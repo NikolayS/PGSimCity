@@ -750,3 +750,15 @@ body.pg-labels-off #labels-root {
     padding: 14px;
   }
 }
+
+/* The prototype disclaimer carries the two links that invite corrections, so
+   they must be visibly clickable rather than dissolving into the small print. */
+.help-disclaimer a {
+  color: var(--c-backend);
+  text-decoration: underline;
+  text-decoration-color: rgba(90, 209, 255, 0.4);
+  text-underline-offset: 2px;
+}
+.help-disclaimer a:hover {
+  text-decoration-color: var(--c-backend);
+}

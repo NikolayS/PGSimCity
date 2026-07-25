@@ -14,6 +14,21 @@ a database — the people who need to understand why a checkpoint spikes latency
 why one forgotten transaction bloats a table forever, and what `synchronous_commit`
 is really charging them.
 
+**Live: <https://nikolays.github.io/PGSimCity/>**
+
+---
+
+> ### This is a prototype (v0.1)
+>
+> It was built quickly, and it **almost certainly contains inaccuracies and mistakes** — in the
+> simulation as well as in the explanations. It is a *model* of PostgreSQL, not an emulator:
+> no PostgreSQL source code runs here, and the numbers are scaled so a human can watch them.
+>
+> If you spot something wrong, especially a claim about how PostgreSQL actually behaves, please
+> [open an issue](https://github.com/NikolayS/PGSimCity/issues/new) or send a
+> [pull request](https://github.com/NikolayS/PGSimCity/pulls). Corrections from people who know
+> the engine are exactly what this needs.
+
 ---
 
 ## Run it

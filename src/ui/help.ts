@@ -236,8 +236,13 @@ export function createHelp(ctx: UiContext): UiModule {
       ),
       el('p', {
         class: 'help-disclaimer',
-        text:
-          'PGSimCity is a teaching model, not a real server: the mechanisms are faithful, the numbers are simulated, and no PostgreSQL source code is running here.',
+        html:
+          '<strong>Prototype, v0.1.</strong> PGSimCity is a teaching model, not a real server: the mechanisms are modelled, ' +
+          'the numbers are simulated, and no PostgreSQL source code runs here. It was built quickly and ' +
+          '<strong>almost certainly contains inaccuracies and mistakes</strong>, in both the simulation and the explanations.' +
+          '<br><br>Found one? Corrections from people who know the engine are exactly what this needs — please ' +
+          '<a href="https://github.com/NikolayS/PGSimCity/issues/new" target="_blank" rel="noopener">open an issue</a> or send a ' +
+          '<a href="https://github.com/NikolayS/PGSimCity/pulls" target="_blank" rel="noopener">pull request</a>.',
       }),
     ),
   )
