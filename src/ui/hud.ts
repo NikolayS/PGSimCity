@@ -334,7 +334,7 @@ export function createHud(ctx: UiContext): UiModule {
     'div',
     { class: 'hud-brand', title: 'PGSimCity — a working model of the PostgreSQL engine' },
     statusDot,
-    el('span', { class: 'hud-brand__mark' }, el('b', { text: 'PG' }), 'CITY'),
+    el('span', { class: 'hud-brand__mark' }, el('b', { text: 'PG' }), 'SIMCITY'),
     el('span', { class: 'hud-brand__rule' }),
     clockEl,
   )
