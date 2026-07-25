@@ -1,0 +1,219 @@
+/* ============================================================
+   PGCITY design tokens — the single source of truth for colour.
+   Keep in sync with src/core/theme.ts (3D side).
+   ============================================================ */
+
+:root {
+  /* --- surfaces --- */
+  --bg-void: #04060c;
+  --bg-deep: #070b14;
+  --bg-panel: rgba(10, 16, 28, 0.72);
+  --bg-panel-solid: #0a1020;
+  --bg-raise: rgba(20, 30, 50, 0.72);
+  --bg-sunken: rgba(3, 6, 12, 0.6);
+
+  /* --- strokes --- */
+  --line-hair: rgba(120, 170, 235, 0.14);
+  --line-soft: rgba(120, 170, 235, 0.26);
+  --line-hard: rgba(150, 200, 255, 0.45);
+
+  /* --- type --- */
+  --ink: #e8f1ff;
+  --ink-dim: #a9bcd8;
+  --ink-faint: #6d81a0;
+  --ink-invert: #04060c;
+
+  /* --- semantic system colours (mirrored in theme.ts) --- */
+  --c-client: #8ecae6;
+  --c-backend: #5ad1ff;
+  --c-shmem: #7b6cff;
+  --c-buffer-clean: #3fa7ff;
+  --c-buffer-dirty: #ff4d6d;
+  --c-buffer-pinned: #ffd166;
+  --c-wal: #ffb03a;
+  --c-storage: #55d6a0;
+  --c-vacuum: #b57bff;
+  --c-checkpoint: #ff7ac6;
+  --c-bgwriter: #4fe3c1;
+  --c-replication: #ff9f1c;
+  --c-lock: #ff5c5c;
+  --c-ok: #57e389;
+  --c-warn: #ffcc55;
+  --c-crit: #ff5f6d;
+
+  /* --- glow --- */
+  --glow-cyan: 0 0 0 1px rgba(90, 209, 255, 0.35), 0 0 24px -6px rgba(90, 209, 255, 0.65);
+  --glow-soft: 0 10px 40px -18px rgba(0, 0, 0, 0.9);
+
+  /* --- geometry --- */
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 16px;
+  --r-pill: 999px;
+
+  /* --- type ramp --- */
+  --f-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, Roboto, sans-serif;
+  --f-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+  --fs-micro: 10px;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 15px;
+  --fs-xl: 19px;
+
+  /* --- motion --- */
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 120ms;
+  --dur: 220ms;
+  --dur-slow: 420ms;
+
+  /* --- layout --- */
+  --hud-gap: 14px;
+  --panel-w: 384px;
+  --rail-w: 296px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-void);
+  color: var(--ink);
+  font-family: var(--f-ui);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overscroll-behavior: none;
+}
+
+#stage,
+#canvas-root {
+  position: fixed;
+  inset: 0;
+}
+
+#canvas-root canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  outline: none;
+}
+
+/* CSS2D label layer must never eat pointer events wholesale */
+#labels-root {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 2;
+}
+
+#hud {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-rows: auto 1fr auto;
+  grid-template-areas:
+    "top top top"
+    "left center right"
+    "bottom bottom bottom";
+  gap: var(--hud-gap);
+  padding: var(--hud-gap);
+}
+
+#hud > * {
+  pointer-events: none;
+}
+#hud-top { grid-area: top; }
+#hud-left { grid-area: left; align-self: start; }
+#hud-right { grid-area: right; align-self: start; justify-self: end; }
+#hud-bottom { grid-area: bottom; }
+#tour-layer { grid-area: center; place-self: end center; }
+#toast-stack { grid-area: center; place-self: start end; }
+#compass { grid-area: center; place-self: end start; }
+
+/* anything interactive opts back in */
+#hud button,
+#hud input,
+#hud select,
+#hud a,
+#hud .interactive {
+  pointer-events: auto;
+}
+
+/* --- boot screen --- */
+#boot {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(120% 90% at 50% 20%, #0b1424 0%, #04060c 70%);
+  transition: opacity 700ms var(--ease), visibility 700ms;
+}
+#boot.done {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.boot-inner {
+  text-align: center;
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+}
+.boot-title {
+  margin: 4px 0 0;
+  font-size: 40px;
+  letter-spacing: 0.24em;
+  font-weight: 300;
+  text-indent: 0.24em;
+}
+.boot-title span {
+  color: var(--c-backend);
+  font-weight: 600;
+}
+.boot-sub {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: var(--fs-sm);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+.boot-bar {
+  margin-top: 18px;
+  width: 260px;
+  height: 2px;
+  background: rgba(120, 170, 235, 0.16);
+  border-radius: var(--r-pill);
+  overflow: hidden;
+}
+.boot-bar i {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--c-backend), var(--c-shmem));
+  transition: width 300ms var(--ease);
+}
+.boot-status {
+  margin: 0;
+  font-family: var(--f-mono);
+  font-size: var(--fs-xs);
+  color: var(--ink-faint);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="description" content="PGCITY — an explorable 3D city that shows how PostgreSQL actually works." />
+    <meta name="color-scheme" content="dark" />
+    <title>PGCITY · How PostgreSQL Works, in 3D</title>
+  </head>
+  <body>
+    <!-- ============ WebGL canvas mounts here ============ -->
+    <div id="stage">
+      <div id="canvas-root"></div>
+      <!-- CSS2DRenderer output is appended here by engine/labels.ts -->
+      <div id="labels-root" aria-hidden="true"></div>
+    </div>
+
+    <!-- ============ HUD layers (filled by src/ui/*) ============ -->
+    <div id="hud">
+      <header id="hud-top"></header>
+      <aside id="hud-left"></aside>
+      <aside id="hud-right"></aside>
+      <footer id="hud-bottom"></footer>
+      <div id="tour-layer"></div>
+      <div id="toast-stack"></div>
+      <div id="help-overlay" hidden></div>
+      <div id="compass"></div>
+    </div>
+
+    <!-- ============ Boot screen ============ -->
+    <div id="boot">
+      <div class="boot-inner">
+        <div class="boot-mark">
+          <svg viewBox="0 0 100 100" width="86" height="86" aria-hidden="true">
+            <defs>
+              <linearGradient id="bg1" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stop-color="#5ad1ff" />
+                <stop offset="100%" stop-color="#7b6cff" />
+              </linearGradient>
+            </defs>
+            <path
+              d="M50 6 L88 28 L88 72 L50 94 L12 72 L12 28 Z"
+              fill="none"
+              stroke="url(#bg1)"
+              stroke-width="2.5"
+            />
+            <path d="M50 24 L72 37 L72 63 L50 76 L28 63 L28 37 Z" fill="none" stroke="#5ad1ff" stroke-width="1.2" opacity=".55" />
+            <circle cx="50" cy="50" r="7" fill="#5ad1ff" />
+          </svg>
+        </div>
+        <h1 class="boot-title">PG<span>CITY</span></h1>
+        <p class="boot-sub">A working model of the PostgreSQL engine</p>
+        <div class="boot-bar"><i id="boot-fill"></i></div>
+        <p class="boot-status" id="boot-status">assembling shared memory…</p>
+      </div>
+    </div>
+
+    <noscript>
+      <div style="padding:2rem;font:16px system-ui;color:#dbe7ff;background:#05070d">
+        PGCITY needs JavaScript and WebGL2 to run.
+      </div>
+    </noscript>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

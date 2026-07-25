@@ -1,0 +1,199 @@
+/* ============================================================================
+   PGCITY — in-world label chips.
+
+   These live in #labels-root, positioned every frame by CSS2DRenderer. The
+   renderer owns each `.lbl` element's inline `position`, `display` and
+   `transform`, so nothing in this file may set `transform` on `.lbl` itself —
+   the enter/exit motion is applied to the inner `.lbl__chip` instead.
+
+   Anatomy (anchor point is the element's bottom-left corner):
+
+        ┌───────────────────────────────┐
+        │ ▌CHECKPOINTER      2.3 MB/s   │   ← .lbl__chip
+        │ ▌background process           │
+        └───────────────────────────────┘
+       ╱                                    ← .lbl__leader
+      ●                                     ← .lbl__dot  (the world anchor)
+
+   Colour comes from --lbl-accent, set inline per component by labels.ts, so a
+   WAL chip is amber and a vacuum chip is violet without a class per district.
+   ==========================================================================*/
+
+.lbl {
+  --lbl-accent: var(--c-backend);
+
+  position: absolute;
+  /* The padding *is* the leader line's run: 18px right and 18px up from the
+     anchor to the chip's lower-left corner. */
+  padding: 0 0 18px 18px;
+  /* Only the chip and the dot are hit targets; the leader gutter is not. */
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 180ms var(--ease);
+  will-change: opacity;
+}
+
+.lbl.is-on {
+  opacity: 1;
+}
+
+/* --------------------------------- chip ---------------------------------- */
+
+.lbl__chip {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 14px;
+  padding: 5px 10px 5px 9px;
+  border: 1px solid var(--line-hair);
+  border-radius: var(--r-sm);
+  background: rgba(8, 13, 24, 0.62);
+  backdrop-filter: blur(10px) saturate(135%);
+  -webkit-backdrop-filter: blur(10px) saturate(135%);
+  box-shadow: 0 10px 28px -20px #000;
+  white-space: nowrap;
+  overflow: hidden;
+  pointer-events: auto;
+  cursor: pointer;
+  transform: translateY(6px);
+  transition:
+    transform 180ms var(--ease),
+    background var(--dur) var(--ease),
+    border-color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease);
+}
+
+.lbl.is-on .lbl__chip {
+  transform: none;
+}
+
+/* the 2px semantic accent bar */
+.lbl__chip::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: var(--lbl-accent);
+  box-shadow: 0 0 10px -1px var(--lbl-accent);
+}
+
+.lbl__name {
+  grid-area: 1 / 1;
+  font-family: var(--f-ui);
+  font-size: var(--fs-xs);
+  font-style: normal;
+  font-weight: 600;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+
+.lbl__role {
+  grid-area: 2 / 1;
+  font-family: var(--f-ui);
+  font-size: var(--fs-micro);
+  font-style: normal;
+  letter-spacing: 0.05em;
+  color: var(--ink-faint);
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+
+/* live readout — spans both rows, right-aligned, tabular so it never jitters */
+.lbl__read {
+  grid-area: 1 / 2 / 3 / 3;
+  font-family: var(--f-mono);
+  font-size: var(--fs-xs);
+  font-style: normal;
+  color: var(--lbl-accent);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------- leader + anchor ---------------------------- */
+
+.lbl__leader {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 25px; /* 18px * √2 */
+  height: 1px;
+  transform-origin: 0 50%;
+  transform: rotate(-45deg);
+  background: linear-gradient(90deg, var(--lbl-accent), rgba(140, 180, 235, 0.12));
+  opacity: 0.55;
+  transition: opacity var(--dur) var(--ease);
+}
+
+.lbl__dot {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 3px;
+  height: 3px;
+  margin: 0 0 -1.5px -1.5px;
+  border-radius: 50%;
+  background: var(--lbl-accent);
+  box-shadow: 0 0 8px 0 var(--lbl-accent);
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+/* -------------------------------- states --------------------------------- */
+
+.lbl__chip:hover,
+.lbl.is-hovered .lbl__chip {
+  border-color: var(--line-hard);
+  background: rgba(12, 20, 34, 0.78);
+}
+
+.lbl.is-hovered .lbl__leader {
+  opacity: 0.85;
+}
+
+.lbl.is-selected {
+  /* CSS2DRenderer sortObjects is off, so this z-index is ours to use. */
+  z-index: 3;
+}
+
+.lbl.is-selected .lbl__chip {
+  background: var(--bg-panel-solid);
+  border-color: transparent;
+  box-shadow:
+    0 0 0 1px var(--lbl-accent),
+    0 0 26px -8px var(--lbl-accent),
+    0 12px 30px -22px #000;
+}
+
+.lbl.is-selected .lbl__name {
+  color: #fff;
+}
+
+.lbl.is-selected .lbl__leader,
+.lbl.is-selected .lbl__dot {
+  opacity: 1;
+}
+
+/* far away: the chip degrades to a name plate — the city stays readable when
+   forty of these are on screen at once. */
+.lbl.is-far .lbl__role,
+.lbl.is-far .lbl__read {
+  display: none;
+}
+
+.lbl.is-far .lbl__chip {
+  /* collapse to a single track, otherwise the (now empty) readout column keeps
+     its column-gap and the plate carries dead space on the right */
+  grid-template-columns: minmax(0, 1fr);
+  column-gap: 0;
+  padding: 3px 8px 3px 8px;
+  background: rgba(8, 13, 24, 0.5);
+}
+
+.lbl.is-far .lbl__name {
+  font-size: var(--fs-micro);
+  color: var(--ink-dim);
+}

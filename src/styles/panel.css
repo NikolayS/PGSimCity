@@ -1,0 +1,614 @@
+/* ============================================================================
+   PGCITY — the two side panels: the console (#hud-left) and the inspector
+   (#hud-right), plus the knob widget they share.
+
+   Everything here composes the .pg-* primitives in ui.css and only ever uses
+   tokens from tokens.css. Nothing in this file invents a colour.
+   ==========================================================================*/
+
+:root {
+  /* how far the overlay panels sit from the top/bottom edge on narrow screens,
+     so they clear the HUD bars they slide over */
+  --pgc-inset: 58px;
+  /* width of the collapsed tab strip */
+  --pgc-tab: 32px;
+}
+
+/* ---------------------------------------------------------------------------
+   Mount points. The middle HUD row is 1fr, so a full-height column gives the
+   panels a definite box to be a percentage of; min-height:0 stops a tall panel
+   from pushing the grid past the viewport.
+   -------------------------------------------------------------------------*/
+
+#hud-left,
+#hud-right {
+  height: 100%;
+  min-height: 0;
+}
+
+.pgc-host {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  height: 100%;
+  min-height: 0;
+  max-height: 100%;
+}
+.pgc-host--right {
+  flex-direction: row-reverse;
+}
+
+.pgc-panel {
+  max-height: 100%;
+  min-height: 0;
+  transition: transform var(--dur-slow) var(--ease-out-expo), opacity var(--dur) var(--ease);
+}
+.pgc-rail {
+  width: var(--rail-w);
+  flex: 0 0 auto;
+}
+.pgc-insp {
+  width: var(--panel-w);
+  flex: 0 0 auto;
+}
+
+/* the scrollable middles */
+.pgc-rail__body,
+.pgc-insp__body {
+  flex: 0 1 auto;
+  min-height: 0;
+  scrollbar-width: thin;
+  /* Firefox counterpart of the .pg-scroll webkit thumb defined in ui.css */
+  scrollbar-color: color-mix(in srgb, var(--c-backend) 22%, transparent) transparent;
+}
+.pgc-rail__body:focus-visible,
+.pgc-insp__body:focus-visible {
+  outline: 2px solid var(--c-backend);
+  outline-offset: -3px;
+}
+
+/* ---------------------------------------------------------------------------
+   The collapsed tab.
+   -------------------------------------------------------------------------*/
+
+.pgc-tab {
+  width: var(--pgc-tab);
+  height: var(--pgc-tab);
+  flex: 0 0 auto;
+  background: var(--bg-panel);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  box-shadow: var(--glow-soft);
+  display: none;
+}
+.pgc-host:not(.is-open) .pgc-tab,
+.pgc-host.is-compact .pgc-tab {
+  display: inline-flex;
+}
+
+/* desktop: closing the rail simply gives the column back to the city */
+.pgc-host:not(.is-compact):not(.is-open) .pgc-panel {
+  display: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Shared blocks.
+   -------------------------------------------------------------------------*/
+
+.pgc-block {
+  padding: 12px 0;
+  border-top: 1px solid var(--line-hair);
+}
+.pgc-block:first-child {
+  padding-top: 2px;
+  border-top: 0;
+}
+
+.pgc-eyebrow-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.pgc-spacer {
+  flex: 1 1 auto;
+}
+
+.pgc-live-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--c-ok);
+  box-shadow: 0 0 8px -1px var(--c-ok);
+  animation: pgc-breathe 2.4s var(--ease) infinite;
+}
+.pgc-live-dot.is-paused {
+  background: var(--ink-faint);
+  box-shadow: none;
+  animation: none;
+}
+
+@keyframes pgc-breathe {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   The knob widget — used by the console rail and inline in the inspector.
+   -------------------------------------------------------------------------*/
+
+.pgc-knob {
+  gap: 6px;
+  padding: 10px 0 12px;
+}
+.pgc-knob__row {
+  gap: 8px;
+}
+.pgc-knob__label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.pgc-knob__label.is-mono {
+  font-family: var(--f-mono);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--ink-dim);
+}
+.pgc-knob__warn {
+  color: var(--c-warn);
+  opacity: 0.7;
+  flex: 0 0 auto;
+}
+
+.pgc-val {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  white-space: nowrap;
+  font-family: var(--f-mono);
+  font-variant-numeric: tabular-nums;
+}
+.pgc-val__n {
+  font-size: var(--fs-sm);
+  color: var(--c-backend);
+}
+.pgc-val__u {
+  font-size: var(--fs-micro);
+  color: var(--ink-faint);
+}
+.pgc-val__u:empty {
+  display: none;
+}
+.pgc-val__alt {
+  font-size: var(--fs-micro);
+  color: var(--ink-faint);
+  padding-left: 4px;
+  border-left: 1px solid var(--line-hair);
+}
+.pgc-val__alt:empty {
+  display: none;
+}
+
+.pgc-knob[data-kind='toggle'] .pgc-val__n {
+  color: var(--ink-faint);
+  text-transform: uppercase;
+  font-size: var(--fs-micro);
+  letter-spacing: 0.1em;
+}
+.pgc-knob[data-kind='toggle'] .pgc-val.is-on .pgc-val__n {
+  color: var(--c-backend);
+}
+.pgc-knob[data-kind='toggle'].is-danger .pgc-val.is-on .pgc-val__n {
+  color: var(--c-crit);
+}
+.pgc-knob[data-kind='select'] .pgc-val__n {
+  font-size: var(--fs-micro);
+  color: var(--ink-faint);
+}
+
+.pgc-guc {
+  margin-top: -2px;
+  overflow-wrap: anywhere;
+}
+.pgc-knob__select {
+  margin-top: 2px;
+}
+.pgc-knob__range {
+  margin-top: 1px;
+}
+.pgc-knob__hint {
+  margin: 0;
+  max-width: 46ch;
+}
+
+/* danger: present but quiet, louder once it is actually armed */
+.pgc-knob.is-danger {
+  padding-left: 9px;
+  margin-left: -9px;
+  border-left: 1px solid transparent;
+}
+.pgc-knob.is-danger.is-armed {
+  border-left-color: var(--c-crit);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--c-crit) 8%, transparent), transparent 62%);
+}
+.pgc-knob.is-danger.is-armed .pgc-val__n {
+  color: var(--c-crit);
+}
+.pgc-knob.is-danger.is-armed .pgc-knob__warn {
+  color: var(--c-crit);
+  opacity: 1;
+}
+
+/* ---------------------------------------------------------------------------
+   Console rail.
+   -------------------------------------------------------------------------*/
+
+.pgc-rail__head {
+  gap: 9px;
+}
+.pgc-rail__id {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.pgc-preset {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pgc-preset__dot {
+  color: var(--c-ok);
+  transition: color var(--dur) var(--ease);
+}
+.pgc-preset__dot[data-state='custom'] {
+  color: var(--c-warn);
+}
+.pgc-preset__dot[data-state='scenario'] {
+  color: var(--c-checkpoint);
+}
+.pgc-rail__collapse svg {
+  transform: rotate(180deg);
+}
+
+.pgc-group > .pgc-collapse__head {
+  padding-right: 2px;
+}
+.pgc-collapse__t {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pgc-group__badge {
+  margin-left: auto;
+  font-family: var(--f-mono);
+  font-size: var(--fs-micro);
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--ink-invert);
+  background: var(--c-warn);
+  border-radius: var(--r-pill);
+  min-width: 15px;
+  text-align: center;
+  padding: 1px 5px;
+  opacity: 0;
+  transition: opacity var(--dur) var(--ease);
+}
+.pgc-group__badge.is-on {
+  opacity: 0.9;
+}
+.pgc-group.is-chaos > .pgc-collapse__head {
+  color: var(--c-crit);
+}
+
+.pgc-group__hint {
+  margin: 0 0 4px;
+  font-size: var(--fs-micro);
+  line-height: 1.5;
+  color: var(--ink-faint);
+  max-width: 40ch;
+}
+
+.pgc-rail__foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: space-between;
+}
+.pgc-reset {
+  flex: 0 0 auto;
+}
+.pgc-changed {
+  font-size: var(--fs-micro);
+  color: var(--ink-faint);
+  text-align: right;
+  line-height: 1.3;
+}
+
+/* ---------------------------------------------------------------------------
+   Inspector.
+   -------------------------------------------------------------------------*/
+
+.pgc-insp__head {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  padding-top: 10px;
+}
+.pgc-insp__top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pgc-insp__title {
+  font-size: var(--fs-xl);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  line-height: 1.15;
+}
+.pgc-insp__sub {
+  line-height: 1.45;
+  max-width: 52ch;
+}
+.pgc-insp__sub[hidden] {
+  display: none;
+}
+.pgc-readout {
+  margin: 2px 0 0;
+  font-family: var(--f-mono);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  color: var(--c-backend);
+  opacity: 0.85;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pgc-readout[hidden] {
+  display: none;
+}
+
+.pgc-kind {
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: var(--r-pill);
+  color: var(--kind, var(--c-backend));
+  border: 1px solid currentColor;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  box-shadow: inset 0 0 14px -8px currentColor;
+}
+.pgc-kind[hidden] {
+  display: none;
+}
+.pgc-kind[data-kind='process'] {
+  --kind: var(--c-backend);
+}
+.pgc-kind[data-kind='memory'] {
+  --kind: var(--c-shmem);
+}
+.pgc-kind[data-kind='storage'] {
+  --kind: var(--c-storage);
+}
+.pgc-kind[data-kind='network'] {
+  --kind: var(--c-replication);
+}
+.pgc-kind[data-kind='client'] {
+  --kind: var(--c-client);
+}
+.pgc-kind[data-kind='concept'] {
+  --kind: var(--c-vacuum);
+}
+
+.pgc-fly {
+  flex: 0 0 auto;
+}
+
+/* --- metrics ---
+   The hairlines are drawn by the tiles rather than by the container's gap, so a
+   row that does not divide evenly leaves an empty cell that reads as part of
+   the instrument instead of a hole. The panel's overflow clips the outermost
+   shadow, so the border never doubles up. */
+.pgc-metrics {
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  gap: 0;
+  background: var(--bg-sunken);
+}
+.pgc-metrics .pg-metric {
+  box-shadow: 1px 0 0 0 var(--line-hair), 0 1px 0 0 var(--line-hair);
+}
+.pgc-metrics .pg-metric__k {
+  white-space: normal;
+  line-height: 1.3;
+}
+.pgc-metrics .pg-metric__v {
+  overflow-wrap: anywhere;
+}
+
+/* --- prose --- */
+.pgc-block--prose {
+  padding-top: 4px;
+}
+.pgc-section > .pgc-collapse__head {
+  text-transform: none;
+  letter-spacing: 0.01em;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--ink);
+  padding: 10px 2px;
+}
+.pgc-section > .pg-collapse__body {
+  padding-bottom: 12px;
+}
+.pgc-prose {
+  max-width: 66ch;
+}
+.pgc-p {
+  margin: 0 0 11px;
+}
+.pgc-p:last-child {
+  margin-bottom: 0;
+}
+
+/* --- inline knobs --- */
+.pgc-block--knobs .pgc-knob:first-of-type {
+  padding-top: 2px;
+}
+
+/* --- related --- */
+.pgc-see {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.pgc-see__btn {
+  font-size: var(--fs-micro);
+  padding: 5px 9px;
+}
+
+/* --- source --- */
+.pgc-src {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 3px;
+}
+.pgc-src__i {
+  font-size: var(--fs-micro);
+  color: var(--ink-faint);
+  padding: 4px 8px;
+  border-radius: var(--r-sm);
+  background: var(--bg-sunken);
+  border: 1px solid var(--line-hair);
+  overflow-wrap: anywhere;
+}
+
+/* --- empty state --- */
+.pgc-empty {
+  padding-top: 6px;
+}
+.pgc-empty__lead {
+  margin: 8px 0 6px;
+  font-size: var(--fs-xl);
+  font-weight: 300;
+  letter-spacing: 0.01em;
+  color: var(--ink);
+}
+.pgc-empty .pg-hint {
+  max-width: 52ch;
+}
+.pgc-empty__k {
+  display: block;
+  margin: 22px 0 0;
+}
+.pgc-empty__list {
+  display: grid;
+  gap: 6px;
+  margin-top: 9px;
+}
+.pgc-empty__btn {
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  justify-items: start;
+  padding: 9px 11px;
+}
+.pgc-empty__n {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--ink);
+}
+.pgc-empty__w {
+  font-size: var(--fs-micro);
+  color: var(--ink-faint);
+  white-space: normal;
+  line-height: 1.4;
+}
+.pgc-empty__keys {
+  margin: 20px 0 0;
+  font-size: var(--fs-micro);
+  color: var(--ink-faint);
+  line-height: 2;
+}
+
+/* ---------------------------------------------------------------------------
+   Narrow screens: both panels stop taking space and slide over the city.
+   -------------------------------------------------------------------------*/
+
+@media (max-width: 1100px) {
+  .pgc-host {
+    height: auto;
+  }
+  .pgc-host.is-compact .pgc-tab {
+    position: fixed;
+    top: 50%;
+    z-index: 8;
+    margin: 0;
+  }
+  .pgc-host--left.is-compact .pgc-tab {
+    left: 0;
+    transform: translateY(-50%);
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+  }
+  .pgc-host--right.is-compact .pgc-tab {
+    right: 0;
+    transform: translateY(-50%);
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+
+  .pgc-host.is-compact .pgc-panel {
+    position: fixed;
+    top: var(--pgc-inset);
+    bottom: var(--pgc-inset);
+    z-index: 7;
+    max-height: none;
+    opacity: 0;
+    visibility: hidden;
+    transition: transform var(--dur-slow) var(--ease-out-expo), opacity var(--dur) var(--ease),
+      visibility 0s linear var(--dur-slow);
+  }
+  .pgc-host.is-compact.is-open .pgc-panel {
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+    transition-delay: 0s;
+  }
+
+  .pgc-host--left.is-compact .pgc-panel {
+    left: calc(var(--pgc-tab) + 6px);
+    width: min(var(--rail-w), calc(100vw - var(--pgc-tab) - 18px));
+    transform: translateX(calc(-100% - var(--pgc-tab) - 12px));
+  }
+  .pgc-host--right.is-compact .pgc-panel {
+    right: calc(var(--pgc-tab) + 6px);
+    width: min(var(--panel-w), calc(100vw - var(--pgc-tab) - 18px));
+    transform: translateX(calc(100% + var(--pgc-tab) + 12px));
+  }
+}
+
+@media (max-width: 560px) {
+  :root {
+    --pgc-inset: 46px;
+  }
+  .pgc-insp__title {
+    font-size: var(--fs-lg);
+  }
+  .pgc-empty__lead {
+    font-size: var(--fs-lg);
+  }
+}

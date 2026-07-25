@@ -1,0 +1,639 @@
+/* ============================================================================
+   PGCITY — TOUR & COMMAND PALETTE
+
+     .tour-*   the cinematic lower third in #tour-layer, the scenario narration
+               card that reuses it, and the first-run prompt
+     .pal-*    the command palette overlay (src/ui/search.ts), mounted on
+               <body> so it sits above every HUD layer
+
+   Everything composes the .pg-* primitives from ui.css and only uses tokens.
+   ==========================================================================*/
+
+/* --------------------------------------------------------------------------
+   The layer itself. tokens.css parks it at the bottom-centre of the HUD grid;
+   we only decide how its cards stack.
+   ------------------------------------------------------------------------*/
+
+#tour-layer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 980px;
+  min-width: 0;
+}
+
+/* ==========================================================================
+   TOURING MODE — the chrome steps back
+   ========================================================================*/
+
+body.pg-tour #hud-top,
+body.pg-tour #hud-left,
+body.pg-tour #hud-right,
+body.pg-tour #compass {
+  opacity: 0.26;
+  transition: opacity var(--dur-slow) var(--ease);
+}
+body.pg-tour #hud-bottom {
+  opacity: 0.5;
+  transition: opacity var(--dur-slow) var(--ease);
+}
+body.pg-tour #hud-top:hover,
+body.pg-tour #hud-left:hover,
+body.pg-tour #hud-right:hover,
+body.pg-tour #hud-bottom:hover,
+body.pg-tour #compass:hover,
+body.pg-tour #hud-top:focus-within,
+body.pg-tour #hud-left:focus-within,
+body.pg-tour #hud-right:focus-within,
+body.pg-tour #hud-bottom:focus-within {
+  opacity: 1;
+}
+
+/* a cinema vignette under the HUD, over the city */
+body.pg-tour::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  background:
+    radial-gradient(120% 78% at 50% 34%, transparent 42%, rgba(2, 4, 9, 0.62) 100%),
+    linear-gradient(0deg, rgba(2, 4, 9, 0.5) 0%, transparent 34%);
+  animation: tour-vignette var(--dur-slow) var(--ease) both;
+}
+
+@keyframes tour-vignette {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ==========================================================================
+   THE CAPTION CARD
+   ========================================================================*/
+
+.tour-card {
+  width: 100%;
+  min-width: 0;
+  border-color: var(--line-soft);
+  background: linear-gradient(180deg, rgba(14, 22, 38, 0.82), rgba(8, 12, 22, 0.9));
+  box-shadow: var(--glow-soft), 0 0 0 1px rgba(90, 209, 255, 0.06);
+  overflow: hidden;
+}
+/* Both halves are two-class selectors so neither depends on this file being
+   injected after ui.css to beat .pg-panel's display:flex. */
+.tour-card:not(.is-live) {
+  display: none;
+}
+.tour-card.is-live {
+  display: block;
+}
+.tour-card.is-enter {
+  animation: tour-rise var(--dur-slow) var(--ease-out-expo) both;
+}
+
+@keyframes tour-rise {
+  from {
+    opacity: 0;
+    transform: translateY(26px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.tour-card__grid {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 18px;
+  padding: 16px 18px 12px;
+}
+
+/* --- chapter number ------------------------------------------------------ */
+
+.tour-card__idx {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  padding-right: 18px;
+  border-right: 1px solid var(--line-hair);
+  align-self: stretch;
+}
+.tour-card__n {
+  font-family: var(--f-mono);
+  font-size: 30px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-backend);
+  text-shadow: 0 0 22px rgba(90, 209, 255, 0.45);
+}
+.tour-card__of {
+  font-family: var(--f-mono);
+  font-size: var(--fs-xs);
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- prose --------------------------------------------------------------- */
+
+.tour-card__text {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+.tour-card__eyebrow {
+  color: var(--c-backend);
+  opacity: 0.85;
+}
+.tour-card__title {
+  margin: 0;
+  font-size: var(--fs-xl);
+  font-weight: 500;
+  letter-spacing: 0.005em;
+  color: var(--ink);
+  text-wrap: balance;
+}
+.tour-card__body {
+  margin: 2px 0 0;
+  max-width: 78ch;
+  color: var(--ink-dim);
+}
+
+/* --- transport ----------------------------------------------------------- */
+
+.tour-card__deck {
+  display: grid;
+  justify-items: end;
+  gap: 8px;
+}
+.tour-card__clock {
+  font-family: var(--f-mono);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+}
+.tour-card.is-held .tour-card__clock {
+  color: var(--c-warn);
+}
+.tour-card__btns {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tour-btn {
+  flex: 0 0 auto;
+}
+.tour-btn__icon {
+  display: inline-flex;
+}
+.tour-btn--exit {
+  padding: 6px 10px;
+}
+.tour-btn--exit:hover {
+  color: var(--ink);
+  border-color: var(--c-crit);
+}
+
+/* --- chapter strip ------------------------------------------------------- */
+
+.tour-steps {
+  display: flex;
+  gap: 3px;
+  padding: 0 18px 12px;
+}
+.tour-step {
+  pointer-events: auto;
+  appearance: none;
+  flex: 1 1 0;
+  height: 3px;
+  min-width: 6px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: rgba(120, 170, 235, 0.16);
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), transform var(--dur-fast) var(--ease);
+}
+.tour-step:hover {
+  transform: scaleY(2.2);
+  background: rgba(120, 170, 235, 0.5);
+}
+.tour-step.is-done {
+  background: rgba(90, 209, 255, 0.42);
+}
+.tour-step.is-now {
+  background: var(--c-backend);
+  box-shadow: 0 0 12px -2px var(--c-backend);
+}
+.tour-step:focus-visible {
+  outline: 2px solid var(--c-backend);
+  outline-offset: 3px;
+}
+
+/* --- chapter progress ---------------------------------------------------- */
+
+.tour-bar {
+  height: 2px;
+  background: rgba(120, 170, 235, 0.12);
+  overflow: hidden;
+  border-radius: 0 0 var(--r-lg) var(--r-lg);
+}
+.tour-bar__fill {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--c-backend), var(--c-shmem));
+  box-shadow: 0 0 12px -2px var(--c-backend);
+  transition: width 140ms linear;
+}
+.tour-card.is-held .tour-bar__fill {
+  background: linear-gradient(90deg, var(--c-warn), var(--c-wal));
+}
+
+/* ==========================================================================
+   NARRATION CARD — scenario beats when the tour is not running
+   ========================================================================*/
+
+.tour-narrate {
+  width: min(560px, 100%);
+  padding: 12px 16px 14px;
+  border-color: var(--line-hair);
+  background: linear-gradient(180deg, rgba(14, 22, 38, 0.8), rgba(8, 12, 22, 0.88));
+}
+.tour-narrate:not(.is-live) {
+  display: none;
+}
+.tour-narrate.is-live {
+  display: block;
+}
+.tour-narrate.is-enter {
+  animation: tour-rise var(--dur) var(--ease-out-expo) both;
+}
+.tour-narrate.is-out {
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+.tour-narrate__eyebrow {
+  color: var(--c-vacuum);
+}
+.tour-narrate__title {
+  margin: 4px 0 0;
+  font-size: var(--fs-lg);
+  font-weight: 550;
+  color: var(--ink);
+}
+.tour-narrate__body {
+  margin: 4px 0 0;
+  max-width: 68ch;
+}
+
+/* ==========================================================================
+   FIRST-RUN PROMPT
+   ========================================================================*/
+
+.tour-first {
+  align-items: center;
+  gap: 18px;
+  padding: 11px 12px 11px 16px;
+  width: auto;
+  max-width: 100%;
+  flex-direction: row;
+  border-color: var(--line-soft);
+}
+.tour-first:not(.is-live) {
+  display: none;
+}
+.tour-first.is-live {
+  display: flex;
+  animation: tour-rise var(--dur-slow) var(--ease-out-expo) both;
+}
+.tour-first__text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.tour-first__line {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--ink-dim);
+}
+.tour-first__btns {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.tour-first__go {
+  color: var(--ink-invert);
+  background: var(--c-backend);
+  border-color: var(--c-backend);
+}
+.tour-first__go:hover {
+  background: color-mix(in srgb, var(--c-backend) 82%, white);
+  border-color: color-mix(in srgb, var(--c-backend) 82%, white);
+  color: var(--ink-invert);
+}
+.tour-first__no {
+  color: var(--ink-faint);
+}
+
+/* ==========================================================================
+   COMMAND PALETTE
+   ========================================================================*/
+
+.pal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  grid-template-rows: minmax(8vh, 12vh) auto 1fr;
+  justify-items: center;
+  padding: 0 16px;
+  pointer-events: auto;
+  background: rgba(3, 6, 12, 0.62);
+  backdrop-filter: blur(6px) saturate(120%);
+  -webkit-backdrop-filter: blur(6px) saturate(120%);
+  animation: pal-fade var(--dur-fast) var(--ease) both;
+}
+.pal-overlay[hidden] {
+  display: none;
+}
+
+@keyframes pal-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.pal-dialog {
+  grid-row: 2;
+  width: min(680px, 100%);
+  max-height: min(70vh, 620px);
+  border-color: var(--line-soft);
+  box-shadow: var(--glow-soft), 0 0 0 1px rgba(90, 209, 255, 0.08), 0 40px 120px -40px rgba(0, 0, 0, 0.9);
+  animation: tour-rise var(--dur) var(--ease-out-expo) both;
+}
+
+/* --- field --------------------------------------------------------------- */
+
+.pal-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line-hair);
+  flex: 0 0 auto;
+}
+.pal-head__icon {
+  display: inline-flex;
+  color: var(--ink-faint);
+}
+.pal-head__esc {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+}
+.pal-input {
+  pointer-events: auto;
+  flex: 1 1 auto;
+  min-width: 0;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: var(--ink);
+  font-family: var(--f-mono);
+  font-size: var(--fs-md);
+  letter-spacing: 0.01em;
+  padding: 2px 0;
+}
+.pal-input::placeholder {
+  color: var(--ink-faint);
+  opacity: 0.75;
+}
+
+/* --- results ------------------------------------------------------------- */
+
+.pal-list {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  min-height: 0;
+  padding: 6px 6px 8px;
+}
+
+.pal-group {
+  padding: 10px 10px 5px;
+}
+
+.pal-row {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.pal-row.is-sel {
+  background: rgba(90, 209, 255, 0.09);
+  border-color: rgba(90, 209, 255, 0.28);
+}
+
+.pal-row__badge {
+  font-family: var(--f-mono);
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  text-align: center;
+  padding: 2px 0;
+  border-radius: 4px;
+  border: 1px solid var(--line-hair);
+  background: var(--bg-sunken);
+  color: var(--ink-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pal-row[data-kind='component'] .pal-row__badge {
+  color: var(--c-backend);
+}
+.pal-row[data-kind='setting'] .pal-row__badge {
+  color: var(--c-wal);
+}
+.pal-row[data-kind='scenario'] .pal-row__badge {
+  color: var(--c-vacuum);
+}
+.pal-row[data-kind='chapter'] .pal-row__badge {
+  color: var(--c-storage);
+}
+
+.pal-row__main {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+.pal-row__title {
+  font-size: var(--fs-sm);
+  font-weight: 550;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pal-row__sub {
+  font-size: var(--fs-micro);
+  line-height: 1.4;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pal-row__go {
+  font-family: var(--f-mono);
+  font-size: var(--fs-xs);
+  color: var(--c-backend);
+  opacity: 0;
+}
+.pal-row.is-sel .pal-row__go {
+  opacity: 0.9;
+}
+
+.pal-mark {
+  background: transparent;
+  color: var(--c-backend);
+  font-weight: 650;
+}
+.pal-row__sub .pal-mark {
+  color: var(--c-client);
+}
+
+/* --- empty state --------------------------------------------------------- */
+
+.pal-empty {
+  padding: 26px 14px 30px;
+  text-align: center;
+}
+.pal-empty__t {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--ink-dim);
+}
+.pal-empty__s {
+  margin: 6px 0 0;
+  font-size: var(--fs-xs);
+  color: var(--ink-faint);
+}
+
+/* --- footer -------------------------------------------------------------- */
+
+.pal-foot {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--line-hair);
+  flex: 0 0 auto;
+}
+.pal-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.pal-hint__t {
+  font-size: var(--fs-micro);
+  color: var(--ink-faint);
+  letter-spacing: 0.04em;
+}
+.pal-foot__count {
+  margin-left: auto;
+  font-family: var(--f-mono);
+  font-size: var(--fs-micro);
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- the console dial a palette result just pointed at ------------------- */
+
+.pal-flash {
+  animation: pal-flash 2s var(--ease) 1;
+  border-radius: var(--r-sm);
+}
+
+@keyframes pal-flash {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(90, 209, 255, 0);
+    background: transparent;
+  }
+  12% {
+    box-shadow: 0 0 0 1px rgba(90, 209, 255, 0.55), 0 0 26px -6px rgba(90, 209, 255, 0.8);
+    background: rgba(90, 209, 255, 0.1);
+  }
+  60% {
+    box-shadow: 0 0 0 1px rgba(90, 209, 255, 0.35);
+    background: rgba(90, 209, 255, 0.05);
+  }
+}
+
+/* ==========================================================================
+   NARROW SCREENS
+   ========================================================================*/
+
+@media (max-width: 900px) {
+  .tour-card__grid {
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 12px;
+    padding: 13px 14px 10px;
+  }
+  .tour-card__idx {
+    padding-right: 12px;
+  }
+  .tour-card__n {
+    font-size: 22px;
+  }
+  .tour-card__deck {
+    grid-column: 1 / -1;
+    justify-items: stretch;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+  }
+  .tour-card__btns {
+    justify-content: flex-end;
+  }
+  .tour-card__title {
+    font-size: var(--fs-lg);
+  }
+  .tour-steps {
+    padding: 0 14px 10px;
+  }
+  .pal-row {
+    grid-template-columns: 60px minmax(0, 1fr) auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .tour-card__body {
+    font-size: var(--fs-xs);
+  }
+  .tour-first {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .pal-overlay {
+    grid-template-rows: 6vh auto 1fr;
+    padding: 0 10px;
+  }
+}
