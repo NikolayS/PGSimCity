@@ -26,20 +26,38 @@ interface HitData {
   probe?: ProbeRuntime
 }
 
-const canvas = document.querySelector<HTMLCanvasElement>('#scene')
+const canvasPlaceholder = document.querySelector<HTMLCanvasElement>('#scene')
 const fallback = document.querySelector<HTMLElement>('#fallback')
 
-if (!canvas) throw new Error('Observability canvas is missing')
+if (!canvasPlaceholder) throw new Error('Observability canvas is missing')
 
-// Let the browser negotiate the context attributes. Some current Chrome/GPU
-// combinations reject an explicitly requested high-performance context even
-// though their normal WebGL2 context works perfectly.
-const context = canvas.getContext('webgl2')
-
-if (!context) {
-  if (fallback) fallback.hidden = false
-  throw new Error('WebGL2 is required')
+function createRenderer(): THREE.WebGLRenderer {
+  try {
+    // Match the renderer path used by the main city.
+    return new THREE.WebGLRenderer({
+      antialias: true,
+      powerPreference: 'high-performance',
+      stencil: false,
+      alpha: false,
+    })
+  } catch (preferredError) {
+    console.warn('Preferred WebGL context failed; retrying with browser defaults.', preferredError)
+    return new THREE.WebGLRenderer({ antialias: false })
+  }
 }
+
+let renderer: THREE.WebGLRenderer
+try {
+  renderer = createRenderer()
+} catch (error) {
+  if (fallback) fallback.hidden = false
+  throw error
+}
+
+const canvas = renderer.domElement
+canvas.id = 'scene'
+canvas.setAttribute('aria-label', canvasPlaceholder.getAttribute('aria-label') ?? 'Interactive 3D map')
+canvasPlaceholder.replaceWith(canvas)
 
 canvas.addEventListener('webglcontextlost', (event) => {
   event.preventDefault()
@@ -49,7 +67,6 @@ canvas.addEventListener('webglcontextlost', (event) => {
   }
 })
 
-const renderer = new THREE.WebGLRenderer({ canvas, context })
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75))
 renderer.setSize(window.innerWidth, window.innerHeight, false)
 renderer.outputColorSpace = THREE.SRGBColorSpace
