@@ -127,10 +127,10 @@ export const KNOB_META: KnobMeta[] = [
   {
     key: 'bgwriterEnabled',
     label: 'Background writer',
-    guc: 'bgwriter_delay',
+    guc: 'bgwriter_lru_maxpages',
     group: 'memory',
     kind: 'toggle',
-    hint: 'Trickles dirty pages to disk between checkpoints so backends never have to write their own.',
+    hint: 'Trickles dirty pages to disk between checkpoints so backends never have to write their own. Setting bgwriter_lru_maxpages = 0 is how you actually turn it off; bgwriter_delay only changes how often it wakes.',
   },
   {
     key: 'bgwriterLruMaxpages',
@@ -190,7 +190,7 @@ export const KNOB_META: KnobMeta[] = [
     min: 32,
     max: 2048,
     step: 32,
-    unit: 'MB',
+    unit: 'MiB',
     hint: 'When WAL grows past this, a checkpoint is forced whether it was due or not.',
   },
   {
@@ -252,7 +252,7 @@ export const KNOB_META: KnobMeta[] = [
     max: 400,
     step: 5,
     unit: 'ms',
-    hint: 'Round-trip cost to the standby. With synchronous_commit=on and a synchronous standby, every commit pays it.',
+    hint: 'One-way network delay to the standby. synchronous_commit = on waits for a LOCAL flush and pays none of it; only remote_apply makes a commit wait for the round trip.',
   },
   {
     key: 'replicaSlowApply',

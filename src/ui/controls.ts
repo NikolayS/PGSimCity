@@ -125,7 +125,7 @@ export interface KnobDisplay {
   num: string
   /** its unit, rendered quietly next to it */
   unit?: string
-  /** the same quantity said another way: pages as MB, seconds as minutes */
+  /** the same quantity said another way: pages as MiB, seconds as minutes */
   alt?: string
 }
 
@@ -147,7 +147,7 @@ export function knobDisplay(meta: KnobMeta, value: KnobValue): KnobDisplay {
     case 'checkpointTimeout':
       return { num: String(Math.round(n)), unit: 's', alt: n >= 60 ? fmtDuration(n) : undefined }
     case 'maxWalSize':
-      return { num: fmtNum(n), unit: 'MB', alt: n >= 1024 ? fmtBytes(n * 1024 * 1024, 1) : undefined }
+      return { num: fmtNum(n), unit: 'MiB', alt: n >= 1024 ? fmtBytes(n * 1024 * 1024, 1) : undefined }
     case 'tps':
       return { num: fmtNum(n), unit: 'tps' }
     case 'timeScale':

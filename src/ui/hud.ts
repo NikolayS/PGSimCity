@@ -104,11 +104,11 @@ const VITALS: VitalDef[] = [
     label: 'Cache hit',
     focus: 'shared.buffers',
     color: cssColor('bufClean'),
-    hint: 'Share of page requests served from shared_buffers. Below ~99% on an OLTP system is worth explaining.',
+    hint: 'Share of page requests served from shared_buffers. A well-tuned OLTP server sits above 99%; here the sequential-scan dial is what moves it, because a scan streams pages this pool cannot keep.',
   },
   {
     key: 'wal',
-    label: 'WAL / s',
+    label: 'WAL',
     focus: 'wal.vault',
     color: cssColor('wal'),
     hint: 'Write-ahead log bytes produced per second. Compare it against max_wal_size to predict the next checkpoint.',
@@ -226,7 +226,7 @@ function lagClimbing(lag: readonly number[]): boolean {
 function health(s: SimState): Health {
   if (s.checkpoint.phase !== 'idle' && s.checkpoint.reason === 'wal') return 'crit'
   if (s.locks.length >= 3) return 'crit'
-  if (s.stats.cacheHitPct < 90) return 'warn'
+  if (s.stats.cacheHitPct < 55) return 'warn'
   if (s.replication.enabled && (s.replication.lagSec > 5 || lagClimbing(s.stats.history.lag))) return 'warn'
   if (s.buffers.size > 0 && s.buffers.dirtyCount / s.buffers.size > 0.7) return 'warn'
   return 'ok'
@@ -236,7 +236,7 @@ function healthReason(s: SimState, h: Health): string {
   if (s.checkpoint.phase !== 'idle' && s.checkpoint.reason === 'wal')
     return 'Checkpoint triggered by WAL volume — max_wal_size is being outrun'
   if (s.locks.length >= 3) return `${s.locks.length} backends waiting on a heavyweight lock`
-  if (s.stats.cacheHitPct < 90) return `Cache hit ratio ${s.stats.cacheHitPct.toFixed(1)}% — reads are going to storage`
+  if (s.stats.cacheHitPct < 55) return `Cache hit ratio ${s.stats.cacheHitPct.toFixed(1)}% — most reads are going to storage`
   if (s.replication.enabled && s.replication.lagSec > 5) return `Standby is ${s.replication.lagSec.toFixed(1)}s behind`
   if (s.replication.enabled && lagClimbing(s.stats.history.lag)) return 'Replication lag is climbing'
   if (h === 'warn') return 'Most of the buffer pool is dirty'
@@ -251,13 +251,19 @@ function vitalValue(key: VitalKey, s: SimState): { text: string; state: State } 
       return { text: fmtNum(s.stats.tps), state: ratio < 0.4 ? 'crit' : ratio < 0.72 ? 'warn' : '' }
     }
     case 'hit': {
+      // Banded against what THIS city can actually reach. Its workload runs
+      // sequential scans over relations far larger than a 768-frame pool, so it
+      // lives in the 60-90% range and only approaches 99% once the seq-scan
+      // dial is turned down. Bands tuned to a real server's 99% would leave
+      // this vital stuck on a warning for every visitor, which teaches nothing.
       const v = s.stats.cacheHitPct
-      return { text: `${v.toFixed(1)}%`, state: v < 75 ? 'crit' : v < 90 ? 'warn' : v >= 99 ? 'ok' : '' }
+      return { text: `${v.toFixed(1)}%`, state: v < 55 ? 'crit' : v < 80 ? 'warn' : v >= 95 ? 'ok' : '' }
     }
     case 'wal': {
       const bps = s.wal.bytesPerSec
       const fillSec = bps > 1 ? (s.knobs.maxWalSize * 1024 * 1024) / bps : Infinity
-      return { text: fmtBytes(bps), state: fillSec < 12 ? 'crit' : fillSec < 40 ? 'warn' : '' }
+      // A rate carries its time component in the value, not only in the label.
+      return { text: `${fmtBytes(bps)}/s`, state: fillSec < 12 ? 'crit' : fillSec < 40 ? 'warn' : '' }
     }
     case 'dirty': {
       const d = s.buffers.dirtyCount

@@ -104,7 +104,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What actually happens at COMMIT',
-        body: 'With `synchronous_commit = on`, a committing backend calls `XLogFlush` up to its own commit record and sleeps until the fsync returns. While it sleeps, other backends pile their commit records into the same buffer, so one fsync frequently hardens dozens of transactions — this is group commit, and it is why throughput does not fall off a cliff as concurrency rises. With `synchronous_commit = off` the backend does not wait at all: it marks the LSN it needs, returns success to the client, and leaves the WAL writer to flush within roughly `wal_writer_delay` (200 ms by default).',
+        body: 'With `synchronous_commit = on`, a committing backend calls `XLogFlush` up to its own commit record and sleeps until the fsync returns. While it sleeps, other backends pile their commit records into the same buffer, so one fsync frequently hardens dozens of transactions — this is group commit, and it is why throughput does not fall off a cliff as concurrency rises. With `synchronous_commit = off` the backend does not wait at all: it marks the LSN it needs, returns success to the client, and leaves the WAL writer to flush it. The documented bound on that window is three times `wal_writer_delay` — about 600 ms at the default 200 ms — because the WAL writer needs a full cycle to notice the record and another to flush it.',
       },
       {
         heading: 'What you would see in production',
@@ -158,7 +158,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'How to watch it',
-        body: 'Query `pg_replication_slots` and look at `active`, `wal_status` and `safe_wal_size` — `wal_status` moving from `reserved` to `extended` to `lost` is the disk filling in slow motion. `pg_stat_archiver.last_failed_time` tells you whether archiving is the culprit. `SELECT pg_current_wal_lsn()` minus a slot LSN gives you exactly how many bytes one consumer is holding hostage.',
+        body: 'Query `pg_replication_slots` and look at `active`, `wal_status` and `safe_wal_size` — `wal_status` moving from `reserved` to `extended` to `unreserved` to `lost` is the disk filling in slow motion. `unreserved` is the one to page on: the WAL that slot needs is now beyond `max_slot_wal_keep_size` and can be removed at the next checkpoint, so it is the last moment at which the slot can still be saved. By `lost` the segments are gone and whatever was consuming that slot has to be rebuilt. `pg_stat_archiver.last_failed_time` tells you whether archiving is the culprit. `SELECT pg_current_wal_lsn()` minus a slot LSN gives you exactly how many bytes one consumer is holding hostage.',
       },
     ],
     metrics: [
@@ -210,7 +210,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       {
         label: 'Backlog size',
         get: (s) => fmtBytes(s.wal.archiveQueue * s.wal.segmentSize),
-        hint: 'bytes that would be lost if the primary died right now',
+        hint: 'WAL that exists only on the primary — still safe in pg_wal, lost only if you lose the primary\'s storage',
       },
     ],
     knobs: ['tps', 'writeRatio', 'maxWalSize'],
@@ -291,7 +291,10 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       { label: 'Sent LSN', get: (s) => fmtLsn(s.replication.sentLsn) },
       {
         label: 'Behind the primary',
-        get: (s) => fmtBytes(Math.max(0, s.wal.insertLsn - s.replication.sentLsn)),
+        get: (s) =>
+          !s.replication.enabled || !s.replication.connected
+            ? 'no standby'
+            : fmtBytes(Math.max(0, s.wal.insertLsn - s.replication.sentLsn)),
         hint: 'WAL generated but not yet handed to the wire',
       },
       {
@@ -338,7 +341,10 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       { label: 'Slot position', get: (s) => fmtLsn(s.replication.logicalSlotLsn) },
       {
         label: 'WAL held by the slot',
-        get: (s) => fmtBytes(Math.max(0, s.wal.insertLsn - s.replication.logicalSlotLsn)),
+        get: (s) =>
+          !s.replication.enabled
+            ? 'nothing — no slot exists'
+            : fmtBytes(Math.max(0, s.wal.insertLsn - s.replication.logicalSlotLsn)),
         hint: 'cannot be recycled until the consumer confirms it',
       },
     ],
@@ -832,7 +838,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     sections: [
       {
         heading: 'What it actually does',
-        body: 'The launcher itself vacuums nothing. Every `autovacuum_naptime` (60 seconds by default) it wakes, picks the database that has waited longest, and asks the postmaster to fork a **worker** for it. The worker is what reads the statistics, builds the list of tables over threshold, and processes them. With the default naptime and several databases, the effective visit interval for any one database is naptime divided by database count, which is worth remembering on clusters with dozens of databases.',
+        body: 'The launcher itself vacuums nothing. Every `autovacuum_naptime` (60 seconds by default) it wakes, picks the database that has waited longest, and asks the postmaster to fork a **worker** for it. The worker is what reads the statistics, builds the list of tables over threshold, and processes them. With N databases the launcher wakes every `autovacuum_naptime`/N and starts one worker per wakeup, so each database is still visited about once per naptime — not more often. On a cluster with dozens of databases the wakeups get closer together, the per-database interval does not, and it stretches further whenever all `autovacuum_max_workers` are already busy.',
       },
       {
         heading: 'The threshold formula',
@@ -849,6 +855,10 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       {
         heading: 'What you would see in production',
         body: 'The symptom is never "autovacuum is slow". It is a table growing while its row count is flat, or `pg_stat_user_tables.last_autovacuum` hours old on your busiest table, or three workers permanently occupied by three giant tables while everything else queues behind them. Watch `n_dead_tup` against the computed threshold, and `pg_stat_progress_vacuum` to see what the running workers are actually doing.',
+      },
+      {
+        heading: 'Where this model cheats',
+        body: 'The naptime here is 12 seconds, not 60, and this city has exactly one database — otherwise the yard would sit empty for the length of a visit. The threshold formula, the shared cost budget and the phase order are the real ones; only the clock is compressed.',
       },
     ],
     metrics: [
@@ -875,7 +885,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     sections: [
       {
         heading: 'The phases, in order',
-        body: 'A vacuum is a fixed sequence, and `pg_stat_progress_vacuum` names every step. **Scan heap**: read pages (skipping all-visible ones via the visibility map) and collect the TIDs of dead tuples. **Vacuum indexes**: for each index, remove every entry pointing at a collected TID — this is why vacuum cost scales with index count, not just table size. **Vacuum heap**: return to the collected pages and turn those line pointers into free space, updating the FSM. **Truncate**: give back trailing empty pages if it can. **Analyze**: refresh planner statistics, if that was also due.',
+        body: 'A vacuum is a fixed sequence, and `pg_stat_progress_vacuum` names every step. **Scan heap**: read pages (skipping all-visible ones via the visibility map) and collect the TIDs of dead tuples. **Vacuum indexes**: for each index, remove every entry pointing at a collected TID — this is why vacuum cost scales with index count, not just table size. **Vacuum heap**: return to the collected pages and turn those line pointers into free space, updating the FSM. **Cleaning up indexes**: each index gets its post-vacuum cleanup pass. **Truncate**: give back trailing empty pages if it can, and only those. ANALYZE is *not* one of these phases — autovacuum may run it against the same table straight afterwards, but it is a separate command with its own view, `pg_stat_progress_analyze`.',
       },
       {
         heading: 'Dead is not the same as removable',
@@ -1079,14 +1089,26 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       { label: 'Mode', get: (s) => (s.replication.enabled ? s.replication.mode : 'no standby') },
       { label: 'Network latency', get: (s) => `${fmtNum(s.replication.networkLagMs)} ms`, hint: 'one way' },
       {
+        // synchronous_commit = 'on' is a LOCAL flush guarantee: it never puts the
+        // network in the commit path. Only a genuinely synchronous standby does,
+        // and only while one is actually connected.
         label: 'Commit tax',
         get: (s) =>
-          s.knobs.synchronousCommit === 'on' || s.knobs.synchronousCommit === 'remote_apply'
+          s.replication.enabled && s.replication.connected && s.replication.mode === 'sync'
             ? `${fmtNum(s.replication.networkLagMs * 2)} ms per commit`
-            : 'none — async commit path',
+            : s.knobs.synchronousCommit === 'off'
+              ? 'none — the commit does not wait at all'
+              : 'none — local flush only',
+        hint: 'a commit only pays the network when a synchronous standby is in the path',
       },
       { label: 'In flight', get: (s) => fmtNum(s.replication.inFlight), hint: 'WAL records on the wire' },
-      { label: 'Lag', get: (s) => `${fmtBytes(s.replication.lagBytes)} · ${fmtDuration(s.replication.lagSec)}` },
+      {
+        label: 'Lag',
+        get: (s) =>
+          !s.replication.enabled || !s.replication.connected
+            ? '—'
+            : `${fmtBytes(s.replication.lagBytes)} · ${fmtDuration(s.replication.lagSec)}`,
+      },
     ],
     knobs: ['synchronousCommit', 'replicaNetworkLag', 'replicaEnabled', 'replicaSlowApply'],
     see: ['walsender', 'walreceiver', 'replica.standby', 'walwriter'],
@@ -1200,7 +1222,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       { label: 'sent → write', get: (s) => fmtBytes(Math.max(0, s.replication.sentLsn - s.replication.writeLsn)), hint: 'network' },
       { label: 'write → flush', get: (s) => fmtBytes(Math.max(0, s.replication.writeLsn - s.replication.flushLsn)), hint: 'standby disk' },
       { label: 'flush → replay', get: (s) => fmtBytes(Math.max(0, s.replication.flushLsn - s.replication.replayLsn)), hint: 'replay speed' },
-      { label: 'Replay lag', get: (s) => fmtDuration(s.replication.lagSec) },
+      { label: 'Replay lag', get: (s) => (!s.replication.enabled || !s.replication.connected ? '—' : fmtDuration(s.replication.lagSec)) },
     ],
     knobs: ['replicaEnabled', 'replicaSlowApply', 'replicaNetworkLag', 'synchronousCommit'],
     see: ['startup.proc', 'replica.client', 'walsender', 'replica.buffers'],
@@ -1308,7 +1330,13 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     ],
     metrics: [
       { label: 'Standby', get: (s) => (s.replication.enabled ? (s.replication.connected ? 'accepting reads' : 'offline') : 'not running') },
-      { label: 'Staleness', get: (s) => `${fmtDuration(s.replication.lagSec)} · ${fmtBytes(s.replication.lagBytes)}` },
+      {
+        label: 'Staleness',
+        get: (s) =>
+          !s.replication.enabled || !s.replication.connected
+            ? '—'
+            : `${fmtDuration(s.replication.lagSec)} · ${fmtBytes(s.replication.lagBytes)}`,
+      },
       {
         label: 'Vacuum horizon held',
         get: (s) => `${fmtDuration(s.oldestSnapshotAge)} · ${fmtNum(Math.max(0, s.xid - s.xminHorizon))} xids`,
@@ -1356,7 +1384,10 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       { label: 'Confirmed to', get: (s) => fmtLsn(s.replication.logicalSlotLsn) },
       {
         label: 'WAL retained for it',
-        get: (s) => fmtBytes(Math.max(0, s.wal.insertLsn - s.replication.logicalSlotLsn)),
+        get: (s) =>
+          !s.replication.enabled
+            ? 'nothing — no subscription exists'
+            : fmtBytes(Math.max(0, s.wal.insertLsn - s.replication.logicalSlotLsn)),
         hint: 'the publisher cannot recycle this until the subscriber confirms',
       },
     ],

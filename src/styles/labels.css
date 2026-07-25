@@ -4,43 +4,62 @@
    These live in #labels-root, positioned every frame by CSS2DRenderer. The
    renderer owns each `.lbl` element's inline `position`, `display` and
    `transform`, so nothing in this file may set `transform` on `.lbl` itself —
-   the enter/exit motion is applied to the inner `.lbl__chip` instead.
+   the chip is offset, and the enter motion applied, on `.lbl__chip` instead.
 
-   Anatomy (anchor point is the element's bottom-left corner):
+   `.lbl` is a zero-height anchor box whose ORIGIN is the world point: the
+   CSS2DObject uses center (0,0), so the element's top-left corner lands exactly
+   on the thing being named. Everything inside is absolutely positioned from
+   there, which is what lets engine/labels.ts nudge a chip off its anchor to
+   dodge a collision and still draw an honest leader back to it:
 
         ┌───────────────────────────────┐
-        │ ▌CHECKPOINTER      2.3 MB/s   │   ← .lbl__chip
+        │ ▌CHECKPOINTER      2.3 MB/s   │   ← .lbl__chip, at (--lbl-dx, --lbl-dy)
         │ ▌background process           │
         └───────────────────────────────┘
-       ╱                                    ← .lbl__leader
-      ●                                     ← .lbl__dot  (the world anchor)
+       ╱                                    ← .lbl__leader, --lbl-lead long
+      ●                                     ← .lbl__dot, the world anchor (0,0)
+
+   The 320px containing block is deliberate: it is what caps a long role line,
+   and it makes the off-screen measurement in labels.ts agree exactly with the
+   on-screen layout.
 
    Colour comes from --lbl-accent, set inline per component by labels.ts, so a
    WAL chip is amber and a vacuum chip is violet without a class per district.
+
+   Variants:  .lbl--district  a whole district
+              .lbl--city      the model's own name, from far out
+              .has-more       carries a "+N" collapse pill
+              .is-far         degraded to a bare name plate
+              .is-nudged      moved off its home offset; leader emphasised
    ==========================================================================*/
 
 .lbl {
   --lbl-accent: var(--c-backend);
+  /* written by labels.ts on each placement pass */
+  --lbl-dx: 16px;
+  --lbl-dy: -50px;
+  --lbl-lead: 23px;
+  --lbl-lead-a: -45deg;
 
   position: absolute;
-  /* The padding *is* the leader line's run: 18px right and 18px up from the
-     anchor to the chip's lower-left corner. */
-  padding: 0 0 18px 18px;
-  /* Only the chip and the dot are hit targets; the leader gutter is not. */
+  /* A definite containing block: the chip is shrink-to-fit inside it, so this
+     width is also the chip's maximum. Height is 0 — the anchor is a point. */
+  width: 320px;
+  height: 0;
+  /* Only the chip and the dot are hit targets; the anchor box is not. */
   pointer-events: none;
   opacity: 0;
-  transition: opacity 180ms var(--ease);
+  transition: opacity 200ms var(--ease);
   will-change: opacity;
-}
-
-.lbl.is-on {
-  opacity: 1;
 }
 
 /* --------------------------------- chip ---------------------------------- */
 
 .lbl__chip {
-  position: relative;
+  position: absolute;
+  left: 0;
+  top: 0;
+  max-width: 100%;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -56,16 +75,17 @@
   overflow: hidden;
   pointer-events: auto;
   cursor: pointer;
-  transform: translateY(6px);
+  /* 6px below its resting place while it fades in */
+  transform: translate(var(--lbl-dx), calc(var(--lbl-dy) + 6px));
   transition:
-    transform 180ms var(--ease),
+    transform 200ms var(--ease),
     background var(--dur) var(--ease),
     border-color var(--dur) var(--ease),
     box-shadow var(--dur) var(--ease);
 }
 
 .lbl.is-on .lbl__chip {
-  transform: none;
+  transform: translate(var(--lbl-dx), var(--lbl-dy));
 }
 
 /* the 2px semantic accent bar */
@@ -105,11 +125,14 @@
 /* live readout — spans both rows, right-aligned, tabular so it never jitters */
 .lbl__read {
   grid-area: 1 / 2 / 3 / 3;
+  max-width: 170px;
   font-family: var(--f-mono);
   font-size: var(--fs-xs);
   font-style: normal;
   color: var(--lbl-accent);
   text-align: right;
+  text-overflow: ellipsis;
+  overflow: hidden;
   font-variant-numeric: tabular-nums;
 }
 
@@ -118,28 +141,68 @@
 .lbl__leader {
   position: absolute;
   left: 0;
-  bottom: 0;
-  width: 25px; /* 18px * √2 */
+  top: 0;
+  width: var(--lbl-lead);
   height: 1px;
   transform-origin: 0 50%;
-  transform: rotate(-45deg);
+  transform: rotate(var(--lbl-lead-a));
   background: linear-gradient(90deg, var(--lbl-accent), rgba(140, 180, 235, 0.12));
   opacity: 0.55;
-  transition: opacity var(--dur) var(--ease);
+  transition:
+    width 200ms var(--ease),
+    transform 200ms var(--ease),
+    opacity var(--dur) var(--ease);
 }
 
 .lbl__dot {
   position: absolute;
   left: 0;
-  bottom: 0;
+  top: 0;
   width: 3px;
   height: 3px;
-  margin: 0 0 -1.5px -1.5px;
+  margin: -1.5px 0 0 -1.5px;
   border-radius: 50%;
   background: var(--lbl-accent);
   box-shadow: 0 0 8px 0 var(--lbl-accent);
   pointer-events: auto;
   cursor: pointer;
+}
+
+/* a chip that had to move off its home offset says so: the run is longer and
+   the eye needs the line to make the association */
+.lbl.is-nudged .lbl__leader {
+  opacity: 0.78;
+  background: linear-gradient(90deg, var(--lbl-accent), rgba(140, 180, 235, 0.3));
+}
+
+/* --------------------------- the collapse pill ---------------------------- */
+
+/* "+7" — seven named things are in there, not labelled at this zoom. Always in
+   the last track, whether that is beside a readout or on its own. */
+.lbl__more {
+  grid-column: -2 / -1;
+  grid-row: 1 / -1;
+  align-self: center;
+  padding: 1px 5px 2px;
+  border: 1px solid var(--line-hair);
+  border-radius: 999px;
+  background: rgba(140, 180, 235, 0.09);
+  font-family: var(--f-mono);
+  font-size: var(--fs-micro);
+  font-style: normal;
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  color: var(--lbl-accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.lbl:not(.has-more) .lbl__more {
+  display: none;
+}
+
+/* name | readout | pill */
+.lbl.has-more .lbl__chip {
+  grid-template-columns: minmax(0, 1fr) auto auto;
 }
 
 /* -------------------------------- states --------------------------------- */
@@ -185,15 +248,111 @@
 }
 
 .lbl.is-far .lbl__chip {
-  /* collapse to a single track, otherwise the (now empty) readout column keeps
-     its column-gap and the plate carries dead space on the right */
-  grid-template-columns: minmax(0, 1fr);
-  column-gap: 0;
   padding: 3px 8px 3px 8px;
   background: rgba(8, 13, 24, 0.5);
+}
+
+/* collapse to the tracks that still carry something, otherwise the (now empty)
+   readout column keeps its column-gap and the plate carries dead space */
+.lbl.is-far:not(.has-more) .lbl__chip {
+  grid-template-columns: minmax(0, 1fr);
+  column-gap: 0;
+}
+
+.lbl.is-far.has-more .lbl__chip {
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 9px;
 }
 
 .lbl.is-far .lbl__name {
   font-size: var(--fs-micro);
   color: var(--ink-dim);
+}
+
+/* ------------------------------- district -------------------------------- */
+
+/* One chip per district, at the centroid of its members — the label the city
+   wears from a distance, and the reason an area can never read as empty. */
+.lbl--district {
+  z-index: 2;
+}
+
+.lbl--district .lbl__chip {
+  grid-template-columns: minmax(0, 1fr);
+  column-gap: 0;
+  padding: 4px 9px 4px 8px;
+  background: rgba(6, 11, 20, 0.72);
+}
+
+.lbl--district.has-more .lbl__chip {
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 9px;
+  padding-right: 7px;
+}
+
+.lbl--district .lbl__name {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  color: var(--ink);
+}
+
+.lbl--district .lbl__leader {
+  opacity: 0.4;
+}
+
+/* --------------------------------- city ---------------------------------- */
+
+/* The model's own name, only from far enough out that nothing else is legible.
+   Nothing but the name — no role, no readout. */
+.lbl--city .lbl__role,
+.lbl--city .lbl__read {
+  display: none;
+}
+
+.lbl--city .lbl__chip {
+  grid-template-columns: minmax(0, 1fr);
+  column-gap: 0;
+  padding: 5px 13px 5px 12px;
+  background: rgba(6, 11, 20, 0.5);
+}
+
+.lbl--city .lbl__name {
+  font-size: var(--fs-sm);
+  letter-spacing: 0.3em;
+  color: var(--ink);
+}
+
+.lbl--city .lbl__leader,
+.lbl--city .lbl__dot {
+  opacity: 0.35;
+}
+
+/* ------------------------------- measuring ------------------------------- */
+
+/* labels.ts parks new chips here for one layout to read their box, then hands
+   them to the CSS2D renderer. Off-screen and invisible, but still laid out —
+   `visibility` rather than `display`, or the measurement would be zero. */
+.lbl-measure {
+  position: absolute;
+  left: -20000px;
+  top: 0;
+  width: 0;
+  height: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* ---------------------------- reduced motion ----------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .lbl,
+  .lbl__chip,
+  .lbl__leader {
+    transition: none;
+  }
+  /* no rise-in, so the chip must already sit at its resting offset */
+  .lbl__chip {
+    transform: translate(var(--lbl-dx), var(--lbl-dy));
+  }
 }

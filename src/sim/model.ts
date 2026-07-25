@@ -1197,6 +1197,8 @@ export function createSim(bus: Bus): SimApi {
                 'warn',
                 6000,
               )
+              // The run is over: the flag described this pass, not the bay.
+              w.stalledByHorizon = false
             }
           }
           break
@@ -2541,8 +2543,12 @@ export function createSim(bus: Bus): SimApi {
       const d = TABLES[i]
       t.pages = d.pages
       t.liveTuples = d.pages * d.tuplesPerPage
-      // seed some plausible churn so the yard is not idle for the first minute
-      const seed = d.id === 'events' ? 0 : Math.round((50 + K.autovacuumScaleFactor * t.liveTuples) * (d.id === 'sessions' ? 0.62 : 0.3))
+      // The city is a database that has been up for a while, not one that was
+      // loaded a second ago, so the tables already carry dead versions. sessions
+      // starts just under its threshold: autovacuum has a bay to open in the
+      // first half minute at any transaction rate, which is the only way the
+      // yard introduces itself before a visitor has stopped looking at it.
+      const seed = d.id === 'events' ? 0 : Math.round((50 + K.autovacuumScaleFactor * t.liveTuples) * (d.id === 'sessions' ? 0.94 : 0.45))
       t.deadTuples = seed
       deadRemovable[i] = seed
       t.bloat = 0

@@ -81,7 +81,7 @@ const STEPS: TourStep[] = [
     id: 'buffers',
     title: 'Reading a page: the cache',
     body:
-      'Postgres never reads a single row off disk. It reads the whole 8 kB page that contains it into shared_buffers — the lit plaza in the middle of the city — and every backend then reads that one copy. Blue tiles match what is on disk; the sweeping hand is the clock algorithm looking for a frame nobody wants any more. Watch the cache hit figure in the top bar: on a healthy server almost every read lands on a tile that is already here.',
+      'Postgres never reads a single row off disk. It reads the whole 8 kB page that contains it into shared_buffers — the lit plaza in the middle of the city — and every backend then reads that one copy. Blue tiles match what is on disk; the sweeping hand is the clock algorithm looking for a frame nobody wants any more. Watch the cache hit figure in the top bar. A tuned OLTP server sits above 99% because nearly every read lands on a tile that is already here; this city reads lower, because its workload also sweeps whole tables that were never going to fit. The seq-scan dial is what moves that number.',
     focus: 'shared.buffers',
     duration: 18,
     knobs: { seqScanRatio: 0.12 },
@@ -181,7 +181,7 @@ const STEPS: TourStep[] = [
     id: 'lag',
     title: 'Lag, and the four LSNs',
     body:
-      'A standby reports four positions, and confusing them is the most common mistake in Postgres monitoring: what it has received, what it has written, what it has flushed to its own disk, and what it has actually replayed. Only the last one is visible to a query running on the replica. Replay is a single process, and your primary produced that log with sixteen backends at once. Watch received keep pace while replayed slides away from it — that gap is your replication lag.',
+      'A standby reports four positions, and confusing them is the most common mistake in Postgres monitoring: what the primary has sent, what the standby has written, what it has flushed to its own disk, and what it has actually replayed — `sent_lsn`, `write_lsn`, `flush_lsn` and `replay_lsn`. Only the last one is visible to a query running on the replica. Replay is a single process, and your primary produced that log with sixteen backends at once. Watch sent keep pace while replayed slides away from it — that gap is your replication lag.',
     focus: 'replica.standby',
     duration: 20,
     scenario: 'replication-lag',

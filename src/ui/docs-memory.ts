@@ -566,7 +566,11 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       },
     ],
     metrics: [
-      { label: 'In transaction', get: (s) => fmtNum(countBackends(s, (b) => b.active && nz(b.xid) > 0)), hint: 'backends that have been assigned an xid' },
+      {
+        label: 'In transaction',
+        get: (s) => fmtNum(countBackends(s, (b) => b.active && b.state !== 'idle' && nz(b.xid) > 0)),
+        hint: 'backends assigned an xid — i.e. inside a transaction that has written',
+      },
       { label: 'Next xid', get: (s) => fmtNum(nz(s.xid)) },
       { label: 'xmin horizon', get: (s) => fmtNum(nz(s.xminHorizon)) },
       { label: 'Horizon lag', get: (s) => `${fmtNum(Math.max(0, nz(s.xid) - nz(s.xminHorizon)))} xids` },
@@ -614,7 +618,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       { label: 'Horizon lag', get: (s) => `${fmtNum(Math.max(0, nz(s.xid) - nz(s.xminHorizon)))} xids` },
       {
         label: 'Vacuum stalled',
-        get: (s) => `${fmtNum((s.autovac?.workers ?? []).filter((w) => w && w.stalledByHorizon).length)} workers`,
+        get: (s) => `${fmtNum((s.autovac?.workers ?? []).filter((w) => w && w.active && w.stalledByHorizon).length)} workers`,
         hint: 'workers that found dead rows they are not allowed to remove',
       },
       { label: 'Dead tuples', get: (s) => fmtNum(sumTables(s, (t) => t.deadTuples)), hint: 'across all tables' },
