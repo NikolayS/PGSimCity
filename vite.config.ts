@@ -13,12 +13,21 @@ const entry = (rel: string) => fileURLToPath(new URL(rel, import.meta.url))
  */
 const input: Record<string, string> = { city: entry('./index.html') }
 
-// The observability page is only buildable once BOTH its HTML and the module
-// that HTML loads exist. Checking only the page lets a half-landed feature take
-// the deploy down.
-const observability = entry('./observability/index.html')
-if (existsSync(observability) && existsSync(entry('./src/observability/main.ts'))) {
-  input.observability = observability
+/**
+ * The observability page is a second entry that is still being written. Build it
+ * only when its whole entry graph is present — the page, its module, and the
+ * module's own local imports. Checking just one of those still lets a partially
+ * landed feature fail the build and block the deploy, which has happened twice.
+ *
+ * Set PGSIMCITY_ENTRIES=city to force the city alone regardless.
+ */
+const allExist = (...paths: string[]) => paths.every((p) => existsSync(entry(p)))
+
+if (
+  process.env.PGSIMCITY_ENTRIES !== 'city' &&
+  allExist('./observability/index.html', './src/observability/main.ts', './src/observability/style.css')
+) {
+  input.observability = entry('./observability/index.html')
 }
 
 export default defineConfig({
