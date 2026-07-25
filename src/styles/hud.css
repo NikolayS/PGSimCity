@@ -111,7 +111,10 @@
   border-left: 1px solid var(--line-hair);
   padding: 7px 14px;
   display: grid;
-  grid-template-columns: auto auto;
+  /* Fixed columns: a metric tile must never resize as its number changes, or
+     every tile to its right dances. Value column is sized for the longest
+     realistic readout (e.g. "1.2 MiB/s"). */
+  grid-template-columns: 92px 88px;
   column-gap: 12px;
   row-gap: 1px;
   align-items: end;
@@ -130,12 +133,22 @@
 
 .hud-vital__k {
   grid-column: 1 / -1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .hud-vital__v {
   grid-column: 1;
   font-size: var(--fs-lg);
   letter-spacing: -0.01em;
   white-space: nowrap;
+  /* Equal-width digits: without this, 111 is narrower than 000 and the
+     readout shivers on every update. */
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+  min-width: 0;
+  overflow: hidden;
 }
 .hud-vital .pg-spark {
   grid-column: 2;
@@ -687,6 +700,7 @@ body.pg-labels-off #labels-root {
 @media (max-width: 1280px) {
   .hud-vital {
     padding: 7px 11px;
+    grid-template-columns: 92px 60px;
   }
   .hud-vital .pg-spark {
     width: 60px;
