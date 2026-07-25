@@ -72,10 +72,14 @@ async function boot(): Promise<void> {
 
   // --- WebGL2 gate -----------------------------------------------------------
   const probe = document.createElement('canvas')
-  if (!probe.getContext('webgl2')) {
+  const probeCtx = probe.getContext('webgl2')
+  if (!probeCtx) {
     fatal('This browser has no WebGL2. Try a recent Chrome, Edge, Firefox or Safari.')
     return
   }
+  // Hand the probe context straight back — browsers cap how many WebGL contexts
+  // can be live at once, and the real one has not been created yet.
+  probeCtx.getExtension('WEBGL_lose_context')?.loseContext()
 
   const bus = createBus()
   const registry = new Registry()
@@ -92,7 +96,6 @@ async function boot(): Promise<void> {
   const sim = createSim(bus)
 
   // --- the context every district is built against ---------------------------
-  const flowQueue: FlowRequest[] = []
   const ctx: WorldContext = {
     scene,
     camera,
@@ -223,14 +226,20 @@ async function boot(): Promise<void> {
 
   /* --- the loop ------------------------------------------------------------ */
 
-  const clock = new THREE.Clock()
+  const timer = new THREE.Timer()
+  timer.connect(document)
   let running = true
 
   function frame(): void {
     if (!running) return
     requestAnimationFrame(frame)
 
-    const dt = clamp(clock.getDelta(), 0, 0.1)
+    timer.update()
+    // rawDt is real wall-clock time — the only honest input to the fps readout
+    // and the adaptive-quality timers. dt is clamped so that one slow frame
+    // cannot teleport the simulation or the camera.
+    const rawDt = timer.getDelta()
+    const dt = clamp(rawDt, 0, 0.1)
     const s = sim.state
 
     // 1. advance the model
@@ -250,7 +259,7 @@ async function boot(): Promise<void> {
     picker.update(dt)
 
     // 4. draw
-    gfx.render(dt)
+    gfx.render(dt, rawDt)
     labels.update(dt, camera, s)
     labels.render(scene, camera)
 
@@ -267,9 +276,13 @@ async function boot(): Promise<void> {
 
   /* --- teardown (hot reload / navigation) ---------------------------------- */
 
+  let disposed = false
   const dispose = () => {
+    if (disposed) return
+    disposed = true
     running = false
     window.removeEventListener('resize', onResize)
+    timer.disconnect()
     for (const m of modules) m.dispose?.()
     for (const u of ui) u.dispose()
     flows.dispose()
@@ -279,12 +292,25 @@ async function boot(): Promise<void> {
     gfx.dispose()
     theme.dispose()
   }
-  window.addEventListener('pagehide', dispose, { once: true })
+  // pagehide also fires when the page goes into the back/forward cache, where it
+  // is expected to come back alive. Only tear down when it is a real unload.
+  window.addEventListener('pagehide', (e: PageTransitionEvent) => {
+    if (e.persisted) {
+      running = false // pause; pageshow restarts the loop
+      return
+    }
+    dispose()
+  })
+  window.addEventListener('pageshow', () => {
+    if (running || disposed) return
+    running = true
+    timer.update() // swallow the delta accumulated while frozen
+    frame()
+  })
   if (import.meta.hot) import.meta.hot.dispose(dispose)
 
   // handy in the console
   Object.assign(window as unknown as Record<string, unknown>, { PGCITY: { sim, registry, bus, rig, gfx, flows } })
-  void flowQueue
 }
 
 boot().catch((err) => fatal('PGSimCity failed to start — see the console.', err))

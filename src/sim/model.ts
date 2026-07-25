@@ -76,6 +76,12 @@ const IDLE_REAP = 22
 /** autovacuum_naptime. Real default is 60s; compressed so the yard stays alive. */
 const AV_NAPTIME = 12
 const LOCK_TIMEOUT = 15
+/**
+ * Ceiling on the pages one vacuum pass may hand back. Real truncation needs an
+ * ACCESS EXCLUSIVE lock and gives it up the moment anyone else wants the table,
+ * so it proceeds in small bites — and usually reclaims nothing at all.
+ */
+const TRUNCATE_MAX_PAGES = 8
 const MAX_VISIT_PAGES = 2400
 const PAGE_OPS_PER_SEC = 60000
 const FLOW_BUDGET_PER_SEC = 420
@@ -352,6 +358,8 @@ export function createSim(bus: Bus): SimApi {
   // (`aggregate`) sweeps the big ones.
   /** Row count each relation settles at — inserts replace what deletes remove. */
   const naturalLive: number[] = TABLES.map((d) => d.pages * d.tuplesPerPage)
+  /** 0 = tables at their natural size, 1 = draining hard. See tickTables(). */
+  let liveDeficit = 0
   const wSeq: number[] = TABLES.map((d) => d.weight * Math.pow(600 / d.pages, 1.5))
   const wAgg: number[] = TABLES.map((d) => d.weight * Math.pow(d.pages / 600, 0.6))
 
@@ -993,6 +1001,8 @@ export function createSim(bus: Bus): SimApi {
   }
 
   function tickTables(dt: number): void {
+    let defW = 0
+    let wSum = 0
     for (let i = 0; i < N_TABLES; i++) {
       const t = tables[i]
       t.heat = damp(t.heat, 0, 1.1, dt)
@@ -1006,7 +1016,19 @@ export function createSim(bus: Bus): SimApi {
       // table rather than accumulating dead versions.
       const deficit = clamp01((naturalLive[i] - t.liveTuples) / naturalLive[i])
       wIns[i] = TABLES[i].weight * (TABLES[i].id === 'events' ? 2.4 : 1) * (1 + 3 * deficit)
+      // Weighted by how often this table is the target of an update or delete,
+      // so the feedback tracks the relations that are actually draining.
+      defW += deficit * wUpd[i]
+      wSum += wUpd[i]
     }
+    // The deficit above only decides *which* table receives an insert. This
+    // decides *how many* statements are inserts at all: an update-heavy
+    // workload deletes far more rows than it inserts, and without this the
+    // bloat scenarios empty their tables inside ninety seconds, so the bloat
+    // bar ends up measuring an empty relation instead of dead versions in a
+    // live one. Full response by a 15% shortfall; no effect at all once the
+    // tables are at their natural size, so a healthy workload is untouched.
+    liveDeficit = wSum > 0 ? clamp01(defW / wSum / 0.15) : 0
   }
 
   /* ======================================================================
@@ -1129,12 +1151,27 @@ export function createSim(bus: Bus): SimApi {
         }
         case 'truncate': {
           if (done) {
-            // only trailing empty pages come back to the filesystem
+            // ONLY trailing *empty* pages come back to the filesystem, and that
+            // is the whole lesson: vacuum makes space reusable inside the file,
+            // it does not give it back.
+            //
+            // Vacuum leaves its free space scattered across the relation, so a
+            // page at the tail is only reclaimable if every slot on it happens
+            // to be free. With a free fraction f that is f^tuplesPerPage, and
+            // the expected run of such pages at the end of the file is
+            // p/(1-p). For a bloated but populated table that is zero, which is
+            // why the slab keeps its height while the bloat bar climbs. Only a
+            // table that lost nearly all of its rows ever shrinks — and even
+            // then the truncation needs the exclusive lock it can only take a
+            // few pages at a time.
             const cap = t.pages * t.def.tuplesPerPage
             const used = t.liveTuples + t.deadTuples
-            const spare = Math.floor((cap - used) / t.def.tuplesPerPage)
-            if (spare > 40 && !horizonFrozen) {
-              t.pages = Math.max(t.def.pages, t.pages - Math.floor(spare * 0.35))
+            const free = cap > 0 ? clamp01((cap - used) / cap) : 0
+            const p = Math.pow(free, Math.min(t.def.tuplesPerPage, 32))
+            const tailEmpty = p >= 0.999 ? t.pages : Math.floor(p / (1 - p))
+            const shed = Math.min(tailEmpty, TRUNCATE_MAX_PAGES)
+            if (shed > 0 && !horizonFrozen) {
+              t.pages = Math.max(t.def.pages, t.pages - shed)
             }
             vacNext(w, 'analyze', 1.1)
           }
@@ -1540,7 +1577,10 @@ export function createSim(bus: Bus): SimApi {
     let kind: QueryKind
     let ti: number
     if (isWrite) {
-      if (rng() < K.updateRatio) {
+      // Steady state: rows that leave have to be replaced. The workload tilts
+      // towards inserts exactly as far as the tables are short of their natural
+      // size, and not at all when they are not. See tickTables().
+      if (rng() < K.updateRatio * (1 - 0.95 * liveDeficit)) {
         kind = rng() < 0.22 ? 'delete' : 'update'
         ti = weightedPick(wUpd, rng)
       } else {
@@ -1559,7 +1599,9 @@ export function createSim(bus: Bus): SimApi {
 
     b.query = kind
     b.table = ti
-    b.xid = state.xid
+    // backend_xid is assigned lazily, at the first write — a read-only
+    // transaction never consumes a transaction id. See beginExec().
+    b.xid = 0
     b.sql = sqlFor(kind, ti)
     b.rowsSent = 0
     b.buffersTouched = 0
@@ -1607,6 +1649,14 @@ export function createSim(bus: Bus): SimApi {
     const ti = b.table
     const t = tables[ti]
     const nIdx = t.def.indexes.length
+
+    // A transaction is assigned an xid the moment it first writes, and not
+    // before. Read-only transactions hold a snapshot but consume no xid, which
+    // is why `backend_xid` in pg_stat_activity is null for them.
+    if (x.writes) {
+      state.xid += x.txCount
+      b.xid = state.xid
+    }
 
     // Pages per statement. An index scan is a btree descent (root, inner, leaf)
     // plus the heap tuple; maintaining an index on write costs another descent
@@ -1662,7 +1712,9 @@ export function createSim(bus: Bus): SimApi {
         flow(rid.idxLookup(ti), 1, 'page_read', 0.9)
       }
     } else if (x.seqScan) {
-      t.seqScans++
+      // Same unit as idxScans above: one backend trip carries x.txCount
+      // statements, and both counters are per statement.
+      t.seqScans += x.txCount
     }
     if (++sBufReq >= 2) {
       sBufReq = 0
@@ -1799,7 +1851,6 @@ export function createSim(bus: Bus): SimApi {
       sClog = 0
       flow('clog.in', 1, 'stat', 0.8)
     }
-    state.xid += x.txCount
     x.commitLsn = wal.insertLsn
   }
 
@@ -1811,6 +1862,9 @@ export function createSim(bus: Bus): SimApi {
     stats.commits += x.txCount - rb
     commitsAcc += x.txCount - rb
     visitsAcc++
+    // The transaction is over: its xid is no longer live, so the backend stops
+    // holding back the xmin horizon.
+    b.xid = 0
     b.state = 'idle'
     b.stateT = 0
     b.stateDur = 0.2
@@ -1923,6 +1977,11 @@ export function createSim(bus: Bus): SimApi {
             // ERROR: canceling statement due to lock timeout
             unblock(slot)
             stats.rollbacks += x.txCount
+            // These transactions are dead. Zero the batch so endVisit cannot
+            // count the same work a second time as commits — an aborted
+            // transaction is not throughput.
+            x.txCount = 0
+            b.xid = 0
             b.state = 'sending'
             b.stateT = 0
             b.stateDur = 0.05
@@ -2355,6 +2414,7 @@ export function createSim(bus: Bus): SimApi {
 
   function hardReset(): void {
     Object.assign(K, DEFAULT_KNOBS)
+    liveDeficit = 0
     state.t = 0
     state.realT = 0
     state.xid = 100000

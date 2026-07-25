@@ -40,7 +40,11 @@ export interface RendererApi {
   dom: HTMLCanvasElement
   /** Smoothed frames per second. */
   readonly fps: number
-  render(dt: number): void
+  /**
+   * `dt` is the clamped delta used for animation; `rawDt` is real wall-clock
+   * time and is what the fps readout and the adaptive-quality timers measure.
+   */
+  render(dt: number, rawDt?: number): void
   resize(): void
   setQuality(level: QualityLevel): void
   dispose(): void
@@ -142,7 +146,9 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   renderer.toneMapping = THREE.ACESFilmicToneMapping
   renderer.toneMappingExposure = 1.06
   renderer.setClearColor(COLOR.bg, 1)
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap
+  // PCFSoft is deprecated in r185 and silently substituted with PCF — ask for
+  // what we actually get, so the console stays clean and the code stays honest.
+  renderer.shadowMap.type = THREE.PCFShadowMap
   renderer.shadowMap.enabled = quality.shadows
   renderer.info.autoReset = true
 
@@ -260,6 +266,20 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     if (smaaPass) smaaPass.enabled = wantsSmaa(quality.level)
   }
 
+  /**
+   * The WAL vault and the maintenance yard are lit almost entirely by emissive
+   * neon, and their form is carried by the bloom halo around it. 'low' drops the
+   * whole post chain, which is right for a weak GPU but leaves those districts as
+   * near-black silhouettes. Paying it back with real lights costs nothing.
+   */
+  function applyLightCompensation(): void {
+    const noBloom = !quality.bloom
+    hemi.intensity = noBloom ? 0.78 : 0.55
+    fill.intensity = noBloom ? 0.46 : 0.35
+    walGlow.intensity = noBloom ? 66 : 40
+    yardGlow.intensity = noBloom ? 44 : 26
+  }
+
   /** Bloom runs at half the composer's device resolution; call after setSize. */
   function sizeBloom(): void {
     if (!bloomPass) return
@@ -330,6 +350,8 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   let autoDowngrades = 0
   let autoUpgrades = 0
   let manualOverride = false
+  /** Downgrades spent after the user picked a level by hand. Capped at one. */
+  let courtesyDowngrades = 0
 
   function levelIndex(l: QualityLevel): number {
     const i = LEVELS.indexOf(l)
@@ -358,6 +380,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
 
     if (useComposer()) buildComposer()
     applyPassToggles()
+    applyLightCompensation()
 
     // Force a full re-size so pixel ratio / composer targets follow the level.
     viewW = -1
@@ -385,6 +408,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
 
   function setQuality(level: QualityLevel): void {
     manualOverride = true
+    courtesyDowngrades = 0
     if (level === quality.level) return
     applyQuality(level)
     bus.emit('quality', { level })
@@ -398,9 +422,11 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     applyQuality(next)
     bus.emit('quality', { level: next })
     bus.emit('toast', {
-      text: `Frame rate low — graphics quality reduced to ${next}.`,
+      text: manualOverride
+        ? `Frame rate low — graphics quality reduced to ${next}. Set it back in the top bar; it will not be lowered again.`
+        : `Frame rate low — graphics quality reduced to ${next}.`,
       kind: 'warn',
-      ms: 4200,
+      ms: manualOverride ? 6000 : 4200,
     })
   }
 
@@ -431,6 +457,13 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     }
 
     if (slowT >= FPS_FLOOR_SECONDS && quality.level !== 'low') {
+      // An explicit choice from the top bar gets one courtesy rescue, then we
+      // stop and leave the user in charge of their own machine.
+      if (manualOverride && courtesyDowngrades >= 1) {
+        slowT = 0
+        return
+      }
+      if (manualOverride) courtesyDowngrades++
       stepDown()
       return
     }
@@ -449,15 +482,20 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
 
   /* ---- frame ------------------------------------------------------------*/
 
-  function render(dt: number): void {
-    // Tab-switch / breakpoint deltas must not poison the fps estimate.
+  function render(dt: number, rawDt?: number): void {
     const d = clamp(dt, 1 / 1000, 0.25)
-    fps = damp(fps, 1 / d, 2.5, d)
+    // The fps readout and the adapt timers run on real time, not on the delta
+    // the simulation was given. A machine drawing 1 frame a second must be able
+    // to say so — clamping here is what used to floor the readout at 10 fps.
+    // The upper bound only exists so a tab-switch or a breakpoint cannot poison
+    // the estimate with a multi-second gap.
+    const real = clamp(rawDt ?? dt, 1 / 1000, 4)
+    fps = damp(fps, 1 / real, 2.5, Math.min(real, 0.5))
 
     if (useComposer() && composer) composer.render(d)
     else renderer.render(scene, camera)
 
-    adapt(d)
+    adapt(Math.min(real, 1))
   }
 
   /* ---- context loss -----------------------------------------------------*/
