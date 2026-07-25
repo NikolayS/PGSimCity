@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="PGSimCity Observability Lab — an experimental 3D map of PostgreSQL subsystems and the statistics that expose them."
+    />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#050812" />
+    <title>Observability Lab · PGSimCity</title>
+  </head>
+  <body>
+    <main id="app">
+      <canvas id="scene" aria-label="Interactive 3D PostgreSQL observability map"></canvas>
+
+      <header class="topbar">
+        <a class="brand" href="../" aria-label="Back to PGSimCity">
+          <span class="brand__pg">PG</span><span>SIMCITY</span>
+          <i></i>
+          <strong>OBSERVABILITY LAB</strong>
+        </a>
+
+        <div class="search-wrap">
+          <label for="search">Find a view, function, or subsystem</label>
+          <input id="search" type="search" placeholder="Try pg_stat_replication" autocomplete="off" />
+          <kbd>/</kbd>
+        </div>
+
+        <nav class="view-actions" aria-label="Camera controls">
+          <button id="view-3d" class="active" type="button">3D</button>
+          <button id="view-top" type="button">TOP</button>
+          <button id="reset" type="button">RESET</button>
+        </nav>
+      </header>
+
+      <section class="intro" aria-labelledby="intro-title">
+        <p class="eyebrow">EXPERIMENT 001</p>
+        <h1 id="intro-title">See where<br />Postgres tells on itself.</h1>
+        <p>
+          Subsystems are buildings. Statistics are probes. Connections show the execution and durability path.
+          Select anything to inspect the observability surface.
+        </p>
+        <button id="start" type="button">ENTER THE MAP <span>→</span></button>
+      </section>
+
+      <aside id="inspector" class="inspector" aria-live="polite">
+        <button id="inspector-close" class="inspector__close" type="button" aria-label="Close inspector">×</button>
+        <p id="detail-kind" class="eyebrow">SUBSYSTEM</p>
+        <h2 id="detail-title">PostgreSQL</h2>
+        <p id="detail-copy">Choose a subsystem or probe in the map.</p>
+        <div id="detail-stats" class="stat-list"></div>
+      </aside>
+
+      <div id="labels" class="labels" aria-hidden="true"></div>
+
+      <footer class="legend">
+        <div id="categories" class="categories" aria-label="Filter by category"></div>
+        <p>
+          Drag to orbit · scroll to zoom · click to inspect
+          <span>Inspired by <a href="https://pgstats.dev/" target="_blank" rel="noreferrer">Alexey Lesovsky’s PostgreSQL Observability</a></span>
+        </p>
+      </footer>
+
+      <div id="fallback" class="fallback" hidden>
+        This experiment needs WebGL2. Try a current Chrome, Firefox, Edge, or Safari.
+      </div>
+    </main>
+
+    <script type="module" src="/src/observability/main.ts"></script>
+  </body>
+</html>
