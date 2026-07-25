@@ -105,8 +105,8 @@ export interface Knobs {
 }
 
 export const DEFAULT_KNOBS: Knobs = {
-  tps: 120,
-  writeRatio: 0.35,
+  tps: 10,
+  writeRatio: 0.2,
   updateRatio: 0.6,
   seqScanRatio: 0.15,
   sharedBuffers: 768,
