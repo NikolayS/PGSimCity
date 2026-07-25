@@ -31,18 +31,25 @@ const fallback = document.querySelector<HTMLElement>('#fallback')
 
 if (!canvas) throw new Error('Observability canvas is missing')
 
-const context = canvas.getContext('webgl2', {
-  alpha: false,
-  antialias: true,
-  powerPreference: 'high-performance',
-})
+// Let the browser negotiate the context attributes. Some current Chrome/GPU
+// combinations reject an explicitly requested high-performance context even
+// though their normal WebGL2 context works perfectly.
+const context = canvas.getContext('webgl2')
 
 if (!context) {
   if (fallback) fallback.hidden = false
   throw new Error('WebGL2 is required')
 }
 
-const renderer = new THREE.WebGLRenderer({ canvas, context, antialias: true })
+canvas.addEventListener('webglcontextlost', (event) => {
+  event.preventDefault()
+  if (fallback) {
+    fallback.textContent = 'The graphics context was lost. Reload this page to restore the map.'
+    fallback.hidden = false
+  }
+})
+
+const renderer = new THREE.WebGLRenderer({ canvas, context })
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75))
 renderer.setSize(window.innerWidth, window.innerHeight, false)
 renderer.outputColorSpace = THREE.SRGBColorSpace
