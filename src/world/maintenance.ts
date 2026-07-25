@@ -826,8 +826,8 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   const AX = AL[0] // -196
   const AZ = AL[2] //    0
 
+  // No apron here: the depot's slab already runs under the tower's footprint.
   const launchStruct = batch(gLaunch, unitBox, matStruct, [
-    [AX, APRON_Y, AZ, 26, 0.2, 26],
     [AX, 2.6, AZ, 18, 4, 18],
     [AX, 4.9, AZ, 19.4, 0.7, 19.4],
   ], true)
@@ -904,15 +904,16 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   gDepot.name = 'vac.depot'
   group.add(gDepot)
 
-  const depotMass: BoxSpec[] = [[DP[0], APRON_Y, DP[2], 30, 0.2, 92]]
+  // One slab, running north-south under the bays and on under the tower.
+  const depotMass: BoxSpec[] = [[DP[0] + 2, APRON_Y, DP[2], 48, 0.2, 92]]
   const depotDetail: BoxSpec[] = []
   for (let i = 0; i < N_VAC_WORKERS; i++) {
     const b = vacBayPos(i)
-    depotMass.push([b[0] - 4, 5.6, b[2], 16, 0.7, 15])
-    depotDetail.push([b[0] - 11.4, 3.0, b[2] - 7, 1.0, 5.4, 1.0])
-    depotDetail.push([b[0] - 11.4, 3.0, b[2] + 7, 1.0, 5.4, 1.0])
-    depotDetail.push([b[0] + 3.4, 3.0, b[2] - 7, 1.0, 5.4, 1.0])
-    depotDetail.push([b[0] + 3.4, 3.0, b[2] + 7, 1.0, 5.4, 1.0])
+    depotMass.push([b[0] - 4, 8.6, b[2], 16, 0.7, 15]) // bay canopy, clear of the masts
+    depotDetail.push([b[0] - 11.4, 4.6, b[2] - 7, 1.0, 8.0, 1.0])
+    depotDetail.push([b[0] - 11.4, 4.6, b[2] + 7, 1.0, 8.0, 1.0])
+    depotDetail.push([b[0] + 3.4, 4.6, b[2] - 7, 1.0, 8.0, 1.0])
+    depotDetail.push([b[0] + 3.4, 4.6, b[2] + 7, 1.0, 8.0, 1.0])
     depotDetail.push([b[0] - 12.4, 2.2, b[2], 1.6, 3.6, 1.2])
   }
   const depotStruct = batch(gDepot, unitBox, matStruct, depotMass, true)
@@ -962,8 +963,8 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     const home = new THREE.CatmullRomCurve3(
       [
         new THREE.Vector3(LF[0], 8.8, LF[2]),
-        new THREE.Vector3(LF[0] - 14, 8.6, LF[2]),
-        new THREE.Vector3(LF[0] - 21, 4.0, LF[2] - 6),
+        new THREE.Vector3(LF[0] - 13, 8.6, LF[2]),
+        new THREE.Vector3(LF[0] - 18, 4.0, LF[2] - 6),
         new THREE.Vector3(LF[0] - 12, ROAD_Y, LF[2] - 24),
         new THREE.Vector3(bayX - 8, ROAD_Y, bayZ + 26),
         new THREE.Vector3(bayX, ROAD_Y, bayZ),
@@ -972,6 +973,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       'catmullrom',
       0.5,
     )
+    home.getPointAt(0, _p) // warm the arc-length cache off the hot path
 
     trucks.push({
       slot: i,
@@ -1021,7 +1023,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   const DECK_X = LF[0] - 5
 
   const landStruct = batch(gLand, unitBox, matStruct, [
-    [LF[0], APRON_Y, LF[2], 44, 0.2, 34], // apron
+    [LF[0] - 2, APRON_Y, LF[2], 36, 0.2, 34], // apron
     [DECK_X, 7.6, LF[2], 16, 0.9, 13], // tipping deck
     [DECK_X - 7.4, 3.9, LF[2] - 5.6, 1.4, 7.4, 1.4],
     [DECK_X - 7.4, 3.9, LF[2] + 5.6, 1.4, 7.4, 1.4],
@@ -1036,9 +1038,9 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     [DECK_X, 8.9, LF[2] - 6.4, 16, 1.6, 0.14], // deck rails
     [DECK_X, 8.9, LF[2] + 6.4, 16, 1.6, 0.14],
     [DECK_X - 8.0, 8.9, LF[2], 0.14, 1.6, 13],
-    [DECK_X - 14, 4.2, LF[2], 12, 0.5, 6], // approach ramp
-    [DECK_X - 14, 2.8, LF[2] - 2.8, 12, 3.4, 0.4],
-    [DECK_X - 14, 2.8, LF[2] + 2.8, 12, 3.4, 0.4],
+    [DECK_X - 13, 4.2, LF[2], 11, 0.5, 6], // approach ramp
+    [DECK_X - 13, 2.8, LF[2] - 2.8, 11, 3.4, 0.4],
+    [DECK_X - 13, 2.8, LF[2] + 2.8, 11, 3.4, 0.4],
   ])
 
   const landNeonMesh = neonBatch(gLand, [
@@ -1090,14 +1092,15 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   group.add(gLog)
 
   const GX = LG[0] // -140
-  const GZ = LG[2] //  100
+  /** Pulled 3m north of the anchor so the hall stays on the district slab. */
+  const GZ = LG[2] - 3 // 97
   const TAPE_Y = 13.4
-  const TAPE_Z = GZ - 10.4
+  const TAPE_Z = GZ - 7.4
   const TAPE_X0 = GX + 10 // write head (east)
   const TAPE_X1 = GX - 10 // take-up reel (west)
 
   const logStruct = batch(gLog, unitBox, matStruct, [
-    [GX, APRON_Y, GZ, 34, 0.2, 24],
+    [GX, APRON_Y, GZ - 1, 34, 0.2, 20],
     [GX, 5.4, GZ, 28, 9.6, 18], // hall
     [GX, 10.6, GZ, 29.4, 0.9, 19.4], // cornice
     [GX - 10, 13.6, GZ + 2, 6, 5, 8], // spool house
@@ -1237,10 +1240,11 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     yardPosts.push([FX1, y, (FZ0 + FZ1) / 2, th, th, FZ1 - FZ0])
   }
 
+  // Kept clear of the excavation rim (x = -118) so no light pool hangs over it.
   const LAMPS: readonly (readonly [number, number])[] = [
-    [-166, -58], [-122, -58], [-166, -16], [-122, -14],
-    [-166, 20], [-122, 56], [-226, -42], [-226, 40],
-    [-248, 62], [-178, 96], [-122, 92], [-196, -44],
+    [-166, -58], [-130, -58], [-166, -16], [-130, -14],
+    [-166, 20], [-130, 56], [-226, -42], [-226, 40],
+    [-246, 62], [-178, 92], [-130, 88], [-196, -44],
   ]
   for (const [x, z] of LAMPS) {
     yardPosts.push([x, 6.0, z, 0.5, 11, 0.5])
@@ -1807,8 +1811,9 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     const scanTarget = (bgw.scanPos / Math.max(1, N_BUFFERS)) * TAU
     if (bgOn) sweepAngle = advanceAngle(sweepAngle, scanTarget, dt * (0.4 + clamp01(bgw.activity) * 3.2))
 
+    // parked outside the shed door, dark, while the pool goes on getting dirtier
     const sxp = lerp(LOOP_X + LOOP_R * Math.cos(sweepAngle), BX - 15, sweepPark)
-    const szp = lerp(LOOP_Z + LOOP_R * Math.sin(sweepAngle), BZ + 3, sweepPark)
+    const szp = lerp(LOOP_Z + LOOP_R * Math.sin(sweepAngle), BZ + 12, sweepPark)
     gSweep.position.set(sxp, ROAD_Y, szp)
     gSweep.rotation.y = lerp(-sweepAngle - Math.PI / 2, Math.PI / 2, smoothstep(sweepPark))
 
