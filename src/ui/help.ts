@@ -237,7 +237,7 @@ export function createHelp(ctx: UiContext): UiModule {
       el('p', {
         class: 'help-disclaimer',
         text:
-          'PGCITY is a teaching model, not a real server: the mechanisms are faithful, the numbers are simulated, and no PostgreSQL source code is running here.',
+          'PGSimCity is a teaching model, not a real server: the mechanisms are faithful, the numbers are simulated, and no PostgreSQL source code is running here.',
       }),
     ),
   )

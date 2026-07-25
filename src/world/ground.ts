@@ -524,7 +524,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
 
   ctx.register({
     id: 'world.ground',
-    name: 'PGCITY',
+    name: 'PGSimCity',
     role: 'one PostgreSQL cluster',
     kind: 'concept',
     district: 'world',

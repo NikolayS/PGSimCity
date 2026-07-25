@@ -342,7 +342,7 @@ export function createSearch(ctx: UiContext): UiModule {
     autocomplete: 'off',
     autocapitalize: 'off',
     role: 'combobox',
-    'aria-label': 'Search PGCITY',
+    'aria-label': 'Search PGSimCity',
     'aria-autocomplete': 'list',
     'aria-expanded': 'false',
     'aria-controls': 'pal-list',

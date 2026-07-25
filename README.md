@@ -1,4 +1,4 @@
-# PGCITY
+# PGSimCity
 
 **An explorable 3D city that shows how PostgreSQL actually works.**
 

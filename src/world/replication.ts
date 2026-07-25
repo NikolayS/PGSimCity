@@ -109,9 +109,13 @@ function setTRS(
   mesh.setMatrixAt(i, _m)
 }
 
-/** Park an instance out of sight without changing the draw cost. */
-function hideInst(mesh: THREE.InstancedMesh, i: number): void {
-  setTRS(mesh, i, 0, -9000, 0, 0.0001, 0.0001, 0.0001)
+/**
+ * Park an instance: zero scale, and *inside* its own district. Sending it to
+ * y = -9000 would work visually but would blow up the object's world AABB,
+ * which is what the picker measures to draw its selection reticle.
+ */
+function hideInst(mesh: THREE.InstancedMesh, i: number, x = 0, y = 0, z = 0): void {
+  setTRS(mesh, i, x, y, z, 0.0001, 0.0001, 0.0001)
 }
 
 /** Re-sample a route into a curve we can extrude. */
@@ -155,6 +159,19 @@ function glyphAtlas(): THREE.CanvasTexture {
   tex.magFilter = THREE.LinearFilter
   tex.anisotropy = 4
   return tex
+}
+
+/** The atlas is ASCII; formatted simulation strings are not. Fold them in. */
+function asciiCode(cc: number): number {
+  if (cc === 0x2026) return 0x2e // …
+  if (cc === 0x2014 || cc === 0x2013 || cc === 0x2212) return 0x2d // — – −
+  if (cc === 0x00b7 || cc === 0x2022) return 0x2e // · •
+  if (cc === 0x2192 || cc === 0x25b6) return 0x3e // → ▶
+  if (cc === 0x2713) return 0x2a // ✓
+  if (cc === 0x2018 || cc === 0x2019) return 0x27 // ’
+  if (cc === 0x201c || cc === 0x201d) return 0x22 // ”
+  if (cc === 0x2260) return 0x21 // ≠
+  return cc
 }
 
 type Facing = 'north' | 'south' | 'east' | 'west' | 'up'
@@ -274,11 +291,16 @@ class TextBank {
     for (let i = 0; i < s.cap; i++) {
       const q = (s.start + i) * 12
       if (i >= n) {
-        // collapse the unused quad to a point: it still draws, as nothing
-        for (let k = 0; k < 12; k++) this.pos[q + k] = 0
+        // collapse onto the anchor, not the origin: a zeroed quad would drag
+        // this mesh's bounding box across the whole city
+        for (let k = 0; k < 4; k++) {
+          this.pos[q + k * 3] = s.x
+          this.pos[q + k * 3 + 1] = s.y
+          this.pos[q + k * 3 + 2] = s.z
+        }
         continue
       }
-      let code = text.charCodeAt(i) - 32
+      let code = asciiCode(text.charCodeAt(i)) - 32
       if (code < 0 || code > 94) code = 0
       const col = code % GL_COLS
       const row = (code / GL_COLS) | 0
@@ -329,6 +351,13 @@ class TextBank {
       this.col[o + i * 3 + 2] = _c.b
     }
     this.colAttr.needsUpdate = true
+  }
+
+  /** Freeze the buffer: draw only what was allocated, and keep the zeroed
+   *  tail of the position attribute out of the AABB. */
+  finish(min: THREE.Vector3, max: THREE.Vector3): void {
+    this.geometry.setDrawRange(0, this.next * 6)
+    this.geometry.boundingBox = new THREE.Box3(min, max)
   }
 
   dispose(): void {
@@ -415,6 +444,8 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
   gWire.add(conduit, ackLine)
   const STREAM_LEN = streamCurve.getLength()
   const ACK_LEN = ackCurve.getLength()
+  /** Mid-span. Idle packets are parked here so the wire's AABB stays honest. */
+  const wireMid = routePoint('net.stream', 0.5, new THREE.Vector3())
 
   /* Sheath: short neon bars clamped along the cable. Segmenting the glow is
    * what lets the link show a *gap* when the standby is gone. */
@@ -474,7 +505,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
   packets.raycast = () => {}
   _c.setRGB(0, 0, 0)
   for (let i = 0; i < N_PKT; i++) {
-    hideInst(packets, i)
+    hideInst(packets, i, wireMid.x, wireMid.y, wireMid.z)
     packets.setColorAt(i, _c)
   }
   packets.instanceColor!.setUsage(THREE.DynamicDrawUsage)
@@ -493,7 +524,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
   sparks.raycast = () => {}
   _c.setRGB(0, 0, 0)
   for (let i = 0; i < N_SPARK; i++) {
-    hideInst(sparks, i)
+    hideInst(sparks, i, breakAt.x, breakAt.y, breakAt.z)
     sparks.setColorAt(i, _c)
   }
   sparks.instanceColor!.setUsage(THREE.DynamicDrawUsage)
@@ -584,7 +615,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
   recvSegs.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
   _c.setRGB(0, 0, 0)
   for (let i = 0; i < N_RSEG; i++) {
-    hideInst(recvSegs, i)
+    hideInst(recvSegs, i, RX + 20, 2.2, RZ - 9 + i * 6)
     recvSegs.setColorAt(i, _c)
   }
   recvSegs.instanceColor!.setUsage(THREE.DynamicDrawUsage)
@@ -675,7 +706,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
   belt.raycast = () => {}
   _c.setRGB(0, 0, 0)
   for (let i = 0; i < N_BELT; i++) {
-    hideInst(belt, i)
+    hideInst(belt, i, SX, BELT_Y, (BELT_Z0 + BELT_Z1) / 2)
     belt.setColorAt(i, _c)
   }
   belt.instanceColor!.setUsage(THREE.DynamicDrawUsage)
@@ -855,7 +886,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     [RULER_X, 0.6, RULER_Z0, 5, 1.2, 5],
     [RULER_X, 0.6, RULER_Z1, 5, 1.2, 5],
     [RULER_X, RULER_Y, (RULER_Z0 + RULER_Z1) / 2, 1.6, 1.4, RULER_L + 2], // the rail
-    [RULER_X, RULER_Y - 4.6, (RULER_Z0 + RULER_Z1) / 2, 1.2, 6.0, 0.8], // legend backing
+    [RULER_X + 0.5, 4.9, (RULER_Z0 + RULER_Z1) / 2, 1.4, 9.0, 40], // legend board
   ]
   const rulerStruct = batch(gRuler, unitBox, matStruct, rulerMass, true)
 
@@ -880,26 +911,25 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
   carriages.raycast = () => {}
   _c.setRGB(0, 0, 0)
   for (let i = 0; i < 6; i++) {
-    hideInst(carriages, i)
+    hideInst(carriages, i, RULER_X, RULER_Y, (RULER_Z0 + RULER_Z1) / 2)
     carriages.setColorAt(i, _c)
   }
   carriages.instanceColor!.setUsage(THREE.DynamicDrawUsage)
   gRuler.add(carriages)
 
+  const RULER_MID = (RULER_Z0 + RULER_Z1) / 2
   const carLabel: number[] = []
   for (let i = 0; i < 4; i++) {
-    carLabel.push(text.alloc(8, RULER_X - 1.6, RULER_Y + 2.6, RULER_Z0, 'west', 1.0, CAR_COLOR[i], 'center', 1.1, CAR_NAME[i]))
+    carLabel.push(text.alloc(8, RULER_X - 1.6, RULER_Y + 2.4, RULER_Z0, 'west', 1.0, CAR_COLOR[i], 'center', 1.1, CAR_NAME[i]))
   }
 
-  text.alloc(24, RULER_X - 1.2, RULER_Y + 5.6, (RULER_Z0 + RULER_Z1) / 2, 'west', 1.9, COLOR.ink, 'center', 0.9, 'pg_stat_replication')
-  const TX_SCALE = text.alloc(34, RULER_X - 1.2, RULER_Y + 3.6, (RULER_Z0 + RULER_Z1) / 2, 'west', 1.0, COLOR.inkDim, 'center', 0.7, '')
+  text.alloc(24, RULER_X - 0.4, 8.0, RULER_MID, 'west', 1.9, COLOR.ink, 'center', 0.9, 'pg_stat_replication')
+  const TX_SCALE = text.alloc(34, RULER_X - 0.4, 6.3, RULER_MID, 'west', 1.0, COLOR.inkDim, 'center', 0.7)
   const TX_ROW: number[] = []
   for (let i = 0; i < 4; i++) {
-    TX_ROW.push(
-      text.alloc(38, RULER_X - 1.2, RULER_Y - 2.4 - i * 1.9, (RULER_Z0 + RULER_Z1) / 2, 'west', 1.25, CAR_COLOR[i], 'center', 1.0, ''),
-    )
+    TX_ROW.push(text.alloc(38, RULER_X - 0.4, 5.0 - i * 1.4, RULER_MID, 'west', 1.1, CAR_COLOR[i], 'center', 1.0))
   }
-  const TX_LAGBAR = text.alloc(30, RULER_X - 1.2, RULER_Y + 1.6, (RULER_Z0 + RULER_Z1) / 2, 'west', 1.15, COLOR.crit, 'center', 1.0, '')
+  const TX_LAGBAR = text.alloc(44, RULER_X - 1.2, 10.6, RULER_MID, 'west', 1.15, COLOR.crit, 'center', 1.0)
 
   /* =====================================================================
    * 5. REPLICA CLIENT — read-only traffic, and the xmin it can pin.
@@ -926,11 +956,28 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
 
   const clientNeon = neonBatch(gClient, unitBox, [
     [RC[0], RC[1] + 3.0, RC[2], 5.4, 0.2, 5.4], // 0: pod deck light
-    [RC[0], RC[1] - 14, RC[2], 0.5, 26, 0.5], // 1: the read beam down to the deck
+    [0, 0, 0, 1, 1, 1], // 1: the read beam, aimed at the standby below
     [RC[0], RC[1] + 4.6, RC[2], 1.2, 1.2, 1.2], // 2: feedback lamp
   ])
   const IX_READBEAM = 1
   const IX_FBLAMP = 2
+  {
+    // The beam lands where the replica.read route lands — on the deck's
+    // west landing pad — instead of dropping into open ground beside it.
+    _p.set(RC[0], RC[1] - 2.2, RC[2])
+    routePoint('replica.read', 1, _p2)
+    _p2.y = 4.6
+    _sc.subVectors(_p2, _p)
+    const len = _sc.length()
+    _sc.normalize()
+    _q.setFromUnitVectors(_axisY, _sc)
+    setTRS(
+      clientNeon, IX_READBEAM,
+      (_p.x + _p2.x) / 2, (_p.y + _p2.y) / 2, (_p.z + _p2.z) / 2,
+      0.5, len, 0.5, _q,
+    )
+    clientNeon.instanceMatrix.needsUpdate = true
+  }
 
   text.alloc(20, RC[0], RC[1] + 7.4, RC[2], 'south', 1.5, COLOR.client, 'center', 1.0, 'read-only client')
   const TX_RCLIENT = text.alloc(34, RC[0], RC[1] + 5.6, RC[2], 'south', 0.95, COLOR.inkDim, 'center', 0.75, '')
@@ -998,6 +1045,8 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
   edgeLines.raycast = () => {}
   edgeLines.renderOrder = 2
   group.add(edgeLines)
+  // The wire's own signage sits over the WAL district, so the box spans both.
+  text.finish(new THREE.Vector3(40, -2, 40), new THREE.Vector3(272, 60, 352))
   group.add(text.mesh)
 
   /* =====================================================================
@@ -1163,6 +1212,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
   let textT = 0
   let subBeat = 0
   let fbAcc = 0
+  const carLabelZ = new Float64Array(4)
 
   const BELT_LEN = BELT_Z1 - BELT_Z0
 
@@ -1210,7 +1260,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
       if (pktT[i] >= 1 || !connected) {
         if (pktT[i] >= 1) dishFlash = 1
         pktOn[i] = 0
-        hideInst(packets, i)
+        hideInst(packets, i, wireMid.x, wireMid.y, wireMid.z)
         _c.setRGB(0, 0, 0)
         packets.setColorAt(i, _c)
         pktDirty = true
@@ -1236,8 +1286,13 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
       const onStream = i < N_SHEATH_S
       const k = onStream ? (i + 0.5) / N_SHEATH_S : (i - N_SHEATH_S + 0.5) / N_SHEATH_A
       const near = 1 - clamp01(Math.abs(k - BREAK_T) * 9)
-      const glow = link * (0.16 + thru * 0.5) * (onStream ? 1 : 0.55)
-      _c.setHex(onStream ? COLOR.replication : COLOR.ok).multiplyScalar(glow)
+      // The return path is normally quiet acknowledgements. With
+      // hot_standby_feedback it also carries the standby's xmin, which is a
+      // vacuum-coloured thing to be sending your primary — so it turns violet.
+      const glow = link * (0.16 + thru * 0.5) * (onStream ? 1 : 0.55 + feedback * 1.5)
+      _c.setHex(onStream ? COLOR.replication : COLOR.ok)
+      if (!onStream && feedback > 0.01) _c.lerp(_c2.setHex(COLOR.vacuum), feedback)
+      _c.multiplyScalar(glow)
       if (link < 0.98 && near > 0) {
         // arc light at the break, and a dead zone either side of it
         const arc = (1 - link) * near * (0.5 + 0.5 * Math.sin(t * 31 + i))
@@ -1267,13 +1322,12 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
         sparks.setColorAt(i, _c)
       }
     } else {
-      for (let i = 0; i < N_SPARK; i++) hideInst(sparks, i)
+      for (let i = 0; i < N_SPARK; i++) hideInst(sparks, i, breakAt.x, breakAt.y, breakAt.z)
       _c.setRGB(0, 0, 0)
       for (let i = 0; i < N_SPARK; i++) sparks.setColorAt(i, _c)
     }
     sparks.instanceMatrix.needsUpdate = true
     sparks.instanceColor!.needsUpdate = true
-    text.setColor(TX_WIRE, COLOR.crit, 0.08 + broken * (1.3 + 0.5 * Math.sin(t * 6)))
 
     /* --- 2. walreceiver ------------------------------------------------- */
 
@@ -1449,7 +1503,11 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
       setTRS(carriages, i, RULER_X, RULER_Y - 0.2, _carZ[i], 2.6, 2.6, 1.0)
       _c.setHex(CAR_COLOR[i]).multiplyScalar(i === CAR_REPLAY ? 2.0 : 1.4)
       carriages.setColorAt(i, _c)
-      if (i < 4) text.moveTo(carLabel[i], RULER_X - 1.6, RULER_Y + 2.6, _carZ[i])
+      // Relaying out a name costs a buffer upload, so only when it really moved.
+      if (i < 4 && Math.abs(_carZ[i] - carLabelZ[i]) > 0.08) {
+        carLabelZ[i] = _carZ[i]
+        text.moveTo(carLabel[i], RULER_X - 1.6, RULER_Y + 2.4, _carZ[i])
+      }
     }
     // The lag bar spans exactly the gap that matters: flushed vs replayed.
     const lagLen = Math.max(0.2, zFlush - zReplay)
@@ -1479,7 +1537,6 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     _c.setHex(COLOR.vacuum).multiplyScalar(0.1 + feedback * (1.6 + 0.6 * Math.sin(t * 4)))
     clientNeon.setColorAt(IX_FBLAMP, _c)
     clientNeon.instanceColor!.needsUpdate = true
-    text.setColor(TX_FEEDBACK, COLOR.vacuum, 0.06 + feedback * 1.1)
 
     // The feedback rides the return path: the standby's xmin goes *up* the
     // wire and stops the primary's vacuum removing rows it still needs.
@@ -1511,13 +1568,17 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     _c.setHex(COLOR.toast).multiplyScalar(subBeat * (0.4 + 0.6 * Math.max(0, Math.sin(t * 3.1))))
     subNeon.setColorAt(IX_SUBLAMP, _c)
     subNeon.instanceColor!.needsUpdate = true
-    text.setColor(TX_SUBOFF, COLOR.crit, 0.1 + (1 - subBeat) * 0.8)
 
     /* --- 7. live text, eight times a second ------------------------------ */
 
+    // Colours that ride a formatted string are updated with it: a setColor
+    // touches the whole colour buffer, so it does not belong in a hot loop.
     textT += dt
     if (textT >= 0.125) {
       textT = 0
+      text.setColor(TX_WIRE, COLOR.crit, 0.08 + broken * (1.3 + 0.5 * Math.sin(t * 6)))
+      text.setColor(TX_FEEDBACK, COLOR.vacuum, 0.06 + feedback * 1.1)
+      text.setColor(TX_SUBOFF, COLOR.crit, 0.1 + (1 - subBeat) * 0.8)
       text.set(TX_LAT, `${rep.networkLagMs.toFixed(0)} ms · ${rep.inFlight} in flight`)
       text.set(TX_WRITE, fmtLsn(rep.writeLsn))
       text.set(TX_FLUSH, fmtLsn(rep.flushLsn))

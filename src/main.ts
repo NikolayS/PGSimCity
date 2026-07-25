@@ -277,4 +277,4 @@ async function boot(): Promise<void> {
   void flowQueue
 }
 
-boot().catch((err) => fatal('PGCITY failed to start — see the console.', err))
+boot().catch((err) => fatal('PGSimCity failed to start — see the console.', err))

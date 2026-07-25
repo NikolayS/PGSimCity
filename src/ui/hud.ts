@@ -332,7 +332,7 @@ export function createHud(ctx: UiContext): UiModule {
   const clockEl = el('span', { class: 'hud-clock', text: '0:00' })
   const brand = el(
     'div',
-    { class: 'hud-brand', title: 'PGCITY — a working model of the PostgreSQL engine' },
+    { class: 'hud-brand', title: 'PGSimCity — a working model of the PostgreSQL engine' },
     statusDot,
     el('span', { class: 'hud-brand__mark' }, el('b', { text: 'PG' }), 'CITY'),
     el('span', { class: 'hud-brand__rule' }),

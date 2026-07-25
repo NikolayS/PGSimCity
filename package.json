@@ -1,9 +1,9 @@
 {
-  "name": "pgcity",
+  "name": "pgsimcity",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "PGCITY — an explorable 3D city that shows how PostgreSQL actually works",
+  "description": "PGSimCity — an explorable 3D city that shows how PostgreSQL actually works",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

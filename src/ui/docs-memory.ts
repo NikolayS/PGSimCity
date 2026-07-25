@@ -79,7 +79,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
    * ====================================================================*/
   {
     id: 'world.ground',
-    title: 'PGCITY',
+    title: 'PGSimCity',
     subtitle: 'one cluster — one postmaster, one shared memory segment, one data directory',
     tldr: 'One data directory, one shared memory segment, and a separate OS process for every connection.',
     sections: [

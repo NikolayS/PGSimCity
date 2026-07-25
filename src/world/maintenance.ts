@@ -395,14 +395,17 @@ interface Truck {
   slot: number
   group: THREE.Group
   body: THREE.InstancedMesh
-  wheels: THREE.InstancedMesh
-  neon: THREE.InstancedMesh
+  /** first instance index in the shared wheel / lamp meshes */
+  wheel0: number
+  neon0: number
   panelTop: LivePlate
   panelBot: LivePlate
   focus: [number, number, number]
   pos: THREE.Vector3
   prev: THREE.Vector3
   bay: THREE.Vector3
+  /** where the worker was standing when this run was assigned to it */
+  launchFrom: THREE.Vector3
   /** the haul road from the landfill tipping deck back to the bay */
   home: THREE.CatmullRomCurve3
   yaw: number
@@ -413,7 +416,6 @@ interface Truck {
   carry: number
   spin: number
   tilt: number
-  idxLeg: number
   homing: number
   wasActive: boolean
   prevPhase: VacPhase
@@ -627,14 +629,6 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   const IX_CK_BEACON = cn([HALL_X - 1, 27.2, CZ - 1, 1.4, 1.4, 1.4])
   const IX_CK_BEACON2 = cn([CX - 9, 36.6, CZ - 18, 1.2, 1.2, 1.2])
   const IX_CK_VALVE = cn([0, 0, 0, 1, 1, 1])
-  const ckptNeonMesh = neonBatch(gCkpt, ckptNeon)
-  {
-    routePoint('ckpt.sweep', 0, _p2)
-    routeTangent('ckpt.sweep', 0, _dir).normalize()
-    _q.setFromUnitVectors(_axisY, _dir)
-    setTRS(ckptNeonMesh, IX_CK_VALVE, _p2.x, _p2.y, _p2.z, 3.4, 0.5, 3.4, _q)
-    ckptNeonMesh.instanceMatrix.needsUpdate = true
-  }
 
   /* The countdown dial: two arcs racing each other.
    *   outer — checkpoint_timeout
@@ -646,25 +640,32 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   const DIAL_X = CX + 17.4
   const DIAL_Y = 24
   const DIAL_Z = CZ + 14
-  const dialSpecs: BoxSpec[] = []
+  const IX_CK_DIAL = ckptNeon.length
   for (let ring = 0; ring < 2; ring++) {
-    for (let i = 0; i < DIAL_N; i++) dialSpecs.push([DIAL_X, DIAL_Y, DIAL_Z, 1, 1, 1])
+    for (let i = 0; i < DIAL_N; i++) cn([DIAL_X, DIAL_Y, DIAL_Z, 1, 1, 1])
   }
-  const dialMesh = neonBatch(gCkpt, dialSpecs)
-  for (let ring = 0; ring < 2; ring++) {
-    const r = ring === 0 ? 6.6 : 4.7
-    for (let i = 0; i < DIAL_N; i++) {
-      const a = (i / DIAL_N) * TAU
-      _e.set(-a, 0, 0)
-      _q.setFromEuler(_e)
-      setTRS(
-        dialMesh, ring * DIAL_N + i,
-        DIAL_X, DIAL_Y + r * Math.cos(a), DIAL_Z - r * Math.sin(a),
-        0.34, ring === 0 ? 1.6 : 1.3, 0.42, _q,
-      )
+
+  const ckptNeonMesh = neonBatch(gCkpt, ckptNeon)
+  {
+    routePoint('ckpt.sweep', 0, _p2)
+    routeTangent('ckpt.sweep', 0, _dir).normalize()
+    _q.setFromUnitVectors(_axisY, _dir)
+    setTRS(ckptNeonMesh, IX_CK_VALVE, _p2.x, _p2.y, _p2.z, 3.4, 0.5, 3.4, _q)
+    for (let ring = 0; ring < 2; ring++) {
+      const r = ring === 0 ? 6.6 : 4.7
+      for (let i = 0; i < DIAL_N; i++) {
+        const a = (i / DIAL_N) * TAU
+        _e.set(-a, 0, 0)
+        _q.setFromEuler(_e)
+        setTRS(
+          ckptNeonMesh, IX_CK_DIAL + ring * DIAL_N + i,
+          DIAL_X, DIAL_Y + r * Math.cos(a), DIAL_Z - r * Math.sin(a),
+          0.34, ring === 0 ? 1.6 : 1.3, 0.42, _q,
+        )
+      }
     }
+    ckptNeonMesh.instanceMatrix.needsUpdate = true
   }
-  dialMesh.instanceMatrix.needsUpdate = true
 
   const SGN_CKPT = signs.plate('checkpointer', HALL_E + 0.5, 17.0, CZ + 3, 'east', 2.0, COLOR.checkpoint, 1.0)
   signs.plate('buffers written', HALL_E + 0.5, 14.9, GAUGE_Z0 + GAUGE_LEN / 2, 'east', 0.85, COLOR.inkDim, 0.7)
@@ -742,8 +743,8 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     [BX - 15, 2.4, BZ + 7.6, 5.4, 4.6, 0.5], // door recess
     [BX - 15, 6.6, BZ, 10.4, 0.4, 15.4], // banding
     [BX - 9.6, 4.6, BZ, 0.6, 8, 15.4],
-    [BX - 4, 10.5, BZ - 15.5, 0.9, 14, 0.9], // dirty-page mast
-    [BX + 2, 10.5, BZ - 15.5, 0.9, 14, 0.9], // backend-write mast
+    [BX - 4, 11.5, BZ - 15.5, 0.9, 16, 0.9], // dirty-page mast
+    [BX + 2, 11.5, BZ - 15.5, 0.9, 16, 0.9], // backend-write mast
     [BX + 15.5, 6.2, BZ, 6, 1.2, 10], // chute canopy
     [BX + 18, 8.4, BZ, 5, 1.0, 1.0], // outfall toward the plaza
   ]
@@ -767,27 +768,6 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   const IX_BG_CHUTE = bn([BX + 15.5, 6.9, BZ, 5.2, 0.3, 9.4])
   const IX_BG_OFF = bn([BX - 15, 9.9, BZ + 7.6, 4.6, 1.0, 0.3])
   const bgwNeonMesh = neonBatch(gBgw, bgwNeon)
-
-  // the circuit, painted: 40 dashes for 1024 buffers
-  const LOOP_DASH = 40
-  const loopSpecs: BoxSpec[] = []
-  for (let i = 0; i < LOOP_DASH; i++) loopSpecs.push([LOOP_X, PAINT_Y, LOOP_Z, 1, 1, 1])
-  const loopMesh = neonBatch(gBgw, loopSpecs)
-  for (let i = 0; i < LOOP_DASH; i++) {
-    const a = (i / LOOP_DASH) * TAU
-    _e.set(0, -a, 0)
-    _q.setFromEuler(_e)
-    setTRS(
-      loopMesh, i,
-      LOOP_X + LOOP_R * Math.cos(a), PAINT_Y, LOOP_Z + LOOP_R * Math.sin(a),
-      1.7, 0.06, 0.45, _q,
-    )
-  }
-  loopMesh.instanceMatrix.needsUpdate = true
-  _c.setHex(SODIUM).multiplyScalar(0.18)
-  for (let i = 0; i < LOOP_DASH; i++) loopMesh.setColorAt(i, _c)
-  loopMesh.instanceColor!.needsUpdate = true
-  loopMesh.raycast = () => {}
 
   const gSweep = new THREE.Group()
   gBgw.add(gSweep)
@@ -870,16 +850,13 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   for (let i = 0; i < N_VAC_WORKERS; i++) ln([AX - 8 + i * 8, 5.6, AZ + 9.4, 2.2, 0.9, 0.4])
   const IX_AV_NAP = ln([AX, 5.6, AZ - 9.4, 12, 0.7, 0.4])
   const IX_AV_TOP = ln([AX, 38.4, AZ, 1.3, 1.3, 1.3])
+  // the rotating scanner: bar, leading head, trailing lamp — placed every frame
+  const IX_AV_SCAN = launchNeon.length
+  ln([AX, 37.4, AZ, 16, 0.35, 0.6])
+  ln([AX, 37.4, AZ, 1.4, 0.7, 1.0])
+  ln([AX, 37.4, AZ, 1.0, 0.5, 0.7])
   const launchNeonMesh = neonBatch(gLaunch, launchNeon)
-
-  const gScan = new THREE.Group()
-  gScan.position.set(AX, 37.4, AZ)
-  gLaunch.add(gScan)
-  const scanBar = neonBatch(gScan, [
-    [0, 0, 0, 16, 0.35, 0.6], // the bar
-    [7.4, 0, 0, 1.4, 0.7, 1.0], // leading head
-    [-7.4, 0, 0, 1.0, 0.5, 0.7], // trailing lamp
-  ])
+  launchNeonMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
 
   signs.plate('autovacuum launcher', AX, 41.4, AZ, 'north', 1.6, COLOR.vacuum, 1.0)
   signs.plate('autovacuum_naptime', AX, 7.0, AZ - 9.6, 'north', 0.8, COLOR.inkDim, 0.55)
@@ -929,6 +906,25 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
 
   const TRUCK_BODY = 11
   const TRUCK_NEON = 7
+  /* Each worker keeps its own body — that is what the picker resolves against —
+   * but the wheels and the lamps of all three share one mesh each. */
+  const truckWheels = new THREE.InstancedMesh(unitCyl, matTyre, N_VAC_WORKERS * 4)
+  truckWheels.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  truckWheels.frustumCulled = false
+  truckWheels.raycast = () => {}
+  group.add(truckWheels)
+  meshes.push(truckWheels)
+
+  const truckNeon = new THREE.InstancedMesh(unitBox, neonWhite, N_VAC_WORKERS * TRUCK_NEON)
+  truckNeon.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  truckNeon.frustumCulled = false
+  truckNeon.raycast = () => {}
+  _c.setRGB(0, 0, 0)
+  for (let k = 0; k < N_VAC_WORKERS * TRUCK_NEON; k++) truckNeon.setColorAt(k, _c)
+  truckNeon.instanceColor!.setUsage(THREE.DynamicDrawUsage)
+  group.add(truckNeon)
+  meshes.push(truckNeon)
+
   const trucks: Truck[] = []
   for (let i = 0; i < N_VAC_WORKERS; i++) {
     const g = new THREE.Group()
@@ -940,21 +936,6 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     body.frustumCulled = false
     g.add(body)
     meshes.push(body)
-
-    const wheels = new THREE.InstancedMesh(unitCyl, matTyre, 4)
-    wheels.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
-    wheels.frustumCulled = false
-    g.add(wheels)
-    meshes.push(wheels)
-
-    const neon = new THREE.InstancedMesh(unitBox, neonWhite, TRUCK_NEON)
-    neon.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
-    neon.frustumCulled = false
-    _c.setRGB(0, 0, 0)
-    for (let k = 0; k < TRUCK_NEON; k++) neon.setColorAt(k, _c)
-    neon.instanceColor!.setUsage(THREE.DynamicDrawUsage)
-    g.add(neon)
-    meshes.push(neon)
 
     const b = vacBayPos(i)
     const bayX = b[0] - 4
@@ -979,16 +960,17 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       slot: i,
       group: g,
       body,
-      wheels,
-      neon,
+      wheel0: i * 4,
+      neon0: i * TRUCK_NEON,
       panelTop: signs.live('AV-0 idle', 1.6, COLOR.vacuum, 1.0),
       panelBot: signs.live('in bay', 1.15, COLOR.inkDim, 0.7),
       focus: [bayX, 3, bayZ],
       pos: new THREE.Vector3(bayX, ROAD_Y, bayZ),
       prev: new THREE.Vector3(bayX, ROAD_Y, bayZ),
       bay: new THREE.Vector3(bayX, ROAD_Y, bayZ),
+      launchFrom: new THREE.Vector3(bayX, ROAD_Y, bayZ),
       home,
-      yaw: Math.PI / 2,
+      yaw: 0, // parked nose-east, pointing at the depot exit
       bank: 0,
       pitch: 0,
       hopper: 0,
@@ -996,7 +978,6 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       carry: 0,
       spin: 0,
       tilt: 0,
-      idxLeg: 0,
       homing: 0,
       wasActive: false,
       prevPhase: 'idle',
@@ -1023,7 +1004,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   const DECK_X = LF[0] - 5
 
   const landStruct = batch(gLand, unitBox, matStruct, [
-    [LF[0] - 2, APRON_Y, LF[2], 36, 0.2, 34], // apron
+    [LF[0] - 2, APRON_Y, LF[2], 32, 0.2, 34], // apron
     [DECK_X, 7.6, LF[2], 16, 0.9, 13], // tipping deck
     [DECK_X - 7.4, 3.9, LF[2] - 5.6, 1.4, 7.4, 1.4],
     [DECK_X - 7.4, 3.9, LF[2] + 5.6, 1.4, 7.4, 1.4],
@@ -1038,30 +1019,25 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     [DECK_X, 8.9, LF[2] - 6.4, 16, 1.6, 0.14], // deck rails
     [DECK_X, 8.9, LF[2] + 6.4, 16, 1.6, 0.14],
     [DECK_X - 8.0, 8.9, LF[2], 0.14, 1.6, 13],
-    [DECK_X - 13, 4.2, LF[2], 11, 0.5, 6], // approach ramp
-    [DECK_X - 13, 2.8, LF[2] - 2.8, 11, 3.4, 0.4],
-    [DECK_X - 13, 2.8, LF[2] + 2.8, 11, 3.4, 0.4],
+    [DECK_X - 10, 4.2, LF[2], 8, 0.5, 6], // approach ramp up to the deck
+    [DECK_X - 10, 2.8, LF[2] - 2.8, 8, 3.4, 0.4],
+    [DECK_X - 10, 2.8, LF[2] + 2.8, 8, 3.4, 0.4],
   ])
 
-  const landNeonMesh = neonBatch(gLand, [
+  /* Fixtures first, then the pile — one instanced mesh for the whole site. */
+  const N_DEBRIS = low ? 120 : 300
+  const landNeon: BoxSpec[] = [
     [DECK_X + 8.2, 8.4, LF[2], 0.3, 1.4, 12], // tipping edge
     [PILE_X + 11.85, 2.4, PILE_Z, 0.14, 0.6, 24], // wall trim
     [DECK_X - 6, 10.6, LF[2] - 6.6, 1.0, 1.0, 1.0], // gate lamp
-  ])
-
-  const N_DEBRIS = low ? 120 : 300
-  const debris = new THREE.InstancedMesh(unitBox, neonWhite, N_DEBRIS)
-  debris.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
-  debris.frustumCulled = false
-  debris.raycast = () => {}
-  _c.setRGB(0, 0, 0)
-  for (let i = 0; i < N_DEBRIS; i++) {
-    zeroInst(debris, i, PILE_X, 1, PILE_Z)
-    debris.setColorAt(i, _c)
-  }
-  debris.instanceColor!.setUsage(THREE.DynamicDrawUsage)
-  gLand.add(debris)
-  meshes.push(debris)
+  ]
+  const IX_LF_DEBRIS = landNeon.length
+  for (let i = 0; i < N_DEBRIS; i++) landNeon.push([PILE_X, 1, PILE_Z, 1, 1, 1])
+  const landNeonMesh = neonBatch(gLand, landNeon)
+  landNeonMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  landNeonMesh.frustumCulled = false
+  for (let i = 0; i < N_DEBRIS; i++) zeroInst(landNeonMesh, IX_LF_DEBRIS + i, PILE_X, 1, PILE_Z)
+  landNeonMesh.instanceMatrix.needsUpdate = true
 
   const dbX = new Float32Array(N_DEBRIS)
   const dbZ = new Float32Array(N_DEBRIS)
@@ -1135,23 +1111,17 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   const LG_WIN_N = 3
   const IX_LG_HEAD = gn([TAPE_X0 + 1.8, TAPE_Y + 0.6, TAPE_Z, 1.0, 0.4, 1.0])
   const IX_LG_REEL = gn([TAPE_X1, TAPE_Y, TAPE_Z - 0.8, 5.8, 0.1, 5.8])
-  const logNeonMesh = neonBatch(gLog, logNeon)
-  setTRS(logNeonMesh, IX_LG_REEL, TAPE_X1, TAPE_Y, TAPE_Z - 0.8, 5.8, 0.1, 5.8, reelQuat)
-  logNeonMesh.instanceMatrix.needsUpdate = true
-
+  /** The entries themselves ride in the same mesh as the fittings. */
   const N_ENTRY = low ? 24 : 44
-  const entries = new THREE.InstancedMesh(unitBox, neonWhite, N_ENTRY)
-  entries.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
-  entries.frustumCulled = false
-  entries.raycast = () => {}
-  _c.setRGB(0, 0, 0)
-  for (let i = 0; i < N_ENTRY; i++) {
-    zeroInst(entries, i, TAPE_X0, TAPE_Y, TAPE_Z)
-    entries.setColorAt(i, _c)
-  }
-  entries.instanceColor!.setUsage(THREE.DynamicDrawUsage)
-  gLog.add(entries)
-  meshes.push(entries)
+  const IX_LG_ENTRY = logNeon.length
+  for (let i = 0; i < N_ENTRY; i++) gn([TAPE_X0, TAPE_Y, TAPE_Z, 1, 1, 1])
+
+  const logNeonMesh = neonBatch(gLog, logNeon)
+  logNeonMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  logNeonMesh.frustumCulled = false
+  setTRS(logNeonMesh, IX_LG_REEL, TAPE_X1, TAPE_Y, TAPE_Z - 0.8, 5.8, 0.1, 5.8, reelQuat)
+  for (let i = 0; i < N_ENTRY; i++) zeroInst(logNeonMesh, IX_LG_ENTRY + i, TAPE_X0, TAPE_Y, TAPE_Z)
+  logNeonMesh.instanceMatrix.needsUpdate = true
   const enT = new Float32Array(N_ENTRY)
   const enLen = new Float32Array(N_ENTRY)
   const enCol = new Int32Array(N_ENTRY)
@@ -1179,9 +1149,8 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     [SX, APRON_Y, SZ, 24, 0.2, 20],
     [SX, 3.6, SZ, 16, 6, 12],
     [SX, 7.0, SZ, 17, 0.8, 13],
+    [SX + 5, 14, SZ, 0.9, 14, 0.9], // relay mast
   ], true)
-
-  const statsCyl = batch(gStats, unitCyl, matHeavy, [[SX + 5, 14, SZ, 1.0, 14, 1.0]])
 
   const dishAt = new THREE.Vector3(SX + 5, 20.6, SZ)
   const dishAim = new THREE.Vector3(
@@ -1252,14 +1221,6 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   }
   const yardDeep = batch(gYard, unitBox, matDeep, yardPosts)
 
-  const lampSpecs: BoxSpec[] = []
-  for (const [x, z] of LAMPS) lampSpecs.push([x + 1.7, 11.2, z, 1.4, 0.35, 0.8])
-  const lampMesh = neonBatch(gYard, lampSpecs)
-  _c.setHex(SODIUM).multiplyScalar(1.3)
-  for (let i = 0; i < LAMPS.length; i++) lampMesh.setColorAt(i, _c)
-  lampMesh.instanceColor!.needsUpdate = true
-  lampMesh.raycast = () => {}
-
   const poolMat = own(
     new THREE.MeshBasicMaterial({
       map: soft,
@@ -1281,13 +1242,30 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   gYard.add(pools)
   meshes.push(pools)
 
-  /* Painted markings: bay outlines, hazard chevrons, haul-road edge. */
+  /* Every static lit thing at ground level in one mesh: painted markings, the
+   * bgwriter's circuit, and the lamp heads. */
   const paint: BoxSpec[] = []
   const paintQ: (THREE.Quaternion | null)[] = []
-  const pushPaint = (s: BoxSpec, q?: THREE.Quaternion) => {
+  const paintC: number[] = []
+  const PAINT_COL = mixHex(COLOR.warn, COLOR.vacuum, 0.4)
+  const pushPaint = (s: BoxSpec, q?: THREE.Quaternion, col = PAINT_COL, bright = 0.22) => {
     paint.push(s)
     paintQ.push(q ? q.clone() : null)
+    paintC.push(col, bright)
   }
+
+  // the bgwriter's circuit: 40 dashes for 1024 buffers
+  const LOOP_DASH = 40
+  for (let i = 0; i < LOOP_DASH; i++) {
+    const a = (i / LOOP_DASH) * TAU
+    _e.set(0, -a, 0)
+    _q.setFromEuler(_e)
+    pushPaint(
+      [LOOP_X + LOOP_R * Math.cos(a), PAINT_Y, LOOP_Z + LOOP_R * Math.sin(a), 1.7, 0.06, 0.45],
+      _q, SODIUM, 0.18,
+    )
+  }
+  for (const [x, z] of LAMPS) pushPaint([x + 1.7, 11.2, z, 1.4, 0.35, 0.8], undefined, SODIUM, 1.3)
   _e.set(0, Math.PI / 4, 0)
   const chevQ = new THREE.Quaternion().setFromEuler(_e)
   for (let i = 0; i < N_VAC_WORKERS; i++) {
@@ -1308,13 +1286,16 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     pushPaint([_p3.x, PAINT_Y, _p3.z - 4.4, 2.4, 0.06, 0.34])
     pushPaint([_p3.x, PAINT_Y, _p3.z + 4.4, 2.4, 0.06, 0.34])
   }
-  for (let i = 0; i < 6; i++) pushPaint([DECK_X - 22 + i * 2.6, PAINT_Y, LF[2], 0.5, 0.06, 9], chevQ)
+  // keep-clear hatching on the apron beside the tipping deck
+  for (let i = 0; i < 6; i++) pushPaint([DECK_X - 6 + i * 2.6, PAINT_Y, LF[2] - 13, 0.5, 0.06, 6], chevQ)
 
   const paintMesh = neonBatch(gYard, paint)
-  for (let i = 0; i < paint.length; i++) setBox(paintMesh, i, paint[i], paintQ[i] ?? undefined)
+  for (let i = 0; i < paint.length; i++) {
+    setBox(paintMesh, i, paint[i], paintQ[i] ?? undefined)
+    _c.setHex(paintC[i * 2]).multiplyScalar(paintC[i * 2 + 1])
+    paintMesh.setColorAt(i, _c)
+  }
   paintMesh.instanceMatrix.needsUpdate = true
-  _c.setHex(mixHex(COLOR.warn, COLOR.vacuum, 0.4)).multiplyScalar(0.22)
-  for (let i = 0; i < paint.length; i++) paintMesh.setColorAt(i, _c)
   paintMesh.instanceColor!.needsUpdate = true
   paintMesh.raycast = () => {}
 
@@ -1573,10 +1554,14 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
 
   /* --- worker routing ----------------------------------------------------- */
 
-  /** Keep a vehicle on the surface until it is actually over the excavation. */
+  /**
+   * Keep a vehicle on the surface until it is well inside the excavation, then
+   * let it follow the road down. The routes dive below y=0 while still over
+   * solid ground; a truck may not. It descends the pit face instead.
+   */
   function haulY(x: number, z: number, routeY: number): number {
     const d = Math.max(Math.abs(x) - CITY.pit.x, Math.abs(z) - CITY.pit.z)
-    const k = 1 - smoothstep((d + 26) / 26) // 0 at the rim, 1 well inside the pit
+    const k = 1 - smoothstep((d + 38) / 24) // surface until 14m inside the rim
     return lerp(ROAD_Y, routeY, k)
   }
 
@@ -1586,27 +1571,34 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     switch (phase) {
       case 'travel': {
         if (travel < 0.12) {
-          // pulling out of the bay and onto the haul road
-          const k = travel / 0.12
+          // Pull out onto the haul road from wherever the worker was standing:
+          // a free worker can be re-tasked before it has finished coming home.
+          const k = smoothstep(travel / 0.12)
           routePoint(go, 0, _p2)
-          _p.set(lerp(tr.bay.x, _p2.x, k), ROAD_Y, lerp(tr.bay.z, _p2.z, k))
+          _p.set(
+            lerp(tr.launchFrom.x, _p2.x, k),
+            lerp(tr.launchFrom.y, ROAD_Y, k),
+            lerp(tr.launchFrom.z, _p2.z, k),
+          )
           return
         }
         routePoint(go, (travel - 0.12) / 0.88, _p)
         break
       }
       case 'scan_heap':
-        // the slow crawl over the heap: this is the pass that finds them
-        routePoint(go, 0.9 + 0.1 * progress, _p)
+        // Working the heap: crawl out over it and back, the pass that finds
+        // the dead rows. Out-and-back so the worker starts and ends where the
+        // travel road left it, with no jump at the phase change.
+        routePoint(go, 1 - 0.1 * Math.sin(Math.PI * clamp01(progress)), _p)
         break
-      case 'vacuum_index': {
-        // out to the index and back, once per index
-        const u = tr.idxLeg % 2 === 0 ? progress : 1 - progress
-        routePoint(rid.vacIdx(table), u, _p)
+      case 'vacuum_index':
+        // Out to the index structure and back, once per index — a round trip,
+        // so the worker is always at the heap end when the phase changes.
+        routePoint(rid.vacIdx(table), Math.sin(Math.PI * clamp01(progress)), _p)
         break
-      }
       case 'vacuum_heap':
-        routePoint(go, 1 - 0.08 * progress, _p)
+        // the second pass, where the line pointers actually come back
+        routePoint(go, 1 - 0.07 * Math.sin(Math.PI * clamp01(progress)), _p)
         break
       case 'return':
         routePoint(rid.vacBack(table), clamp01(progress), _p)
@@ -1624,7 +1616,8 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
         routeTangent(rid.vacGo(table), clamp01((travel - 0.12) / 0.88), _dir)
         break
       case 'vacuum_index':
-        routeTangent(rid.vacIdx(table), clamp01(progress), _dir)
+        routeTangent(rid.vacIdx(table), Math.sin(Math.PI * clamp01(progress)), _dir)
+        if (progress > 0.5) _dir.negate() // heading home along the same road
         break
       case 'return':
         routeTangent(rid.vacBack(table), clamp01(progress), _dir)
@@ -1657,16 +1650,16 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   const offReset = ctx.bus.on('sim:reset', () => {
     for (let i = 0; i < N_DEBRIS; i++) {
       dbLive[i] = 0
-      zeroInst(debris, i, PILE_X, 1, PILE_Z)
+      zeroInst(landNeonMesh, IX_LF_DEBRIS + i, PILE_X, 1, PILE_Z)
     }
-    debris.instanceMatrix.needsUpdate = true
+    landNeonMesh.instanceMatrix.needsUpdate = true
     dbCount = 0
     dbNext = 0
     for (let i = 0; i < N_ENTRY; i++) {
       enLive[i] = 0
-      zeroInst(entries, i, TAPE_X0, TAPE_Y, TAPE_Z)
+      zeroInst(logNeonMesh, IX_LG_ENTRY + i, TAPE_X0, TAPE_Y, TAPE_Z)
     }
-    entries.instanceMatrix.needsUpdate = true
+    logNeonMesh.instanceMatrix.needsUpdate = true
     prevWritten = -1
     prevEvict = -1
   })
@@ -1729,10 +1722,9 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
         else if (i < head) b = (lead ? 2.4 : 1.3) * (0.7 + 0.3 * Math.sin(t * 9))
         else b = 0.07
         _c.setHex(base).multiplyScalar(b)
-        dialMesh.setColorAt(ring * DIAL_N + i, _c)
+        ckptNeonMesh.setColorAt(IX_CK_DIAL + ring * DIAL_N + i, _c)
       }
     }
-    dialMesh.instanceColor!.needsUpdate = true
     signs.setColor(SGN_MAXWAL, walWinning ? COLOR.crit : COLOR.wal, walWinning ? 1.3 : 0.4)
     signs.setColor(
       SGN_CKREASON,
@@ -1860,10 +1852,15 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     const avOn = av.enabled
     // one revolution per naptime: the sweep you see is the countdown
     const napFrac = 1 - clamp01(av.nextLaunchSec / NAPTIME)
-    if (avOn) {
-      scanAngle = advanceAngle(scanAngle, napFrac * TAU, dt * 3.2)
-      gScan.rotation.y = -scanAngle
-    }
+    if (avOn) scanAngle = advanceAngle(scanAngle, napFrac * TAU, dt * 3.2)
+    _e.set(0, -scanAngle, 0)
+    _q.setFromEuler(_e)
+    _sc.set(1, 1, 1)
+    _p.set(AX, 37.4, AZ)
+    _mw.compose(_p, _q, _sc)
+    setPart(launchNeonMesh, IX_AV_SCAN, _mw, 0, 0, 0, 16, 0.35, 0.6)
+    setPart(launchNeonMesh, IX_AV_SCAN + 1, _mw, 7.4, 0, 0, 1.4, 0.7, 1.0)
+    setPart(launchNeonMesh, IX_AV_SCAN + 2, _mw, -7.4, 0, 0, 1.0, 0.5, 0.7)
     launchFlash = Math.max(0, launchFlash - dt * 1.4)
 
     let busy = 0
@@ -1908,12 +1905,12 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     launchNeonMesh.instanceColor!.needsUpdate = true
 
     _c.setHex(COLOR.vacuum).multiplyScalar(avOn ? 1.3 : 0.05)
-    scanBar.setColorAt(0, _c)
+    launchNeonMesh.setColorAt(IX_AV_SCAN, _c)
     _c.setHex(COLOR.vacuum).multiplyScalar(avOn ? 2.4 : 0.05)
-    scanBar.setColorAt(1, _c)
+    launchNeonMesh.setColorAt(IX_AV_SCAN + 1, _c)
     _c.setHex(COLOR.vacuum).multiplyScalar(avOn ? 0.8 : 0.05)
-    scanBar.setColorAt(2, _c)
-    scanBar.instanceColor!.needsUpdate = true
+    launchNeonMesh.setColorAt(IX_AV_SCAN + 2, _c)
+    launchNeonMesh.instanceColor!.needsUpdate = true
 
     /* --- 4. THE WORKERS -------------------------------------------------- */
 
@@ -1930,11 +1927,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       const table = sim.tables[w.table]
 
       if (w.phase !== tr.prevPhase) {
-        if (w.phase === 'vacuum_index') tr.idxLeg = tr.prevPhase === 'vacuum_index' ? tr.idxLeg + 1 : 0
-        if (w.phase === 'scan_heap') {
-          tr.idxLeg = 0
-          tr.dumped = false
-        }
+        if (w.phase === 'scan_heap') tr.dumped = false
         if (w.phase === 'vacuum_heap') tr.expected = Math.max(1, table.deadTuples)
         tr.prevPhase = w.phase
       }
@@ -1943,6 +1936,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
         tr.homing = 0
         tr.dumped = false
         tr.hopper = 0
+        tr.launchFrom.copy(tr.pos)
       }
       if (!w.active && tr.wasActive) tr.homing = 1 // coast home from the landfill
       tr.wasActive = w.active
@@ -1954,27 +1948,35 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
         truckRoute(tr, w.phase, w.table, w.progress, w.travel)
         tr.pos.lerp(_p, 1 - Math.exp(-18 * dt))
       } else if (tr.homing > 0) {
-        tr.homing = Math.max(0, tr.homing - dt / 3.4)
+        tr.homing = Math.max(0, tr.homing - dt / 2.6)
         tr.home.getPointAt(clamp01(1 - tr.homing), _p)
         tr.pos.lerp(_p, 1 - Math.exp(-14 * dt))
       } else {
         tr.pos.lerp(tr.bay, 1 - Math.exp(-4 * dt))
       }
 
-      // Heading from real motion when moving, from the road when stopped.
+      /* Heading comes from the road, not from the frame-to-frame delta: a
+       * worker settling onto its parking spot must not spin to face the drift.
+       * The climb angle, though, is real motion — the road dives underground
+       * where the truck does not. */
       _dir.subVectors(tr.pos, tr.prev)
-      const speed = _dir.length() / Math.max(1e-4, dt)
-      if (speed > 1.2) _dir.normalize()
-      else if (w.active) truckTangent(w.phase, w.table, w.progress, w.travel)
+      const moved = _dir.length()
+      const speed = moved / Math.max(1e-4, dt)
+      const climb = moved > 1e-5 ? _dir.y / moved : 0
+      if (w.active) truckTangent(w.phase, w.table, w.progress, w.travel)
+      else if (speed > 1.2) _dir.normalize()
       else _dir.set(1, 0, 0)
 
-      let dy = Math.atan2(_dir.x, _dir.z) - tr.yaw
+      // The chassis is modelled nose-along +X, and Ry maps +X to (cos y, 0, -sin y).
+      let dy = Math.atan2(-_dir.z, _dir.x) - tr.yaw
       while (dy > Math.PI) dy -= TAU
       while (dy < -Math.PI) dy += TAU
       const yawRate = dy / Math.max(1e-3, dt)
       tr.yaw += dy * (1 - Math.exp(-7 * dt))
+      // roll out of the corner, pitch down the ramp
       tr.bank = damp(tr.bank, clamp(yawRate * 0.05, -0.4, 0.4), 5, dt)
-      tr.pitch = damp(tr.pitch, clamp(-Math.asin(clamp(_dir.y, -1, 1)) * 0.8, -0.9, 0.9), 6, dt)
+      const pitchTo = speed > 1.2 ? Math.asin(clamp(climb, -1, 1)) * 0.8 : 0
+      tr.pitch = damp(tr.pitch, clamp(pitchTo, -0.9, 0.9), 6, dt)
       tr.spin += speed * dt * 1.1
 
       // The hopper fills as scanning finds dead rows and tops up as they are
@@ -2026,7 +2028,9 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       /* world matrix, then every part hung off it */
       _e.set(0, tr.yaw, 0)
       _q.setFromEuler(_e)
-      _qa.setFromAxisAngle(_axisZ, tr.bank + tr.pitch)
+      _qa.setFromAxisAngle(_axisZ, tr.pitch) // nose up / down
+      _q.multiply(_qa)
+      _qa.setFromAxisAngle(_axisX, tr.bank) // lean
       _q.multiply(_qa)
       _sc.set(1, 1, 1)
       _mw.compose(tr.pos, _q, _sc)
@@ -2055,44 +2059,46 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       tr.body.boundingBox = null
       tr.body.boundingSphere = null
 
-      if (tr.wheels.visible) {
+      if (truckWheels.visible) {
         _qc.setFromAxisAngle(_axisX, Math.PI / 2)
         _qd.setFromAxisAngle(_axisY, tr.spin)
         _qc.multiply(_qd)
-        setPart(tr.wheels, 0, _mw, 2.3, 0.9, 1.55, 1.8, 0.7, 1.8, _qc)
-        setPart(tr.wheels, 1, _mw, 2.3, 0.9, -1.55, 1.8, 0.7, 1.8, _qc)
-        setPart(tr.wheels, 2, _mw, -2.3, 0.9, 1.55, 1.8, 0.7, 1.8, _qc)
-        setPart(tr.wheels, 3, _mw, -2.3, 0.9, -1.55, 1.8, 0.7, 1.8, _qc)
-        tr.wheels.instanceMatrix.needsUpdate = true
+        const w0 = tr.wheel0
+        setPart(truckWheels, w0, _mw, 2.3, 0.9, 1.55, 1.8, 0.7, 1.8, _qc)
+        setPart(truckWheels, w0 + 1, _mw, 2.3, 0.9, -1.55, 1.8, 0.7, 1.8, _qc)
+        setPart(truckWheels, w0 + 2, _mw, -2.3, 0.9, 1.55, 1.8, 0.7, 1.8, _qc)
+        setPart(truckWheels, w0 + 3, _mw, -2.3, 0.9, -1.55, 1.8, 0.7, 1.8, _qc)
+        truckWheels.instanceMatrix.needsUpdate = true
       }
 
+      const n0 = tr.neon0
       const fh = Math.max(0.05, tr.hopper * 2.3)
-      setPart(tr.neon, 0, _mw, hopX, hopY - 1.25 + fh / 2, 0, 4.2, fh, 2.8, _qa)
-      setPart(tr.neon, 1, _mw, 2.5, 3.6, 0, 2.5, 0.9, 2.95)
-      setPart(tr.neon, 2, _mw, 2.5, 5.05, 0, 0.9, 0.55, 0.9)
-      setPart(tr.neon, 3, _mw, 3.95, 2.2, 1.0, 0.3, 0.45, 0.7)
-      setPart(tr.neon, 4, _mw, 3.95, 2.2, -1.0, 0.3, 0.45, 0.7)
-      setPart(tr.neon, 5, _mw, ax + adx, ay + ady - 0.3, 0, 1.0, 0.55, 2.2, _qb)
-      setPart(tr.neon, 6, _mw, -3.55, 3.3, 0, 0.14, 2.0, 3.0, _qa)
-      tr.neon.instanceMatrix.needsUpdate = true
+      setPart(truckNeon, n0, _mw, hopX, hopY - 1.25 + fh / 2, 0, 4.2, fh, 2.8, _qa)
+      setPart(truckNeon, n0 + 1, _mw, 2.5, 3.6, 0, 2.5, 0.9, 2.95)
+      setPart(truckNeon, n0 + 2, _mw, 2.5, 5.05, 0, 0.9, 0.55, 0.9)
+      setPart(truckNeon, n0 + 3, _mw, 3.95, 2.2, 1.0, 0.3, 0.45, 0.7)
+      setPart(truckNeon, n0 + 4, _mw, 3.95, 2.2, -1.0, 0.3, 0.45, 0.7)
+      setPart(truckNeon, n0 + 5, _mw, ax + adx, ay + ady - 0.3, 0, 1.0, 0.55, 2.2, _qb)
+      setPart(truckNeon, n0 + 6, _mw, -3.55, 3.3, 0, 0.14, 2.0, 3.0, _qa)
+      truckNeon.instanceMatrix.needsUpdate = true
 
       const live = w.active || tr.homing > 0
       _c.setHex(COLOR.vacuum).multiplyScalar(tr.hopper * 2.2 + 0.05)
-      tr.neon.setColorAt(0, _c) // what is in the hopper
+      truckNeon.setColorAt(n0, _c) // what is in the hopper
       _c.setHex(COLOR.vacuum).multiplyScalar(live ? 0.55 : 0.12)
-      tr.neon.setColorAt(1, _c)
+      truckNeon.setColorAt(n0 + 1, _c)
       if (stalled) _c.setHex(COLOR.crit).multiplyScalar(1.4 + 1.6 * Math.abs(Math.sin(t * 7)))
       else if (live) _c.setHex(COLOR.warn).multiplyScalar(0.7 + 0.9 * Math.abs(Math.sin(t * 3.4)))
       else _c.setHex(COLOR.warn).multiplyScalar(0.06)
-      tr.neon.setColorAt(2, _c) // beacon
+      truckNeon.setColorAt(n0 + 2, _c) // beacon
       _c.setHex(COLOR.ink).multiplyScalar(live ? 1.6 : 0.05)
-      tr.neon.setColorAt(3, _c)
-      tr.neon.setColorAt(4, _c)
+      truckNeon.setColorAt(n0 + 3, _c)
+      truckNeon.setColorAt(n0 + 4, _c)
       _c.setHex(COLOR.vacuum).multiplyScalar(tr.carry * 2.6 + 0.04)
-      tr.neon.setColorAt(5, _c) // what the scoop actually brought up
+      truckNeon.setColorAt(n0 + 5, _c) // what the scoop actually brought up
       _c.setHex(stalled ? COLOR.crit : COLOR.warn).multiplyScalar(live ? 0.5 : 0.08)
-      tr.neon.setColorAt(6, _c)
-      tr.neon.instanceColor!.needsUpdate = true
+      truckNeon.setColorAt(n0 + 6, _c)
+      truckNeon.instanceColor!.needsUpdate = true
 
       // focus follows the truck, so "focus autovac.worker.0" frames the vehicle
       tr.focus[0] = tr.pos.x
@@ -2138,7 +2144,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       if (fade <= 0.002) {
         dbLive[i] = 0
         dbCount--
-        zeroInst(debris, i, PILE_X, 1, PILE_Z)
+        zeroInst(landNeonMesh, IX_LF_DEBRIS + i, PILE_X, 1, PILE_Z)
         continue
       }
       const k = dbFall[i]
@@ -2147,13 +2153,12 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       _e.set(0, dbRot[i], 0)
       _q.setFromEuler(_e)
       const s = dbS[i] * (1 - settle * 0.25)
-      setTRS(debris, i, dbX[i], y - settle * 0.4, dbZ[i], s, s * 0.7, s, _q)
+      setTRS(landNeonMesh, IX_LF_DEBRIS + i, dbX[i], y - settle * 0.4, dbZ[i], s, s * 0.7, s, _q)
       _c.setHex(mixHex(COLOR.vacuum, COLOR.storage, clamp01(age / 30)))
         .multiplyScalar((k < 1 ? 1.8 : 0.5) * fade)
-      debris.setColorAt(i, _c)
+      landNeonMesh.setColorAt(IX_LF_DEBRIS + i, _c)
     }
-    debris.instanceMatrix.needsUpdate = true
-    debris.instanceColor!.needsUpdate = true
+    landNeonMesh.instanceMatrix.needsUpdate = true
 
     let stalledAny = false
     for (let i = 0; i < N_VAC_WORKERS; i++) if (av.workers[i].stalledByHorizon) stalledAny = true
@@ -2211,16 +2216,18 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       enT[i] += dt * 0.34
       if (enT[i] >= 1) {
         enLive[i] = 0
-        zeroInst(entries, i, TAPE_X1, TAPE_Y, TAPE_Z)
+        zeroInst(logNeonMesh, IX_LG_ENTRY + i, TAPE_X1, TAPE_Y, TAPE_Z)
         continue
       }
       tapeActive++
-      setTRS(entries, i, lerp(TAPE_X0, TAPE_X1, enT[i]), TAPE_Y + 0.28, TAPE_Z, enLen[i], 0.22, 0.42)
+      setTRS(
+        logNeonMesh, IX_LG_ENTRY + i,
+        lerp(TAPE_X0, TAPE_X1, enT[i]), TAPE_Y + 0.28, TAPE_Z,
+        enLen[i], 0.22, 0.42,
+      )
       _c.setHex(enCol[i]).multiplyScalar(enBright[i] * clamp01(enT[i] * 12) * clamp01((1 - enT[i]) * 6))
-      entries.setColorAt(i, _c)
+      logNeonMesh.setColorAt(IX_LG_ENTRY + i, _c)
     }
-    entries.instanceMatrix.needsUpdate = true
-    entries.instanceColor!.needsUpdate = true
 
     tapeSpin += dt * (0.5 + clamp01(logRate / 6) * 4.5)
     if (tapeSpin > TAU) tapeSpin -= TAU
@@ -2277,27 +2284,22 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
 
     bgwDetailMesh.visible = near
     gSweep.visible = near
-    loopMesh.visible = near
 
     launchDetailMesh.visible = near
-    gScan.visible = near
 
     depotDetailMesh.visible = near
-    for (const tr of trucks) tr.wheels.visible = near
+    truckWheels.visible = near
 
     landDetailMesh.visible = near
     logDetailMesh.visible = near
     logReels.visible = near
-    entries.visible = near
-    statsCyl.visible = near
     dish.visible = near
 
     yardDeep.visible = near
-    lampMesh.visible = near
-    paintMesh.visible = near
-    pools.visible = near
     edgeLines.visible = near
     signMesh.visible = close
+    // paint, lamp heads, light pools and haze stay on: they are what makes the
+    // yard read as a lit depot from the air, and they are two draw calls.
   }
 
   function dispose(): void {
