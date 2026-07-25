@@ -31,26 +31,61 @@ const fallback = document.querySelector<HTMLElement>('#fallback')
 
 if (!canvasPlaceholder) throw new Error('Observability canvas is missing')
 
-function createRenderer(): THREE.WebGLRenderer {
-  try {
-    // Match the renderer path used by the main city.
-    return new THREE.WebGLRenderer({
+async function createRenderer(): Promise<THREE.WebGLRenderer> {
+  const profiles: THREE.WebGLRendererParameters[] = [
+    {
       antialias: true,
       powerPreference: 'high-performance',
       stencil: false,
       alpha: false,
-    })
-  } catch (preferredError) {
-    console.warn('Preferred WebGL context failed; retrying with browser defaults.', preferredError)
-    return new THREE.WebGLRenderer({ antialias: false })
+    },
+    { antialias: false },
+    { antialias: false, powerPreference: 'low-power', stencil: false },
+  ]
+
+  let lastError: unknown
+  for (const [index, profile] of profiles.entries()) {
+    try {
+      return new THREE.WebGLRenderer(profile)
+    } catch (error) {
+      lastError = error
+      console.warn(`WebGL renderer profile ${index + 1} failed.`, error)
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 250))
+    }
   }
+
+  throw lastError
+}
+
+function showRendererError(error: unknown): void {
+  if (!fallback) return
+
+  const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+  fallback.replaceChildren()
+
+  const title = document.createElement('strong')
+  title.textContent = 'The 3D renderer could not start.'
+
+  const detail = document.createElement('span')
+  detail.textContent = `Build e0ad821-r2 · ${message}`
+
+  const hint = document.createElement('span')
+  hint.textContent = 'Close other PGSimCity tabs, then retry. Chrome can temporarily exhaust its graphics contexts.'
+
+  const retry = document.createElement('button')
+  retry.type = 'button'
+  retry.textContent = 'RETRY'
+  retry.addEventListener('click', () => window.location.reload())
+
+  fallback.append(title, detail, hint, retry)
+  fallback.hidden = false
 }
 
 let renderer: THREE.WebGLRenderer
 try {
-  renderer = createRenderer()
+  renderer = await createRenderer()
 } catch (error) {
-  if (fallback) fallback.hidden = false
+  showRendererError(error)
   throw error
 }
 
