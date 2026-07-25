@@ -90,6 +90,14 @@ export interface CollisionBuildOptions {
    * and must stay a single collider or there is nothing to stand on.
    */
   slabY?: number
+  /**
+   * A box taller than this is split too. Default 70 m. Districts park unused
+   * instanced-mesh instances far below the world — the postmaster's registry
+   * box runs y = -1000‥47, the WAL vault's y = -9000‥17 — and boxing those
+   * would drop an invisible one-kilometre column through the city. Nothing a
+   * pedestrian can see is taller than 53 m, so 70 is comfortable headroom.
+   */
+  maxHeight?: number
   /** Never accept a slab bigger than this even if it is thin. Default 340 m. */
   hugeSpan?: number
   /** Boxes thinner than this vertically are decals / lines. Default 0.3 m. */
@@ -177,6 +185,7 @@ const EPS = 1e-4
 const DEFAULTS = {
   maxSpan: 60,
   slabY: 5,
+  maxHeight: 70,
   hugeSpan: 340,
   minThickness: 0.3,
   ceiling: 38,
@@ -265,6 +274,9 @@ export function createCollisionWorld(): CollisionWorld {
     if (sx <= EPS || sz <= EPS || sy < o.minThickness) return 0
     if (b.min.y >= o.ceiling) return 0
     if (b.max.y <= o.floor) return 0
+    // Absurdly tall: a container, or a mesh with instances parked below the
+    // world. Either way, look at its parts instead.
+    if (sy > o.maxHeight) return 2
     if (sx <= o.maxSpan && sz <= o.maxSpan) return 1
     // Wide. A thin wide box is a deck or a roof and stays one collider; a wide
     // *tall* box is a district container and has to be broken up.
@@ -292,6 +304,7 @@ export function createCollisionWorld(): CollisionWorld {
       excludeDistricts: opts.excludeDistricts ?? [],
       maxSpan: opts.maxSpan ?? DEFAULTS.maxSpan,
       slabY: opts.slabY ?? DEFAULTS.slabY,
+      maxHeight: opts.maxHeight ?? DEFAULTS.maxHeight,
       hugeSpan: opts.hugeSpan ?? DEFAULTS.hugeSpan,
       minThickness: opts.minThickness ?? DEFAULTS.minThickness,
       ceiling: opts.ceiling ?? DEFAULTS.ceiling,

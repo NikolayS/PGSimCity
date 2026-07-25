@@ -188,10 +188,20 @@ async function boot(): Promise<void> {
     }
   })
 
+  // The HUD's quality select asks for a level; the renderer echoes the level it
+  // ended up at. Same ping-pong guard as camera:mode.
+  let applyingQuality = false
   bus.on('quality', ({ level }) => {
+    if (!applyingQuality && level !== gfx.quality.level) {
+      applyingQuality = true
+      try {
+        gfx.setQuality(level)
+      } finally {
+        applyingQuality = false
+      }
+    }
     flows.setQuality(gfx.quality)
     labels.setQuality(gfx.quality)
-    void level
   })
 
   bus.on('sim:reset', () => sim.reset())

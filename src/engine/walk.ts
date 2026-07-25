@@ -115,8 +115,10 @@ const JUMP_BUFFER = 0.13
 const COYOTE = 0.11
 /** Below this the world has clearly lost you. */
 const VOID_Y = -90
-/** No ground for this long and we assume you are falling forever. */
+/** No ground for this long and we start to suspect you are falling forever. */
 const LOST_GROUND = 2.0
+/** …and this long with nothing underfoot settles it. */
+const LOST_GROUND_HARD = 6.0
 /** Sway is a fraction of the vertical bob. */
 const SWAY_RATIO = 0.6
 /** Bob amplitude chases the walk speed at this rate — fast enough to read as instant. */
@@ -128,20 +130,22 @@ const FADE_OUT = 0.18
 const FADE_IN = 0.45
 
 /**
- * The respawn pad: the south promenade of the shared-memory deck. The buffer
- * grid reaches z = ±46.1 (31 * 2.9 / 2 + tile/2) and the deck edge is at
- * z = ±62, so z = 54 is clear pavement, facing north straight up the grid.
+ * The respawn pad. The buffer grid reaches z = ±46.1 (31 * 2.9 / 2 + tile / 2)
+ * and the raised inner deck ends at z = 50.5, so z = 48 is a four-metre band of
+ * clear deck at y = 3.7, right at the south edge of the grid, facing north
+ * straight up it. (The outer promenade beyond z = 50.5 sits 0.70 m lower — a
+ * step you have to jump, which is why the pad is not out there.)
  */
 const SAFE_X = 0
-const SAFE_Z = 54
-const SAFE_Y = CITY.deck.top
+const SAFE_Z = 48
+const SAFE_Y = CITY.deck.top + 0.7
 /** Facing: yaw 0 looks down -Z in three's convention, i.e. north, up the grid. */
 const SAFE_YAW = 0
 
 /** Fallback landing pads for enter(), nearest-first, when nothing is underfoot. */
 const LANDING_PADS: readonly [number, number, number][] = [
   [SAFE_X, SAFE_Y, SAFE_Z],
-  [0, CITY.deck.top, -54],
+  [0, SAFE_Y, -48],
   [-66, CITY.deck.top, 0],
   [66, CITY.deck.top, 0],
   [0, 0, CITY.backend.z + 26],
@@ -633,8 +637,12 @@ export function createWalkController(opts: WalkOptions): WalkController {
 
     /* --- vertical -------------------------------------------------------- */
     const wasGrounded = grounded
+    const vy0 = vy
     vy -= T.gravity * d
-    pos.y += vy * d
+    // Trapezoid, not Euler. Under constant acceleration this is exact, which is
+    // the difference between a jump that peaks at 0.90 m and one that peaks at
+    // 0.85 m and changes height when the frame rate does.
+    pos.y += (vy0 + vy) * 0.5 * d
 
     const g = collision.groundAt(pos, wasGrounded ? GROUND_SNAP : AIR_SNAP)
     if (g !== null && vy <= 0) {
@@ -652,7 +660,14 @@ export function createWalkController(opts: WalkOptions): WalkController {
     if (pos.y < VOID_Y) {
       startRespawn('You fell out of the world — back on the plaza.')
     } else if (lostGroundT > LOST_GROUND) {
-      startRespawn('Lost the ground — back on the plaza.')
+      // Two seconds of air is usually a bug — but stepping off the plaza into
+      // the excavation is a legitimate 55 m dive that takes 2.2 s. One deep
+      // probe (at most once a second, only while falling) tells them apart.
+      if (lostGroundT > LOST_GROUND_HARD || collision.groundAt(pos, 400) === null) {
+        startRespawn('Lost the ground — back on the plaza.')
+      } else {
+        lostGroundT = LOST_GROUND * 0.5
+      }
     }
 
     /* --- head bob, driven by distance ------------------------------------ */

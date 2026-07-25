@@ -62,7 +62,8 @@ export const expDelay = (ratePerSec: number, r = rand) =>
 export function fmtBytes(b: number, digits = 1): string {
   const neg = b < 0
   let v = Math.abs(b)
-  const units = ['B', 'kB', 'MB', 'GB', 'TB', 'PB']
+  // Binary units: the arithmetic below is 1024-based, so the names must be too.
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB']
   let i = 0
   while (v >= 1024 && i < units.length - 1) {
     v /= 1024
