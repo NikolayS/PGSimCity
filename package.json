@@ -3,7 +3,27 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "license": "Apache-2.0",
   "description": "PGSimCity — an explorable 3D city that shows how PostgreSQL actually works",
+  "author": "Nikolay Samokhvalov",
+  "homepage": "https://nikolays.github.io/PGSimCity/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NikolayS/PGSimCity.git"
+  },
+  "bugs": {
+    "url": "https://github.com/NikolayS/PGSimCity/issues"
+  },
+  "keywords": [
+    "postgresql",
+    "postgres",
+    "visualization",
+    "3d",
+    "threejs",
+    "database",
+    "education",
+    "webgl"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "vite build",

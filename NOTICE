@@ -1,0 +1,22 @@
+PGSimCity
+Copyright 2026 Nikolay Samokhvalov
+
+This product is licensed under the Apache License, Version 2.0 (the "License");
+you may not use this product except in compliance with the License. You may
+obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+A copy of the License is included in the LICENSE file at the root of this
+distribution.
+
+PostgreSQL is a trademark of the PostgreSQL Community Association of Canada.
+PGSimCity is an independent educational project: it is not affiliated with,
+sponsored by, or endorsed by the PostgreSQL project, the PostgreSQL Global
+Development Group, or the PostgreSQL Community Association of Canada. The
+elephant mark and any PostgreSQL naming used in this project are used only to
+refer to PostgreSQL itself.
+
+This product bundles third-party software distributed under its own license
+terms; see the dependency manifests (package.json, package-lock.json) and the
+license files shipped inside each dependency for details.

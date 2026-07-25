@@ -1,5 +1,50 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
-.DS_Store
-*.log
+dist-ssr/
 .vite/
+*.tsbuildinfo
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Scratch, temp and working files
+scratch/
+tmp/
+.tmp/
+.cache/
+*.tmp
+*.bak
+*.orig
+*.rej
+*~
+
+# Editor / IDE
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*.sublime-workspace
+
+# OS junk
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+desktop.ini
