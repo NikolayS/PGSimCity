@@ -1,4 +1,4 @@
-import type { BackendSim, BackendState, ComponentDoc, PlanNode, SimState, TableSim } from '../core/types'
+import type { BackendSim, BackendState, BookRef, ComponentDoc, DocRef, PlanNode, SimState, TableSim } from '../core/types'
 import { N_BUFFERS } from '../core/types'
 import { fmtBytes, fmtDuration, fmtLsn, fmtNum, fmtPct } from '../core/util'
 
@@ -71,6 +71,49 @@ function countPlanNodes(n: PlanNode | null | undefined, depth = 0): number {
 /** States that mean "this backend is doing work right now". */
 const BUSY: BackendState[] = ['parse', 'plan', 'exec_cpu', 'exec_io', 'sort', 'wal_insert', 'commit_wait', 'sending']
 
+/* ---------------------------- reference helpers ---------------------------
+ * The reading list under each component. Every entry here was checked against
+ * the thing it points at — the manual page title, the file on master, the
+ * function name inside it, the chapter number on interdb.jp. A reference
+ * nobody checked is worse than no reference, so where a book genuinely has no
+ * chapter on a subject, the field is simply absent.
+ * -------------------------------------------------------------------------*/
+
+const DOCS_BASE = 'https://www.postgresql.org/docs/current/'
+const SRC_BASE = 'https://github.com/postgres/postgres/blob/'
+const SUZUKI_BASE = 'https://www.interdb.jp/pg/'
+
+/** A page of the PostgreSQL manual. `page` may carry a #ANCHOR. */
+const manual = (page: string, label: string): DocRef => ({ label, url: DOCS_BASE + page })
+
+/** A file on master, with the functions worth opening it for. */
+const srcFile = (path: string, symbol?: string): DocRef => ({ label: path, url: `${SRC_BASE}master/${path}`, symbol })
+
+/** A chapter of Hironobu Suzuki's *The Internals of PostgreSQL*, free online. */
+const suzuki = (n: number, label: string): DocRef & { chapter: string } => ({
+  chapter: String(n),
+  label,
+  url: `${SUZUKI_BASE}pgsql${String(n).padStart(2, '0')}/index.html`,
+})
+
+/**
+ * A chapter of Egor Rogov's *PostgreSQL 14 Internals*. A book: cited, never
+ * linked. Chapters are named, not numbered — the publisher's own contents list
+ * gives the titles, and a chapter number nobody re-checked is exactly the kind
+ * of confident wrong detail this apparatus exists to avoid.
+ */
+const ROGOV_EDITION = 'PostgreSQL 14 Internals — Egor Rogov, Postgres Professional'
+const R_MVCC = 'Part I. Isolation and MVCC'
+const R_WAL = 'Part II. Buffer Cache and WAL'
+const R_LOCKS = 'Part III. Locks'
+const R_EXEC = 'Part IV. Query Execution'
+const rogov = (part: string, chapter: string, confidence?: string): BookRef => ({
+  edition: ROGOV_EDITION,
+  part,
+  chapter,
+  confidence,
+})
+
 /* ------------------------------ the docs ------------------------------ */
 
 export const DOCS_MEMORY: ComponentDoc[] = [
@@ -119,6 +162,15 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     knobs: ['tps', 'writeRatio', 'paused'],
     see: ['postmaster', 'shmem.deck', 'backend.row', 'world.pit'],
     source: ['src/backend/postmaster/postmaster.c'],
+    refs: {
+      docs: [
+        manual('creating-cluster.html', '18.2. Creating a Database Cluster'),
+        manual('tutorial-arch.html', '1.2. Architectural Fundamentals'),
+      ],
+      source: [srcFile('src/backend/postmaster/postmaster.c', 'PostmasterMain')],
+      suzuki: suzuki(1, 'Database Cluster, Databases and Tables'),
+      rogov: rogov(R_MVCC, 'Introduction — data organization, processes and memory'),
+    },
   },
 
   {
@@ -162,6 +214,18 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     knobs: ['sharedBuffers', 'seqScanRatio', 'checkpointTimeout'],
     see: ['shared.buffers', 'buf.mapping', 'world.ground'],
     source: ['src/backend/storage/buffer/bufmgr.c', 'src/backend/storage/smgr/md.c'],
+    refs: {
+      docs: [
+        manual('runtime-config-resource.html', '19.4. Resource Consumption'),
+        manual('monitoring-stats.html', '27.2. The Cumulative Statistics System — pg_stat_io'),
+      ],
+      source: [
+        srcFile('src/backend/storage/buffer/bufmgr.c', 'ReadBuffer_common, FlushBuffer'),
+        srcFile('src/backend/storage/smgr/md.c', 'mdreadv, mdwritev'),
+      ],
+      suzuki: suzuki(8, 'Buffer Manager (§8.1, §8.4)'),
+      rogov: rogov(R_WAL, 'Buffer Cache — cache hits and cache misses'),
+    },
   },
 
   /* ======================================================================
@@ -204,6 +268,11 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     knobs: ['tps', 'writeRatio'],
     see: ['conn.gate', 'postmaster', 'backend.row', 'xmin.horizon'],
     source: ['src/backend/postmaster/postmaster.c'],
+    refs: {
+      docs: [manual('runtime-config-connection.html', '19.3. Connections and Authentication — max_connections')],
+      source: [srcFile('src/backend/postmaster/postmaster.c', 'BackendStartup')],
+      suzuki: suzuki(2, 'Process and Memory Architecture'),
+    },
   },
 
   {
@@ -236,6 +305,16 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     knobs: ['tps'],
     see: ['client.pool', 'postmaster', 'backend.slot'],
     source: ['src/backend/postmaster/postmaster.c'],
+    refs: {
+      docs: [
+        manual('auth-pg-hba-conf.html', '20.1. The pg_hba.conf File'),
+        manual('auth-methods.html', '20.3. Authentication Methods'),
+      ],
+      source: [
+        srcFile('src/backend/libpq/hba.c', 'parse_hba_line, check_hba'),
+        srcFile('src/backend/libpq/auth.c', 'ClientAuthentication'),
+      ],
+    },
   },
 
   /* ======================================================================
@@ -278,6 +357,15 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     knobs: ['tps', 'autovacuum', 'replicaEnabled'],
     see: ['conn.gate', 'backend.row', 'shmem.deck', 'world.ground'],
     source: ['src/backend/postmaster/postmaster.c'],
+    refs: {
+      docs: [
+        manual('tutorial-arch.html', '1.2. Architectural Fundamentals'),
+        manual('runtime-config-connection.html', '19.3. Connections and Authentication'),
+      ],
+      source: [srcFile('src/backend/postmaster/postmaster.c', 'PostmasterMain, BackendStartup, HandleChildCrash')],
+      suzuki: suzuki(2, 'Process and Memory Architecture (§2.1)'),
+      rogov: rogov(R_MVCC, 'Introduction — processes and memory'),
+    },
   },
 
   /* ======================================================================
@@ -320,6 +408,18 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     knobs: ['tps', 'writeRatio', 'updateRatio'],
     see: ['backend.slot', 'backend.localmem', 'shmem.deck', 'postmaster'],
     source: ['src/backend/postmaster/postmaster.c', 'src/backend/executor/execMain.c'],
+    refs: {
+      docs: [
+        manual('tutorial-arch.html', '1.2. Architectural Fundamentals'),
+        manual('monitoring-stats.html', '27.2. The Cumulative Statistics System — pg_stat_activity'),
+      ],
+      source: [
+        srcFile('src/backend/postmaster/postmaster.c', 'BackendStartup'),
+        srcFile('src/backend/tcop/postgres.c', 'PostgresMain'),
+      ],
+      suzuki: suzuki(2, 'Process and Memory Architecture (§2.1)'),
+      rogov: rogov(R_MVCC, 'Introduction — processes and memory'),
+    },
   },
 
   {
@@ -364,6 +464,18 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     knobs: ['tps', 'longRunningXact', 'lockContention'],
     see: ['backend.localmem', 'planner.lab', 'xmin.horizon', 'lock.manager'],
     source: ['src/backend/postmaster/postmaster.c', 'src/backend/executor/execMain.c', 'src/backend/parser/analyze.c'],
+    refs: {
+      docs: [
+        manual('protocol-flow.html', '54.2. Message Flow'),
+        manual('monitoring-stats.html', '27.2. The Cumulative Statistics System — backend_xid, backend_xmin'),
+      ],
+      source: [
+        srcFile('src/backend/tcop/postgres.c', 'PostgresMain, exec_simple_query'),
+        srcFile('src/backend/utils/time/snapmgr.c', 'SnapshotResetXmin'),
+      ],
+      suzuki: suzuki(2, 'Process and Memory Architecture'),
+      rogov: rogov(R_MVCC, 'Snapshots', 'cited for the horizon claim only — Rogov has no backend-lifecycle chapter'),
+    },
   },
 
   {
@@ -401,6 +513,18 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     ],
     knobs: ['seqScanRatio', 'tps'],
     see: ['backend.slot', 'planner.planner', 'planner.executor', 'shared.buffers'],
+    refs: {
+      docs: [
+        manual('runtime-config-resource.html#GUC-WORK-MEM', '19.4. Resource Consumption — work_mem'),
+        manual('sql-explain.html', 'EXPLAIN'),
+      ],
+      source: [
+        srcFile('src/backend/utils/sort/tuplesort.c', 'tuplesort_begin_common, inittapes'),
+        srcFile('src/backend/executor/nodeHash.c', 'ExecHashTableCreate, ExecHashIncreaseNumBatches'),
+      ],
+      suzuki: suzuki(2, 'Process and Memory Architecture (§2.2, the local memory area)'),
+      rogov: rogov(R_EXEC, 'Merging and Sorting; Hashing'),
+    },
   },
 
   /* ======================================================================
@@ -441,6 +565,18 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     ],
     knobs: ['sharedBuffers'],
     see: ['shared.buffers', 'proc.array', 'lock.manager', 'wal.buffers'],
+    refs: {
+      docs: [
+        manual('kernel-resources.html', '18.4. Managing Kernel Resources'),
+        manual('runtime-config-resource.html', '19.4. Resource Consumption — huge_pages, shared_memory_type'),
+      ],
+      source: [
+        srcFile('src/backend/storage/ipc/ipci.c', 'CalculateShmemSize, CreateSharedMemoryAndSemaphores'),
+        srcFile('src/backend/storage/ipc/shmem.c', 'ShmemInitStruct'),
+      ],
+      suzuki: suzuki(2, 'Process and Memory Architecture (§2.2)'),
+      rogov: rogov(R_MVCC, 'Introduction — processes and memory'),
+    },
   },
 
   {
@@ -492,6 +628,18 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     knobs: ['sharedBuffers', 'bgwriterEnabled', 'bgwriterLruMaxpages', 'seqScanRatio'],
     see: ['buf.mapping', 'world.pit', 'backend.localmem', 'shmem.deck'],
     source: ['src/backend/storage/buffer/bufmgr.c', 'src/backend/storage/buffer/freelist.c'],
+    refs: {
+      docs: [
+        manual('runtime-config-resource.html#GUC-SHARED-BUFFERS', '19.4. Resource Consumption — shared_buffers'),
+        manual('pgbuffercache.html', 'F.25. pg_buffercache'),
+      ],
+      source: [
+        srcFile('src/backend/storage/buffer/bufmgr.c', 'BufferAlloc, PinBuffer, FlushBuffer, BufferSync'),
+        srcFile('src/backend/storage/buffer/freelist.c', 'StrategyGetBuffer, ClockSweepTick, GetBufferFromRing'),
+      ],
+      suzuki: suzuki(8, 'Buffer Manager'),
+      rogov: rogov(R_WAL, 'Buffer Cache'),
+    },
   },
 
   {
@@ -531,6 +679,18 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     knobs: ['sharedBuffers', 'tps', 'seqScanRatio'],
     see: ['shared.buffers', 'lock.manager', 'world.pit'],
     source: ['src/backend/storage/buffer/bufmgr.c', 'src/backend/storage/buffer/freelist.c'],
+    refs: {
+      docs: [
+        manual('monitoring-stats.html#WAIT-EVENT-LWLOCK-TABLE', '27.2. The Cumulative Statistics System — LWLock wait events'),
+        manual('pgbuffercache.html', 'F.25. pg_buffercache'),
+      ],
+      source: [
+        srcFile('src/backend/storage/buffer/buf_table.c', 'BufTableLookup, BufTableInsert, BufTableDelete'),
+        srcFile('src/backend/storage/buffer/bufmgr.c', 'BufferAlloc'),
+      ],
+      suzuki: suzuki(8, 'Buffer Manager (§8.2, §8.3)'),
+      rogov: rogov(R_WAL, 'Buffer Cache'),
+    },
   },
 
   {
@@ -579,6 +739,18 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     knobs: ['tps', 'longRunningXact'],
     see: ['xmin.horizon', 'clog.slru', 'shmem.deck', 'backend.slot'],
     source: ['src/backend/storage/ipc/procarray.c'],
+    refs: {
+      docs: [
+        manual('mvcc.html', 'Chapter 13. Concurrency Control'),
+        manual('transaction-iso.html', '13.2. Transaction Isolation'),
+      ],
+      source: [
+        srcFile('src/backend/storage/ipc/procarray.c', 'GetSnapshotData'),
+        srcFile('src/backend/utils/time/snapmgr.c', 'GetTransactionSnapshot, SnapshotResetXmin'),
+      ],
+      suzuki: suzuki(5, 'Concurrency Control (§5.5, §5.6)'),
+      rogov: rogov(R_MVCC, 'Snapshots'),
+    },
   },
 
   {
@@ -634,6 +806,18 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     knobs: ['longRunningXact', 'autovacuum', 'autovacuumScaleFactor'],
     see: ['proc.array', 'autovac.worker', 'storage.table', 'backend.slot'],
     source: ['src/backend/storage/ipc/procarray.c', 'src/backend/access/heap/vacuumlazy.c', 'src/backend/commands/vacuum.c'],
+    refs: {
+      docs: [
+        manual('routine-vacuuming.html', '24.1. Routine Vacuuming'),
+        manual('mvcc-intro.html', '13.1. Introduction'),
+      ],
+      source: [
+        srcFile('src/backend/storage/ipc/procarray.c', 'ComputeXidHorizons, GetOldestNonRemovableTransactionId'),
+        srcFile('src/backend/access/heap/heapam_visibility.c', 'HeapTupleSatisfiesVacuum'),
+      ],
+      suzuki: suzuki(5, 'Concurrency Control (§5.5, §5.7)'),
+      rogov: rogov(R_MVCC, 'Snapshots — the database horizon'),
+    },
   },
 
   {
@@ -692,6 +876,19 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     knobs: ['lockContention', 'tps', 'updateRatio'],
     see: ['backend.slot', 'proc.array', 'storage.table', 'buf.mapping'],
     source: ['src/backend/storage/lmgr/lock.c'],
+    refs: {
+      docs: [
+        manual('explicit-locking.html', '13.3. Explicit Locking'),
+        manual('view-pg-locks.html', '53.13. pg_locks'),
+        manual('runtime-config-locks.html', '19.12. Lock Management'),
+      ],
+      source: [
+        srcFile('src/backend/storage/lmgr/lock.c', 'LockAcquire, LockRelease'),
+        srcFile('src/backend/storage/lmgr/deadlock.c', 'DeadLockCheck'),
+        srcFile('src/backend/storage/lmgr/proc.c', 'ProcSleep'),
+      ],
+      rogov: rogov(R_LOCKS, 'Relation-Level Locks; Row-Level Locks; Locks in Memory'),
+    },
   },
 
   {
@@ -735,6 +932,18 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     knobs: ['tps', 'writeRatio'],
     see: ['proc.array', 'xmin.horizon', 'shmem.deck'],
     source: ['src/backend/access/transam/clog.c', 'src/backend/access/transam/slru.c', 'src/backend/access/heap/heapam.c'],
+    refs: {
+      docs: [
+        manual('storage-file-layout.html', '66.1. Database File Layout'),
+        manual('runtime-config-resource.html', '19.4. Resource Consumption — transaction_buffers, subtransaction_buffers'),
+      ],
+      source: [
+        srcFile('src/backend/access/transam/clog.c', 'TransactionIdSetTreeStatus, TransactionIdGetStatus'),
+        srcFile('src/backend/access/transam/slru.c', 'SimpleLruReadPage'),
+      ],
+      suzuki: suzuki(5, 'Concurrency Control (§5.4 Commit Log)'),
+      rogov: rogov(R_MVCC, 'Pages and Tuples — transaction status and hint bits', 'the nearest chapter; Rogov has none on the SLRU caches themselves'),
+    },
   },
 
   {
@@ -774,6 +983,14 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     knobs: ['autovacuum', 'autovacuumScaleFactor'],
     see: ['autovac.worker', 'storage.table', 'planner.planner'],
     source: ['src/backend/utils/activity/pgstat.c'],
+    refs: {
+      docs: [manual('monitoring-stats.html', '27.2. The Cumulative Statistics System')],
+      source: [
+        srcFile('src/backend/utils/activity/pgstat.c', 'pgstat_report_stat'),
+        srcFile('src/backend/utils/activity/pgstat_shmem.c'),
+        srcFile('src/backend/utils/activity/pgstat_relation.c'),
+      ],
+    },
   },
 
   {
@@ -820,6 +1037,18 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     knobs: ['tps', 'writeRatio', 'synchronousCommit', 'fullPageWrites'],
     see: ['shmem.deck', 'backend.slot', 'shared.buffers'],
     source: ['src/backend/access/transam/xlog.c', 'src/backend/access/transam/xloginsert.c'],
+    refs: {
+      docs: [
+        manual('wal-configuration.html', '28.5. WAL Configuration'),
+        manual('runtime-config-wal.html', '19.5. Write Ahead Log — wal_buffers, wal_writer_delay'),
+      ],
+      source: [
+        srcFile('src/backend/access/transam/xlog.c', 'XLogInsertRecord, AdvanceXLInsertBuffer'),
+        srcFile('src/backend/access/transam/xloginsert.c', 'XLogInsert'),
+      ],
+      suzuki: suzuki(9, 'Write Ahead Logging (WAL) (§9.5)'),
+      rogov: rogov(R_WAL, 'Write-Ahead Log'),
+    },
   },
 
   /* ======================================================================
@@ -862,6 +1091,18 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     knobs: ['tps', 'seqScanRatio'],
     see: ['planner.parser', 'planner.rewriter', 'planner.planner', 'planner.executor'],
     source: ['src/backend/parser/analyze.c', 'src/backend/optimizer/plan/planner.c', 'src/backend/executor/execMain.c'],
+    refs: {
+      docs: [
+        manual('query-path.html', '51.1. The Path of a Query'),
+        manual('protocol-flow.html', '54.2. Message Flow'),
+      ],
+      source: [
+        srcFile('src/backend/tcop/postgres.c', 'pg_parse_query, pg_analyze_and_rewrite_fixedparams, pg_plan_query'),
+        srcFile('src/backend/utils/cache/plancache.c', 'choose_custom_plan'),
+      ],
+      suzuki: suzuki(3, 'Query Processing'),
+      rogov: rogov(R_EXEC, 'Query Execution Stages'),
+    },
   },
 
   {
@@ -899,6 +1140,15 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     knobs: ['tps'],
     see: ['planner.rewriter', 'planner.planner', 'planner.lab'],
     source: ['src/backend/parser/analyze.c'],
+    refs: {
+      docs: [
+        manual('parser-stage.html', '51.3. The Parser Stage'),
+        manual('query-path.html', '51.1. The Path of a Query'),
+      ],
+      source: [srcFile('src/backend/parser/analyze.c', 'parse_analyze_fixedparams, transformStmt')],
+      suzuki: suzuki(3, 'Query Processing (§3.1)'),
+      rogov: rogov(R_EXEC, 'Query Execution Stages — parsing'),
+    },
   },
 
   {
@@ -935,6 +1185,17 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     ],
     see: ['planner.parser', 'planner.planner', 'planner.lab'],
     source: ['src/backend/rewrite/rewriteHandler.c'],
+    refs: {
+      docs: [
+        manual('rules-views.html', '39.2. Views and the Rule System'),
+        manual('ddl-rowsecurity.html', '5.9. Row Security Policies'),
+      ],
+      source: [
+        srcFile('src/backend/rewrite/rewriteHandler.c', 'fireRIRrules'),
+        srcFile('src/backend/rewrite/rowsecurity.c', 'get_row_security_policies'),
+      ],
+      rogov: rogov(R_EXEC, 'Query Execution Stages — the transformation stage', 'Rogov gives the rewriter no section of its own'),
+    },
   },
 
   {
@@ -986,6 +1247,20 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     knobs: ['seqScanRatio', 'tps', 'writeRatio'],
     see: ['planner.executor', 'planner.plantree', 'stats.shmem', 'storage.index'],
     source: ['src/backend/optimizer/plan/planner.c', 'src/backend/optimizer/path/costsize.c'],
+    refs: {
+      docs: [
+        manual('planner-optimizer.html', '51.5. Planner/Optimizer'),
+        manual('runtime-config-query.html', '19.7. Query Planning'),
+        manual('planner-stats.html', '14.2. Statistics Used by the Planner'),
+      ],
+      source: [
+        srcFile('src/backend/optimizer/path/costsize.c', 'cost_seqscan, cost_index, index_pages_fetched'),
+        srcFile('src/backend/utils/adt/selfuncs.c', 'eqsel, scalarineqsel, ineq_histogram_selectivity, get_actual_variable_range'),
+        srcFile('src/backend/optimizer/path/allpaths.c', 'make_one_rel, set_subquery_pathlist, qual_is_pushdown_safe'),
+      ],
+      suzuki: suzuki(3, 'Query Processing (§3.2, §3.3, §3.6)'),
+      rogov: rogov(R_EXEC, 'Query Execution Stages; Statistics'),
+    },
   },
 
   {
@@ -1030,6 +1305,20 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     knobs: ['seqScanRatio', 'tps'],
     see: ['planner.plantree', 'planner.planner', 'backend.localmem', 'shared.buffers'],
     source: ['src/backend/executor/execMain.c'],
+    refs: {
+      docs: [
+        manual('executor.html', '51.6. Executor'),
+        manual('parallel-query.html', 'Chapter 15. Parallel Query'),
+        manual('when-can-parallel-query-be-used.html', '15.2. When Can Parallel Query Be Used?'),
+      ],
+      source: [
+        srcFile('src/backend/executor/execMain.c', 'standard_ExecutorRun, ExecutePlan'),
+        srcFile('src/backend/executor/execProcnode.c', 'ExecInitNode, ExecProcNodeFirst'),
+        srcFile('src/backend/executor/nodeGather.c', 'ExecGather, gather_readnext'),
+      ],
+      suzuki: suzuki(3, 'Query Processing (§3.4, §3.7)'),
+      rogov: rogov(R_EXEC, 'Query Execution Stages; Nested Loop; Hashing; Merging and Sorting'),
+    },
   },
 
   {
@@ -1087,5 +1376,17 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     knobs: ['seqScanRatio'],
     see: ['planner.planner', 'planner.executor', 'planner.lab', 'shared.buffers'],
     source: ['src/backend/executor/execMain.c', 'src/backend/optimizer/path/costsize.c'],
+    refs: {
+      docs: [
+        manual('using-explain.html', '14.1. Using EXPLAIN'),
+        manual('executor.html', '51.6. Executor'),
+      ],
+      source: [
+        srcFile('src/backend/commands/explain.c', 'ExplainNode'),
+        srcFile('src/backend/optimizer/path/costsize.c', 'cost_seqscan, cost_gather_merge'),
+      ],
+      suzuki: suzuki(3, 'Query Processing (§3.3, §3.6)'),
+      rogov: rogov(R_EXEC, 'Query Execution Stages'),
+    },
   },
 ]

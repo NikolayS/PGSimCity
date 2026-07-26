@@ -1,6 +1,6 @@
 import '../styles/panel.css'
 
-import type { ComponentDef, ComponentDoc, ComponentKind, Knobs, SimState } from '../core/types'
+import type { ComponentDef, ComponentDoc, ComponentKind, DocRef, DocReferences, Knobs, SimState } from '../core/types'
 import { doc, knobMeta, mdToHtml } from './content'
 import { createCollapse, createKnobControl, loadFlag, saveFlag } from './controls'
 import type { KnobControl } from './controls'
@@ -57,6 +57,83 @@ function proseBody(text: string): HTMLElement {
     if (t) wrap.append(el('p', { class: 'pgc-p', html: mdToHtml(t) }))
   }
   return wrap
+}
+
+/* ---------------------------------------------------------------------------
+ * References — the reading list behind each component.
+ *
+ * Everything here is checkable: a manual page, a file in the PostgreSQL tree, a
+ * chapter of a book. That is the whole point, so the renderer never dresses up
+ * a reference as something it is not. No URL means no link.
+ * -------------------------------------------------------------------------*/
+
+/** One reference line. A link only when there is a real URL to link to. */
+function refLine(r: DocRef): HTMLElement {
+  const li = el('li', { class: 'pgc-src__i pgc-ref' })
+  li.append(
+    r.url
+      ? el('a', { class: 'pgc-ref__a', href: r.url, target: '_blank', rel: 'noopener noreferrer', text: r.label })
+      : el('span', { class: 'pgc-ref__t', text: r.label }),
+  )
+  if (r.symbol) li.append(document.createTextNode(' '), el('span', { class: 'pgc-ref__sym pg-mono', text: r.symbol }))
+  if (r.verified === false) {
+    const dagger = el('span', { class: 'pgc-ref__unver', text: ' †' })
+    dagger.title = 'the link is good; the section or chapter number has not been re-checked'
+    li.append(dagger)
+  }
+  return li
+}
+
+/**
+ * One labelled group. Everything else is borrowed from the "In the source"
+ * block's classes so the two read as the same object; the one inline rule is
+ * the gap between groups, which belongs in `.pgc-ref__g` in panel.css the next
+ * time that file is open.
+ */
+function refGroup(heading: string, items: HTMLElement[]): HTMLElement | null {
+  if (!items.length) return null
+  return el(
+    'div',
+    { class: 'pgc-ref__g', style: { marginTop: '10px' } },
+    el('span', { class: 'pg-eyebrow', text: heading }),
+    el('ul', { class: 'pgc-src pgc-ref__list' }, ...items),
+  )
+}
+
+function renderRefs(refs: DocReferences): HTMLElement | null {
+  const groups: (HTMLElement | null)[] = [
+    refGroup('Documentation', (refs.docs ?? []).map(refLine)),
+    refGroup('Source', (refs.source ?? []).map(refLine)),
+    refGroup(
+      'The Internals of PostgreSQL',
+      refs.suzuki ? [refLine({ ...refs.suzuki, label: `ch. ${refs.suzuki.chapter} — ${refs.suzuki.label}` })] : [],
+    ),
+  ]
+
+  // Rogov: "PostgreSQL 14 Internals" is a book. The reference apparatus supplies
+  // NO url for it, by explicit instruction, because there is no canonical public
+  // page for a chapter — inventing one would be a fabricated citation. Render it
+  // as plain text, never as an <a>. Do not "helpfully" add a link here later.
+  if (refs.rogov) {
+    const r = refs.rogov
+    const line = el(
+      'li',
+      { class: 'pgc-src__i pgc-ref' },
+      el('span', { class: 'pgc-ref__t', text: r.edition }),
+      el('br'),
+      el('span', { class: 'pgc-ref__t', text: `${r.part} · ${r.chapter}` }),
+    )
+    if (r.confidence) line.title = `confidence: ${r.confidence}`
+    groups.push(refGroup('In print', [line]))
+  }
+
+  const kept = groups.filter((g): g is HTMLElement => g != null)
+  if (!kept.length) return null
+
+  const block = el('div', { class: 'pgc-block pgc-block--refs' }, el('span', { class: 'pg-eyebrow', text: 'Go deeper' }))
+  const body = el('div', { class: 'pg-body' }, ...kept)
+  block.append(body)
+  return block
 }
 
 /* ===========================================================================
@@ -237,6 +314,18 @@ export function createInspector(ctx: UiContext): UiModule {
       document.createTextNode(' takes the guided tour'),
     )
     wrap.append(keys)
+
+    /* Whose shoulders this stands on. Named here rather than in every panel,
+       and worded so nobody reads it as an endorsement — none of these people
+       has seen this city. Each component also links the exact page or chapter
+       it draws on, under "Go deeper". */
+    wrap.append(
+      el('p', { class: 'pg-eyebrow pgc-empty__k', text: 'Where this comes from' }),
+      el('p', {
+        class: 'pg-hint',
+        text: 'The explanations lean on the PostgreSQL documentation, Bruce Momjian’s talks and slides, Hironobu Suzuki’s “The Internals of PostgreSQL”, and Egor Rogov’s “PostgreSQL 14 Internals”. With thanks — and to be clear, none of them is involved in this project or has reviewed it. Every mistake you find here is this project’s own.',
+      }),
+    )
     return wrap
   }
 
@@ -343,8 +432,10 @@ export function createInspector(ctx: UiContext): UiModule {
       )
     }
 
-    /* source */
-    const source = info?.source ?? []
+    /* source — the plain-path list, for docs that have no linked reading list
+       yet. Where `refs.source` exists it says the same thing with URLs and
+       function names, so showing both would just print every path twice. */
+    const source = info?.refs?.source?.length ? [] : (info?.source ?? [])
     if (source.length) {
       const list = el('ul', { class: 'pgc-src' })
       for (const path of source) list.append(el('li', { class: 'pgc-src__i pg-mono', text: path }))
@@ -356,6 +447,12 @@ export function createInspector(ctx: UiContext): UiModule {
           list,
         ),
       )
+    }
+
+    /* references — the reading list, only if this doc has one */
+    if (info?.refs) {
+      const block = renderRefs(info.refs)
+      if (block) wrap.append(block)
     }
 
     return wrap

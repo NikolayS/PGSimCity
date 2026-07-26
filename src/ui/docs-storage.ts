@@ -1,4 +1,4 @@
-import type { CheckpointPhase, ComponentDoc, SimState, TableSim, VacPhase, WalSegment } from '../core/types'
+import type { BookRef, CheckpointPhase, ComponentDoc, DocRef, SimState, TableSim, VacPhase, WalSegment } from '../core/types'
 import { clamp, fmtBytes, fmtDuration, fmtLsn, fmtNum, fmtPct } from '../core/util'
 
 /* ============================================================================
@@ -80,6 +80,54 @@ function vacSummary(s: SimState): string {
   return `${live.length} × ${phase}`
 }
 
+/* ---------------------------- reference helpers ---------------------------
+ * The reading list under each component. Every entry here was checked against
+ * the thing it points at — the manual page title, the file on master, the
+ * function name inside it, the chapter number on interdb.jp. A reference
+ * nobody checked is worse than no reference, so where a book genuinely has no
+ * chapter on a subject, the field is simply absent.
+ * -------------------------------------------------------------------------*/
+
+const DOCS_BASE = 'https://www.postgresql.org/docs/current/'
+const SRC_BASE = 'https://github.com/postgres/postgres/blob/'
+const SUZUKI_BASE = 'https://www.interdb.jp/pg/'
+
+/** A page of the PostgreSQL manual. `page` may carry a #ANCHOR. */
+const manual = (page: string, label: string): DocRef => ({ label, url: DOCS_BASE + page })
+
+/** A file on master, with the functions worth opening it for. */
+const srcFile = (path: string, symbol?: string): DocRef => ({ label: path, url: `${SRC_BASE}master/${path}`, symbol })
+
+/** The same file on a released branch, for code that has since moved on master. */
+const srcFileAt = (branch: string, note: string, path: string, symbol?: string): DocRef => ({
+  label: `${path} — ${note}`,
+  url: `${SRC_BASE}${branch}/${path}`,
+  symbol,
+})
+
+/** A chapter of Hironobu Suzuki's *The Internals of PostgreSQL*, free online. */
+const suzuki = (n: number, label: string): DocRef & { chapter: string } => ({
+  chapter: String(n),
+  label,
+  url: `${SUZUKI_BASE}pgsql${String(n).padStart(2, '0')}/index.html`,
+})
+
+/**
+ * A chapter of Egor Rogov's *PostgreSQL 14 Internals*. A book: cited, never
+ * linked. Chapters are named, not numbered — the publisher's own contents list
+ * gives the titles, and a chapter number nobody re-checked is exactly the kind
+ * of confident wrong detail this apparatus exists to avoid.
+ */
+const ROGOV_EDITION = 'PostgreSQL 14 Internals — Egor Rogov, Postgres Professional'
+const R_MVCC = 'Part I. Isolation and MVCC'
+const R_WAL = 'Part II. Buffer Cache and WAL'
+const rogov = (part: string, chapter: string, confidence?: string): BookRef => ({
+  edition: ROGOV_EDITION,
+  part,
+  chapter,
+  confidence,
+})
+
 /* ============================================================================
  * The docs.
  * ==========================================================================*/
@@ -132,6 +180,18 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     knobs: ['synchronousCommit', 'fullPageWrites', 'writeRatio', 'tps'],
     see: ['wal.vault', 'checkpointer', 'disk.array', 'net.wire'],
     source: ['src/backend/postmaster/walwriter.c', 'src/backend/access/transam/xlog.c'],
+    refs: {
+      docs: [
+        manual('wal-async-commit.html', '28.4. Asynchronous Commit'),
+        manual('runtime-config-wal.html', '19.5. Write Ahead Log'),
+      ],
+      source: [
+        srcFile('src/backend/postmaster/walwriter.c', 'WalWriterMain'),
+        srcFile('src/backend/access/transam/xlog.c', 'XLogFlush, XLogBackgroundFlush'),
+      ],
+      suzuki: suzuki(9, 'Write Ahead Logging (WAL) (§9.6)'),
+      rogov: rogov(R_WAL, 'Write-Ahead Log; WAL Modes — synchronous and asynchronous commit'),
+    },
   },
 
   {
@@ -178,6 +238,15 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     knobs: ['maxWalSize', 'checkpointTimeout', 'walLevel', 'fullPageWrites'],
     see: ['walwriter', 'checkpointer', 'archiver', 'walsender'],
     source: ['src/backend/access/transam/xlog.c', 'src/backend/access/transam/xloginsert.c'],
+    refs: {
+      docs: [
+        manual('wal-internals.html', '28.6. WAL Internals'),
+        manual('wal-configuration.html', '28.5. WAL Configuration'),
+      ],
+      source: [srcFile('src/backend/access/transam/xlog.c', 'XLogWrite, RemoveOldXlogFiles, InstallXLogFileSegment')],
+      suzuki: suzuki(9, 'Write Ahead Logging (WAL) (§9.9)'),
+      rogov: rogov(R_WAL, 'Write-Ahead Log'),
+    },
   },
 
   {
@@ -216,6 +285,17 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     knobs: ['tps', 'writeRatio', 'maxWalSize'],
     see: ['archive.store', 'wal.vault', 'checkpointer', 'walsender'],
     source: ['src/backend/postmaster/pgarch.c'],
+    refs: {
+      docs: [
+        manual('continuous-archiving.html', '25.3. Continuous Archiving and Point-in-Time Recovery (PITR)'),
+        manual('runtime-config-wal.html', '19.5. Write Ahead Log — archive_command, archive_library'),
+      ],
+      source: [
+        srcFile('src/backend/postmaster/pgarch.c', 'pgarch_ArchiverCopyLoop, pgarch_archiveXlog'),
+        srcFile('src/backend/access/transam/xlogarchive.c', 'XLogArchiveNotify'),
+      ],
+      suzuki: suzuki(10, 'Online Backup and Point-In-Time Recovery (PITR)'),
+    },
   },
 
   {
@@ -262,6 +342,17 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     knobs: ['tps', 'writeRatio', 'fullPageWrites'],
     see: ['archiver', 'wal.vault', 'startup.proc', 'replica.storage'],
     source: ['src/backend/postmaster/pgarch.c', 'src/backend/access/transam/xlog.c'],
+    refs: {
+      docs: [
+        manual('continuous-archiving.html', '25.3. Continuous Archiving and Point-in-Time Recovery (PITR)'),
+        manual('app-pgbasebackup.html', 'pg_basebackup'),
+      ],
+      source: [
+        srcFile('src/backend/access/transam/xlogrecovery.c', 'PerformWalRecovery, InitWalRecovery'),
+        srcFile('src/backend/access/transam/xlogarchive.c', 'RestoreArchivedFile'),
+      ],
+      suzuki: suzuki(10, 'Online Backup and Point-In-Time Recovery (PITR) (§10.2)'),
+    },
   },
 
   {
@@ -307,6 +398,17 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     knobs: ['replicaEnabled', 'replicaNetworkLag', 'synchronousCommit', 'walLevel'],
     see: ['net.wire', 'walreceiver', 'wal.vault', 'logical.decoder'],
     source: ['src/backend/replication/walsender.c', 'src/backend/replication/slot.c'],
+    refs: {
+      docs: [
+        manual('warm-standby.html', '26.2. Log-Shipping Standby Servers'),
+        manual('monitoring-stats.html', '27.2. The Cumulative Statistics System — pg_stat_replication'),
+      ],
+      source: [
+        srcFile('src/backend/replication/walsender.c', 'XLogSendPhysical, WalSndLoop'),
+        srcFile('src/backend/replication/slot.c', 'ReplicationSlotCreate, ReplicationSlotsComputeRequiredLSN'),
+      ],
+      suzuki: suzuki(11, 'Streaming Replication (§11.4 Replication Slots)'),
+    },
   },
 
   {
@@ -355,6 +457,14 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       'src/backend/replication/logical/reorderbuffer.c',
       'src/backend/replication/slot.c',
     ],
+    refs: {
+      docs: [manual('logicaldecoding.html', 'Chapter 47. Logical Decoding')],
+      source: [
+        srcFile('src/backend/replication/logical/decode.c', 'LogicalDecodingProcessRecord'),
+        srcFile('src/backend/replication/logical/reorderbuffer.c', 'ReorderBufferProcessTXN, ReorderBufferCommit'),
+      ],
+      suzuki: suzuki(12, 'Logical Replication (§12.3 ReorderBuffer Structure — the author still marks this chapter beta)'),
+    },
   },
 
   /* ======================================================================
@@ -398,6 +508,18 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     ],
     see: ['storage.table', 'storage.index', 'wal.vault', 'disk.array'],
     source: ['src/backend/storage/smgr/md.c'],
+    refs: {
+      docs: [
+        manual('storage-file-layout.html', '66.1. Database File Layout'),
+        manual('storage.html', 'Chapter 66. Database Physical Storage'),
+      ],
+      source: [
+        srcFile('src/backend/storage/smgr/md.c', 'mdextend, mdwritev, register_dirty_segment'),
+        srcFile('src/backend/catalog/storage.c', 'RelationCreateStorage, RelationDropStorage'),
+      ],
+      suzuki: suzuki(1, 'Database Cluster, Databases and Tables (§1.2)'),
+      rogov: rogov(R_MVCC, 'Introduction — data organization'),
+    },
   },
 
   {
@@ -459,6 +581,18 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       'src/backend/access/heap/hio.c',
       'src/backend/access/heap/pruneheap.c',
     ],
+    refs: {
+      docs: [
+        manual('storage-page-layout.html', '66.6. Database Page Layout'),
+        manual('storage-hot.html', '66.7. Heap-Only Tuples (HOT)'),
+      ],
+      source: [
+        srcFile('src/backend/access/heap/heapam.c', 'heap_update'),
+        srcFile('src/backend/access/heap/pruneheap.c', 'heap_page_prune_opt, heap_page_prune_and_freeze, heap_prune_record_redirect'),
+      ],
+      suzuki: suzuki(1, 'Database Cluster, Databases and Tables (§1.3 Heap Table Structure; HOT itself is ch. 7)'),
+      rogov: rogov(R_MVCC, 'Pages and Tuples; Page Pruning and HOT Updates'),
+    },
   },
 
   {
@@ -513,6 +647,21 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     knobs: ['seqScanRatio', 'updateRatio', 'autovacuum', 'autovacuumScaleFactor'],
     see: ['storage.table', 'storage.vm', 'autovac.worker', 'os.cache'],
     source: ['src/backend/access/nbtree/nbtree.c', 'src/backend/access/gin/gininsert.c'],
+    refs: {
+      docs: [
+        manual('btree.html', '65.1. B-Tree Indexes'),
+        manual('indexes-index-only-scans.html', '11.9. Index-Only Scans and Covering Indexes'),
+        manual('gin.html', '65.4. GIN Indexes'),
+      ],
+      source: [
+        srcFile('src/backend/access/nbtree/nbtsearch.c', '_bt_search, _bt_first'),
+        srcFile('src/backend/access/nbtree/nbtdedup.c', '_bt_bottomupdel_pass'),
+        srcFile('src/backend/access/gin/ginfast.c', 'ginHeapTupleFastInsert, ginInsertCleanup'),
+        srcFile('src/backend/access/gin/ginget.c', 'scanPostingTree, entryGetItem'),
+      ],
+      suzuki: suzuki(7, 'HOT and Index-Only Scans (§7.2)'),
+      rogov: rogov('Parts IV and V. Query Execution; Types of Indexes', 'Index Access Methods; Index Scan; B-Tree; GIN'),
+    },
   },
 
   {
@@ -573,6 +722,15 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     knobs: ['writeRatio', 'updateRatio', 'seqScanRatio'],
     see: ['storage.table', 'storage.index', 'os.cache', 'autovac.worker'],
     source: ['src/backend/access/common/toast_internals.c', 'src/backend/access/common/detoast.c'],
+    refs: {
+      docs: [manual('storage-toast.html', '66.2. TOAST')],
+      source: [
+        srcFile('src/backend/access/heap/heaptoast.c', 'heap_toast_insert_or_update'),
+        srcFile('src/backend/access/common/detoast.c', 'detoast_attr'),
+      ],
+      suzuki: suzuki(1, 'Database Cluster, Databases and Tables (§1.3.2 TOAST)'),
+      rogov: rogov(R_MVCC, 'Pages and Tuples — the TOAST section', 'a section, not a chapter of its own'),
+    },
   },
 
   {
@@ -611,6 +769,17 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     knobs: ['autovacuum', 'autovacuumScaleFactor', 'updateRatio', 'longRunningXact'],
     see: ['storage.table', 'autovac.worker', 'landfill', 'storage.vm'],
     source: ['src/backend/storage/freespace/freespace.c', 'src/backend/access/heap/hio.c'],
+    refs: {
+      docs: [
+        manual('storage-fsm.html', '66.3. Free Space Map'),
+        manual('pgfreespacemap.html', 'F.27. pg_freespacemap'),
+      ],
+      source: [
+        srcFile('src/backend/storage/freespace/freespace.c', 'GetPageWithFreeSpace, RecordPageWithFreeSpace, FreeSpaceMapVacuum'),
+        srcFile('src/backend/access/heap/hio.c', 'RelationGetBufferForTuple'),
+      ],
+      rogov: rogov(R_MVCC, 'Vacuum and Autovacuum', 'where the free space map is discussed; it has no chapter of its own'),
+    },
   },
 
   {
@@ -653,6 +822,18 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     knobs: ['autovacuum', 'autovacuumScaleFactor', 'updateRatio', 'longRunningXact'],
     see: ['storage.index', 'autovac.worker', 'storage.fsm', 'storage.table'],
     source: ['src/backend/access/heap/visibilitymap.c', 'src/backend/access/heap/vacuumlazy.c'],
+    refs: {
+      docs: [
+        manual('storage-vm.html', '66.4. Visibility Map'),
+        manual('indexes-index-only-scans.html', '11.9. Index-Only Scans and Covering Indexes'),
+      ],
+      source: [
+        srcFile('src/backend/access/heap/visibilitymap.c', 'visibilitymap_set, visibilitymap_clear, visibilitymap_get_status'),
+        srcFile('src/backend/access/heap/vacuumlazy.c', 'lazy_scan_prune'),
+      ],
+      suzuki: suzuki(6, 'VACUUM Processing (§6.2 Visibility Map)'),
+      rogov: rogov(R_MVCC, 'Vacuum and Autovacuum; Freezing — the all-frozen bit'),
+    },
   },
 
   {
@@ -687,6 +868,18 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     knobs: ['sharedBuffers', 'seqScanRatio', 'tps'],
     see: ['disk.array', 'storage.table', 'bgwriter', 'storage.datadir'],
     source: ['src/backend/storage/smgr/md.c', 'src/backend/storage/buffer/bufmgr.c'],
+    refs: {
+      docs: [
+        manual('runtime-config-query.html#GUC-EFFECTIVE-CACHE-SIZE', '19.7. Query Planning — effective_cache_size'),
+        manual('runtime-config-resource.html#GUC-IO-COMBINE-LIMIT', '19.4. Resource Consumption — io_method, io_combine_limit'),
+      ],
+      source: [
+        srcFile('src/backend/storage/smgr/md.c', 'mdreadv, mdwritev, register_dirty_segment'),
+        srcFile('src/backend/storage/aio/read_stream.c', 'read_stream_begin_relation, read_stream_next_buffer'),
+      ],
+      suzuki: suzuki(8, 'Buffer Manager (§8.5 Asynchronous I/O)'),
+      rogov: rogov(R_WAL, 'Buffer Cache — choosing the buffer cache size, and double buffering'),
+    },
   },
 
   {
@@ -730,6 +923,18 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     knobs: ['fullPageWrites', 'synchronousCommit', 'checkpointTimeout', 'maxWalSize'],
     see: ['checkpointer', 'os.cache', 'walwriter', 'wal.vault'],
     source: ['src/backend/storage/smgr/md.c', 'src/backend/access/transam/xlog.c'],
+    refs: {
+      docs: [
+        manual('wal-reliability.html', '28.1. Reliability'),
+        manual('runtime-config-wal.html#GUC-FSYNC', '19.5. Write Ahead Log — fsync, full_page_writes'),
+      ],
+      source: [
+        srcFile('src/backend/storage/file/fd.c', 'pg_fsync, data_sync_elevel'),
+        srcFile('src/backend/access/transam/xlog.c', 'issue_xlog_fsync, XLogFlush'),
+      ],
+      suzuki: suzuki(9, 'Write Ahead Logging (WAL) — full-page writes'),
+      rogov: rogov(R_WAL, 'WAL Modes — fault tolerance'),
+    },
   },
 
   /* ======================================================================
@@ -782,6 +987,18 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       'src/backend/access/transam/xlog.c',
       'src/backend/storage/buffer/bufmgr.c',
     ],
+    refs: {
+      docs: [
+        manual('wal-configuration.html', '28.5. WAL Configuration'),
+        manual('runtime-config-wal.html#GUC-CHECKPOINT-TIMEOUT', '19.5. Write Ahead Log — checkpoint_timeout, checkpoint_completion_target'),
+      ],
+      source: [
+        srcFile('src/backend/postmaster/checkpointer.c', 'CheckpointerMain, CheckpointWriteDelay, IsCheckpointOnSchedule, AbsorbSyncRequests'),
+        srcFile('src/backend/access/transam/xlog.c', 'CreateCheckPoint, CheckPointGuts'),
+      ],
+      suzuki: suzuki(9, 'Write Ahead Logging (WAL) (§9.7 Checkpoint Processing)'),
+      rogov: rogov(R_WAL, 'Write-Ahead Log — checkpoints'),
+    },
   },
 
   {
@@ -825,6 +1042,19 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       'src/backend/storage/buffer/freelist.c',
       'src/backend/storage/buffer/bufmgr.c',
     ],
+    refs: {
+      docs: [
+        manual('runtime-config-resource.html#RUNTIME-CONFIG-RESOURCE-BACKGROUND-WRITER', '19.4. Resource Consumption — Background Writer'),
+        manual('monitoring-stats.html', '27.2. The Cumulative Statistics System — pg_stat_bgwriter, pg_stat_checkpointer, pg_stat_io'),
+      ],
+      source: [
+        srcFile('src/backend/postmaster/bgwriter.c', 'BackgroundWriterMain'),
+        srcFile('src/backend/storage/buffer/bufmgr.c', 'BgBufferSync'),
+        srcFile('src/backend/storage/buffer/freelist.c', 'StrategySyncStart'),
+      ],
+      suzuki: suzuki(8, 'Buffer Manager (§8.6 Dirty Pages Flushing)'),
+      rogov: rogov(R_WAL, 'Buffer Cache; Write-Ahead Log', 'the background writer is covered inside both, with no section of its own'),
+    },
   },
 
   /* ======================================================================
@@ -875,6 +1105,15 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     knobs: ['autovacuum', 'autovacuumScaleFactor', 'updateRatio', 'writeRatio'],
     see: ['autovac.worker', 'storage.table', 'landfill', 'storage.fsm'],
     source: ['src/backend/postmaster/autovacuum.c'],
+    refs: {
+      docs: [
+        manual('runtime-config-vacuum.html', '19.10. Vacuuming'),
+        manual('routine-vacuuming.html', '24.1. Routine Vacuuming'),
+      ],
+      source: [srcFile('src/backend/postmaster/autovacuum.c', 'AutoVacLauncherMain, do_start_worker, AutoVacuumUpdateCostLimit')],
+      suzuki: suzuki(6, 'VACUUM Processing (§6.5 Autovacuum Daemon)'),
+      rogov: rogov(R_MVCC, 'Vacuum and Autovacuum'),
+    },
   },
 
   {
@@ -933,6 +1172,19 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       'src/backend/commands/vacuum.c',
       'src/backend/access/heap/visibilitymap.c',
     ],
+    refs: {
+      docs: [
+        manual('sql-vacuum.html', 'VACUUM'),
+        manual('progress-reporting.html', '27.4. Progress Reporting — pg_stat_progress_vacuum'),
+      ],
+      source: [
+        srcFile('src/backend/access/heap/vacuumlazy.c', 'heap_vacuum_rel, lazy_scan_prune, lazy_vacuum_all_indexes, lazy_vacuum_heap_rel, lazy_truncate_heap'),
+        srcFile('src/backend/commands/vacuum.c', 'vacuum_get_cutoffs, vacuum_delay_point, vac_truncate_clog'),
+        srcFile('src/backend/postmaster/autovacuum.c', 'do_autovacuum, relation_needs_vacanalyze'),
+      ],
+      suzuki: suzuki(6, 'VACUUM Processing (§6.1, §6.3)'),
+      rogov: rogov(R_MVCC, 'Vacuum and Autovacuum; Freezing — wraparound'),
+    },
   },
 
   {
@@ -977,6 +1229,19 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     knobs: ['autovacuum', 'autovacuumScaleFactor', 'longRunningXact', 'updateRatio'],
     see: ['autovac.worker', 'storage.fsm', 'storage.table', 'autovac.launcher'],
     source: ['src/backend/access/heap/vacuumlazy.c', 'src/backend/storage/freespace/freespace.c'],
+    refs: {
+      docs: [
+        manual('sql-vacuum.html', 'VACUUM — VACUUM FULL'),
+        manual('pgstattuple.html', 'F.33. pgstattuple'),
+      ],
+      source: [
+        srcFile('src/backend/access/heap/vacuumlazy.c', 'lazy_truncate_heap'),
+        srcFile('src/backend/commands/repack.c', 'cluster_rel, rebuild_relation, copy_table_data'),
+        srcFileAt('REL_18_STABLE', 'PostgreSQL 18 and earlier', 'src/backend/commands/cluster.c', 'cluster_rel, rebuild_relation, copy_table_data'),
+      ],
+      suzuki: suzuki(6, 'VACUUM Processing (§6.6 Reclaiming Bloated Space)'),
+      rogov: rogov(R_MVCC, 'Rebuilding Tables and Indexes'),
+    },
   },
 
   {
@@ -1018,6 +1283,16 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     knobs: ['lockContention', 'longRunningXact', 'tps'],
     see: ['stats.collector', 'checkpointer', 'autovac.launcher', 'backend.slot'],
     source: ['src/backend/postmaster/syslogger.c'],
+    refs: {
+      docs: [
+        manual('runtime-config-logging.html', '19.8. Error Reporting and Logging'),
+        manual('auto-explain.html', 'F.3. auto_explain'),
+      ],
+      source: [
+        srcFile('src/backend/postmaster/syslogger.c', 'SysLoggerMain, logfile_rotate'),
+        srcFile('src/backend/utils/error/elog.c', 'send_message_to_server_log'),
+      ],
+    },
   },
 
   {
@@ -1057,6 +1332,16 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     knobs: ['tps', 'writeRatio', 'seqScanRatio'],
     see: ['logger', 'backend.slot', 'checkpointer', 'autovac.launcher'],
     source: ['src/backend/utils/activity/pgstat.c'],
+    refs: {
+      docs: [
+        manual('monitoring-stats.html', '27.2. The Cumulative Statistics System'),
+        manual('pgstatstatements.html', 'F.32. pg_stat_statements'),
+      ],
+      source: [
+        srcFile('src/backend/utils/activity/pgstat.c', 'pgstat_report_stat'),
+        srcFile('src/backend/utils/activity/pgstat_shmem.c'),
+      ],
+    },
   },
 
   /* ======================================================================
@@ -1113,6 +1398,17 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     knobs: ['synchronousCommit', 'replicaNetworkLag', 'replicaEnabled', 'replicaSlowApply'],
     see: ['walsender', 'walreceiver', 'replica.standby', 'walwriter'],
     source: ['src/backend/replication/walsender.c', 'src/backend/replication/walreceiver.c'],
+    refs: {
+      docs: [
+        manual('warm-standby.html', '26.2. Log-Shipping Standby Servers — synchronous replication'),
+        manual('protocol-replication.html', '54.4. Streaming Replication Protocol'),
+      ],
+      source: [
+        srcFile('src/backend/replication/walsender.c', 'WalSndLoop'),
+        srcFile('src/backend/replication/syncrep.c', 'SyncRepWaitForLSN'),
+      ],
+      suzuki: suzuki(11, 'Streaming Replication (§11.3)'),
+    },
   },
 
   {
@@ -1151,6 +1447,14 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     knobs: ['replicaEnabled', 'replicaNetworkLag', 'replicaSlowApply', 'synchronousCommit'],
     see: ['startup.proc', 'walsender', 'net.wire', 'replica.storage'],
     source: ['src/backend/replication/walreceiver.c'],
+    refs: {
+      docs: [
+        manual('warm-standby.html', '26.2. Log-Shipping Standby Servers'),
+        manual('monitoring-stats.html', '27.2. The Cumulative Statistics System — pg_stat_wal_receiver'),
+      ],
+      source: [srcFile('src/backend/replication/walreceiver.c', 'WalReceiverMain, XLogWalRcvFlush, XLogWalRcvSendHSFeedback')],
+      suzuki: suzuki(11, 'Streaming Replication (§11.1)'),
+    },
   },
 
   {
@@ -1192,6 +1496,18 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     knobs: ['replicaSlowApply', 'replicaEnabled', 'checkpointTimeout', 'maxWalSize'],
     see: ['walreceiver', 'checkpointer', 'replica.standby', 'archive.store'],
     source: ['src/backend/postmaster/startup.c', 'src/backend/access/transam/xlog.c'],
+    refs: {
+      docs: [
+        manual('wal-intro.html', '28.3. Write-Ahead Logging (WAL)'),
+        manual('wal-configuration.html', '28.5. WAL Configuration — restartpoints'),
+      ],
+      source: [
+        srcFile('src/backend/postmaster/startup.c', 'StartupProcessMain'),
+        srcFile('src/backend/access/transam/xlogrecovery.c', 'PerformWalRecovery, WaitForWALToBecomeAvailable'),
+      ],
+      suzuki: suzuki(9, 'Write Ahead Logging (WAL) (§9.8 Database Recovery)'),
+      rogov: rogov(R_WAL, 'Write-Ahead Log — recovery and checkpoint mechanics', 'the nearest honest chapter; Rogov does not cover replication'),
+    },
   },
 
   {
@@ -1231,6 +1547,17 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       'src/backend/replication/walreceiver.c',
       'src/backend/storage/ipc/procarray.c',
     ],
+    refs: {
+      docs: [
+        manual('warm-standby.html', '26.2. Log-Shipping Standby Servers'),
+        manual('hot-standby.html', '26.4. Hot Standby'),
+      ],
+      source: [
+        srcFile('src/backend/access/transam/xlogrecovery.c', 'PerformWalRecovery'),
+        srcFile('src/backend/replication/walreceiver.c', 'WalReceiverMain'),
+      ],
+      suzuki: suzuki(11, 'Streaming Replication'),
+    },
   },
 
   {
@@ -1269,6 +1596,18 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     knobs: ['replicaEnabled', 'replicaSlowApply', 'sharedBuffers'],
     see: ['replica.standby', 'startup.proc', 'os.cache', 'checkpointer'],
     source: ['src/backend/storage/buffer/bufmgr.c', 'src/backend/storage/buffer/freelist.c'],
+    refs: {
+      docs: [
+        manual('pgprewarm.html', 'F.30. pg_prewarm'),
+        manual('wal-configuration.html', '28.5. WAL Configuration — restartpoints'),
+      ],
+      source: [
+        srcFile('src/backend/storage/buffer/bufmgr.c', 'BufferAlloc'),
+        srcFile('src/backend/access/transam/xlog.c', 'CreateRestartPoint'),
+      ],
+      suzuki: suzuki(8, 'Buffer Manager'),
+      rogov: rogov(R_WAL, 'Buffer Cache'),
+    },
   },
 
   {
@@ -1303,6 +1642,14 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     knobs: ['replicaEnabled', 'replicaSlowApply', 'replicaNetworkLag'],
     see: ['storage.datadir', 'replica.standby', 'walreceiver', 'archive.store'],
     source: ['src/backend/storage/smgr/md.c', 'src/backend/postmaster/startup.c'],
+    refs: {
+      docs: [
+        manual('app-pgbasebackup.html', 'pg_basebackup'),
+        manual('continuous-archiving.html', '25.3. Continuous Archiving and Point-in-Time Recovery (PITR)'),
+      ],
+      source: [srcFile('src/backend/backup/basebackup.c', 'SendBaseBackup')],
+      suzuki: suzuki(10, 'Online Backup and Point-In-Time Recovery (PITR) (§10.1 Base Backup)'),
+    },
   },
 
   {
@@ -1350,6 +1697,16 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     knobs: ['replicaEnabled', 'replicaSlowApply', 'longRunningXact', 'seqScanRatio'],
     see: ['replica.standby', 'autovac.worker', 'net.wire', 'replica.buffers'],
     source: ['src/backend/storage/ipc/procarray.c', 'src/backend/replication/walsender.c'],
+    refs: {
+      docs: [
+        manual('hot-standby.html', '26.4. Hot Standby'),
+        manual('runtime-config-replication.html', '19.6. Replication — standby servers'),
+      ],
+      source: [
+        srcFile('src/backend/storage/ipc/standby.c', 'ResolveRecoveryConflictWithSnapshot'),
+        srcFile('src/backend/replication/walreceiver.c', 'XLogWalRcvSendHSFeedback'),
+      ],
+    },
   },
 
   {
@@ -1398,5 +1755,16 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       'src/backend/replication/logical/reorderbuffer.c',
       'src/backend/replication/slot.c',
     ],
+    refs: {
+      docs: [
+        manual('logical-replication.html', 'Chapter 29. Logical Replication'),
+        manual('logical-replication-restrictions.html', '29.8. Restrictions'),
+      ],
+      source: [
+        srcFile('src/backend/replication/logical/worker.c', 'ApplyWorkerMain'),
+        srcFile('src/backend/replication/logical/tablesync.c', 'LogicalRepSyncTableStart'),
+      ],
+      suzuki: suzuki(12, 'Logical Replication (§12.7 Apply Worker and Transaction Replay — the author still marks this chapter beta)'),
+    },
   },
 ]
