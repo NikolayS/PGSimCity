@@ -427,7 +427,7 @@
   border: 0;
   border-right: 1px solid color-mix(in srgb, var(--ink) 25%, transparent);
   cursor: help;
-  transition: filter var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+  transition: filter var(--dur-fast) var(--ease);
 }
 
 .an-byte-region:hover,
@@ -782,8 +782,8 @@
 .an-tuple-field:focus-visible,
 .an-tuple-field.is-explained {
   border-color: currentColor;
-  outline: 0;
-  box-shadow: inset 0 0 14px -8px currentColor;
+  outline: 2px solid currentColor;
+  outline-offset: -2px;
 }
 
 .an-tuple-field__name {

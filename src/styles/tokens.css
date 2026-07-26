@@ -210,9 +210,6 @@
 :root[data-theme="day"] .tour-bar {
   background: rgba(24, 34, 46, 0.14);
 }
-:root[data-theme="day"] .tour-card__n {
-  text-shadow: none;
-}
 :root[data-theme="day"] .pal-overlay {
   background: rgba(24, 34, 46, 0.28);
 }
