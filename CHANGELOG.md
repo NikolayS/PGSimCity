@@ -9,6 +9,89 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.4.0] — 2026-07-26
+
+The buildings start telling the truth, and the elephant comes back.
+
+### Fixed — the geometry
+
+The prose in this city had been through two rounds of expert review. The
+geometry had been through none. A geometry-truth audit — four PostgreSQL
+specialists auditing buildings, adjacencies, animations and scale as *claims*
+rather than reading the text beside them — found the city contradicting its own
+documentation in places where a reader would believe the building.
+
+- **The xmin horizon blade floated above every active backend.** It was computed
+  independently of the PGPROC pillars it cuts through, so fourteen backends
+  could all sit below the "oldest transaction ID anyone can still see" plane —
+  arithmetically impossible, and an inversion of the single lesson that
+  structure exists to teach.
+- **The OS page cache was drawn inside the excavation**, below a line the city's
+  own signage says separates memory from durable storage. It is volatile kernel
+  memory outside PostgreSQL's address space. `pg_wal` broke the same line in the
+  other direction — printed on the pit floor as a data-directory subdirectory
+  while built as a surface vault outside the cut.
+- **`archive_command` was built twice**, with archived WAL parked in two stores
+  in series, teaching a two-stage archive pipeline PostgreSQL does not have.
+- **TOAST sliced before it compressed.** PostgreSQL compresses first and slices
+  only what still does not fit.
+- **Index maintenance flew from the index into the heap**, and the
+  buffer-mapping probe ran backwards.
+- **The LSN ruler displayed an equation its own rows failed to satisfy** — the
+  lag bar spanned standby-flush→replay while the byte count beside it was
+  computed from primary-flush→replay.
+- **Cumulative statistics was a rolling sixty-bar time series.** PostgreSQL
+  keeps monotonic counters and no history whatsoever.
+
+### Fixed — the plate
+
+- **The Slonik plate is the real mark again.** v0.3.0 built the outline from the
+  blue fill path of the genuine PostgreSQL SVG. The commit that followed it —
+  titled "trace the plate from the real PostgreSQL logo artwork" — replaced that
+  vector data with hand-authored control points, which is the opposite of what
+  its message claims. Four later passes then edited the hand drawing, each
+  widening it slightly to satisfy the containment audit, until the trunk was 3%
+  of the plate's height and the silhouette was a rounded blob. The vector data
+  is restored: front-on head, both ears, both tusks, trunk down the centreline.
+
+### Added
+
+- **Sound.** The audio engine had existed for some time as 505 lines that
+  nothing imported. It is now driven from the walk controller, so footstep
+  cadence comes from distance travelled and surfaces are read from what the
+  collision layer says is underfoot. Off by default.
+- **Swimming in the buffer pool (`shared_buffers`).** The plaza is 1,024 page
+  frames whose height is their clock-sweep `usage_count` and whose colour is
+  their state. You can now be inside it, at the scale of the pages.
+- **Walking and swimming on a phone.** Pointer lock does not exist on iOS
+  Safari, so first person was unreachable on mobile. There are now thumb
+  controls: a stick that appears where the thumb lands, and look-by-drag with
+  sensitivity in degrees per centimetre so it feels the same on any screen.
+- **`tools/plot-plate.mjs`** — prints the plate's silhouette, bounding box and
+  trunk proportion straight from the source in about two seconds. Five attempts
+  at the shape had been judged through a seventy-second software render with the
+  side panels covering two thirds of the frame, which is why none of them could
+  iterate.
+- The page-anatomy and data-directory views now open from where their question
+  arises, rather than from a tab strip pinned to a corner.
+
+### Changed
+
+- The panel design drops the coloured accent bars, and then the corner brackets
+  that briefly replaced them. Both are generated-interface clichés; the fix was
+  to subtract rather than to substitute.
+
+### Known issues
+
+- Cache hit ratio settles near 87% where a healthy production system sits at
+  98–99%.
+- The plate's containment audit still constrains the silhouette; the shape holds
+  the city, and the city was not laid out to be an elephant.
+- iOS Safari differs from Chrome's mobile emulation in touch handling and
+  viewport units. The touch controls have not been tested on a real device.
+
+---
+
 ## [0.3.0] — 2026-07-26
 
 The numbers stop being wrong, and the city stops looking like a night raid.
