@@ -34,6 +34,15 @@
  *     `trips/s * batch` and is therefore an OUTPUT: it falls in exact
  *     proportion to any slowdown in the trip loop, and it saturates when the
  *     fleet is full.
+ *
+ *     One corollary, and it is load-bearing: the page STREAM a trip pushes
+ *     through the pool is sampled at MAX_VISIT_PAGES, because the city cannot
+ *     animate a hundred thousand buffer requests inside one trip — but the TIME
+ *     that trip costs is charged on the unsampled amount (`work` in
+ *     beginExec()). Charge the time on the sampled count and every transaction
+ *     in the batch past the cap is free, which is the batch controller's bug
+ *     rebuilt out of a different part. Anything that samples for the animation's
+ *     sake must leave the cost alone.
  * ==========================================================================*/
 
 import {
@@ -138,6 +147,37 @@ const FLOW_BUDGET_PER_SEC = 420
 const WAL_WRITER_DELAY = 0.2
 const BGW_DELAY = 0.2
 const NET_STRETCH = 6 // ms of configured network lag → sim seconds (see header)
+/**
+ * Pages per second the modelled storage device sustains before writes start
+ * queueing behind each other. Calibrated so a healthy OLTP city sits at
+ * ~1.1-1.4x pressure and a squeezed checkpoint (`checkpoint_completion_target`
+ * near 0.1) pushes it to the ceiling — which is the whole reason that GUC
+ * exists. See ioPressure().
+ */
+const DEVICE_PAGES_PER_SEC = 1400
+
+/**
+ * The WAL distance that triggers a checkpoint. `CalculateCheckPointSegments()`,
+ * src/backend/access/transam/xlog.c:
+ *
+ *     CheckPointSegments = ConvertToXSegs(max_wal_size_mb, wal_segment_size)
+ *                          / (1.0 + CheckPointCompletionTarget)
+ *
+ * A checkpoint has to *start* early enough that the WAL produced while it
+ * spreads itself out — completion_target of one whole cycle — still fits under
+ * max_wal_size. At the 0.9 default that is 53% of the knob, not 100%. Triggering
+ * at the full max_wal_size is what made pg_wal peak at (1 + target) times the
+ * number the user set.
+ *
+ * FOLLOW-UP (needs src/core/types.ts and src/world/maintenance.ts, both outside
+ * this workflow's file scope): this belongs next to DEFAULT_KNOBS in
+ * core/types.ts so that maintenance.ts's `walFracOf` — the checkpointer dial and
+ * its "max_wal_size N%" readout — divides by the same number instead of by the
+ * raw knob. Until it moves, that dial reads ~53% when a checkpoint actually
+ * fires.
+ */
+export const walTriggerBytes = (k: Knobs): number =>
+  (k.maxWalSize * 1024 * 1024) / (1 + k.checkpointCompletionTarget)
 
 /* --------------------------------------------------------------------------
  * Internal per-backend bookkeeping the UI never sees.
@@ -379,6 +419,26 @@ export function createSim(bus: Bus): SimApi {
   const buf = state.buffers
   const wal = state.wal
   const ckpt = state.checkpoint
+  /**
+   * REDO of the last COMPLETED checkpoint — pg_control's `checkPointCopy.redo`.
+   * Recovery starts here, and WAL below it is what gets recycled. Deliberately
+   * distinct from `ckpt.redoLsn`, which is RedoRecPtr: the RUNNING checkpoint's
+   * full-page-image boundary, advanced the instant the checkpoint begins.
+   *
+   * CreateCheckPoint() sets RedoRecPtr at the start but keeps
+   * PriorRedoPtr = ControlFile->checkPointCopy.redo, and only calls
+   * KeepLogSeg()/RemoveOldXlogFiles() *after* the checkpoint record is written
+   * and pg_control is updated. Recycling at the start instead made pg_wal
+   * collapse tens of seconds before the checkpoint that justified it had
+   * finished — backwards: real PostgreSQL holds its maximum until completion.
+   *
+   * FOLLOW-UP (needs src/core/types.ts + src/ui/docs-storage.ts, outside this
+   * workflow's file scope): promote this to `CheckpointState.completedRedoLsn`
+   * so docs-storage.ts's "Crash recovery from" / "Redo point — recovery would
+   * start here" read it instead of `redoLsn`. Those two readouts are correct
+   * between checkpoints and one checkpoint ahead of themselves while one runs.
+   */
+  let completedRedoLsn = ckpt.redoLsn
   const bgw = state.bgwriter
   const av = state.autovac
   const rep = state.replication
@@ -425,6 +485,17 @@ export function createSim(bus: Bus): SimApi {
    * image, because the rule is `page.LSN <= RedoRecPtr`, not residency.
    */
   const fpiDone = new Set<number>()
+  /**
+   * BM_CHECKPOINT_NEEDED. BufferSync() tags every buffer that is dirty at the
+   * redo point and writes exactly that set; a page dirtied afterwards is
+   * explicitly not this checkpoint's responsibility, and — the part that
+   * matters — a page that was dirty at the redo point IS, unconditionally.
+   * Without the tag the write loop lapped the pool picking up whatever happened
+   * to be dirty at the time, so pages from the snapshot could survive the
+   * checkpoint unwritten while post-redo pages were written in their place.
+   * That breaks the contract that makes redoLsn a valid recovery start.
+   */
+  const ckptNeeded = new Uint8Array(N_BUFFERS)
   const ringBuf = new Int32Array(N_BACKEND_SLOTS * RING).fill(-1)
 
   // A backend holds only a handful of pins at once (the pages its current node
@@ -463,21 +534,39 @@ export function createSim(bus: Bus): SimApi {
   let wireTail = 0
   let wireCount = 0
 
-  /* ---- controller / accumulators -------------------------------------- */
+  /* ---- accumulators ---------------------------------------------------- */
 
   let pendingTx = 0
   let nextArrival = 0
   /** Transactions carried by one backend trip. See sizeBatch(). */
   let batchSize = 1
-  let visitRate = 4 // EMA of completed backend trips per second
   /** Arrivals the queue could not hold — pg's "too many clients already". */
   let refusedTx = 0
-  let visitsAcc = 0
   let commitsAcc = 0
   let walAcc = 0
   let fpiAcc = 0
   let ioReadAcc = 0
   let ioWriteAcc = 0
+  /**
+   * Writeback queueing, recomputed from the smoothed write rate in tickStats().
+   * 1 = an idle device. Storage is shared and finite: the checkpointer, the
+   * bgwriter and every backend that evicts a dirty page are all queueing on the
+   * same spindle a backend's own read has to wait behind.
+   */
+  let ioLoad = 1
+  /**
+   * What a backend actually feels. The `syncing` term is what makes
+   * "writes every dirty page, then fsyncs — the latency spike you feel" true:
+   * the fsync phase is a stall, not a progress bar, so it is added here at tick
+   * resolution rather than at the 250 ms stats cadence, which would smear it.
+   *
+   * checkpoint_completion_target exists *solely* because an unspread checkpoint
+   * is a recognisable I/O latency event. Before this coupling, ckpt.phase was
+   * referenced nowhere outside tickCheckpoint(): dragging the target from 0.9 to
+   * 0.1 squeezed the same writes into a ninth of the time and moved write-phase
+   * mean I/O by 7%, with idle-phase peaks *higher* than write-phase peaks.
+   */
+  const ioPressure = () => ioLoad + (ckpt.phase === 'syncing' ? 1.5 : 0)
   let winHits = 0
   let winMisses = 0
   let rateT = 0
@@ -583,6 +672,7 @@ export function createSim(bus: Bus): SimApi {
     if (buf.valid[b]) bufMap.delete(bufKey(buf.rel[b], buf.blk[b]))
     buf.valid[b] = 0
     buf.dirty[b] = 0
+    ckptNeeded[b] = 0
     buf.pinned[b] = 0
     buf.usage[b] = 0
     buf.rel[b] = 255
@@ -703,7 +793,16 @@ export function createSim(bus: Bus): SimApi {
 
   function resizePool(newSize: number): void {
     const size = clamp(Math.round(newSize), 32, N_BUFFERS)
-    if (size < buf.size) for (let b = size; b < buf.size; b++) invalidate(b)
+    // shared_buffers only changes at restart, and the shutdown checkpoint that
+    // precedes one writes every dirty buffer out. Dropping the frames without
+    // writing them was a silent loss of modified pages — and the one remaining
+    // way a page dirty at a checkpoint's redo point could escape being written.
+    if (size < buf.size) {
+      for (let b = size; b < buf.size; b++) {
+        writeOut(b, false)
+        invalidate(b)
+      }
+    }
     buf.size = size
     if (buf.clockHand >= size) buf.clockHand = 0
     if (bgw.scanPos >= size) bgw.scanPos = 0
@@ -748,8 +847,12 @@ export function createSim(bus: Bus): SimApi {
     if (!flushing) {
       flushing = true
       flushBytes = Math.max(0, flushTarget - wal.flushLsn)
-      // fsync latency: mostly fixed cost, a little size-dependent.
-      flushDur = 0.085 + Math.min(0.22, flushBytes / (6 * 1024 * 1024))
+      // fsync latency: mostly fixed cost, a little size-dependent — and then
+      // whatever the device is already busy with. A WAL fsync competes with the
+      // checkpointer's writeback on the same storage, which is why commit
+      // latency jumps during a checkpoint even for transactions that touched
+      // nothing but cached pages.
+      flushDur = (0.085 + Math.min(0.22, flushBytes / (6 * 1024 * 1024))) * ioPressure()
       flushT = 0
       // write() happens now; fsync() completes flushDur later. Between the two,
       // these bytes are in the OS page cache — they survive a Postgres crash
@@ -888,12 +991,18 @@ export function createSim(bus: Bus): SimApi {
       }
     }
 
-    // pg_wal size: everything since the checkpoint REDO point, plus the
-    // recycled files we keep pre-allocated, plus anything archiving is holding
-    // — and, critically, everything a replication slot has not confirmed yet.
-    // A standby that falls behind (or a slot nobody is reading) pins WAL on the
-    // primary. That is how a replica takes down a primary's disk.
-    const sinceRedo = Math.max(0, wal.insertLsn - ckpt.redoLsn)
+    // pg_wal size: everything since the REDO point of the last COMPLETED
+    // checkpoint, plus the recycled files we keep pre-allocated, plus anything
+    // archiving is holding — and, critically, everything a replication slot has
+    // not confirmed yet. A standby that falls behind (or a slot nobody is
+    // reading) pins WAL on the primary. That is how a replica takes down a
+    // primary's disk.
+    //
+    // `completedRedoLsn`, not `ckpt.redoLsn`: segments are recycled by
+    // RemoveOldXlogFiles() after the checkpoint record is written and pg_control
+    // updated, never at the start. This is why pg_wal holds its maximum right
+    // through the write phase and steps down exactly once, at the end.
+    const sinceRedo = Math.max(0, wal.insertLsn - completedRedoLsn)
     let slotHold = 0
     if (rep.enabled) {
       const restart = rep.logicalEnabled ? Math.min(rep.flushLsn, rep.logicalSlotLsn) : rep.flushLsn
@@ -917,15 +1026,27 @@ export function createSim(bus: Bus): SimApi {
     ckpt.progress = 0
     ckpt.buffersWritten = 0
     ckpt.nextInSec = K.checkpointTimeout
-    // REDO point: recovery would replay from here.
+    // RedoRecPtr: where replay would restart if we crashed once this checkpoint
+    // has completed. `completedRedoLsn` — what pg_control still says, and what
+    // WAL retention is measured from — does not move until then.
     ckpt.redoLsn = wal.insertLsn
+    // BufferSync(): tag the dirty set as it stands at the redo point. This IS
+    // the checkpoint's obligation; nothing dirtied after this line belongs to it.
     let n = 0
-    for (let b = 0; b < buf.size; b++) if (buf.dirty[b]) n++
+    for (let b = 0; b < buf.size; b++) {
+      if (buf.dirty[b]) {
+        ckptNeeded[b] = 1
+        n++
+      } else ckptNeeded[b] = 0
+    }
+    for (let b = buf.size; b < N_BUFFERS; b++) ckptNeeded[b] = 0
     ckpt.buffersToWrite = n
     // Every page now owes a full-page image on its next modification.
     fpiDone.clear()
     wal.fpwBurst = 1
-    ckptScan = buf.clockHand
+    // One forward-only lap over the pool, so the pass visits every tagged buffer
+    // exactly once and then stops.
+    ckptScan = 0
     bus.emit('checkpoint:start', { reason })
     bus.emit('fx:pulse', {
       at: [ANCHOR.checkpointer[0], ANCHOR.checkpointer[1] + 12, ANCHOR.checkpointer[2]],
@@ -944,11 +1065,18 @@ export function createSim(bus: Bus): SimApi {
 
   function tickCheckpoint(dt: number): void {
     ckpt.elapsed += ckpt.phase === 'idle' ? 0 : dt
+    // checkpointer.c schedules START-to-start: CheckpointerMain() computes
+    // elapsed_secs = now - last_checkpoint_time, and last_checkpoint_time is
+    // stamped when the checkpoint BEGINS. Running the countdown only while idle
+    // made the period checkpoint_timeout + duration — 68 s at
+    // completion_target = 0.1 and 122 s at 1.0 against a fixed 60 s timeout,
+    // i.e. completion_target changed checkpoint FREQUENCY. It spreads the
+    // writes; it must never move the schedule.
+    ckpt.nextInSec -= dt
 
     if (ckpt.phase === 'idle') {
-      ckpt.nextInSec -= dt
       const walSinceRedo = wal.insertLsn - ckpt.redoLsn
-      if (walSinceRedo > K.maxWalSize * 1024 * 1024) startCheckpoint('wal')
+      if (walSinceRedo > walTriggerBytes(K)) startCheckpoint('wal')
       else if (ckpt.nextInSec <= 0) startCheckpoint('time')
       return
     }
@@ -957,9 +1085,11 @@ export function createSim(bus: Bus): SimApi {
       if (ckpt.elapsed > 0.35) {
         ckpt.phase = 'writing'
         // checkpoint_completion_target spreads the writes. For a WAL-triggered
-        // checkpoint the deadline is "when we would fill max_wal_size again".
+        // checkpoint the deadline is "when we would reach the trigger again" —
+        // the same walTriggerBytes() the trigger above uses, or the write phase
+        // would be paced against a distance the checkpoint never gets to run.
         const walRate = Math.max(4096, wal.bytesPerSec)
-        const walDeadline = (K.maxWalSize * 1024 * 1024) / walRate
+        const walDeadline = walTriggerBytes(K) / walRate
         const span = ckpt.reason === 'wal' ? Math.min(K.checkpointTimeout, walDeadline) : K.checkpointTimeout
         ckptWriteDur = clamp(K.checkpointCompletionTarget * span, 2, 600)
         ckptWriteAcc = 0
@@ -974,19 +1104,33 @@ export function createSim(bus: Bus): SimApi {
       ckptWriteAcc -= n
       const target = stride(rate, 26)
       while (n-- > 0 && ckpt.buffersWritten < ckpt.buffersToWrite) {
-        // One ordered pass over the pool, writing whatever is still dirty. The
-        // bgwriter may have cleaned some of them already — that is the point.
+        // ONE forward-only pass over the tagged set — the buffers that were
+        // dirty at the redo point, and only those. The old code searched
+        // circularly for "whatever is dirty now", which lapped repeatedly: it
+        // wrote pages first dirtied AFTER the redo point while pages from the
+        // snapshot survived the checkpoint unwritten, which is precisely the
+        // durability contract redoLsn depends on.
         let found = -1
-        for (let k = 0; k < buf.size; k++) {
-          const b = (ckptScan + k) % buf.size
-          if (buf.dirty[b]) {
+        while (ckptScan < buf.size) {
+          const b = ckptScan++
+          if (ckptNeeded[b]) {
+            ckptNeeded[b] = 0
             found = b
-            ckptScan = (b + 1) % buf.size
             break
           }
         }
+        if (found < 0) {
+          // Lap complete: every tagged buffer has been visited. (Only reachable
+          // if the pool shrank underneath us.)
+          ckpt.buffersWritten = ckpt.buffersToWrite
+          break
+        }
+        // BufferSync()'s num_processed. A tagged buffer someone else already
+        // cleaned still counts as processed and does not count as written —
+        // that split is what makes buffers_checkpoint smaller than the dirty
+        // count when the bgwriter is doing its job.
         ckpt.buffersWritten++
-        if (found < 0) continue
+        if (!buf.dirty[found]) continue
         buf.dirty[found] = 0
         ioWriteAcc++
         if (++sCkpt >= target) {
@@ -1012,9 +1156,17 @@ export function createSim(bus: Bus): SimApi {
       return
     }
 
-    // finishing: write the checkpoint record, recycle WAL below the REDO point
+    // finishing: write the checkpoint record, update pg_control, and only THEN
+    // recycle the WAL below the redo point
     if (ckpt.elapsed > ckptWriteDur + ckptSyncDur + 0.4) {
-      walInsert(140)
+      walInsert(140) // the checkpoint record
+      // ControlFile->checkPointCopy = checkPoint, then RemoveOldXlogFiles().
+      // ckpt.redoLsn, NOT wal.insertLsn: recovery restarts at the redo point
+      // this checkpoint stamped when it began, so what pg_wal must keep is
+      // everything since then — including every byte the checkpoint itself
+      // produced while it ran. Assigning insertLsn here would zero retention at
+      // completion instead of at start: right phase, wrong magnitude.
+      completedRedoLsn = ckpt.redoLsn
       ckpt.lastDuration = ckpt.elapsed
       ckpt.count++
       ckpt.phase = 'idle'
@@ -1778,25 +1930,44 @@ export function createSim(bus: Bus): SimApi {
         perStmt = 4
         break
     }
-    // Scans are sampled once per trip; point work scales with the batch.
-    const total = x.seqScan ? perStmt : Math.min(MAX_VISIT_PAGES, perStmt * x.txCount)
+    // The pages this trip really has to move. Scans are sampled once per trip;
+    // point work scales with the batch, and is NOT capped here.
+    const work = x.seqScan ? perStmt : perStmt * x.txCount
+    // How much of that stream is actually pushed through the buffer pool. The
+    // city cannot animate a hundred thousand page requests inside one trip, so
+    // the *stream* is sampled — but only the stream. The cost is charged below
+    // on the full `work`.
+    const total = Math.min(MAX_VISIT_PAGES, work)
     x.pagesTotal = total
     x.pagesLeft = total
     x.execElapsed = 0
 
     const missFrac = clamp01(1 - buf.hitRatio)
     // Keep the floor — a trivial statement still costs something — but there is
-    // no ceiling. Execution time has to stay proportional to the work, or a big
-    // batch is free, the fleet has no capacity, and no amount of offered load
-    // can ever saturate it. This is what makes achieved tps saturate instead of
-    // tracking the knob, and what makes a cold pool cost real wall time.
-    const dur = Math.max(0.1, 0.06 + total * (0.00035 + missFrac * 0.0045))
-    x.execTotal = dur
+    // no ceiling of any kind. Execution time has to stay proportional to the
+    // work, or a big batch is free, the fleet has no capacity, and no amount of
+    // offered load can ever saturate it. Clamping `dur` (the old
+    // `clamp(…, 0.1, 1.5)`) and charging it on the SAMPLED page count are the
+    // same defect wearing two hats: above MAX_VISIT_PAGES the second one made
+    // every further transaction in the batch free, so achieved tps went on
+    // climbing past the fleet's asymptote (measured 1.5k tps at 5,000 offered
+    // but 9.2k at 50,000). Charge on `work`. `base` is the cost on an
+    // unloaded device; ioPressure() adds what the queue in front of it costs.
+    const base = Math.max(0.1, 0.06 + work * (0.00035 + missFrac * 0.0045))
 
     const ioShare = missFrac > 0.02 ? clamp(0.25 + missFrac * 0.6, 0.2, 0.85) : 0
+    // Only the I/O half is stretched by device pressure, and that asymmetry is
+    // the lesson: a query served out of shared_buffers barely notices a
+    // checkpoint, and a query that has to reach storage queues behind every
+    // page the checkpointer is pushing at it. Stretching the CPU half too would
+    // make shared_buffers look useless during a checkpoint, which is backwards.
+    const ioDur = base * ioShare * ioPressure()
+    const dur = ioDur + base * (1 - ioShare)
+    x.execTotal = dur
+
     if (ioShare > 0) {
       b.state = 'exec_io'
-      b.stateDur = dur * ioShare
+      b.stateDur = ioDur
     } else {
       b.state = 'exec_cpu'
       b.stateDur = dur
@@ -1960,7 +2131,6 @@ export function createSim(bus: Bus): SimApi {
     stats.rollbacks += rb
     stats.commits += x.txCount - rb
     commitsAcc += x.txCount - rb
-    visitsAcc++
     // The transaction is over: its xid is no longer live, so the backend stops
     // holding back the xmin horizon.
     b.xid = 0
@@ -2269,8 +2439,13 @@ export function createSim(bus: Bus): SimApi {
       stats.walBytesPerSec = wal.bytesPerSec
       stats.ioReadPerSec = damp(stats.ioReadPerSec, ioReadAcc / iv, 3, iv)
       stats.ioWritePerSec = damp(stats.ioWritePerSec, ioWriteAcc / iv, 3, iv)
+      // Writeback pressure. Quadratic, because a device does not degrade
+      // linearly: it is fine until it is not. Reads are deliberately NOT in the
+      // numerator — a read miss is already priced into exec duration through
+      // missFrac, and counting it twice would let the buffer-pool lesson bleed
+      // into the checkpoint one.
+      ioLoad = 1 + 2.5 * clamp01(stats.ioWritePerSec / DEVICE_PAGES_PER_SEC) ** 2
       bgw.cleanedPerSec = damp(bgw.cleanedPerSec, cleanedAcc / iv, 3, iv)
-      visitRate = damp(visitRate, visitsAcc / iv, 1.6, iv)
       // fpwBurst decays as the working set pays off its full-page images
       const fpiRatio = walAcc > 0 ? clamp01(fpiAcc / walAcc) : 0
       wal.fpwBurst = damp(wal.fpwBurst, fpiRatio, 0.7, iv)
@@ -2294,7 +2469,6 @@ export function createSim(bus: Bus): SimApi {
       ioReadAcc = 0
       ioWriteAcc = 0
       cleanedAcc = 0
-      visitsAcc = 0
       winHits = 0
       winMisses = 0
     }
@@ -2646,6 +2820,11 @@ export function createSim(bus: Bus): SimApi {
     ckpt.reason = 'time'
     ckpt.count = 0
     ckpt.redoLsn = lsn0
+    // Both pointers, or the first tick reports a 26-billion-byte pg_wal.
+    completedRedoLsn = lsn0
+    ckptNeeded.fill(0)
+    ckptScan = 0
+    ioLoad = 1
 
     bgw.enabled = K.bgwriterEnabled
     bgw.scanPos = 0
@@ -2736,8 +2915,7 @@ export function createSim(bus: Bus): SimApi {
     nextArrival = 0
     refusedTx = 0
     sizeBatch()
-    visitRate = 4
-    visitsAcc = commitsAcc = walAcc = fpiAcc = ioReadAcc = ioWriteAcc = 0
+    commitsAcc = walAcc = fpiAcc = ioReadAcc = ioWriteAcc = 0
     winHits = winMisses = 0
     rateT = histT = 0
     cleanedAcc = 0

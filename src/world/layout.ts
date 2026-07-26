@@ -128,7 +128,7 @@ export const ANCHOR = {
   // the archive estate (east, outside the server): WAL-G's object storage
   /** Where the city hands a finished segment to something it does not own. */
   archiveGate: [300, 0, -70],
-  /** The switchyard. One elevated deck per timeline; ramps are the forks. */
+  /** The switchyard. One deck per timeline; a turnout onto a siding is a fork. */
   timelineYard: [344, 0, -44],
   /** The bucket: WAL segment silos, grouped by timeline, plus the .history shelf. */
   objectStore: [396, 0, -80],
@@ -150,6 +150,13 @@ export const ANCHOR = {
 
   // the HA quarter (south): three nodes, one lock, one service address
   /**
+   * The rejoin bay. A node that has lost the leader lock cannot simply follow
+   * the winner: after an UNPLANNED failover its own pg_wal has diverged, so it
+   * must be rewound (pg_rewind) or rebuilt (pg_basebackup) first. Two gates,
+   * one siding, and the prerequisite list on a board.
+   */
+  rejoinBay: [-56, 0, 232],
+  /**
    * The endpoint clients actually dial. It stands on the arrivals avenue,
    * OUTSIDE the server boundary, in the central corridor the conduits are
    * forbidden to enter (|x| < CONDUIT.clearX) — a router in front of the
@@ -167,6 +174,8 @@ export const ANCHOR = {
   /** Node 3: the second streaming standby. Mirrors the standby across x. */
   standbyB: [-112, 0, 262],
   standbyBDeck: [-112, 3, 288],
+  /** Node 3's walreceiver, where its own wire makes landfall. */
+  standbyBRecv: [-112, 0, 216],
 
   // the query lab floats above the backend row
   planner: [0, 66, -130],
@@ -176,6 +185,42 @@ export type AnchorId = keyof typeof ANCHOR
 
 export const v3 = (a: readonly [number, number, number]) => new THREE.Vector3(a[0], a[1], a[2])
 export const at = (id: AnchorId) => v3(ANCHOR[id])
+
+/* --------------------------------------------------------------------------
+ * THE TIMELINE SWITCHYARD.
+ *
+ * Plan-level because two things need it: world/continuity.ts builds the decks,
+ * and the archive road below has to run along the live one.
+ *
+ * Time runs EAST. The live timeline is the through line, at the yard's own
+ * grade. Every other timeline is a siding one step above it, taken through a
+ * turnout at the LSN where it branched — and a siding never rejoins, because
+ * a timeline never does. The plaque at each turnout is the `.history` file.
+ * Later timelines fork further east and are shorter, which is true: they hold
+ * only the WAL written after the branch.
+ * ------------------------------------------------------------------------*/
+
+export const CONTINUITY = {
+  yard: {
+    /** Through line: timeline 1, the one the city is writing right now. */
+    x0: 302,
+    x1: 390,
+    z: -44,
+    /** Top of the deck slab. Traffic rides ~1.6 m above it. */
+    deckY: 7,
+    width: 7,
+  },
+  /** Sidings, west to east. `forkX` is the turnout; the deck starts 14 m later. */
+  branches: [
+    { forkX: 316, z: -30, deckY: 10.5 },
+    { forkX: 330, z: -16, deckY: 10.5 },
+    { forkX: 344, z: -2, deckY: 10.5 },
+  ],
+  /** Object-store silos: rows are timelines, columns are segments. */
+  silo: { rows: 4, cols: 8, pitchX: 6.4, pitchZ: 7, radius: 2.4, height: 6 },
+  /** Base backups kept in the vault, newest last. */
+  backupSlots: 5,
+} as const
 
 /* --------------------------------------------------------------------------
  * Per-slot helpers.
@@ -671,6 +716,143 @@ route('bufmap.in', [
   [-46, 7, -2],
   [ANCHOR.bufMapping[0], 6, ANCHOR.bufMapping[2]],
 ], { color: COLOR.shmem, speed: 110, size: 0.8 })
+
+/* --- continuity: the archive estate, the recovery ground, the HA quarter --
+ *
+ * Three roads matter here and the rest are local moves:
+ *
+ *   archive.ship   the finished segment leaving the site for good
+ *   restore.haul   the ONE road back — base backup and archived WAL both ride
+ *                  it, because they both come out of the same bucket
+ *   net.streamB    the second standby's wire, a third duct in the same bank
+ *                  as far as z ≈ 150, then peeling west on its own
+ * ------------------------------------------------------------------------*/
+
+/* Out of the cold store, under the archive gate, along the live timeline's
+ * through line, and into the bucket. Past the gate the city no longer owns it. */
+route('archive.ship', [
+  [ANCHOR.archiveStore[0] + 16, 8.0, ANCHOR.archiveStore[2]],
+  [284, 8.2, -70],
+  [ANCHOR.archiveGate[0], 8.2, ANCHOR.archiveGate[2]],
+  [CONTINUITY.yard.x0 + 1, CONTINUITY.yard.deckY + 1.6, -52],
+  [CONTINUITY.yard.x0 + 12, CONTINUITY.yard.deckY + 1.6, CONTINUITY.yard.z],
+  [350, CONTINUITY.yard.deckY + 1.6, CONTINUITY.yard.z],
+  [CONTINUITY.yard.x1, CONTINUITY.yard.deckY + 1.6, CONTINUITY.yard.z],
+  [ANCHOR.objectStore[0], 8.0, -62],
+  [ANCHOR.objectStore[0], 7.0, ANCHOR.objectStore[2] + 8],
+], { color: COLOR.archive, speed: 92, size: 1.3, visible: true, roadOpacity: 0.15, tension: 0.4 })
+
+/* pg_basebackup pulls from the STANDBY — the whole point of the exercise —
+ * and the result goes straight out to object storage. */
+route('backup.take', [
+  [ANCHOR.standby[0] + 16, 6, ANCHOR.standby[2] + 8],
+  [180, 5, 258],
+  [240, 5, 252],
+  [ANCHOR.backupHost[0] - 14, 6, ANCHOR.backupHost[2] + 2],
+], { color: COLOR.storage, speed: 78, size: 1.25, visible: true, roadOpacity: 0.13 })
+
+route('backup.store', [
+  [ANCHOR.backupHost[0] + 8, 6, 232],
+  [352, 6, 200],
+  [378, 6, 152],
+  [ANCHOR.backupVault[0], 6, ANCHOR.backupVault[2] + 16],
+], { color: COLOR.storage, speed: 78, size: 1.25, visible: true, roadOpacity: 0.13 })
+
+/* The long way home. Deliberately long: restoring is not a local operation,
+ * and the road runs right round the outside of the city to say so. */
+route('restore.haul', [
+  [400, 4, 20],
+  [402, 3, 90],
+  [386, 3, 170],
+  // wide of the standby's plinth (replication ends at x 280 / z 350) the whole
+  // way round: the haul road belongs to nobody's district
+  [356, 3, 286],
+  [286, 3, 364],
+  [160, 3, 404],
+  [0, 3, 412],
+  [-150, 3, 398],
+  [-244, 3, 352],
+  [ANCHOR.recoveryGate[0], 3, ANCHOR.recoveryGate[2]],
+], { color: COLOR.archive, speed: 96, size: 1.2, visible: true, roadOpacity: 0.09 })
+
+/* base.tar onto an empty $PGDATA */
+route('restore.unpack', [
+  [ANCHOR.recoveryGate[0], 3, ANCHOR.recoveryGate[2]],
+  [-306, 3, 278],
+  [ANCHOR.recoveryPad[0] + 4, 4, ANCHOR.recoveryPad[2] + 12],
+], { color: COLOR.storage, speed: 70, size: 1.3, visible: true, roadOpacity: 0.14 })
+
+/* restore_command: the winch lifts one segment off the haul road and lays it
+ * on the belt. One hook, one file — this is why recovery is single-threaded. */
+route('restore.replay', [
+  [ANCHOR.recoveryGate[0] + 2, 4, 284],
+  [ANCHOR.restoreWinch[0], 8, ANCHOR.restoreWinch[2] + 8],
+  [-300, 7, 212],
+  [ANCHOR.recoveryReplay[0] + 16, 6, ANCHOR.recoveryReplay[2]],
+], { color: COLOR.wal, speed: 72, size: 1.25, visible: true, roadOpacity: 0.15 })
+
+/* the startup process writing replayed pages into the restored cluster */
+route('restore.apply', [
+  [ANCHOR.recoveryReplay[0], 6, ANCHOR.recoveryReplay[2] - 10],
+  [-350, 6, 214],
+  [-330, 6, 232],
+  [ANCHOR.recoveryPad[0], 5, ANCHOR.recoveryPad[2]],
+], { color: COLOR.bufClean, speed: 68, size: 1.1, visible: true, roadOpacity: 0.12 })
+
+/* Node 3's wire. One more walsender in the same cabinet, one more duct in the
+ * same bank down the east verge, then west across the southern approach. */
+route('net.streamB', [
+  [ANCHOR.walSender[0] - 7, 7.0, ANCHOR.walSender[2] + 10],
+  [196, 1.9, 70],
+  [180, 1.6, 102],
+  [164, 1.6, 140],
+  [130, 1.7, 163],
+  [60, 1.7, 172],
+  [-30, 1.7, 178],
+  [-92, 1.8, 196],
+  [ANCHOR.standbyBRecv[0] + 4, 7.0, ANCHOR.standbyBRecv[2] - 8],
+], { color: COLOR.replication, speed: 115, size: 1.3, visible: true, roadOpacity: 0.16 })
+
+route('net.ackB', [
+  [ANCHOR.standbyBRecv[0] - 2, 7.0, ANCHOR.standbyBRecv[2] - 10],
+  [-94, 1.8, 190],
+  [-32, 1.7, 172],
+  [58, 1.7, 166],
+  [126, 1.7, 157],
+  [160, 1.6, 135],
+  [176, 1.6, 99],
+  [193, 1.9, 68],
+  [ANCHOR.walSender[0] - 11, 7.0, ANCHOR.walSender[2] + 8],
+], { color: COLOR.ok, speed: 130, size: 0.95 })
+
+/* Node 3 replays like any standby — just fifteen minutes later. */
+route('replicaB.apply', [
+  [ANCHOR.standbyBRecv[0], 8, ANCHOR.standbyBRecv[2]],
+  [ANCHOR.standbyB[0], 9, ANCHOR.standbyB[2] - 14],
+  [ANCHOR.standbyB[0], 8, ANCHOR.standbyB[2]],
+  [ANCHOR.standbyBDeck[0], 6, ANCHOR.standbyBDeck[2] - 8],
+  [ANCHOR.standbyBDeck[0], 5, ANCHOR.standbyBDeck[2]],
+], { color: COLOR.replication, speed: 76, size: 1.1 })
+
+/* Lease renewals. Patroni's agents talk to the DCS and to nothing else — so
+ * these roads deliberately share no metal with the replication wire. */
+route('ha.lease1', [
+  [0, 6, 128],
+  [0, 5, 176],
+  [ANCHOR.leaseNode1[0] - 4, 5, ANCHOR.leaseNode1[2] - 6],
+], { color: COLOR.inkDim, speed: 120, size: 0.85, visible: true, roadOpacity: 0.1 })
+
+route('ha.lease2', [
+  [ANCHOR.standby[0] - 14, 6, ANCHOR.standby[2] + 6],
+  [64, 4, 262],
+  [ANCHOR.leaseNode2[0] + 3, 5, ANCHOR.leaseNode2[2]],
+], { color: COLOR.inkDim, speed: 120, size: 0.85, visible: true, roadOpacity: 0.1 })
+
+route('ha.lease3', [
+  [ANCHOR.standbyB[0] + 14, 6, ANCHOR.standbyB[2] + 4],
+  [-60, 4, 266],
+  [ANCHOR.leaseNode3[0] - 3, 5, ANCHOR.leaseNode3[2]],
+], { color: COLOR.inkDim, speed: 120, size: 0.85, visible: true, roadOpacity: 0.1 })
 
 /* --- exports ------------------------------------------------------------- */
 

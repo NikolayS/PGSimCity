@@ -74,6 +74,38 @@ export function saveFlag(key: string, value: boolean): void {
 }
 
 /* ---------------------------------------------------------------------------
+ * Phone sheets — shared between the console (left) and the inspector (right).
+ *
+ * On a phone both panels are bottom sheets standing in the same place, so only
+ * one may be up at a time, and the HUD needs to know that one is: the transport
+ * dock hides underneath it rather than leaving unreachable buttons behind the
+ * glass. Both facts are read straight off the DOM, so whichever module moved
+ * last, the answer is the same.
+ * -------------------------------------------------------------------------*/
+
+export const SHEET_EVENT = 'pgsimcity:sheet'
+
+export type SheetSide = 'left' | 'right'
+
+/** Tell the other sheet to stand down. Only ever called when one opens. */
+export function announceSheet(side: SheetSide): void {
+  window.dispatchEvent(new CustomEvent(SHEET_EVENT, { detail: { side } }))
+}
+
+export function sheetSideOf(e: Event): SheetSide | null {
+  const detail = (e as CustomEvent<{ side?: SheetSide }>).detail
+  return detail?.side ?? null
+}
+
+/** Recompute body.pg-sheet / body.pg-sheet-tall from whatever is actually open. */
+export function syncSheetFlags(): void {
+  const open = document.querySelector('.pgc-host.is-compact.is-open') != null
+  const tall = document.querySelector('.pgc-host.is-compact.is-open .pgc-panel.is-tall') != null
+  document.body.classList.toggle('pg-sheet', open)
+  document.body.classList.toggle('pg-sheet-tall', open && tall)
+}
+
+/* ---------------------------------------------------------------------------
  * Collapsible section — shared by the console's groups and the inspector's
  * prose. Composes .pg-collapse from ui.css and stays keyboard operable.
  * -------------------------------------------------------------------------*/
@@ -391,6 +423,7 @@ export function createControls(ctx: UiContext): UiModule {
   let compact = narrow.matches
   let openWide = loadFlag(OPEN_KEY, true)
   let openNarrow = false
+  let tall = false
 
   const isOpen = (): boolean => (compact ? openNarrow : openWide)
 
@@ -404,6 +437,7 @@ export function createControls(ctx: UiContext): UiModule {
     panel.setAttribute('aria-hidden', String(!open))
     // Nothing inside a hidden panel should be reachable by keyboard.
     panel.inert = !open && compact
+    syncSheetFlags()
   }
 
   function setOpen(next: boolean): void {
@@ -418,8 +452,18 @@ export function createControls(ctx: UiContext): UiModule {
       panel.classList.remove('pg-enter')
       void panel.offsetWidth
       panel.classList.add('pg-enter')
+      if (compact) announceSheet('left')
     }
     ctx.bus.emit('ui:layout', {})
+  }
+
+  function setTall(next: boolean): void {
+    tall = next
+    setClass(panel, 'is-tall', tall)
+    sizeBtn.title = tall ? 'Shrink the console' : 'Expand the console'
+    sizeBtn.setAttribute('aria-label', sizeBtn.title)
+    sizeBtn.setAttribute('aria-expanded', String(tall))
+    syncSheetFlags()
   }
 
   const tab = el('button', {
@@ -433,11 +477,28 @@ export function createControls(ctx: UiContext): UiModule {
 
   const presetDot = el('span', { class: 'pg-dot pgc-preset__dot' })
   const presetName = el('div', { class: 'pgc-preset', text: 'Defaults' })
+
+  /* Phone only: trade half the city for a tall sheet while you are reading, and
+     trade it straight back. */
+  const sizeBtn = el(
+    'button',
+    {
+      class: 'pg-btn pg-btn--icon pgc-sheet-size',
+      type: 'button',
+      title: 'Expand the console',
+      'aria-label': 'Expand the console',
+      'aria-expanded': 'false',
+      on: { click: () => setTall(!tall) },
+    },
+    icon('chevron', 13),
+  )
+
   const head = el(
     'header',
     { class: 'pg-panel__head pgc-rail__head' },
     presetDot,
     el('div', { class: 'pgc-rail__id' }, el('div', { class: 'pg-eyebrow', text: 'Console' }), presetName),
+    sizeBtn,
     el(
       'button',
       {
@@ -541,6 +602,12 @@ export function createControls(ctx: UiContext): UiModule {
   }
   narrow.addEventListener('change', onNarrow)
 
+  /* Two sheets, one place to stand. */
+  const onSheet = (e: Event): void => {
+    if (sheetSideOf(e) !== 'left' && compact && openNarrow) setOpen(false)
+  }
+  window.addEventListener(SHEET_EVENT, onSheet)
+
   const offScenario = ctx.bus.on('scenario', () => refresh())
   const offReset = ctx.bus.on('sim:reset', () => {
     for (const c of controls) c.sync(true)
@@ -561,10 +628,12 @@ export function createControls(ctx: UiContext): UiModule {
     },
     dispose() {
       narrow.removeEventListener('change', onNarrow)
+      window.removeEventListener(SHEET_EVENT, onSheet)
       offScenario()
       offReset()
       for (const c of controls) c.dispose()
       host.remove()
+      syncSheetFlags()
     },
   }
 }

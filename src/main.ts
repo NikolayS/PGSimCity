@@ -30,6 +30,7 @@ import { createStorage } from './world/storage'
 import { createMaintenance } from './world/maintenance'
 import { createReplication } from './world/replication'
 import { createPlanner } from './world/planner'
+import { createContinuity } from './world/continuity'
 import { createAccess } from './world/access'
 import type { AccessModule } from './world/access'
 
@@ -144,6 +145,9 @@ async function boot(): Promise<void> {
   await progress(85, 'connecting the standby…')
   add(createReplication(ctx))
   add(createPlanner(ctx))
+  // After replication: the continuity quarter reads the standby's anchors and
+  // hangs its own second standby, archive estate and recovery ground off them.
+  add(createContinuity(ctx))
 
   // --- collision + the pedestrian -------------------------------------------
   // Every district is in the scene, so the registry's bounding boxes are final.

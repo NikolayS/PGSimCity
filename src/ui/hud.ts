@@ -473,13 +473,15 @@ export function createHud(ctx: UiContext): UiModule {
     qualitySel,
   )
 
-  const topBar = el(
-    'div',
-    { class: 'pg-panel hud-bar' },
-    brand,
-    vitalsRow,
-    el('div', { class: 'hud-right' }, ckptBtn, el('span', { class: 'hud-sep' }), tourBtn, diagnoseLink, paletteBtn, helpBtn, perf),
-  )
+  /* The tools travel. On a desktop they belong beside the checkpoint ring in
+     the instrument bar; on a phone there is no room for both, and the split
+     that survives is instruments on top, controls at the bottom — so this whole
+     cluster moves into the transport dock and comes back on rotation. */
+  const toolCluster = el('div', { class: 'hud-tools' }, tourBtn, diagnoseLink, paletteBtn, helpBtn, perf)
+
+  const rightCluster = el('div', { class: 'hud-right' }, ckptBtn, el('span', { class: 'hud-sep' }), toolCluster)
+
+  const topBar = el('div', { class: 'pg-panel hud-bar' }, brand, vitalsRow, rightCluster)
   topEl.append(topBar)
 
   /* =======================================================================
@@ -533,7 +535,7 @@ export function createHud(ctx: UiContext): UiModule {
       on: { click: () => resetSim() },
     },
     icon('reset', 13),
-    'Reset',
+    el('span', { class: 'hud-reset__t', text: 'Reset' }),
   )
 
   interface ChipUi {
@@ -569,20 +571,69 @@ export function createHud(ctx: UiContext): UiModule {
     el('div', { class: 'hud-now__bar' }, nowFill),
   )
 
+  /* Phone only: the scenario rail is thirteen chips long and there is no width
+     for it under the transport, so it collapses behind one labelled control and
+     the city keeps the pixels. Hidden on a desktop, where the rail always
+     shows. */
+  const scnBtn = el(
+    'button',
+    {
+      class: 'pg-btn hud-scn__toggle',
+      type: 'button',
+      'aria-expanded': 'false',
+      'aria-controls': 'hud-scenarios',
+      title: 'Show or hide the scenario list',
+      on: { click: () => setScenariosOpen(!scenariosOpen) },
+    },
+    el('span', { class: 'hud-scn__toggle-icon', text: '◈' }),
+    el('span', { text: 'Scenarios' }),
+  )
+
+  const scnWrap = el(
+    'div',
+    { class: 'hud-transport__scn', id: 'hud-scenarios' },
+    el('span', { class: 'pg-eyebrow hud-scn__label', text: 'Scenarios' }),
+    chipRow,
+  )
+
+  /* Where the tool cluster lands on a phone. Empty, and zero-sized, otherwise. */
+  const dockSlot = el('div', { class: 'hud-transport__dock' })
+
   const transport = el(
     'div',
     { class: 'pg-panel hud-transport' },
-    el('div', { class: 'hud-transport__deck' }, playBtn, speedGroup, resetBtn),
+    el('div', { class: 'hud-transport__deck' }, playBtn, speedGroup, resetBtn, scnBtn),
     el('span', { class: 'hud-sep' }),
-    el(
-      'div',
-      { class: 'hud-transport__scn' },
-      el('span', { class: 'pg-eyebrow hud-scn__label', text: 'Scenarios' }),
-      chipRow,
-    ),
+    scnWrap,
     nowBox,
+    dockSlot,
   )
   bottomEl.append(transport)
+
+  let scenariosOpen = false
+
+  function setScenariosOpen(next: boolean): void {
+    scenariosOpen = next
+    setClass(transport, 'is-scn-open', next)
+    setClass(scnBtn, 'is-active', next)
+    scnBtn.setAttribute('aria-expanded', String(next))
+  }
+
+  /* ---- phone layout: instruments on top, every control in the dock -------- */
+
+  const phone = window.matchMedia('(max-width: 700px)')
+
+  function applyPhoneLayout(): void {
+    const target = phone.matches ? dockSlot : rightCluster
+    if (toolCluster.parentElement !== target) target.append(toolCluster)
+    // Leaving the rail expanded across a rotation would re-cover the city.
+    if (!phone.matches && scenariosOpen) setScenariosOpen(false)
+  }
+
+  const onPhoneChange = (): void => applyPhoneLayout()
+  phone.addEventListener('change', onPhoneChange)
+  cleanup.push(() => phone.removeEventListener('change', onPhoneChange))
+  applyPhoneLayout()
 
   /* =======================================================================
    * TOASTS

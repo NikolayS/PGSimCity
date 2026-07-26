@@ -325,6 +325,9 @@ export function createFlows(
     // cull the whole batch the moment the camera looks away from the origin.
     mesh.frustumCulled = false
     mesh.raycast = () => {} // packets are never pickable
+    // Only the used head of the pool is submitted; see the high-water mark in
+    // update(). An empty city costs nothing.
+    mesh.count = 0
     group.add(mesh)
 
     mArr = mesh.instanceMatrix.array as Float32Array
@@ -358,7 +361,7 @@ export function createFlows(
     mesh.instanceColor.needsUpdate = true
   }
 
-  /** Zero-scale matrix: the instance still draws, as degenerate triangles. */
+  /** Zero-scale matrix, for any parked instance still inside the draw range. */
   function park(i: number): void {
     const o = i * 16
     for (let k = 0; k < 16; k++) mArr[o + k] = 0
@@ -507,6 +510,14 @@ export function createFlows(
 
     drainPending()
 
+    /* High-water mark of live instance indices. Slots are handed out from the
+     * low end of the pool, so on a quiet city this is a couple of hundred out of
+     * a couple of thousand, and the rest of the pool is never submitted. That
+     * matters more than it used to: the packet is a freight pod now, four times
+     * the triangles of the dart it replaced, and paying for all of them on an
+     * idle frame would be a real regression rather than a bookkeeping one. */
+    let hi = 0
+
     for (let a = nAct - 1; a >= 0; a--) {
       const i = act[a]
       const b = bakes[pRoute[i]]
@@ -520,6 +531,7 @@ export function createFlows(
         continue
       }
       pT[i] = t
+      if (i >= hi) hi = i + 1
 
       const cum = b.cum
       const d = t * b.length
@@ -582,6 +594,7 @@ export function createFlows(
       mesh.setMatrixAt(i, _mat)
     }
 
+    mesh.count = hi
     mesh.instanceMatrix.needsUpdate = true
     if (colorDirty && mesh.instanceColor) {
       mesh.instanceColor.needsUpdate = true

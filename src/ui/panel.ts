@@ -2,7 +2,16 @@ import '../styles/panel.css'
 
 import type { ComponentDef, ComponentDoc, ComponentKind, DocRef, DocReferences, Knobs, SimState } from '../core/types'
 import { doc, knobMeta, mdToHtml } from './content'
-import { createCollapse, createKnobControl, loadFlag, saveFlag } from './controls'
+import {
+  SHEET_EVENT,
+  announceSheet,
+  createCollapse,
+  createKnobControl,
+  loadFlag,
+  saveFlag,
+  sheetSideOf,
+  syncSheetFlags,
+} from './controls'
 import type { KnobControl } from './controls'
 import { clear, el, icon, metricTile, setClass, setText } from './uikit'
 import type { UiContext, UiModule } from './uikit'
@@ -185,10 +194,33 @@ export function createInspector(ctx: UiContext): UiModule {
     icon('close', 13),
   )
 
+  /* Phone only: the sheet keeps the bottom 42% by default so the city keeps the
+     rest. This buys the other 40% when you are reading rather than exploring. */
+  const sizeBtn = el(
+    'button',
+    {
+      class: 'pg-btn pg-btn--icon pgc-sheet-size',
+      type: 'button',
+      title: 'Expand the inspector',
+      'aria-label': 'Expand the inspector',
+      'aria-expanded': 'false',
+      on: { click: () => setTall(!tall) },
+    },
+    icon('chevron', 13),
+  )
+
   const head = el(
     'header',
     { class: 'pg-panel__head pgc-insp__head' },
-    el('div', { class: 'pgc-insp__top' }, kindBadge, el('span', { class: 'pgc-spacer' }), flyBtn, closeBtn),
+    el(
+      'div',
+      { class: 'pgc-insp__top' },
+      kindBadge,
+      el('span', { class: 'pgc-spacer' }),
+      sizeBtn,
+      flyBtn,
+      closeBtn,
+    ),
     title,
     subtitle,
     readout,
@@ -219,6 +251,7 @@ export function createInspector(ctx: UiContext): UiModule {
   let compact = narrow.matches
   let openWide = loadFlag(OPEN_KEY, true)
   let openNarrow = false
+  let tall = false
 
   const isOpen = (): boolean => (compact ? openNarrow : openWide)
 
@@ -231,6 +264,7 @@ export function createInspector(ctx: UiContext): UiModule {
     tab.setAttribute('aria-label', tab.title)
     panel.setAttribute('aria-hidden', String(!open))
     panel.inert = !open && compact
+    syncSheetFlags()
   }
 
   function setOpen(next: boolean): void {
@@ -240,7 +274,17 @@ export function createInspector(ctx: UiContext): UiModule {
       saveFlag(OPEN_KEY, next)
     }
     applyOpen()
+    if (next && compact) announceSheet('right')
     ctx.bus.emit('ui:layout', {})
+  }
+
+  function setTall(next: boolean): void {
+    tall = next
+    setClass(panel, 'is-tall', tall)
+    sizeBtn.title = tall ? 'Shrink the inspector' : 'Expand the inspector'
+    sizeBtn.setAttribute('aria-label', sizeBtn.title)
+    sizeBtn.setAttribute('aria-expanded', String(tall))
+    syncSheetFlags()
   }
 
   /* --- live pieces, rebuilt on every selection --------------------------- */
@@ -519,6 +563,12 @@ export function createInspector(ctx: UiContext): UiModule {
   }
   narrow.addEventListener('change', onNarrow)
 
+  /* Two sheets, one place to stand. */
+  const onSheet = (e: Event): void => {
+    if (sheetSideOf(e) !== 'right' && compact && openNarrow) setOpen(false)
+  }
+  window.addEventListener(SHEET_EVENT, onSheet)
+
   applyOpen()
   select(null)
 
@@ -550,8 +600,10 @@ export function createInspector(ctx: UiContext): UiModule {
     dispose() {
       offSelect()
       narrow.removeEventListener('change', onNarrow)
+      window.removeEventListener(SHEET_EVENT, onSheet)
       teardown()
       host.remove()
+      syncSheetFlags()
     },
   }
 }

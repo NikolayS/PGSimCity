@@ -131,14 +131,19 @@ void main() {
   float w = fract( vU * uBands - phase );
   float band = pow( 1.0 - w, 4.0 );
 
-  // An open transaction doing nothing is lit and completely still.
-  float sick = stuck * ( 0.09 + 0.03 * sin( phase * 0.7 ) );
+  // An open transaction doing nothing is lit and completely still. It must not
+  // outshine a duct that is doing work: the loudest thing in the district has
+  // to be traffic, not the absence of it. So the wall lands just under a busy
+  // duct's, and the travelling light is all but extinguished — what is left of
+  // it stops dead where it was, because the phase no longer advances. Stalled
+  // bands frozen in the pipe is what idle_in_transaction actually looks like.
+  float sick = stuck * 0.018;
 
   // The duct wall stays faint — it is infrastructure, and the city is dark.
   // Everything visible is shaped by 'rim' so a duct reads as a round thing
   // with an edge rather than a painted stripe.
   float wall = 0.030 + 0.085 * lit + sick;
-  float glow = band * ( 0.045 + 0.34 * lit ) * ( 1.0 - stuck * 0.6 );
+  float glow = band * ( 0.045 + 0.34 * lit ) * ( 1.0 - stuck * 0.78 );
 
   // Dissolve into the terminal wall and the backend flank.
   float ends = smoothstep( 0.0, 0.02, vU ) * ( 1.0 - smoothstep( 0.975, 1.0, vU ) );
@@ -558,12 +563,18 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
   pmGlow.instanceColor!.setUsage(THREE.DynamicDrawUsage)
   pm.add(pmGlow)
 
-  // Beacon: core + halo, animated purely through instance colour.
+  // The lantern: a lit core inside a soft shell, animated purely through
+  // instance colour. The shell has to be translucent — on an opaque material a
+  // dim instance is not a halo, it is a grey ball parked on the roof, and it
+  // hides the core it is supposed to be haloing. Halo first, core second:
+  // instance order is draw order inside one InstancedMesh, so the core lands
+  // on top of the shell rather than under it.
   const sphereGeo = own(new THREE.SphereGeometry(1, 12, 8))
-  const pmBeacon = new THREE.InstancedMesh(sphereGeo, neonWhite, 2)
+  const beaconMat = theme.neon(0xffffff, 1, { transparent: true, opacity: 0.42 })
+  const pmBeacon = new THREE.InstancedMesh(sphereGeo, beaconMat, 2)
   fillBoxes(pmBeacon, [
-    [0, PM_TOP, 0, 3.0, 3.0, 3.0],
-    [0, PM_TOP, 0, 6.6, 6.6, 6.6],
+    [0, PM_TOP, 0, 6.6, 6.6, 6.6], // 0: shell
+    [0, PM_TOP, 0, 3.0, 3.0, 3.0], // 1: core
   ])
   _c.setHex(COLOR.postmaster)
   for (let i = 0; i < 2; i++) pmBeacon.setColorAt(i, _c)
@@ -1015,10 +1026,10 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
     const load = clamp01(sim.stats.activeBackends / Math.max(1, sim.maxConnections))
     const breathe = 0.55 + 0.45 * Math.sin(t * 1.5)
     const beaconLevel = 0.7 + breathe * 0.5 + beaconFlash * 3.2
-    _c.setHex(COLOR.postmaster).multiplyScalar(beaconLevel)
-    pmBeacon.setColorAt(0, _c)
-    _c.setHex(COLOR.postmaster).multiplyScalar(beaconLevel * 0.16)
-    pmBeacon.setColorAt(1, _c)
+    _c.setHex(COLOR.postmaster).multiplyScalar(beaconLevel * 0.26)
+    pmBeacon.setColorAt(0, _c) // shell
+    _c.setHex(COLOR.postmaster).multiplyScalar(beaconLevel * 2.4)
+    pmBeacon.setColorAt(1, _c) // core — pushed past the bloom threshold
     pmBeacon.instanceColor!.needsUpdate = true
 
     // window slits brighten with the number of live sessions
