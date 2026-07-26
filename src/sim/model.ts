@@ -786,8 +786,9 @@ export function createSim(bus: Bus): SimApi {
    * defaults: 81.7% displayed against a true 65.2%, jittering across 60 points.
    *
    * These are the same two counters decayed by a common factor, so the ratio is
-   * the real event-weighted one over a ~7 s horizon and cannot drift when the
-   * city goes idle.
+   * the real event-weighted one over a ~50 s horizon and cannot drift when the
+   * city goes idle. A shorter window lets a warmed finite sample round to a
+   * misleading 100.0% seconds after its last miss.
    */
   let emaHits = 0
   let emaSeen = 0
@@ -3071,8 +3072,9 @@ export function createSim(bus: Bus): SimApi {
 
       // blks_hit / (blks_hit + blks_read) over a sliding window: decay the two
       // COUNTS by a common factor and divide, rather than averaging per-window
-      // ratios. ~7 s horizon, which is ~900 page requests at the default load.
-      const k = Math.exp(-0.15 * iv)
+      // ratios. ~50 s horizon: responsive to a changed workload without
+      // reporting a warmed finite sample as a perfect 100.0% cache.
+      const k = Math.exp(-0.02 * iv)
       emaHits = emaHits * k + winHits
       emaSeen = emaSeen * k + winHits + winMisses
       if (emaSeen > 8) buf.hitRatio = emaHits / emaSeen
@@ -3195,7 +3197,14 @@ export function createSim(bus: Bus): SimApi {
       state.scenario = null
       return
     }
+    const previousScenarioT = state.scenarioT
     state.scenarioT += dt
+    // This guided beat describes the launcher waking and a worker being sent,
+    // so a passive viewer must see that change too. Crossing the beat makes it
+    // one-shot: a viewer remains free to turn the knob back off afterwards.
+    if (def.id === 'bloat-and-vacuum' && previousScenarioT < 70 && state.scenarioT >= 70) {
+      setKnob('autovacuum', true)
+    }
     // Stands in for a `lockTimeout` knob this scenario would set at a beat.
     const lt = SCENARIO_LOCK_TIMEOUT[def.id]
     if (lt && lockTimeout !== lt.sec && state.scenarioT >= lt.atSec) {

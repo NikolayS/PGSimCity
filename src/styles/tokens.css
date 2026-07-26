@@ -399,6 +399,26 @@ body {
   font-size: var(--fs-xs);
   color: var(--ink-faint);
 }
+.boot-honesty {
+  width: min(430px, calc(100vw - 40px));
+  margin: 12px 0 0;
+  color: var(--ink-dim);
+  font-size: var(--fs-micro);
+  line-height: 1.6;
+}
+.boot-honesty strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+.boot-honesty a {
+  color: var(--c-backend);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--c-backend) 45%, transparent);
+  text-underline-offset: 2px;
+}
+.boot-honesty a:hover {
+  text-decoration-color: var(--c-backend);
+}
 
 @media (prefers-reduced-motion: reduce) {
   * {
