@@ -25,9 +25,6 @@ import type { UiContext, UiModule } from './uikit'
  * while never fighting a control the user has their hand on.
  * ==========================================================================*/
 
-/** One 8 KiB page, so shared_buffers can be shown in bytes as well as frames. */
-const PAGE_BYTES = 8192
-
 /** How long after the last interaction a control is left alone by the poll. */
 const GRACE_MS = 700
 
@@ -173,9 +170,8 @@ export function knobDisplay(meta: KnobMeta, value: KnobValue): KnobDisplay {
   if (meta.kind === 'select') return { num: String(value) }
 
   const n = typeof value === 'number' && isFinite(value) ? value : 0
+  if (meta.fmt) return { num: meta.fmt(n as never) }
   switch (meta.key) {
-    case 'sharedBuffers':
-      return { num: fmtNum(n), unit: 'pages', alt: fmtBytes(n * PAGE_BYTES, 1) }
     case 'checkpointTimeout':
       return { num: String(Math.round(n)), unit: 's', alt: n >= 60 ? fmtDuration(n) : undefined }
     case 'maxWalSize':

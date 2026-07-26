@@ -4,6 +4,7 @@ import { N_BACKEND_SLOTS } from '../core/types'
 import type { BackendSim, PlanNode, SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, damp, easeOutCubic, fmtNum } from '../core/util'
 import { ANCHOR, CITY, backendX } from './layout'
+import { OPACITY_TIER } from './storage'
 
 /* ============================================================================
  * THE QUERY LAB — what happens between "SELECT" and the first row.
@@ -223,11 +224,9 @@ class TextBank {
     this.tex = glyphAtlas()
     this.material = new THREE.MeshBasicMaterial({
       map: this.tex,
-      transparent: true,
+      alphaTest: 0.08,
       vertexColors: true,
-      depthWrite: false,
       toneMapped: false,
-      opacity: 0,
     })
     this.mesh = new THREE.Mesh(g, this.material)
     this.mesh.frustumCulled = false
@@ -387,20 +386,33 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
     return x
   }
 
-  /* The lab is a concept, not a building, so it owns its materials: the whole
-   * volume has to be able to dissolve when nothing is selected. */
-  const matShell = own(new THREE.MeshStandardMaterial({
-    color: 0x212c44, roughness: 0.72, metalness: 0.26, emissive: 0x060912, transparent: true, opacity: 0,
-  }))
-  const matGlass = own(new THREE.MeshStandardMaterial({
-    color: 0x6f7dff, roughness: 0.1, metalness: 0.05, transparent: true, opacity: 0, side: THREE.DoubleSide,
-  }))
-  const matCard = own(new THREE.MeshStandardMaterial({
-    color: 0x18213a, roughness: 0.86, metalness: 0.1, emissive: 0x04060f, transparent: true, opacity: 0,
-  }))
-  const lineMat = own(new THREE.LineBasicMaterial({
-    color: COLOR.inkDim, transparent: true, opacity: 0, depthWrite: false, toneMapped: false,
-  }))
+  // The lab shell is a conceptual space, not a building: `volume` is its one
+  // semantic translucency. Everything nested inside is solid so the diagram
+  // never stacks translucent cards against a translucent back wall.
+  const matShell = theme.mat('planner.shell', {
+    color: 0x212c44,
+    roughness: 0.72,
+    metalness: 0.26,
+    emissive: 0x060912,
+    transparent: true,
+    opacity: OPACITY_TIER.volume,
+  })
+  const matBack = theme.mat('planner.back', {
+    color: 0x10182a,
+    roughness: 0.92,
+    metalness: 0.06,
+    emissive: 0x03050c,
+    opacity: OPACITY_TIER.solid,
+    side: THREE.DoubleSide,
+  })
+  const matCard = theme.mat('planner.card', {
+    color: 0x18213a,
+    roughness: 0.86,
+    metalness: 0.1,
+    emissive: 0x04060f,
+    opacity: OPACITY_TIER.solid,
+  })
+  const lineMat = theme.line(COLOR.inkDim, OPACITY_TIER.solid)
   const neonWhite = theme.neon(0xffffff, 1)
   const unitBox = theme.box(1, 1, 1)
 
@@ -437,14 +449,16 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
     [LX + SHELL_W / 2, LY, LZ - SHELL_D / 2, 1.2, SHELL_H, 1.2],
     [LX - SHELL_W / 2, LY, LZ + SHELL_D / 2, 1.2, SHELL_H, 1.2],
     [LX + SHELL_W / 2, LY, LZ + SHELL_D / 2, 1.2, SHELL_H, 1.2],
-    [LX, FLOOR_Y + 1.0, LZ, SHELL_W - 6, 0.4, SHELL_D - 6], // service grating
   ]
   const shellMesh = batch(group, matShell, shell, true)
   pushBoxEdges(edgeVerts, [LX, LY, LZ, SHELL_W, SHELL_H, SHELL_D])
+  const serviceGrating = batch(group, matCard, [
+    [LX, FLOOR_Y + 1.0, LZ, SHELL_W - 6, 0.4, SHELL_D - 6],
+  ], true)
 
   // A back wall, so the diagram has something to read against.
   const wallGeo = own(new THREE.PlaneGeometry(SHELL_W - 2, SHELL_H - 2))
-  const backWall = new THREE.Mesh(wallGeo, matGlass)
+  const backWall = new THREE.Mesh(wallGeo, matBack)
   backWall.position.set(LX, LY, LZ - SHELL_D / 2 + 0.5)
   backWall.raycast = () => {}
   group.add(backWall)
@@ -971,12 +985,6 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
     const on = v > 0.004
     group.visible = on
     for (let i = 0; i < registeredObjects.length; i++) registeredObjects[i].visible = on
-    if (!on) return
-    matShell.opacity = 0.92 * v
-    matCard.opacity = 0.9 * v
-    matGlass.opacity = 0.07 * v
-    lineMat.opacity = 0.34 * v
-    text.material.opacity = v
   }
 
   /** Which station is lit for this backend right now. */
@@ -1211,7 +1219,7 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
     owned.length = 0
     text.dispose()
     for (const m of [
-      shellMesh, shellNeon, tether, stageLamps, statsPlate, cardStruct, cardNeon,
+      shellMesh, serviceGrating, shellNeon, tether, stageLamps, statsPlate, cardStruct, cardNeon,
       treeFrame, nodeBody, nodeGlow, struts, tuples,
       ...stageStruct,
     ]) {

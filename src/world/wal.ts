@@ -46,7 +46,7 @@ const WW = ANCHOR.walWriter // pumping station
 const WV = ANCHOR.walVault // the ingot hall
 const AR = ANCHOR.archiver // gantry crane
 const AS = ANCHOR.archiveStore // cold store
-const WS = ANCHOR.walSender // transmission tower
+const WS = ANCHOR.walSender // the cable head at the top of the line
 const LD = ANCHOR.logicalDecoder // the prism
 
 /** Half-length of the vault hall in z: 14 slots, 9 m apart, plus a bay. */
@@ -786,10 +786,10 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
   const archDetailMesh = batch(gArchiver, unitBox, matDeep, archDetail)
 
   // Queue depth, stacked on the mast: a stuck archive_command is a real outage.
-  // Last two instances are the hoist lamp and the backlog strobe.
+  // Last two instances are the hoist lamp and the backlog lamp at the mast head.
   const N_QBAR = 12
   const IX_HOIST = N_QBAR
-  const IX_STROBE = N_QBAR + 1
+  const IX_BACKLOG = N_QBAR + 1
   const archQueue = new THREE.InstancedMesh(unitBox, neonWhite, N_QBAR + 2)
   _c.setRGB(0, 0, 0)
   for (let i = 0; i < N_QBAR; i++) {
@@ -797,9 +797,9 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
     archQueue.setColorAt(i, _c)
   }
   setBox(archQueue, IX_HOIST, [AR[0], 19.7, AR[2], 1.6, 0.9, 1.6])
-  setBox(archQueue, IX_STROBE, [AR[0] - 11, 22.8, AR[2] - 6, 1.4, 1.4, 1.4])
+  setBox(archQueue, IX_BACKLOG, [AR[0] - 11, 22.8, AR[2] - 6, 1.4, 1.4, 1.4])
   archQueue.setColorAt(IX_HOIST, _c)
-  archQueue.setColorAt(IX_STROBE, _c)
+  archQueue.setColorAt(IX_BACKLOG, _c)
   archQueue.instanceMatrix.needsUpdate = true
   archQueue.instanceColor!.setUsage(THREE.DynamicDrawUsage)
   gArchiver.add(archQueue)
@@ -892,7 +892,13 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
   signs.plate('archive store · cold', AS[0], 12.6, AS[2] - 11.2, 'north', 1.1, COLOR.archive, 0.85)
 
   /* =======================================================================
-   * 4. WALSENDER — the transmission tower and the slot spool.
+   * 4. WALSENDER — the cable head at the top of the line, and the slot spool.
+   *
+   * The duct that carries the log south leaves the ground four metres off this
+   * building's south face, so the walsender is a terminal building on that
+   * duct: an apron, a squat termination hall, a gallery, the outfeed cabinet
+   * the duct climbs out of, and the spool that holds everything the standby
+   * has not confirmed yet. It ends at 16 m and there is nothing above it.
    * =====================================================================*/
 
   const gSender = new THREE.Group()
@@ -900,90 +906,44 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
   group.add(gSender)
 
   const sendMass: BoxSpec[] = [
-    [WS[0], 0.7, WS[2], 18, 1.4, 18],
-    [WS[0], 2.4, WS[2], 14, 2.2, 14],
-    [WS[0], 15.9, WS[2], 11, 0.5, 11], // platforms
-    [WS[0], 27.3, WS[2], 8, 0.45, 8],
-    [WS[0], 35.9, WS[2], 5.5, 0.4, 5.5],
+    [WS[0], 0.7, WS[2], 18, 1.4, 18], // apron
+    [WS[0], 2.4, WS[2], 14, 2.2, 14], // base
+    [WS[0], 12.0, WS[2], 12.4, 0.6, 12.4], // gallery deck
+    [WS[0], 14.35, WS[2], 7.6, 0.5, 7.6], // head cap
   ]
   const sendStruct = batch(gSender, unitBox, matStruct, sendMass, true)
 
+  /* Two drums, not a mast: the termination hall and the head above it. */
   const sendTower: BoxSpec[] = [
-    [WS[0], 9.5, WS[2], 10.4, 12.6, 10.4],
-    [WS[0], 21.5, WS[2], 7.0, 11.4, 7.0],
-    [WS[0], 31.5, WS[2], 4.4, 8.6, 4.4],
-    [WS[0], 40.5, WS[2], 0.9, 9.4, 0.9],
+    [WS[0], 7.6, WS[2], 10.4, 8.2, 10.4],
+    [WS[0], 13.2, WS[2], 6.6, 1.8, 6.6],
   ]
   const sendTowerMesh = batch(gSender, unitCyl, matStruct, sendTower)
 
   const sendDetail: BoxSpec[] = [
-    [WS[0], 16.5, WS[2] - 5.4, 11, 1.1, 0.12], // platform railings
-    [WS[0], 16.5, WS[2] + 5.4, 11, 1.1, 0.12],
-    [WS[0] - 5.4, 16.5, WS[2], 0.12, 1.1, 11],
-    [WS[0] + 5.4, 16.5, WS[2], 0.12, 1.1, 11],
-    [WS[0], 27.9, WS[2] - 3.9, 8, 1.0, 0.12],
-    [WS[0], 27.9, WS[2] + 3.9, 8, 1.0, 0.12],
-    [WS[0] + 4.5, 30.0, WS[2] + 3.2, 1.0, 1.0, 5.4], // dish support arm
-    [WS[0], 3.0, WS[2] + 9.4, 6, 3.2, 1.2], // cabinet
+    [WS[0], 12.9, WS[2] - 6.1, 12.4, 1.1, 0.12], // gallery railings
+    [WS[0], 12.9, WS[2] + 6.1, 12.4, 1.1, 0.12],
+    [WS[0] - 6.1, 12.9, WS[2], 0.12, 1.1, 12.4],
+    [WS[0] + 6.1, 12.9, WS[2], 0.12, 1.1, 12.4],
+    [WS[0], 3.0, WS[2] + 9.4, 6, 3.2, 1.2], // outfeed cabinet
+    [WS[0] - 3.5, 3.2, WS[2] + 9.4, 0.9, 3.6, 1.6], // its end posts
+    [WS[0] + 3.5, 3.2, WS[2] + 9.4, 0.9, 3.6, 1.6],
+    [WS[0], 1.9, WS[2] + 11.6, 7.4, 0.9, 3.0], // kerb out to the duct riser
   ]
   const sendDetailMesh = batch(gSender, unitBox, matDeep, sendDetail)
-
-  /* The dish. Aimed at the walreceiver — computed from the anchor, not guessed. */
-  const dishAt = new THREE.Vector3(WS[0] + 5.6, 30.4, WS[2] + 6.4)
-  const dishAim = new THREE.Vector3(
-    ANCHOR.walReceiver[0] - dishAt.x,
-    14 - dishAt.y,
-    ANCHOR.walReceiver[2] - dishAt.z,
-  ).normalize()
-  const dishQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, -1, 0), dishAim)
-  const dishGeo = own(new THREE.SphereGeometry(5.0, 18, 8, 0, TAU, 0, Math.PI * 0.36))
-  const dish = new THREE.Mesh(dishGeo, matStruct)
-  dish.position.copy(dishAt)
-  dish.quaternion.copy(dishQuat)
-  gSender.add(dish)
-
-  const dishInner = new THREE.Mesh(dishGeo, neonWhite)
-  dishInner.position.copy(dishAt)
-  dishInner.quaternion.copy(dishQuat)
-  dishInner.scale.setScalar(0.94)
-  dishInner.raycast = () => {}
-  const dishInnerMat = own(new THREE.MeshBasicMaterial({ color: 0x000000, toneMapped: false, side: THREE.BackSide }))
-  dishInner.material = dishInnerMat
-  gSender.add(dishInner)
-
-  const feedHorn = new THREE.InstancedMesh(unitCyl, matHeavy, 1)
-  _p2.copy(dishAt).addScaledVector(dishAim, 2.6)
-  _q.setFromUnitVectors(_axisY, dishAim)
-  setTRS(feedHorn, 0, _p2.x, _p2.y, _p2.z, 1.0, 5.2, 1.0, _q)
-  feedHorn.instanceMatrix.needsUpdate = true
-  gSender.add(feedHorn)
-
-  // Transmission pulses: rings leaving the dish along the aim vector.
-  const N_PULSE = 4
-  const pulseGeo = own(new THREE.TorusGeometry(1, 0.09, 5, 22))
-  const pulses = new THREE.InstancedMesh(pulseGeo, neonWhite, N_PULSE)
-  pulses.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
-  pulses.frustumCulled = false
-  pulses.raycast = () => {}
-  _c.setRGB(0, 0, 0)
-  for (let i = 0; i < N_PULSE; i++) {
-    hideInst(pulses, i)
-    pulses.setColorAt(i, _c)
-  }
-  pulses.instanceColor!.setUsage(THREE.DynamicDrawUsage)
-  gSender.add(pulses)
-  const pulseT = new Float32Array(N_PULSE)
-  const pulseOn = new Uint8Array(N_PULSE)
-  const pulseQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), dishAim)
 
   /* The replication slot, as a spool of WAL we have promised to keep. */
   const SPX = WS[0] + 15
   const SPZ = WS[2] + 13
   const SPY = 6.2
+  const SIGX = SPX - 5.8
+  const SIGZ = SPZ - 4.0
   const spoolMass: BoxSpec[] = [
     [SPX, 0.6, SPZ, 13, 1.2, 9],
     [SPX - 3.4, SPY / 2, SPZ, 1.4, SPY, 1.4], // bearing posts
     [SPX + 3.4, SPY / 2, SPZ, 1.4, SPY, 1.4],
+    [SIGX, 6.2, SIGZ, 0.8, 12.4, 0.8], // signal post
+    [SIGX, 12.6, SIGZ, 2.6, 0.4, 2.0], // and its head plate
   ]
   const spoolStruct = batch(gSender, unitBox, matStruct, spoolMass, true)
 
@@ -1004,21 +964,39 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
   spoolWind.instanceColor!.setUsage(THREE.DynamicDrawUsage)
   gSender.add(spoolWind)
 
+  /* The drum's ratchet. This is where the old transmission pulse went: one
+   * tooth per chunk the walsender pushes, stepping round the west flange, with
+   * a short trail behind it. Same event, same rhythm, same countability — a
+   * turning drum at 6 m instead of a ring launched into the sky. */
+  const N_TOOTH = 8
+  const TOOTH_R = 4.2
+  const spoolTeeth = new THREE.InstancedMesh(unitBox, neonWhite, N_TOOTH)
+  spoolTeeth.raycast = () => {}
+  _c.setRGB(0, 0, 0)
+  for (let i = 0; i < N_TOOTH; i++) {
+    const a = (i / N_TOOTH) * TAU
+    setBox(spoolTeeth, i, [SPX - 2.75, SPY + TOOTH_R * Math.cos(a), SPZ + TOOTH_R * Math.sin(a), 0.5, 1.15, 1.15])
+    spoolTeeth.setColorAt(i, _c)
+  }
+  spoolTeeth.instanceMatrix.needsUpdate = true
+  spoolTeeth.instanceColor!.setUsage(THREE.DynamicDrawUsage)
+  gSender.add(spoolTeeth)
+
   const sendNeonSpecs: BoxSpec[] = [
-    [WS[0], 8.0, WS[2] - 5.3, 6.0, 0.35, 0.12], // tower bands
-    [WS[0], 8.0, WS[2] + 5.3, 6.0, 0.35, 0.12],
-    [WS[0], 20.0, WS[2] - 3.6, 4.0, 0.3, 0.12],
-    [WS[0], 20.0, WS[2] + 3.6, 4.0, 0.3, 0.12],
+    [WS[0], 6.2, WS[2] - 5.25, 6.0, 0.35, 0.12], // hall bands
+    [WS[0], 6.2, WS[2] + 5.25, 6.0, 0.35, 0.12],
+    [WS[0], 9.6, WS[2] - 5.25, 4.6, 0.3, 0.12],
+    [WS[0], 9.6, WS[2] + 5.25, 4.6, 0.3, 0.12],
     [WS[0], 3.0, WS[2] + 10.05, 4.4, 1.2, 0.12], // cabinet readout
-    [WS[0], 45.6, WS[2], 1.5, 1.5, 1.5], // 5: mast beacon
-    [SPX, 13.6, SPZ, 1.2, 1.2, 1.2], // 6: slot overflow warning
+    [WS[0], 15.4, WS[2], 1.5, 1.5, 1.5], // 5: head lamp
+    [SIGX, 13.2, SIGZ, 1.2, 1.2, 1.2], // 6: slot overflow warning
   ]
   const sendNeon = neonBatch(gSender, unitBox, sendNeonSpecs)
   const IX_BEACON = 5
   const IX_SLOTWARN = 6
 
   signs.plate('walsender', WS[0], 4.9, WS[2] + 10.1, 'south', 1.1, COLOR.replication, 1.0)
-  const [SGN_SLOT] = signs.plate('replication slot', SPX, 15.0, SPZ, 'west', 1.1, COLOR.replication, 0.7)
+  const [SGN_SLOT] = signs.plate('replication slot', SIGX, 14.4, SIGZ, 'west', 1.1, COLOR.replication, 0.7)
 
   /* =======================================================================
    * 5. LOGICAL DECODER — physical WAL in, per-row changes out.
@@ -1263,8 +1241,8 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
     district: 'wal',
     object: gSender,
     tier: 0,
-    focus: { target: [WS[0], 20, WS[2]], distance: 92, dir: [-0.72, 0.4, 0.52] },
-    labelAt: [WS[0], 50, WS[2]],
+    focus: { target: [WS[0] + 4, 8, WS[2] + 6], distance: 74, dir: [-0.66, 0.38, 0.66] },
+    labelAt: [WS[0], 20, WS[2]],
     color: COLOR.replication,
     readout: (s: SimState) => {
       const r = s.replication
@@ -1311,6 +1289,9 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
   let logicalAcc = 0
   let streamAcc = 0
   let logicalBeat = 0
+  /** Which tooth of the slot drum is under the pawl, and the trail behind it. */
+  let toothHead = 0
+  const toothGlow = new Float32Array(N_TOOTH)
 
   // Crane: driven by the *simulated* clock so it stays locked to the sim.
   let craneSlot = -1
@@ -1677,16 +1658,18 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
     const qCrit = clamp01((qDepth - 5) / 7)
     for (let i = 0; i < N_QBAR; i++) {
       const on = clamp01(queueLevel - i)
-      _c.setHex(COLOR.archive).lerp(_c2.setHex(COLOR.crit), qCrit)
+      _c.setHex(COLOR.archive).lerp(_c2.setHex(COLOR.warn), qCrit)
       _c.multiplyScalar(0.04 + on * 1.7)
       archQueue.setColorAt(i, _c)
     }
     _c.setHex(craneCarrying ? COLOR.archive : COLOR.inkDim).multiplyScalar(craneCarrying ? 1.8 : 0.25)
     archQueue.setColorAt(IX_HOIST, _c)
-    _c.setHex(COLOR.crit).multiplyScalar(qCrit * (1.2 + 1.2 * Math.sin(t * 6)))
-    archQueue.setColorAt(IX_STROBE, _c)
+    // Backlog lamp at the head of the mast: steady amber, and how bright it is
+    // *is* how deep the queue is. It is a gauge you can read from the plaza.
+    _c.setHex(COLOR.warn).multiplyScalar(0.05 + clamp01(queueLevel / N_QBAR) * 1.4 + qCrit * 0.6)
+    archQueue.setColorAt(IX_BACKLOG, _c)
     archQueue.instanceColor!.needsUpdate = true
-    signs.setColor(SGN_QUEUE, qCrit > 0.3 ? COLOR.crit : COLOR.archive, 0.35 + qCrit * 0.9)
+    signs.setColor(SGN_QUEUE, qCrit > 0.3 ? COLOR.warn : COLOR.archive, 0.35 + qCrit * 0.9)
 
     // Cold store fill.
     const stored = clamp(wal.archived, 0, N_STORE)
@@ -1709,45 +1692,23 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
       if (streamAcc > 0.3) {
         streamAcc = 0
         ctx.flow({ route: 'wal.stream', count: 1, kind: 'stream', color: COLOR.replication })
-        for (let i = 0; i < N_PULSE; i++) {
-          if (!pulseOn[i]) {
-            pulseOn[i] = 1
-            pulseT[i] = 0
-            break
-          }
-        }
+        // one chunk pushed = one tooth of the drum
+        toothHead = (toothHead + 1) % N_TOOTH
+        toothGlow[toothHead] = 1
       }
     }
     streamPulse = Math.max(0, streamPulse - dt * 2.2)
 
-    let pulseDirty = false
-    for (let i = 0; i < N_PULSE; i++) {
-      if (!pulseOn[i]) continue
-      pulseT[i] += dt / 1.1
-      if (pulseT[i] >= 1) {
-        pulseOn[i] = 0
-        hideInst(pulses, i)
-        _c.setRGB(0, 0, 0)
-        pulses.setColorAt(i, _c)
-        pulseDirty = true
-        continue
-      }
-      const k = pulseT[i]
-      _p.copy(dishAt).addScaledVector(dishAim, 3 + k * 34)
-      const r = 2.2 + k * 7
-      setTRS(pulses, i, _p.x, _p.y, _p.z, r, r, r, pulseQuat)
-      _c.setHex(COLOR.replication).multiplyScalar(2.2 * (1 - k) * (1 - k))
-      pulses.setColorAt(i, _c)
-      pulseDirty = true
-    }
-    if (pulseDirty) {
-      pulses.instanceMatrix.needsUpdate = true
-      pulses.instanceColor!.needsUpdate = true
-    }
-
     const connected = rep.connected && rep.enabled
-    _c.setHex(COLOR.replication).multiplyScalar(connected ? 0.1 + streamPulse * 1.9 : 0.02)
-    dishInnerMat.color.copy(_c)
+
+    // The drum turns while the sender is working, and stands still when it is
+    // not. Brightness only — the teeth never move.
+    for (let i = 0; i < N_TOOTH; i++) {
+      if (toothGlow[i] > 0) toothGlow[i] = Math.max(0, toothGlow[i] - dt * 1.5)
+      _c.setHex(COLOR.replication).multiplyScalar(connected ? 0.14 + toothGlow[i] * 2.0 : 0.03)
+      spoolTeeth.setColorAt(i, _c)
+    }
+    spoolTeeth.instanceColor!.needsUpdate = true
 
     // The slot spool: WAL we promised to keep because the standby has not
     // replayed it yet. This is exactly how a forgotten slot fills your disk.
@@ -1756,18 +1717,19 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
     setTRS(spoolWind, 0, SPX, SPY, SPZ, spoolR, 4.2, spoolR, spoolAxis)
     spoolWind.instanceMatrix.needsUpdate = true
     const spoolCrit = clamp01((lagFrac - 0.72) / 0.28)
-    _c.setHex(COLOR.wal).lerp(_c2.setHex(COLOR.crit), spoolCrit).multiplyScalar(0.55 + lagFrac * 1.5)
+    _c.setHex(COLOR.wal).lerp(_c2.setHex(COLOR.warn), spoolCrit).multiplyScalar(0.55 + lagFrac * 1.5)
     spoolWind.setColorAt(0, _c)
     spoolWind.instanceColor!.needsUpdate = true
-    signs.setColor(SGN_SLOT, spoolCrit > 0.3 ? COLOR.crit : COLOR.replication, 0.4 + lagFrac * 0.8)
+    signs.setColor(SGN_SLOT, spoolCrit > 0.3 ? COLOR.warn : COLOR.replication, 0.4 + lagFrac * 0.8)
 
     const sendLevel = connected ? 0.25 + streamPulse * 1.1 : 0.05
     _c.setHex(COLOR.replication).multiplyScalar(sendLevel)
     for (let i = 0; i < IX_BEACON; i++) sendNeon.setColorAt(i, _c)
-    // aviation beacon on the mast — ambient, keeps blinking whatever the sim does
-    _c.setHex(COLOR.crit).multiplyScalar(0.35 + 0.65 * Math.max(0, Math.sin(t * 2.2)))
+    // steady lamp at the head of the line: it changes brightness, never blinks
+    _c.setHex(COLOR.replication).multiplyScalar(connected ? 0.9 : 0.25)
     sendNeon.setColorAt(IX_BEACON, _c)
-    _c.setHex(COLOR.crit).multiplyScalar(spoolCrit * (1.4 + 1.0 * Math.sin(t * 7)))
+    // slot overflow: steady amber on the signal post, brightness is the danger
+    _c.setHex(COLOR.warn).multiplyScalar(0.04 + spoolCrit * 1.8)
     sendNeon.setColorAt(IX_SLOTWARN, _c)
     sendNeon.instanceColor!.needsUpdate = true
 
@@ -1846,8 +1808,8 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
     storeShelfMesh.visible = near
 
     sendDetailMesh.visible = near
-    feedHorn.visible = near
     spoolFlanges.visible = near
+    spoolTeeth.visible = near
 
     logDetailMesh.visible = near
     prism.visible = near
@@ -1867,7 +1829,7 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
       segFillMesh, segCaps, segMarks, chargeBody,
       archStruct, archDetailMesh, archQueue, runwayMasts, craneBody,
       storeStruct, storeShelfMesh, storeSlots,
-      sendStruct, sendTowerMesh, sendDetailMesh, feedHorn, pulses, spoolStruct, spoolFlanges, spoolWind, sendNeon,
+      sendStruct, sendTowerMesh, sendDetailMesh, spoolStruct, spoolFlanges, spoolWind, spoolTeeth, sendNeon,
       logStruct, logDetailMesh, beamOut, logNeon,
       collars,
     ]) {

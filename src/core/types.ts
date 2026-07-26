@@ -12,9 +12,21 @@ import type * as THREE from 'three'
  * City constants — geometry and simulation must agree on these counts.
  * -------------------------------------------------------------------------*/
 
-/** Shared-buffer visual grid is BUF_GRID x BUF_GRID tiles. */
+/** Shared-buffer visual sample is BUF_GRID x BUF_GRID frame tiles. */
 export const BUF_GRID = 32
-export const N_BUFFERS = BUF_GRID * BUF_GRID // 1024 "8 KiB pages" on screen
+export const N_BUFFERS = BUF_GRID * BUF_GRID
+/** PostgreSQL's standard block size. */
+export const PG_PAGE_BYTES = 8 * 1024
+/** Real shared_buffers range exposed by the control rail, in binary MiB. */
+export const SHARED_BUFFERS_MIN_MIB = 128
+export const SHARED_BUFFERS_MAX_MIB = 64 * 1024
+/**
+ * Logical pool size at which all N_BUFFERS representative frames are active.
+ * The model scales capacity against this reference, then leaves the geometry
+ * capped: larger pools are beyond the sampled working set, where the miss
+ * curve should already be flat.
+ */
+export const SHARED_BUFFERS_FULL_SAMPLE_MIB = 8 * 1024
 /** How many backend slots exist in the Backend District. */
 export const N_BACKEND_SLOTS = 16
 /** Visible WAL segment slots in the vault (a moving window of pg_wal). */
@@ -73,13 +85,13 @@ export interface Knobs {
   updateRatio: number
   /** 0..1 — share of reads that are seq scans (vs index scans). */
   seqScanRatio: number
-  /** Active buffers, <= N_BUFFERS. Visualised as the lit part of the grid. */
+  /** Logical shared_buffers pool size in MiB. The plaza is only a sample. */
   sharedBuffers: number
   /** seconds */
   checkpointTimeout: number
   /** 0..1 */
   checkpointCompletionTarget: number
-  /** MB — WAL volume that forces a checkpoint. */
+  /** MiB — WAL volume that forces a checkpoint. */
   maxWalSize: number
   bgwriterEnabled: boolean
   /** pages per bgwriter round */
@@ -109,7 +121,7 @@ export const DEFAULT_KNOBS: Knobs = {
   writeRatio: 0.2,
   updateRatio: 0.6,
   seqScanRatio: 0.15,
-  sharedBuffers: 768,
+  sharedBuffers: 2 * 1024,
   checkpointTimeout: 60,
   checkpointCompletionTarget: 0.9,
   maxWalSize: 256,
@@ -206,7 +218,7 @@ export interface BackendSim {
 }
 
 export interface BufferPool {
-  /** Active size (knobs.sharedBuffers). Entries >= size are dark. */
+  /** Active frames in the 1,024-frame sample. Entries >= size are dark. */
   size: number
   valid: Uint8Array
   dirty: Uint8Array

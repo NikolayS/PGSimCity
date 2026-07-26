@@ -48,3 +48,6 @@ tmp/
 Thumbs.db
 ehthumbs.db
 desktop.ini
+
+# Task specs handed to codex sessions — scratch, not part of the project
+TASK-*.md

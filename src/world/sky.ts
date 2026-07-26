@@ -19,6 +19,58 @@ const SKY_RADIUS = 1800
 const STAR_RADIUS = 1720
 const N_STARS = 1400
 
+/* ---------------------------------------------------------------------------
+ * SLONIK, the asterism.
+ *
+ * Fourteen stars in the eastern sky, above the WAL district — which is where a
+ * visitor at the establishing shot is already looking. It is deliberately a
+ * *sparse* reading of the outline, not a tracing of it: the points sit on the
+ * strong corners (brow, crown, ear, notch, jaw, trunk, curl) with the spacing
+ * left irregular, the magnitudes uneven, and only some of the links drawn. An
+ * asterism you have to finish yourself is the only kind that reads as one.
+ *
+ * Coordinates are in the constellation's own plane, x right, y up, degrees.
+ * -------------------------------------------------------------------------*/
+
+/** Where the figure sits: azimuth in the XZ plane, then elevation. */
+const ASTERISM_AZ = Math.atan2(0.851, 0.522)
+const ASTERISM_EL = 0.50 // ~29°
+/** Degrees of sky per unit of the figure below. */
+const ASTERISM_SCALE = 1.42
+
+/** x, y, magnitude 0..1. */
+const ASTERISM: readonly (readonly [number, number, number])[] = [
+  [-11.4, 1.0, 0.55], // the face, low
+  [-12.2, 9.6, 0.85], // the brow
+  [-7.6, 15.2, 0.5], // the forehead
+  [-1.4, 17.0, 0.95], // the crown — the bright one
+  [3.2, 14.6, 0.45], // the temple dip
+  [8.6, 16.4, 0.7], // the top of the ear
+  [15.4, 8.0, 0.9], // the ear, outer
+  [13.6, -1.4, 0.5],
+  [10.2, -8.4, 0.65], // the bottom of the ear
+  [6.4, -5.6, 0.4], // the notch
+  [1.0, -10.2, 0.6], // the jaw
+  [-4.4, -13.4, 0.5], // the trunk leaves the jaw
+  [-10.6, -16.8, 0.75], // the trunk
+  [-15.8, -14.2, 0.85], // the curl
+]
+
+/** Which stars are joined. Gaps are on purpose. */
+const ASTERISM_LINKS: readonly (readonly [number, number])[] = [
+  [1, 2],
+  [2, 3],
+  [3, 4],
+  [4, 5],
+  [5, 6],
+  [6, 7],
+  [8, 9],
+  [10, 11],
+  [11, 12],
+  [12, 13],
+  [0, 1],
+]
+
 const skyVert = /* glsl */ `
 varying vec3 vDir;
 void main() {
@@ -140,10 +192,11 @@ export function createSky(theme: ThemeApi): THREE.Object3D {
 
   /* ---- stars ---- */
 
-  const pos = new Float32Array(N_STARS * 3)
-  const col = new Float32Array(N_STARS * 3)
-  const siz = new Float32Array(N_STARS)
-  const pha = new Float32Array(N_STARS)
+  const nTotal = N_STARS + ASTERISM.length
+  const pos = new Float32Array(nTotal * 3)
+  const col = new Float32Array(nTotal * 3)
+  const siz = new Float32Array(nTotal)
+  const pha = new Float32Array(nTotal)
   const rng = makeRng(0x51a2b7)
   const c = new THREE.Color()
 
@@ -167,6 +220,74 @@ export function createSky(theme: ThemeApi): THREE.Object3D {
     siz[i] = 1.0 + Math.pow(rng(), 3.5) * 3.4
     pha[i] = rng()
   }
+
+  /* ---- the asterism ----
+   * Laid out in its own tangent plane and pushed onto the star sphere. The
+   * stars ride in the same buffer as every other star, so the figure costs one
+   * extra draw call for its links and nothing at all for its points. */
+  const aF = new THREE.Vector3(
+    Math.cos(ASTERISM_AZ) * Math.cos(ASTERISM_EL),
+    Math.sin(ASTERISM_EL),
+    Math.sin(ASTERISM_AZ) * Math.cos(ASTERISM_EL),
+  ).normalize()
+  const aRight = new THREE.Vector3().crossVectors(aF, new THREE.Vector3(0, 1, 0)).normalize()
+  const aUp = new THREE.Vector3().crossVectors(aRight, aF).normalize()
+  const aDir = new THREE.Vector3()
+  const DEG = (Math.PI / 180) * ASTERISM_SCALE
+
+  const linkPos = new Float32Array(ASTERISM_LINKS.length * 6)
+  const starAt = (k: number, out: THREE.Vector3): THREE.Vector3 => {
+    const s = ASTERISM[k]
+    return out
+      .copy(aF)
+      .addScaledVector(aRight, s[0] * DEG)
+      .addScaledVector(aUp, s[1] * DEG)
+      .normalize()
+      .multiplyScalar(STAR_RADIUS)
+  }
+
+  for (let k = 0; k < ASTERISM.length; k++) {
+    const i = N_STARS + k
+    const mag = ASTERISM[k][2]
+    starAt(k, aDir)
+    pos[i * 3] = aDir.x
+    pos[i * 3 + 1] = aDir.y
+    pos[i * 3 + 2] = aDir.z
+    // Cool white, a shade brighter than the field they sit in — but still under
+    // the bloom threshold, because the sky is a backdrop and never a light.
+    c.setHex(0xdce9ff)
+    const b = 0.34 + mag * 0.5
+    col[i * 3] = c.r * b
+    col[i * 3 + 1] = c.g * b
+    col[i * 3 + 2] = c.b * b
+    siz[i] = 1.5 + mag * 3.6
+    pha[i] = (k * 0.37) % 1
+  }
+  for (let l = 0; l < ASTERISM_LINKS.length; l++) {
+    starAt(ASTERISM_LINKS[l][0], aDir).toArray(linkPos, l * 6)
+    starAt(ASTERISM_LINKS[l][1], aDir).toArray(linkPos, l * 6 + 3)
+  }
+
+  const linkGeo = new THREE.BufferGeometry()
+  linkGeo.setAttribute('position', new THREE.BufferAttribute(linkPos, 3))
+  linkGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), STAR_RADIUS * 1.02)
+  const linkMat = new THREE.LineBasicMaterial({
+    color: 0x9fb8e6,
+    // Same queue trick as the stars: opaque queue, additive blend, no depth.
+    transparent: false,
+    blending: THREE.AdditiveBlending,
+    opacity: 0.085,
+    depthWrite: false,
+    depthTest: false,
+    toneMapped: false,
+    fog: false,
+  })
+  const links = new THREE.LineSegments(linkGeo, linkMat)
+  links.name = 'sky.slonik'
+  links.frustumCulled = false
+  links.renderOrder = -998
+  links.raycast = () => {}
+  group.add(links)
 
   const starGeo = new THREE.BufferGeometry()
   starGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
@@ -214,6 +335,8 @@ export function createSky(theme: ThemeApi): THREE.Object3D {
     domeMat.dispose()
     starGeo.dispose()
     starMat.dispose()
+    linkGeo.dispose()
+    linkMat.dispose()
   }
 
   // The sky reads the palette but deliberately holds no *cached* theme material:

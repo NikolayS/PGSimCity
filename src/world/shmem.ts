@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { COLOR } from '../core/theme'
-import { BUF_GRID, N_BACKEND_SLOTS } from '../core/types'
+import { BUF_GRID, N_BACKEND_SLOTS, N_BUFFERS, PG_PAGE_BYTES } from '../core/types'
 import type { SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, fmtBytes, fmtLsn, fmtNum, fmtPct, makeRng } from '../core/util'
 import { DECK_GATES } from './access'
@@ -46,8 +46,42 @@ const DECK_BOT = CITY.deck.top - CITY.deck.thickness
 const MOUNT_Y = DECK_TOP + 0.7
 
 const TAU = Math.PI * 2
+const MIB_BYTES = 1024 * 1024
 /** How many tiles behind the clock hand still show its trail. */
 const SWEEP_TRAIL = 26
+
+/* --------------------------------------------------------- tile encoding
+ * The grid is the one place in the city where a thousand lit surfaces sit edge
+ * to edge, so it is the one place where an unbounded colour term destroys the
+ * reading rather than just looking bright. Every tile colour is built as
+ * HUE × LEVEL and nothing else:
+ *
+ *   hue    a triple whose largest channel is ~1. It carries the MEANING —
+ *          free / clean / dirty, tinted toward the relation that owns the
+ *          page, blended toward amber under the clock hand.
+ *   level  a scalar, always inside [0, TILE_CEIL]. Heat never multiplies the
+ *          colour past the ceiling; it eases `level` toward it and it lifts
+ *          the tile. Scaling a whole triple keeps the hue exactly; adding
+ *          white — or clamping per channel, which is the same thing once a
+ *          channel is over 1 — is what turned the grid into a pink smear.
+ *
+ * TILE_CEIL sits deliberately below the point where the tiles themselves
+ * become a bloom source: a thousand emitters over the bloom threshold is a
+ * white sheet, not a readout. The plaza's glow belongs to the sweep blade, the
+ * deck rim and the WAL ring. The tiles stay crisp, which also means they read
+ * the same at quality 'low' (no post chain, so an over-1 channel hard-clips)
+ * and at 'high' (ACES at the OutputPass, which desaturates highlights).
+ */
+const TILE_CEIL = 0.86
+/**
+ * Recent-touch window. Short on purpose: at 1,200 tps a 0.9 s window has the
+ * whole cache lit at once, and a flash that is always on says nothing.
+ */
+const TOUCH_FLASH = 0.4
+/** Extra height a freshly touched frame pops up by. Heat is geometry, not glare. */
+const TOUCH_RISE = 0.9
+/** Pin posts drawn at once. Pins live ~0.12 s and there is at most one per backend. */
+const MAX_PINS = 48
 /** Visible xid range on the ProcArray height axis. Beyond this the blade bottoms out. */
 const XID_SPAN = 600
 const PROC_H = 13.5
@@ -487,6 +521,23 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
   for (let i = 0; i < N; i++) tilePhase[i] = (rng() * 256) | 0
   let tilesPrimed = false
 
+  // Pin posts. A pinned frame is one somebody is holding open right now, and
+  // the pin is precisely what stops the clock sweep taking it. Marking it with
+  // its own amber post on the roof keeps "pinned" an INDEPENDENT reading from
+  // "dirty": mixing amber into a blue or red tile only bleaches the tile and
+  // costs you both facts. Amber matches the bufPinned swatch in the legend.
+  const gPin = keep(withWhite(new THREE.BoxGeometry(0.42, 1, 0.42).translate(0, 0.5, 0)))
+  const pins = instanced(gPin, mData, MAX_PINS)
+  pins.raycast = () => {} // the tile underneath is the thing you click
+  pins.count = 0
+  bufGroup.add(pins)
+  const pinMat = pins.instanceMatrix.array as Float32Array
+  {
+    const pinCol = pins.instanceColor!.array as Float32Array
+    for (let i = 0; i < MAX_PINS; i++) setColor3(pinCol, i, L_PINNED[0] * 0.9, L_PINNED[1] * 0.9, L_PINNED[2] * 0.9)
+    pins.instanceColor!.needsUpdate = true
+  }
+
   // Clock sweep: a translucent sheet across the row being examined plus the
   // bright hand itself. The trail behind it is painted into the tile colours.
   const gSheet = keep(new THREE.BoxGeometry(GRID_SPAN + 4, 8, PITCH * 0.9))
@@ -847,7 +898,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     focus: { target: [0, DECK_TOP, 0], distance: 215, dir: [0.34, 0.6, 0.72] },
     labelAt: [0, DECK_TOP + 2, -DECK_D / 2 + 6],
     readout: (s) =>
-      `${fmtBytes(s.buffers.size * 8192)} buffers · ${s.stats.activeBackends}/${s.maxConnections} attached`,
+      `${fmtBytes(s.knobs.sharedBuffers * MIB_BYTES)} pool · ${fmtNum(N_BUFFERS)} sampled frames · ${s.stats.activeBackends}/${s.maxConnections} attached`,
   })
 
   ctx.register({
@@ -855,7 +906,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     // "Buffer pool" is the structure; shared_buffers is the parameter that
     // sizes it. Naming it only by the GUC conflates the two.
     name: 'Buffer pool (shared_buffers)',
-    role: 'the page cache every backend reads through',
+    role: 'a 1,024-frame sample of the page cache every backend reads through',
     kind: 'memory',
     district: 'shmem',
     object: bufGroup,
@@ -864,9 +915,9 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     focus: { target: [0, BASE_Y + 2, 0], distance: 104, dir: [0.12, 0.66, 0.74] },
     labelAt: [0, 12, 0],
     readout: (s) =>
-      `hit ${fmtPct(s.buffers.hitRatio, 1)} · ${fmtNum(s.buffers.usedCount)}/${fmtNum(s.buffers.size)} used · ${fmtNum(
-        s.buffers.dirtyCount,
-      )} dirty`,
+      `hit ${fmtPct(s.buffers.hitRatio, 1)} · ${fmtNum(N_BUFFERS)}-frame sample · ${fmtBytes(
+        s.knobs.sharedBuffers * MIB_BYTES,
+      )} pool · ${fmtNum(s.buffers.usedCount)}/${fmtNum(s.buffers.size)} sample frames used`,
   })
 
   ctx.register({
@@ -984,15 +1035,21 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     const collapseStep = dt * 2.6
     const timeOff = (t * 200) | 0
 
+    let nPins = 0
+
     for (let i = 0; i < n; i++) {
-      let r: number, g: number, bl: number
+      // hue: largest channel ~1, carries the meaning. level: scalar, bounded.
+      let hr: number, hg: number, hb: number
+      let level: number
       let target: number
+      let isPinned = false
 
       if (i >= size) {
-        // Frames beyond shared_buffers were never allocated.
-        r = 0.006
-        g = 0.009
-        bl = 0.018
+        // Frames beyond the pool's share of this sample are not active.
+        hr = 0.1
+        hg = 0.15
+        hb = 0.3
+        level = 0.06
         target = 0.15
       } else {
         const key = ((rel[i] << 24) ^ (blk[i] >>> 0)) >>> 0
@@ -1001,91 +1058,116 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
 
         const u = usage[i]
         if (!valid[i]) {
-          r = L_FREE[0] * 0.75
-          g = L_FREE[1] * 0.75
-          bl = L_FREE[2] * 0.75
+          // bufFree is already a near-black navy; it wants no dimming.
+          hr = L_FREE[0]
+          hg = L_FREE[1]
+          hb = L_FREE[2]
+          level = 0.8
           target = 0.3
         } else {
-          const isDirty = dirty[i] !== 0
-          let inten: number
-          if (isDirty) {
+          if (dirty[i] !== 0) {
             // Dirty pages breathe: they are debt the checkpointer has to pay.
-            const p = 0.86 + 0.24 * SIN[(tilePhase[i] + timeOff) & 255]
-            inten = 1.06 * p
-            r = L_DIRTY[0] * inten
-            g = L_DIRTY[1] * inten
-            bl = L_DIRTY[2] * inten
+            // The breath moves LEVEL, so a dirty frame pulses without ever
+            // drifting off its own hue.
+            hr = L_DIRTY[0]
+            hg = L_DIRTY[1]
+            hb = L_DIRTY[2]
+            level = 0.46 + 0.09 * SIN[(tilePhase[i] + timeOff) & 255]
           } else {
-            inten = 0.34 + (u / 5) * 0.3
-            r = L_CLEAN[0] * inten
-            g = L_CLEAN[1] * inten
-            bl = L_CLEAN[2] * inten
+            hr = L_CLEAN[0]
+            hg = L_CLEAN[1]
+            hb = L_CLEAN[2]
+            level = 0.26 + (u / 5) * 0.16
           }
-          // Whose page is this? A light tint toward the owning relation.
+          // Whose page is this? A light tint toward the owning relation. This
+          // moves the hue only — it can never add energy.
           const rl = rel[i]
           if (rl < TABLES.length) {
             const o = rl * 3
             const w = 0.3
-            r += (L_TABLE[o] * inten - r) * w
-            g += (L_TABLE[o + 1] * inten - g) * w
-            bl += (L_TABLE[o + 2] * inten - bl) * w
+            hr += (L_TABLE[o] - hr) * w
+            hg += (L_TABLE[o + 1] - hg) * w
+            hb += (L_TABLE[o + 2] - hb) * w
           }
+          target = 0.4 + (u / 5) * MAX_RISE
           if (pinned[i]) {
-            r += L_PINNED[0] * 0.5
-            g += L_PINNED[1] * 0.5
-            bl += L_PINNED[2] * 0.5
+            // Held open right now: brighter, taller, and wearing a pin post.
+            isPinned = true
+            level += (TILE_CEIL - level) * 0.42
+            target += 1.6
           }
-          target = 0.4 + (u / 5) * MAX_RISE + (pinned[i] ? 1.6 : 0)
         }
 
-        // Fresh touches flash and decay: this is the working set. The lift is
-        // mostly multiplicative so a busy frame gets BRIGHTER rather than
-        // WHITER — an additive white term large enough to read at 10 tps turns
-        // the whole grid into a featureless sheet at 1,200 tps, which is
-        // exactly when the clean/dirty/pinned signal matters most.
+        // Fresh touches flash and decay: this is the working set. The flash
+        // eases LEVEL toward the ceiling and pops the tile up — it never
+        // multiplies the colour, so a frame that is hot on a 1,200 tps
+        // workload is a vivid red or a vivid blue, not a white square.
         const age = t - touch[i]
-        if (age >= 0 && age < 0.9) {
-          const f = 1 - age / 0.9
+        if (age >= 0 && age < TOUCH_FLASH) {
+          const f = 1 - age / TOUCH_FLASH
           const ff = f * f
-          const lift = 1 + 1.15 * ff
-          r = r * lift + 0.16 * ff
-          g = g * lift + 0.18 * ff
-          bl = bl * lift + 0.23 * ff
+          level += (TILE_CEIL - level) * (0.78 * ff)
+          target += TOUCH_RISE * ff
         }
 
         // Clock-sweep trail. d is how many frames ago the hand passed here.
         let d = hand - i
         if (d < 0) d += size
         if (d < SWEEP_TRAIL) {
-          const w = (1 - d / SWEEP_TRAIL) * 0.55
-          r += L_WARN[0] * w
-          g += L_WARN[1] * w
-          bl += L_WARN[2] * w
+          const w = (1 - d / SWEEP_TRAIL) * 0.6
+          hr += (L_WARN[0] - hr) * w
+          hg += (L_WARN[1] - hg) * w
+          hb += (L_WARN[2] - hb) * w
+          level += (TILE_CEIL - level) * w * 0.5
         }
       }
 
       const c = tileCollapse[i]
       if (c > 0) {
+        // The frame just changed identity. It drops flat and goes pale — a
+        // bounded pale, so a burst of evictions is a rash of flat tiles rather
+        // than another white sheet.
         tileCollapse[i] = c - collapseStep > 0 ? c - collapseStep : 0
         target *= 1 - c * 0.92
-        r += 0.5 * c
-        g += 0.5 * c
-        bl += 0.6 * c
+        // Dropping flat is already the loud half of this signal, so the pale
+        // half stays small — at 1,200 tps the whole cache turns over inside the
+        // decay window, and a strong wash here would put the sheet straight back.
+        const w = c * 0.45
+        hr += (L_INK[0] - hr) * w
+        hg += (L_INK[1] - hg) * w
+        hb += (L_INK[2] - hb) * w
+        level += (TILE_CEIL - level) * c * 0.55
       }
 
       const h = tileH[i] + (target - tileH[i]) * kH
       tileH[i] = h
       tileMat[i * 16 + 5] = h < 0.06 ? 0.06 : h
-      // Hard ceiling. mData is a MeshBasicMaterial with toneMapped:false, so a
-      // channel above 1 does not roll off — it clips to white in the
-      // framebuffer and then clears the bloom threshold, which is how the whole
-      // grid used to turn into a pink smear under load. Heat is carried by tile
-      // HEIGHT (target, above) and by the rim, not by an unbounded colour.
-      setColor3(tileCol, i, r > 1 ? 1 : r, g > 1 ? 1 : g, bl > 1 ? 1 : bl)
+
+      if (isPinned && nPins < MAX_PINS) {
+        setTRS(pinMat, nPins, tileX(i), BASE_Y + h, tileZ(i), 1, 1.9, 1)
+        nPins++
+      }
+
+      let r = hr * level
+      let g = hg * level
+      let bl = hb * level
+      // Hue-preserving ceiling, and the only clamp in the district that has to
+      // be right. Scaling the triple keeps red red and blue blue; clamping the
+      // channels one at a time is what walked every hot tile to white.
+      const mx = r > g ? (r > bl ? r : bl) : g > bl ? g : bl
+      if (mx > TILE_CEIL) {
+        const k = TILE_CEIL / mx
+        r *= k
+        g *= k
+        bl *= k
+      }
+      setColor3(tileCol, i, r, g, bl)
     }
     tilesPrimed = true
     tiles.instanceMatrix.needsUpdate = true
     tiles.instanceColor!.needsUpdate = true
+    pins.count = nPins
+    if (nPins > 0) pins.instanceMatrix.needsUpdate = true
 
     // The hand itself.
     const row = Math.floor(hand / G)
@@ -1464,28 +1546,31 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     g2.textAlign = 'left'
     g2.font = '600 46px ui-monospace, SFMono-Regular, Menlo, monospace'
     g2.fillStyle = '#dbe7ff'
-    g2.fillText(`shared_buffers  ${fmtNum(b.size)} × 8 KiB = ${fmtBytes(b.size * 8192)}`, 34, 52)
+    const poolBytes = sim.knobs.sharedBuffers * MIB_BYTES
+    g2.fillText(`shared_buffers  ${fmtBytes(poolBytes)} pool`, 34, 42)
 
-    g2.font = '500 40px ui-monospace, SFMono-Regular, Menlo, monospace'
+    g2.font = '600 32px ui-monospace, SFMono-Regular, Menlo, monospace'
+    g2.fillStyle = '#a997ff'
+    g2.fillText(`REPRESENTATIVE SAMPLE  ·  ${fmtNum(N_BUFFERS)} frames shown`, 34, 94)
+
+    g2.font = '500 36px ui-monospace, SFMono-Regular, Menlo, monospace'
     g2.fillStyle = '#8fa5c4'
     const hit = `hit ${fmtPct(b.hitRatio, 1)}`
-    g2.fillText(hit, 34, 122)
+    g2.fillText(hit, 34, 148)
     const w1 = g2.measureText(hit).width
     g2.fillStyle = '#3fa7ff'
-    const used = `  used ${fmtNum(b.usedCount)}/${fmtNum(b.size)}`
-    g2.fillText(used, 34 + w1, 122)
+    const used = `  sample used ${fmtNum(b.usedCount)}/${fmtNum(b.size)}`
+    g2.fillText(used, 34 + w1, 148)
     const w2 = g2.measureText(used).width
     g2.fillStyle = '#ff4d6d'
-    g2.fillText(`  dirty ${fmtNum(b.dirtyCount)}`, 34 + w1 + w2, 122)
+    g2.fillText(`  dirty ${fmtNum(b.dirtyCount)}`, 34 + w1 + w2, 148)
 
     g2.fillStyle = '#8fa5c4'
-    g2.font = '500 34px ui-monospace, SFMono-Regular, Menlo, monospace'
+    g2.font = '500 29px ui-monospace, SFMono-Regular, Menlo, monospace'
     g2.fillText(
-      `clock hand ${b.clockHand}   evictions ${fmtNum(b.evictions)} (${fmtNum(b.dirtyEvictions)} dirty)   pinned ${fmtNum(
-        b.pinnedCount,
-      )}`,
+      `${fmtNum(poolBytes / PG_PAGE_BYTES)} buffers in pool  ·  evictions ${fmtNum(b.evictions)}  ·  pinned ${fmtNum(b.pinnedCount)}`,
       34,
-      190,
+      210,
     )
     readout.texture.needsUpdate = true
   }

@@ -3,7 +3,7 @@ import { COLOR } from '../core/theme'
 import { REPLICA_BUF_GRID } from '../core/types'
 import type { SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, damp, fmtBytes, fmtLsn, lerp, makeRng } from '../core/util'
-import { ANCHOR, CITY, TABLES, routePoint, routeTangent } from './layout'
+import { ANCHOR, CITY, TABLES, routeLength, routePoint, routeTangent } from './layout'
 
 /* ============================================================================
  * REPLICATION — a second cluster, and the wire that keeps it alive.
@@ -38,7 +38,6 @@ const _qi = new THREE.Quaternion()
 const _m = new THREE.Matrix4()
 const _c = new THREE.Color()
 const _c2 = new THREE.Color()
-const _axisY = new THREE.Vector3(0, 1, 0)
 const _axisZ = new THREE.Vector3(0, 0, 1)
 /** Ruler scratch: carriage positions and the four LSNs, hoisted out of update(). */
 const _carZ = new Float64Array(5)
@@ -1021,55 +1020,75 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
 
   /* =====================================================================
    * 5. REPLICA CLIENT — read-only traffic, and the xmin it can pin.
+   *
+   * An application tier, so it is a small terminal on its own apron off the
+   * south-west corner of the deck: reading hall, two wings, a canopy facing
+   * the standby — the primary's client terminal at a quarter of the size.
+   * Reads leave it along a surface duct that climbs the deck's west ramp onto
+   * the read-only landing pad, and hot_standby_feedback comes back the same
+   * way before it turns north up the ack duct. Nothing about this client, and
+   * nothing it sends, ever leaves the ground.
    * ===================================================================*/
 
   const gClient = new THREE.Group()
   gClient.name = 'replica.client'
   group.add(gClient)
 
-  const podGroup = new THREE.Group()
-  podGroup.position.set(RC[0], RC[1], RC[2])
-  gClient.add(podGroup)
-  const podStruct = batch(podGroup, unitBox, matStruct, [
-    [0, 0, 0, 11, 3.0, 11],
-    [0, 2.0, 0, 7, 1.4, 7],
-    [0, -2.2, 0, 3.0, 1.6, 3.0],
-  ], true)
-  const ringGeo = own(new THREE.TorusGeometry(8.2, 0.28, 5, 26))
-  const ringMat = own(new THREE.MeshBasicMaterial({ color: 0x000000, toneMapped: false }))
-  const podRing = new THREE.Mesh(ringGeo, ringMat)
-  podRing.rotation.x = Math.PI / 2
-  podRing.raycast = () => {}
-  podGroup.add(podRing)
+  const CX = RC[0]
+  const CZ = RC[2]
 
+  const clientMass: BoxSpec[] = [
+    [CX, 0.5, CZ, 30, 1.0, 22], // apron slab
+    [CX, 4.2, CZ, 18, 6.4, 12], // reading hall
+    [CX, 7.7, CZ, 20, 0.7, 14], // hall roof
+    [CX - 11.5, 2.8, CZ, 7, 4.6, 10], // west wing
+    [CX + 11.5, 2.8, CZ, 7, 4.6, 10], // east wing
+    [CX + 12, 5.6, CZ - 1, 9, 0.5, 8], // canopy, facing the standby
+    [CX + 15.6, 2.9, CZ - 4.2, 0.6, 5.2, 0.6], // canopy legs
+    [CX + 15.6, 2.9, CZ + 2.0, 0.6, 5.2, 0.6],
+  ]
+  const clientStruct = batch(gClient, unitBox, matCool, clientMass, true)
+
+  const clientDetail: BoxSpec[] = [
+    [CX, 1.25, CZ, 29, 0.4, 21], // plinth band
+    [CX - 11.5, 5.2, CZ, 7.4, 0.4, 10.4], // wing roofs
+    [CX + 11.5, 5.2, CZ, 7.4, 0.4, 10.4],
+    [CX, 4.2, CZ - 6.3, 14, 4.4, 0.5], // board on the north face
+  ]
+  const clientDetailMesh = batch(gClient, unitBox, matDeep, clientDetail)
+
+  /* The read run. Short lit bars clamped along the surface duct, sampled off
+   * the real route so the run cannot drift off it — the same treatment the
+   * wire's sheath gets, at a quarter of the length. */
+  const N_READ = low ? 7 : 12
+  const READ_LEN = routeLength('replica.read')
   const clientNeon = neonBatch(gClient, unitBox, [
-    [RC[0], RC[1] + 3.0, RC[2], 5.4, 0.2, 5.4], // 0: pod deck light
-    [0, 0, 0, 1, 1, 1], // 1: the read beam, aimed at the standby below
-    [RC[0], RC[1] + 4.6, RC[2], 1.2, 1.2, 1.2], // 2: feedback lamp
+    [CX, 8.4, CZ, 19, 0.16, 0.14], // 0: hall head rail
+    [CX, 4.6, CZ - 6.6, 12, 0.14, 0.3], // 1: board rail
+    [CX, 6.0, CZ - 6.6, 1.1, 1.1, 1.1], // 2: feedback lamp, on the north face
   ])
-  const IX_READBEAM = 1
   const IX_FBLAMP = 2
-  {
-    // The beam lands where the replica.read route lands — on the deck's
-    // west landing pad — instead of dropping into open ground beside it.
-    _p.set(RC[0], RC[1] - 2.2, RC[2])
-    routePoint('replica.read', 1, _p2)
-    _p2.y = 4.6
-    _sc.subVectors(_p2, _p)
-    const len = _sc.length()
-    _sc.normalize()
-    _q.setFromUnitVectors(_axisY, _sc)
-    setTRS(
-      clientNeon, IX_READBEAM,
-      (_p.x + _p2.x) / 2, (_p.y + _p2.y) / 2, (_p.z + _p2.z) / 2,
-      0.5, len, 0.5, _q,
-    )
-    clientNeon.instanceMatrix.needsUpdate = true
-  }
 
-  text.alloc(20, RC[0], RC[1] + 7.4, RC[2], 'south', 1.5, COLOR.client, 'center', 1.0, 'read-only client')
-  const TX_RCLIENT = text.alloc(34, RC[0], RC[1] + 5.6, RC[2], 'south', 0.95, COLOR.inkDim, 'center', 0.75, '')
-  const TX_FEEDBACK = text.alloc(40, RC[0], RC[1] - 3.4, RC[2], 'south', 1.05, COLOR.vacuum, 'center', 0.1, '')
+  const readRun = new THREE.InstancedMesh(unitBox, neonWhite, N_READ)
+  readRun.raycast = () => {}
+  {
+    _c.setRGB(0, 0, 0)
+    for (let i = 0; i < N_READ; i++) {
+      const k = (i + 0.5) / N_READ
+      routePoint('replica.read', k, _p)
+      routeTangent('replica.read', k, _p2).normalize()
+      _q.setFromUnitVectors(_axisZ, _p2)
+      setTRS(readRun, i, _p.x, _p.y, _p.z, 0.42, 0.42, (READ_LEN / N_READ) * 0.6, _q)
+      readRun.setColorAt(i, _c)
+    }
+    readRun.instanceMatrix.needsUpdate = true
+    readRun.instanceColor!.setUsage(THREE.DynamicDrawUsage)
+  }
+  gClient.add(readRun)
+
+  text.alloc(20, CX, 10.0, CZ - 7.2, 'north', 1.4, COLOR.client, 'center', 1.0, 'read-only client')
+  const TX_RCLIENT = text.alloc(34, CX, 8.6, CZ - 7.2, 'north', 0.9, COLOR.inkDim, 'center', 0.75, '')
+  const TX_FEEDBACK = text.alloc(40, CX, 1.9, CZ - 11.6, 'north', 0.95, COLOR.vacuum, 'center', 0.1, '')
 
   /* =====================================================================
    * 6. LOGICAL SUBSCRIBER — rows, not blocks. Only at wal_level=logical.
@@ -1252,8 +1271,8 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     district: 'replication',
     object: gClient,
     tier: 1,
-    focus: { target: [RC[0], RC[1], RC[2]], distance: 68, dir: [-0.5, 0.3, 0.81] },
-    labelAt: [RC[0], RC[1] + 12, RC[2]],
+    focus: { target: [RC[0] + 4, 5, RC[2]], distance: 62, dir: [-0.42, 0.36, -0.83] },
+    labelAt: [RC[0], 13, RC[2]],
     color: COLOR.client,
     readout: (s: SimState) => {
       const pin = s.knobs.longRunningXact && s.replication.connected
@@ -1300,6 +1319,8 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
   let textT = 0
   let subBeat = 0
   let fbAcc = 0
+  /** Decays after each read the standby serves; drives the surface run's glow. */
+  let readGlow = 0
   const carLabelZ = new Float64Array(4)
 
   const BELT_LEN = BELT_Z1 - BELT_Z0
@@ -1521,7 +1542,11 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
         tileHeat[idx] = 1
       }
     }
-    if (connected && trng() < dt * 6) tileRead[(trng() * N_RTILE) | 0] = 1
+    if (connected && trng() < dt * 6) {
+      tileRead[(trng() * N_RTILE) | 0] = 1
+      readGlow = 1
+    }
+    readGlow = Math.max(0, readGlow - dt * 2.4)
 
     for (let i = 0; i < N_RTILE; i++) {
       const h = tileHeat[i]
@@ -1597,23 +1622,27 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
 
     /* --- 5. replica client + hot_standby_feedback ------------------------ */
 
-    podGroup.rotation.y += dt * 0.22
-    podRing.rotation.z += dt * 0.5
-    _c.setHex(COLOR.client).multiplyScalar(0.5 + 0.3 * Math.sin(t * 1.7))
-    ringMat.color.copy(_c)
-
     // No GUC for hot_standby_feedback in this model: the honest stand-in is a
     // long-running snapshot, which is exactly what the feedback message pins.
     const pinning = sim.knobs.longRunningXact && connected
     feedback = damp(feedback, pinning ? 1 : 0, 3, dt)
 
-    _c.setHex(COLOR.client).multiplyScalar(link * (0.35 + 0.25 * Math.sin(t * 3)))
+    // The terminal itself: lit while there is something to read, dim when the
+    // standby has stopped replaying. It changes brightness, it never flashes.
+    _c.setHex(COLOR.client).multiplyScalar(0.2 + link * 0.75)
     clientNeon.setColorAt(0, _c)
-    _c.setHex(COLOR.client).multiplyScalar(link * 0.55)
-    clientNeon.setColorAt(IX_READBEAM, _c)
-    _c.setHex(COLOR.vacuum).multiplyScalar(0.1 + feedback * (1.6 + 0.6 * Math.sin(t * 4)))
+    clientNeon.setColorAt(1, _c)
+    _c.setHex(COLOR.vacuum).multiplyScalar(0.08 + feedback * 1.5)
     clientNeon.setColorAt(IX_FBLAMP, _c)
     clientNeon.instanceColor!.needsUpdate = true
+
+    // The read run. Client blue outbound; it turns vacuum violet when the
+    // client is pinning, because then the traffic on it is the xmin going the
+    // other way — the same violet the ack duct wears for the same reason.
+    _c.setHex(COLOR.client).multiplyScalar(link * (0.22 + readGlow * 1.1) + 0.05)
+    if (feedback > 0.01) _c.lerp(_c2.setHex(COLOR.vacuum).multiplyScalar(0.3 + feedback * 1.2), feedback)
+    for (let i = 0; i < N_READ; i++) readRun.setColorAt(i, _c)
+    readRun.instanceColor!.needsUpdate = true
 
     // The feedback rides the return path: the standby's xmin goes *up* the
     // wire and stops the primary's vacuum removing rows it still needs.
@@ -1706,8 +1735,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     pressGroup.visible = near
     deckDetailMesh.visible = near
     rulerTicks.visible = near
-    podStruct.visible = near
-    podRing.visible = near
+    clientDetailMesh.visible = near
     subDetailMesh.visible = near
     rackMesh.visible = near
     edgeLines.visible = near
@@ -1731,7 +1759,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
       startStruct, startDetailMesh, gateMesh, belt, queue, pressMesh, pageMesh, startNeon,
       deckStruct, deckDetailMesh, tiles, storeStruct, rackMesh, storeNeon,
       rulerStruct, rulerTicks, carriages,
-      podStruct, clientNeon,
+      clientStruct, clientDetailMesh, clientNeon, readRun,
       subStruct, subDetailMesh, bins, subNeon,
     ]) {
       m.dispose()

@@ -58,6 +58,7 @@ const APP_KEYS: KeyRow[] = [
   { keys: ['F'], what: 'Toggle fly / orbit camera' },
   { keys: ['G'], what: 'Get down — walk the city on foot, 1.7 m tall' },
   { keys: ['H'], what: 'Establishing shot of the whole city' },
+  { keys: ['O'], what: 'Overview — straight down on the plate the city stands on' },
   { keys: ['/', 'Ctrl K'], join: 'or', what: 'Command palette' },
   { keys: ['?'], what: 'This panel' },
   { keys: ['L'], what: 'Toggle floating labels' },
@@ -116,6 +117,10 @@ const READING: { h: string; p: string }[] = [
   {
     h: 'The WAL district',
     p: 'Everything east of the plaza is the write-ahead log. Changes go there <strong>before</strong> they reach the data files, and a commit waits for that amber stream to be flushed — never for the pages themselves.',
+  },
+  {
+    h: 'The ground',
+    p: 'The city stands on a poured plate with a kerb and an edge light, and beyond that kerb there is nothing. The plate is cut to the outline of Slonik, the PostgreSQL elephant: the trunk runs north over the client terminal, the ear lies south-west over the standby and recovery sites, and the brow reaches east over the WAL district. Press <code>O</code> to look straight down at it.',
   },
   {
     h: 'The standby',

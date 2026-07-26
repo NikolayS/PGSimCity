@@ -160,9 +160,16 @@ async function boot(): Promise<void> {
   // out of it, so a downward ray correctly finds nothing over the pit — and the
   // plaza deck. Every other surface is already the top of a collider box.
   collision.addWalkable(groundMod.group)
-  collision.addWalkable(shmemMod.group)
+  // The DECK, not the whole shared-memory group. The 1024 buffer tiles standing
+  // on it change height every frame with usage_count, and a walkable surface
+  // that moves is not a floor: it rises into your feet and drops away from
+  // under them while you stand still. You walk *through* the buffer tiles —
+  // being inside a lit buffer is the point — so only the slab underneath them
+  // is ground. (Falls back to the whole group if shmem ever renames the deck.)
+  collision.addWalkable(shmemMod.group.getObjectByName('shmem.deck') ?? shmemMod.group)
   // MUST follow build(): build() resets the box array and would discard these.
   access.installCollision(collision)
+  for (const b of (groundMod.group.userData.rimColliders as THREE.Box3[] | undefined) ?? []) collision.addBox(b)
   const walk = createWalkController({
     camera,
     dom: renderer.domElement,

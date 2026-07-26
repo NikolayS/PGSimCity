@@ -56,6 +56,7 @@ export interface WalkTuning {
   bobAmplitude: number
   /** Metres of travel per full bob cycle. */
   bobWavelength: number
+  /** Longest drop-in flight, in seconds. A short drop takes proportionally less. */
   descentDuration: number
 }
 
@@ -109,6 +110,27 @@ const DEFAULT_TUNING: WalkTuning = {
 const GROUND_SNAP = 0.55
 /** …and how close a falling walker must be to a surface to land on it. */
 const AIR_SNAP = 0.08
+/**
+ * How far ABOVE the feet a grounded walker still accepts a surface. A ramp
+ * rises into you as you walk up it, so without this you walk *at* the slope
+ * instead of onto it — and the faster you run the sooner it stops you. It stays
+ * well under stepHeight, or it becomes a way to climb walls.
+ */
+const SLOPE_TOL = 0.12
+/**
+ * Longest physics step. The most important number in this file.
+ *
+ * Integrate a 100 ms frame in one go and gravity moves the feet 0.11 m before
+ * anything goes looking for the floor — further than the ground query's 0.05 m
+ * of upward tolerance. The floor you were standing on is now ABOVE the search
+ * window, so it is not found, so you fall; next frame you are deeper and it is
+ * further above you. One long frame and the city has no floor at all, which is
+ * exactly what "there is no floor — it feels like flying" looks like from the
+ * inside. Sub-stepping makes the walk identical at 12 fps and at 144.
+ */
+const MAX_STEP = 1 / 50
+/** Cap the substeps so a tab that was asleep cannot stall the frame. */
+const MAX_SUBSTEPS = 6
 /** Jump pressed slightly before landing still counts. */
 const JUMP_BUFFER = 0.13
 /** Walking off a ledge leaves you a moment to jump. */
@@ -141,6 +163,32 @@ const SAFE_Z = 48
 const SAFE_Y = CITY.deck.top + 0.7
 /** Facing: yaw 0 looks down -Z in three's convention, i.e. north, up the grid. */
 const SAFE_YAW = 0
+
+/**
+ * The last stretch of a drop-in is a real fall under real gravity: 3.2 m takes
+ * 0.54 s and arrives at 8.4 m/s, hard enough to trigger the landing dip.
+ * Arriving is not the same as being placed, and that difference is most of what
+ * makes a floor feel like a floor.
+ */
+const DROP_IN = 3.2
+/** A respawn is a smaller version of the same idea. */
+const RESPAWN_DROP = 1.2
+/**
+ * A drop-in point has to have the city within this radius. The ground plate
+ * runs out past 600 m in every direction, so "the ray found a surface" is not
+ * the same as "a person would want to stand here": land in the empty outfield
+ * and there is nothing to walk past, which reads exactly like flying.
+ */
+const LANDING_NEAR = 60
+/** Offsets probed around a candidate landing to prove it is a floor, not a post. */
+const STAND_PROBE: readonly number[] = [1.2, 0, -1.2, 0, 0, 1.2, 0, -1.2]
+/** How far a probe may differ from the middle and still be the same surface. */
+const STAND_TOL = 0.6
+/** Pitch is level by this fraction of the drop-in: you arrive facing the city. */
+const PITCH_LEVEL_BY = 0.45
+/** Drop-in flight time per metre travelled, on top of a fixed minimum. */
+const DESCENT_PER_M = 0.0022
+const DESCENT_MIN = 0.3
 
 /** Fallback landing pads for enter(), nearest-first, when nothing is underfoot. */
 const LANDING_PADS: readonly [number, number, number][] = [
@@ -228,6 +276,7 @@ export function createWalkController(opts: WalkOptions): WalkController {
   // descent
   let descending = false
   let descentT = 0
+  let descentDur = DEFAULT_TUNING.descentDuration
   const descentFrom = new THREE.Vector3()
   const descentTo = new THREE.Vector3()
   let descentPitch0 = 0
@@ -240,7 +289,10 @@ export function createWalkController(opts: WalkOptions): WalkController {
 
   const keys = new Set<string>()
   const mv: MoveResult = createMoveResult()
+  const padUsed = new Uint8Array(LANDING_PADS.length)
   let disposed = false
+  /** Ground covered this frame, summed over the substeps. Drives the head bob. */
+  let frameTravel = 0
 
   camera.rotation.order = 'YXZ'
 
@@ -360,42 +412,70 @@ export function createWalkController(opts: WalkOptions): WalkController {
   }
 
   /**
-   * Where should a drop-in land? Straight down from the camera if there is
-   * anything under it; otherwise the nearest landing pad that has a floor.
+   * Could a person stand here? A surface is only a floor if it is still there a
+   * stride away in every direction. A mast top, a plinth cap or the rim of a
+   * lamp post passes the downward ray and fails this.
+   */
+  function standable(x: number, y: number, z: number): boolean {
+    let ok = 0
+    for (let i = 0; i < STAND_PROBE.length; i += 2) {
+      const g = probeGround(x + STAND_PROBE[i], y + 0.6, z + STAND_PROBE[i + 1], 1.8)
+      if (g !== null && Math.abs(g - y) <= STAND_TOL) ok++
+    }
+    return ok >= 3
+  }
+
+  /**
+   * Where should a drop-in land? Straight down from the camera — if what is
+   * down there is a floor AND the city is within sight of it. Otherwise the
+   * nearest landing pad that passes the same two tests.
    */
   function findLanding(x: number, y: number, z: number, out: THREE.Vector3): void {
     const straight = probeGround(x, y, z, Math.max(4, y - VOID_Y))
-    if (straight !== null) {
+    if (straight !== null && collision.solidNear(x, z, LANDING_NEAR) && standable(x, straight, z)) {
       out.set(x, straight, z)
       return
     }
-    let bestD = Infinity
-    let bestI = 0
-    for (let i = 0; i < LANDING_PADS.length; i++) {
-      const p = LANDING_PADS[i]
-      const dx = p[0] - x
-      const dz = p[2] - z
-      const d = dx * dx + dz * dz
-      if (d < bestD) {
-        bestD = d
-        bestI = i
+    padUsed.fill(0)
+    for (let k = 0; k < LANDING_PADS.length; k++) {
+      let bestD = Infinity
+      let bestI = -1
+      for (let i = 0; i < LANDING_PADS.length; i++) {
+        if (padUsed[i] === 1) continue
+        const p = LANDING_PADS[i]
+        const dx = p[0] - x
+        const dz = p[2] - z
+        const d = dx * dx + dz * dz
+        if (d < bestD) {
+          bestD = d
+          bestI = i
+        }
+      }
+      if (bestI < 0) break
+      padUsed[bestI] = 1
+      const pad = LANDING_PADS[bestI]
+      const g = probeGround(pad[0], pad[1] + 4, pad[2], 12)
+      if (g !== null && standable(pad[0], g, pad[2])) {
+        out.set(pad[0], g, pad[2])
+        return
       }
     }
-    const pad = LANDING_PADS[bestI]
-    const g = probeGround(pad[0], pad[1] + 4, pad[2], 12)
-    out.set(pad[0], g ?? pad[1], pad[2])
+    // Every pad is buried under something new. The plaza is still the plaza.
+    out.set(SAFE_X, SAFE_Y, SAFE_Z)
   }
 
   function respawn(reason: string): void {
     const g = probeGround(SAFE_X, SAFE_Y + 4, SAFE_Z, 12)
-    pos.set(SAFE_X, g ?? SAFE_Y, SAFE_Z)
+    // Just above the deck, not on it: the short fall and its thump are the
+    // receipt that says the floor they are back on is a real one.
+    pos.set(SAFE_X, (g ?? SAFE_Y) + RESPAWN_DROP, SAFE_Z)
     vel.set(0, 0, 0)
     vy = 0
-    grounded = true
+    grounded = false
     lostGroundT = 0
     coyoteT = 0
     bobAmp = 0
-    landDip = 0.08
+    landDip = 0
     bus.emit('toast', { text: reason, kind: 'warn', ms: 2600 })
   }
 
@@ -457,11 +537,14 @@ export function createWalkController(opts: WalkOptions): WalkController {
     descentYaw = Math.atan2(-_fwd.x, -_fwd.z)
     descentPitch0 = Math.asin(clamp(_fwd.y, -1, 1))
 
+    collision.stepHeight = T.stepHeight
     findLanding(src.x, src.y, src.z, _probe)
-    pos.copy(_probe)
+    // The flight ends DROP_IN metres up, in the air, with gravity switched on:
+    // the walker finishes the trip by falling and landing on the floor itself.
+    pos.set(_probe.x, _probe.y + DROP_IN, _probe.z)
     vel.set(0, 0, 0)
     vy = 0
-    grounded = true
+    grounded = false
     lostGroundT = 0
     crouching = false
     running = false
@@ -470,13 +553,19 @@ export function createWalkController(opts: WalkOptions): WalkController {
     bobPhase = 0
     bobAmp = 0
     landDip = 0
+    frameTravel = 0
     yaw = descentYaw
     pitch = descentPitch0
 
     descentTo.set(pos.x, pos.y + T.eyeStand, pos.z)
+    // A five-metre hop and a two-hundred-metre plunge cannot take the same time.
+    descentDur = clamp(
+      DESCENT_MIN + descentFrom.distanceTo(descentTo) * DESCENT_PER_M,
+      DESCENT_MIN,
+      T.descentDuration,
+    )
     descending = true
     descentT = 0
-    collision.stepHeight = T.stepHeight
 
     bus.emit('toast', {
       text: 'On foot — WASD or arrows to walk, Shift to run, Space to jump, C to crouch. Press G to stand back up.',
@@ -492,8 +581,12 @@ export function createWalkController(opts: WalkOptions): WalkController {
   function finishDescent(): void {
     descending = false
     descentT = 0
-    // A small dip on landing: the difference between arriving and stopping.
-    landDip = 0.09
+    // Hand over to physics in mid-air, looking at the horizon. The dip comes
+    // when the feet arrive, not when the flight ends.
+    pitch = 0
+    vy = 0
+    grounded = false
+    lostGroundT = 0
     const r = descentResolve
     descentResolve = null
     if (r) r()
@@ -530,7 +623,7 @@ export function createWalkController(opts: WalkOptions): WalkController {
 
   function tickDescent(dt: number): void {
     descentT += dt
-    const t = clamp01(descentT / T.descentDuration)
+    const t = clamp01(descentT / descentDur)
     const kxz = easeInOutCubic(t)
     // Vertical uses a power curve so the fall accelerates into the ground —
     // easing out on Y reads as being lowered on a wire, not dropping in.
@@ -538,36 +631,20 @@ export function createWalkController(opts: WalkOptions): WalkController {
     camera.position.x = descentFrom.x + (descentTo.x - descentFrom.x) * kxz
     camera.position.z = descentFrom.z + (descentTo.z - descentFrom.z) * kxz
     camera.position.y = descentFrom.y + (descentTo.y - descentFrom.y) * ky
-    pitch = descentPitch0 * (1 - easeInOutCubic(t))
+    // Level the head early. You came from a camera staring down at the model;
+    // the first thing a body wants is the horizon, and it wants it before it
+    // lands, not after.
+    pitch = descentPitch0 * (1 - easeInOutCubic(clamp01(t / PITCH_LEVEL_BY)))
     camera.rotation.set(pitch, yaw, 0, 'YXZ')
     camera.updateMatrixWorld()
     if (t >= 1) finishDescent()
   }
 
-  function update(dt: number): void {
-    if (!enabled) return
-    const d = dt > 0 ? (dt < 0.1 ? dt : 0.1) : 0
-    if (d === 0) return
-
-    if (descending) {
-      lookX = 0
-      lookY = 0
-      tickDescent(d)
-      return
-    }
-
-    tickFade(d)
-
-    /* --- look ------------------------------------------------------------ */
-    yaw -= lookX * T.lookSensitivity
-    pitch -= lookY * T.lookSensitivity
-    lookX = 0
-    lookY = 0
-    pitch = clamp(pitch, -T.pitchLimit, T.pitchLimit)
-    // Wrap yaw so it never grows without bound over a long session.
-    if (yaw > Math.PI) yaw -= Math.PI * 2
-    else if (yaw < -Math.PI) yaw += Math.PI * 2
-
+  /**
+   * One physics step, never longer than MAX_STEP. The look angles are resolved
+   * once per frame, in update(), and read from here.
+   */
+  function step(d: number): void {
     /* --- stance ---------------------------------------------------------- */
     crouching = keys.has('KeyC')
     running = !crouching && (keys.has('ShiftLeft') || keys.has('ShiftRight'))
@@ -626,17 +703,16 @@ export function createWalkController(opts: WalkOptions): WalkController {
     // along it at full speed and the bob never settles.
     if (mv.hitX) vel.x = 0
     if (mv.hitZ) vel.z = 0
-    const travelled = Math.hypot(mv.position.x - pos.x, mv.position.z - pos.z)
+    frameTravel += Math.hypot(mv.position.x - pos.x, mv.position.z - pos.z)
     pos.x = mv.position.x
     pos.z = mv.position.z
-    if (mv.stepped > 0) {
-      pos.y = mv.position.y
-      if (vy < 0) vy = 0
-      grounded = true
-    }
+    // Step-up is for someone walking up a kerb, not for someone falling past
+    // one: in the air, the ground query is the only thing that may stop a fall.
+    if (mv.stepped > 0 && grounded) pos.y = mv.position.y
 
     /* --- vertical -------------------------------------------------------- */
     const wasGrounded = grounded
+    const yBefore = pos.y
     const vy0 = vy
     vy -= T.gravity * d
     // Trapezoid, not Euler. Under constant acceleration this is exact, which is
@@ -644,9 +720,26 @@ export function createWalkController(opts: WalkOptions): WalkController {
     // 0.85 m and changes height when the frame rate does.
     pos.y += (vy0 + vy) * 0.5 * d
 
-    const g = collision.groundAt(pos, wasGrounded ? GROUND_SNAP : AIR_SNAP)
+    /*
+     * SWEEP, DO NOT SAMPLE. Ask what was under the feet across the whole step,
+     * not what is under them at the end of it: probe from where they started —
+     * plus a little slope tolerance, so a ramp rising into you still counts as
+     * ground — and look down past where they ended. The window is
+     *
+     *     [ pos.y - snap , yBefore + slopeTol + GROUND_TOL ]
+     *
+     * so the floor you were standing on can never end up above the search and
+     * be missed. Sampling at the new position is how a walker used to sink
+     * through the plaza deck, one long frame at a time, until nothing was left
+     * underneath them at all.
+     */
+    const fell = yBefore - pos.y
+    const snap = wasGrounded ? GROUND_SNAP : AIR_SNAP
+    const slopeTol = wasGrounded ? SLOPE_TOL : 0
+    _probe.set(pos.x, yBefore + slopeTol, pos.z)
+    const g = collision.groundAt(_probe, (fell > 0 ? fell : 0) + snap + slopeTol)
     if (g !== null && vy <= 0) {
-      if (!grounded && vy < -6) landDip = clamp01(-vy / 14) * 0.11
+      if (!wasGrounded && vy < -6) landDip = clamp01(-vy / 14) * 0.11
       pos.y = g
       vy = 0
       grounded = true
@@ -670,13 +763,52 @@ export function createWalkController(opts: WalkOptions): WalkController {
       }
     }
 
+  }
+
+  /**
+   * The frame. Look is resolved once; the body is integrated in fixed steps;
+   * the camera is placed once, at the end.
+   */
+  function update(dt: number): void {
+    if (!enabled) return
+    const d = dt > 0 ? (dt < 0.1 ? dt : 0.1) : 0
+    if (d === 0) return
+
+    if (descending) {
+      lookX = 0
+      lookY = 0
+      tickDescent(d)
+      return
+    }
+
+    tickFade(d)
+
+    /* --- look ------------------------------------------------------------ */
+    yaw -= lookX * T.lookSensitivity
+    pitch -= lookY * T.lookSensitivity
+    lookX = 0
+    lookY = 0
+    pitch = clamp(pitch, -T.pitchLimit, T.pitchLimit)
+    // Wrap yaw so it never grows without bound over a long session.
+    if (yaw > Math.PI) yaw -= Math.PI * 2
+    else if (yaw < -Math.PI) yaw += Math.PI * 2
+
+    /* --- the body, in fixed steps ---------------------------------------- */
+    frameTravel = 0
+    let steps = d > MAX_STEP ? Math.ceil(d / MAX_STEP) : 1
+    if (steps > MAX_SUBSTEPS) steps = MAX_SUBSTEPS
+    const sd = d / steps
+    for (let i = 0; i < steps; i++) step(sd)
+
     /* --- head bob, driven by distance ------------------------------------ */
+    const sy = Math.sin(yaw)
+    const cy = Math.cos(yaw)
     const speed = Math.hypot(vel.x, vel.z)
     let bobY = 0
     let bobX = 0
     if (!noBob) {
-      if (grounded && travelled > 1e-5) {
-        bobPhase += (travelled / T.bobWavelength) * Math.PI * 2
+      if (grounded && frameTravel > 1e-5) {
+        bobPhase += (frameTravel / T.bobWavelength) * Math.PI * 2
         if (bobPhase > Math.PI * 2) bobPhase -= Math.PI * 2
       }
       const ampTarget = grounded ? T.bobAmplitude * clamp01(speed / T.speedWalk) : 0

@@ -150,24 +150,6 @@ function advanceAngle(cur: number, target: number, maxStep: number): number {
   return next >= TAU ? next - TAU : next
 }
 
-/** A soft radial sprite: lamp pools, steam, district haze. */
-function softTexture(): THREE.CanvasTexture {
-  const s = 128
-  const cv = document.createElement('canvas')
-  cv.width = cv.height = s
-  const c = cv.getContext('2d')!
-  const g = c.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2)
-  g.addColorStop(0, 'rgba(255,255,255,1)')
-  g.addColorStop(0.34, 'rgba(255,255,255,0.44)')
-  g.addColorStop(0.7, 'rgba(255,255,255,0.1)')
-  g.addColorStop(1, 'rgba(255,255,255,0)')
-  c.fillStyle = g
-  c.fillRect(0, 0, s, s)
-  const tex = new THREE.CanvasTexture(cv)
-  tex.colorSpace = THREE.SRGBColorSpace
-  return tex
-}
-
 /* ============================================================================
  * SIGNAGE — one canvas atlas, one merged geometry, one draw call for every
  * piece of text in the yard, including the three live worker status panels.
@@ -362,9 +344,10 @@ class Signage {
     g.setIndex(this.idx)
     const mat = new THREE.MeshBasicMaterial({
       map: this.texture,
-      transparent: true,
+      // Alpha is a glyph cutout, not object translucency. Alpha testing keeps
+      // the plates crisp and out of the transparent depth-sort pass.
+      alphaTest: 0.08,
       vertexColors: true,
-      depthWrite: false,
       toneMapped: false,
       side: THREE.DoubleSide,
     })
@@ -453,9 +436,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
 
   const unitBox = theme.box(1, 1, 1)
   const unitCyl = theme.cyl(0.5, 0.5, 1, 14)
-  const quadGeo = own(new THREE.PlaneGeometry(1, 1))
   const domeGeo = own(new THREE.SphereGeometry(0.5, 14, 8))
-  const soft = own(softTexture())
 
   const edgeVerts: number[] = []
   const signs = new Signage()
@@ -674,40 +655,6 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   signs.plate('checkpoint_timeout', DIAL_X + 0.4, DIAL_Y + 8.6, DIAL_Z, 'east', 0.95, COLOR.checkpoint, 0.6)
   const SGN_MAXWAL = signs.plate('max_wal_size', DIAL_X + 0.4, DIAL_Y - 8.6, DIAL_Z, 'east', 0.95, COLOR.wal, 0.45)
   const SGN_CKREASON = signs.plate('WAL-triggered, not timed', DIAL_X + 0.4, DIAL_Y + 10.2, DIAL_Z, 'east', 0.9, COLOR.crit, 0.08)
-
-  /* Sync steam. fsync is where the heat is. */
-  const N_STEAM = low ? 5 : 10
-  const steamMat = own(
-    new THREE.MeshBasicMaterial({
-      map: soft,
-      transparent: true,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      toneMapped: false,
-    }),
-  )
-  const steam = new THREE.InstancedMesh(quadGeo, steamMat, N_STEAM)
-  steam.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
-  steam.frustumCulled = false
-  steam.raycast = () => {}
-  _c.setRGB(0, 0, 0)
-  for (let i = 0; i < N_STEAM; i++) {
-    zeroInst(steam, i, CX - 9, 36, CZ - 18)
-    steam.setColorAt(i, _c)
-  }
-  steam.instanceColor!.setUsage(THREE.DynamicDrawUsage)
-  gCkpt.add(steam)
-  meshes.push(steam)
-  const stT = new Float32Array(N_STEAM)
-  const stX = new Float32Array(N_STEAM)
-  const stZ = new Float32Array(N_STEAM)
-  const stS = new Float32Array(N_STEAM)
-  for (let i = 0; i < N_STEAM; i++) {
-    stT[i] = rng()
-    stX[i] = (rng() - 0.5) * 3
-    stZ[i] = (rng() - 0.5) * 3
-    stS[i] = 3 + rng() * 3
-  }
 
   /* =======================================================================
    * 2. BACKGROUND WRITER — the street sweeper.
@@ -1182,7 +1129,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   signs.plate('this is only a relay', SX, 7.0, SZ - 6.3, 'north', 0.7, COLOR.ok, 0.4)
 
   /* =======================================================================
-   * 8. THE YARD ITSELF — fence, lamps, paint, haze.
+   * 8. THE YARD ITSELF — fence, lamps, and paint.
    * =====================================================================*/
 
   const gYard = new THREE.Group()
@@ -1209,7 +1156,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     yardPosts.push([FX1, y, (FZ0 + FZ1) / 2, th, th, FZ1 - FZ0])
   }
 
-  // Kept clear of the excavation rim (x = -118) so no light pool hangs over it.
+  // Kept clear of the excavation rim (x = -118).
   const LAMPS: readonly (readonly [number, number])[] = [
     [-166, -58], [-130, -58], [-166, -16], [-130, -14],
     [-166, 20], [-130, 56], [-226, -42], [-226, 40],
@@ -1220,27 +1167,6 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     yardPosts.push([x + 0.9, 11.6, z, 2.4, 0.4, 0.9])
   }
   const yardDeep = batch(gYard, unitBox, matDeep, yardPosts)
-
-  const poolMat = own(
-    new THREE.MeshBasicMaterial({
-      map: soft,
-      color: SODIUM,
-      transparent: true,
-      opacity: 0.16,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      toneMapped: false,
-    }),
-  )
-  const pools = new THREE.InstancedMesh(quadGeo, poolMat, LAMPS.length)
-  _q.setFromAxisAngle(_axisX, -Math.PI / 2)
-  for (let i = 0; i < LAMPS.length; i++) {
-    setTRS(pools, i, LAMPS[i][0] + 1.7, PAINT_Y + 0.03, LAMPS[i][1], 30, 30, 1, _q)
-  }
-  pools.instanceMatrix.needsUpdate = true
-  pools.raycast = () => {}
-  gYard.add(pools)
-  meshes.push(pools)
 
   /* Every static lit thing at ground level in one mesh: painted markings, the
    * bgwriter's circuit, and the lamp heads. */
@@ -1298,25 +1224,6 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   paintMesh.instanceMatrix.needsUpdate = true
   paintMesh.instanceColor!.needsUpdate = true
   paintMesh.raycast = () => {}
-
-  const hazeMat = own(
-    new THREE.MeshBasicMaterial({
-      map: soft,
-      color: SODIUM,
-      transparent: true,
-      opacity: 0.06,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      toneMapped: false,
-    }),
-  )
-  const haze = new THREE.Mesh(quadGeo, hazeMat)
-  haze.rotation.x = -Math.PI / 2
-  haze.position.set(-184, 1.2, 20)
-  haze.scale.set(150, 180, 1)
-  haze.renderOrder = 2
-  haze.raycast = () => {}
-  gYard.add(haze)
 
   /* --- one blueprint pass for the whole yard ----------------------------- */
   const edgeGeo = own(new THREE.BufferGeometry())
@@ -1774,25 +1681,6 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     _c.setHex(COLOR.checkpoint).multiplyScalar(writing ? 1.4 + 0.6 * Math.sin(t * 8) : 0.12)
     ckptNeonMesh.setColorAt(IX_CK_VALVE, _c)
     ckptNeonMesh.instanceColor!.needsUpdate = true
-
-    if (steam.visible) {
-      const heat = syncFlash * 0.9 + pressure * 0.25
-      for (let i = 0; i < N_STEAM; i++) {
-        stT[i] += dt * (0.12 + heat * 0.55)
-        if (stT[i] >= 1) stT[i] -= 1
-        const k = stT[i]
-        const s = stS[i] * (0.55 + k * 1.7)
-        _p.set(CX - 9 + stX[i] * (0.4 + k), 36 + k * 15, CZ - 18 + stZ[i] * (0.4 + k))
-        _sc.set(s, s, s)
-        _m.compose(_p, ctx.camera.quaternion, _sc)
-        steam.setMatrixAt(i, _m)
-        const a = (1 - k) * k * 4 * (0.03 + heat * 0.2)
-        _c.setHex(mixHex(COLOR.checkpoint, COLOR.ink, 0.55)).multiplyScalar(a)
-        steam.setColorAt(i, _c)
-      }
-      steam.instanceMatrix.needsUpdate = true
-      steam.instanceColor!.needsUpdate = true
-    }
 
     /* --- 2. BGWRITER ----------------------------------------------------- */
 
@@ -2264,9 +2152,6 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     }
     statsNeonMesh.instanceColor!.needsUpdate = true
 
-    /* --- 8. THE YARD ------------------------------------------------------ */
-
-    hazeMat.opacity = 0.04 + (busy / N_VAC_WORKERS) * 0.035 + (running ? 0.035 : 0)
   }
 
   /* =======================================================================
@@ -2280,7 +2165,6 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     ckptDetailMesh.visible = near
     ckptDomes.visible = near
     wheelGroup.visible = near
-    steam.visible = near
 
     bgwDetailMesh.visible = near
     gSweep.visible = near
@@ -2298,8 +2182,8 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     yardDeep.visible = near
     edgeLines.visible = near
     signMesh.visible = close
-    // paint, lamp heads, light pools and haze stay on: they are what makes the
-    // yard read as a lit depot from the air, and they are two draw calls.
+    // Paint and solid lamp heads stay on so the yard remains legible from the
+    // air without transparent light pools or district haze.
   }
 
   function dispose(): void {

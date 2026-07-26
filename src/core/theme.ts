@@ -221,12 +221,22 @@ function isStandard(m: THREE.Material): m is THREE.MeshStandardMaterial {
   return (m as THREE.MeshStandardMaterial).isMeshStandardMaterial === true
 }
 
-/** Wire the ramp into one standard material. Idempotent. */
-function installToon(m: THREE.MeshStandardMaterial): void {
+/**
+ * Wire the ramp into one standard material. Idempotent, and deliberately stingy
+ * with `needsUpdate`: that flag costs a shader recompile, and a mode switch
+ * touches every material in the city at once. Only a real change of ramp state
+ * pays for one.
+ */
+function installToon(m: THREE.MeshStandardMaterial, target: ThemeMode): void {
+  const ud = m.userData as ThemeUserData
   if (m.onBeforeCompile !== toonHook) {
     m.onBeforeCompile = toonHook
     m.customProgramCacheKey = toonCacheKey
+    ud.pgToon = undefined
   }
+  const want = ATMOSPHERE[target].toon
+  if (ud.pgToon === want) return
+  ud.pgToon = want
   m.needsUpdate = true
 }
 
@@ -242,6 +252,20 @@ export function cssColor(key: ColorKey): string {
 /** Mix two hex ints in linear-ish space. */
 export function mixHex(a: number, b: number, t: number): number {
   return mix(a, b, t)
+}
+
+/**
+ * Translate one AUTHORED (night) colour into the mode the city is in right now.
+ *
+ * For anything painted through `mat()`, `neon()` or `line()` this happens
+ * automatically. This is the escape hatch for the places that cannot: a colour
+ * snapshotted at import time into a typed array (the plaza's per-instance tints),
+ * a route colour baked into a particle buffer, a registry entry's outline colour.
+ * Wrap the night value at the point of use and subscribe to onThemeMode() to
+ * re-derive, and that surface follows the switch too.
+ */
+export function modeColor(nightHex: number): number {
+  return mode === 'day' ? dayAccent(nightHex) : nightHex
 }
 
 const HEX6 = /^#([0-9a-f]{6})$/i
@@ -293,7 +317,7 @@ function paintMat(m: THREE.MeshStandardMaterial, s: MatSpec, target: ThemeMode):
     m.emissive.setHex(s.emissive)
   }
   m.emissiveIntensity = s.emissiveIntensity
-  installToon(m)
+  installToon(m, target)
 }
 
 interface NeonSpec {
@@ -348,6 +372,8 @@ interface CapturedNight {
 interface ThemeUserData {
   /** Set on materials the theme cache owns: the generic pass must skip them. */
   pgTheme?: boolean
+  /** Whether the toon ramp is currently compiled into this material. */
+  pgToon?: boolean
   pgNight?: CapturedNight
 }
 
@@ -408,11 +434,15 @@ export function paintSceneMaterial(m: THREE.Material, target: ThemeMode): void {
   }
 
   if (line.isLineBasicMaterial === true) {
+    // A white line material is either a per-vertex multiplier (the shared-memory
+    // beams) or a chrome marker the picker recolours on every selection. Either
+    // way its colour is not ours to move.
+    if (line.vertexColors === true) return
     if (first) {
       night.color = line.color.getHex()
       night.opacity = line.opacity
     }
-    if (night.color !== undefined && night.opacity !== undefined) {
+    if (night.color !== undefined && night.opacity !== undefined && !isNeutralExtreme(night.color)) {
       paintLine(line, { color: night.color, opacity: night.opacity }, target)
     }
     return
@@ -446,7 +476,7 @@ export function paintSceneMaterial(m: THREE.Material, target: ThemeMode): void {
     if (night.metalness !== undefined) {
       std.metalness = target === 'day' ? night.metalness * 0.25 : night.metalness
     }
-    installToon(std)
+    installToon(std, target)
   }
 }
 

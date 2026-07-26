@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { Bus, CameraApi, CameraMode, FocusSpec } from '../core/types'
 import { clamp, clamp01, damp, easeInOutCubic, lerp, reduceMotion } from '../core/util'
 import { ANCHOR } from '../world/layout'
+import { PLAN_UP } from '../world/slonik'
 
 /* ============================================================================
  * THE CAMERA RIG
@@ -26,6 +27,8 @@ import { ANCHOR } from '../world/layout'
 
 export interface CameraRig extends CameraApi {
   home(instant?: boolean): void
+  /** Straight down on the whole plate — the shot the Slonik outline is cut for. */
+  plan(instant?: boolean): void
   setPivot(p: THREE.Vector3 | [number, number, number]): void
   readonly pivot: THREE.Vector3
   readonly speed: number
@@ -36,7 +39,8 @@ export interface CameraRig extends CameraApi {
  * ------------------------------------------------------------------------*/
 
 const MIN_DIST = 8
-const MAX_DIST = 1400
+/** Far enough out to hold the whole plate — which is now ~1.3 km corner to corner. */
+const MAX_DIST = 1650
 /** Never flip over the poles; 3.05 rad lets you get well under the city to
  *  look up into the storage excavation. */
 const PHI_MIN = 0.03
@@ -83,6 +87,30 @@ const PATH_EASE = 0.18
  */
 const HOME_POS = new THREE.Vector3(-218, 216, -342)
 const HOME_PIVOT = new THREE.Vector3(-18, 0, -16)
+
+/**
+ * THE OVERVIEW SHOT — straight down on the plate.
+ *
+ * The ground plate is cut to the Slonik outline and this is the framing it was
+ * drawn for. Two things make it work and neither is arbitrary:
+ *
+ *  - the camera is tipped ~5° off vertical, and the *azimuth* of that tip sets
+ *    which world direction lands at the top of frame. The rig always uses world
+ *    up for roll, so screen-up is the horizontal part of `dir`, negated. Putting
+ *    the camera slightly north-west therefore puts world south-east at the top
+ *    — which is the elephant's own up, so the mark stands upright and faces
+ *    left, exactly as it is drawn, rather than lying on its side.
+ *  - the distance is derived from the plate's extent along the two screen axes
+ *    (see PLAN_SPAN), not guessed, and it backs off on a narrow window the same
+ *    way the establishing shot does.
+ */
+const PLAN_PIVOT = new THREE.Vector3(-3, 0, 36)
+/** Tip off vertical. Small enough to read as plan, big enough to set the roll. */
+const PLAN_TILT = 0.1
+const PLAN_DIR = new THREE.Vector3(-PLAN_UP[0] * PLAN_TILT, 1, -PLAN_UP[1] * PLAN_TILT).normalize()
+/** Plate extent along screen-x and screen-y in that framing, plus breathing room. */
+const PLAN_SPAN_X = 1330
+const PLAN_SPAN_Y = 1170
 
 const CITY_CENTER = new THREE.Vector3(ANCHOR.cityCenter[0], ANCHOR.cityCenter[1], ANCHOR.cityCenter[2])
 const WORLD_UP = new THREE.Vector3(0, 1, 0)
@@ -508,6 +536,13 @@ export function createCameraRig(
     if (e.code === 'Home') {
       e.preventDefault()
       home(false)
+      return
+    }
+    // O for overview. A camera framing, so it is bound here with Home rather
+    // than in the HUD — nothing else in the app claims the key.
+    if (e.code === 'KeyO' && !e.repeat) {
+      e.preventDefault()
+      plan(false)
       return
     }
     if (!MOVE_CODES.has(e.code)) return
@@ -996,6 +1031,27 @@ export function createCameraRig(
     )
   }
 
+  /**
+   * Frame the whole plate from directly overhead. Distance is whatever it takes
+   * to fit the plate in both screen axes at the current aspect, so the shot is
+   * correct on a phone and on an ultrawide.
+   */
+  function plan(instant = false): void {
+    const tanV = Math.tan((camera.fov * Math.PI) / 360)
+    const aspect = Math.max(camera.aspect, 0.35)
+    const d = Math.max(PLAN_SPAN_Y / 2 / tanV, PLAN_SPAN_X / 2 / (tanV * aspect)) * 1.04
+    if (mode === 'fly') setMode('orbit')
+    focusOn(
+      {
+        target: [PLAN_PIVOT.x, PLAN_PIVOT.y, PLAN_PIVOT.z],
+        distance: clamp(d, MIN_DIST, MAX_DIST),
+        dir: [PLAN_DIR.x, PLAN_DIR.y, PLAN_DIR.z],
+      },
+      { instant, duration: 1.4 },
+    )
+    bus.emit('toast', { text: 'Overview — the plate is the PostgreSQL elephant', kind: 'info', ms: 2600 })
+  }
+
   function setPivot(p: THREE.Vector3 | [number, number, number]): void {
     if (Array.isArray(p)) pivotT.set(p[0], p[1], p[2])
     else pivotT.copy(p)
@@ -1100,6 +1156,7 @@ export function createCameraRig(
     resize,
     dispose,
     home,
+    plan,
     setPivot,
     get pivot(): THREE.Vector3 {
       return pivot

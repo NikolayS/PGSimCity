@@ -1,21 +1,36 @@
 import * as THREE from 'three'
 import { COLOR, mixHex } from '../core/theme'
-import { fmtBytes, fmtNum } from '../core/util'
+import { clamp01, fmtBytes, fmtNum } from '../core/util'
 import { ANCHOR, CITY, DISTRICT_BOUNDS } from './layout'
+import {
+  clearance,
+  contains,
+  logoToWorld,
+  offsetRing,
+  outlineBounds,
+  ringArea2,
+  sampleOutline,
+  writeShape,
+} from './slonik'
+import type { PlanBounds } from './slonik'
 import type { DistrictId, SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
 
 /* ============================================================================
  * GROUND — the plate PGSimCity is bolted to, and the hole cut through it.
  *
- * Three ideas, in order of importance:
+ * Four ideas, in order of importance:
  *
  *  1. The ground is a *cut* plane. A rectangular hole over CITY.pit exposes the
  *     storage district 52 m down. That cut is the whole thesis of the model:
  *     above the line is memory, below it is disk, and you can see both at once.
- *  2. The surface is a survey grid, not a texture — a two-tier world-space grid
- *     with screen-constant line width, dissolving into the fog instead of
- *     ending at an edge.
- *  3. Districts stand on plinths with lit rims and floor signage, so a newcomer
+ *  2. The plate ENDS. Its outer boundary is the Slonik outline (world/slonik.ts)
+ *     — a poured slab with real thickness, a kerb and an edge light, standing in
+ *     an empty void. No district moves; only the shape of the ground under them.
+ *     Look straight down (the `O` preset) and the ground is the PostgreSQL mark.
+ *  3. The surface is a survey grid, not a texture — a two-tier world-space grid
+ *     with screen-constant line width, fading out in the last few metres before
+ *     the kerb instead of running off into nothing.
+ *  4. Districts stand on plinths with lit rims and floor signage, so a newcomer
  *     can orient themselves before they know a single Postgres word.
  * ==========================================================================*/
 
@@ -24,6 +39,7 @@ import type { DistrictId, SimState, WorldContext, WorldFactory, WorldModule } fr
  * -------------------------------------------------------------------------*/
 
 const groundVert = /* glsl */ `
+uniform float uFogK;
 varying vec3 vWorld;
 #include <fog_pars_vertex>
 
@@ -33,6 +49,12 @@ void main() {
   vec4 mvPosition = viewMatrix * wp;
   gl_Position = projectionMatrix * mvPosition;
   #include <fog_vertex>
+  #ifdef USE_FOG
+  // The plate is now a kilometre across and the overview shot looks at all of
+  // it from 1.3 km up. At full strength the scene fog would swallow the whole
+  // silhouette, so the slab — and only the slab — reads the fog short.
+  vFogDepth *= uFogK;
+  #endif
 }
 `
 
@@ -41,9 +63,12 @@ uniform vec3 uBase;
 uniform vec3 uMinor;
 uniform vec3 uMajor;
 uniform vec3 uSweep;
+uniform vec3 uRim;
 uniform float uTime;
-uniform float uInner;
-uniform float uOuter;
+uniform float uSweepR;
+uniform sampler2D uEdge;
+uniform vec4 uEdgeMap;   // x0, z0, 1/width, 1/depth of the edge field
+uniform float uEdgeMax;  // metres encoded across the signed field
 
 varying vec3 vWorld;
 #include <fog_pars_fragment>
@@ -63,6 +88,12 @@ void main() {
   vec2 p = vWorld.xz;
   float r = length( p );
 
+  // Distance from the kerb, in metres, from a baked signed field. One texture
+  // fetch buys the grid cut-off, the slab's shading and the edge-light spill —
+  // all of which have to follow an outline no analytic function describes.
+  vec2 euv = ( p - uEdgeMap.xy ) * uEdgeMap.zw;
+  float edge = ( texture2D( uEdge, euv ).r - 0.5 ) * 2.0 * uEdgeMax;
+
   float dMinor, dMajor;
   float minor = gridMask( p, 10.0, 1.15, dMinor );   // 10 m survey grid
   float major = gridMask( p, 50.0, 1.70, dMajor );   // 50 m block grid
@@ -70,28 +101,31 @@ void main() {
   minor *= 1.0 - smoothstep( 0.20, 0.80, dMinor );
   major *= 1.0 - smoothstep( 0.28, 1.05, dMajor );
 
-  float camFade = 1.0 - smoothstep( 620.0, 1500.0, distance( vWorld, cameraPosition ) );
+  float camFade = 1.0 - smoothstep( 700.0, 1800.0, distance( vWorld, cameraPosition ) );
   minor *= camFade;
   major *= camFade;
 
-  // Radial dissolve: the plate must end in fog, never in a visible edge.
-  float falloff = 1.0 - smoothstep( uInner, uOuter, r );
-  falloff *= falloff;
+  // The survey grid stops at the plate, not in the fog: it dies in the last
+  // 34 m so the kerb is a boundary and not just the place the lines get cut.
+  float hem = smoothstep( 0.0, 34.0, edge );
+  minor *= hem;
+  major *= hem;
 
   // Sonar ping out of the city centre, one every 14 s. Deliberately almost
   // subliminal — it exists to say "this thing is live", nothing more.
   float ph = fract( uTime / 14.0 );
-  float q = ( r - ph * uOuter ) / 30.0;
+  float q = ( r - ph * uSweepR ) / 30.0;
   float sweep = exp( - q * q ) * ( 1.0 - ph ) * 0.5;
 
-  vec3 col = uBase * mix( 0.45, 1.0, falloff );
+  // Poured concrete reads darker where it meets its own edge.
+  vec3 col = uBase * mix( 0.46, 1.0, smoothstep( 0.0, 260.0, edge ) );
   col = mix( col, uMinor, minor * 0.9 );
   col = mix( col, uMajor, major );
   col += uSweep * sweep * ( 0.35 + 0.65 * max( minor, major ) );
+  // …and then the edge light spills back in over it.
+  col += uRim * exp( - max( edge, 0.0 ) / 26.0 ) * 0.5;
 
-  float alpha = clamp( falloff * ( 1.0 + sweep * 0.25 ), 0.0, 1.0 );
-
-  gl_FragColor = vec4( col, alpha );
+  gl_FragColor = vec4( col, 1.0 );
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
   #include <fog_fragment>
@@ -174,17 +208,42 @@ const PLINTH_DROP = 0.5 // sink the slab below y=0 so it never z-fights the plat
 /** Warm sodium, the colour of a building that is still occupied at night. */
 const MAST_LAMP = 0xffca8a
 
-/** x, z, mast height — well outside every district footprint. */
-const MASTS: readonly (readonly [number, number, number])[] = [
-  // ordered so that the first three already ring the city — 'low' quality keeps
-  // only those and still gets a balanced silhouette
-  [430, -300, 58],
-  [-450, 40, 66],
-  [300, 430, 62],
-  [470, 120, 44],
-  [-330, 360, 48],
-  [-380, -320, 52],
+/**
+ * Survey masts, sited in LOGO space so they are guaranteed to stand on the
+ * plate and so they populate the parts of it the city never reaches: the brow,
+ * the ear, the crown and the long empty run of the trunk. `[xe, ye, height]`,
+ * ordered so the first three already ring the city — 'low' quality keeps only
+ * those and still gets a balanced skyline.
+ */
+const MAST_SITES: readonly (readonly [number, number, number])[] = [
+  [-24, 12, 58], // the brow, east — beyond the archive estate
+  [30, 4, 66], // the ear, south-west
+  [-27, -27, 62], // out along the trunk, north
+  [-6, 24, 46], // the crown, south-east
+  [11, -17, 50], // the jaw, west — beyond the maintenance yard
+  [24, -14, 52], // the lower ear, over the recovery ground's horizon
 ]
+
+const MASTS: readonly (readonly [number, number, number])[] = MAST_SITES.map((m) => {
+  const [x, z] = logoToWorld(m[0], m[1])
+  return [x, z, m[2]] as const
+})
+
+/* --- the rim -------------------------------------------------------------- */
+
+/** Slab thickness. Invisible from above, unmistakable from a low orbit. */
+const SKIRT_DROP = 14
+/** Kerb upstand. Chest height on a 1.8 m body — this is also the parapet. */
+const KERB_H = 1.15
+/** How far in from the true edge the kerb's inner face stands. */
+const KERB_W = 2.2
+/** Samples per cubic along the outline. 17 cubics × 16 ≈ 15 m of kerb each. */
+const RIM_SEG = 16
+const RIM_SEG_LOW = 9
+/** Metres encoded across the signed edge field. */
+const EDGE_MAX = 96
+/** Edge-field resolution across the plate's width. */
+const EDGE_TEX_W = 128
 
 /** x, z, base radius, height, colour — a light cone standing over each district. */
 const CONES: readonly (readonly [number, number, number, number, number])[] = [
@@ -197,6 +256,92 @@ const CONES: readonly (readonly [number, number, number, number, number])[] = [
 ]
 
 const cssHex = (c: number) => '#' + (c >>> 0).toString(16).padStart(6, '0')
+
+/** Cool architectural white for the kerb light. Structure, not a Postgres fact. */
+const RIM_LIGHT = mixHex(COLOR.gridBright, COLOR.ink, 0.46)
+/** How short the plate and its rim read the scene fog. See groundVert. */
+const FOG_K = 0.42
+
+/* ---------------------------------------------------------------------------
+ * Rim construction.
+ * -------------------------------------------------------------------------*/
+
+/**
+ * Make the material read the scene fog at `FOG_K` of its true depth, so the rim
+ * survives the same distances the slab does. Patched rather than switched off:
+ * an edge light that ignores the fog entirely floats.
+ */
+function dampFog<T extends THREE.Material>(m: T): T {
+  m.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <fog_vertex>',
+      `#include <fog_vertex>\n#ifdef USE_FOG\n\tvFogDepth *= ${FOG_K.toFixed(3)};\n#endif`,
+    )
+  }
+  m.customProgramCacheKey = () => 'pgc-rim-fog'
+  return m
+}
+
+/**
+ * A closed quad strip between two rings held at two heights: `a[i]`@ya to
+ * `b[i]`@yb. Non-indexed so computeVertexNormals() gives flat facets, which is
+ * what a poured edge wants. Drawn DoubleSide, so the winding is free.
+ */
+function ribbon(a: Float64Array, ya: number, b: Float64Array, yb: number): THREE.BufferGeometry {
+  const n = a.length / 2
+  const pos = new Float32Array(n * 6 * 3)
+  let w = 0
+  const put = (r: Float64Array, i: number, y: number) => {
+    pos[w++] = r[i]
+    pos[w++] = y
+    pos[w++] = r[i + 1]
+  }
+  for (let i = 0; i < n; i++) {
+    const p = i * 2
+    const q = ((i + 1) % n) * 2
+    put(a, p, ya)
+    put(b, p, yb)
+    put(b, q, yb)
+    put(a, p, ya)
+    put(b, q, yb)
+    put(a, q, ya)
+  }
+  const g = new THREE.BufferGeometry()
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3))
+  g.computeVertexNormals()
+  return g
+}
+
+/**
+ * Bake distance-to-the-kerb into a one-channel texture, signed and biased so
+ * that 0.5 is exactly the outline and bilinear filtering stays honest across
+ * it. The fragment shader cannot evaluate a 272-segment outline per pixel; it
+ * can afford one fetch.
+ */
+function bakeEdgeField(bounds: PlanBounds): THREE.DataTexture {
+  const w = EDGE_TEX_W
+  const spanX = bounds.x1 - bounds.x0
+  const spanZ = bounds.z1 - bounds.z0
+  const h = Math.max(16, Math.round((w * spanZ) / spanX))
+  const data = new Uint8Array(w * h)
+  // A coarse ring is plenty: this field is only ever read at tens of metres.
+  const coarse = sampleOutline(6)
+  for (let j = 0; j < h; j++) {
+    const z = bounds.z0 + ((j + 0.5) / h) * spanZ
+    for (let i = 0; i < w; i++) {
+      const x = bounds.x0 + ((i + 0.5) / w) * spanX
+      const sd = clearance(coarse, x, z)
+      data[j * w + i] = Math.round(clamp01((sd / EDGE_MAX) * 0.5 + 0.5) * 255)
+    }
+  }
+  const tex = new THREE.DataTexture(data, w, h, THREE.RedFormat, THREE.UnsignedByteType)
+  tex.minFilter = THREE.LinearFilter
+  tex.magFilter = THREE.LinearFilter
+  tex.wrapS = THREE.ClampToEdgeWrapping
+  tex.wrapT = THREE.ClampToEdgeWrapping
+  tex.needsUpdate = true
+  return tex
+}
 
 /* ---------------------------------------------------------------------------
  * Factory.
@@ -215,13 +360,11 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
    * 1. The plate, with the excavation cut out of it.
    * -------------------------------------------------------------------*/
 
-  const G = CITY.ground
+  // The outer boundary is the elephant. Everything else about the plate — the
+  // excavation, the plinths, the decals — is unchanged; what changed is where
+  // the ground stops.
   const shape = new THREE.Shape()
-  shape.moveTo(-G, -G)
-  shape.lineTo(G, -G)
-  shape.lineTo(G, G)
-  shape.lineTo(-G, G)
-  shape.closePath()
+  writeShape(shape)
 
   // Shape space is XY; after the -90° rotation about X, +Y becomes world -Z.
   const hole = new THREE.Path()
@@ -232,8 +375,16 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   hole.closePath()
   shape.holes.push(hole)
 
-  const plateGeo = new THREE.ShapeGeometry(shape)
+  const plateGeo = new THREE.ShapeGeometry(shape, 12)
   geos.push(plateGeo)
+
+  /* The same outline, sampled, for everything that is not the slab itself:
+   * the kerb, the skirt, the edge light, the walker's parapet and the baked
+   * distance field. One ring, one winding, so they can never disagree. */
+  const ring = sampleOutline(quality.level === 'low' ? RIM_SEG_LOW : RIM_SEG)
+  const ccw = ringArea2(ring) > 0
+  const bounds = outlineBounds(ring)
+  const edgeTex = bakeEdgeField(bounds)
 
   const gridUniforms = THREE.UniformsUtils.merge([
     THREE.UniformsLib.fog,
@@ -242,11 +393,19 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
       uMinor: { value: new THREE.Color(COLOR.grid) },
       uMajor: { value: new THREE.Color(COLOR.gridBright) },
       uSweep: { value: new THREE.Color(mixHex(COLOR.gridBright, COLOR.backend, 0.55)) },
+      uRim: { value: new THREE.Color(mixHex(0x000000, RIM_LIGHT, 0.5)) },
       uTime: { value: 0 },
-      uInner: { value: 560 },
-      uOuter: { value: 1320 },
+      uSweepR: { value: 900 },
+      uFogK: { value: FOG_K },
+      uEdgeMax: { value: EDGE_MAX },
+      uEdgeMap: {
+        value: new THREE.Vector4(bounds.x0, bounds.z0, 1 / (bounds.x1 - bounds.x0), 1 / (bounds.z1 - bounds.z0)),
+      },
+      uEdge: { value: edgeTex },
     },
   ])
+  // UniformsUtils.merge clones values; the texture must be handed over after.
+  ;(gridUniforms.uEdge as { value: THREE.Texture | null }).value = edgeTex
   const uTime = gridUniforms.uTime as { value: number }
 
   const plateMat = new THREE.ShaderMaterial({
@@ -267,6 +426,94 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   plate.renderOrder = -5 // first of the transparent pass, so it can occlude properly
   plate.frustumCulled = false
   group.add(plate)
+
+  /* ---------------------------------------------------------------------
+   * 1b. The rim: slab thickness, kerb, edge light, and a parapet a walker
+   *     cannot step over. The city now stands on an island, and an island
+   *     has to look and behave like one from every side.
+   * -------------------------------------------------------------------*/
+
+  const kerbInner = offsetRing(ring, KERB_W, ccw)
+
+  const skirtGeo = ribbon(ring, 0, ring, -SKIRT_DROP) // the poured depth of the slab
+  const kerbOutGeo = ribbon(ring, KERB_H, ring, 0) // the kerb's outer face
+  const kerbTopGeo = ribbon(ring, KERB_H, kerbInner, KERB_H) // its capping
+  const kerbInGeo = ribbon(kerbInner, KERB_H, kerbInner, 0) // and the face a walker meets
+  geos.push(skirtGeo, kerbOutGeo, kerbTopGeo, kerbInGeo)
+
+  const rimMat = dampFog(
+    new THREE.MeshStandardMaterial({
+      color: 0x0a1120,
+      roughness: 0.94,
+      metalness: 0.1,
+      emissive: 0x05080f,
+      emissiveIntensity: 0.9,
+      side: THREE.DoubleSide,
+    }),
+  )
+  rimMat.name = 'ground.rim'
+  mats.push(rimMat)
+  for (const g of [skirtGeo, kerbOutGeo, kerbTopGeo, kerbInGeo]) {
+    const m = new THREE.Mesh(g, rimMat)
+    m.name = 'ground.rim'
+    m.frustumCulled = false
+    m.raycast = () => {}
+    group.add(m)
+  }
+
+  // The edge light. A line, not a strip: it is the one element that has to
+  // survive at 1.3 km, where a 0.4 m band of geometry is a third of a pixel.
+  // Same treatment as the pit rim, one stop dimmer — this edge is architecture,
+  // not a Postgres fact.
+  const edgePts = new Float32Array((ring.length / 2) * 3)
+  for (let i = 0, w = 0; i < ring.length; i += 2) {
+    edgePts[w++] = ring[i]
+    edgePts[w++] = KERB_H + 0.03
+    edgePts[w++] = ring[i + 1]
+  }
+  const edgeGeo = new THREE.BufferGeometry()
+  edgeGeo.setAttribute('position', new THREE.BufferAttribute(edgePts, 3))
+  geos.push(edgeGeo)
+  const edgeMat = dampFog(
+    new THREE.LineBasicMaterial({ color: RIM_LIGHT, transparent: true, opacity: 0.62, toneMapped: false }),
+  )
+  mats.push(edgeMat)
+  const edgeLine = new THREE.LineLoop(edgeGeo, edgeMat)
+  edgeLine.name = 'ground.edgeLight'
+  edgeLine.frustumCulled = false
+  edgeLine.renderOrder = 4
+  edgeLine.raycast = () => {}
+  group.add(edgeLine)
+
+  /* Solids for the pedestrian: one box per kerb segment. world.ground is on
+   * collision.ts's exclude list (it is a *walkable*, not an obstacle), so these
+   * are published here and handed to the collision world by main.ts instead. */
+  const rimColliders: THREE.Box3[] = []
+  {
+    const n = kerbInner.length / 2
+    for (let i = 0; i < n; i++) {
+      const a = i * 2
+      const b = ((i + 1) % n) * 2
+      rimColliders.push(
+        new THREE.Box3(
+          new THREE.Vector3(Math.min(ring[a], kerbInner[b]) - 0.6, -0.5, Math.min(ring[a + 1], kerbInner[b + 1]) - 0.6),
+          new THREE.Vector3(
+            Math.max(ring[a], kerbInner[b]) + 0.6,
+            KERB_H + 0.4,
+            Math.max(ring[a + 1], kerbInner[b + 1]) + 0.6,
+          ),
+        ),
+      )
+    }
+  }
+  group.userData.rimColliders = rimColliders
+  /** Published so the plate's containment of every district can be *checked*. */
+  group.userData.slonik = {
+    ring,
+    bounds,
+    contains: (x: number, z: number) => contains(ring, x, z),
+    clearance: (x: number, z: number) => clearance(ring, x, z),
+  }
 
   /* ---------------------------------------------------------------------
    * 2. The excavation: rim, walls, strata, floor.

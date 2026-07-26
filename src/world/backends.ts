@@ -32,6 +32,16 @@ const PLINTH_H = 2.2
 const COLLAR_H = 0.7
 const CROWN_H = 2.2
 
+// Every tower carries this narrow private-memory reservoir on its front face.
+// The capacity follows the tower, while the fill is driven independently.
+const MEM_BASE_Y = PLINTH_H + 3.35
+const MEM_W = 2.15
+const MEM_D = 0.56
+const MEM_X_OFF = BW * 0.34
+const MEM_Z = BZ + BW / 2 + 0.38
+const SPILL_Z = BZ + 3
+const SPILL_AT = 0.62
+
 /* --- module-scope scratch: update() must never allocate ------------------- */
 const _p = new THREE.Vector3()
 const _sc = new THREE.Vector3()
@@ -67,8 +77,21 @@ function pushBoxEdges(out: number[], s: BoxSpec): void {
 }
 
 function setBox(mesh: THREE.InstancedMesh, idx: number, s: BoxSpec): void {
-  _p.set(s[0], s[1], s[2])
-  _sc.set(s[3], s[4], s[5])
+  setBoxAt(mesh, idx, s[0], s[1], s[2], s[3], s[4], s[5])
+}
+
+function setBoxAt(
+  mesh: THREE.InstancedMesh,
+  idx: number,
+  x: number,
+  y: number,
+  z: number,
+  w: number,
+  h: number,
+  d: number,
+): void {
+  _p.set(x, y, z)
+  _sc.set(w, h, d)
   _q.identity()
   _m.compose(_p, _q, _sc)
   mesh.setMatrixAt(idx, _m)
@@ -353,18 +376,93 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
   beaconMesh.instanceColor!.setUsage(THREE.DynamicDrawUsage)
   group.add(beaconMesh)
 
-  /* --- work_mem spill puddles ------------------------------------------- */
+  /* --- private memory + per-backend temp-file spills -------------------- */
+  const privateMemory = new THREE.Group()
+  privateMemory.name = 'backend.localmem'
+
+  // A matte cradle and quiet glass shell make each reservoir part of its
+  // tower. Only the changing fill, overflow path and temp file are neon.
+  const memoryGlass = theme.mat('backends.private-memory.glass', {
+    color: 0x385783,
+    roughness: 0.35,
+    metalness: 0.08,
+    transparent: true,
+    opacity: 0.16,
+    side: THREE.DoubleSide,
+  })
+  const memoryBackMesh = new THREE.InstancedMesh(unitBox, matTrim, N)
+  const memoryShellMesh = new THREE.InstancedMesh(unitBox, memoryGlass, N)
+  const memoryTickMesh = new THREE.InstancedMesh(unitBox, matStruct, N * 3)
+  const memoryFillMesh = new THREE.InstancedMesh(unitBox, neonWhite, N)
+  memoryFillMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  memoryFillMesh.frustumCulled = false
+
+  const memoryH = new Float32Array(N)
+  const memoryLevel = new Float32Array(N)
+  for (let i = 0; i < N; i++) {
+    const x = XS[i] + MEM_X_OFF
+    const top = PLINTH_H + SH[i] - 0.55
+    const h = clamp(top - MEM_BASE_Y, 2.8, 8.2)
+    memoryH[i] = h
+    memoryLevel[i] = 0.04
+
+    const back: BoxSpec = [x, MEM_BASE_Y + h / 2, MEM_Z - 0.22, MEM_W + 0.55, h + 0.65, 0.24]
+    const shell: BoxSpec = [x, MEM_BASE_Y + h / 2, MEM_Z, MEM_W, h, MEM_D]
+    setBox(memoryBackMesh, i, back)
+    setBox(memoryShellMesh, i, shell)
+    pushBoxEdges(edgeVerts, back)
+    pushBoxEdges(edgeVerts, shell)
+    for (let j = 0; j < 3; j++) {
+      setBox(memoryTickMesh, i * 3 + j, [
+        x,
+        MEM_BASE_Y + h * ((j + 1) / 4),
+        MEM_Z + MEM_D / 2 + 0.045,
+        MEM_W + 0.34,
+        0.09,
+        0.08,
+      ])
+    }
+
+    const fillH = h * memoryLevel[i]
+    setBox(memoryFillMesh, i, [
+      x,
+      MEM_BASE_Y + fillH / 2,
+      MEM_Z + MEM_D / 2 + 0.08,
+      MEM_W - 0.34,
+      fillH,
+      0.1,
+    ])
+    _c.setHex(COLOR.backend).multiplyScalar(0.08)
+    memoryFillMesh.setColorAt(i, _c)
+  }
+  memoryBackMesh.instanceMatrix.needsUpdate = true
+  memoryShellMesh.instanceMatrix.needsUpdate = true
+  memoryTickMesh.instanceMatrix.needsUpdate = true
+  memoryFillMesh.instanceMatrix.needsUpdate = true
+  memoryFillMesh.instanceColor!.setUsage(THREE.DynamicDrawUsage)
+  memoryFillMesh.instanceColor!.needsUpdate = true
+  privateMemory.add(memoryBackMesh, memoryShellMesh, memoryTickMesh, memoryFillMesh)
+
+  // Once a reservoir is full, the overflow visibly runs down that tower and
+  // across its footing into a separate temp-file slab.
+  const spillPipeMesh = new THREE.InstancedMesh(unitBox, neonWhite, N)
+  const spillRunMesh = new THREE.InstancedMesh(unitBox, neonWhite, N)
+  const tempFileMesh = new THREE.InstancedMesh(unitBox, matStruct, N)
+  for (const mesh of [spillPipeMesh, spillRunMesh, tempFileMesh]) {
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+    mesh.frustumCulled = false
+    mesh.raycast = () => {}
+  }
+  _c.setRGB(0, 0, 0)
+  for (let i = 0; i < N; i++) {
+    spillPipeMesh.setColorAt(i, _c)
+    spillRunMesh.setColorAt(i, _c)
+  }
+  spillPipeMesh.instanceColor!.setUsage(THREE.DynamicDrawUsage)
+  spillRunMesh.instanceColor!.setUsage(THREE.DynamicDrawUsage)
+
   const puddleGeo = own(new THREE.CircleGeometry(1, 24))
-  const puddleMat = own(
-    new THREE.MeshBasicMaterial({
-      color: 0xffffff,
-      transparent: true,
-      opacity: 0.55,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      toneMapped: false,
-    }),
-  )
+  const puddleMat = theme.neon(0xffffff, 1, { transparent: true, opacity: 0.55 })
   const puddleMesh = new THREE.InstancedMesh(puddleGeo, puddleMat, N)
   puddleMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
   puddleMesh.frustumCulled = false
@@ -372,7 +470,8 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
   _c.setRGB(0, 0, 0)
   for (let i = 0; i < N; i++) puddleMesh.setColorAt(i, _c)
   puddleMesh.instanceColor!.setUsage(THREE.DynamicDrawUsage)
-  group.add(puddleMesh)
+  privateMemory.add(spillPipeMesh, spillRunMesh, tempFileMesh, puddleMesh)
+  group.add(privateMemory)
 
   /* --- pid plates (one texture atlas, one draw call) --------------------- */
   const PID = new Int32Array(N)
@@ -444,83 +543,6 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
     group.add(mesh)
   }
 
-  /* =======================================================================
-   * LOCAL MEMORY — private to one backend, unlike everything on the plaza.
-   * =====================================================================*/
-
-  const LM_X = -140
-  const LM_Y = 21
-  const LM_Z = -132
-
-  const lm = new THREE.Group()
-  lm.name = 'backend.localmem'
-
-  const glassMat = theme.mat('backends.localmem', {
-    color: 0x3d6bb0,
-    roughness: 0.3,
-    metalness: 0.05,
-    transparent: true,
-    opacity: 0.11,
-    side: THREE.DoubleSide,
-  })
-  const shell = new THREE.Mesh(theme.box(30, 15, 22), glassMat)
-  shell.position.set(LM_X, LM_Y, LM_Z)
-  lm.add(shell)
-  pushBoxEdges(edgeVerts, [LM_X, LM_Y, LM_Z, 30, 15, 22])
-
-  // the three local arenas, sized by nothing in particular — the point is that
-  // there is one of these per backend, not one for the cluster
-  const arenaMat = theme.neon(0xffffff, 1, { transparent: true, opacity: 0.3 })
-  const arenas = new THREE.InstancedMesh(unitBox, arenaMat, 3)
-  const workBox: BoxSpec = [LM_X - 8.5, LM_Y - 2.6, LM_Z, 11, 5.4, 8]
-  setBox(arenas, 0, workBox)
-  setBox(arenas, 1, [LM_X + 4.5, LM_Y - 0.6, LM_Z - 0.5, 8, 9, 7])
-  setBox(arenas, 2, [LM_X - 8.5, LM_Y + 3.6, LM_Z + 1, 6, 3.4, 6])
-  arenas.instanceMatrix.needsUpdate = true
-  _c.setHex(COLOR.vacuum).multiplyScalar(0.5)
-  arenas.setColorAt(0, _c)
-  _c.setHex(COLOR.bgwriter).multiplyScalar(0.32)
-  arenas.setColorAt(1, _c)
-  _c.setHex(COLOR.bufClean).multiplyScalar(0.32)
-  arenas.setColorAt(2, _c)
-  arenas.instanceColor!.setUsage(THREE.DynamicDrawUsage)
-  lm.add(arenas)
-
-  // work_mem fill level: rises with the number of sorting backends
-  const fillMat = theme.neon(COLOR.vacuum, 1.5, { transparent: true, opacity: 0.75 })
-  const fill = new THREE.Mesh(theme.box(10.4, 1, 7.4), fillMat)
-  const FILL_BASE = workBox[1] - workBox[4] / 2
-  fill.position.set(workBox[0], FILL_BASE, workBox[2])
-  fill.scale.y = 0.001
-  lm.add(fill)
-
-  // overflow: when work_mem is exceeded the sort spills to a temp file on disk
-  const spillMat = theme.neon(COLOR.vacuum, 1.2, { transparent: true, opacity: 0.4 })
-  const spill = new THREE.Mesh(theme.box(2.6, 1, 2.6), spillMat)
-  spill.position.set(workBox[0], FILL_BASE, workBox[2])
-  spill.visible = false
-  lm.add(spill)
-
-  const tempBlock = new THREE.Mesh(theme.box(17, 2.4, 12), matStruct)
-  tempBlock.position.set(LM_X - 8.5, 1.2, LM_Z)
-  lm.add(tempBlock)
-  pushBoxEdges(edgeVerts, [LM_X - 8.5, 1.2, LM_Z, 17, 2.4, 12])
-  const tempGlowMat = theme.neon(COLOR.vacuum, 1.3, { transparent: true, opacity: 0.6 })
-  const tempGlow = new THREE.Mesh(theme.box(15, 0.24, 10), tempGlowMat)
-  tempGlow.position.set(LM_X - 8.5, 2.5, LM_Z)
-  tempGlow.scale.set(0.001, 1, 0.001)
-  lm.add(tempGlow)
-
-  const lmPanel = makePanel()
-  lmPanel.position.set(LM_X, LM_Y - 1, LM_Z + 11.2)
-  lm.add(lmPanel)
-
-  const lmCaption = makeTextPlate('shared memory is one — local memory is per backend', 1.7)
-  lmCaption.position.set(LM_X, 6.4, LM_Z + 11.4)
-  lm.add(lmCaption)
-
-  group.add(lm)
-
   /* --- one blueprint line pass for the whole district -------------------- */
   const edgeGeo = own(new THREE.BufferGeometry())
   edgeGeo.setAttribute('position', new THREE.Float32BufferAttribute(edgeVerts, 3))
@@ -528,57 +550,6 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
   edgeLines.raycast = () => {}
   edgeLines.renderOrder = 2
   group.add(edgeLines)
-
-  /* --- helpers ----------------------------------------------------------- */
-  function makeTextPlate(text: string, height: number): THREE.Mesh {
-    const tex = theme.textTexture(text, { size: 48, color: '#a9bedd', letterSpacing: '1px' })
-    const img = tex.image as { width: number; height: number }
-    const geo = own(new THREE.PlaneGeometry((height * img.width) / Math.max(1, img.height), height))
-    const mat = own(
-      new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.8, depthWrite: false, toneMapped: false }),
-    )
-    const mesh = new THREE.Mesh(geo, mat)
-    mesh.raycast = () => {}
-    return mesh
-  }
-
-  /** Engineering placard for the local-memory volume — one texture, one draw. */
-  function makePanel(): THREE.Mesh {
-    const cv = document.createElement('canvas')
-    cv.width = 512
-    cv.height = 256
-    const g = cv.getContext('2d')!
-    g.clearRect(0, 0, 512, 256)
-    g.font = '600 30px ui-monospace, SFMono-Regular, Menlo, monospace'
-    g.fillStyle = '#dbe7ff'
-    g.fillText('LOCAL MEMORY', 26, 46)
-    g.font = '500 26px ui-monospace, SFMono-Regular, Menlo, monospace'
-    const rows: [string, string][] = [
-      ['work_mem', '#b57bff'],
-      ['maintenance_work_mem', '#4fe3c1'],
-      ['temp_buffers', '#3fa7ff'],
-    ]
-    for (let i = 0; i < rows.length; i++) {
-      const y = 104 + i * 40
-      g.fillStyle = rows[i][1]
-      g.fillRect(26, y - 16, 14, 14)
-      g.fillStyle = '#c3d3ee'
-      g.fillText(rows[i][0], 52, y)
-    }
-    g.font = '400 22px ui-monospace, SFMono-Regular, Menlo, monospace'
-    g.fillStyle = '#8fa5c4'
-    g.fillText('one arena per backend', 26, 232)
-    const tex = own(new THREE.CanvasTexture(cv))
-    tex.colorSpace = THREE.SRGBColorSpace
-    tex.anisotropy = 4
-    const geo = own(new THREE.PlaneGeometry(15, 7.5))
-    const mat = own(
-      new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.9, depthWrite: false, toneMapped: false }),
-    )
-    const mesh = new THREE.Mesh(geo, mat)
-    mesh.raycast = () => {}
-    return mesh
-  }
 
   /* =======================================================================
    * Registration.
@@ -621,16 +592,16 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
 
   ctx.register({
     id: 'backend.localmem',
-    name: 'Local memory',
-    role: 'work_mem / maintenance_work_mem / temp_buffers — per backend',
+    name: 'Private memory ×16',
+    role: 'one work_mem / maintenance_work_mem / temp_buffers arena inside each backend',
     kind: 'memory',
     district: 'backends',
-    object: lm,
-    tier: 1,
-    focus: { target: [LM_X, 14, LM_Z], distance: 62, dir: [0.2, 0.32, 1] },
-    labelAt: [LM_X, LM_Y + 11, LM_Z],
+    object: privateMemory,
+    tier: 2,
+    focus: { target: [XS[7] + MEM_X_OFF, MEM_BASE_Y + memoryH[7] * 0.5, MEM_Z], distance: 38, dir: [0.35, 0.3, 1] },
+    labelAt: [XS[7] + MEM_X_OFF, MEM_BASE_Y + memoryH[7] + 3, MEM_Z],
     color: COLOR.vacuum,
-    readout: () => `${sorting} sorting · temp files ${fmtBytes(tempBytes)}`,
+    readout: () => `${N} private arenas · ${sorting} sorting · temp files ${fmtBytes(tempBytes)}`,
   })
 
   /* =======================================================================
@@ -642,6 +613,7 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
   const crownRgb = new Float32Array(N * 3)
   const shaftRgb = new Float32Array(N * 3)
   const puddle = new Float32Array(N)
+  const tempFileBytes = new Float32Array(N)
   const ringPhase = new Float32Array(N)
   const ringLevel = new Float32Array(N)
   const chainLevel = new Float32Array(N)
@@ -665,6 +637,7 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
 
     const nb = Math.min(N, sim.backends.length)
     let sortCount = 0
+    tempBytes = 0
 
     for (let i = 0; i < N; i++) {
       const b = i < nb ? sim.backends[i] : null
@@ -682,7 +655,6 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
       let wipe = -1
       let beacon = 0
       let ring = 0
-      let pud = 0
 
       switch (st) {
         case 'free':
@@ -759,7 +731,6 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
           crownBr = 0.7
           tintHex = COLOR.vacuum
           tintMix = 0.2
-          pud = b ? 0.35 + clamp01(b.progress) * 0.65 : 0.5
           sortCount++
           break
         case 'wal_insert':
@@ -838,6 +809,34 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
       _c.setRGB(shaftRgb[i * 3], shaftRgb[i * 3 + 1], shaftRgb[i * 3 + 2])
       shaftMesh.setColorAt(i, _c)
 
+      // Private memory is one independently-sized reservoir per backend. A
+      // sort fills its own reservoir first; only its excess reaches the temp
+      // file below. When the operation ends, that one reservoir drains.
+      const sortPhase = st === 'sort' && b
+        ? clamp01(b.stateDur > 0 ? b.stateT / b.stateDur : b.progress)
+        : 0
+      const memWant = st === 'sort'
+        ? 0.14 + clamp01(sortPhase / SPILL_AT) * 0.86
+        : b && b.active
+          ? 0.075
+          : 0.035
+      const memRate = memWant > memoryLevel[i] ? 18 : 2.2
+      memoryLevel[i] = damp(memoryLevel[i], memWant, memRate, dt)
+      const memH = memoryH[i] * Math.max(0.01, memoryLevel[i])
+      setBoxAt(
+        memoryFillMesh,
+        i,
+        XS[i] + MEM_X_OFF,
+        MEM_BASE_Y + memH / 2,
+        MEM_Z + MEM_D / 2 + 0.08,
+        MEM_W - 0.34,
+        memH,
+        0.1,
+      )
+      _c.setHex(st === 'sort' ? COLOR.vacuum : COLOR.backend)
+        .multiplyScalar(st === 'sort' ? 0.45 + memoryLevel[i] * 1.1 : 0.07 + memoryLevel[i] * 0.22)
+      memoryFillMesh.setColorAt(i, _c)
+
       // I/O beacon
       _c.setHex(COLOR.crit).multiplyScalar(beacon)
       beaconMesh.setColorAt(i, _c)
@@ -866,12 +865,48 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
       }
       ringMesh.setColorAt(i, _c)
 
-      // work_mem spill: a puddle of temp file at the tower's feet
-      puddle[i] = damp(puddle[i], pud, pud > puddle[i] ? 1.6 : 0.5, dt)
+      // Temp file: the spill begins only after this backend's reservoir fills.
+      const spillWant = st === 'sort'
+        ? clamp01((sortPhase - SPILL_AT) / (1 - SPILL_AT))
+        : 0
+      tempFileBytes[i] = spillWant > 0
+        ? tempFileBytes[i] + dts * (0.35 + spillWant) * 5.2e6
+        : Math.max(0, tempFileBytes[i] - dts * 9e6)
+      tempBytes += tempFileBytes[i]
+      const lingering = clamp01(tempFileBytes[i] / 1.8e7)
+      const pud = Math.max(spillWant, lingering * 0.72)
+      puddle[i] = damp(puddle[i], pud, pud > puddle[i] ? 14 : 1.1, dt)
       const pr = puddle[i]
       if (pr > 0.01) {
-        const r = 3.4 + pr * 6.2
-        _p.set(XS[i], 0.06, BZ + 3)
+        const x = XS[i] + MEM_X_OFF
+        const pipeH = (MEM_BASE_Y - 0.28) * pr
+        setBoxAt(
+          spillPipeMesh,
+          i,
+          x,
+          MEM_BASE_Y - pipeH / 2,
+          MEM_Z + MEM_D / 2 + 0.08,
+          0.16,
+          pipeH,
+          0.16,
+        )
+        setBoxAt(
+          spillRunMesh,
+          i,
+          x,
+          0.18,
+          (MEM_Z + SPILL_Z) / 2,
+          0.16,
+          0.16,
+          Math.abs(MEM_Z - SPILL_Z),
+        )
+        setBoxAt(tempFileMesh, i, x, 0.11, SPILL_Z, 3.8 + pr * 1.4, 0.22, 2.6 + pr * 1.1)
+        _c.setHex(COLOR.vacuum).multiplyScalar(0.35 + pr * 1.15)
+        spillPipeMesh.setColorAt(i, _c)
+        spillRunMesh.setColorAt(i, _c)
+
+        const r = 2.8 + pr * 4.8
+        _p.set(x, 0.24, SPILL_Z)
         _e.set(-Math.PI / 2, 0, 0)
         _q.setFromEuler(_e)
         _sc.set(r, r, r)
@@ -879,12 +914,17 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
         puddleMesh.setMatrixAt(i, _m)
         _c.setHex(COLOR.vacuum).multiplyScalar(0.25 + pr * 0.7)
       } else {
-        _p.set(XS[i], -1000, BZ)
+        _p.set(XS[i] + MEM_X_OFF, -1000, BZ)
         _q.identity()
         _sc.set(0.001, 0.001, 0.001)
         _m.compose(_p, _q, _sc)
+        spillPipeMesh.setMatrixAt(i, _m)
+        spillRunMesh.setMatrixAt(i, _m)
+        tempFileMesh.setMatrixAt(i, _m)
         puddleMesh.setMatrixAt(i, _m)
         _c.setRGB(0, 0, 0)
+        spillPipeMesh.setColorAt(i, _c)
+        spillRunMesh.setColorAt(i, _c)
       }
       puddleMesh.setColorAt(i, _c)
 
@@ -984,40 +1024,22 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
     attrColor.needsUpdate = true
     crownMesh.instanceColor!.needsUpdate = true
     shaftMesh.instanceColor!.needsUpdate = true
+    memoryFillMesh.instanceMatrix.needsUpdate = true
+    memoryFillMesh.instanceColor!.needsUpdate = true
     beaconMesh.instanceColor!.needsUpdate = true
     ringMesh.instanceMatrix.needsUpdate = true
     ringMesh.instanceColor!.needsUpdate = true
+    spillPipeMesh.instanceMatrix.needsUpdate = true
+    spillPipeMesh.instanceColor!.needsUpdate = true
+    spillRunMesh.instanceMatrix.needsUpdate = true
+    spillRunMesh.instanceColor!.needsUpdate = true
+    tempFileMesh.instanceMatrix.needsUpdate = true
     puddleMesh.instanceMatrix.needsUpdate = true
     puddleMesh.instanceColor!.needsUpdate = true
     chainGeo.attributes.position.needsUpdate = true
     chainGeo.attributes.color.needsUpdate = true
 
-    /* --- local memory ----------------------------------------------------- */
     sorting = sortCount
-    const want = clamp01(sortCount / 3)
-    const level = damp(fill.scale.y, Math.max(0.001, want * 5.4), 3, dt)
-    fill.scale.y = level
-    fill.position.y = FILL_BASE + level / 2
-
-    const overflowing = sortCount > 0
-    // temp files accumulate while sorts spill, then age out
-    tempBytes = overflowing
-      ? tempBytes + dts * sortCount * 5.2e6
-      : Math.max(0, tempBytes - dts * 9e6)
-
-    spill.visible = overflowing
-    if (overflowing) {
-      const len = FILL_BASE - 2.5
-      spill.scale.set(1, len, 1)
-      spill.position.set(workBox[0], 2.5 + len / 2, workBox[2])
-    }
-    const ts = clamp01(tempBytes / 4e8)
-    const tScale = Math.max(0.001, ts)
-    tempGlow.scale.set(tScale, 1, tScale)
-
-    _c.setHex(COLOR.vacuum).multiplyScalar(0.35 + want * 0.9)
-    arenas.setColorAt(0, _c)
-    arenas.instanceColor!.needsUpdate = true
   }
 
   function setDetail(level: 0 | 1 | 2): void {
@@ -1025,9 +1047,7 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
     ventMesh.visible = level >= 1
     edgeLines.visible = level >= 1
     plateMesh.visible = level >= 2
-    lmPanel.visible = level >= 1
-    lmCaption.visible = level >= 2
-    arenas.visible = level >= 1
+    memoryTickMesh.visible = level >= 1
   }
 
   function dispose(): void {
@@ -1039,11 +1059,17 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
     shaftMesh.dispose()
     bandMesh.dispose()
     crownMesh.dispose()
+    memoryBackMesh.dispose()
+    memoryShellMesh.dispose()
+    memoryTickMesh.dispose()
+    memoryFillMesh.dispose()
     ringMesh.dispose()
     beaconMesh.dispose()
+    spillPipeMesh.dispose()
+    spillRunMesh.dispose()
+    tempFileMesh.dispose()
     puddleMesh.dispose()
     plateMesh.dispose()
-    arenas.dispose()
   }
 
   return { id: 'backends', group, update, setDetail, dispose }

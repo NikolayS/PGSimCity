@@ -1,3 +1,7 @@
+import {
+  SHARED_BUFFERS_MAX_MIB,
+  SHARED_BUFFERS_MIN_MIB,
+} from '../core/types'
 import type { ComponentDoc, Knobs } from '../core/types'
 import { DOCS_MEMORY } from './docs-memory'
 import { DOCS_STORAGE } from './docs-storage'
@@ -67,6 +71,12 @@ export const KNOB_GROUPS: { id: KnobGroup; label: string; hint: string }[] = [
   { id: 'sim', label: 'Playback', hint: 'Simulation controls' },
 ]
 
+function fmtSharedBuffers(mib: number): string {
+  if (mib < 1024) return `${Math.round(mib)} MiB`
+  const gib = mib / 1024
+  return `${Number.isInteger(gib) ? gib.toFixed(0) : gib.toFixed(1)} GiB`
+}
+
 export const KNOB_META: KnobMeta[] = [
   {
     key: 'tps',
@@ -117,12 +127,12 @@ export const KNOB_META: KnobMeta[] = [
     label: 'shared_buffers',
     guc: 'shared_buffers',
     group: 'memory',
-    kind: 'range',
-    min: 32,
-    max: 1024,
-    step: 32,
-    unit: 'pages',
-    hint: "Postgres's own page cache. Too small and backends thrash; too large and you starve the OS cache.",
+    kind: 'logrange',
+    min: SHARED_BUFFERS_MIN_MIB,
+    max: SHARED_BUFFERS_MAX_MIB,
+    step: 128,
+    fmt: fmtSharedBuffers,
+    hint: "Postgres's own page cache, sized here in real MiB/GiB. The plaza is a fixed 1,024-frame sample of that pool; each MiB implies 128 8 KiB buffers.",
   },
   {
     key: 'bgwriterEnabled',

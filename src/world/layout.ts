@@ -113,7 +113,13 @@ export const ANCHOR = {
   startupProc: [120, 0, 246],
   replicaBuffers: [120, 3, 300],
   replicaStorage: [120, -34, 300],
-  replicaClient: [56, 34, 330],
+  /**
+   * The read-only client's terminal, at grade south-west of the standby deck.
+   * It is an application tier, so it stands off the cluster's own ground with
+   * its own apron, exactly like the primary's client terminal — and its reads
+   * reach the deck along a surface run, not down from above.
+   */
+  replicaClient: [56, 0, 330],
   subscriber: [252, 0, 208],
 
   /* --- the continuity quarter: backups, PITR, and failover ---------------
@@ -659,11 +665,17 @@ route('replica.io', [
   [ANCHOR.replicaStorage[0], -32, ANCHOR.replicaStorage[2]],
 ], { color: COLOR.storage, speed: 70, size: 1.0 })
 
+/* A surface run: out of the terminal's east canopy, north-east across the
+ * apron on a shallow duct, up the deck's west ramp onto the read-only landing
+ * pad. hot_standby_feedback comes back along the same run before it joins the
+ * ack duct north, so the standby's xmin never leaves the ground either. */
 route('replica.read', [
-  [ANCHOR.replicaClient[0], 30, ANCHOR.replicaClient[2]],
-  [96, 20, 312],
-  [ANCHOR.replicaBuffers[0] - 12, 8, ANCHOR.replicaBuffers[2]],
-], { color: COLOR.client, speed: 110, size: 1.0 })
+  [ANCHOR.replicaClient[0] + 17, 2.4, ANCHOR.replicaClient[2] - 2],
+  [78, 2.0, 322],
+  [92, 2.2, 308],
+  [ANCHOR.replicaBuffers[0] - 22, 3.0, ANCHOR.replicaBuffers[2]],
+  [ANCHOR.replicaBuffers[0] - 18, 5.6, ANCHOR.replicaBuffers[2]],
+], { color: COLOR.client, speed: 110, size: 1.0, visible: true, roadOpacity: 0.14 })
 
 /* --- maintenance --------------------------------------------------------- */
 

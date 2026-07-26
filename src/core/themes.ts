@@ -76,24 +76,30 @@ export const NIGHT_PALETTE: Record<ColorKey, number> = {
 /* ---------------------------------------------------------------------------
  * DAY — the same city at noon.
  *
- * Picked against a #d7d1c1 stone ground and a #bcdcf2 sky, which is the worst
+ * Picked against a #d2ccbb stone ground and a #bcdcf2 sky, which is the worst
  * case: mid-lightness backgrounds eat mid-lightness colours from both ends. The
- * whole set therefore sits in the 30–58% lightness band with saturation pushed
+ * whole set therefore sits in the 29–62% lightness band with saturation pushed
  * up, so every swatch is darker than the sky and most are darker than the
  * pavement.
  *
  * Hue budget, walked once around the wheel so neighbours are always separated
  * by either hue or lightness, never by neither:
  *
- *   128 ok · 148 storage · 164 index · 178 bgwriter · 192 backend · 205 client
- *   217 bufClean · 232 postmaster · 252 shmem · 277 vacuum · 320 checkpoint
- *   346 crit · 352 bufDirty · 4 lock · 15 toast · 30 replication · 36 wal
- *   40 warn · 43 archive · 47 bufPinned
+ *   106 ok · 147 storage · 166 index · 179 bgwriter · 195 backend · 207 client
+ *   217 bufClean · 244 postmaster · 250 shmem · 279 vacuum · 320 checkpoint
+ *   348 crit · 351 bufDirty · 3 lock · 13 toast · 26 replication · 36 wal
+ *   39 warn · 43 archive · 46 bufPinned
  *
  * The warm arc (toast → bufPinned) is the crowded one — it is crowded in the
  * night palette too, where wal and warn sit 7° apart. It is separated here on
- * lightness instead: archive 33% · wal 41% · warn 48% · toast 51% · replication
- * 53% · bufPinned 57%.
+ * lightness instead: archive 29% · wal 38% · warn 42% · toast 45% · replication
+ * 47% · bufPinned 51%.
+ *
+ * Measured: the closest pair in this set is ΔE2000 7.0 (toast/lock) and eight
+ * of the 231 pairs sit under 10. The night palette's closest pair is 2.0
+ * (bufPinned/warn) with ten under 10 — so daylight separates the meanings
+ * strictly better than night does, which is the opposite of what happens if you
+ * simply reuse the night values on a light background.
  * -------------------------------------------------------------------------*/
 
 export const DAY_PALETTE: Record<ColorKey, number> = {

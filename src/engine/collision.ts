@@ -135,6 +135,17 @@ export interface CollisionWorld {
    */
   groundAt(p: THREE.Vector3, maxDrop: number): number | null
   /**
+   * Is there any structure a pedestrian could meet within `radius` of this XZ?
+   *
+   * Only what a person can actually walk up to counts: the buried storage layer
+   * and anything hanging in the client sky are ignored. This is how a drop-in
+   * tells "you are in the city" from "you are standing in the empty outfield" —
+   * the ground ray cannot, because it finds the same plate at y = 0 either way.
+   *
+   * Not for per-frame use: it shares the candidate buffer with move().
+   */
+  solidNear(x: number, z: number, radius: number): boolean
+  /**
    * Slide a vertical capsule horizontally. `from` and `to` are FEET positions;
    * only the horizontal component of `to` is used — `to.y` is passed through to
    * `out.position.y` (plus any step-up), and `from.y` is the height the capsule
@@ -181,6 +192,10 @@ const RAY_UP = 2.0
 const GROUND_TOL = 0.05
 /** Below this the two floats are the same number. */
 const EPS = 1e-4
+/** solidNear(): a box whose top is below this is buried and does not count. */
+const NEAR_FLOOR = -1
+/** …and one whose underside is above this hangs in the sky and does not either. */
+const NEAR_CEILING = 30
 
 const DEFAULTS = {
   maxSpan: 60,
@@ -494,6 +509,21 @@ export function createCollisionWorld(): CollisionWorld {
     return best === -Infinity ? null : best
   }
 
+  function solidNear(x: number, z: number, radius: number): boolean {
+    if (n === 0 || radius <= 0) return false
+    queryRect(x - radius, z - radius, x + radius, z + radius)
+    const r2 = radius * radius
+    for (let i = 0; i < candN; i++) {
+      const o = cand[i] * 6
+      if (data[o + 4] < NEAR_FLOOR) continue
+      if (data[o + 1] > NEAR_CEILING) continue
+      const dx = x < data[o] ? data[o] - x : x > data[o + 3] ? x - data[o + 3] : 0
+      const dz = z < data[o + 2] ? data[o + 2] - z : z > data[o + 5] ? z - data[o + 5] : 0
+      if (dx * dx + dz * dz <= r2) return true
+    }
+    return false
+  }
+
   /**
    * One axis of the slide. `isX` picks the axis; `other` is the walker's
    * position on the perpendicular axis. Boxes the walker is already inside are
@@ -677,6 +707,7 @@ export function createCollisionWorld(): CollisionWorld {
     addWalkable,
     removeWalkable,
     groundAt,
+    solidNear,
     move,
     debugMesh,
     get stepHeight(): number {

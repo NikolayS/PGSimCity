@@ -143,6 +143,15 @@ const NOMINAL_TRIPS = 35
 const TRUNCATE_MAX_PAGES = 8
 const MAX_VISIT_PAGES = 2400
 const PAGE_OPS_PER_SEC = 60000
+/**
+ * Where a relation's index blocks start in the buffer key space. It used to be
+ * the relation's *declared* heap size, so the moment a table bloated past
+ * `def.pages` its heap blocks started colliding with its own index blocks in
+ * `bufMap` — one frame answering to both a heap page and a leaf page. bufKey is
+ * `rel * 0x400000 + blk` and no relation here approaches 65536 pages, so putting
+ * the index space above that makes the collision impossible rather than unlikely.
+ */
+const IDX_BASE = 1 << 16
 const FLOW_BUDGET_PER_SEC = 420
 const WAL_WRITER_DELAY = 0.2
 const BGW_DELAY = 0.2
@@ -154,7 +163,7 @@ const NET_STRETCH = 6 // ms of configured network lag → sim seconds (see heade
  * near 0.1) pushes it to the ceiling — which is the whole reason that GUC
  * exists. See ioPressure().
  */
-const DEVICE_PAGES_PER_SEC = 1400
+const DEVICE_PAGES_PER_SEC = 900
 
 /**
  * The WAL distance that triggers a checkpoint. `CalculateCheckPointSegments()`,
@@ -204,6 +213,9 @@ interface Extra {
   planStart: number[]
   planEnd: number[]
   fpiBytes: number
+  walPending: number
+  walPendingFpi: number
+  walPrepared: boolean
 }
 
 function makeExtra(): Extra {
@@ -228,6 +240,9 @@ function makeExtra(): Extra {
     planStart: [],
     planEnd: [],
     fpiBytes: 0,
+    walPending: 0,
+    walPendingFpi: 0,
+    walPrepared: false,
   }
 }
 
@@ -438,11 +453,33 @@ export function createSim(bus: Bus): SimApi {
    * start here" read it instead of `redoLsn`. Those two readouts are correct
    * between checkpoints and one checkpoint ahead of themselves while one runs.
    */
-  let completedRedoLsn = ckpt.redoLsn
+  type RuntimeCheckpoint = typeof ckpt & {
+    completedRedoLsn: number
+    numTimed: number
+    numRequested: number
+  }
+  const runtimeCkpt = ckpt as RuntimeCheckpoint
+  runtimeCkpt.completedRedoLsn = ckpt.redoLsn
+  runtimeCkpt.numTimed = 0
+  runtimeCkpt.numRequested = 0
   const bgw = state.bgwriter
   const av = state.autovac
   const rep = state.replication
+  type RuntimeReplication = typeof rep & { ackedApplyLsn: number }
+  const runtimeRep = rep as RuntimeReplication
+  runtimeRep.ackedApplyLsn = rep.replayLsn
   const stats = state.stats
+  type RuntimeStats = typeof stats & {
+    queueDepth: number
+    queueSec: number
+    refused: number
+    arrivals: number
+  }
+  const runtimeStats = stats as RuntimeStats
+  runtimeStats.queueDepth = 0
+  runtimeStats.queueSec = 0
+  runtimeStats.refused = 0
+  runtimeStats.arrivals = 0
 
   /* ---- derived tables ------------------------------------------------- */
 
@@ -451,9 +488,69 @@ export function createSim(bus: Bus): SimApi {
   /** Hot working set per relation: ~4% of the heap takes ~97% of the traffic. */
   const hotPages: number[] = TABLES.map((d) => clamp(Math.round(d.pages * 0.04), 16, 180))
   /** Total index pages per table, used to place index blocks past the heap. */
-  const idxPages: number[] = TABLES.map((d) => d.indexes.reduce((a, ix) => a + ix.pages, 0))
+  const baseIdxPages: number[] = TABLES.map((d) => d.indexes.reduce((a, ix) => a + ix.pages, 0))
+  /** Effective index pages, including leaf pages occupied by dead entries. */
+  const idxPages = baseIdxPages.slice()
+  /** Index entries left behind by DELETE and non-HOT UPDATE until vacuum. */
+  const deadIndexTuples: number[] = TABLES.map(() => 0)
+  type RuntimeTable = TableSim & {
+    indexPages: number
+    deadIndexTuples: number
+    insSinceVacuum: number
+    frozenPages: number
+    vacuumInsThreshold: number
+  }
+  const runtimeTable = (ti: number): RuntimeTable => tables[ti] as RuntimeTable
+  const INDEX_ENTRIES_PER_PAGE = 180
+  const refreshIndexPages = (ti: number): void => {
+    idxPages[ti] = baseIdxPages[ti] + Math.ceil(deadIndexTuples[ti] / INDEX_ENTRIES_PER_PAGE)
+    runtimeTable(ti).indexPages = idxPages[ti]
+    runtimeTable(ti).deadIndexTuples = deadIndexTuples[ti]
+  }
+
+  /* ---- sampled sequential scans ---------------------------------------- */
+
+  /**
+   * One sampled block stands for this many real blocks of the relation. The city
+   * cannot animate 5,200 buffer requests inside one trip, so a sequential scan is
+   * sampled — but a sample is only honest if it is a sample OF SOMETHING FIXED.
+   */
+  const SCAN_STRIDE = 32
+  /** Blocks in the relation's sampling grid. Grows as the relation grows. */
+  const scanGridN = (t: TableSim): number =>
+    Math.max(1, Math.min(t.pages, Math.max(8, Math.ceil(t.pages / SCAN_STRIDE))))
+  /**
+   * Step `i` of the scan. Two scans of one relation read the SAME blocks — that
+   * is what a sequential scan is — so the sampled walk has to be the same walk
+   * every time, spread evenly across the whole relation.
+   *
+   * It used to start at `floor(rng() * t.pages)` and run contiguously, which made
+   * every scan of a relation a different, essentially disjoint slice of it: to
+   * the buffer pool, re-scanning one table looked like scanning a fresh table, so
+   * a repeated scan could never hit and 98% of all blks_read in the city came out
+   * of sequential scans no matter how large shared_buffers was. That also broke
+   * the shared_buffers lesson outright, because ring-strategy misses do not
+   * respond to the pool size at all.
+   */
+  const scanBlkOf = (t: TableSim, i: number): number => {
+    const n = scanGridN(t)
+    return (i % n) * Math.max(1, Math.floor(t.pages / n))
+  }
   /** Dead tuples that predate the xmin horizon and may therefore be removed. */
   const deadRemovable: number[] = TABLES.map(() => 0)
+  /** pg_stat_all_tables.ins_since_vacuum, for insert-triggered vacuum. */
+  const insSinceVacuum: number[] = TABLES.map(() => 0)
+  /** relallfrozen, scaled as a count of heap pages. */
+  const frozenPages: number[] = TABLES.map((d) => d.pages)
+  const vacuumInsThreshold: number[] = TABLES.map(() => 1000)
+  for (let i = 0; i < N_TABLES; i++) {
+    const t = runtimeTable(i)
+    t.indexPages = idxPages[i]
+    t.deadIndexTuples = 0
+    t.insSinceVacuum = 0
+    t.frozenPages = frozenPages[i]
+    t.vacuumInsThreshold = vacuumInsThreshold[i]
+  }
 
   const wRead: number[] = TABLES.map((d) => d.weight)
   const wIns: number[] = TABLES.map((d) => d.weight * (d.id === 'events' ? 2.4 : 1))
@@ -484,7 +581,8 @@ export function createSim(bus: Bus): SimApi {
    * buffer: evicting a page and reading it back does NOT make it owe a second
    * image, because the rule is `page.LSN <= RedoRecPtr`, not residency.
    */
-  const fpiDone = new Set<number>()
+  const fpiGenerationByPage = new Map<number, number>()
+  let fpiGeneration = 0
   /**
    * BM_CHECKPOINT_NEEDED. BufferSync() tags every buffer that is dirty at the
    * redo point and writes exactly that set; a page dirtied afterwards is
@@ -504,14 +602,23 @@ export function createSim(bus: Bus): SimApi {
   const PINS = 4
   const pinRing = new Int32Array(N_BACKEND_SLOTS * PINS).fill(-1)
   const pinPos = new Int32Array(N_BACKEND_SLOTS)
+  /**
+   * Concurrent pins one backend may hold, scaled to the pool. StrategyGetBuffer()
+   * raises `ERROR: no unpinned buffers available` when every frame is pinned, and
+   * this is what keeps that unreachable by construction: 16 slots × 4 pins = 64
+   * possible pins against a pool whose slider minimum is 32 frames was enough to
+   * pin the whole pool, which is how a pinned frame came to be stolen at all.
+   */
+  const pinsFor = (): number => Math.max(1, Math.min(PINS, Math.floor(buf.size / (2 * N_BACKEND_SLOTS))))
 
   function pinBuffer(slot: number, b: number): void {
     const base = slot * PINS
-    const p = pinPos[slot]
+    const n = pinsFor()
+    const p = pinPos[slot] % n
     const old = pinRing[base + p]
     if (old >= 0 && old !== b) buf.pinned[old] = 0
     pinRing[base + p] = b
-    pinPos[slot] = (p + 1) % PINS
+    pinPos[slot] = (p + 1) % n
     buf.pinned[b] = 1
     pinT[b] = state.t
   }
@@ -534,6 +641,72 @@ export function createSim(bus: Bus): SimApi {
   let wireTail = 0
   let wireCount = 0
 
+  /**
+   * Standby apply acknowledgements travel back to the primary. A replay LSN is
+   * not enough to release SyncRep waiters until the primary has received it.
+   */
+  const ACKW = 32
+  const ackLsn = new Float64Array(ACKW)
+  const ackAt = new Float64Array(ACKW)
+  let ackHead = 0
+  let ackTail = 0
+  let ackCount = 0
+  let ackSentLsn = wal.flushLsn
+  let ackedApplyLsn = wal.flushLsn
+
+  /**
+   * LagTrackerWrite/LagTrackerRead: primary flush positions paired with the
+   * time at which they became durable. replay_lag is a measured interval, not
+   * a byte gap divided by today's write rate.
+   */
+  const LAG_SAMPLES = 512
+  const lagSampleLsn = new Float64Array(LAG_SAMPLES)
+  const lagSampleAt = new Float64Array(LAG_SAMPLES)
+  let lagSampleHead = 0
+  let lagSampleCount = 1
+  lagSampleLsn[0] = wal.flushLsn
+  lagSampleAt[0] = state.t
+
+  function recordFlushSample(lsn: number): void {
+    if (lagSampleCount > 0) {
+      const last = (lagSampleHead + lagSampleCount - 1) % LAG_SAMPLES
+      if (lsn <= lagSampleLsn[last]) return
+    }
+    if (lagSampleCount < LAG_SAMPLES) {
+      const at = (lagSampleHead + lagSampleCount) % LAG_SAMPLES
+      lagSampleLsn[at] = lsn
+      lagSampleAt[at] = state.t
+      lagSampleCount++
+    } else {
+      lagSampleLsn[lagSampleHead] = lsn
+      lagSampleAt[lagSampleHead] = state.t
+      lagSampleHead = (lagSampleHead + 1) % LAG_SAMPLES
+    }
+  }
+
+  function flushTimeOf(lsn: number): number {
+    if (lagSampleCount <= 0) return state.t
+    const first = lagSampleHead
+    if (lsn <= lagSampleLsn[first]) return lagSampleAt[first]
+    let prev = first
+    for (let i = 1; i < lagSampleCount; i++) {
+      const cur = (lagSampleHead + i) % LAG_SAMPLES
+      if (lsn <= lagSampleLsn[cur]) {
+        const span = lagSampleLsn[cur] - lagSampleLsn[prev]
+        const f = span > 0 ? clamp01((lsn - lagSampleLsn[prev]) / span) : 1
+        return lagSampleAt[prev] + (lagSampleAt[cur] - lagSampleAt[prev]) * f
+      }
+      prev = cur
+    }
+    return lagSampleAt[prev]
+  }
+
+  function updateReplayLag(): void {
+    rep.lagSec = rep.replayLsn >= wal.flushLsn
+      ? 0
+      : Math.min(999, Math.max(0, state.t - flushTimeOf(rep.replayLsn)))
+  }
+
   /* ---- accumulators ---------------------------------------------------- */
 
   let pendingTx = 0
@@ -545,6 +718,10 @@ export function createSim(bus: Bus): SimApi {
   let commitsAcc = 0
   let walAcc = 0
   let fpiAcc = 0
+  let maintenanceWalPending = 0
+  let maintenanceFpiPending = 0
+  let maintenanceWalQueued = 0
+  let maintenanceWalDrained = 0
   let ioReadAcc = 0
   let ioWriteAcc = 0
   /**
@@ -569,6 +746,23 @@ export function createSim(bus: Bus): SimApi {
   const ioPressure = () => ioLoad + (ckpt.phase === 'syncing' ? 1.5 : 0)
   let winHits = 0
   let winMisses = 0
+  /**
+   * The two halves of `pg_stat_database`'s hit ratio, as a sliding delta.
+   * `blks_hit / (blks_hit + blks_read)` is an EVENT-weighted ratio over
+   * cumulative counters: every page request carries the same weight no matter
+   * which second it arrived in. Averaging per-window *ratios* with equal weight
+   * — which is what the old `damp(hitRatio, winHits/seen, …)` did — is a
+   * different and badly biased statistic here, because misses arrive in bursts
+   * (one analytics scan is 200 misses inside a single 0.25 s window) while the
+   * quiet windows in between are nearly all hits. Measured at the shipped
+   * defaults: 81.7% displayed against a true 65.2%, jittering across 60 points.
+   *
+   * These are the same two counters decayed by a common factor, so the ratio is
+   * the real event-weighted one over a ~7 s horizon and cannot drift when the
+   * city goes idle.
+   */
+  let emaHits = 0
+  let emaSeen = 0
   let rateT = 0
   let histT = 0
   let pageBudget = 0
@@ -581,6 +775,7 @@ export function createSim(bus: Bus): SimApi {
   let bgwT = 0
   let flushing = false
   let flushTarget = 0
+  let flushCovered = 0
   let flushT = 0
   let flushDur = 0
   let flushBytes = 0
@@ -592,6 +787,7 @@ export function createSim(bus: Bus): SimApi {
   let statT = 0
   let degradeWarnT = -100
   let refuseWarnT = -100
+  let noBufWarnT = -100
   let planSeq = 1
 
   /** xmin horizon control. When a long transaction is open the horizon freezes. */
@@ -658,10 +854,7 @@ export function createSim(bus: Bus): SimApi {
    * that cancelled every bottleneck in the model — see the file header.
    */
   function sizeBatch(): void {
-    // ceil, not round: a trip is indivisible, so rounding 1.4 down would leave
-    // the fleet structurally unable to serve the offered rate. Over-sizing is
-    // harmless — startVisit() only ever takes what is actually queued.
-    batchSize = Math.max(1, Math.ceil(K.tps / NOMINAL_TRIPS))
+    batchSize = Math.max(1, Math.round(K.tps / NOMINAL_TRIPS))
   }
 
   /* ======================================================================
@@ -698,31 +891,49 @@ export function createSim(bus: Bus): SimApi {
    * Clock sweep. Walk the pool decrementing usage_count until we find a frame
    * with usage 0 and no pin. This is BufferAlloc()/StrategyGetBuffer() and it is
    * the reason a too-small shared_buffers makes *backends* do write I/O.
+   *
+   * Returns -1 when every frame is pinned. StrategyGetBuffer() raises
+   * `ERROR: no unpinned buffers available` there — it refuses, it never steals.
+   * The old fallback (`return buf.clockHand % size`) handed back a PINNED frame,
+   * which touchPage then evicted out from under the backend holding it: measured
+   * 66 such thefts at shared_buffers=32 / tps=1600 over two minutes, every one of
+   * them a page another backend was reading.
+   *
+   * `trycounter` mirrors the real one exactly: it is reset every time a
+   * usage_count is decremented — that is progress — and only counts down on a
+   * frame that is pinned.
    */
   function clockVictim(): number {
     const size = buf.size
-    let guard = size * 6 + 8
-    while (guard-- > 0) {
+    let trycounter = size
+    for (;;) {
       const b = buf.clockHand
       buf.clockHand = buf.clockHand + 1 >= size ? 0 : buf.clockHand + 1
-      if (buf.pinned[b]) continue
-      if (buf.usage[b] > 0) {
-        buf.usage[b]--
-        continue
+      if (!buf.pinned[b]) {
+        if (buf.usage[b] > 0) {
+          buf.usage[b]--
+          trycounter = size
+          continue
+        }
+        return b
       }
-      return b
+      if (--trycounter === 0) return -1
     }
-    return buf.clockHand % size
   }
 
-  /** BAS_BULKREAD: reuse our own ring frame instead of evicting the whole pool. */
+  /**
+   * BAS_BULKREAD: reuse our own ring frame instead of evicting the whole pool.
+   * GetBufferFromRing() takes the frame back only when it is unpinned AND its
+   * usage_count is still <= 1 — if somebody else has been using the page since we
+   * put it there, it has escaped the ring and we must not recycle it.
+   */
   function ringVictim(slot: number, x: Extra): number {
     const base = slot * RING
     const b = ringBuf[base + x.ringPos]
     x.ringPos = (x.ringPos + 1) % RING
-    if (b >= 0 && b < buf.size && !buf.pinned[b]) return b
+    if (b >= 0 && b < buf.size && !buf.pinned[b] && buf.usage[b] <= 1) return b
     const v = clockVictim()
-    ringBuf[base + (x.ringPos + RING - 1) % RING] = v
+    if (v >= 0) ringBuf[base + ((x.ringPos + RING - 1) % RING)] = v
     return v
   }
 
@@ -737,7 +948,12 @@ export function createSim(bus: Bus): SimApi {
     const x = extras[slot]
 
     if (found !== undefined && found < buf.size && buf.valid[found]) {
-      if (buf.usage[found] < 5) buf.usage[found]++
+      // PinBuffer(): a strategy access caps usage_count at 1 (`if (usage == 0)
+      // usage = 1`), an ordinary one increments up to BM_MAX_USAGE_COUNT. That cap
+      // is the whole point of a ring — a sequential scan must not be able to
+      // promote the pages it sweeps past above the OLTP working set.
+      if (useRing) { if (buf.usage[found] === 0) buf.usage[found] = 1 }
+      else if (buf.usage[found] < 5) buf.usage[found]++
       pinBuffer(slot, found)
       buf.lastTouch[found] = state.t
       buf.hits++
@@ -749,6 +965,18 @@ export function createSim(bus: Bus): SimApi {
 
     // miss → find a victim, pay for it, then read from storage
     const v = useRing ? ringVictim(slot, x) : clockVictim()
+    if (v < 0) {
+      // Every frame is pinned: `ERROR: no unpinned buffers available`. The read
+      // still happened — it just cannot be cached — so it counts as blks_read.
+      buf.misses++
+      winMisses++
+      ioReadAcc++
+      if (state.t - noBufWarnT > 20) {
+        noBufWarnT = state.t
+        toast('ERROR: no unpinned buffers available', 'warn', 4000)
+      }
+      return false
+    }
     if (buf.valid[v]) {
       writeOut(v, true) // the backend that wanted the frame does this write
       bufMap.delete(bufKey(buf.rel[v], buf.blk[v]))
@@ -782,13 +1010,36 @@ export function createSim(bus: Bus): SimApi {
     // start from a page it trusts. This is why WAL volume explodes immediately
     // after every checkpoint and then decays as the write working set pays off.
     const key = bufKey(buf.rel[b], buf.blk[b])
-    if (fpiDone.has(key)) return
-    if (fpiDone.size > 40000) fpiDone.clear()
-    fpiDone.add(key)
+    if (fpiGenerationByPage.get(key) === fpiGeneration) return
+    fpiGenerationByPage.set(key, fpiGeneration)
     const bytes = PAGE * rr(0.6, 1.0) // the hole between pd_lower/pd_upper is skipped
     extras[slot].fpiBytes += bytes
-    walInsert(bytes)
-    fpiAcc += bytes
+  }
+
+  /**
+   * WAL for a page modified by a maintenance process. Vacuum uses its own
+   * Buffer Access Strategy, so there is deliberately no backend slot and no
+   * call to touchPage()/markDirty(). It still shares the checkpoint generation:
+   * a heap page pays at most one FPI between redo points no matter whether a
+   * backend or vacuum touched it first.
+   */
+  function walInsertPage(rel: number, blk: number, recBytes: number): void {
+    queueMaintenanceWal(recBytes)
+    if (K.fullPageWrites) {
+      const key = bufKey(rel, blk)
+      if (fpiGenerationByPage.get(key) !== fpiGeneration) {
+        fpiGenerationByPage.set(key, fpiGeneration)
+        const bytes = PAGE * rr(0.6, 1.0)
+        queueMaintenanceWal(bytes)
+        maintenanceFpiPending += bytes
+        ioWriteAcc++
+      }
+    }
+  }
+
+  function queueMaintenanceWal(bytes: number): void {
+    maintenanceWalPending += bytes
+    maintenanceWalQueued += bytes
   }
 
   function resizePool(newSize: number): void {
@@ -807,6 +1058,19 @@ export function createSim(bus: Bus): SimApi {
     if (buf.clockHand >= size) buf.clockHand = 0
     if (bgw.scanPos >= size) bgw.scanPos = 0
     for (let i = 0; i < ringBuf.length; i++) if (ringBuf[i] >= size) ringBuf[i] = -1
+    // pinsFor() shrinks with the pool; pins parked in ring positions the new
+    // bound no longer reaches would otherwise be held for ever.
+    const n = pinsFor()
+    for (let s = 0; s < N_BACKEND_SLOTS; s++) {
+      for (let i = 0; i < PINS; i++) {
+        const b = pinRing[s * PINS + i]
+        if (b >= 0 && (i >= n || b >= size)) {
+          if (b < buf.size) buf.pinned[b] = 0
+          pinRing[s * PINS + i] = -1
+        }
+      }
+      if (pinPos[s] >= n) pinPos[s] = 0
+    }
   }
 
   /** Pin decay + the counters the 3D grid reads. Cheap: 1024 slots. */
@@ -842,26 +1106,47 @@ export function createSim(bus: Bus): SimApi {
     if (wal.bufferBytes >= wal.bufferCapacity) requestFlush(wal.insertLsn)
   }
 
+  /**
+   * Capture the finished insert position before issuing write+fsync. WAL
+   * inserted after this point is not covered by this flush and has to ride the
+   * next one; this is why a commit under load waits for one to two fsyncs.
+   */
+  function startFlush(): void {
+    flushing = true
+    flushCovered = Math.max(flushTarget, wal.insertLsn)
+    flushBytes = Math.max(0, flushCovered - wal.flushLsn)
+    flushDur = (0.085 + Math.min(0.22, flushBytes / (6 * 1024 * 1024))) * ioPressure()
+    flushT = 0
+    // write() happens now; fsync() completes later. WAL buffers are reusable
+    // once written to the kernel, not once the fsync has hardened them.
+    wal.writeLsn = Math.max(wal.writeLsn, flushCovered)
+    wal.bufferBytes = Math.min(wal.bufferCapacity, wal.insertLsn - wal.writeLsn)
+    flow('wal.flush', 1, 'wal_flush', 1.3)
+  }
+
   function requestFlush(target: number): void {
     if (target > flushTarget) flushTarget = target
-    if (!flushing) {
-      flushing = true
-      flushBytes = Math.max(0, flushTarget - wal.flushLsn)
-      // fsync latency: mostly fixed cost, a little size-dependent — and then
-      // whatever the device is already busy with. A WAL fsync competes with the
-      // checkpointer's writeback on the same storage, which is why commit
-      // latency jumps during a checkpoint even for transactions that touched
-      // nothing but cached pages.
-      flushDur = (0.085 + Math.min(0.22, flushBytes / (6 * 1024 * 1024))) * ioPressure()
-      flushT = 0
-      // write() happens now; fsync() completes flushDur later. Between the two,
-      // these bytes are in the OS page cache — they survive a Postgres crash
-      // and not a power cut, which is the whole point of the walwriter doc.
-      // Handing them to the kernel is also what frees the wal_buffers ring:
-      // a WAL buffer is reusable once written, not once flushed.
-      wal.writeLsn = Math.max(wal.writeLsn, flushTarget)
-      wal.bufferBytes = Math.min(wal.bufferCapacity, wal.insertLsn - wal.writeLsn)
-      flow('wal.flush', 1, 'wal_flush', 1.3)
+    if (!flushing) startFlush()
+  }
+
+  function drainMaintenanceWal(dt: number): void {
+    if (maintenanceWalPending > 0) {
+      const gap = Math.max(0, wal.insertLsn - wal.writeLsn)
+      const available = Math.max(0, wal.bufferCapacity - gap)
+      const chunk = Math.min(
+        maintenanceWalPending,
+        available,
+        Math.max(4096, 24 * 1024 * 1024 * dt),
+      )
+      if (chunk > 0) {
+        walInsert(chunk)
+        maintenanceWalPending -= chunk
+        maintenanceWalDrained += chunk
+        const fpiChunk = Math.min(maintenanceFpiPending, chunk)
+        maintenanceFpiPending -= fpiChunk
+        fpiAcc += fpiChunk
+      }
+      if (maintenanceWalPending > 0) requestFlush(wal.insertLsn)
     }
   }
 
@@ -884,7 +1169,8 @@ export function createSim(bus: Bus): SimApi {
         // Records inserted while it was in flight are not covered: they stay in
         // wal_buffers and ride the next flush, which is why a commit arriving
         // mid-fsync waits for the one after it.
-        wal.flushLsn = Math.max(wal.flushLsn, wal.writeLsn)
+        wal.flushLsn = Math.max(wal.flushLsn, flushCovered)
+        recordFlushSample(wal.flushLsn)
         wal.bufferBytes = Math.min(wal.bufferCapacity, wal.insertLsn - wal.writeLsn)
         flushing = false
         flow('wal.write', 1, 'wal', 1.4)
@@ -895,7 +1181,7 @@ export function createSim(bus: Bus): SimApi {
         // starts the next write+fsync immediately. Under sustained load that is
         // why fsyncs run back to back, and why the write pointer stays ahead of
         // the flush pointer instead of the two meeting between flushes.
-        if (flushTarget > wal.flushLsn) requestFlush(flushTarget)
+        if (flushTarget > wal.flushLsn) startFlush()
       }
     }
 
@@ -1002,7 +1288,7 @@ export function createSim(bus: Bus): SimApi {
     // RemoveOldXlogFiles() after the checkpoint record is written and pg_control
     // updated, never at the start. This is why pg_wal holds its maximum right
     // through the write phase and steps down exactly once, at the end.
-    const sinceRedo = Math.max(0, wal.insertLsn - completedRedoLsn)
+    const sinceRedo = Math.max(0, wal.insertLsn - runtimeCkpt.completedRedoLsn)
     let slotHold = 0
     if (rep.enabled) {
       const restart = rep.logicalEnabled ? Math.min(rep.flushLsn, rep.logicalSlotLsn) : rep.flushLsn
@@ -1026,6 +1312,9 @@ export function createSim(bus: Bus): SimApi {
     ckpt.progress = 0
     ckpt.buffersWritten = 0
     ckpt.nextInSec = K.checkpointTimeout
+    ckptRecordTicket = 0
+    if (reason === 'time') runtimeCkpt.numTimed++
+    else runtimeCkpt.numRequested++
     // RedoRecPtr: where replay would restart if we crashed once this checkpoint
     // has completed. `completedRedoLsn` — what pg_control still says, and what
     // WAL retention is measured from — does not move until then.
@@ -1042,8 +1331,8 @@ export function createSim(bus: Bus): SimApi {
     for (let b = buf.size; b < N_BUFFERS; b++) ckptNeeded[b] = 0
     ckpt.buffersToWrite = n
     // Every page now owes a full-page image on its next modification.
-    fpiDone.clear()
-    wal.fpwBurst = 1
+    fpiGeneration++
+    wal.fpwBurst = K.fullPageWrites ? 1 : 0
     // One forward-only lap over the pool, so the pass visits every tagged buffer
     // exactly once and then stops.
     ckptScan = 0
@@ -1057,9 +1346,10 @@ export function createSim(bus: Bus): SimApi {
     }
   }
 
-  let ckptWriteDur = 30
+  let ckptWriteEnd = 0
   let ckptSyncDur = 1.5
-  let ckptWriteAcc = 0
+  let ckptSyncEnd = 0
+  let ckptRecordTicket = 0
   /** The checkpointer has its own cursor: it sweeps the pool exactly once. */
   let ckptScan = 0
 
@@ -1084,25 +1374,34 @@ export function createSim(bus: Bus): SimApi {
     if (ckpt.phase === 'start') {
       if (ckpt.elapsed > 0.35) {
         ckpt.phase = 'writing'
-        // checkpoint_completion_target spreads the writes. For a WAL-triggered
-        // checkpoint the deadline is "when we would reach the trigger again" —
-        // the same walTriggerBytes() the trigger above uses, or the write phase
-        // would be paced against a distance the checkpoint never gets to run.
-        const walRate = Math.max(4096, wal.bytesPerSec)
-        const walDeadline = walTriggerBytes(K) / walRate
-        const span = ckpt.reason === 'wal' ? Math.min(K.checkpointTimeout, walDeadline) : K.checkpointTimeout
-        ckptWriteDur = clamp(K.checkpointCompletionTarget * span, 2, 600)
-        ckptWriteAcc = 0
       }
       return
     }
 
     if (ckpt.phase === 'writing') {
-      const rate = ckpt.buffersToWrite / ckptWriteDur
-      ckptWriteAcc += rate * dt
-      let n = Math.floor(ckptWriteAcc)
-      ckptWriteAcc -= n
-      const target = stride(rate, 26)
+      // IsCheckpointOnSchedule(): both the WAL and time criteria are sampled
+      // continuously. A workload change during the write phase therefore moves
+      // the pace immediately instead of being frozen into one rate captured at
+      // checkpoint start.
+      // buffersWritten tracks only the write pass, while the completion target
+      // applies to the whole checkpoint. Reserve the modelled sync/control-file
+      // tail so target=1.0 still completes on the start-to-start deadline rather
+      // than slipping the next checkpoint by that tail on every cycle.
+      const completionReserve =
+        clamp(0.5 + ckpt.buffersToWrite / 420, 0.5, 4) + 0.45
+      const elapsedXlogs =
+        (wal.insertLsn - ckpt.redoLsn + wal.bytesPerSec * completionReserve)
+        / Math.max(1, walTriggerBytes(K))
+      const elapsedTime =
+        (ckpt.elapsed + completionReserve) / Math.max(1, K.checkpointTimeout)
+      const sched = Math.max(elapsedXlogs, elapsedTime)
+      const target = Math.max(0.01, K.checkpointCompletionTarget)
+      const desired = Math.min(
+        ckpt.buffersToWrite,
+        Math.ceil(clamp01(sched / target) * ckpt.buffersToWrite),
+      )
+      let n = Math.max(0, desired - ckpt.buffersWritten)
+      const flowStride = stride(n / Math.max(dt, 1 / 120), 26)
       while (n-- > 0 && ckpt.buffersWritten < ckpt.buffersToWrite) {
         // ONE forward-only pass over the tagged set — the buffers that were
         // dirty at the redo point, and only those. The old code searched
@@ -1133,16 +1432,18 @@ export function createSim(bus: Bus): SimApi {
         if (!buf.dirty[found]) continue
         buf.dirty[found] = 0
         ioWriteAcc++
-        if (++sCkpt >= target) {
+        if (++sCkpt >= flowStride) {
           sCkpt = 0
           flow('ckpt.sweep', 1, 'page_write', 1.25)
           flow(rid.ioWrite(buf.rel[found] < N_TABLES ? buf.rel[found] : 0), 1, 'page_write', 1.1)
         }
       }
       ckpt.progress = ckpt.buffersToWrite > 0 ? clamp01(ckpt.buffersWritten / ckpt.buffersToWrite) : 1
-      if (ckpt.progress >= 1 || ckpt.elapsed > ckptWriteDur + 1) {
+      if (ckpt.progress >= 1) {
         ckpt.phase = 'syncing'
         ckptSyncDur = clamp(0.5 + ckpt.buffersWritten / 420, 0.5, 4)
+        ckptWriteEnd = ckpt.elapsed
+        ckptSyncEnd = ckptWriteEnd + ckptSyncDur
         ckpt.progress = 1
       }
       return
@@ -1152,21 +1453,28 @@ export function createSim(bus: Bus): SimApi {
       // The fsync burst. Every file the checkpoint touched is flushed now, and
       // this is where a checkpoint actually hurts on a busy machine.
       flow('ckpt.fsync', 1, 'page_write', 1.3)
-      if (ckpt.elapsed > ckptWriteDur + ckptSyncDur) ckpt.phase = 'finishing'
+      if (ckpt.elapsed > ckptSyncEnd) ckpt.phase = 'finishing'
       return
     }
 
     // finishing: write the checkpoint record, update pg_control, and only THEN
     // recycle the WAL below the redo point
-    if (ckpt.elapsed > ckptWriteDur + ckptSyncDur + 0.4) {
-      walInsert(140) // the checkpoint record
+    if (ckpt.elapsed > ckptSyncEnd + 0.4) {
+      if (ckptRecordTicket === 0) {
+        // Append the checkpoint record to the ordered maintenance stream.
+        // Vacuum records generated later queue behind it instead of starving
+        // checkpoint completion.
+        queueMaintenanceWal(140)
+        ckptRecordTicket = maintenanceWalQueued
+      }
+      if (maintenanceWalDrained < ckptRecordTicket) return
       // ControlFile->checkPointCopy = checkPoint, then RemoveOldXlogFiles().
       // ckpt.redoLsn, NOT wal.insertLsn: recovery restarts at the redo point
       // this checkpoint stamped when it began, so what pg_wal must keep is
       // everything since then — including every byte the checkpoint itself
       // produced while it ran. Assigning insertLsn here would zero retention at
       // completion instead of at start: right phase, wrong magnitude.
-      completedRedoLsn = ckpt.redoLsn
+      runtimeCkpt.completedRedoLsn = ckpt.redoLsn
       ckpt.lastDuration = ckpt.elapsed
       ckpt.count++
       ckpt.phase = 'idle'
@@ -1248,6 +1556,15 @@ export function createSim(bus: Bus): SimApi {
       const t = tables[i]
       t.heat = damp(t.heat, 0, 1.1, dt)
       t.vacuumThreshold = 50 + K.autovacuumScaleFactor * t.liveTuples
+      // autovacuum.c relation_needs_vacanalyze: insert-triggered vacuum scales
+      // only with the unfrozen share. That makes append-only relations get a
+      // cheap VM/freeze pass even though they never manufacture dead tuples.
+      const unfrozen = t.pages > 0 ? clamp01((t.pages - frozenPages[i]) / t.pages) : 1
+      vacuumInsThreshold[i] = 1000 + K.autovacuumScaleFactor * t.liveTuples * unfrozen
+      const rt = runtimeTable(i)
+      rt.insSinceVacuum = insSinceVacuum[i]
+      rt.frozenPages = frozenPages[i]
+      rt.vacuumInsThreshold = vacuumInsThreshold[i]
       const total = t.liveTuples + t.deadTuples
       t.bloat = total > 0 ? t.deadTuples / total : 0
       if (deadRemovable[i] > t.deadTuples) deadRemovable[i] = t.deadTuples
@@ -1280,40 +1597,83 @@ export function createSim(bus: Bus): SimApi {
   const vacPhaseDur: number[] = new Array(N_VAC_WORKERS).fill(1)
   const vacIdxLeft: number[] = new Array(N_VAC_WORKERS).fill(0)
   const vacTarget: number[] = new Array(N_VAC_WORKERS).fill(0)
+  const vacIndexTarget: number[] = new Array(N_VAC_WORKERS).fill(0)
+  const vacHeapModified: number[] = new Array(N_VAC_WORKERS).fill(0)
+  const vacPageAcc: number[] = new Array(N_VAC_WORKERS).fill(0)
+  const vacPageCursor: number[] = new Array(N_VAC_WORKERS).fill(0)
 
   function vacNext(w: VacWorker, phase: VacPhase, dur: number): void {
     w.phase = phase
     w.progress = 0
     vacPhaseT[w.slot] = 0
     vacPhaseDur[w.slot] = Math.max(0.05, dur)
+    vacPageAcc[w.slot] = 0
+    vacPageCursor[w.slot] = 0
   }
 
   function launchVacuum(): void {
-    let slot = -1
-    for (let i = 0; i < N_VAC_WORKERS; i++) if (!av.workers[i].active) { slot = i; break }
-    if (slot < 0) return
-    // pick the neediest table that is not already being vacuumed
-    let best = -1
-    let bestScore = 0
+    const candidates: { table: number; score: number }[] = []
     for (let i = 0; i < N_TABLES; i++) {
       const t = tables[i]
       if (t.vacuuming) continue
-      if (t.deadTuples <= t.vacuumThreshold) continue
-      const score = t.deadTuples / Math.max(1, t.vacuumThreshold)
-      if (score > bestScore) { bestScore = score; best = i }
+      const sVac = t.deadTuples / Math.max(1, t.vacuumThreshold)
+      const sIns = insSinceVacuum[i] / Math.max(1, vacuumInsThreshold[i])
+      const score = Math.max(sVac, sIns)
+      if (score > 1) candidates.push({ table: i, score })
     }
-    if (best < 0) return
-    const w = av.workers[slot]
-    w.active = true
-    w.table = best
-    w.deadCollected = 0
-    w.travel = 0
-    w.stalledByHorizon = false
-    vacTarget[slot] = Math.floor(deadRemovable[best])
-    tables[best].vacuuming = true
-    av.totalRuns++
-    vacNext(w, 'travel', 2.0)
-    flow('vac.launch', 2, 'stat', 1.2)
+    candidates.sort((a, b) => b.score - a.score)
+
+    // do_autovacuum walks the eligible list and fills every free worker slot.
+    // Choosing one global winner per naptime let a small hot table win again
+    // before a large table ever got a turn.
+    let next = 0
+    for (let slot = 0; slot < N_VAC_WORKERS && next < candidates.length; slot++) {
+      const w = av.workers[slot]
+      if (w.active) continue
+      const best = candidates[next++].table
+      w.active = true
+      w.table = best
+      w.deadCollected = 0
+      w.travel = 0
+      w.stalledByHorizon = false
+      vacTarget[slot] = Math.floor(deadRemovable[best])
+      const dead = Math.max(1, tables[best].deadTuples)
+      vacIndexTarget[slot] = Math.floor(deadIndexTuples[best] * (vacTarget[slot] / dead))
+      const pages = Math.max(1, tables[best].pages)
+      vacHeapModified[slot] = Math.round(pages * (1 - Math.exp(-vacTarget[slot] / pages)))
+      tables[best].vacuuming = true
+      av.totalRuns++
+      vacNext(w, 'travel', 2.0)
+      flow('vac.launch', 2, 'stat', 1.2)
+    }
+  }
+
+  function indexPagesFor(ti: number, indexNo: number): number {
+    const d = TABLES[ti]
+    const share = d.indexes[indexNo].pages / Math.max(1, baseIdxPages[ti])
+    return Math.max(1, Math.round(idxPages[ti] * share))
+  }
+
+  function indexBlockOffset(ti: number, indexNo: number): number {
+    let offset = IDX_BASE + 8
+    for (let i = 0; i < indexNo; i++) offset += indexPagesFor(ti, i)
+    return offset
+  }
+
+  /** Pace a discrete per-page maintenance action over the current phase. */
+  function vacuumPageWork(
+    worker: number,
+    total: number,
+    dt: number,
+    done: boolean,
+    visit: (page: number) => void,
+  ): void {
+    if (total <= 0) return
+    vacPageAcc[worker] += (total * dt) / vacPhaseDur[worker]
+    let n = Math.floor(vacPageAcc[worker])
+    vacPageAcc[worker] -= n
+    if (done) n = total - vacPageCursor[worker]
+    while (n-- > 0 && vacPageCursor[worker] < total) visit(vacPageCursor[worker]++)
   }
 
   function tickAutovac(dt: number): void {
@@ -1329,6 +1689,10 @@ export function createSim(bus: Bus): SimApi {
     for (let i = 0; i < N_VAC_WORKERS; i++) {
       const w = av.workers[i]
       if (!w.active) continue
+      // A maintenance worker that cannot reserve WAL space waits on
+      // WALWriteLock just like a backend. Do not let the phase clock keep
+      // running while its page records pile up in an unbounded side queue.
+      if (maintenanceWalPending >= wal.bufferCapacity) continue
       const ti = w.table
       const t = tables[ti]
       vacPhaseT[i] += dt
@@ -1349,6 +1713,15 @@ export function createSim(bus: Bus): SimApi {
         }
         case 'scan_heap': {
           t.heat = Math.min(1, t.heat + dt * 0.6)
+          const skip = t.def.id === 'events' ? 0.15 : 1
+          const readPages = Math.max(1, Math.round(t.pages * skip))
+          ioReadAcc += (readPages * dt) / vacPhaseDur[i]
+          const modified = vacHeapModified[i]
+          const deadPerPage = modified > 0 ? vacTarget[i] / modified : 0
+          vacuumPageWork(i, modified, dt, done, (page) => {
+            const blk = Math.min(t.pages - 1, Math.floor((page * t.pages) / Math.max(1, modified)))
+            walInsertPage(ti, blk, 40 + 2 * deadPerPage)
+          })
           if (++sVac >= 5) { sVac = 0; flow(rid.idxLookup(ti), 1, 'dead', 0.9) }
           if (done) {
             const removable = Math.floor(deadRemovable[ti])
@@ -1360,19 +1733,31 @@ export function createSim(bus: Bus): SimApi {
               vacNext(w, 'analyze', 1.0)
             } else {
               vacIdxLeft[i] = t.def.indexes.length
-              vacNext(w, 'vacuum_index', 1.0 + t.def.indexes[0].pages / 260)
+              vacNext(w, 'vacuum_index', 1.0 + indexPagesFor(ti, 0) / 260)
             }
           }
           break
         }
         case 'vacuum_index': {
+          const indexNo = t.def.indexes.length - vacIdxLeft[i]
+          const pages = indexPagesFor(ti, indexNo)
+          const killed = vacIndexTarget[i] / Math.max(1, t.def.indexes.length)
+          const modified = Math.round(pages * (1 - Math.exp(-killed / Math.max(1, pages))))
+          ioReadAcc += (pages * dt) / vacPhaseDur[i]
+          const killedPerPage = modified > 0 ? killed / modified : 0
+          const base = indexBlockOffset(ti, indexNo)
+          vacuumPageWork(i, modified, dt, done, (page) => {
+            walInsertPage(ti, base + page, 30 + 2 * killedPerPage)
+          })
           if (++sVac >= 4) { sVac = 0; flow(rid.vacIdx(ti), 1, 'dead', 1.1) }
           if (done) {
             vacIdxLeft[i]--
             if (vacIdxLeft[i] > 0) {
-              const ix = t.def.indexes[t.def.indexes.length - vacIdxLeft[i]]
-              vacNext(w, 'vacuum_index', 1.0 + ix.pages / 260)
+              const nextIndex = t.def.indexes.length - vacIdxLeft[i]
+              vacNext(w, 'vacuum_index', 1.0 + indexPagesFor(ti, nextIndex) / 260)
             } else {
+              deadIndexTuples[ti] = Math.max(0, deadIndexTuples[ti] - vacIndexTarget[i])
+              refreshIndexPages(ti)
               vacNext(w, 'vacuum_heap', clamp(t.pages / 1600, 0.8, 5))
             }
           }
@@ -1386,6 +1771,14 @@ export function createSim(bus: Bus): SimApi {
           deadRemovable[ti] -= take
           w.deadCollected += take
           av.landfill += take
+          const modified = vacHeapModified[i]
+          const deadPerPage = modified > 0 ? vacTarget[i] / modified : 0
+          vacuumPageWork(i, modified, dt, done, (page) => {
+            const blk = Math.min(t.pages - 1, Math.floor((page * t.pages) / Math.max(1, modified)))
+            // The scan pass already paid this page's FPI in this checkpoint
+            // generation; walInsertPage's generation check prevents a second.
+            walInsertPage(ti, blk, 40 + 2 * deadPerPage)
+          })
           if (++sVac >= 4) { sVac = 0; flow(rid.ioWrite(ti), 1, 'page_write', 1.0) }
           if (done) vacNext(w, 'truncate', 0.7)
           break
@@ -1408,11 +1801,16 @@ export function createSim(bus: Bus): SimApi {
             const cap = t.pages * t.def.tuplesPerPage
             const used = t.liveTuples + t.deadTuples
             const free = cap > 0 ? clamp01((cap - used) / cap) : 0
-            const p = Math.pow(free, Math.min(t.def.tuplesPerPage, 32))
-            const tailEmpty = p >= 0.999 ? t.pages : Math.floor(p / (1 - p))
+            const spare = Math.floor((cap - used) / Math.max(1, t.def.tuplesPerPage))
+            // Scattered free space almost never forms a long empty suffix.
+            // Nine independent occupancy groups is the scaled analogue of a
+            // real page's many tuple slots; the 1/16 gate is
+            // REL_TRUNCATE_FRACTION.
+            const tailEmpty = Math.floor(t.pages * Math.pow(free, 9))
             const shed = Math.min(tailEmpty, TRUNCATE_MAX_PAGES)
-            if (shed > 0 && !horizonFrozen) {
+            if (spare > Math.max(40, t.pages / 16) && shed > 0 && !horizonFrozen) {
               t.pages = Math.max(t.def.pages, t.pages - shed)
+              maintenanceWalPending += 30 // XLOG_SMGR_TRUNCATE
             }
             vacNext(w, 'analyze', 1.1)
           }
@@ -1428,6 +1826,8 @@ export function createSim(bus: Bus): SimApi {
           if (done) {
             t.vacuuming = false
             t.lastVacuum = state.t
+            insSinceVacuum[ti] = 0
+            frozenPages[ti] = t.pages
             w.active = false
             w.phase = 'idle'
             w.progress = 0
@@ -1558,6 +1958,12 @@ export function createSim(bus: Bus): SimApi {
         wireCount = 0
         wireHead = 0
         wireTail = 0
+        ackCount = 0
+        ackHead = 0
+        ackTail = 0
+        ackSentLsn = rep.replayLsn
+        ackedApplyLsn = rep.replayLsn
+        runtimeRep.ackedApplyLsn = ackedApplyLsn
         toast(
           K.walLevel === 'minimal'
             ? 'wal_level=minimal — a standby cannot be fed from this WAL'
@@ -1568,7 +1974,7 @@ export function createSim(bus: Bus): SimApi {
       rep.inFlight = 0
       rep.applyActivity = damp(rep.applyActivity, 0, 3, dt)
       rep.lagBytes = Math.max(0, wal.flushLsn - rep.replayLsn)
-      rep.lagSec = rep.lagBytes / Math.max(4096, wal.bytesPerSec)
+      updateReplayLag()
       return
     }
     if (!rep.connected) {
@@ -1578,6 +1984,9 @@ export function createSim(bus: Bus): SimApi {
       const behind = wal.flushLsn - rep.replayLsn
       if (behind > 4 * WAL_SEG) {
         rep.sentLsn = rep.writeLsn = rep.flushLsn = rep.replayLsn = wal.flushLsn
+        ackCount = ackHead = ackTail = 0
+        ackSentLsn = ackedApplyLsn = rep.replayLsn
+        runtimeRep.ackedApplyLsn = ackedApplyLsn
         toast('Standby resynchronised (required WAL had been recycled)', 'info')
       }
     }
@@ -1607,7 +2016,6 @@ export function createSim(bus: Bus): SimApi {
     if (rep.flushLsn < rep.writeLsn) {
       const rate = Math.max(8 * 1024 * 1024, wal.bytesPerSec * 6)
       rep.flushLsn = Math.floor(Math.min(rep.writeLsn, rep.flushLsn + rate * dt))
-      flow('net.ack', 1, 'ack', 1.0)
     }
 
     // Startup process: single-threaded replay of a WAL stream that sixteen
@@ -1625,8 +2033,26 @@ export function createSim(bus: Bus): SimApi {
       rep.applyActivity = damp(rep.applyActivity, 0.08, 3, dt)
     }
 
+    // WalRcvForceReply reports replay progress immediately, but the report
+    // still crosses the network. The primary releases remote_apply waiters only
+    // after this watermark arrives, so the minimum price is one round trip.
+    if (rep.replayLsn > ackSentLsn && ackCount < ACKW) {
+      ackSentLsn = rep.replayLsn
+      ackLsn[ackHead] = rep.replayLsn
+      ackAt[ackHead] = state.t + delay
+      ackHead = (ackHead + 1) % ACKW
+      ackCount++
+      flow('net.ack', 1, 'ack', 1.0)
+    }
+    while (ackCount > 0 && ackAt[ackTail] <= state.t) {
+      ackedApplyLsn = Math.max(ackedApplyLsn, ackLsn[ackTail])
+      runtimeRep.ackedApplyLsn = ackedApplyLsn
+      ackTail = (ackTail + 1) % ACKW
+      ackCount--
+    }
+
     rep.lagBytes = Math.max(0, wal.flushLsn - rep.replayLsn)
-    rep.lagSec = Math.min(999, rep.lagBytes / Math.max(4096, wal.bytesPerSec))
+    updateReplayLag()
 
     // hot standby serving read-only queries
     replicaReadT += dt
@@ -1782,33 +2208,48 @@ export function createSim(bus: Bus): SimApi {
     }
   }
 
-  function pickBlk(ti: number, mode: 'hot' | 'append' | 'scan', x?: Extra): number {
+  function pickBlk(ti: number, mode: 'hot' | 'append' | 'scan', x?: Extra, forWrite = false): number {
     const t = tables[ti]
     if (mode === 'append') {
       // inserts go to the tail page unless the FSM has holes to fill
       if (t.bloat > 0.15 && rng() < 0.6) return Math.floor(t.pages * rng())
       return Math.max(0, t.pages - 1 - Math.floor(rng() * 2))
     }
-    if (mode === 'scan' && x) {
-      const b = x.scanBlk % Math.max(1, t.pages)
-      x.scanBlk = b + 1
-      return b
-    }
-    // 97.5% of accesses land in a small hot set, skewed within it
-    if (rng() < 0.975) {
+    if (mode === 'scan' && x) return scanBlkOf(t, x.scanBlk++)
+    // The hot set takes almost everything, skewed hard within it; the rest is a
+    // cold tail spread over the whole relation. The tail is what sets the
+    // WORKING SET, and it used to be 2.5% uniform over 10,920 heap pages — so
+    // 90% of all accesses needed more distinct pages than the buffer pool can
+    // ever hold, the shared_buffers slider spanned only the steep part of the
+    // miss curve, and the lesson the slider exists to teach ("raise it until it
+    // stops helping") had no flat part to reach.
+    //
+    // Writes get a tighter tail than reads, and that asymmetry is physical: the
+    // pages a workload MODIFIES are a much smaller and much hotter set than the
+    // pages it reads. It is also what makes buffers_checkpoint comparable to
+    // buffers_clean in pg_stat_bgwriter — a dirty working set that survives to
+    // the checkpoint is the whole reason checkpoint_completion_target exists.
+    if (rng() < (forWrite ? 0.997 : 0.995)) {
       const u = rng()
       return Math.floor(hotPages[ti] * u * u)
     }
     return Math.floor(t.pages * rng())
   }
 
-  /** Index blocks live past the heap in the same relation for visual purposes. */
+  /**
+   * Index blocks live past the heap, in a key space no heap page can reach.
+   * A btree on a hot relation is small and stays resident: the leaf level is
+   * reached through a descent that touches root and inner pages every time, so
+   * the *distinct* leaves a workload visits are a small fraction of the index —
+   * which is why `idx_blks_hit` is very nearly all of `idx_blks_read + hit` on a
+   * healthy server, and why an index scan almost never reaches storage.
+   */
   function idxBlk(ti: number, level: 0 | 1 | 2): number {
-    const base = tables[ti].def.pages
+    const base = IDX_BASE
     if (level === 0) return base // root — always cached
     if (level === 1) return base + 1 + Math.floor(rng() * 4)
     const u = rng()
-    return base + 8 + Math.floor(idxPages[ti] * u * u * u * u)
+    return base + 8 + Math.floor(idxPages[ti] * 0.3 * u * u * u * u)
   }
 
   function startVisit(slot: number): void {
@@ -1857,6 +2298,9 @@ export function createSim(bus: Bus): SimApi {
     b.waitOn = -1
     b.plan = null
     x.fpiBytes = 0
+    x.walPending = 0
+    x.walPendingFpi = 0
+    x.walPrepared = false
     x.visitT = 0
     x.idleT = 0
     x.writes = kind === 'insert' || kind === 'update' || kind === 'delete'
@@ -1879,7 +2323,9 @@ export function createSim(bus: Bus): SimApi {
     const rbase = slot * RING
     for (let i = 0; i < RING; i++) ringBuf[rbase + i] = -1
     x.ringPos = 0
-    x.scanBlk = Math.floor(rng() * Math.max(1, tables[ti].pages))
+    // Step 0 of the relation's sampling grid. It is deliberately NOT a random
+    // offset: see scanBlkOf().
+    x.scanBlk = 0
 
     if (++sBufReq >= 2) {
       sBufReq = 0
@@ -1914,11 +2360,17 @@ export function createSim(bus: Bus): SimApi {
       case 'select_idx':
         perStmt = 3 + Math.min(8, x.rowsPerStmt)
         break
+      // Both sequential kinds read the WHOLE relation — that is what makes them
+      // sequential — so both push the same sampled walk through the pool, and
+      // both cost what the relation costs. `aggregate` used to sample at
+      // min(pages, 200), i.e. 48% of `sessions` against select_seq's 7% of the
+      // same table: two statements reading identical blocks, one of them handing
+      // the buffer pool seven times the traffic. What actually separates them is
+      // which relations the planner sends them to (wSeq favours the small ones,
+      // wAgg the large) and the sort/hash `aggregate` runs on top.
       case 'select_seq':
-        perStmt = Math.min(t.pages, 16 + Math.round(t.pages / 32))
-        break
       case 'aggregate':
-        perStmt = Math.min(t.pages, 200)
+        perStmt = scanGridN(t)
         break
       case 'insert':
         perStmt = 1 + 3 * nIdx + (t.def.toast ? 2 : 0)
@@ -1930,14 +2382,24 @@ export function createSim(bus: Bus): SimApi {
         perStmt = 4
         break
     }
-    // The pages this trip really has to move. Scans are sampled once per trip;
-    // point work scales with the batch, and is NOT capped here.
-    const work = x.seqScan ? perStmt : perStmt * x.txCount
+    // The pages this trip really has to move. EVERY statement in the batch is
+    // charged, sequential scans included: the file header's contract is that
+    // "all work (pages touched, WAL bytes, dead tuples) is multiplied by that
+    // batch, so the pool and the WAL see the real pressure", and exempting scans
+    // broke it. The seq-scan share of buffer traffic then fell as 1/batch, so the
+    // lifetime hit ratio became a function of the *tps* knob — measured 62.0% at
+    // 10 tps rising to 88.7% at 3000 — and `seq_scan` in pg_stat_user_tables was
+    // counted per statement while only one statement's worth of pages was pushed
+    // through the pool.
+    const work = perStmt * x.txCount
     // How much of that stream is actually pushed through the buffer pool. The
     // city cannot animate a hundred thousand page requests inside one trip, so
     // the *stream* is sampled — but only the stream. The cost is charged below
-    // on the full `work`.
-    const total = Math.min(MAX_VISIT_PAGES, work)
+    // on the full `work`. The cap has to scale with the batch too, or it puts the
+    // 1/batch dilution straight back: past MAX_VISIT_PAGES every further
+    // transaction would contribute no pages at all.
+    const cap = Math.max(MAX_VISIT_PAGES, 24 * x.txCount)
+    const total = Math.min(cap, work)
     x.pagesTotal = total
     x.pagesLeft = total
     x.execElapsed = 0
@@ -2001,11 +2463,35 @@ export function createSim(bus: Bus): SimApi {
     const share = x.execTotal > 0 ? dt / x.execTotal : 1
     let n = Math.min(x.pagesLeft, Math.ceil(x.pagesTotal * share))
     if (n <= 0) return
+
+    const ti = b.table
+    const t = tables[ti]
+    const nIdx = t.def.indexes.length
+    const ring = x.seqScan && t.pages > buf.size / 4
+    const write = x.writes
+    const gridN = x.seqScan ? scanGridN(t) : 0
+
     if (n > pageBudget) {
-      // CPU backstop: account for the rest statistically at the current hit rate
+      // CPU backstop: the city has a hard ceiling on buffer requests per second
+      // (PAGE_OPS_PER_SEC), so the tail of a very large batch is accounted
+      // statistically instead of being walked page by page.
+      //
+      // It must NOT be accounted at buf.hitRatio: that is the gauge this stream
+      // feeds, so the backstop would confirm whatever the gauge already said and
+      // the ratio would stop responding to the workload at exactly the loads
+      // where the backstop fires. Use THIS statement's own measured rate on the
+      // pages it did push through — a real observation of this access pattern —
+      // and, before it has any, the structural rate for the access kind: a ring
+      // scan of a relation larger than its 32-frame ring misses.
       const skipped = n - Math.max(0, Math.floor(pageBudget))
       n = Math.max(0, Math.floor(pageBudget))
-      const h = Math.round(skipped * buf.hitRatio)
+      const seen = b.buffersTouched
+      // A BAS_BULKREAD stream is the explicit cold-path case: pages skipped by
+      // the CPU backstop are misses just like the pages we walked. Letting eight
+      // early ring hits flip the whole statistical tail to "hit" made large
+      // batches self-confirming and put the tps knob back into the hit ratio.
+      const rate = ring ? 0 : seen >= 8 ? b.buffersHit / seen : clamp01(buf.hitRatio)
+      const h = Math.round(skipped * rate)
       buf.hits += h
       buf.misses += skipped - h
       winHits += h
@@ -2019,16 +2505,20 @@ export function createSim(bus: Bus): SimApi {
     pageBudget -= n
     x.pagesLeft -= n
 
-    const ti = b.table
-    const t = tables[ti]
-    const nIdx = t.def.indexes.length
-    const ring = x.seqScan && t.pages > buf.size / 4
-    const write = x.writes
-
     for (let i = 0; i < n; i++) {
       let blk: number
       let forWrite = false
       if (x.seqScan) {
+        // Each statement in the batch is its own scan, and initscan() calls
+        // GetAccessStrategy() per scan: the ring belongs to the scan, not to the
+        // backend. One grid wrap == one statement boundary, so hand the next
+        // statement a fresh ring rather than letting it inherit the frames the
+        // previous one was recycling.
+        if (x.scanBlk > 0 && x.scanBlk % gridN === 0) {
+          const rb = slot * RING
+          for (let j = 0; j < RING; j++) ringBuf[rb + j] = -1
+          x.ringPos = 0
+        }
         blk = pickBlk(ti, 'scan', x)
       } else if (b.query === 'insert') {
         const k = i % (1 + nIdx)
@@ -2039,7 +2529,7 @@ export function createSim(bus: Bus): SimApi {
         if (k === 0) blk = idxBlk(ti, 0)
         else if (k === 1) blk = idxBlk(ti, 1)
         else if (k === 2) blk = idxBlk(ti, 2)
-        else { blk = pickBlk(ti, 'hot'); forWrite = write }
+        else { blk = pickBlk(ti, 'hot', undefined, write); forWrite = write }
         // a non-HOT update also has to write every index entry
         if (write && !x.hot && k === 2) forWrite = true
       }
@@ -2051,7 +2541,7 @@ export function createSim(bus: Bus): SimApi {
   }
 
   /** Commit accounting: tuples, WAL, dead rows, xids. */
-  function finishStatement(slot: number): void {
+  function finishStatement(slot: number, deferWal = false): number {
     const b = backends[slot]
     const x = extras[slot]
     const ti = b.table
@@ -2059,11 +2549,18 @@ export function createSim(bus: Bus): SimApi {
     const rows = x.rowsPerStmt * x.txCount
     const tup = avgTuple[ti]
     const nIdx = t.def.indexes.length
+    const logical = K.walLevel === 'logical'
+    // A same-page heap update can omit the unchanged tuple prefix/suffix.
+    // Logical decoding needs a standalone new tuple, so it pays the full body.
+    // minimal and replica are identical for ordinary steady-state DML.
+    const CHANGED = 0.35
+    const updBody = logical ? tup : Math.max(24, Math.round(tup * CHANGED))
     let bytes = 0
 
     switch (b.query) {
       case 'insert': {
         t.inserts += rows
+        insSinceVacuum[ti] += rows
         t.liveTuples += rows
         stats.tupInserted += rows
         extendIfNeeded(ti)
@@ -2082,9 +2579,11 @@ export function createSim(bus: Bus): SimApi {
           // xmin horizon allows it.
           const pruned = horizonFrozen ? 0 : Math.floor(rows2 * 0.85)
           addDead(ti, rows2 - pruned)
-          bytes += rows2 * (88 + tup)
+          bytes += rows2 * (88 + updBody)
         } else {
           addDead(ti, rows2)
+          deadIndexTuples[ti] += rows2 * nIdx
+          refreshIndexPages(ti)
           bytes += rows2 * (108 + tup + nIdx * 78)
         }
         extendIfNeeded(ti)
@@ -2096,9 +2595,11 @@ export function createSim(bus: Bus): SimApi {
         stats.tupDeleted += del
         t.liveTuples -= del
         addDead(ti, del)
+        deadIndexTuples[ti] += del * nIdx
+        refreshIndexPages(ti)
         // DELETE writes a tiny WAL record — the index entries are cleaned up
         // later by vacuum, which is why deletes look cheap and then aren't.
-        bytes += del * 64
+        bytes += del * (64 + (logical ? 28 : 0))
         break
       }
       default: {
@@ -2110,7 +2611,7 @@ export function createSim(bus: Bus): SimApi {
 
     if (x.writes) {
       bytes += x.txCount * 46 // commit record
-      walInsert(bytes)
+      if (!deferWal) walInsert(bytes)
       b.walBytes = bytes + x.fpiBytes
       if (++sWalIns >= stride(stats.tps * K.writeRatio, 28)) {
         sWalIns = 0
@@ -2121,7 +2622,21 @@ export function createSim(bus: Bus): SimApi {
       sClog = 0
       flow('clog.in', 1, 'stat', 0.8)
     }
-    x.commitLsn = wal.insertLsn
+    if (!deferWal) x.commitLsn = wal.insertLsn
+    return bytes
+  }
+
+  function beginWalInsert(slot: number): void {
+    const b = backends[slot]
+    const x = extras[slot]
+    // Apply the tuple/index effects once, then copy the resulting record bytes
+    // through the fixed wal_buffers ring over subsequent ticks.
+    x.walPending = finishStatement(slot, true) + x.fpiBytes
+    x.walPendingFpi = x.fpiBytes
+    x.walPrepared = true
+    b.state = 'wal_insert'
+    b.stateT = 0
+    b.stateDur = rr(0.03, 0.07)
   }
 
   function endVisit(slot: number): void {
@@ -2283,9 +2798,7 @@ export function createSim(bus: Bus): SimApi {
                 b.stateT = 0
                 b.stateDur = rr(0.12, 0.34)
               } else if (x.writes) {
-                b.state = 'wal_insert'
-                b.stateT = 0
-                b.stateDur = rr(0.03, 0.07)
+                beginWalInsert(slot)
               } else {
                 finishStatement(slot)
                 b.state = 'sending'
@@ -2300,9 +2813,7 @@ export function createSim(bus: Bus): SimApi {
         case 'sort':
           if (b.stateT >= b.stateDur) {
             if (x.writes) {
-              b.state = 'wal_insert'
-              b.stateT = 0
-              b.stateDur = rr(0.03, 0.07)
+              beginWalInsert(slot)
             } else {
               finishStatement(slot)
               b.state = 'sending'
@@ -2314,7 +2825,38 @@ export function createSim(bus: Bus): SimApi {
 
         case 'wal_insert':
           if (b.stateT >= b.stateDur) {
-            finishStatement(slot)
+            if (!x.walPrepared) {
+              x.walPending = finishStatement(slot, true) + x.fpiBytes
+              x.walPendingFpi = x.fpiBytes
+              x.walPrepared = true
+            }
+            const gap = Math.max(0, wal.insertLsn - wal.writeLsn)
+            const available = Math.max(0, wal.bufferCapacity - gap)
+            if (available <= 0) {
+              requestFlush(wal.insertLsn)
+              break
+            }
+            const chunk = Math.min(
+              x.walPending,
+              available,
+              Math.max(4096, 24 * 1024 * 1024 * dt),
+            )
+            if (chunk > 0) {
+              walInsert(chunk)
+              x.walPending -= chunk
+              const fpiChunk = Math.min(x.walPendingFpi, chunk)
+              x.walPendingFpi -= fpiChunk
+              fpiAcc += fpiChunk
+            }
+            if (x.walPending > 0) {
+              // At a full ring the backend remains on WALWriteLock until a
+              // writer makes reusable space. Work beyond the capacity is never
+              // silently accepted or hidden by the display clamp.
+              requestFlush(wal.insertLsn)
+              break
+            }
+            x.commitLsn = wal.insertLsn
+            x.walPrepared = false
             b.state = 'commit_wait'
             b.stateT = 0
             b.stateDur = commitWaitEstimate()
@@ -2329,16 +2871,18 @@ export function createSim(bus: Bus): SimApi {
             // Commit returns immediately; the WAL is written by walwriter later.
             // Crash here and you lose the last few hundred ms of transactions.
             done = b.stateT >= 0.012
-          } else if (sc === 'remote_apply' && rep.connected) {
-            done = wal.flushLsn >= x.commitLsn && rep.replayLsn >= x.commitLsn
-          } else {
-            if (sc === 'remote_apply' && !rep.connected && state.t - degradeWarnT > 20) {
+          } else if (sc === 'remote_apply' && rep.enabled) {
+            done = wal.flushLsn >= x.commitLsn && ackedApplyLsn >= x.commitLsn
+            if (!rep.connected && state.t - degradeWarnT > 20) {
               degradeWarnT = state.t
-              toast('synchronous_commit=remote_apply with no standby — degrading to local flush', 'warn', 6000)
+              toast('commits are waiting for a synchronous standby that is not there', 'warn', 6000)
             }
+          } else {
+            // No synchronous standby configured at all is an empty
+            // synchronous_standby_names: local flush is the correct guarantee.
             done = wal.flushLsn >= x.commitLsn
+            if (b.stateT > 8) done = true // watchdog for local states only
           }
-          if (b.stateT > 8) done = true // watchdog: never wedge the city
           if (done) {
             b.state = 'sending'
             b.stateT = 0
@@ -2372,14 +2916,15 @@ export function createSim(bus: Bus): SimApi {
   }
 
   function commitWaitEstimate(): number {
+    const fsync = Math.max(0.09, flushDur) * 1.5
     switch (K.synchronousCommit) {
       case 'off':
         return 0.012
       case 'local':
       case 'on':
-        return 0.14
+        return fsync
       case 'remote_apply':
-        return 0.14 + (K.replicaNetworkLag * NET_STRETCH * 2) / 1000 + 0.12
+        return fsync + (K.replicaNetworkLag * NET_STRETCH * 2) / 1000 + 0.12
     }
   }
 
@@ -2390,6 +2935,9 @@ export function createSim(bus: Bus): SimApi {
   function tickPostmaster(dt: number): void {
     forkCooldown -= dt
     state.forkPulse = damp(state.forkPulse, 0, 3.2, dt)
+    runtimeStats.queueDepth = pendingTx
+    runtimeStats.queueSec = pendingTx / Math.max(1, K.tps)
+    runtimeStats.refused = refusedTx
     if (pendingTx <= 0) return
     let idle = 0
     let active = 0
@@ -2414,6 +2962,9 @@ export function createSim(bus: Bus): SimApi {
     if (pendingTx > cap) {
       refusedTx += pendingTx - cap
       pendingTx = cap
+      runtimeStats.queueDepth = pendingTx
+      runtimeStats.queueSec = pendingTx / Math.max(1, K.tps)
+      runtimeStats.refused = refusedTx
       if (state.t - refuseWarnT > 15) {
         refuseWarnT = state.t
         toast(
@@ -2450,10 +3001,13 @@ export function createSim(bus: Bus): SimApi {
       const fpiRatio = walAcc > 0 ? clamp01(fpiAcc / walAcc) : 0
       wal.fpwBurst = damp(wal.fpwBurst, fpiRatio, 0.7, iv)
 
-      const seen = winHits + winMisses
-      // ~2s smoothing: a single 200-page analytics scan should nudge the gauge,
-      // not slam it.
-      if (seen > 8) buf.hitRatio = damp(buf.hitRatio, winHits / seen, 0.7, iv)
+      // blks_hit / (blks_hit + blks_read) over a sliding window: decay the two
+      // COUNTS by a common factor and divide, rather than averaging per-window
+      // ratios. ~7 s horizon, which is ~900 page requests at the default load.
+      const k = Math.exp(-0.15 * iv)
+      emaHits = emaHits * k + winHits
+      emaSeen = emaSeen * k + winHits + winMisses
+      if (emaSeen > 8) buf.hitRatio = emaHits / emaSeen
       stats.cacheHitPct = buf.hitRatio * 100
       stats.blksHit = buf.hits
       stats.blksRead = buf.misses
@@ -2634,7 +3188,7 @@ export function createSim(bus: Bus): SimApi {
         rep.logicalEnabled = K.walLevel === 'logical'
         break
       case 'fullPageWrites':
-        fpiDone.clear()
+        fpiGeneration++
         if (!K.fullPageWrites) {
           wal.fpwBurst = 0
           toast('full_page_writes=off — smaller WAL, and torn pages on crash', 'warn', 6000)
@@ -2665,6 +3219,10 @@ export function createSim(bus: Bus): SimApi {
     state.t += dt
     flowTokens = Math.min(90, flowTokens + FLOW_BUDGET_PER_SEC * dt)
     pageBudget = PAGE_OPS_PER_SEC * dt
+    // Maintenance generated these records on the previous tick. Give that
+    // ordered stream first use of wal_buffers so client backends cannot starve
+    // vacuum WAL indefinitely under sustained load.
+    drainMaintenanceWal(dt)
 
     tickScenario(dt)
 
@@ -2673,6 +3231,7 @@ export function createSim(bus: Bus): SimApi {
     let guard = 900
     while (nextArrival <= 0 && guard-- > 0) {
       pendingTx++
+      runtimeStats.arrivals++
       const d = expDelay(K.tps, rng)
       if (!isFinite(d)) { nextArrival = 1e9; break }
       nextArrival += d
@@ -2773,13 +3332,15 @@ export function createSim(bus: Bus): SimApi {
     buf.blk.fill(0)
     buf.lastTouch.fill(-99)
     pinT.fill(-99)
-    fpiDone.clear()
+    fpiGenerationByPage.clear()
+    fpiGeneration = 0
     buf.clockHand = 0
     buf.hits = 0
     buf.misses = 0
     buf.evictions = 0
     buf.dirtyEvictions = 0
     buf.hitRatio = 0.9
+    emaHits = emaSeen = 0
     buf.dirtyCount = 0
     buf.pinnedCount = 0
     buf.usedCount = 0
@@ -2806,6 +3367,7 @@ export function createSim(bus: Bus): SimApi {
     archT = 0
     flushing = false
     flushTarget = lsn0
+    flushCovered = lsn0
     flushT = 0
     flushBytes = 0
     walWriterT = 0
@@ -2821,9 +3383,14 @@ export function createSim(bus: Bus): SimApi {
     ckpt.count = 0
     ckpt.redoLsn = lsn0
     // Both pointers, or the first tick reports a 26-billion-byte pg_wal.
-    completedRedoLsn = lsn0
+    runtimeCkpt.completedRedoLsn = lsn0
+    runtimeCkpt.numTimed = 0
+    runtimeCkpt.numRequested = 0
     ckptNeeded.fill(0)
     ckptScan = 0
+    ckptWriteEnd = 0
+    ckptSyncEnd = 0
+    ckptRecordTicket = 0
     ioLoad = 1
 
     bgw.enabled = K.bgwriterEnabled
@@ -2849,6 +3416,10 @@ export function createSim(bus: Bus): SimApi {
       vacPhaseDur[i] = 1
       vacIdxLeft[i] = 0
       vacTarget[i] = 0
+      vacIndexTarget[i] = 0
+      vacHeapModified[i] = 0
+      vacPageAcc[i] = 0
+      vacPageCursor[i] = 0
     }
 
     for (let i = 0; i < N_TABLES; i++) {
@@ -2864,6 +3435,17 @@ export function createSim(bus: Bus): SimApi {
       const seed = d.id === 'events' ? 0 : Math.round((50 + K.autovacuumScaleFactor * t.liveTuples) * (d.id === 'sessions' ? 0.94 : 0.45))
       t.deadTuples = seed
       deadRemovable[i] = seed
+      insSinceVacuum[i] = 0
+      frozenPages[i] = t.pages
+      vacuumInsThreshold[i] = 1000
+      deadIndexTuples[i] = 0
+      idxPages[i] = baseIdxPages[i]
+      const rt = runtimeTable(i)
+      rt.indexPages = idxPages[i]
+      rt.deadIndexTuples = 0
+      rt.insSinceVacuum = 0
+      rt.frozenPages = t.pages
+      rt.vacuumInsThreshold = 1000
       t.bloat = 0
       t.vacuumThreshold = 50 + K.autovacuumScaleFactor * t.liveTuples
       t.lastVacuum = 0
@@ -2890,6 +3472,13 @@ export function createSim(bus: Bus): SimApi {
     rep.logicalChangesPerSec = 0
     rep.inFlight = 0
     wireHead = wireTail = wireCount = 0
+    ackHead = ackTail = ackCount = 0
+    ackSentLsn = ackedApplyLsn = lsn0
+    runtimeRep.ackedApplyLsn = ackedApplyLsn
+    lagSampleHead = 0
+    lagSampleCount = 1
+    lagSampleLsn[0] = lsn0
+    lagSampleAt[0] = state.t
 
     stats.tps = 0
     stats.commits = 0
@@ -2905,6 +3494,10 @@ export function createSim(bus: Bus): SimApi {
     stats.ioWritePerSec = 0
     stats.cacheHitPct = 90
     stats.activeBackends = 0
+    runtimeStats.queueDepth = 0
+    runtimeStats.queueSec = 0
+    runtimeStats.refused = 0
+    runtimeStats.arrivals = 0
     stats.history.tps.length = 0
     stats.history.hit.length = 0
     stats.history.wal.length = 0
@@ -2916,7 +3509,10 @@ export function createSim(bus: Bus): SimApi {
     refusedTx = 0
     sizeBatch()
     commitsAcc = walAcc = fpiAcc = ioReadAcc = ioWriteAcc = 0
+    maintenanceWalPending = maintenanceFpiPending = 0
+    maintenanceWalQueued = maintenanceWalDrained = 0
     winHits = winMisses = 0
+    emaHits = emaSeen = 0
     rateT = histT = 0
     cleanedAcc = 0
     lockHolder = -1
@@ -2926,6 +3522,7 @@ export function createSim(bus: Bus): SimApi {
     horizonT = 0
     degradeWarnT = -100
     refuseWarnT = -100
+    noBufWarnT = -100
     savedKeys = []
     beatIdx = 0
   }

@@ -5,6 +5,19 @@ import type { FlowRequest, SimState, WorldContext, WorldFactory, WorldModule } f
 import { clamp, clamp01, fmtBytes, fmtNum, fmtPct, makeRng } from '../core/util'
 import { ANCHOR, CITY, N_TABLES, TABLES, indexPos, rid, routeCurve, tableX } from './layout'
 
+/**
+ * Opacity is semantic, never atmosphere. Physical matter is solid; `volume`
+ * is only for non-physical regions, `glass` only for real enclosures whose
+ * contents must remain visible, and `hint` for at most one unstacked cue in a
+ * district. New translucent materials must choose one of these tiers.
+ */
+export const OPACITY_TIER = {
+  solid: 1.0,
+  volume: 0.35,
+  glass: 0.6,
+  hint: 0.12,
+} as const
+
 /* ============================================================================
  * THE STORAGE UNDERWORLD
  *
@@ -229,23 +242,24 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
 
   /** One material for every instanced-colour mesh down here. */
   const mData = keep(new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true, toneMapped: false }))
-  const mGlass = keep(
+  // Kernel memory is a conceptual region, not physical matter: the one
+  // deliberately translucent material in this district.
+  const mVolume = keep(
     new THREE.MeshBasicMaterial({
       color: 0xffffff,
       vertexColors: true,
       transparent: true,
-      opacity: 0.34,
-      depthWrite: false,
-      toneMapped: false,
+      opacity: OPACITY_TIER.volume,
+      // The slab is one non-overlapping tile layer. Writing depth keeps later,
+      // farther translucent districts from stacking through it.
+      depthWrite: true,
     }),
   )
-  const mBeam = keep(
+  const mIndexLine = keep(
     new THREE.LineBasicMaterial({
       vertexColors: true,
-      transparent: true,
       toneMapped: false,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
+      depthWrite: true,
     }),
   )
   /** Invisible collider: no draw call, still raycastable. */
@@ -595,7 +609,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     gStrut.setAttribute('position', pa)
     gStrut.setAttribute('color', ca)
   }
-  const struts = new THREE.LineSegments(gStrut, mBeam)
+  const struts = new THREE.LineSegments(gStrut, mIndexLine)
   struts.frustumCulled = false
   struts.raycast = () => {}
   group.add(struts)
@@ -754,7 +768,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
   osGroup.name = 'os.cache'
   group.add(osGroup)
 
-  const osTiles = instanced(gFlat, mGlass, OC_N)
+  const osTiles = instanced(gFlat, mVolume, OC_N)
   osGroup.add(osTiles)
   const osMat = osTiles.instanceMatrix.array as Float32Array
   const osCol = osTiles.instanceColor!.array as Float32Array
@@ -1806,7 +1820,6 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     }
     osResidentPct = live ? resident / live : 0
     osTiles.instanceColor!.needsUpdate = true
-    mGlass.opacity = 0.22 + clamp01(osResidentPct) * 0.18
 
     /* --------------------------------------------------------- disk LEDs */
     ledBudget += (sim.stats.ioReadPerSec * 0.35 + sim.stats.ioWritePerSec * 0.25) * dt + diskReads

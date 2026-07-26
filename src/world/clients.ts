@@ -4,6 +4,7 @@ import { N_BACKEND_SLOTS } from '../core/types'
 import type { BackendState, SimState, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, damp, fmtNum, lerp, makeRng } from '../core/util'
 import { ANCHOR, CONDUIT, conduitX, rid, routeCurve } from './layout'
+import { OPACITY_TIER } from './storage'
 
 /* ============================================================================
  * CLIENTS — the application tier, the server boundary, and the postmaster.
@@ -120,7 +121,7 @@ void main() {
   float phase = vSt.z;
   float stuck = vSt.w;
 
-  // Glass: you see through the duct face-on and along it at the silhouette.
+  // A bright edge gives the solid duct a readable round silhouette.
   float rim = 1.0 - abs( dot( vNrm, vView ) );
   rim *= rim;
 
@@ -139,16 +140,15 @@ void main() {
   // bands frozen in the pipe is what idle_in_transaction actually looks like.
   float sick = stuck * 0.018;
 
-  // The duct wall stays faint — it is infrastructure, and the city is dark.
-  // Everything visible is shaped by 'rim' so a duct reads as a round thing
-  // with an edge rather than a painted stripe.
-  float wall = 0.030 + 0.085 * lit + sick;
-  float glow = band * ( 0.045 + 0.34 * lit ) * ( 1.0 - stuck * 0.78 );
-
-  // Dissolve into the terminal wall and the backend flank.
-  float ends = smoothstep( 0.0, 0.02, vU ) * ( 1.0 - smoothstep( 0.975, 1.0, vU ) );
-
-  vec3 col = tint * ( wall * ( 0.30 + 0.70 * rim ) + glow * ( 0.35 + 0.65 * rim ) ) * ends;
+  // Matte near-black infrastructure, lifted at the rim. Traffic is a coloured
+  // band on the surface, not additive light shining through everything.
+  float wall = 0.11 + 0.10 * lit + sick;
+  float stripe = band * ( 0.08 + 0.42 * lit ) * ( 1.0 - stuck * 0.78 );
+  vec3 base = vec3( 0.014, 0.021, 0.037 ) * ( 0.72 + 0.28 * rim );
+  vec3 col = base + tint * (
+    wall * ( 0.35 + 0.65 * rim ) +
+    stripe * ( 0.45 + 0.55 * rim )
+  );
   gl_FragColor = vec4( col, 1.0 );
 
   #ifdef USE_FOG
@@ -157,7 +157,7 @@ void main() {
     #else
       float fogF = smoothstep( fogNear, fogFar, vFogDepth );
     #endif
-    // Additive blending: distance has to take light away, not add fog colour.
+    // Night fog takes distant colour away instead of washing it grey.
     gl_FragColor.rgb *= 1.0 - fogF;
   #endif
 
@@ -327,15 +327,13 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
   // The forecourt. Plain tarmac laid over the city's survey grid: the ground
   // treatment changing is what tells you which side of the boundary you are on.
   const apronGeo = own(new THREE.PlaneGeometry(300, 104))
-  const apronMat = own(
-    new THREE.MeshBasicMaterial({
-      color: 0x0a1119,
-      transparent: true,
-      opacity: 0.94,
-      depthWrite: false,
-      toneMapped: false,
-    }),
-  )
+  const apronMat = theme.mat('clients.forecourt', {
+    color: 0x0a1119,
+    roughness: 0.98,
+    metalness: 0.02,
+    emissive: 0x020408,
+    opacity: OPACITY_TIER.solid,
+  })
   const apron = new THREE.Mesh(apronGeo, apronMat)
   apron.name = 'client.forecourt'
   apron.rotation.x = -Math.PI / 2
@@ -563,21 +561,15 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
   pmGlow.instanceColor!.setUsage(THREE.DynamicDrawUsage)
   pm.add(pmGlow)
 
-  // The lantern: a lit core inside a soft shell, animated purely through
-  // instance colour. The shell has to be translucent — on an opaque material a
-  // dim instance is not a halo, it is a grey ball parked on the roof, and it
-  // hides the core it is supposed to be haloing. Halo first, core second:
-  // instance order is draw order inside one InstancedMesh, so the core lands
-  // on top of the shell rather than under it.
+  // One solid neon core. The housing and mast supply its silhouette; a halo
+  // would fog the roof and whatever district happens to sit behind it.
   const sphereGeo = own(new THREE.SphereGeometry(1, 12, 8))
-  const beaconMat = theme.neon(0xffffff, 1, { transparent: true, opacity: 0.42 })
-  const pmBeacon = new THREE.InstancedMesh(sphereGeo, beaconMat, 2)
+  const pmBeacon = new THREE.InstancedMesh(sphereGeo, neonWhite, 1)
   fillBoxes(pmBeacon, [
-    [0, PM_TOP, 0, 6.6, 6.6, 6.6], // 0: shell
-    [0, PM_TOP, 0, 3.0, 3.0, 3.0], // 1: core
+    [0, PM_TOP, 0, 3.2, 3.2, 3.2],
   ])
   _c.setHex(COLOR.postmaster)
-  for (let i = 0; i < 2; i++) pmBeacon.setColorAt(i, _c)
+  pmBeacon.setColorAt(0, _c)
   pmBeacon.instanceColor!.setUsage(THREE.DynamicDrawUsage)
   pm.add(pmBeacon)
 
@@ -726,10 +718,8 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
       uniforms: tubeUniforms,
       vertexShader: CONDUIT_VERT,
       fragmentShader: CONDUIT_FRAG,
-      transparent: true,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      side: THREE.DoubleSide,
+      depthWrite: true,
+      side: THREE.FrontSide,
       fog: true,
     }),
   )
@@ -790,9 +780,8 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
       new THREE.MeshBasicMaterial({
         map: tex,
         color,
-        transparent: true,
-        opacity: 0.92,
-        depthWrite: false,
+        // The texture's alpha cuts out glyphs; the plate itself stays solid.
+        alphaTest: 0.08,
         toneMapped: false,
       }),
     )
@@ -1026,10 +1015,8 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
     const load = clamp01(sim.stats.activeBackends / Math.max(1, sim.maxConnections))
     const breathe = 0.55 + 0.45 * Math.sin(t * 1.5)
     const beaconLevel = 0.7 + breathe * 0.5 + beaconFlash * 3.2
-    _c.setHex(COLOR.postmaster).multiplyScalar(beaconLevel * 0.26)
-    pmBeacon.setColorAt(0, _c) // shell
     _c.setHex(COLOR.postmaster).multiplyScalar(beaconLevel * 2.4)
-    pmBeacon.setColorAt(1, _c) // core — pushed past the bloom threshold
+    pmBeacon.setColorAt(0, _c)
     pmBeacon.instanceColor!.needsUpdate = true
 
     // window slits brighten with the number of live sessions
