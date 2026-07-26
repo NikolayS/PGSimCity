@@ -10,7 +10,8 @@ import type { RouteDef, TableDef } from '../core/types'
  * North is -Z, east is +X. One world unit ≈ one metre; a person would be ~1.8.
  *
  *                              ▲ -Z  (north)
- *              CLIENT SKY  z ≈ -330 .. -260
+ *              CLIENT TERMINAL  z ≈ -352 .. -288   (outside the server)
+ *              SERVER BOUNDARY  z = -252           (fence + gatehouse)
  *              POSTMASTER  z = -215
  *              BACKENDS    z = -130   x = -112 .. 112
  *   MAINTENANCE            SHARED MEMORY PLAZA            WAL DISTRICT
@@ -57,10 +58,19 @@ export const ANCHOR = {
   cityCenter: [0, 6, 0],
 
   // clients & postmaster
-  clientSky: [0, 52, -300],
+  /**
+   * The client terminal, at grade, outside the server boundary. `clientSky` is
+   * the historical name and stays an export so nothing breaks; `clientTerminal`
+   * is the one to reach for. Both are the same point.
+   */
+  clientSky: [0, 6, -300],
+  clientTerminal: [0, 6, -300],
   postmaster: [0, 0, -215],
   postmasterTop: [0, 34, -215],
-  connGate: [0, 14, -250],
+  /** The gatehouse in the boundary fence — pg_hba.conf, at ground level. */
+  connGate: [0, 0, -252],
+  /** Where a connection is handed to the postmaster: its south door. */
+  postmasterDoor: [0, 1.8, -206],
 
   // shared memory plaza
   plaza: [0, 3, 0],
@@ -126,6 +136,49 @@ export function backendX(i: number): number {
 }
 export function backendPos(i: number): [number, number, number] {
   return [backendX(i), 0, CITY.backend.z]
+}
+
+/* --------------------------------------------------------------------------
+ * The connection conduits.
+ *
+ * A Postgres connection is not an event, it is a *thing*: a socket, a process,
+ * a slab of memory, held for the whole session. So it is drawn as a physical
+ * duct running from the client terminal to one backend, and it never leaves
+ * the horizontal — `y` is constant the whole way, from the terminal wall to
+ * the backend flank, carried on piers.
+ *
+ * Sixteen of them leave the terminal in two banks of eight, flanking the
+ * central avenue that carries the postmaster. That gap is not decoration: the
+ * postmaster forks the backend and then drops out of the data path entirely,
+ * so no conduit is allowed to touch it.
+ * ------------------------------------------------------------------------*/
+
+export const CONDUIT = {
+  /** Running height. Flat for the whole length — nothing here climbs or dives. */
+  y: 6,
+  /** Outer radius of the duct. Packets ride inside it. */
+  radius: 2.4,
+  /** |x| of the innermost / outermost duct where it leaves the terminal. */
+  bankInner: 22,
+  bankOuter: 82,
+  /** No duct may come closer than this to the centre line — the postmaster's. */
+  clearX: 21,
+  /** Terminal wall the ducts emerge from. */
+  terminalFace: -290,
+  /** The server boundary the ducts cross. */
+  boundaryZ: -252,
+  /** Backend wall the ducts plug into. */
+  backendFace: -136,
+} as const
+
+/** X of connection conduit i where it leaves the client terminal. */
+export function conduitX(i: number): number {
+  const half = N_BACKEND_SLOTS / 2
+  const step = (CONDUIT.bankOuter - CONDUIT.bankInner) / (half - 1)
+  const west = i < half
+  const k = west ? half - 1 - i : i - half
+  const x = CONDUIT.bankInner + k * step
+  return west ? -x : x
 }
 
 /** X position of table i in the storage underworld. */
@@ -271,12 +324,15 @@ function route(
 
 /* --- clients & postmaster ------------------------------------------------ */
 
+/* The arrivals avenue: terminal door → boundary gate → the postmaster's door.
+ * A street, walked at a walking pace, entirely at grade. */
 route('conn.in', [
-  [0, 74, -360],
-  [0, 60, -300],
-  [0, 44, -252],
-  ANCHOR.postmasterTop as unknown as [number, number, number],
-], { color: COLOR.client, speed: 120, visible: true, roadOpacity: 0.1, size: 1.4 })
+  [0, 1.8, -288],
+  [0, 1.8, -270],
+  [0, 1.8, CONDUIT.boundaryZ],
+  [0, 1.8, -230],
+  [ANCHOR.postmasterDoor[0], ANCHOR.postmasterDoor[1], ANCHOR.postmasterDoor[2]],
+], { color: COLOR.client, speed: 70, visible: true, roadOpacity: 0.14, size: 1.4 })
 
 /* --- per-backend routes -------------------------------------------------- */
 
@@ -301,28 +357,43 @@ for (let i = 0; i < N_BACKEND_SLOTS; i++) {
   const bz = CITY.backend.z
   const lean = bx * 0.42
 
-  // postmaster forks a new backend
+  // postmaster forks a new backend: out of its south door, down the yard road
   route(rid.fork(i), [
-    [0, 26, -215],
-    [bx * 0.4, 30, -186],
-    [bx, 22, bz - 8],
-    [bx, 13, bz],
-  ], { color: COLOR.postmaster, speed: 150, size: 1.6 })
+    [0, 1.8, -202],
+    [bx * 0.35, 1.8, -184],
+    [bx * 0.8, 1.8, -158],
+    [bx, 1.8, -140],
+    [bx, 4.5, bz - 4],
+  ], { color: COLOR.postmaster, speed: 110, size: 1.4 })
 
-  // client sends a query down; rows come back up
+  /* The connection conduit. `query` is the duct's centre line, so the tube in
+   * world/clients.ts is built straight off this curve and the packets ride
+   * inside it; `result` is the same line run backwards in the other lane. */
+  const cx = conduitX(i)
+  const cy = CONDUIT.y
+  let mx = cx + (bx - cx) * 0.25
+  if (Math.abs(mx) < CONDUIT.clearX) mx = mx < 0 ? -CONDUIT.clearX : CONDUIT.clearX
+  const fx = cx + (bx - cx) * 0.72
+  /** Lane offset: rows come home beside the query, not through it. */
+  const lane = 1.0
+
   route(rid.query(i), [
-    [bx * 0.75, 58, -300],
-    [bx * 0.9, 40, -220],
-    [bx, 26, bz - 22],
-    [bx, 17, bz],
-  ], { color: COLOR.client, speed: 130, size: 1.2 })
+    [cx, cy, CONDUIT.terminalFace],
+    [cx, cy, -262],
+    [mx, cy, -224],
+    [fx, cy, -180],
+    [bx, cy, -150],
+    [bx, cy, CONDUIT.backendFace],
+  ], { color: COLOR.client, speed: 96, size: 1.1, tension: 0.4 })
 
   route(rid.result(i), [
-    [bx, 17, bz],
-    [bx + 3, 28, bz - 26],
-    [bx * 0.9 + 3, 44, -230],
-    [bx * 0.75 + 3, 62, -308],
-  ], { color: COLOR.ok, speed: 140, size: 1.0 })
+    [bx + lane, cy, CONDUIT.backendFace],
+    [bx + lane, cy, -150],
+    [fx + lane, cy, -180],
+    [mx + lane, cy, -224],
+    [cx + lane, cy, -262],
+    [cx + lane, cy, CONDUIT.terminalFace],
+  ], { color: COLOR.ok, speed: 104, size: 0.95, tension: 0.4 })
 
   // backend asks shared buffers for a page, and gets one back
   route(rid.bufReq(i), [

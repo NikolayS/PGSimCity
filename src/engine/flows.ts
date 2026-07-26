@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { Bus, FlowKind, FlowRequest, QualitySettings, ThemeApi } from '../core/types'
 import { ROUTES, routeCurve } from '../world/layout'
-import { clamp, makeRng, reduceMotion } from '../core/util'
+import { makeRng, reduceMotion } from '../core/util'
 
 /* ============================================================================
  * FLOWS — every moving packet in the city.
@@ -24,7 +24,7 @@ import { clamp, makeRng, reduceMotion } from '../core/util'
 const SAMPLES = 96
 /** Staggered emissions waiting for their turn. Oldest is dropped on overflow. */
 const PENDING_CAP = 512
-/** Geometry is 1 unit long; this is the world-space length of a size-1 packet. */
+/** Multiplier on the pod's own 0.92 x 0.72 body for a size-1 packet. */
 const PACKET_SCALE = 1.8
 /**
  * Instance colours are pushed past 1.0 so they clear the bloom threshold
@@ -36,8 +36,10 @@ const FADE_OUT = 0.12
 /** Sanity clamp: nobody gets to ask for ten thousand packets in one call. */
 const MAX_BURST = 256
 
-/* Packet silhouette per FlowKind: pages are chunky, WAL records are darts.
- * The shape carries meaning, same as the colour. */
+/* Packet silhouette per FlowKind. Meaning is carried by *bulk*, never by
+ * elongation: a page is a wide pallet, a stat ping is a small crate. No kind is
+ * allowed a length-to-width ratio above the pod's own 1.28, so nothing on any
+ * route can read as a dart no matter how fast it is travelling. */
 const KIND_ORDER: readonly FlowKind[] = [
   'query',
   'result',
@@ -54,8 +56,8 @@ const KIND_ORDER: readonly FlowKind[] = [
 ]
 /** Index 12 is the "no kind given" default. */
 const KIND_DEFAULT = KIND_ORDER.length
-const KIND_W = Float32Array.from([1.0, 0.95, 1.35, 1.35, 0.8, 0.85, 1.1, 0.85, 0.7, 1.25, 1.15, 0.7, 1.0])
-const KIND_L = Float32Array.from([1.15, 1.05, 0.8, 0.8, 1.4, 1.55, 1.0, 1.35, 1.2, 0.7, 1.0, 0.9, 1.0])
+const KIND_W = Float32Array.from([1.05, 1.0, 1.4, 1.4, 1.0, 1.1, 1.2, 1.0, 0.75, 1.25, 1.1, 0.7, 1.0])
+const KIND_L = Float32Array.from([0.95, 0.92, 1.05, 1.05, 1.0, 1.05, 1.0, 1.0, 0.7, 0.9, 0.95, 0.65, 1.0])
 const KIND_INDEX = new Map<string, number>()
 for (let i = 0; i < KIND_ORDER.length; i++) KIND_INDEX.set(KIND_ORDER[i], i)
 
@@ -112,34 +114,61 @@ function segFor(cum: Float32Array, d: number): number {
 }
 
 /**
- * The dart: a 4-sided tapered prism, 1 unit long on +Z, 0.44 wide.
- * Long tail, short nose — it reads as a direction even when it is 3 pixels.
+ * The freight pod: a chamfered 4-sided body 0.92 long on +Z and 0.72 across,
+ * so it is very nearly as fat as it is long. 18 vertices, 32 triangles.
+ *
+ * This shape is load-bearing. The packet used to be a tapered dart oriented
+ * along travel and stretched by speed, which at commit rates drew a 5-unit
+ * streak — and a lit streak crossing the sky over a city at night is a tracer
+ * round, whatever the label on it says. A pod cannot make that picture. It
+ * still points along the tangent, so motion stays purposeful, but the
+ * silhouette is cargo: something being carried somewhere on purpose.
+ *
+ * Vertex colour dims the two end caps, which gives the body a lit-carriage
+ * read up close and costs nothing — the instance colour still supplies the hue.
  */
 function packetGeometry(): THREE.BufferGeometry {
-  const r = 0.22
-  const ringZ = 0.15
-  // 0 = nose, 1..4 = ring, 5 = tail
-  const pos = new Float32Array([
-    0, 0, 0.5,
-    r, 0, ringZ,
-    0, r, ringZ,
-    -r, 0, ringZ,
-    0, -r, ringZ,
-    0, 0, -0.5,
-  ])
-  const idx: number[] = []
-  for (let i = 0; i < 4; i++) {
-    const a = 1 + i
-    const b = 1 + ((i + 1) % 4)
-    idx.push(0, a, b) // nose fan
-    idx.push(5, b, a) // tail fan (reversed winding → outward)
+  const r = 0.36 // body radius
+  const rc = 0.21 // chamfered end radius
+  const zb = 0.26 // where the body stops and the chamfer starts
+  const zc = 0.46 // the very end
+
+  const pos: number[] = []
+  const col: number[] = []
+  /** One 4-vertex ring on the +X/+Y/-X/-Y axes. */
+  const ring = (z: number, rad: number, bright: number): void => {
+    pos.push(rad, 0, z, 0, rad, z, -rad, 0, z, 0, -rad, z)
+    for (let i = 0; i < 4; i++) col.push(bright, bright, bright)
   }
+  ring(-zc, rc, 0.45) // 0..3   back rim
+  ring(-zb, r, 1) // 4..7   body
+  ring(zb, r, 1) // 8..11  body
+  ring(zc, rc, 0.45) // 12..15 front rim
+  pos.push(0, 0, -zc, 0, 0, zc) // 16, 17 cap centres
+  col.push(0.4, 0.4, 0.4, 0.4, 0.4, 0.4)
+
+  const idx: number[] = []
+  // Three bands. (A_k, A_k+1, B_k+1) faces outward when B is further along +Z.
+  for (let band = 0; band < 3; band++) {
+    const a = band * 4
+    const b = a + 4
+    for (let k = 0; k < 4; k++) {
+      const k1 = (k + 1) % 4
+      idx.push(a + k, a + k1, b + k1)
+      idx.push(a + k, b + k1, b + k)
+    }
+  }
+  for (let k = 0; k < 4; k++) {
+    const k1 = (k + 1) % 4
+    idx.push(16, k1, k) // back cap, normal -Z
+    idx.push(17, 12 + k, 12 + k1) // front cap, normal +Z
+  }
+
   const geo = new THREE.BufferGeometry()
-  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
-  // vertexColors is on, so the shader reads `color`: give it white and let the
-  // per-instance colour do all the work.
-  const white = new Float32Array(6 * 3).fill(1)
-  geo.setAttribute('color', new THREE.BufferAttribute(white, 3))
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+  // vertexColors is on, so the shader reads `color`: the per-instance colour
+  // supplies the hue and this only shades the ends down.
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3))
   geo.setIndex(idx)
   geo.computeBoundingSphere()
   return geo
@@ -270,7 +299,6 @@ export function createFlows(
   let pT!: Float32Array
   let pSpeed!: Float32Array
   let pSize!: Float32Array
-  let pStretch!: Float32Array
   let pLatA!: Float32Array
   let pLatB!: Float32Array
   let pRoute!: Int32Array
@@ -305,7 +333,6 @@ export function createFlows(
     pT = new Float32Array(pool)
     pSpeed = new Float32Array(pool)
     pSize = new Float32Array(pool)
-    pStretch = new Float32Array(pool)
     pLatA = new Float32Array(pool)
     pLatB = new Float32Array(pool)
     pRoute = new Int32Array(pool)
@@ -429,7 +456,6 @@ export function createFlows(
     pT[i] = 0
     pSpeed[i] = speed * jitter
     pSize[i] = size
-    pStretch[i] = clamp(speed / 90, 0.75, 2.2)
     pLatA[i] = (rng() * 2 - 1) * spread
     pLatB[i] = (rng() * 2 - 1) * spread * 0.5
     pRoute[i] = route
@@ -548,7 +574,7 @@ export function createFlows(
 
       const k = pKind[i]
       const w = pSize[i] * PACKET_SCALE * fade * KIND_W[k]
-      const len = pSize[i] * PACKET_SCALE * fade * KIND_L[k] * pStretch[i]
+      const len = pSize[i] * PACKET_SCALE * fade * KIND_L[k]
 
       _quat.setFromUnitVectors(FORWARD, _tan)
       _scl.set(w, w, len)

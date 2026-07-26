@@ -171,6 +171,9 @@ const PLINTHS: readonly PlinthSpec[] = [
 const PLINTH_H = 0.6
 const PLINTH_DROP = 0.5 // sink the slab below y=0 so it never z-fights the plate
 
+/** Warm sodium, the colour of a building that is still occupied at night. */
+const MAST_LAMP = 0xffca8a
+
 /** x, z, mast height — well outside every district footprint. */
 const MASTS: readonly (readonly [number, number, number])[] = [
   // ordered so that the first three already ring the city — 'low' quality keeps
@@ -183,7 +186,7 @@ const MASTS: readonly (readonly [number, number, number])[] = [
   [-380, -320, 52],
 ]
 
-/** x, z, base radius, height, colour — a light cone under each district beacon. */
+/** x, z, base radius, height, colour — a light cone standing over each district. */
 const CONES: readonly (readonly [number, number, number, number, number])[] = [
   [ANCHOR.walVault[0], ANCHOR.walVault[2], 34, 62, COLOR.wal],
   [ANCHOR.checkpointer[0], ANCHOR.checkpointer[2], 26, 50, COLOR.checkpoint],
@@ -466,12 +469,17 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
    * -------------------------------------------------------------------*/
 
   const dressing = quality.level === 'low' ? 3 : MASTS.length
-  const beaconMats: THREE.MeshBasicMaterial[] = []
-  const beaconPhase: number[] = []
 
   const mastMat = theme.mat('ground.mast', { color: 0x18233a, roughness: 0.75, metalness: 0.45 })
-  const beaconGeo = new THREE.SphereGeometry(1.5, 8, 6)
-  geos.push(beaconGeo)
+  /**
+   * Warm, steady, and the same every frame. A distant tower reads as somewhere
+   * people work; a tower that flashes reads as a hazard the sky is being warned
+   * about, which is not what the outskirts of this city are for.
+   */
+  const lampMat = theme.neon(MAST_LAMP, 1.05)
+  const crownGeo = new THREE.BoxGeometry(2.2, 1.1, 2.2)
+  const floorGeo = new THREE.BoxGeometry(2.8, 0.5, 2.8)
+  geos.push(crownGeo, floorGeo)
 
   for (let i = 0; i < dressing; i++) {
     const [mx, mz, mh] = MASTS[i]
@@ -479,21 +487,16 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     mast.position.set(mx, mh / 2, mz)
     group.add(mast)
 
-    const bm = new THREE.MeshBasicMaterial({
-      color: COLOR.ink,
-      toneMapped: false,
-      transparent: true,
-      opacity: 0.1,
-      depthWrite: false,
-    })
-    mats.push(bm)
-    beaconMats.push(bm)
-    beaconPhase.push((i * 0.37) % 1)
+    // one lit floor near the top, one crown light — a building, not a beacon
+    const lit = new THREE.Mesh(floorGeo, lampMat)
+    lit.position.set(mx, mh * 0.72, mz)
+    lit.raycast = () => {}
+    group.add(lit)
 
-    const beacon = new THREE.Mesh(beaconGeo, bm)
-    beacon.position.set(mx, mh + 1.4, mz)
-    beacon.raycast = () => {}
-    group.add(beacon)
+    const crown = new THREE.Mesh(crownGeo, lampMat)
+    crown.position.set(mx, mh + 0.4, mz)
+    crown.raycast = () => {}
+    group.add(crown)
   }
 
   if (quality.level !== 'low') {
@@ -562,17 +565,11 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   let clock = 0
 
   function update(dt: number, _sim: SimState, _t: number): void {
-    // Ambient, not simulated: the sweep and the beacons keep running while the
-    // simulation is paused so the model never looks dead.
+    // Ambient, not simulated: the survey sweep keeps running while the
+    // simulation is paused so the model never looks dead. The mast lights do
+    // not move at all — they are lit windows, and lit windows hold still.
     clock += dt
     uTime.value = clock
-
-    for (let i = 0; i < beaconMats.length; i++) {
-      const p = (clock * 0.38 + beaconPhase[i]) % 1
-      // double-flash, aviation style
-      const on = p < 0.05 ? 1 : p < 0.11 ? 0.12 : p < 0.16 ? 0.85 : 0.06
-      beaconMats[i].opacity = on
-    }
   }
 
   function dispose(): void {

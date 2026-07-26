@@ -2,6 +2,10 @@
 
 **An explorable 3D city that shows how PostgreSQL actually works.**
 
+**Live: <https://nikolays.github.io/PGSimCity/>**
+
+![The city seen from above the south-east: the shared memory plaza in the centre, the WAL district glowing amber to the east, the storage excavation cut into the ground, and the standby to the south.](docs/screenshot.png)
+
 Every building is a real mechanism. The plaza in the centre is `shared_buffers` —
 1024 page frames whose height is their clock-sweep usage count and whose colour is
 their true state. The amber district to the east is the write-ahead log. The pit
@@ -13,8 +17,6 @@ It is built for engineers who are good at their job and have never had to operat
 a database — the people who need to understand why a checkpoint spikes latency,
 why one forgotten transaction bloats a table forever, and what `synchronous_commit`
 is really charging them.
-
-**Live: <https://nikolays.github.io/PGSimCity/>**
 
 ---
 
@@ -33,6 +35,8 @@ is really charging them.
 
 ## Run it
 
+Node.js 20 or newer, and a browser with WebGL2.
+
 ```bash
 npm install
 npm run dev      # http://localhost:5173
@@ -50,20 +54,36 @@ No server, no database, no network calls. It is a single static bundle.
 
 ## Controls
 
+### Camera
+
 | | |
 |---|---|
-| **Orbit** | left-drag to orbit · right/middle-drag to pan · wheel to zoom |
-| **Fly** | click the scene to capture the mouse, `Esc` to release |
-| **Move** | `W` `A` `S` `D` or the **arrow keys** · `Space`/`E` up · `C`/`Q` down |
-| **Faster / finer** | `Shift` boost · `Alt` precision · `PageUp`/`PageDown` altitude |
-| **Look at things** | click to select · double-click to fly to it |
-| `F` | toggle fly / orbit |
-| `H` | back to the establishing shot |
-| `T` | guided tour |
-| `/` or `Ctrl-K` | command palette — search every component, setting and scenario |
-| `?` | keyboard map and colour legend |
-| `K` / `P` | pause · `,` `.` slower / faster · `R` reset |
-| `1`–`8` | jump to a district |
+| Left-drag | Orbit around the city |
+| Right-drag or middle-drag | Pan sideways |
+| Wheel | Zoom — the dolly follows the cursor, not the pivot |
+| Click | Select a building. In fly mode, capture the mouse |
+| `W` `A` `S` `D` or the arrow keys | Move |
+| `Space` or `E` · `C` or `Q` | Rise · descend (fly mode) |
+| `PageUp` / `PageDown` | Change altitude (any mode) |
+| `Shift` · `Alt` | Boost · precision |
+| `Esc` | Leave pointer lock |
+
+### Keys
+
+| | |
+|---|---|
+| `F` | Toggle fly / orbit camera |
+| `G` | Get down and walk the city on foot, 1.7 m tall |
+| `H` | Back to the establishing shot |
+| `T` | Guided tour — the whole city in 14 chapters |
+| `/` or `Ctrl-K` | Command palette — search every component, setting and scenario |
+| `?` | Keyboard map and colour legend |
+| `L` | Toggle the floating labels |
+| `K` or `P` | Pause / resume |
+| `,` `.` | Slower / faster (0.1× – 5×) |
+| `R` | Reset to the default settings |
+| `Esc` | Close the topmost overlay |
+| `1` – `8` | Jump to a district: clients, backends, shared buffers, WAL, storage, checkpointer, autovacuum, standby |
 
 ---
 
@@ -76,7 +96,7 @@ No server, no database, no network calls. It is a single static bundle.
 | **Backend row** | 16 backend processes. Their lighting *is* their state — including `idle in transaction` |
 | **Shared memory plaza** | `shared_buffers`, `wal_buffers`, the ProcArray, the lock table, CLOG, the buffer mapping table |
 | **The excavation** | Where memory ends and disk begins |
-| **Storage** (below) | Heap files as fields of 8 kB pages, B-trees as actual trees, TOAST, the FSM and visibility map, the OS page cache, the disks |
+| **Storage** (below) | Heap files as fields of 8 KiB pages, B-trees as actual trees, TOAST, the FSM and visibility map, the OS page cache, the disks |
 | **WAL district** (east) | walwriter → `pg_wal` segments → archiver → walsender |
 | **Maintenance yard** (west) | checkpointer, background writer, autovacuum launcher and its workers |
 | **Standby** (south) | walreceiver, the startup process replaying WAL, and the lag between them |
@@ -98,13 +118,15 @@ are red**, **clean pages are blue**, **vacuum is violet**, **checkpoints are pin
   sinks and goes red, the autovacuum trucks keep driving their whole route, and
   their scoops come up empty every single time. The `sessions` table bloats and
   never recovers. This is the most expensive lesson in the app.
-- Run the **checkpoint storm** scenario. Watch the checkpointer's flywheel spin
+- Run the **Checkpoint storm** scenario. Watch the checkpointer's flywheel spin
   up, the fsync phase shudder, and then a wall of full-page writes flood the WAL
   district immediately afterwards.
 - Set **`synchronous_commit`** to `off` and watch every backend stop waiting in
   `commit_wait`. Then read what you just traded away.
 - Turn on **Slow replay** and watch the four LSNs on the standby's ruler — sent,
   written, flushed, applied — pull apart. That gap is `pg_stat_replication`.
+- Press **`G`** and walk in at eye level. A buffer you have been looking down on
+  from 400 units up is a different object when it is three times your height.
 
 ---
 
@@ -113,7 +135,8 @@ are red**, **clean pages are blue**, **vacuum is violet**, **checkpoints are pin
 ```
 src/
   core/      contracts — types, the event bus, the palette, the component registry
-  engine/    renderer + post-processing, camera rig, particle flows, labels, picking
+  engine/    renderer + post-processing, camera rig, particle flows, labels,
+             picking, and the collision world the walk mode stands on
   sim/       the PostgreSQL model. No three.js in here, ever.
   world/     layout.ts is the city plan; one module per district
   ui/        HUD, control rail, inspector, guided tour, command palette, and the
@@ -130,8 +153,12 @@ Three rules hold it together:
 3. **Structure is matte, meaning is neon.** Only emissive materials cross the
    bloom threshold, so anything that glows is carrying information.
 
-Stack: [three.js](https://threejs.org) r185, TypeScript, Vite. Three runtime
-dependencies, no framework, no CDN, no telemetry.
+Stack: [three.js](https://threejs.org) r185, TypeScript, Vite. One runtime
+dependency, no framework, no CDN, no telemetry.
+
+`window.PGSIMCITY` in the browser console hands you
+`{ sim, registry, bus, rig, gfx, flows }`, if you would rather drive the city
+from the outside.
 
 ---
 
@@ -142,6 +169,17 @@ replacement, WAL insert/write/flush positions, checkpoint pacing against
 `checkpoint_completion_target`, autovacuum thresholds, the xmin horizon blocking
 cleanup, HOT updates skipping index maintenance — but the numbers are scaled so a
 human can watch them. 1024 buffers stand in for a million; one particle stands in
-for thousands of tuples.
+for thousands of tuples. Nothing here parses SQL, and no byte of PostgreSQL source
+code runs in your browser.
 
 Where it simplifies, the inspector says so.
+
+---
+
+## Licence
+
+[Apache-2.0](LICENSE). Copyright 2026 Nikolay Samokhvalov. See [NOTICE](NOTICE).
+
+PostgreSQL is a trademark of the PostgreSQL Community Association of Canada.
+PGSimCity is an independent educational project and is not affiliated with,
+sponsored by, or endorsed by the PostgreSQL project.

@@ -11,13 +11,19 @@ import { clamp } from '../core/util'
  * `focus` on the bus: raycast at 25Hz against the registry roots, never while
  * the camera is being dragged, never when the pointer is on the HUD.
  *
- * Second, draw the selection. A wireframe box would look like a debug overlay,
- * so instead each marker is a survey reticle: four corner brackets standing
- * just outside the object's world AABB, a dashed ring on the ground directly
- * beneath it, and a hairline dropping from the box down to that ring — the
- * same notation an architectural model uses to say "this one, here, on this
- * plot". The brackets breathe on a 1.2s cycle and the ring turns slowly; the
- * hover marker is the identical geometry at 35% with no motion, so hovering
+ * Second, draw the selection. A wireframe box looks like a debug overlay and a
+ * set of corner brackets looks like a sight, so the marker is neither: it is
+ * the drawing an architect would hand you for this one building. A setting-out
+ * circle on the ground, the footprint squared off inside it, the crown of the
+ * massing repeated at roof level, two staffs tying the two together, and a
+ * dimension line on each of the two exposed sides. Under all of it, a soft
+ * band of light on the plot — the same lit-kerb language the district plinths
+ * already speak, which is what makes the selection read from 400 m away.
+ *
+ * Nothing about the marker moves. The only animation anywhere is a slow rise
+ * and fall in the ground light's brightness, at the rate a lamp warms.
+ *
+ * Hover is the identical drawing at a third of the intensity, so hovering
  * previews the selection instead of introducing a second visual language.
  * ==========================================================================*/
 
@@ -31,28 +37,130 @@ const DBL_MS = 320
 const PICK_SEC = 1 / 25
 /** Objects animate under the cursor — re-measure the selected AABB this often. */
 const BOX_SEC = 0.5
-/** Bracket breathing period, seconds. */
-const BREATH_SEC = 1.2
-/** Ground ring turn rate, rad/sec. */
-const RING_SPIN = 0.35
+/** Ground-light breathing period, seconds. */
+const LAMP_SEC = 3.2
 
 /* --- module-scope scratch: nothing in here allocates per frame ------------- */
 const _ndc = new THREE.Vector2()
 const _box = new THREE.Box3()
+const _sub = new THREE.Box3()
 const _size = new THREE.Vector3()
 const _center = new THREE.Vector3()
 const _hits: THREE.Intersection[] = []
 
+/* Line-writing cursor, hoisted so `applyBox` allocates nothing at all. */
+let _pen: Float32Array | null = null
+let _penK = 0
+function seg(ax: number, ay: number, az: number, bx: number, by: number, bz: number): void {
+  const p = _pen!
+  p[_penK++] = ax; p[_penK++] = ay; p[_penK++] = az
+  p[_penK++] = bx; p[_penK++] = by; p[_penK++] = bz
+}
+
+/* ---------------------------------------------------------------------------
+ * Measuring a component, safely.
+ *
+ * A registry root's world AABB is very often a lie. Districts park unused
+ * instanced-mesh instances far below the world so they cannot be seen — the
+ * postmaster's box runs y = -1000 to 47, the WAL vault's starts at y = -9000 —
+ * and a marker sized from those is a kilometre tall. engine/collision.ts hit
+ * exactly this problem for the walk controller and solved it by refusing to
+ * accept an impossible box: it splits into the object's children and looks at
+ * those instead. The same three verdicts are used here, and the boxes that
+ * survive are unioned back into the one box the marker gets drawn from.
+ * -------------------------------------------------------------------------*/
+
+/** Taller than this and it is a parking artefact. The city plate + pit is 126. */
+const MAX_H = 170
+/** Wider than this in X or Z and it is not one object either. */
+const MAX_SPAN = 3200
+/** Boxes entirely outside this band are off the map. The pit floor is -60. */
+const Y_FLOOR = -260
+const Y_CEIL = 260
+/** How deep to recurse into an impossible container. */
+const MAX_DEPTH = 4
+
+/** 0 drop, 1 accept, 2 split. */
+function verdict(b: THREE.Box3): 0 | 1 | 2 {
+  const sx = b.max.x - b.min.x
+  const sy = b.max.y - b.min.y
+  const sz = b.max.z - b.min.z
+  if (!isFinite(sx) || !isFinite(sy) || !isFinite(sz)) return 0
+  if (b.max.y <= Y_FLOOR || b.min.y >= Y_CEIL) return 0
+  if (sy > MAX_H || sx > MAX_SPAN || sz > MAX_SPAN) return 2
+  return 1
+}
+
+/** Union every believable box in `obj`'s subtree into `out`. */
+function gather(obj: THREE.Object3D, depth: number, out: THREE.Box3): void {
+  _sub.makeEmpty()
+  _sub.setFromObject(obj)
+  if (_sub.isEmpty()) return
+  const v = verdict(_sub)
+  if (v === 1) {
+    out.union(_sub)
+    return
+  }
+  if (v === 2 && depth < MAX_DEPTH) {
+    const kids = obj.children
+    for (let i = 0; i < kids.length; i++) gather(kids[i], depth + 1, out)
+  }
+}
+
+/** Last resort: keep the top of the box and a sane footprint around it. */
+function clampBox(b: THREE.Box3): void {
+  if (b.max.y - b.min.y > MAX_H) b.min.y = b.max.y - MAX_H
+  const cx = (b.min.x + b.max.x) / 2
+  const cz = (b.min.z + b.max.z) / 2
+  const half = MAX_SPAN / 2
+  if (b.max.x - b.min.x > MAX_SPAN) {
+    b.min.x = cx - half
+    b.max.x = cx + half
+  }
+  if (b.max.z - b.min.z > MAX_SPAN) {
+    b.min.z = cz - half
+    b.max.z = cz + half
+  }
+}
+
+/** Fill `out` with a box worth drawing a marker around. False if there is none. */
+function measure(obj: THREE.Object3D, out: THREE.Box3): boolean {
+  out.makeEmpty()
+  gather(obj, 0, out)
+  if (!out.isEmpty()) return true
+  // Every part was rejected. Fall back to the raw box, clipped to something
+  // drawable, rather than leaving the user with no marker at all.
+  _sub.makeEmpty()
+  _sub.setFromObject(obj)
+  if (_sub.isEmpty() || !isFinite(_sub.min.x) || !isFinite(_sub.max.x) || !isFinite(_sub.min.y)) return false
+  out.copy(_sub)
+  clampBox(out)
+  return true
+}
+
+/* ---------------------------------------------------------------------------
+ * The marker.
+ * -------------------------------------------------------------------------*/
+
+/**
+ * plan rect 8 + crown rect 8 + 2 staffs 4 + staff ticks 8
+ * + 2 dimension lines (extension x2, run, slash x2) 20  =  48 vertices.
+ */
+const PLAN_VERTS = 48
+
 interface Marker {
   root: THREE.Group
-  brackets: THREE.LineSegments
+  plan: THREE.LineSegments
   pos: Float32Array
   attr: THREE.BufferAttribute
   ring: THREE.LineSegments
-  drop: THREE.LineSegments
+  glow: THREE.Mesh
   mat: THREE.LineBasicMaterial
+  glowMat: THREE.MeshBasicMaterial
   /** brightness multiplier applied to the accent colour (bloom threshold) */
   gain: number
+  /** resting opacity of the ground light */
+  lamp: number
 }
 
 export interface PickerApi {
@@ -88,10 +196,10 @@ export function createPicker(opts: {
   }
 
   const ringGeo = makeRingGeometry()
-  const dropGeo = makeDropGeometry()
+  const glowGeo = makeGlowGeometry()
 
-  const sel = makeMarker(ringGeo, dropGeo, 1, 2.1)
-  const hov = makeMarker(ringGeo, dropGeo, 0.35, 1)
+  const sel = makeMarker(ringGeo, glowGeo, 1, 2.1, 0.3)
+  const hov = makeMarker(ringGeo, glowGeo, 0.35, 1, 0.12)
   group.add(sel.root, hov.root)
 
   const raycaster = new THREE.Raycaster()
@@ -296,17 +404,18 @@ export function createPicker(opts: {
 
   function applyAccent(m: Marker, hex: number): void {
     m.mat.color.setHex(hex).multiplyScalar(m.gain)
+    // The ground light is a wash, not linework: it stays under the bloom
+    // threshold however bright the accent is.
+    m.glowMat.color.setHex(hex).multiplyScalar(0.85)
   }
 
   /**
-   * Fit a marker to a component's world AABB. Not cheap (it traverses the whole
-   * subtree), which is exactly why it runs on selection change and twice a
-   * second, not per frame.
+   * Fit a marker to a component. Not cheap (it traverses the subtree, twice
+   * over for a container that has to be split), which is exactly why it runs
+   * on selection change and twice a second, not per frame.
    */
   function applyBox(m: Marker, def: ComponentDef): void {
-    _box.makeEmpty()
-    _box.setFromObject(def.object)
-    if (_box.isEmpty() || !isFinite(_box.min.x) || !isFinite(_box.max.x)) {
+    if (!measure(def.object, _box)) {
       m.root.visible = false
       return
     }
@@ -314,49 +423,66 @@ export function createPicker(opts: {
     _box.getCenter(_center)
 
     const maxDim = Math.max(_size.x, _size.y, _size.z)
-    const pad = clamp(maxDim * 0.05, 0.5, 3)
+    const pad = clamp(maxDim * 0.06, 0.6, 4)
+    const tick = clamp(maxDim * 0.1, 0.5, 6)
     const hx = _size.x * 0.5 + pad
-    const hy = _size.y * 0.5 + pad
     const hz = _size.z * 0.5 + pad
+    const x0 = _center.x - hx
+    const x1 = _center.x + hx
+    const z0 = _center.z - hz
+    const z1 = _center.z + hz
 
-    // bracket arm length: a fixed fraction of the object, never longer than the
-    // edge it sits on (flat objects would otherwise sprout arms out the top)
-    const a = clamp(maxDim * 0.16, 0.9, 6)
-    const ax = Math.min(a, hx * 0.7)
-    const ay = Math.min(a, hy * 0.7)
-    const az = Math.min(a, hz * 0.7)
+    // Where the plan is drawn. Anything standing on the surface gets it on the
+    // ground plane, where a plan belongs. Anything underground or up in the air
+    // gets it just beneath its own base — a soffit plan — so the marker is
+    // never a 60 m line hanging off the object.
+    const base = _box.min.y
+    const planY = base > -1 && base < 12 ? 0.08 : base - Math.max(1.5, pad)
+    const topY = _box.max.y + pad
+    const off = pad + tick * 0.8
 
-    const p = m.pos
-    let k = 0
-    for (let c = 0; c < 4; c++) {
-      const sx = c === 0 || c === 3 ? -1 : 1
-      const sz = c < 2 ? -1 : 1
-      const x = sx * hx
-      const z = sz * hz
-      for (let e = 0; e < 2; e++) {
-        const y = e === 0 ? -hy : hy
-        const yi = e === 0 ? ay : -ay
-        // three arms per corner: along X, along Z, and up/down the vertical edge
-        p[k++] = x; p[k++] = y; p[k++] = z
-        p[k++] = x - sx * ax; p[k++] = y; p[k++] = z
-        p[k++] = x; p[k++] = y; p[k++] = z
-        p[k++] = x; p[k++] = y; p[k++] = z - sz * az
-        p[k++] = x; p[k++] = y; p[k++] = z
-        p[k++] = x; p[k++] = y + yi; p[k++] = z
-      }
-    }
+    _pen = m.pos
+    _penK = 0
+
+    // footprint, on the plan
+    seg(x0, planY, z0, x1, planY, z0)
+    seg(x1, planY, z0, x1, planY, z1)
+    seg(x1, planY, z1, x0, planY, z1)
+    seg(x0, planY, z1, x0, planY, z0)
+    // the crown of the massing, repeated at roof level
+    seg(x0, topY, z0, x1, topY, z0)
+    seg(x1, topY, z0, x1, topY, z1)
+    seg(x1, topY, z1, x0, topY, z1)
+    seg(x0, topY, z1, x0, topY, z0)
+    // two staffs on opposite corners, tying plan to crown, with a tick at each end
+    seg(x0, planY, z0, x0, topY, z0)
+    seg(x0 - tick, planY, z0 - tick, x0, planY, z0)
+    seg(x0 - tick, topY, z0 - tick, x0, topY, z0)
+    seg(x1, planY, z1, x1, topY, z1)
+    seg(x1, planY, z1, x1 + tick, planY, z1 + tick)
+    seg(x1, topY, z1, x1 + tick, topY, z1 + tick)
+    // dimension line across the south face
+    const dz = z1 + off
+    seg(x0, planY, z1, x0, planY, dz + tick * 0.4)
+    seg(x1, planY, z1, x1, planY, dz + tick * 0.4)
+    seg(x0, planY, dz, x1, planY, dz)
+    seg(x0 - tick * 0.4, planY, dz - tick * 0.4, x0 + tick * 0.4, planY, dz + tick * 0.4)
+    seg(x1 - tick * 0.4, planY, dz - tick * 0.4, x1 + tick * 0.4, planY, dz + tick * 0.4)
+    // dimension line down the west face
+    const dx = x0 - off
+    seg(x0, planY, z0, dx - tick * 0.4, planY, z0)
+    seg(x0, planY, z1, dx - tick * 0.4, planY, z1)
+    seg(dx, planY, z0, dx, planY, z1)
+    seg(dx - tick * 0.4, planY, z0 - tick * 0.4, dx + tick * 0.4, planY, z0 + tick * 0.4)
+    seg(dx - tick * 0.4, planY, z1 - tick * 0.4, dx + tick * 0.4, planY, z1 + tick * 0.4)
+
     m.attr.needsUpdate = true
-    m.brackets.position.copy(_center)
 
-    // The ground plane is y=0 — except over the excavation, where the thing you
-    // selected lives underground; there the ring sits just below its own base.
-    const ringY = _box.min.y > -1 ? 0 : _box.min.y - 1.5
-    const radius = Math.max(hx, hz) * 1.1 + 1.5
-    m.ring.position.set(_center.x, ringY, _center.z)
-    m.ring.scale.setScalar(radius)
-
-    m.drop.position.set(_center.x, _box.min.y, _center.z)
-    m.drop.scale.set(1, Math.max(_box.min.y - ringY, 0.001), 1)
+    const radius = Math.hypot(hx, hz) * 1.08 + tick
+    m.ring.position.set(_center.x, planY, _center.z)
+    m.ring.scale.set(radius, 1, radius)
+    m.glow.position.set(_center.x, planY - 0.04, _center.z)
+    m.glow.scale.set(radius, 1, radius)
 
     m.root.visible = true
   }
@@ -386,8 +512,8 @@ export function createPicker(opts: {
         boxT = 0
         applyBox(sel, selDef)
       }
-      sel.brackets.scale.setScalar(1 + 0.028 * Math.sin((t * Math.PI * 2) / BREATH_SEC))
-      sel.ring.rotation.y = t * RING_SPIN
+      // The only motion in the marker: the ground light warming and cooling.
+      sel.glowMat.opacity = sel.lamp * (0.84 + 0.16 * Math.sin((t * Math.PI * 2) / LAMP_SEC))
     }
 
     if (hovDef && hoveredId !== selectedId) {
@@ -409,12 +535,14 @@ export function createPicker(opts: {
     offSelect()
     offHover()
     document.body.style.cursor = ''
-    sel.brackets.geometry.dispose()
-    hov.brackets.geometry.dispose()
+    sel.plan.geometry.dispose()
+    hov.plan.geometry.dispose()
     sel.mat.dispose()
     hov.mat.dispose()
+    sel.glowMat.dispose()
+    hov.glowMat.dispose()
     ringGeo.dispose()
-    dropGeo.dispose()
+    glowGeo.dispose()
     group.clear()
     _hits.length = 0
   }
@@ -424,20 +552,18 @@ export function createPicker(opts: {
 
 /* -------------------------------- geometry -------------------------------- */
 
-/** 4 corners x 2 (bottom, top) x 3 arms x 2 endpoints = 48 vertices. */
-const BRACKET_VERTS = 48
-
 function makeMarker(
   ringGeo: THREE.BufferGeometry,
-  dropGeo: THREE.BufferGeometry,
+  glowGeo: THREE.BufferGeometry,
   opacity: number,
   gain: number,
+  lamp: number,
 ): Marker {
   const mat = new THREE.LineBasicMaterial({
     color: 0xffffff,
     transparent: true,
     opacity,
-    // A reticle you cannot see through the building it marks is a bug, not a
+    // A marker you cannot see through the building it marks is a bug, not a
     // feature: this is chrome, drawn last, over everything.
     depthTest: false,
     depthWrite: false,
@@ -445,20 +571,33 @@ function makeMarker(
   })
   mat.name = `picker:${gain > 1 ? 'select' : 'hover'}`
 
-  const pos = new Float32Array(BRACKET_VERTS * 3)
+  const glowMat = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    vertexColors: true,
+    transparent: true,
+    opacity: lamp,
+    blending: THREE.AdditiveBlending,
+    depthTest: false,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    toneMapped: false,
+  })
+  glowMat.name = `${mat.name}:lamp`
+
+  const pos = new Float32Array(PLAN_VERTS * 3)
   const attr = new THREE.BufferAttribute(pos, 3)
   attr.setUsage(THREE.DynamicDrawUsage)
   const geo = new THREE.BufferGeometry()
   geo.setAttribute('position', attr)
 
-  const brackets = new THREE.LineSegments(geo, mat)
+  const plan = new THREE.LineSegments(geo, mat)
   const ring = new THREE.LineSegments(ringGeo, mat)
-  const drop = new THREE.LineSegments(dropGeo, mat)
+  const glow = new THREE.Mesh(glowGeo, glowMat)
 
   const root = new THREE.Group()
   root.name = 'marker'
   root.visible = false
-  root.add(brackets, ring, drop)
+  root.add(glow, ring, plan)
   for (const o of root.children) {
     o.renderOrder = 999
     o.frustumCulled = false
@@ -466,7 +605,7 @@ function makeMarker(
   }
   root.raycast = noRaycast
 
-  return { root, brackets, pos, attr, ring, drop, mat, gain }
+  return { root, plan, pos, attr, ring, glow, mat, glowMat, gain, lamp }
 }
 
 function noRaycast(): void {
@@ -474,37 +613,73 @@ function noRaycast(): void {
 }
 
 /**
- * Unit-radius dashed ring in the XZ plane. Every sixth dash is long, which
- * gives the ring a readable rotation instead of a shimmering dotted circle.
+ * Unit-radius setting-out circle in the XZ plane: one continuous ring plus
+ * outward radial ticks at the eighths, which is how a plot is marked out
+ * before anything is built on it. Static — it never turns.
  */
 function makeRingGeometry(): THREE.BufferGeometry {
-  const DASHES = 24
-  const STEPS = 3
-  const span = (Math.PI * 2) / DASHES
-  const verts = new Float32Array(DASHES * STEPS * 2 * 3)
+  const STEPS = 64
+  const TICKS = 16
+  const verts = new Float32Array((STEPS + TICKS) * 2 * 3)
   let k = 0
-  for (let d = 0; d < DASHES; d++) {
-    const run = span * (d % 6 === 0 ? 0.92 : 0.5)
-    const a0 = d * span
-    for (let s = 0; s < STEPS; s++) {
-      const t0 = a0 + (run * s) / STEPS
-      const t1 = a0 + (run * (s + 1)) / STEPS
-      verts[k++] = Math.cos(t0)
-      verts[k++] = 0
-      verts[k++] = Math.sin(t0)
-      verts[k++] = Math.cos(t1)
-      verts[k++] = 0
-      verts[k++] = Math.sin(t1)
-    }
+  for (let i = 0; i < STEPS; i++) {
+    const a0 = (i / STEPS) * Math.PI * 2
+    const a1 = ((i + 1) / STEPS) * Math.PI * 2
+    verts[k++] = Math.cos(a0); verts[k++] = 0; verts[k++] = Math.sin(a0)
+    verts[k++] = Math.cos(a1); verts[k++] = 0; verts[k++] = Math.sin(a1)
+  }
+  for (let i = 0; i < TICKS; i++) {
+    const a = (i / TICKS) * Math.PI * 2
+    const c = Math.cos(a)
+    const s = Math.sin(a)
+    const r1 = i % 4 === 0 ? 1.13 : 1.06
+    verts[k++] = c; verts[k++] = 0; verts[k++] = s
+    verts[k++] = c * r1; verts[k++] = 0; verts[k++] = s * r1
   }
   const geo = new THREE.BufferGeometry()
   geo.setAttribute('position', new THREE.BufferAttribute(verts, 3))
   return geo
 }
 
-/** Unit hairline pointing straight down; scaled to reach the ground ring. */
-function makeDropGeometry(): THREE.BufferGeometry {
+/**
+ * The light on the plot: a unit-radius annulus whose brightness is carried in
+ * the vertex colours, so it fades out on both edges with no texture and no
+ * shader. Additive, so on the dark plate it reads as a lit kerb rather than a
+ * disc lying on the ground.
+ */
+function makeGlowGeometry(): THREE.BufferGeometry {
+  const SEG = 48
+  const RADII = [0.62, 0.94, 1.16]
+  const LEVEL = [0, 1, 0]
+  const count = RADII.length * (SEG + 1)
+  const pos = new Float32Array(count * 3)
+  const col = new Float32Array(count * 3)
+  let k = 0
+  for (let r = 0; r < RADII.length; r++) {
+    for (let i = 0; i <= SEG; i++) {
+      const a = (i / SEG) * Math.PI * 2
+      pos[k * 3] = Math.cos(a) * RADII[r]
+      pos[k * 3 + 1] = 0
+      pos[k * 3 + 2] = Math.sin(a) * RADII[r]
+      col[k * 3] = LEVEL[r]
+      col[k * 3 + 1] = LEVEL[r]
+      col[k * 3 + 2] = LEVEL[r]
+      k++
+    }
+  }
+  const idx = new Uint16Array((RADII.length - 1) * SEG * 6)
+  let m = 0
+  for (let r = 0; r < RADII.length - 1; r++) {
+    const a = r * (SEG + 1)
+    const b = (r + 1) * (SEG + 1)
+    for (let i = 0; i < SEG; i++) {
+      idx[m++] = a + i; idx[m++] = b + i; idx[m++] = b + i + 1
+      idx[m++] = a + i; idx[m++] = b + i + 1; idx[m++] = a + i + 1
+    }
+  }
   const geo = new THREE.BufferGeometry()
-  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0, 0, 0, 0, -1, 0]), 3))
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3))
+  geo.setIndex(new THREE.BufferAttribute(idx, 1))
   return geo
 }

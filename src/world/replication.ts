@@ -8,6 +8,11 @@ import { ANCHOR, CITY, TABLES, routePoint, routeTangent } from './layout'
 /* ============================================================================
  * REPLICATION — a second cluster, and the wire that keeps it alive.
  *
+ * The wire is a duct bank at ground level: a bed carrying two conduits,
+ * jointing chambers a crew could open, a cable head at each end. One TCP
+ * connection is a thing somebody dug a trench for, and it runs south along
+ * the east verge the whole way rather than crossing the city overhead.
+ *
  * A standby is not a backup and not a mirror of your *queries*. It is a server
  * that never finishes crash recovery: a walsender on the primary pushes the
  * physical log down one TCP connection, a walreceiver writes it to the
@@ -48,7 +53,6 @@ const NET_STRETCH = 6
 type BoxSpec = [number, number, number, number, number, number]
 
 /* --- anchors, never re-derived -------------------------------------------- */
-const WS = ANCHOR.walSender // where the wire is fed
 const WR = ANCHOR.walReceiver // [120, 0, 200]
 const SP = ANCHOR.startupProc // [120, 0, 246]
 const RB = ANCHOR.replicaBuffers // [120, 3, 300]
@@ -61,8 +65,8 @@ const DECK_H = 22
 const YARD_Z = 336
 /** Where pages leave the deck for the standby's disk. Clear of the tile grid. */
 const SHAFT_Z = ANCHOR.replicaBuffers[2] + 19
-/** The wire's landfall mast, on the receiver's north side. */
-const MAST_Z = 188
+/** The cable head where the duct climbs out of the ground into the receiver. */
+const HEAD_Z = 188
 /** The LSN ruler stands west of the deck and faces the approaching city. */
 const RULER_X = 64
 const RULER_Z0 = 214 // north end — oldest LSN on the scale
@@ -112,7 +116,7 @@ function setTRS(
 /**
  * Park an instance: zero scale, and *inside* its own district. Sending it to
  * y = -9000 would work visually but would blow up the object's world AABB,
- * which is what the picker measures to draw its selection reticle.
+ * which is what the picker and the collision world both measure.
  */
 function hideInst(mesh: THREE.InstancedMesh, i: number, x = 0, y = 0, z = 0): void {
   setTRS(mesh, i, x, y, z, 0.0001, 0.0001, 0.0001)
@@ -428,16 +432,20 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
 
   /* =====================================================================
    * 1. THE WIRE — one TCP connection, drawn at the scale it deserves.
+   *
+   * Two conduits on one bed, at grade, from the walsender's cable head to the
+   * landfall at the walreceiver. Everything below is sampled off the real
+   * route curves, so nothing can drift off the cable.
    * ===================================================================*/
 
   const gWire = new THREE.Group()
   gWire.name = 'net.wire'
   group.add(gWire)
 
-  const streamCurve = subCurve('net.stream', 0.0, 1.0, 40)
-  const ackCurve = subCurve('net.ack', 0.0, 1.0, 32)
-  const conduitGeo = own(new THREE.TubeGeometry(streamCurve, low ? 40 : 72, 0.46, 5, false))
-  const ackGeo = own(new THREE.TubeGeometry(ackCurve, low ? 26 : 48, 0.24, 4, false))
+  const streamCurve = subCurve('net.stream', 0.0, 1.0, 48)
+  const ackCurve = subCurve('net.ack', 0.0, 1.0, 40)
+  const conduitGeo = own(new THREE.TubeGeometry(streamCurve, low ? 48 : 84, 0.55, 6, false))
+  const ackGeo = own(new THREE.TubeGeometry(ackCurve, low ? 30 : 56, 0.3, 5, false))
   const conduit = new THREE.Mesh(conduitGeo, matHeavy) // pickable: it *is* net.wire
   const ackLine = new THREE.Mesh(ackGeo, matHeavy)
   ackLine.raycast = () => {}
@@ -472,29 +480,110 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
   }
   gWire.add(sheath)
 
-  /* Pylons. Sampled off the real curve, then checked against the excavation
-   * and the WAL district's footprints before a foot is planted. */
-  const PYLON_T = [0.15, 0.4, 0.62, 0.82]
-  const pylonMass: BoxSpec[] = []
-  const pylonFine: BoxSpec[] = []
-  for (const pt of PYLON_T) {
-    routePoint('net.stream', pt, _p)
-    routePoint('net.ack', 1 - pt, _p2)
-    const h = _p.y
-    const cx = (_p.x + _p2.x) / 2
-    const cz = (_p.z + _p2.z) / 2
-    // Never plant a foot in the excavation or on another district's building.
-    if (Math.abs(cx) < CITY.pit.x + 6 && Math.abs(cz) < CITY.pit.z + 6) continue
-    pylonMass.push([cx, h / 2, cz, 2.2, h, 2.2])
-    pylonMass.push([cx, 0.7, cz, 7.4, 1.4, 7.4]) // footing
-    pylonMass.push([cx, h + 1.2, cz, Math.abs(_p.x - _p2.x) + 4, 0.9, 2.0]) // crossarm
-    pylonFine.push([cx, h * 0.34, cz, 3.6, 0.5, 3.6]) // maintenance collars
-    pylonFine.push([cx, h * 0.67, cz, 3.0, 0.5, 3.0])
-    pylonFine.push([_p.x, _p.y + 0.9, _p.z, 0.7, 1.6, 0.7]) // insulators
-    pylonFine.push([_p2.x, _p2.y + 0.9, _p2.z, 0.5, 1.6, 0.5])
+  /* --- the bank the two conduits ride on -------------------------------- */
+
+  /** Where the bed's top sits, once the run has climbed its risers. */
+  const BED_CAP = 3.1
+  /** Bed half-width — wide enough for both ducts and a maintenance strip. */
+  const BANK_W = 9
+
+  const _mid = new THREE.Vector3()
+  const _flat = new THREE.Vector3()
+  const _perp = new THREE.Vector3()
+
+  /**
+   * Sample both ducts at the same station. Leaves the bank centreline in
+   * `_mid`, the level tangent in `_flat`, its horizontal normal in `_perp`,
+   * and the matching yaw in `_q` — which `setTRS` does not clobber.
+   */
+  function bankAt(k: number): number {
+    routePoint('net.stream', k, _p)
+    routePoint('net.ack', 1 - k, _p2)
+    _mid.set((_p.x + _p2.x) / 2, Math.min(_p.y, _p2.y), (_p.z + _p2.z) / 2)
+    routeTangent('net.stream', k, _flat)
+    _flat.y = 0
+    if (_flat.lengthSq() < 1e-6) _flat.set(0, 0, 1)
+    _flat.normalize()
+    _perp.set(_flat.z, 0, -_flat.x)
+    _q.setFromUnitVectors(_axisZ, _flat)
+    return Math.min(_mid.y, BED_CAP) - 0.15 // bed top: the ducts sit in it
   }
-  const pylonStruct = batch(gWire, unitBox, matStruct, pylonMass, true)
-  const pylonDetail = batch(gWire, unitBox, matDeep, pylonFine)
+
+  /** Where the crew can open the duct. Also where the bank gets its lights. */
+  const CHAMBER_T = [0.16, 0.4, 0.62, 0.84]
+  const N_BED = low ? 20 : 34
+  const BED_LEN = (STREAM_LEN / N_BED) * 1.08
+
+  /* The cable head at the walsender: the duct climbs out of the ground here,
+   * under a gantry, past the termination cabinets. Axis-aligned, so it also
+   * gets blueprint edges. */
+  routePoint('net.stream', 0, _p)
+  const CH_X = Math.round(_p.x) - 3
+  const CH_Z = Math.round(_p.z)
+  const headSpecs: BoxSpec[] = [
+    [CH_X, 0.55, CH_Z + 2, 18, 1.1, 15], // apron
+    [CH_X - 8, 4.3, CH_Z, 1.4, 8.6, 1.4], // gantry uprights
+    [CH_X + 8, 4.3, CH_Z, 1.4, 8.6, 1.4],
+    [CH_X, 8.9, CH_Z, 18, 0.9, 2.4], // head beam
+    [CH_X, 2.9, CH_Z + 7, 13, 3.6, 3.6], // termination cabinets
+  ]
+
+  const runStruct = new THREE.InstancedMesh(
+    unitBox, matStruct, N_BED + CHAMBER_T.length * 2 + headSpecs.length,
+  )
+  {
+    let i = 0
+    for (; i < N_BED; i++) {
+      const top = bankAt((i + 0.5) / N_BED)
+      const h = top + 0.25
+      setTRS(runStruct, i, _mid.x, top - h / 2, _mid.z, BANK_W, h, BED_LEN, _q)
+    }
+    for (const ct of CHAMBER_T) {
+      const top = bankAt(ct)
+      // the bank widens flush at a chamber, and the lid it opens by sits in the
+      // clear strip between the two ducts
+      setTRS(runStruct, i++, _mid.x, (top + 0.02 - 0.4) / 2, _mid.z, BANK_W + 3.4, top + 0.42, 8.0, _q)
+      setTRS(runStruct, i++, _mid.x, top + 0.12, _mid.z, 2.6, 0.36, 6.0, _q)
+    }
+    for (const s of headSpecs) {
+      setBox(runStruct, i++, s)
+      pushBoxEdges(edgeVerts, s)
+    }
+    runStruct.instanceMatrix.needsUpdate = true
+    gWire.add(runStruct)
+  }
+
+  const runDetail = new THREE.InstancedMesh(unitBox, matDeep, CHAMBER_T.length * 2 + 3)
+  const markNeon = new THREE.InstancedMesh(unitBox, neonWhite, CHAMBER_T.length * 2 + 1)
+  /** Post positions, so the route markers and their lamps agree. */
+  {
+    let d = 0
+    let m = 0
+    _c.setRGB(0, 0, 0)
+    for (const ct of CHAMBER_T) {
+      const top = bankAt(ct)
+      // chamber lid light, flush with the bank
+      setTRS(markNeon, m++, _mid.x, top + 0.34, _mid.z, 1.8, 0.12, 4.4, _q)
+      // route marker post, planted on the verge beside the bank
+      const px = _mid.x + _perp.x * (BANK_W * 0.5 + 3)
+      const pz = _mid.z + _perp.z * (BANK_W * 0.5 + 3)
+      setTRS(runDetail, d++, px, 1.6, pz, 0.5, 3.2, 0.5, _q)
+      setTRS(runDetail, d++, px, 3.3, pz, 1.6, 0.3, 1.0, _q)
+      setTRS(markNeon, m++, px, 3.5, pz, 0.85, 0.5, 0.85, _q)
+    }
+    // clamp bands up the cable head's riser, and the lamp under its beam
+    for (const rt of [0.015, 0.04, 0.065]) {
+      routePoint('net.stream', rt, _p)
+      setTRS(runDetail, d++, _p.x, _p.y, _p.z, 2.0, 0.45, 2.0)
+    }
+    setTRS(markNeon, m++, CH_X, 8.0, CH_Z, 1.6, 0.5, 1.6)
+    for (let i = 0; i < markNeon.count; i++) markNeon.setColorAt(i, _c)
+    runDetail.instanceMatrix.needsUpdate = true
+    markNeon.instanceMatrix.needsUpdate = true
+    markNeon.instanceColor!.setUsage(THREE.DynamicDrawUsage)
+    markNeon.raycast = () => {}
+    gWire.add(runDetail, markNeon)
+  }
 
   /* Packets. One per chunk the walsender pushes; each takes exactly
    * network_lag to cross, which is the only honest way to draw latency. */
@@ -514,34 +603,36 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
   const pktOn = new Uint8Array(N_PKT)
   const pktDur = new Float32Array(N_PKT)
 
-  /* The break. A dead link is not a link that is merely dark — it arcs. */
+  /* The break. When the link drops the bank does not catch fire — the section
+   * goes dark and the crew closes it: a line of amber trestles across the
+   * duct, standing steady for as long as the section is out. */
   const BREAK_T = 0.55
   const breakAt = routePoint('net.stream', BREAK_T, new THREE.Vector3())
-  const N_SPARK = low ? 5 : 9
-  const sparks = new THREE.InstancedMesh(unitBox, neonWhite, N_SPARK)
-  sparks.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
-  sparks.frustumCulled = false
-  sparks.raycast = () => {}
-  _c.setRGB(0, 0, 0)
-  for (let i = 0; i < N_SPARK; i++) {
-    hideInst(sparks, i, breakAt.x, breakAt.y, breakAt.z)
-    sparks.setColorAt(i, _c)
+  const N_TRESTLE = low ? 5 : 9
+  const trestles = new THREE.InstancedMesh(unitBox, neonWhite, N_TRESTLE)
+  trestles.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  trestles.raycast = () => {}
+  const trestleTop = bankAt(BREAK_T)
+  {
+    _c.setRGB(0, 0, 0)
+    // Laid out once, across the bank: only their brightness ever changes.
+    for (let i = 0; i < N_TRESTLE; i++) {
+      const off = ((i + 0.5) / N_TRESTLE - 0.5) * (BANK_W + 4)
+      setTRS(
+        trestles, i,
+        _mid.x + _perp.x * off, trestleTop + 0.85, _mid.z + _perp.z * off,
+        1.5, 1.5, 0.5, _q,
+      )
+      trestles.setColorAt(i, _c)
+    }
+    trestles.instanceMatrix.needsUpdate = true
+    trestles.instanceColor!.setUsage(THREE.DynamicDrawUsage)
   }
-  sparks.instanceColor!.setUsage(THREE.DynamicDrawUsage)
-  gWire.add(sparks)
-  const srng = makeRng(0x51de1a)
-  const sparkDir = new Float32Array(N_SPARK * 3)
-  const sparkPh = new Float32Array(N_SPARK)
-  for (let i = 0; i < N_SPARK; i++) {
-    sparkDir[i * 3] = srng() - 0.5
-    sparkDir[i * 3 + 1] = srng() - 0.5
-    sparkDir[i * 3 + 2] = srng() - 0.5
-    sparkPh[i] = srng()
-  }
+  gWire.add(trestles)
 
-  const TX_WIRE = text.alloc(28, breakAt.x, breakAt.y + 7, breakAt.z, 'west', 2.2, COLOR.crit, 'center', 0.1, 'LINK DOWN')
-  text.alloc(30, 168, 52, 158, 'west', 1.9, COLOR.replication, 'center', 0.75, 'streaming replication')
-  const TX_LAT = text.alloc(26, 168, 48.6, 158, 'west', 1.4, COLOR.inkDim, 'center', 0.8, '')
+  const TX_WIRE = text.alloc(28, breakAt.x, breakAt.y + 7, breakAt.z, 'west', 2.2, COLOR.warn, 'center', 0.1, 'LINK DOWN')
+  text.alloc(30, 188, 10.2, 132, 'west', 1.9, COLOR.replication, 'center', 0.75, 'streaming replication')
+  const TX_LAT = text.alloc(26, 188, 8.2, 132, 'west', 1.4, COLOR.inkDim, 'center', 0.8, '')
 
   /* =====================================================================
    * 2. WALRECEIVER — receives, writes, flushes. Two LSNs, two gauges.
@@ -560,9 +651,10 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     [RX, 10.7, RZ, 21.4, 0.9, 16.4], // service band
     [RX, 13.0, RZ, 12, 3.8, 9], // equipment room
     [RX, 15.1, RZ, 13, 0.6, 10], // roof cap
-    [RX + 2, 7, MAST_Z, 2.0, 14, 2.0], // mast legs, right under the landfall
-    [RX + 6, 7, MAST_Z, 2.0, 14, 2.0],
-    [RX + 4, 14.4, MAST_Z, 10, 0.9, 7], // mast platform
+    [RX + 2, 0.55, HEAD_Z, 20, 1.1, 12], // landfall apron, where the duct surfaces
+    [RX - 4, 4.6, HEAD_Z, 1.8, 9.2, 1.8], // gantry uprights
+    [RX + 8, 4.6, HEAD_Z, 1.8, 9.2, 1.8],
+    [RX + 2, 9.6, HEAD_Z, 16, 0.9, 7.2], // termination deck
   ]
   const recvStruct = batch(gRecv, unitBox, matStruct, recvMass, true)
 
@@ -581,30 +673,26 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
   ]
   const recvDetailMesh = batch(gRecv, unitBox, matDeep, recvDetail)
 
-  /* The dish, aimed at the walsender — computed, never guessed. */
-  const dishAt = new THREE.Vector3(RX + 4, 17.6, MAST_Z)
-  const dishAim = new THREE.Vector3(WS[0] - dishAt.x, 26 - dishAt.y, WS[2] - dishAt.z).normalize()
-  const dishQ = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, -1, 0), dishAim)
-  const dishGeo = own(new THREE.SphereGeometry(5.4, 18, 8, 0, TAU, 0, Math.PI * 0.38))
-  const dish = new THREE.Mesh(dishGeo, matStruct)
-  dish.position.copy(dishAt)
-  dish.quaternion.copy(dishQ)
-  gRecv.add(dish)
-
-  const dishInnerMat = own(new THREE.MeshBasicMaterial({ color: 0x000000, toneMapped: false, side: THREE.BackSide }))
-  const dishInner = new THREE.Mesh(dishGeo, dishInnerMat)
-  dishInner.position.copy(dishAt)
-  dishInner.quaternion.copy(dishQ)
-  dishInner.scale.setScalar(0.94)
-  dishInner.raycast = () => {}
-  gRecv.add(dishInner)
-
-  const feedHorn = new THREE.InstancedMesh(unitCyl, matHeavy, 1)
-  _p2.copy(dishAt).addScaledVector(dishAim, 2.8)
-  _q.setFromUnitVectors(_axisY, dishAim)
-  setTRS(feedHorn, 0, _p2.x, _p2.y, _p2.z, 1.0, 5.4, 1.0, _q)
-  feedHorn.instanceMatrix.needsUpdate = true
-  gRecv.add(feedHorn)
+  /* The cable head. The duct comes up out of the bank, through the gantry
+   * deck, and dies in three termination bushings — this is where the wire
+   * physically ends and the building begins. The bushings light as each
+   * chunk lands, which is the arrival the old aerial link used to show. */
+  const N_BUSH = 3
+  const bushBodies = new THREE.InstancedMesh(unitCyl, matHeavy, N_BUSH)
+  const bushGlow = new THREE.InstancedMesh(unitBox, neonWhite, N_BUSH)
+  bushGlow.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  bushGlow.raycast = () => {}
+  _c.setRGB(0, 0, 0)
+  for (let i = 0; i < N_BUSH; i++) {
+    const bx = RX - 2 + i * 4
+    setTRS(bushBodies, i, bx, 12.1, HEAD_Z, 2.0, 4.0, 2.0)
+    setTRS(bushGlow, i, bx, 14.3, HEAD_Z, 2.4, 0.5, 2.4)
+    bushGlow.setColorAt(i, _c)
+  }
+  bushBodies.instanceMatrix.needsUpdate = true
+  bushGlow.instanceMatrix.needsUpdate = true
+  bushGlow.instanceColor!.setUsage(THREE.DynamicDrawUsage)
+  gRecv.add(bushBodies, bushGlow)
 
   /* The standby's own pg_wal: a receiver writes real files to real disk. */
   const N_RSEG = 4
@@ -636,8 +724,8 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     [RX - 10.15, 6.2, RZ, 0.12, 0.5, 12], // hall slits
     [RX + 10.15, 6.2, RZ, 0.12, 0.5, 12],
     [RX, 6.2, RZ - 7.65, 14, 0.5, 0.12],
-    [RX + 4, 21.6, MAST_Z, 1.3, 1.3, 1.3], // 8: mast beacon
-    [RX + 4, 14.9, MAST_Z, 9.8, 0.14, 0.14], // platform rail light
+    [RX + 2, 10.6, HEAD_Z, 1.3, 1.3, 1.3], // 8: link status lamp, steady
+    [RX + 2, 10.1, HEAD_Z, 15.4, 0.14, 0.14], // deck rail light
   ]
   const recvNeon = neonBatch(gRecv, unitBox, recvNeonSpecs)
   const IX_GW = 0
@@ -904,7 +992,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
 
   /* Four carriages plus the primary's own mark and the lag bar. */
   const CAR_SENT = 0, CAR_WRITE = 1, CAR_FLUSH = 2, CAR_REPLAY = 3, CAR_PRIMARY = 4, CAR_LAG = 5
-  const CAR_COLOR = [COLOR.replication, COLOR.wal, COLOR.ok, COLOR.client, COLOR.checkpoint, COLOR.crit]
+  const CAR_COLOR = [COLOR.replication, COLOR.wal, COLOR.ok, COLOR.client, COLOR.checkpoint, COLOR.warn]
   const CAR_NAME = ['sent', 'write', 'flush', 'replay', 'primary', '']
   const carriages = new THREE.InstancedMesh(unitBox, neonWhite, 6)
   carriages.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
@@ -929,7 +1017,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
   for (let i = 0; i < 4; i++) {
     TX_ROW.push(text.alloc(38, RULER_X - 0.4, 5.0 - i * 1.4, RULER_MID, 'west', 1.1, CAR_COLOR[i], 'center', 1.0))
   }
-  const TX_LAGBAR = text.alloc(44, RULER_X - 1.2, 10.6, RULER_MID, 'west', 1.15, COLOR.crit, 'center', 1.0)
+  const TX_LAGBAR = text.alloc(44, RULER_X - 1.2, 10.6, RULER_MID, 'west', 1.15, COLOR.warn, 'center', 1.0)
 
   /* =====================================================================
    * 5. REPLICA CLIENT — read-only traffic, and the xmin it can pin.
@@ -998,7 +1086,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     [UX, 4.4, UZ, 18, 6.4, 14], // apply hall
     [UX, 8.0, UZ, 19.4, 0.9, 15.4], // band
     [UX, 10.2, UZ, 9, 3.6, 8], // worker room
-    [UX - 7, 8.4, UZ - 8, 1.2, 15, 1.2], // receiving mast
+    [UX - 7, 8.4, UZ - 8, 1.2, 15, 1.2], // receiving stack
     [UX - 7, 16.2, UZ - 8, 4.4, 0.5, 4.4],
   ]
   const subStruct = batch(gSub, unitBox, matStruct, subMass, true)
@@ -1030,13 +1118,13 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     [UX, 1.4, UZ + 7.56, 13.4, 0.14, 0.3],
     [UX - 9.15, 4.6, UZ, 0.12, 0.45, 11], // hall slits
     [UX + 9.15, 4.6, UZ, 0.12, 0.45, 11],
-    [UX - 7, 17.2, UZ - 8, 1.1, 1.1, 1.1], // 4: mast lamp
+    [UX - 7, 17.2, UZ - 8, 1.1, 1.1, 1.1], // 4: stack lamp, steady
   ])
   const IX_SUBLAMP = 4
 
   text.alloc(20, UX, 12.8, UZ + 7.7, 'south', 1.4, COLOR.toast, 'center', 1.0, 'subscriber')
   const TX_SUB = text.alloc(34, UX, 10.4, UZ + 7.7, 'south', 0.95, COLOR.inkDim, 'center', 0.8, '')
-  const TX_SUBOFF = text.alloc(34, UX, 8.9, UZ + 7.7, 'south', 0.85, COLOR.crit, 'center', 0.15, 'needs wal_level = logical')
+  const TX_SUBOFF = text.alloc(34, UX, 8.9, UZ + 7.7, 'south', 0.85, COLOR.warn, 'center', 0.15, 'needs wal_level = logical')
 
   /* --- one blueprint pass, one text pass for the district ---------------- */
   const edgeGeo = own(new THREE.BufferGeometry())
@@ -1064,8 +1152,8 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     district: 'replication',
     object: gWire,
     tier: 0,
-    focus: { target: [186, 34, 146], distance: 190, dir: [-0.62, 0.36, 0.7] },
-    labelAt: [breakAt.x, breakAt.y + 12, breakAt.z],
+    focus: { target: [172, 4, 124], distance: 215, dir: [0.76, 0.42, 0.5] },
+    labelAt: [breakAt.x, breakAt.y + 11, breakAt.z],
     color: COLOR.replication,
     readout: (s: SimState) => {
       const r = s.replication
@@ -1202,7 +1290,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
   let prevReplay = -1
   let prevWrite = -1
   let link = 0 // 0..1 connected
-  let dishFlash = 0
+  let arriveFlash = 0
   let applyFlash = 0
   let beltOffset = 0
   let queueLevel = 0
@@ -1258,7 +1346,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
       if (!pktOn[i]) continue
       pktT[i] += dts / pktDur[i]
       if (pktT[i] >= 1 || !connected) {
-        if (pktT[i] >= 1) dishFlash = 1
+        if (pktT[i] >= 1) arriveFlash = 1
         pktOn[i] = 0
         hideInst(packets, i, wireMid.x, wireMid.y, wireMid.z)
         _c.setRGB(0, 0, 0)
@@ -1269,7 +1357,8 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
       routePoint('net.stream', pktT[i], _p)
       routeTangent('net.stream', pktT[i], _p2).normalize()
       _q.setFromUnitVectors(_axisZ, _p2)
-      setTRS(packets, i, _p.x, _p.y, _p.z, 1.15, 1.15, 3.0, _q)
+      // A slug moving along the duct, not a dart: barely longer than it is wide.
+      setTRS(packets, i, _p.x, _p.y, _p.z, 1.35, 1.35, 2.1, _q)
       _c.setHex(COLOR.wal).multiplyScalar(1.9)
       packets.setColorAt(i, _c)
       pktDirty = true
@@ -1294,46 +1383,32 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
       if (!onStream && feedback > 0.01) _c.lerp(_c2.setHex(COLOR.vacuum), feedback)
       _c.multiplyScalar(glow)
       if (link < 0.98 && near > 0) {
-        // arc light at the break, and a dead zone either side of it
-        const arc = (1 - link) * near * (0.5 + 0.5 * Math.sin(t * 31 + i))
-        _c2.setHex(COLOR.crit).multiplyScalar(arc * 2.4)
-        _c.multiplyScalar(1 - near).add(_c2)
+        // the section either side of the break simply stops carrying
+        _c.multiplyScalar(1 - near * (1 - link))
       }
       sheath.setColorAt(i, _c)
     }
     sheath.instanceColor!.needsUpdate = true
 
-    // Sparks only exist while the link is broken.
+    // The trestles closing the section. Steady amber, no flicker: this is a
+    // road closure, and it stays shut until the link comes back.
     const broken = 1 - link
-    if (broken > 0.02) {
-      for (let i = 0; i < N_SPARK; i++) {
-        sparkPh[i] += dt * (2.2 + i * 0.31)
-        if (sparkPh[i] > 1) sparkPh[i] -= 1
-        const k = sparkPh[i]
-        const d = 1.2 + k * 7
-        setTRS(
-          sparks, i,
-          breakAt.x + sparkDir[i * 3] * d,
-          breakAt.y + sparkDir[i * 3 + 1] * d + k * 1.4,
-          breakAt.z + sparkDir[i * 3 + 2] * d,
-          0.5, 0.5, 0.5,
-        )
-        _c.setHex(COLOR.crit).multiplyScalar(broken * 3.2 * (1 - k) * (1 - k))
-        sparks.setColorAt(i, _c)
-      }
-    } else {
-      for (let i = 0; i < N_SPARK; i++) hideInst(sparks, i, breakAt.x, breakAt.y, breakAt.z)
-      _c.setRGB(0, 0, 0)
-      for (let i = 0; i < N_SPARK; i++) sparks.setColorAt(i, _c)
-    }
-    sparks.instanceMatrix.needsUpdate = true
-    sparks.instanceColor!.needsUpdate = true
+    _c.setHex(COLOR.warn).multiplyScalar(broken * broken * 1.6)
+    for (let i = 0; i < N_TRESTLE; i++) trestles.setColorAt(i, _c)
+    trestles.instanceColor!.needsUpdate = true
+
+    // The bank's own lights: warm and steady, brighter with what it carries.
+    _c.setHex(COLOR.replication).multiplyScalar(0.18 + link * (0.22 + thru * 0.6))
+    for (let i = 0; i < markNeon.count; i++) markNeon.setColorAt(i, _c)
+    markNeon.instanceColor!.needsUpdate = true
 
     /* --- 2. walreceiver ------------------------------------------------- */
 
-    dishFlash = Math.max(0, dishFlash - dt * 3.4)
-    _c.setHex(COLOR.replication).multiplyScalar(link * (0.08 + dishFlash * 2.2))
-    dishInnerMat.color.copy(_c)
+    // Each chunk that lands lights the termination bushings.
+    arriveFlash = Math.max(0, arriveFlash - dt * 3.4)
+    _c.setHex(COLOR.replication).multiplyScalar(link * (0.3 + arriveFlash * 2.0))
+    for (let i = 0; i < N_BUSH; i++) bushGlow.setColorAt(i, _c)
+    bushGlow.instanceColor!.needsUpdate = true
 
     if (prevWrite < 0) prevWrite = rep.writeLsn
     const dWrite = rep.writeLsn - prevWrite
@@ -1355,7 +1430,9 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     recvNeon.setColorAt(IX_GF, _c)
     _c.setHex(COLOR.replication).multiplyScalar(link * (0.2 + thru * 0.7))
     for (let i = 2; i < IX_BEACON; i++) recvNeon.setColorAt(i, _c)
-    _c.setHex(connected ? COLOR.ok : COLOR.crit).multiplyScalar(0.4 + 0.6 * Math.max(0, Math.sin(t * 2.4)))
+    // Status lamp on the termination deck: green while streaming, amber when
+    // the link is down. It changes colour, never flashes.
+    _c.setHex(connected ? COLOR.ok : COLOR.warn).multiplyScalar(1.1)
     recvNeon.setColorAt(IX_BEACON, _c)
     _c.setHex(COLOR.replication).multiplyScalar(link * 0.5)
     recvNeon.setColorAt(IX_BEACON + 1, _c)
@@ -1407,7 +1484,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     const qN = Math.round(queueLevel * N_QUEUE)
     for (let i = 0; i < N_QUEUE; i++) {
       const on = i < qN
-      _c.setHex(i > N_QUEUE * 0.66 ? COLOR.crit : COLOR.wal).multiplyScalar(on ? 0.7 + queueLevel * 1.1 : 0)
+      _c.setHex(i > N_QUEUE * 0.66 ? COLOR.warn : COLOR.wal).multiplyScalar(on ? 0.7 + queueLevel * 1.1 : 0)
       queue.setColorAt(i, _c)
     }
     queue.instanceColor!.needsUpdate = true
@@ -1425,7 +1502,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
 
     _c.setHex(COLOR.replication).multiplyScalar(0.15 + rep.applyActivity * 0.9)
     for (let i = 0; i < IX_APPLY_LAMP; i++) startNeon.setColorAt(i, _c)
-    _c.setHex(queueLevel > 0.5 ? COLOR.crit : COLOR.ok).multiplyScalar(0.5 + applyFlash * 1.8)
+    _c.setHex(queueLevel > 0.5 ? COLOR.warn : COLOR.ok).multiplyScalar(0.5 + applyFlash * 1.8)
     startNeon.setColorAt(IX_APPLY_LAMP, _c)
     _c.setHex(COLOR.warn).multiplyScalar(0.1 + queueLevel * 1.4)
     startNeon.setColorAt(IX_APPLY_LAMP + 1, _c)
@@ -1513,7 +1590,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     const lagLen = Math.max(0.2, zFlush - zReplay)
     setTRS(carriages, CAR_LAG, RULER_X, RULER_Y - 2.0, (zFlush + zReplay) / 2, 0.9, 0.9, lagLen)
     const lagBad = clamp01(rep.lagBytes / (8 * MB))
-    _c.setHex(COLOR.warn).lerp(_c2.setHex(COLOR.crit), lagBad).multiplyScalar(0.4 + lagBad * 1.8)
+    _c.setHex(COLOR.warn).lerp(_c2.setHex(COLOR.replication), lagBad).multiplyScalar(0.4 + lagBad * 1.8)
     carriages.setColorAt(CAR_LAG, _c)
     carriages.instanceMatrix.needsUpdate = true
     carriages.instanceColor!.needsUpdate = true
@@ -1565,7 +1642,8 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
 
     _c.setHex(COLOR.toast).multiplyScalar(0.05 + subBeat * (0.3 + changes * 0.8))
     for (let i = 0; i < IX_SUBLAMP; i++) subNeon.setColorAt(i, _c)
-    _c.setHex(COLOR.toast).multiplyScalar(subBeat * (0.4 + 0.6 * Math.max(0, Math.sin(t * 3.1))))
+    // A lit stack, not a beacon: it brightens and dims, it never goes out.
+    _c.setHex(COLOR.toast).multiplyScalar(subBeat * (0.55 + 0.25 * Math.sin(t * 1.4)))
     subNeon.setColorAt(IX_SUBLAMP, _c)
     subNeon.instanceColor!.needsUpdate = true
 
@@ -1576,17 +1654,17 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     textT += dt
     if (textT >= 0.125) {
       textT = 0
-      text.setColor(TX_WIRE, COLOR.crit, 0.08 + broken * (1.3 + 0.5 * Math.sin(t * 6)))
+      text.setColor(TX_WIRE, COLOR.warn, 0.08 + broken * 1.5)
       text.setColor(TX_FEEDBACK, COLOR.vacuum, 0.06 + feedback * 1.1)
-      text.setColor(TX_SUBOFF, COLOR.crit, 0.1 + (1 - subBeat) * 0.8)
+      text.setColor(TX_SUBOFF, COLOR.warn, 0.1 + (1 - subBeat) * 0.8)
       text.set(TX_LAT, `${rep.networkLagMs.toFixed(0)} ms · ${rep.inFlight} in flight`)
       text.set(TX_WRITE, fmtLsn(rep.writeLsn))
       text.set(TX_FLUSH, fmtLsn(rep.flushLsn))
       text.set(TX_APPLY, `${fmtBytes(applyRate)}/s`)
       text.set(TX_QUEUE, waiting > 64 * 1024 ? `${fmtBytes(waiting)} queued` : '')
-      text.setColor(TX_QUEUE, queueLevel > 0.5 ? COLOR.crit : COLOR.warn, 0.6 + queueLevel * 0.9)
+      text.setColor(TX_QUEUE, COLOR.warn, 0.6 + queueLevel * 0.9)
       text.set(TX_LAG, connected ? `lag ${fmtBytes(rep.lagBytes)}` : 'DISCONNECTED')
-      text.setColor(TX_LAG, connected ? (lagBad > 0.6 ? COLOR.crit : COLOR.replication) : COLOR.crit, 1.1)
+      text.setColor(TX_LAG, connected ? (lagBad > 0.6 ? COLOR.warn : COLOR.replication) : COLOR.warn, 1.1)
       text.set(TX_LAGB, connected ? `${rep.lagSec.toFixed(1)} s behind · apply ${fmtBytes(applyRate)}/s` : 'the wire is down')
       text.set(TX_SCALE, `scale: 0 … ${fmtBytes(scaleSpan)} behind`)
       _lsn[0] = rep.sentLsn; _lsn[1] = rep.writeLsn; _lsn[2] = rep.flushLsn; _lsn[3] = rep.replayLsn
@@ -1618,10 +1696,9 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     const near = level >= 1
     const close = level >= 2
 
-    pylonDetail.visible = near
+    runDetail.visible = near
     ackLine.visible = near
     recvDetailMesh.visible = near
-    feedHorn.visible = near
     recvSegCradles.visible = near
     recvSegs.visible = near
     startDetailMesh.visible = near
@@ -1634,7 +1711,11 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     subDetailMesh.visible = near
     rackMesh.visible = near
     edgeLines.visible = near
-    pylonStruct.visible = true
+    // The bank and the cable head are the wire: they are never LOD'd away, and
+    // neither are the bushings that show arrivals landing.
+    runStruct.visible = true
+    bushBodies.visible = true
+    bushGlow.visible = true
     // Small print costs nothing to skip when the whole district is 400 m away.
     text.mesh.visible = near
     text.material.opacity = close ? 1 : 0.8
@@ -1645,8 +1726,8 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     owned.length = 0
     text.dispose()
     for (const m of [
-      sheath, packets, sparks, pylonStruct, pylonDetail,
-      recvStruct, recvDetailMesh, feedHorn, recvSegCradles, recvSegs, recvNeon,
+      sheath, packets, trestles, runStruct, runDetail, markNeon,
+      recvStruct, recvDetailMesh, bushBodies, bushGlow, recvSegCradles, recvSegs, recvNeon,
       startStruct, startDetailMesh, gateMesh, belt, queue, pressMesh, pageMesh, startNeon,
       deckStruct, deckDetailMesh, tiles, storeStruct, rackMesh, storeNeon,
       rulerStruct, rulerTicks, carriages,
