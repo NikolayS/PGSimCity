@@ -667,7 +667,12 @@ export function createHud(ctx: UiContext): UiModule {
       closeViewBtn,
     ),
     el('div', { class: 'hud-view__actions' }, labelsViewBtn, homeViewBtn, overviewViewBtn, flyViewBtn),
-    el('span', { class: 'pg-eyebrow hud-view__district-label', text: 'Fly to a district' }),
+    el(
+      'div',
+      { class: 'hud-view__district-head' },
+      el('span', { class: 'pg-eyebrow', text: 'Fly to a district' }),
+      el('span', { class: 'hud-view__swipe', text: 'Swipe →' }),
+    ),
     el('div', { class: 'hud-view__districts' }, ...districtViewButtons),
   )
   topEl.append(viewPanel)

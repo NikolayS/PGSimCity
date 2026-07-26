@@ -360,8 +360,21 @@
   padding-inline: 8px;
 }
 
-.hud-view__district-label {
+.hud-view__district-head {
   margin-top: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.hud-view__swipe {
+  display: none;
+  color: var(--ink-faint);
+  font-family: var(--f-mono);
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .hud-view__districts {
@@ -1109,6 +1122,9 @@ body.pg-labels-off #labels-root {
     display: flex;
     overflow-x: auto;
     scrollbar-width: thin;
+  }
+  .hud-view__swipe {
+    display: inline;
   }
   .hud-view__district {
     flex: 0 0 92px;
