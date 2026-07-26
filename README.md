@@ -4,7 +4,7 @@
 
 **Live: <https://nikolays.github.io/PGSimCity/>**
 
-![The city seen from above the south-east: the shared memory plaza in the centre, the WAL district glowing amber to the east, the storage excavation cut into the ground, and the standby to the south.](docs/screenshot.png)
+![A daylight view into PGSimCity's storage excavation: the shared buffers plaza spans the pit above teal storage machinery, with backend towers behind and the checkpointer and WAL districts on either side.](docs/screenshot.png)
 
 Every building is a real mechanism. The plaza in the centre is `shared_buffers` —
 1024 page frames whose height is their clock-sweep usage count and whose colour is
