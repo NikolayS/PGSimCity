@@ -148,7 +148,7 @@ const MAP_DISTRICTS: MapDistrict[] = [
   { key: 'replication', label: 'STANDBY', id: 'replica.standby', color: COLOR.replication },
 ]
 
-const QUALITY_LEVELS: QualityLevel[] = ['low', 'medium', 'high', 'ultra']
+const QUALITY_LEVELS: QualityLevel[] = ['low', 'reduced', 'medium', 'high', 'ultra']
 
 /* ------------------------------ tiny helpers ----------------------------- */
 
@@ -697,26 +697,35 @@ export function createHud(ctx: UiContext): UiModule {
     window.setTimeout(() => t.node.remove(), 240)
   }
 
-  function pushToast(text: string, kind: 'info' | 'warn' | 'good' = 'info', ms = 3600): void {
+  function pushToast(
+    text: string,
+    kind: 'info' | 'warn' | 'good' = 'info',
+    ms = 3600,
+    action?: { label: string; quality: QualityLevel },
+  ): void {
     const node = el(
       'button',
       {
         class: `hud-toast hud-toast--${kind} pg-enter`,
         type: 'button',
-        'aria-label': 'Dismiss',
+        'aria-label': action ? `${text} ${action.label}` : 'Dismiss',
       },
       el('span', { class: 'hud-toast__dot pg-dot' }),
       el('span', { class: 'hud-toast__txt', text }),
+      ...(action ? [el('span', { class: 'hud-toast__action', text: action.label })] : []),
     )
     const t: Toast = { node, timer: window.setTimeout(() => dropToast(t), Math.max(600, ms)) }
-    node.addEventListener('click', () => dropToast(t))
+    node.addEventListener('click', () => {
+      if (action) bus.emit('quality', { level: action.quality })
+      dropToast(t)
+    })
     toasts.push(t)
     toastEl.prepend(node)
     while (toasts.length > 4) dropToast(toasts[0])
   }
 
   cleanup.push(
-    bus.on('toast', (p) => pushToast(p.text, p.kind ?? 'info', p.ms ?? 3600)),
+    bus.on('toast', (p) => pushToast(p.text, p.kind ?? 'info', p.ms ?? 3600, p.action)),
   )
 
   /* =======================================================================
