@@ -38,7 +38,7 @@ import { createSearch } from './ui/search'
 import type { UiContext, UiModule } from './ui/uikit'
 
 /* ============================================================================
- * PGCITY — boot.
+ * PGSimCity — boot.
  *
  * Order matters: renderer -> camera -> simulation -> world -> overlays -> UI.
  * The world modules only ever read simulation state; the UI only ever talks to

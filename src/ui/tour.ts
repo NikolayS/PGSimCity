@@ -6,7 +6,7 @@ import { el, icon, setClass, setText } from './uikit'
 import type { UiContext, UiModule } from './uikit'
 
 /* ============================================================================
- * PGCITY — THE GUIDED TOUR
+ * PGSimCity — THE GUIDED TOUR
  *
  * Fourteen chapters that tell one story: a connection arrives, becomes a
  * process, becomes a plan, reads a page, writes a log record, commits, gets
@@ -452,12 +452,16 @@ export function createTour(ctx: UiContext): UiModule {
 
   function hideFirstRun(): void {
     setClass(firstRun, 'is-live', false)
+    document.body.classList.remove('pg-invite')
   }
 
   function showFirstRun(): void {
     if (running || hasSeen()) return
     markSeen()
     setClass(firstRun, 'is-live', true)
+    // The card is centred in the same row as the minimap and is wider than the
+    // space left beside it — tour.css uses this to stand the minimap down.
+    document.body.classList.add('pg-invite')
   }
 
   layer.append(firstRun, narrateCard, card)
@@ -702,6 +706,7 @@ export function createTour(ctx: UiContext): UiModule {
       restoreKnobs()
     }
     document.body.classList.remove('pg-tour')
+    document.body.classList.remove('pg-invite')
     card.remove()
     narrateCard.remove()
     firstRun.remove()

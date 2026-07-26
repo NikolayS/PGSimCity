@@ -337,7 +337,7 @@ class TextBank {
     if (s.x === x && s.y === y && s.z === z) return
     s.x = x; s.y = y; s.z = z
     const t = s.text
-    s.text = ' ' // force a relayout
+    s.text = '\0' // force a relayout
     this.set(id, t)
   }
 

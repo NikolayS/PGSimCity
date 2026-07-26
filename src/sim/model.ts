@@ -1,5 +1,5 @@
 /* ============================================================================
- * PGCITY — THE SIMULATION
+ * PGSimCity — THE SIMULATION
  *
  * This file is the engine. Everything the city draws is a projection of the
  * state produced here, so the rules below are meant to be *true*, not pretty:
@@ -72,6 +72,8 @@ const WAL_BUF_CAP = 256 * 1024
 /** BAS_BULKREAD: a big seq scan gets a 256 KiB ring so it cannot evict the pool. */
 const RING = 32
 const STEP_MAX = 1 / 30
+/** Most sub-steps one update() call may run, so a huge delta cannot stall the tab. */
+const MAX_STEPS = 20
 const IDLE_REAP = 22
 /** autovacuum_naptime. Real default is 60s; compressed so the yard stays alive. */
 const AV_NAPTIME = 12
@@ -2403,7 +2405,13 @@ export function createSim(bus: Bus): SimApi {
   function update(dt: number): void {
     if (!isFinite(dt) || dt <= 0) return
     if (K.paused) return
-    let d = dt > 0.1 ? 0.1 : dt
+    // What arrives here is the caller's already-clamped frame delta multiplied
+    // by the speed knob. Re-clamping it to 0.1 is what used to make the knob a
+    // silent no-op below ~50 fps: at 10 fps the frame delta is already 0.1, so
+    // every multiplier collapsed to 1x. Sub-step instead — STEP_MAX bounds each
+    // step, MAX_STEPS bounds the total work one frame can ask for.
+    const cap = STEP_MAX * MAX_STEPS
+    const d = dt > cap ? cap : dt
     state.realT += d / Math.max(0.05, K.timeScale)
     const steps = d > STEP_MAX ? Math.ceil(d / STEP_MAX) : 1
     const sd = d / steps

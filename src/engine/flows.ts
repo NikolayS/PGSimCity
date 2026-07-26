@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { Bus, FlowKind, FlowRequest, QualitySettings, ThemeApi } from '../core/types'
 import { ROUTES, routeCurve } from '../world/layout'
-import { clamp, makeRng } from '../core/util'
+import { clamp, makeRng, reduceMotion } from '../core/util'
 
 /* ============================================================================
  * FLOWS — every moving packet in the city.
@@ -566,7 +566,10 @@ export function createFlows(
   /* ---- quality / teardown -----------------------------------------------*/
 
   function setQuality(q: QualitySettings): void {
-    const want = Math.max(64, Math.floor(q.maxParticles))
+    // Streams of particles crossing the whole screen are the loudest motion in
+    // the city. Keep enough to read the routes, drop the rest.
+    const budget = reduceMotion() ? q.maxParticles * 0.28 : q.maxParticles
+    const want = Math.max(64, Math.floor(budget))
     if (want === pool) return
     destroyPool()
     qHead = 0

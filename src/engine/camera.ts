@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { Bus, CameraApi, CameraMode, FocusSpec } from '../core/types'
-import { clamp, clamp01, damp, easeInOutCubic, lerp } from '../core/util'
+import { clamp, clamp01, damp, easeInOutCubic, lerp, reduceMotion } from '../core/util'
 import { ANCHOR } from '../world/layout'
 
 /* ============================================================================
@@ -819,7 +819,10 @@ export function createCameraRig(
     _m4.lookAt(tweenP1, tweenTarget, WORLD_UP)
     tweenQ1.setFromRotationMatrix(_m4)
 
-    if (opts?.instant) {
+    // A visitor who asked for reduced motion gets a cut, not a flight: a
+    // scripted camera move across the whole city is exactly the kind of motion
+    // the preference exists to stop.
+    if (opts?.instant || reduceMotion()) {
       camera.position.copy(tweenP1)
       camera.quaternion.copy(tweenQ1)
       camera.updateMatrixWorld()

@@ -9,7 +9,7 @@ import { el, icon, setClass, setText, sparkline } from './uikit'
 import type { UiContext, UiModule } from './uikit'
 
 /* ============================================================================
- * PGCITY — THE HUD
+ * PGSimCity — THE HUD
  *
  * Four surfaces, one module, because they share one clock and one keyboard:
  *
@@ -360,6 +360,8 @@ export function createHud(ctx: UiContext): UiModule {
       'button',
       {
         class: 'hud-vital',
+        // so the stylesheet can drop the least essential tiles on a phone
+        'data-vital': def.key,
         type: 'button',
         title: `${def.hint}\nClick to fly to it.`,
         'aria-label': `${def.label} — show in the city`,

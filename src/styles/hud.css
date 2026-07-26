@@ -1,5 +1,5 @@
 /* ============================================================================
-   PGCITY — HUD chrome.
+   PGSimCity — HUD chrome.
 
    Owns four surfaces and one modal:
      .hud-bar        the instrument bar in #hud-top
@@ -375,6 +375,9 @@
   overflow-x: auto;
   scrollbar-width: thin;
   padding: 3px 2px;
+  /* Scenarios past the right edge are unreachable unless you know the rail
+     scrolls. The fade is the only thing that says so. */
+  mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent);
 }
 
 .hud-chip {
@@ -697,25 +700,23 @@ body.pg-labels-off #labels-root {
    RESPONSIVE
    ========================================================================*/
 
-@media (max-width: 1280px) {
+/* Five vitals at their full width plus the brand, the checkpoint ring, the
+   tools and the quality select need ~1550px. Below that the sparklines are the
+   first thing to go: a truncated vital sign is worth less than no sparkline,
+   and 1280x800 is the most common laptop there is. */
+@media (max-width: 1440px) {
   .hud-vital {
     padding: 7px 11px;
-    grid-template-columns: 92px 60px;
+    grid-template-columns: auto;
   }
   .hud-vital .pg-spark {
-    width: 60px;
+    display: none;
   }
 }
 
 @media (max-width: 1080px) {
   .hud-vitals {
     justify-self: stretch;
-  }
-  .hud-vital .pg-spark {
-    display: none;
-  }
-  .hud-vital {
-    grid-template-columns: auto;
   }
   .hud-perf__nums {
     display: none;
@@ -725,8 +726,19 @@ body.pg-labels-off #labels-root {
   }
 }
 
+/* If it still does not fit, the overflow must at least be discoverable. */
+@media (max-width: 1080px) {
+  .hud-vitals {
+    scrollbar-width: thin;
+    mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+  }
+  .hud-vitals::-webkit-scrollbar {
+    display: block;
+    height: 3px;
+  }
+}
+
 @media (max-width: 860px) {
-  .hud-brand__mark,
   .hud-brand__rule {
     display: none;
   }
@@ -761,4 +773,36 @@ body.pg-labels-off #labels-root {
 }
 .help-disclaimer a:hover {
   text-decoration-color: var(--c-backend);
+}
+
+/* ==========================================================================
+   PHONE
+   A shared link opens on a phone more often than anyone plans for. Keep the
+   product name and the three vitals that tell you the city is alive; the rest
+   of the instrument bar is not worth the width.
+   ========================================================================*/
+
+@media (max-width: 700px) {
+  .hud-brand__mark {
+    display: block;
+    font-size: var(--fs-xs);
+    letter-spacing: 0.08em;
+  }
+  .hud-vital[data-vital='wal'],
+  .hud-vital[data-vital='dirty'] {
+    display: none;
+  }
+  .hud-vital {
+    padding: 6px 8px;
+  }
+  .hud-vitals {
+    mask-image: none;
+  }
+  /* The scenario rail wraps instead of scrolling four of its chips out of
+     sight behind an invisible horizontal scrollbar. */
+  .hud-chips {
+    flex-wrap: wrap;
+    overflow-x: visible;
+    row-gap: 4px;
+  }
 }

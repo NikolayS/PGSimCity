@@ -5,7 +5,7 @@ import { ANCHOR, CITY, DISTRICT_BOUNDS } from './layout'
 import type { DistrictId, SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
 
 /* ============================================================================
- * GROUND — the plate PGCITY is bolted to, and the hole cut through it.
+ * GROUND — the plate PGSimCity is bolted to, and the hole cut through it.
  *
  * Three ideas, in order of importance:
  *
@@ -544,7 +544,11 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     district: 'storage',
     object: pit,
     tier: 1,
-    focus: { target: [0, -22, 0], distance: 320, dir: [0.3, 0.55, 0.78] },
+    // Drop INTO the cut. The old spec parked the camera at distance 320 above
+    // the plaza, where the plaza deck occludes the hole and the excavation reads
+    // as a black square. Aim below the rim (target y = -40) with a shallow dir.y
+    // and the filesystem underneath is what fills the frame.
+    focus: { target: [0, -40, -10], distance: 200, dir: [0.26, 0.2, 0.94] },
     labelAt: [0, -6, -CITY.pit.z],
     color: COLOR.storage,
     readout: (s: SimState) =>

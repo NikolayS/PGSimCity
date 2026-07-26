@@ -14,7 +14,7 @@ import { ANCHOR, rid } from './layout'
  *   the loop entirely. It is the only process in the whole city that never
  *   touches your data.
  *
- * The client constellation is the one place in PGCITY where ambient motion is
+ * The client constellation is the one place in PGSimCity where ambient motion is
  * allowed: it is *outside* the database, so it drifts.
  * ==========================================================================*/
 

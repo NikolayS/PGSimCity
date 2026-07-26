@@ -1,5 +1,5 @@
 /* ============================================================================
- * PGCITY — shared contracts.
+ * PGSimCity — shared contracts.
  *
  * Everything in this file is API surface consumed by more than one module.
  * The simulation (src/sim) never imports three.js; the world (src/world) never

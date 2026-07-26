@@ -1028,7 +1028,12 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
       const h = tileH[i] + (target - tileH[i]) * kH
       tileH[i] = h
       tileMat[i * 16 + 5] = h < 0.06 ? 0.06 : h
-      setColor3(tileCol, i, r, g, bl)
+      // Hard ceiling. mData is a MeshBasicMaterial with toneMapped:false, so a
+      // channel above 1 does not roll off — it clips to white in the
+      // framebuffer and then clears the bloom threshold, which is how the whole
+      // grid used to turn into a pink smear under load. Heat is carried by tile
+      // HEIGHT (target, above) and by the rim, not by an unbounded colour.
+      setColor3(tileCol, i, r > 1 ? 1 : r, g > 1 ? 1 : g, bl > 1 ? 1 : bl)
     }
     tilesPrimed = true
     tiles.instanceMatrix.needsUpdate = true

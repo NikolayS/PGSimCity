@@ -1,5 +1,5 @@
 /* ============================================================
-   PGCITY design tokens — the single source of truth for colour.
+   PGSimCity design tokens — the single source of truth for colour.
    Keep in sync with src/core/theme.ts (3D side).
    ============================================================ */
 
@@ -7,7 +7,10 @@
   /* --- surfaces --- */
   --bg-void: #04060c;
   --bg-deep: #070b14;
-  --bg-panel: rgba(10, 16, 28, 0.72);
+  /* 0.85, not 0.72: at 0.72 the effective contrast of panel text depends on
+     which district happens to be behind it, and over the bloom-lit plaza the
+     dim ink dropped under the AA floor. */
+  --bg-panel: rgba(10, 16, 28, 0.85);
   --bg-panel-solid: #0a1020;
   --bg-raise: rgba(20, 30, 50, 0.72);
   --bg-sunken: rgba(3, 6, 12, 0.6);
@@ -20,7 +23,7 @@
   /* --- type --- */
   --ink: #e8f1ff;
   --ink-dim: #a9bcd8;
-  --ink-faint: #6d81a0;
+  --ink-faint: #8195b4;
   --ink-invert: #04060c;
 
   /* --- semantic system colours (mirrored in theme.ts) --- */
@@ -54,7 +57,7 @@
   /* --- type ramp --- */
   --f-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, Roboto, sans-serif;
   --f-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
-  --fs-micro: 10px;
+  --fs-micro: 11px;
   --fs-xs: 11px;
   --fs-sm: 12px;
   --fs-md: 13px;

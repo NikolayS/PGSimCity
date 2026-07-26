@@ -16,7 +16,7 @@ import {
 import type { UiContext, UiModule } from './uikit'
 
 /* ============================================================================
- * PGCITY — the console (#hud-left).
+ * PGSimCity — the console (#hud-left).
  *
  * Every knob in KNOB_META, grouped by KNOB_GROUPS, rendered with the same
  * widget the inspector embeds inline. The console never caches simulation

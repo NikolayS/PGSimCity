@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import type { ColorKey, MatOpts, TextTexOpts, ThemeApi } from './types'
 
 /**
- * PGCITY palette. Mirrors src/styles/tokens.css.
+ * PGSimCity palette. Mirrors src/styles/tokens.css.
  *
  * Rendering model: the renderer uses ACESFilmic tone mapping and the bloom pass
  * runs with a high threshold, so *only* surfaces whose output exceeds ~1.0 will

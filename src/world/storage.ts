@@ -342,6 +342,17 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
   const rackLight = new THREE.PointLight(0x7fb0ff, 900, 160, 2)
   rackLight.position.set(0, RACK_TOP + 8, RACK_Z + 14)
   group.add(rackLight)
+  // Seen from the surface the excavation used to be an unlit black square: the
+  // two lights above sit low and tight, so nothing carried up to the rim. These
+  // two are wide, weak and high in the cut — enough that the pit reads as a lit
+  // space below the city in the establishing shot, without flattening the
+  // close-up once the camera is actually down there.
+  const pitFill = new THREE.PointLight(COLOR.storage, 5200, 520, 2)
+  pitFill.position.set(0, ROOF_Y + 34, 40)
+  group.add(pitFill)
+  const pitFillW = new THREE.PointLight(0x5f86c8, 3600, 470, 2)
+  pitFillW.position.set(-60, ROOF_Y + 30, -60)
+  group.add(pitFillW)
 
   /* ====================================================== 2. HEAP FILES */
 
@@ -1125,7 +1136,8 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     object: diskGroup,
     tier: 1,
     color: COLOR.storage,
-    focus: { target: [0, RACK_TOP - 4, RACK_Z + 10], distance: 96, dir: [0.16, 0.42, 0.9] },
+    // 96 units is inside the rack volume — frame the platters, do not enter them.
+    focus: { target: [0, RACK_TOP - 4, RACK_Z + 10], distance: 205, dir: [0.2, 0.6, 0.78] },
     labelAt: [0, RACK_TOP + 5, RACK_Z],
     readout: (s) =>
       `${fmtNum(s.stats.ioReadPerSec)} read / ${fmtNum(s.stats.ioWritePerSec)} write pages/s · fsync ${

@@ -1,5 +1,5 @@
 /* ============================================================================
-   PGCITY — the two side panels: the console (#hud-left) and the inspector
+   PGSimCity — the two side panels: the console (#hud-left) and the inspector
    (#hud-right), plus the knob widget they share.
 
    Everything here composes the .pg-* primitives in ui.css and only ever uses

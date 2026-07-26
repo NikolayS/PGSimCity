@@ -1,5 +1,5 @@
 /* ============================================================================
-   PGCITY — TOUR & COMMAND PALETTE
+   PGSimCity — TOUR & COMMAND PALETTE
 
      .tour-*   the cinematic lower third in #tour-layer, the scenario narration
                card that reuses it, and the first-run prompt
@@ -39,6 +39,17 @@ body.pg-tour #hud-bottom {
   opacity: 0.5;
   transition: opacity var(--dur-slow) var(--ease);
 }
+/* The chapter deck and the first-run card are centred in the same grid cell as
+   the minimap, and at 1280px the deck alone (544px) is wider than the space
+   left beside a 206px minimap — so they used to be painted on top of each
+   other. Whichever card is up, the minimap stands down. */
+body.pg-tour #compass,
+body.pg-invite #compass {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-slow) var(--ease);
+}
+
 body.pg-tour #hud-top:hover,
 body.pg-tour #hud-left:hover,
 body.pg-tour #hud-right:hover,

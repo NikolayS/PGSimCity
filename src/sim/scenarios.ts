@@ -1,5 +1,5 @@
 /* ============================================================================
- * PGCITY — GUIDED SCENARIOS
+ * PGSimCity — GUIDED SCENARIOS
  *
  * Each scenario is a lesson: a set of knobs that provokes one specific, real
  * PostgreSQL behaviour, a place to point the camera, and narration beats timed

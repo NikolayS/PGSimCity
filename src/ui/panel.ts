@@ -8,7 +8,7 @@ import { clear, el, icon, metricTile, setClass, setText } from './uikit'
 import type { UiContext, UiModule } from './uikit'
 
 /* ============================================================================
- * PGCITY — the inspector (#hud-right).
+ * PGSimCity — the inspector (#hud-right).
  *
  * One component at a time: what it is, what it is doing right now, and the
  * dials that change its behaviour. Live numbers sit above the prose because

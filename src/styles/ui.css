@@ -1,5 +1,5 @@
 /* ============================================================================
-   PGCITY shared UI primitives.
+   PGSimCity shared UI primitives.
    Every HUD module composes these classes; module-specific CSS files only add
    layout on top. Namespace is `pg-`.
    ==========================================================================*/

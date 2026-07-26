@@ -10,7 +10,7 @@ import { el, icon, setClass, setText } from './uikit'
 import type { UiContext, UiModule } from './uikit'
 
 /* ============================================================================
- * PGCITY — THE COMMAND PALETTE
+ * PGSimCity — THE COMMAND PALETTE
  *
  * One field over a dimmed city that searches the four things a viewer can
  * actually mean:

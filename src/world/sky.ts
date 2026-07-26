@@ -4,7 +4,7 @@ import { makeRng } from '../core/util'
 import type { ThemeApi } from '../core/types'
 
 /* ============================================================================
- * SKY — the night PGCITY runs under.
+ * SKY — the night PGSimCity runs under.
  *
  * Everything is procedural: a gradient dome plus one Points cloud. The dome is
  * pinned to the camera every frame (one vector copy) so the stars behave as if

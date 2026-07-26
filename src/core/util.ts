@@ -57,6 +57,28 @@ export function weightedPick(weights: readonly number[], r = rand): number {
 export const expDelay = (ratePerSec: number, r = rand) =>
   ratePerSec <= 0 ? Infinity : -Math.log(1 - r()) / ratePerSec
 
+/* ------------------------------ accessibility ---------------------------- */
+
+/**
+ * Live "the visitor asked for less motion" flag.
+ *
+ * CSS already honours the preference for transitions, but the camera flights,
+ * the tour's fly-throughs and the particle streams are all JavaScript and were
+ * ignoring it. Read once, kept current by the media query's change event, so
+ * callers can consult it every frame for free.
+ */
+let _reduceMotion = false
+if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+  const mq = window.matchMedia('(prefers-reduced-motion: reduce)')
+  _reduceMotion = mq.matches
+  const onChange = (e: MediaQueryListEvent) => {
+    _reduceMotion = e.matches
+  }
+  if (typeof mq.addEventListener === 'function') mq.addEventListener('change', onChange)
+}
+
+export const reduceMotion = (): boolean => _reduceMotion
+
 /* ------------------------------ formatting ------------------------------ */
 
 export function fmtBytes(b: number, digits = 1): string {

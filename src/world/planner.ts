@@ -312,7 +312,7 @@ class TextBank {
     if (s.x === x && s.y === y && s.size === size) return
     s.x = x; s.y = y; s.size = size
     const t = s.text
-    s.text = ' '
+    s.text = '\0'
     this.set(id, t)
   }
 

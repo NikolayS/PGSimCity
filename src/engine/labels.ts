@@ -69,6 +69,12 @@ const TIER_OUT = [400, 320, 150]
 const TIER_BAND = [80, 70, 35]
 /** Past this the chip drops its role line and readout. */
 const FAR_DIST = 250
+/** Below this much of its level's fade, a label is not worth the space. */
+const MIN_VIS = 0.12
+/** …and above 1/VIS_GAIN of it, it is drawn at full strength. A cross-fade you
+ *  cannot read is just clutter, so the ramp is steep and the 200ms CSS fade on
+ *  enter and exit does most of the smoothing. */
+const VIS_GAIN = 2.2
 
 /* --- priority bands, lowest wins ------------------------------------------ */
 const B_SELECTED = 0
@@ -754,11 +760,17 @@ export function createLabels(container: HTMLElement, registry: Registry, bus: Bu
     readBox()
     for (let i = 0; i < entries.length; i++) {
       const e = entries[i]
-      if (!e.needMeasure || e.far || e.phase === 0) continue
+      if (!e.needMeasure || e.phase === 0) continue
       const w = e.chip.offsetWidth
       if (w > 0) {
-        e.nearW = w
-        e.nearH = e.chip.offsetHeight
+        // whichever form it happens to be wearing right now
+        if (e.far) {
+          e.farW = w
+          e.farH = e.chip.offsetHeight
+        } else {
+          e.nearW = w
+          e.nearH = e.chip.offsetHeight
+        }
         e.needMeasure = false
       }
     }
@@ -796,46 +808,46 @@ export function createLabels(container: HTMLElement, registry: Registry, bus: Bu
       const forced = e.id === selectedId || e.id === hoveredId
       const focused = !forced && focusT > 0 && e.id === focusId
       let band: number
-      let alpha: number
+      let vis: number
 
       if (e.rank === 3) {
         const a = fadeIn(e.dist, DISTRICT_IN, DISTRICT_BAND)
-        if (a > 0.02) {
+        if (a > MIN_VIS) {
           band = B_DISTRICT
-          alpha = e.collapseOn ? 1 : a
+          vis = e.collapseOn ? 1 : a
         } else if (e.collapseOn) {
           band = B_COLLAPSE
-          alpha = 1
+          vis = 1
         } else continue
       } else if (e.rank < 0) {
-        alpha = fadeIn(e.dist, CITY_IN, CITY_BAND)
+        vis = fadeIn(e.dist, CITY_IN, CITY_BAND)
         band = B_CITY
-        if (alpha <= 0.02 && !forced && !focused) continue
+        if (vis <= MIN_VIS && !forced && !focused) continue
       } else {
         const tier = fadeOut(e.dist, TIER_OUT[e.rank], TIER_BAND[e.rank])
         if (e.proxy) {
           // A promoted member has to survive out to district range, where it is
           // the only thing naming this part of the city.
           const a = fadeIn(e.dist, DISTRICT_IN, DISTRICT_BAND)
-          alpha = a > tier ? a : tier
+          vis = a > tier ? a : tier
           band = B_DISTRICT
         } else {
-          alpha = tier
+          vis = tier
           band = B_TIER[e.rank]
         }
-        if (alpha <= 0.02 && !forced && !focused) continue
+        if (vis <= MIN_VIS && !forced && !focused) continue
       }
 
       if (forced) {
         band = e.id === selectedId ? B_SELECTED : B_HOVERED
-        alpha = 1
+        vis = 1
       } else if (focused) {
         band = B_FOCUS
-        alpha = 1
+        vis = 1
       }
 
       e.band = band
-      e.alpha = alpha
+      e.alpha = vis * VIS_GAIN > 1 ? 1 : vis * VIS_GAIN
       e.prio = band * BAND_STEP + (e.dist < 60000 ? e.dist : 60000) - (e.shown ? STICKY : 0)
       cand.push(e)
     }
@@ -909,7 +921,9 @@ export function createLabels(container: HTMLElement, registry: Registry, bus: Bu
       if (far !== e.far) {
         e.far = far
         e.el.classList.toggle('is-far', far)
-        if (!far) e.needMeasure = true
+        // the form we are switching into may have been sized before this chip
+        // grew a readout or a "+N", so take its box again next pass
+        e.needMeasure = true
       }
 
       if (e.place && (e.dx !== e.lastDx || e.dy !== e.lastDy)) {

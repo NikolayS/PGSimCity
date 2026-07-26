@@ -7,7 +7,7 @@ import { emitLoose } from './hud'
 import type { UiContext, UiModule } from './uikit'
 
 /* ============================================================================
- * PGCITY — HELP OVERLAY
+ * PGSimCity — HELP OVERLAY
  *
  * One modal: the complete input map, the colour legend, and four sentences on
  * how to read the city. It is opened by the HUD (the `?` key or the toolbar
@@ -37,7 +37,7 @@ const CAMERA_KEYS: KeyRow[] = [
   { keys: ['LMB drag'], what: 'Orbit around the city' },
   { keys: ['RMB drag', 'MMB drag'], join: 'or', what: 'Pan sideways' },
   { keys: ['Wheel'], what: 'Zoom' },
-  { keys: ['Click'], what: 'Enter fly mode (pointer lock)' },
+  { keys: ['Click'], what: 'Select a building — in fly mode, capture the mouse' },
   { keys: ['W', 'A', 'S', 'D'], what: 'Fly — arrow keys work too' },
   { keys: ['Space', 'E'], join: 'or', what: 'Rise' },
   { keys: ['C', 'Q'], join: 'or', what: 'Descend' },
