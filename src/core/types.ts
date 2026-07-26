@@ -491,7 +491,7 @@ export interface BusEvents {
     ms?: number
     action?: { label: string; quality: QualityLevel }
   }
-  narrate: { title: string; body: string; ms?: number } | null
+  narrate: { title: string; body: string; seconds?: number } | null
   'tour:start': { chapter?: number }
   'tour:stop': Record<string, never>
   'tour:chapter': { index: number; total: number; title: string }
@@ -839,7 +839,7 @@ export interface TourChapter {
   focus?: string
   /** or an explicit camera move */
   camera?: FocusSpec
-  /** seconds this chapter lasts */
+  /** wall-clock seconds this chapter lasts */
   duration: number
   /** knob changes applied on entry */
   knobs?: Partial<Knobs>
@@ -858,7 +858,7 @@ export interface ScenarioDef {
   knobs: Partial<Knobs>
   /** what to look at when it starts */
   focus?: string
-  /** seconds; 0 = runs until cancelled */
+  /** scenario seconds at 1×; 0 = runs until cancelled */
   duration: number
   /** narration beats: [atSecond, title, body] */
   beats?: [number, string, string][]

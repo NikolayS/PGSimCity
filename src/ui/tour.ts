@@ -2,6 +2,7 @@ import '../styles/tour.css'
 
 import type { Knobs, TourChapter } from '../core/types'
 import { clamp } from '../core/util'
+import { SCENARIO_NARRATION_SECONDS } from '../sim/scenarios'
 import { el, icon, setClass, setText } from './uikit'
 import type { UiContext, UiModule } from './uikit'
 
@@ -213,8 +214,6 @@ const SEEN_KEY = 'pgsimcity.seen'
 const FIRST_RUN_DELAY_MS = 2800
 /** The invitation is an offer, not a fixture: it shows itself out. */
 const FIRST_RUN_LIFE_MS = 40000
-const NARRATE_MS = 9000
-
 type KnobKey = keyof Knobs
 type LooseSet = (key: KnobKey, value: Knobs[KnobKey]) => void
 
@@ -375,10 +374,12 @@ export function createTour(ctx: UiContext): UiModule {
   )
 
   let narrateTimer = 0
+  let narrateUntil = 0
 
   function hideNarrate(instant = false): void {
     window.clearTimeout(narrateTimer)
     narrateTimer = 0
+    narrateUntil = 0
     if (!narrateCard.classList.contains('is-live')) return
     if (instant) {
       setClass(narrateCard, 'is-live', false)
@@ -392,7 +393,7 @@ export function createTour(ctx: UiContext): UiModule {
     }, 260)
   }
 
-  function showNarrate(title: string, body: string, ms: number): void {
+  function showNarrate(title: string, body: string, seconds: number): void {
     // Never two cards in the same corner. A scenario beat only happens because
     // somebody started a scenario, and starting one answers the invitation's
     // question — so the invitation stands down rather than stacking on top of
@@ -408,7 +409,7 @@ export function createTour(ctx: UiContext): UiModule {
       narrateCard.classList.add('is-enter')
     }
     setClass(narrateCard, 'is-live', true)
-    narrateTimer = window.setTimeout(() => hideNarrate(), Math.max(1200, ms))
+    narrateUntil = sim.state.scenarioT + Math.max(1.2, seconds)
   }
 
   /* =======================================================================
@@ -640,7 +641,7 @@ export function createTour(ctx: UiContext): UiModule {
         hideNarrate()
         return
       }
-      showNarrate(p.title, p.body, p.ms ?? NARRATE_MS)
+      showNarrate(p.title, p.body, p.seconds ?? SCENARIO_NARRATION_SECONDS)
     }),
     bus.on('camera:mode', () => {
       if (running) userControl = true
@@ -677,11 +678,12 @@ export function createTour(ctx: UiContext): UiModule {
    * TICK
    * =====================================================================*/
 
-  function update(dt: number): void {
+  function update(dt: number, wallDt = dt): void {
+    if (narrateUntil > 0 && sim.state.scenarioT >= narrateUntil) hideNarrate()
     if (!running) return
     if (held) return
 
-    elapsed += dt
+    elapsed += wallDt
     const step = STEPS[index]
 
     // mid-chapter knob beats
@@ -698,7 +700,7 @@ export function createTour(ctx: UiContext): UiModule {
       lookIdx += 1
     }
 
-    paintAcc += dt
+    paintAcc += wallDt
     if (paintAcc >= 0.1) {
       paintAcc = 0
       paintClock()

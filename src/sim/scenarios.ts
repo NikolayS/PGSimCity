@@ -18,6 +18,9 @@
 
 import type { ScenarioDef } from '../core/types'
 
+/** A beat remains readable for this many seconds on the scenario clock. */
+export const SCENARIO_NARRATION_SECONDS = 9
+
 export const SCENARIOS: ScenarioDef[] = [
   /* ---------------------------------------------------------------------- */
   {

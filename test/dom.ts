@@ -198,6 +198,12 @@ class TestElement extends TestNode {
     return this.attributes.get(name) ?? null
   }
 
+  removeAttribute(name: string): void {
+    this.attributes.delete(name)
+    if (name === 'id') this.id = ''
+    if (name === 'class') this.className = ''
+  }
+
   querySelectorAll(selector: string): TestElement[] {
     return descendants(this).filter((element) => matchesSelector(element, selector))
   }
