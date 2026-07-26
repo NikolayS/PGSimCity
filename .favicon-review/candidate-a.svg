@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" role="img" aria-label="Pixel elephant made from shared-buffer frames">
+  <title>Buffer-frame elephant</title>
+  <defs>
+    <pattern id="empty" width="1" height="1" patternUnits="userSpaceOnUse">
+      <rect x=".1" y=".1" width=".8" height=".8" fill="#13233b"/>
+    </pattern>
+    <path id="elephant" d="
+      M7 2h4v1H7z
+      M5 3h7v1H5z
+      M4 4h9v1H4z
+      M3 5h11v1H3z
+      M3 6h1v1H3z M5 6h9v1H5z
+      M2 7h12v1H2z
+      M2 8h12v1H2z
+      M2 9h11v1H2z
+      M2 10h2v1H2z M6 10h2v1H6z M11 10h2v1H11z
+      M2 11h2v1H2z M6 11h2v1H6z M11 11h2v1H11z
+      M2 12h3v1H2z M6 12h2v1H6z M11 12h3v1H11z"/>
+    <clipPath id="elephant-clip"><use href="#elephant"/></clipPath>
+  </defs>
+  <rect x=".5" y=".5" width="15" height="15" rx="2" fill="#070b14" stroke="#6f87aa"/>
+  <rect x="2" y="2" width="12" height="12" fill="url(#empty)"/>
+  <!-- An original, side-on elephant silhouette: head and trunk at left,
+       buffer-pool body at right, with four grounded feet. -->
+  <use href="#elephant" fill="#3fa7ff"/>
+  <path d="M3 2v11M4 2v11M5 2v11M6 2v11M7 2v11M8 2v11M9 2v11M10 2v11M11 2v11M12 2v11M13 2v11
+    M2 3h12M2 4h12M2 5h12M2 6h12M2 7h12M2 8h12M2 9h12M2 10h12M2 11h12M2 12h12"
+    clip-path="url(#elephant-clip)" fill="none" stroke="#070b14" stroke-width=".22"/>
+  <!-- A dirty pair and one pinned frame are live buffer state, not decoration. -->
+  <rect x="8.1" y="5.1" width=".8" height=".8" fill="#ff4d6d"/>
+  <rect x="10.1" y="7.1" width=".8" height=".8" fill="#ff4d6d"/>
+  <rect x="4.1" y="8.1" width=".8" height=".8" fill="#ffd166"/>
+</svg>

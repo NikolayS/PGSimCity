@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Elephant-shaped city skyline">
+  <title>Skyline elephant</title>
+  <rect x="2" y="2" width="60" height="60" rx="9" fill="#070b14" stroke="#6f87aa" stroke-width="2"/>
+  <!-- The roofline is the animal's back: an original stepped city silhouette,
+       with head and road-like curling trunk at left. -->
+  <path fill="#3fa7ff" d="
+    M9 29h5v-7h8v-5h8v-4h8v5h7v-8h8v7h4v29h-6v8h-8V42H31v12h-8V42h-5v12H9V38H6v-9h3z
+    M9 46h9v8H9z"/>
+  <!-- Ear/plaza and eye make the head read before the windows do. -->
+  <path fill="#2558a8" d="M14 24h13v15H14z"/>
+  <rect x="16" y="27" width="3" height="3" fill="#070b14"/>
+  <path fill="#ffd166" d="
+    M28 22h3v4h-3z M35 22h3v4h-3z M47 16h3v4h-3z
+    M34 30h3v4h-3z M43 28h3v4h-3z M51 25h3v4h-3z"/>
+  <path fill="#ff4d6d" d="M25 31h3v4h-3z M48 34h3v4h-3z"/>
+</svg>

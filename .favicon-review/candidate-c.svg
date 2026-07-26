@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Cut-away city above database storage layers">
+  <title>City cut-away</title>
+  <circle cx="32" cy="32" r="29" fill="#070b14" stroke="#6f87aa" stroke-width="2"/>
+  <clipPath id="disc"><circle cx="32" cy="32" r="27"/></clipPath>
+  <g clip-path="url(#disc)">
+    <!-- The city above grade. -->
+    <path fill="#3fa7ff" d="M3 31h7V20h7v6h6V15h9v8h6V11h9v13h7v-7h7v14z"/>
+    <path fill="#ffd166" d="M12 23h2v3h-2z M26 18h2v3h-2z M41 15h2v3h-2z M48 27h3v2h-3z"/>
+    <!-- Grade line, heap pages, and an active WAL seam below it. -->
+    <path fill="#8195b4" d="M3 30h58v3H3z"/>
+    <path fill="#2558a8" d="M3 34h58v7H3z M3 50h58v11H3z"/>
+    <path fill="#17954f" d="M7 35h12v5H7z M22 35h17v5H22z M42 35h13v5H42z
+      M5 51h16v5H5z M24 51h11v5H24z M38 51h19v5H38z"/>
+    <path fill="#ffb03a" d="M3 43h23l4-3 5 6 5-3h21v5H41l-6 4-5-6-3 2H3z"/>
+    <path fill="#ff4d6d" d="M12 43h5v5h-5z M47 43h5v5h-5z"/>
+  </g>
+</svg>
