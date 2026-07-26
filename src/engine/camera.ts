@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import type { Bus, CameraApi, CameraMode, FocusSpec } from '../core/types'
 import { clamp, clamp01, damp, easeInOutCubic, lerp, reduceMotion } from '../core/util'
 import { ANCHOR } from '../world/layout'
-import { PLAN_UP } from '../world/slonik'
+import { PLAN_UP, sampleOutline } from '../world/slonik'
 
 /* ============================================================================
  * THE CAMERA RIG
@@ -104,13 +104,42 @@ const HOME_PIVOT = new THREE.Vector3(-18, 0, -16)
  *    (see PLAN_SPAN), not guessed, and it backs off on a narrow window the same
  *    way the establishing shot does.
  */
-const PLAN_PIVOT = new THREE.Vector3(-3, 0, 36)
 /** Tip off vertical. Small enough to read as plan, big enough to set the roll. */
 const PLAN_TILT = 0.1
 const PLAN_DIR = new THREE.Vector3(-PLAN_UP[0] * PLAN_TILT, 1, -PLAN_UP[1] * PLAN_TILT).normalize()
-/** Plate extent along screen-x and screen-y in that framing, plus breathing room. */
-const PLAN_SPAN_X = 1330
-const PLAN_SPAN_Y = 1170
+
+/**
+ * Pivot and spans measured off the outline itself rather than written down.
+ * Screen-right in a top-down view is world up rotated -90° in (x, z), so the
+ * plate's extent along those two axes *is* its extent on screen — and the shot
+ * stays correct if the outline is ever redrawn.
+ */
+const PLAN_FRAME = (() => {
+  const ring = sampleOutline(10)
+  const ux = PLAN_UP[0]
+  const uz = PLAN_UP[1]
+  const rx = -uz
+  const rz = ux
+  let a0 = Infinity
+  let a1 = -Infinity
+  let b0 = Infinity
+  let b1 = -Infinity
+  for (let i = 0; i < ring.length; i += 2) {
+    const a = ring[i] * rx + ring[i + 1] * rz
+    const b = ring[i] * ux + ring[i + 1] * uz
+    if (a < a0) a0 = a
+    if (a > a1) a1 = a
+    if (b < b0) b0 = b
+    if (b > b1) b1 = b
+  }
+  const ac = (a0 + a1) / 2
+  const bc = (b0 + b1) / 2
+  return {
+    pivot: new THREE.Vector3(ac * rx + bc * ux, 0, ac * rz + bc * uz),
+    spanX: (a1 - a0) * 1.06,
+    spanY: (b1 - b0) * 1.06,
+  }
+})()
 
 const CITY_CENTER = new THREE.Vector3(ANCHOR.cityCenter[0], ANCHOR.cityCenter[1], ANCHOR.cityCenter[2])
 const WORLD_UP = new THREE.Vector3(0, 1, 0)
@@ -1039,11 +1068,11 @@ export function createCameraRig(
   function plan(instant = false): void {
     const tanV = Math.tan((camera.fov * Math.PI) / 360)
     const aspect = Math.max(camera.aspect, 0.35)
-    const d = Math.max(PLAN_SPAN_Y / 2 / tanV, PLAN_SPAN_X / 2 / (tanV * aspect)) * 1.04
+    const d = Math.max(PLAN_FRAME.spanY / 2 / tanV, PLAN_FRAME.spanX / 2 / (tanV * aspect))
     if (mode === 'fly') setMode('orbit')
     focusOn(
       {
-        target: [PLAN_PIVOT.x, PLAN_PIVOT.y, PLAN_PIVOT.z],
+        target: [PLAN_FRAME.pivot.x, PLAN_FRAME.pivot.y, PLAN_FRAME.pivot.z],
         distance: clamp(d, MIN_DIST, MAX_DIST),
         dir: [PLAN_DIR.x, PLAN_DIR.y, PLAN_DIR.z],
       },

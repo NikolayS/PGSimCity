@@ -163,19 +163,36 @@ export function applyStoredThemeMode(): ThemeMode {
 applyDocument(readStoredMode())
 
 /* ============================================================================
- * TOON SHADING
+ * THE DAY SHADER — two injections, one hook.
  *
- * Day mode needs a cel read, and it needs it on materials that already exist
- * and are already referenced by a thousand meshes — so swapping the class for
- * MeshToonMaterial is off the table. Instead the standard material's direct
- * lighting term is replaced at compile time: RE_Direct is redefined to a
- * three-band ramp, and the GGX lobe is clipped into a single hard highlight.
+ * 1. TOON SHADING.
+ *    Day mode needs a cel read, and it needs it on materials that already exist
+ *    and are already referenced by a thousand meshes — so swapping the class for
+ *    MeshToonMaterial is off the table. Instead the standard material's direct
+ *    lighting term is replaced at compile time: RE_Direct is redefined to a
+ *    three-band ramp, and the GGX lobe is clipped into a single hard highlight.
  *
- * The ramp edge is widened by fwidth(), so the terminator stays a clean curve
- * at every distance instead of stair-stepping across a roof. Shadows come for
- * free: lights_fragment_begin has already multiplied directLight.color by the
- * shadow term before RE_Direct sees it, so a shadowed face simply drops to the
- * ambient floor — which is exactly what a cartoon shadow is.
+ *    The ramp edge is widened by fwidth(), so the terminator stays a clean curve
+ *    at every distance instead of stair-stepping across a roof. Shadows come for
+ *    free: lights_fragment_begin has already multiplied directLight.color by the
+ *    shadow term before RE_Direct sees it, so a shadowed face simply drops to
+ *    the ambient floor — which is exactly what a cartoon shadow is.
+ *
+ * 2. PER-INSTANCE COLOUR.
+ *    The plaza's 1024 page frames, the WAL insert ring, the lock partitions, the
+ *    CLOG bits and every flow particle are drawn from per-instance colour
+ *    buffers that their districts fill each frame from values snapshotted at
+ *    import. Those are night values and this module cannot reach them — but it
+ *    can reach the one material they all flow through.
+ *
+ *    The remap is the same inversion the palette performs by hand. At night
+ *    brightness means "hot" because the background is black and an empty frame
+ *    is nearly invisible; in daylight the background is pale, so *ink* means hot
+ *    and an empty frame has to be the light thing. Luminance is therefore
+ *    inverted into a printable band, chroma is normalised so a saturated hue
+ *    survives the move, and colours that were merely dim collapse toward grey
+ *    rather than becoming saturated — an unused buffer must read as empty, not
+ *    as blue.
  *
  * customProgramCacheKey() returns the mode, so three recompiles once per switch
  * and never confuses the two programs.
@@ -207,16 +224,51 @@ void RE_Direct_Toon( const in IncidentLight directLight, const in vec3 geometryP
 #define RE_Direct RE_Direct_Toon
 `
 
-const TOON_ANCHOR = '#include <lights_physical_pars_fragment>'
+const VCOLOR_GLSL = /* glsl */ `
+vec3 pgDayVertexColor( vec3 c ) {
+	float m = max( max( c.r, c.g ), max( c.b, 1e-4 ) );
+	float lum = clamp( dot( c, vec3( 0.2126, 0.7152, 0.0722 ) ), 0.0, 1.0 );
+	// Bright at night becomes deep in daylight, and dark becomes pale. The 0.62
+	// exponent spends most of the band on the dim half, where the buffer grid
+	// actually lives.
+	float v = mix( 0.62, 0.05, pow( lum, 0.45 ) );
+	// Normalising by the largest channel keeps the hue and the saturation while
+	// throwing away the magnitude, which is the part being re-decided.
+	vec3 chroma = c / m;
+	// ...but only for colours that had a magnitude to begin with. A near-black
+	// navy is "this frame is empty", not "this frame is blue".
+	float sat = clamp( m * 6.0, 0.25, 1.0 );
+	return mix( vec3( v ), chroma * v, sat );
+}
+`
 
-function toonHook(shader: { fragmentShader: string }): void {
+const TOON_ANCHOR = '#include <lights_physical_pars_fragment>'
+const VCOLOR_ANCHOR = '#include <color_fragment>'
+const VCOLOR_BODY = /* glsl */ `
+#if defined( USE_COLOR_ALPHA )
+	diffuseColor *= vec4( pgDayVertexColor( vColor.rgb ), vColor.a );
+#elif defined( USE_COLOR )
+	diffuseColor.rgb *= pgDayVertexColor( vColor );
+#endif
+`
+
+/**
+ * The one onBeforeCompile hook, shared by every material the theme touches.
+ * A stable function reference matters: three compares it when deciding whether
+ * a program can be reused.
+ */
+function themeHook(shader: { fragmentShader: string }): void {
   if (!ATMOSPHERE[mode].toon) return
-  if (shader.fragmentShader.indexOf(TOON_ANCHOR) < 0) return
-  shader.fragmentShader = shader.fragmentShader.replace(TOON_ANCHOR, TOON_ANCHOR + '\n' + TOON_GLSL)
+  let f = shader.fragmentShader
+  if (f.indexOf(TOON_ANCHOR) >= 0) f = f.replace(TOON_ANCHOR, TOON_ANCHOR + '\n' + TOON_GLSL)
+  // The replacement is inert unless the material declares vertex colours: the
+  // body it substitutes carries the same #if guards as the chunk it replaces.
+  if (f.indexOf(VCOLOR_ANCHOR) >= 0) f = VCOLOR_GLSL + f.replace(VCOLOR_ANCHOR, VCOLOR_BODY)
+  shader.fragmentShader = f
 }
 
-function toonCacheKey(): string {
-  return ATMOSPHERE[mode].toon ? 'pg-toon' : 'pg-flat'
+function themeCacheKey(): string {
+  return ATMOSPHERE[mode].toon ? 'pg-day' : 'pg-night'
 }
 
 function isStandard(m: THREE.Material): m is THREE.MeshStandardMaterial {
@@ -224,16 +276,20 @@ function isStandard(m: THREE.Material): m is THREE.MeshStandardMaterial {
 }
 
 /**
- * Wire the ramp into one standard material. Idempotent, and deliberately stingy
+ * Wire the day shader into one material. Idempotent, and deliberately stingy
  * with `needsUpdate`: that flag costs a shader recompile, and a mode switch
- * touches every material in the city at once. Only a real change of ramp state
- * pays for one.
+ * touches every material in the city at once. Only a real change of mode pays
+ * for one.
+ *
+ * ShaderMaterials are skipped — they carry no three chunks to replace, and
+ * their colours are handled through their uniforms instead.
  */
-function installToon(m: THREE.MeshStandardMaterial, target: ThemeMode): void {
+function installThemeShader(m: THREE.Material, target: ThemeMode): void {
+  if ((m as THREE.ShaderMaterial).isShaderMaterial === true) return
   const ud = m.userData as ThemeUserData
-  if (m.onBeforeCompile !== toonHook) {
-    m.onBeforeCompile = toonHook
-    m.customProgramCacheKey = toonCacheKey
+  if (m.onBeforeCompile !== themeHook) {
+    m.onBeforeCompile = themeHook
+    m.customProgramCacheKey = themeCacheKey
     ud.pgToon = undefined
   }
   const want = ATMOSPHERE[target].toon
@@ -319,7 +375,7 @@ function paintMat(m: THREE.MeshStandardMaterial, s: MatSpec, target: ThemeMode):
     m.emissive.setHex(s.emissive)
   }
   m.emissiveIntensity = s.emissiveIntensity
-  installToon(m, target)
+  installThemeShader(m, target)
 }
 
 interface NeonSpec {
@@ -331,6 +387,7 @@ function paintNeon(m: THREE.MeshBasicMaterial, s: NeonSpec, target: ThemeMode): 
   const hex = target === 'day' ? dayAccent(s.color) : s.color
   const k = target === 'day' ? dayNeonIntensity(s.intensity) : s.intensity
   m.color.setHex(hex).multiplyScalar(k)
+  installThemeShader(m, target)
 }
 
 interface LineSpec {
@@ -348,6 +405,7 @@ function paintLine(m: THREE.LineBasicMaterial, s: LineSpec, target: ThemeMode): 
     m.transparent = wantsTransparent
     m.needsUpdate = true
   }
+  installThemeShader(m, target)
 }
 
 /* ---------------------------------------------------------------------------
@@ -436,9 +494,11 @@ export function paintSceneMaterial(m: THREE.Material, target: ThemeMode): void {
   }
 
   if (line.isLineBasicMaterial === true) {
+    installThemeShader(line, target)
     // A white line material is either a per-vertex multiplier (the shared-memory
-    // beams) or a chrome marker the picker recolours on every selection. Either
-    // way its colour is not ours to move.
+    // beams, which the shader remap handles instead) or a chrome marker the
+    // picker recolours on every selection. Either way its colour is not ours to
+    // move.
     if (line.vertexColors === true) return
     if (first) {
       night.color = line.color.getHex()
@@ -457,8 +517,10 @@ export function paintSceneMaterial(m: THREE.Material, target: ThemeMode): void {
   // but at a fraction of the weight.
   if (m.blending === THREE.AdditiveBlending) {
     if (first) night.opacity = m.opacity
-    if (night.opacity !== undefined) m.opacity = target === 'day' ? night.opacity * 0.16 : night.opacity
+    if (night.opacity !== undefined) m.opacity = target === 'day' ? night.opacity * 0.1 : night.opacity
   }
+
+  installThemeShader(m, target)
 
   const lit = isStandard(m)
   const hasColor = (basic.color as THREE.Color | undefined) !== undefined
@@ -488,7 +550,6 @@ export function paintSceneMaterial(m: THREE.Material, target: ThemeMode): void {
     if (night.metalness !== undefined) {
       std.metalness = target === 'day' ? night.metalness * 0.25 : night.metalness
     }
-    installToon(std, target)
   }
 }
 

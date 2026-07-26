@@ -5,7 +5,6 @@ import { ANCHOR, CITY, DISTRICT_BOUNDS } from './layout'
 import {
   clearance,
   contains,
-  logoToWorld,
   offsetRing,
   outlineBounds,
   ringArea2,
@@ -210,26 +209,50 @@ const PLINTH_DROP = 0.5 // sink the slab below y=0 so it never z-fights the plat
 /** Warm sodium, the colour of a building that is still occupied at night. */
 const MAST_LAMP = 0xffca8a
 
-/**
- * Survey masts, sited in LOGO space so they are guaranteed to stand on the
- * plate and so they populate the parts of it the city never reaches: the brow,
- * the ear, the crown and the long empty run of the trunk. `[xe, ye, height]`,
- * ordered so the first three already ring the city — 'low' quality keeps only
- * those and still gets a balanced skyline.
- */
-const MAST_SITES: readonly (readonly [number, number, number])[] = [
-  [-24, 12, 58], // the brow, east — beyond the archive estate
-  [30, 4, 66], // the ear, south-west
-  [-27, -27, 62], // out along the trunk, north
-  [-6, 24, 46], // the crown, south-east
-  [11, -17, 50], // the jaw, west — beyond the maintenance yard
-  [24, -14, 52], // the lower ear, over the recovery ground's horizon
-]
+/** Mast heights, tallest first — 'low' quality keeps only the first three. */
+const MAST_HEIGHTS: readonly number[] = [66, 58, 62, 52, 50, 46]
+/** How far in from the kerb a mast stands, and how far it must clear a district. */
+const MAST_INSET = 70
+const MAST_DISTRICT_CLEAR = 80
 
-const MASTS: readonly (readonly [number, number, number])[] = MAST_SITES.map((m) => {
-  const [x, z] = logoToWorld(m[0], m[1])
-  return [x, z, m[2]] as const
-})
+/**
+ * Site the survey masts by walking the plate's own rim rather than by writing
+ * down six coordinates. Masts exist to give the empty parts of the plate — the
+ * brow, the ear, the long run of the trunk — something to read against, and
+ * they must never land on a district or off the edge. Deriving them from the
+ * outline means a redrawn outline moves them instead of stranding them.
+ */
+function siteMasts(ring: Float64Array, ccw: boolean, want: number): [number, number, number][] {
+  const inward = offsetRing(ring, MAST_INSET, ccw)
+  const n = inward.length / 2
+  const out: [number, number, number][] = []
+  const clearOfCity = (x: number, z: number): boolean => {
+    for (const id of Object.keys(DISTRICT_BOUNDS)) {
+      if (id === 'world') continue
+      const b = DISTRICT_BOUNDS[id]
+      const dx = Math.max(b.x[0] - x, 0, x - b.x[1])
+      const dz = Math.max(b.z[0] - z, 0, z - b.z[1])
+      if (Math.hypot(dx, dz) < MAST_DISTRICT_CLEAR) return false
+    }
+    return true
+  }
+  const stride = n / want
+  for (let k = 0; k < want; k++) {
+    for (let t = 0; t < Math.ceil(stride); t++) {
+      const i = (Math.round(k * stride) + t) % n
+      const x = inward[i * 2]
+      const z = inward[i * 2 + 1]
+      // The trunk is narrower than the inset, so an offset point can fall
+      // outside its own plate; and two masts on one lobe read as a fence.
+      if (clearance(ring, x, z) < MAST_INSET * 0.55) continue
+      if (!clearOfCity(x, z)) continue
+      if (out.some((m) => Math.hypot(m[0] - x, m[1] - z) < 200)) continue
+      out.push([x, z, MAST_HEIGHTS[out.length % MAST_HEIGHTS.length]])
+      break
+    }
+  }
+  return out
+}
 
 /* --- the rim -------------------------------------------------------------- */
 
@@ -757,7 +780,8 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
    * 4. Ambient dressing — masts and light cones. A handful of draw calls.
    * -------------------------------------------------------------------*/
 
-  const dressing = quality.level === 'low' ? 3 : MASTS.length
+  const masts = siteMasts(ring, ccw, 6)
+  const dressing = Math.min(masts.length, quality.level === 'low' ? 3 : masts.length)
 
   const mastMat = theme.mat('ground.mast', { color: 0x18233a, roughness: 0.75, metalness: 0.45 })
   /**
@@ -771,7 +795,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   geos.push(crownGeo, floorGeo)
 
   for (let i = 0; i < dressing; i++) {
-    const [mx, mz, mh] = MASTS[i]
+    const [mx, mz, mh] = masts[i]
     const mast = new THREE.Mesh(theme.cyl(0.3, 0.55, mh, 6), mastMat)
     mast.position.set(mx, mh / 2, mz)
     group.add(mast)

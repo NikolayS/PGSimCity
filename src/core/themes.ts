@@ -435,7 +435,7 @@ export function daySurface(hex: number): number {
     // 0.46–0.71, not 0.6–0.9: a sunlit surface still has a light term on top of
     // this, and stone that starts near white has nowhere left to go — it clips,
     // and a clipped face cannot show either the toon terminator or its own ink.
-    const lit = 0.42 + Math.min(l, 0.4) * 0.66
+    const lit = 0.36 + Math.min(l, 0.4) * 0.62
     // Warm sandstone, and committed to it. Every structural colour in the city
     // is a blue-grey navy, so a translation that keeps much of the source hue
     // produces a uniformly cold grey model — technically a day theme, visually
