@@ -75,6 +75,18 @@
   --hud-gap: 14px;
   --panel-w: 384px;
   --rail-w: 296px;
+
+  /* The notch, the rounded corners and the home indicator. Zero on a desktop
+     browser; real numbers on a phone once the document opts in with
+     viewport-fit=cover. Every fixed edge in the HUD adds these, so nothing the
+     viewer has to tap can ever land under hardware. */
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+
+  /* The smallest thing a thumb can reliably hit. Used, not decorative. */
+  --tap: 44px;
 }
 
 * {
@@ -117,6 +129,11 @@ body {
   z-index: 2;
 }
 
+/* The HUD is a four-row grid, and the fourth row exists for one reason: the
+   tour deck and the minimap used to share `center` and paint over each other —
+   at 1280x760 the minimap covered 208px of the first-run card, which is why the
+   banner read "…RE?" instead of "First time here?". The deck now owns a row of
+   its own, so the two can no longer collide at any width. */
 #hud {
   position: fixed;
   inset: 0;
@@ -124,13 +141,17 @@ body {
   pointer-events: none;
   display: grid;
   grid-template-columns: auto 1fr auto;
-  grid-template-rows: auto 1fr auto;
+  /* minmax(0,1fr): on a short viewport the free row must be allowed to vanish
+     rather than push the deck and the transport off the bottom edge. */
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
   grid-template-areas:
     "top top top"
     "left center right"
+    "left deck right"
     "bottom bottom bottom";
   gap: var(--hud-gap);
-  padding: var(--hud-gap);
+  padding: calc(var(--hud-gap) + var(--safe-t)) calc(var(--hud-gap) + var(--safe-r))
+    calc(var(--hud-gap) + var(--safe-b)) calc(var(--hud-gap) + var(--safe-l));
 }
 
 #hud > * {
@@ -140,9 +161,30 @@ body {
 #hud-left { grid-area: left; align-self: start; }
 #hud-right { grid-area: right; align-self: start; justify-self: end; }
 #hud-bottom { grid-area: bottom; }
-#tour-layer { grid-area: center; place-self: end center; }
+#tour-layer { grid-area: deck; place-self: end center; }
 #toast-stack { grid-area: center; place-self: start end; }
 #compass { grid-area: center; place-self: end start; }
+
+/* Below this the free row is thinner than the minimap, and a squeezed grid row
+   would let it ride up over the instrument bar. The city is the map. */
+@media (max-height: 620px) {
+  #compass {
+    display: none;
+  }
+}
+
+/* --- phone ---------------------------------------------------------------
+   On a phone the city IS the product: the HUD gets the thinnest margin that
+   still reads as a margin, and the minimap goes away entirely — 150x128px of
+   map is not worth 6% of a 390x844 screen when the map is right there. */
+@media (max-width: 700px) {
+  :root {
+    --hud-gap: 8px;
+  }
+  #compass {
+    display: none;
+  }
+}
 
 /* anything interactive opts back in */
 #hud button,

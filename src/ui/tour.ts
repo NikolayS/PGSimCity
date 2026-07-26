@@ -211,6 +211,8 @@ const TOTAL_SECONDS = STEPS.reduce((n, c) => n + c.duration, 0)
 
 const SEEN_KEY = 'pgsimcity.seen'
 const FIRST_RUN_DELAY_MS = 2800
+/** The invitation is an offer, not a fixture: it shows itself out. */
+const FIRST_RUN_LIFE_MS = 40000
 const NARRATE_MS = 9000
 
 type KnobKey = keyof Knobs
@@ -391,6 +393,11 @@ export function createTour(ctx: UiContext): UiModule {
   }
 
   function showNarrate(title: string, body: string, ms: number): void {
+    // Never two cards in the same corner. A scenario beat only happens because
+    // somebody started a scenario, and starting one answers the invitation's
+    // question — so the invitation stands down rather than stacking on top of
+    // the narration that the viewer actually asked for.
+    if (firstLive) hideFirstRun()
     window.clearTimeout(narrateTimer)
     setText(narrateTitle, title)
     setText(narrateBody, body)
@@ -407,6 +414,9 @@ export function createTour(ctx: UiContext): UiModule {
   /* =======================================================================
    * FIRST-RUN PROMPT
    * =====================================================================*/
+
+  let firstLive = false
+  let firstTimer = 0
 
   const firstRun = el(
     'aside',
@@ -451,6 +461,9 @@ export function createTour(ctx: UiContext): UiModule {
   )
 
   function hideFirstRun(): void {
+    window.clearTimeout(firstTimer)
+    firstTimer = 0
+    firstLive = false
     setClass(firstRun, 'is-live', false)
     document.body.classList.remove('pg-invite')
   }
@@ -458,10 +471,12 @@ export function createTour(ctx: UiContext): UiModule {
   function showFirstRun(): void {
     if (running || hasSeen()) return
     markSeen()
+    firstLive = true
     setClass(firstRun, 'is-live', true)
-    // The card is centred in the same row as the minimap and is wider than the
-    // space left beside it — tour.css uses this to stand the minimap down.
+    // While this is up, nothing else speaks from the deck (see tour.css).
     document.body.classList.add('pg-invite')
+    // An invitation nobody answers is just furniture. It leaves on its own.
+    firstTimer = window.setTimeout(() => hideFirstRun(), FIRST_RUN_LIFE_MS)
   }
 
   layer.append(firstRun, narrateCard, card)
@@ -701,6 +716,7 @@ export function createTour(ctx: UiContext): UiModule {
     for (const t of timers) window.clearTimeout(t)
     timers.length = 0
     window.clearTimeout(narrateTimer)
+    window.clearTimeout(firstTimer)
     if (running) {
       running = false
       restoreKnobs()

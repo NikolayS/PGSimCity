@@ -549,6 +549,20 @@
   line-height: 2;
 }
 
+/* --- sheet controls (phone only; see the 700px block) --------------------- */
+
+.pgc-sheet-size {
+  display: none;
+  flex: 0 0 auto;
+}
+.pgc-sheet-size svg {
+  transform: rotate(-90deg);
+  transition: transform var(--dur) var(--ease);
+}
+.pgc-panel.is-tall .pgc-sheet-size svg {
+  transform: rotate(90deg);
+}
+
 /* ---------------------------------------------------------------------------
    Narrow screens: both panels stop taking space and slide over the city.
    -------------------------------------------------------------------------*/
@@ -615,5 +629,135 @@
   }
   .pgc-empty__lead {
     font-size: var(--fs-lg);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   PHONE — the panels become bottom sheets.
+
+   A 340px-wide column pinned from top to bottom left 12% of a 390x844 screen
+   for the city, which is the wrong way round: on a phone the panel is a guest.
+   It now takes the bottom 42% and no more, so over half the viewport is always
+   the city, and one tap on the header chevron trades that for a tall sheet when
+   you actually want to read. The instrument bar stays; the dock hides, because
+   the sheet is standing exactly where it was.
+   -------------------------------------------------------------------------*/
+
+@media (max-width: 700px) {
+  :root {
+    --pgc-tab: var(--tap);
+    --pgc-sheet-h: 42svh;
+    --pgc-sheet-tall: 82svh;
+  }
+
+  /* Clear of the sheet's top edge, and thumb-sized. */
+  .pgc-host.is-compact .pgc-tab {
+    top: 38%;
+    width: var(--tap);
+    height: var(--tap);
+  }
+  .pgc-host--left.is-compact .pgc-tab {
+    border-radius: 0 var(--r-md) var(--r-md) 0;
+  }
+  .pgc-host--right.is-compact .pgc-tab {
+    border-radius: var(--r-md) 0 0 var(--r-md);
+  }
+
+  /* Same specificity as the 1100px rules, later in the file — these win. */
+  .pgc-host--left.is-compact .pgc-panel,
+  .pgc-host--right.is-compact .pgc-panel {
+    top: auto;
+    bottom: 0;
+    left: var(--safe-l);
+    right: var(--safe-r);
+    width: auto;
+    /* vh first so a browser without svh still gets a sheet, not a full screen */
+    height: calc(42vh + var(--safe-b));
+    height: calc(var(--pgc-sheet-h) + var(--safe-b));
+    padding-bottom: var(--safe-b);
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    border-bottom: 0;
+    transform: translateY(calc(100% + 10px));
+  }
+  .pgc-host--left.is-compact .pgc-panel.is-tall,
+  .pgc-host--right.is-compact .pgc-panel.is-tall {
+    height: calc(82vh + var(--safe-b));
+    height: calc(var(--pgc-sheet-tall) + var(--safe-b));
+  }
+  .pgc-host.is-compact.is-open .pgc-panel {
+    transform: none;
+  }
+
+  .pgc-sheet-size {
+    display: inline-flex;
+    width: var(--tap);
+    height: var(--tap);
+  }
+
+  /* thumb-sized controls inside the sheets */
+  .pgc-rail__collapse,
+  .pgc-insp__close,
+  .pgc-fly {
+    min-height: var(--tap);
+  }
+  .pgc-rail__collapse,
+  .pgc-insp__close {
+    width: var(--tap);
+    height: var(--tap);
+  }
+  .pgc-panel .pg-collapse__head {
+    min-height: var(--tap);
+  }
+  .pgc-panel .pg-range {
+    height: var(--tap);
+  }
+  .pgc-panel .pg-toggle {
+    width: 52px;
+    height: 30px;
+  }
+  .pgc-panel .pg-toggle::after {
+    width: 22px;
+    height: 22px;
+    top: 3px;
+    left: 3px;
+  }
+  .pgc-panel .pg-toggle:checked::after {
+    transform: translateX(22px);
+  }
+  .pgc-panel .pg-select {
+    min-height: var(--tap);
+  }
+  .pgc-panel .pg-btn {
+    min-height: var(--tap);
+  }
+  .pgc-knob__row {
+    min-height: 26px;
+  }
+
+  .pgc-insp__head {
+    padding: 8px 12px;
+  }
+  .pgc-rail__head {
+    padding: 8px 12px;
+  }
+  .pgc-panel .pg-panel__body {
+    padding: 10px 12px 14px;
+  }
+
+  /* While a sheet is up it is standing on the dock. Leave the instruments —
+     changing a dial to watch a number move is the whole point — and take the
+     controls away, since the sheet covers them anyway and a button nobody can
+     reach is worse than no button. */
+  body.pg-sheet #hud-bottom {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(12px);
+    transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+  }
+  body.pg-sheet.pg-sheet-tall #hud-top {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-12px);
+    transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
   }
 }

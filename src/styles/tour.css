@@ -39,15 +39,13 @@ body.pg-tour #hud-bottom {
   opacity: 0.5;
   transition: opacity var(--dur-slow) var(--ease);
 }
-/* The chapter deck and the first-run card are centred in the same grid cell as
-   the minimap, and at 1280px the deck alone (544px) is wider than the space
-   left beside a 206px minimap — so they used to be painted on top of each
-   other. Whichever card is up, the minimap stands down. */
-body.pg-tour #compass,
-body.pg-invite #compass {
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--dur-slow) var(--ease);
+
+/* The first-run invitation and the scenario narration are two voices saying
+   different things in the same corner of the screen. Only one of them speaks.
+   tour.ts holds the same line from the other side, so the card is never even
+   built while the invitation is up; this is the guarantee, not the mechanism. */
+body.pg-invite .tour-narrate {
+  display: none;
 }
 
 body.pg-tour #hud-top:hover,
@@ -646,5 +644,152 @@ body.pg-tour::after {
   .pal-overlay {
     grid-template-rows: 6vh auto 1fr;
     padding: 0 10px;
+  }
+}
+
+/* ==========================================================================
+   PHONE
+   The deck is a caption, not a document. It takes a fixed slice of the screen,
+   scrolls its own prose inside that slice, and never grows to meet the text.
+   ========================================================================*/
+
+@media (max-width: 700px) {
+  #tour-layer {
+    max-width: 100%;
+    gap: 8px;
+  }
+
+  .tour-card__grid {
+    gap: 10px;
+    padding: 10px 12px 8px;
+  }
+  .tour-card__n {
+    font-size: 18px;
+  }
+  .tour-card__idx {
+    padding-right: 10px;
+  }
+  .tour-card__title {
+    font-size: var(--fs-md);
+  }
+  /* The chapter text is the tallest thing in the HUD. Cap it and let it scroll:
+     four sentences must not cost half a phone screen. */
+  .tour-card__body {
+    max-height: 26svh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  /* Fourteen 3px segments are a progress bar you cannot hit with a thumb. The
+     bar underneath says the same thing, and prev/next do the rest. */
+  .tour-steps {
+    display: none;
+  }
+  .tour-card__deck {
+    gap: 6px;
+  }
+  .tour-card__btns {
+    gap: 6px;
+  }
+  .tour-btn {
+    min-height: var(--tap);
+  }
+  .tour-btn.pg-btn--icon {
+    width: var(--tap);
+    height: var(--tap);
+  }
+  .tour-btn--exit {
+    padding: 0 12px;
+  }
+
+  /* --- the first-run invitation --------------------------------------- */
+
+  .tour-first {
+    width: 100%;
+    padding: 10px 12px;
+    gap: 8px;
+  }
+  .tour-first__btns {
+    width: 100%;
+    gap: 8px;
+  }
+  .tour-first__btns .pg-btn {
+    flex: 1 1 auto;
+    min-height: var(--tap);
+    justify-content: center;
+  }
+
+  .tour-narrate {
+    width: 100%;
+    padding: 10px 12px 12px;
+  }
+  .tour-narrate__body {
+    max-height: 22svh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  /* --- command palette -------------------------------------------------- */
+
+  .pal-overlay {
+    grid-template-rows: 4vh auto 1fr;
+    padding: var(--safe-t) calc(8px + var(--safe-r)) var(--safe-b) calc(8px + var(--safe-l));
+  }
+  .pal-dialog {
+    max-height: min(78svh, 78vh);
+  }
+  .pal-head {
+    min-height: var(--tap);
+  }
+  .pal-row {
+    grid-template-columns: 54px minmax(0, 1fr) auto;
+    min-height: var(--tap);
+  }
+}
+
+/* On a tablet there is room for the chapter strip, but a 3px-tall button is not
+   a target. The segment keeps its look and grows an invisible thumb-sized box
+   around it. (On a phone the strip is gone entirely — see above.) */
+@media (max-width: 900px) and (pointer: coarse) {
+  .tour-steps {
+    gap: 2px;
+    padding: 0 18px 4px;
+  }
+  .tour-step {
+    height: var(--tap);
+    background: transparent;
+    position: relative;
+  }
+  .tour-step:hover {
+    transform: none;
+    background: transparent;
+  }
+  .tour-step::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 3px;
+    margin-top: -1.5px;
+    border-radius: var(--r-pill);
+    background: rgba(120, 170, 235, 0.16);
+    transition: background var(--dur) var(--ease);
+  }
+  .tour-step:hover::after {
+    background: rgba(120, 170, 235, 0.5);
+  }
+  .tour-step.is-done::after {
+    background: rgba(90, 209, 255, 0.42);
+  }
+  .tour-step.is-now::after {
+    background: var(--c-backend);
+    box-shadow: 0 0 12px -2px var(--c-backend);
+  }
+}
+
+@media (max-width: 700px) {
+  .tour-steps {
+    display: none;
   }
 }

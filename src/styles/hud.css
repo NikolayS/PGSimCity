@@ -109,6 +109,10 @@
   background: none;
   border: 0;
   border-left: 1px solid var(--line-hair);
+  /* A scroller's children must never shrink. Without this the five tiles
+     divided a 176px strip between them on a phone and every readout was
+     squeezed to a 16px sliver of itself. */
+  flex: 0 0 auto;
   padding: 7px 14px;
   display: grid;
   /* Fixed columns: a metric tile must never resize as its number changes, or
@@ -268,6 +272,15 @@
 
 /* tools + performance */
 
+/* One cluster, because it moves as one: on a phone the whole thing is re-parented
+   into the transport dock (see applyPhoneLayout in hud.ts). */
+.hud-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .hud-tool.is-active {
   color: var(--ink-invert);
   background: var(--c-backend);
@@ -364,6 +377,22 @@
 }
 .hud-scn__label {
   flex: 0 0 auto;
+}
+
+/* The scenario rail is always open on a desktop, so its toggle is phone-only. */
+.hud-scn__toggle {
+  display: none;
+}
+.hud-scn__toggle-icon {
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0.8;
+}
+
+/* Where the tool cluster docks on a phone. It has no business taking a gap
+   while it is empty. */
+.hud-transport__dock:empty {
+  display: none;
 }
 
 .hud-chips {
@@ -777,12 +806,32 @@ body.pg-labels-off #labels-root {
 
 /* ==========================================================================
    PHONE
-   A shared link opens on a phone more often than anyone plans for. Keep the
-   product name and the three vitals that tell you the city is alive; the rest
-   of the instrument bar is not worth the width.
+   A shared link opens on a phone more often than anyone plans for, and on a
+   phone the city is the product. The HUD splits in two and gets out of the way:
+
+     top     instruments only — identity, clock, the vitals that say the city is
+             alive, and the checkpoint countdown. Nothing to aim at but the
+             vitals themselves.
+     bottom  every control, in a two-row dock: transport + scenarios on one row,
+             the tool cluster (re-parented by hud.ts) on the other.
+     edges   the console and the inspector, as tabs (see panel.css).
+
+   Together the two bars cost about 150px of an 844px screen. Everything else
+   is city. Nothing here may exceed the viewport horizontally: each row is its
+   own scroller, so overflow stays inside the row that owns it.
    ========================================================================*/
 
 @media (max-width: 700px) {
+  /* --- instrument bar --------------------------------------------------- */
+
+  .hud-bar {
+    gap: 8px;
+    min-height: 48px;
+    padding: 0 8px;
+  }
+  .hud-brand {
+    gap: 7px;
+  }
   .hud-brand__mark {
     display: block;
     font-size: var(--fs-xs);
@@ -793,16 +842,186 @@ body.pg-labels-off #labels-root {
     display: none;
   }
   .hud-vital {
-    padding: 6px 8px;
+    padding: 4px 10px;
+    min-height: var(--tap);
+    align-items: center;
   }
-  .hud-vitals {
-    mask-image: none;
+  .hud-ckpt {
+    min-height: var(--tap);
+    min-width: var(--tap);
+    justify-content: center;
   }
-  /* The scenario rail wraps instead of scrolling four of its chips out of
-     sight behind an invisible horizontal scrollbar. */
-  .hud-chips {
+  .hud-sep {
+    display: none;
+  }
+
+  /* --- the dock --------------------------------------------------------- */
+
+  .hud-transport {
     flex-wrap: wrap;
-    overflow-x: visible;
-    row-gap: 4px;
+    gap: 6px;
+    padding: 6px;
+    min-height: 0;
+    border-radius: var(--r-md);
+  }
+
+  /* Two full-width rows, each scrolling inside itself. `flex: 1 1 100%` is what
+     keeps a long row from ever pushing a chip past the right edge of the
+     screen — the row is exactly as wide as the dock, and the overflow is the
+     row's problem, not the viewport's. */
+  .hud-transport__deck,
+  .hud-transport__dock {
+    flex: 1 1 100%;
+    min-width: 0;
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    /* the fade is the only thing that says the row keeps going */
+    mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
+  }
+  .hud-transport__deck::-webkit-scrollbar,
+  .hud-transport__dock::-webkit-scrollbar,
+  .hud-chips::-webkit-scrollbar {
+    display: none;
+  }
+  .hud-transport__dock {
+    display: flex;
+    align-items: center;
+  }
+  .hud-tools {
+    gap: 6px;
+  }
+
+  /* thumb-sized everything in the dock and the bar */
+  .hud-transport .pg-btn,
+  .hud-tools .pg-btn {
+    min-height: var(--tap);
+  }
+  .hud-transport .pg-btn--icon,
+  .hud-tools .pg-btn--icon {
+    width: var(--tap);
+    height: var(--tap);
+  }
+  .hud-play {
+    width: var(--tap);
+    height: var(--tap);
+  }
+  .hud-speed {
+    gap: 0;
+    flex: 0 0 auto;
+  }
+  .hud-speed__v {
+    min-width: 36px;
+  }
+  .hud-reset__t {
+    display: none;
+  }
+  .hud-reset {
+    width: var(--tap);
+    padding: 0;
+    justify-content: center;
+  }
+  .hud-perf__sel {
+    height: var(--tap);
+    min-width: 78px;
+  }
+
+  /* --- the scenario rail, collapsed behind one control ------------------ */
+
+  .hud-scn__toggle {
+    display: inline-flex;
+    flex: 0 0 auto;
+    padding: 0 12px;
+  }
+  /* The rail is a third row, and only when it is asked for. Thirteen chips are
+     worth more than a third of the screen only while you are choosing one. */
+  .hud-transport__scn {
+    display: none;
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+  .hud-transport.is-scn-open .hud-transport__scn {
+    display: flex;
+  }
+  .hud-chips {
+    /* NOT wrap: wrapping made the rail four rows tall and let the widest chip
+       paint 66px past the right edge of a 390px screen. It scrolls. */
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding: 0;
+    mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+  }
+  .hud-chip {
+    min-height: var(--tap);
+    padding: 0 12px;
+  }
+
+  /* --- toasts ----------------------------------------------------------- */
+
+  .hud-toasts {
+    width: min(320px, 76vw);
+  }
+  .hud-toast {
+    min-height: var(--tap);
+    align-items: center;
+  }
+
+  /* --- help ------------------------------------------------------------- */
+
+  .help-overlay {
+    padding: calc(10px + var(--safe-t)) calc(10px + var(--safe-r)) calc(10px + var(--safe-b))
+      calc(10px + var(--safe-l));
+  }
+  .help-dialog {
+    max-height: min(92svh, 92vh);
+  }
+  .help-close {
+    width: var(--tap);
+    height: var(--tap);
+  }
+}
+
+/* ==========================================================================
+   TOUCH
+   A finger is not a mouse pointer. This covers phones and tablets in portrait
+   and deliberately stops short of a desktop that happens to have a touchscreen,
+   where a 30px button beside a 30px button is correct.
+   ========================================================================*/
+
+@media (max-width: 900px) and (pointer: coarse) {
+  #hud .pg-btn--icon,
+  #hud .pgc-tab {
+    width: var(--tap);
+    height: var(--tap);
+  }
+  #hud .pg-btn,
+  #hud .pg-chip,
+  #hud .pg-select,
+  #hud .hud-vital,
+  #hud .hud-ckpt,
+  .pal-dialog .pg-btn {
+    min-height: var(--tap);
+  }
+  #hud .hud-play {
+    width: var(--tap);
+    height: var(--tap);
+  }
+  #hud .pg-range {
+    height: var(--tap);
+  }
+  #hud .pg-toggle {
+    width: 52px;
+    height: 30px;
+  }
+  #hud .pg-toggle::after {
+    width: 22px;
+    height: 22px;
+    top: 3px;
+    left: 3px;
+  }
+  #hud .pg-toggle:checked::after {
+    transform: translateX(22px);
   }
 }
