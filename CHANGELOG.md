@@ -9,6 +9,101 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.2.0] — 2026-07-26
+
+You can walk into it now. Still a prototype, still contains mistakes, and this
+release names the ones we know about.
+
+### Added
+
+- **First person.** Press `G` and drop into the city at eye height — walk, run,
+  crouch, jump. Collision is derived automatically from the component registry's
+  bounding boxes, so every building is solid without per-district authoring.
+- **The plaza is reachable on foot.** It was an island: its edge sits 40 m from
+  solid ground across the 52 m excavation. Four ramped causeways now cross it at
+  1:14, landing in the corridors that are clear of deck furniture, with gates cut
+  in the previously continuous railing. Every route was verified by walking a
+  capsule through the real collision world in code — 17 of 17 passed, and the
+  parapet stops you 0.25 m short of the drop.
+- **A descent into the excavation** — seven flights, 301 treads, from the pit rim
+  to the `$PGDATA` floor. At the bottom, a sign reads *"shared memory is 52 m
+  above you"*, and the plaza's pylons are overhead.
+- **The continuity quarter**: anchors for base backups, point-in-time recovery
+  and failover — an archive estate with a timeline switchyard, a recovery ground
+  on separate iron a haul road away, and an HA quarter with a consensus store and
+  three lease posts. Geometry follows.
+- **A server boundary.** Clients now sit outside a fence with the gatehouse as
+  `pg_hba.conf`. Previously the application tier was drawn as a district *of* the
+  database, which every canonical Postgres diagram is explicit about.
+- Apache 2.0 licence, a `NOTICE` with the PostgreSQL trademark disclaimer, an
+  original elephant mark, favicon set and social preview.
+
+### Changed
+
+- **The city no longer reads as an aerial assault.** Clients came down to ground
+  level, the replication link stopped arcing to y=46 and became a duct bank at
+  grade, the selection marker stopped being four breathing corner brackets — a
+  weapons reticle — and became a surveyor's setting-out drawing, and the blinking
+  aviation beacons are gone. Red now appears only where it means something
+  specific, above all the dirty page.
+- **Left-drag pans, right-drag orbits.** Map convention, not CAD convention. Both
+  old habits still work via middle-drag and `Ctrl`-left-drag.
+- **Labels place themselves like a map.** Five zoom levels with cross-fade,
+  screen-space collision, leader lines, wall-clock hysteresis, and a `+N` pill so
+  a district can never read as empty. The establishing shot went from 26 labels
+  with 9 overlapping pairs to 9 with none; the backend row from 29 overlapping
+  pairs to one.
+- **`autovacuum_vacuum_scale_factor` ships at 0.02**, not PostgreSQL's 0.2. At
+  stock the demo tables need ~5,900 dead row versions to cross the threshold —
+  roughly an hour at 10 tps — so the vacuum yard would be dead for a whole visit.
+  0.02 is what the documentation recommends per-table for a busy relation.
+- Default workload is 10 tps at 20% writes, so a single transaction can be
+  followed end to end.
+
+### Fixed
+
+- **66 verified PostgreSQL corrections**, after four specialists reviewed every
+  word and a second panel cross-examined each contested finding. The worst class
+  is gone: catalog objects that did not exist — `SLRU` as a `wait_event_type`,
+  `TransactionBuffer`, an Analyze phase in `pg_stat_progress_vacuum`. Also: the
+  full-page-image surge begins when a checkpoint *starts*, recycled WAL segments
+  are not zeroed, WAL insertion takes the lock before reserving space, the xmin
+  horizon is per-database, and `synchronous_commit = on` is a *local* flush
+  guarantee.
+- **Binary units.** `fmtBytes()` divided by 1024 and labelled the result kB/MB/GB.
+  Now KiB/MiB/GiB everywhere, except inside quoted PostgreSQL config values.
+- **Pause froze nothing.** The frame loop scaled simulated time but handed real
+  time to the world and the particles, so pausing drained rather than stopping,
+  and `timeScale` desynchronised the two clocks.
+- A WebGL context leak in the support probe, teardown firing on bfcache restore,
+  the fps meter measuring the clamped delta it was designed to hide stalls with,
+  and districts lit only by neon collapsing to black silhouettes at low quality.
+- The quality selector did nothing at all.
+- The top-bar vitals danced on every update.
+
+### Known issues
+
+- **Cache hit ratio reads about 57%**, which is not what an OLTP database looks
+  like. Two compounding defects: the gauge is a time-average of ratios rather
+  than `blks_hit/(blks_hit+blks_read)`, and the working set is sized so the
+  `shared_buffers` slider never leaves the steep part of the curve.
+- **Achieved throughput does not respond to bottlenecks.** A batch controller
+  cancels them out, so lock contention, tiny `shared_buffers` and slow commits
+  all fail to reduce committed transactions. The causes are simulated correctly;
+  the effect is unreachable.
+- WAL-triggered checkpoints fire at the full `max_wal_size` rather than
+  `max_wal_size / (1 + checkpoint_completion_target)`.
+- The shared-buffer grid saturates to white under heavy load and stops encoding
+  state — exactly when the city gets interesting.
+- Mobile layout: panels cover most of the viewport ([#1]).
+- The minimap paints over the guided-tour caption.
+- Walk mode inherits the flying camera's downward pitch on entry.
+
+[#1]: https://github.com/NikolayS/PGSimCity/issues/1
+[0.2.0]: https://github.com/NikolayS/PGSimCity/releases/tag/v0.2.0
+
+---
+
 ## [0.1.0] — 2026-07-25
 
 First public release. A prototype: it works end to end, and it contains
