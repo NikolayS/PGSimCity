@@ -95,15 +95,24 @@ const STEP_MAX = 1 / 30
 /** Most sub-steps one update() call may run, so a huge delta cannot stall the tab. */
 const MAX_STEPS = 20
 const IDLE_REAP = 22
+const MIB = 1024 * 1024
+const DECLARED_WORKING_SET_PAGES = TABLES.reduce(
+  (total, table) => total + table.pages + table.indexes.reduce((sum, index) => sum + index.pages, 0),
+  0,
+)
+const FULL_SAMPLE_PAGES = Math.min(
+  DECLARED_WORKING_SET_PAGES,
+  (SHARED_BUFFERS_FULL_SAMPLE_MIB * MIB) / PAGE,
+)
 
 /**
  * Convert the real MiB setting into the fixed-size representative plaza.
- * Thirty-two frames is the model's safe minimum under sixteen concurrent
- * backends; at 8 GiB the whole sample is active, and larger real pools keep
- * their value while the visualization stays capped.
+ * Scale capacity and page identities against the same working set; otherwise
+ * the 1,024-frame sample acts like the whole pool and evicts pages that fit.
  */
 function sampledBufferFrames(logicalMib: number): number {
-  const scaled = Math.round((logicalMib / SHARED_BUFFERS_FULL_SAMPLE_MIB) * N_BUFFERS)
+  const logicalPages = Math.floor((logicalMib * MIB) / PAGE)
+  const scaled = Math.round((logicalPages / FULL_SAMPLE_PAGES) * N_BUFFERS)
   return clamp(scaled, 32, N_BUFFERS)
 }
 
@@ -582,6 +591,14 @@ export function createSim(bus: Bus): SimApi {
   const bufMap = new Map<number, number>()
   const accessCounts = new Map<number, number>()
   const bufKey = (rel: number, blk: number) => rel * 0x400000 + blk
+  /** Sample page identity into the plaza's stable 1,024-bucket namespace so
+   * the clock sweep compares representative pages with representative frames. */
+  const representativeBufKey = (rel: number, blk: number): number => {
+    let key = bufKey(rel, blk) | 0
+    key = Math.imul(key ^ (key >>> 16), 0x7feb352d)
+    key = Math.imul(key ^ (key >>> 15), 0x846ca68b)
+    return ((key ^ (key >>> 16)) >>> 0) % N_BUFFERS
+  }
   const pinT = new Float32Array(N_BUFFERS)
   /**
    * Pages whose LSN is already past the checkpoint REDO point, i.e. that have
@@ -881,7 +898,7 @@ export function createSim(bus: Bus): SimApi {
    * ====================================================================*/
 
   function invalidate(b: number): void {
-    if (buf.valid[b]) bufMap.delete(bufKey(buf.rel[b], buf.blk[b]))
+    if (buf.valid[b]) bufMap.delete(representativeBufKey(buf.rel[b], buf.blk[b]))
     buf.valid[b] = 0
     buf.dirty[b] = 0
     ckptNeeded[b] = 0
@@ -961,9 +978,10 @@ export function createSim(bus: Bus): SimApi {
    * `useRing` marks a large sequential read; `forWrite` dirties the page.
    */
   function touchPage(slot: number, rel: number, blk: number, forWrite: boolean, useRing: boolean): boolean {
-    const key = bufKey(rel, blk)
-    accessCounts.set(key, (accessCounts.get(key) ?? 0) + 1)
-    const found = bufMap.get(key)
+    const exactKey = bufKey(rel, blk)
+    const representativeKey = representativeBufKey(rel, blk)
+    accessCounts.set(exactKey, (accessCounts.get(exactKey) ?? 0) + 1)
+    const found = bufMap.get(representativeKey)
     const b = backends[slot]
     const x = extras[slot]
 
@@ -976,6 +994,10 @@ export function createSim(bus: Bus): SimApi {
       else if (buf.usage[found] < 5) buf.usage[found]++
       pinBuffer(slot, found)
       buf.lastTouch[found] = state.t
+      // A frame represents a stable bucket of logical pages; expose the page
+      // most recently sampled into that bucket to inspectors and FPI tracking.
+      buf.rel[found] = rel
+      buf.blk[found] = blk
       b.lastBuffer = found
       if (forWrite) markDirty(found, slot)
       // One sampled ring block represents roughly SCAN_STRIDE blocks spread
@@ -985,7 +1007,7 @@ export function createSim(bus: Bus): SimApi {
       const representativeHit =
         !useRing
         || rel >= N_TABLES
-        || rng() < clamp01(buf.size / Math.max(1, tables[rel].pages))
+        || rng() < clamp01((K.sharedBuffers * MIB) / PAGE / Math.max(1, tables[rel].pages))
       if (representativeHit) {
         buf.hits++
         winHits++
@@ -1016,7 +1038,7 @@ export function createSim(bus: Bus): SimApi {
     }
     if (buf.valid[v]) {
       writeOut(v, true) // the backend that wanted the frame does this write
-      bufMap.delete(bufKey(buf.rel[v], buf.blk[v]))
+      bufMap.delete(representativeBufKey(buf.rel[v], buf.blk[v]))
       buf.evictions++
     }
     buf.valid[v] = 1
@@ -1026,7 +1048,7 @@ export function createSim(bus: Bus): SimApi {
     buf.usage[v] = 1
     pinBuffer(slot, v)
     buf.lastTouch[v] = state.t
-    bufMap.set(key, v)
+    bufMap.set(representativeKey, v)
     buf.misses++
     winMisses++
     ioReadAcc++
@@ -2520,7 +2542,8 @@ export function createSim(bus: Bus): SimApi {
     const ti = b.table
     const t = tables[ti]
     const nIdx = t.def.indexes.length
-    const ring = x.seqScan && t.pages > buf.size / 4
+    const logicalBufferPages = Math.floor((K.sharedBuffers * MIB) / PAGE)
+    const ring = x.seqScan && t.pages > logicalBufferPages / 4
     const write = x.writes
     const gridN = x.seqScan ? scanGridN(t) : 0
 

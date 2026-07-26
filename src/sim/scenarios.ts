@@ -103,7 +103,7 @@ export const SCENARIOS: ScenarioDef[] = [
       writeRatio: 0.45,
       updateRatio: 0.6,
       seqScanRatio: 0.1,
-      sharedBuffers: 96,
+      sharedBuffers: 16,
       bgwriterEnabled: true,
       checkpointTimeout: 90,
       maxWalSize: 256,
@@ -111,7 +111,7 @@ export const SCENARIOS: ScenarioDef[] = [
       replicaEnabled: true,
     },
     beats: [
-      [0, 'Ninety-six buffers', 'The lit part of the plaza just collapsed. shared_buffers is now far smaller than the working set, and everything the workload wants is fighting for the same handful of frames.'],
+      [0, 'Sixteen MiB', 'The lit part of the plaza just collapsed. shared_buffers is now far smaller than the working set, and everything the workload wants is fighting for the same handful of frames.'],
       [12, 'The clock sweep', 'That rotating hand is the buffer replacement algorithm. Postgres has no LRU list; it walks the pool decrementing each frame\'s usage_count, and the first frame it finds at zero becomes the victim. Cheap, no global lock to fight over, good enough — until there is nothing worth keeping.'],
       [28, 'Read the hit ratio', 'It fell off a cliff. Every miss is a trip down the green roads to storage, and at this rate the operating system page cache is the only thing between you and the disk.'],
       [44, 'Backends doing their own writes', 'Here is the symptom nobody recognises. When the victim frame is dirty, the backend that wanted the frame has to write it out first — before it can even start its own read. Your user-facing query is now performing someone else\'s I/O.'],
