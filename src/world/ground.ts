@@ -724,6 +724,11 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     group.add(mesh)
   }
 
+  // The excavation rim marks the end of PostgreSQL's own address space, not
+  // the end of RAM: the kernel page cache remains volatile below this cut.
+  addDecal('POSTGRESQL ADDRESS SPACE ENDS HERE', COLOR.shmem, 0, 0.08, -CITY.pit.z - 5, 0, 180)
+  addDecal('POSTGRESQL ADDRESS SPACE ENDS HERE', COLOR.shmem, 0, 0.08, CITY.pit.z + 5, 0, 180)
+
   for (const spec of PLINTHS) {
     const b = DISTRICT_BOUNDS[spec.district]
     if (!b) continue

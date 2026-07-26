@@ -36,6 +36,8 @@ export const CITY = {
   storage: { y: -52, w: 300, d: 220, warehouseTop: -30 },
   /** OS page cache slab */
   osCache: { y: -24, w: 220, d: 160 },
+  /** Explicit volatile-memory / durable-storage boundary below the kernel cache. */
+  durability: { y: -27.4 },
   /**
    * The excavation. The ground plane is cut away over this rectangle so the
    * storage layer below is visible from the surface — the plaza floats over it.
@@ -236,6 +238,10 @@ export const CONTINUITY = {
 export function backendX(i: number): number {
   const step = CITY.backend.span / (N_BACKEND_SLOTS - 1)
   return -CITY.backend.span / 2 + i * step
+}
+/** Canonical PID shown everywhere a backend process is identified. */
+export function backendPid(i: number): number {
+  return 21519 + i * 7
 }
 export function backendPos(i: number): [number, number, number] {
   return [backendX(i), 0, CITY.backend.z]
@@ -448,10 +454,12 @@ export const rid = {
   walIns: (i: number) => `wal.ins.${i}`,
   lockWait: (i: number) => `lock.wait.${i}`,
   ioRead: (t: number) => `io.read.${t}`,
+  ioReadCache: (t: number) => `io.read.cache.${t}`,
   ioWrite: (t: number) => `io.write.${t}`,
   vacGo: (t: number) => `vac.go.${t}`,
   vacBack: (t: number) => `vac.back.${t}`,
   vacIdx: (t: number) => `vac.idx.${t}`,
+  fsmReturn: (t: number) => `fsm.return.${t}`,
   idxLookup: (t: number) => `idx.lookup.${t}`,
 } as const
 
@@ -535,20 +543,27 @@ for (let t = 0; t < N_TABLES; t++) {
   const tx = tableX(t)
   const c = TABLES[t].color
 
-  // page fault: disk → OS cache → shared buffers
+  // page fault: disk rack → OS cache → shared buffers
   route(rid.ioRead(t), [
-    [tx, CITY.storage.warehouseTop + 2, -60],
+    [tx, CITY.storage.y + 6, -99],
     [tx * 0.85, CITY.osCache.y, -34],
     [tx * 0.45, -8, -6],
     [tx * 0.22, 6, 22],
   ], { color: c, speed: 78, size: 1.2, visible: true, roadOpacity: 0.08 })
 
-  // eviction / checkpoint write: shared buffers → disk
+  // kernel-cache hit: the short path never descends to the disk rack
+  route(rid.ioReadCache(t), [
+    [tx * 0.85, CITY.osCache.y, -34],
+    [tx * 0.45, -8, -6],
+    [tx * 0.22, 6, 22],
+  ], { color: COLOR.ok, speed: 92, size: 1.05, visible: true, roadOpacity: 0.05 })
+
+  // eviction / checkpoint write: shared buffers → kernel → disk rack
   route(rid.ioWrite(t), [
     [tx * 0.22 - 3, 6, 26],
     [tx * 0.45 - 3, -8, -2],
     [tx * 0.85 - 3, CITY.osCache.y, -32],
-    [tx, CITY.storage.warehouseTop + 2, -58],
+    [tx, CITY.storage.y + 6, -99],
   ], { color: COLOR.bufDirty, speed: 78, size: 1.2 })
 
   // index probe: heap ← → index structure
@@ -579,6 +594,15 @@ for (let t = 0; t < N_TABLES; t++) {
     [-196, -10, 20],
     [ANCHOR.landfill[0], 8, ANCHOR.landfill[2]],
   ], { color: COLOR.vacuum, speed: 62, size: 1.25 })
+
+  // Removed tuple bodies are only a temporary teaching pile. Their space is
+  // returned to the originating relation's _fsm fork for reuse.
+  route(rid.fsmReturn(t), [
+    [ANCHOR.landfill[0] + 7, 5, ANCHOR.landfill[2]],
+    [-196, -10, 30],
+    [-150, CITY.osCache.y - 4, -34],
+    [tx - 8.3, CITY.storage.warehouseTop + 2, -58],
+  ], { color: COLOR.vacuum, speed: 72, size: 0.8 })
 }
 
 /* --- WAL pipeline -------------------------------------------------------- */
@@ -605,8 +629,21 @@ route('wal.fsync', [
 route('wal.archive', [
   [ANCHOR.walVault[0] + 6, 8, -34],
   [ANCHOR.archiver[0], 8, ANCHOR.archiver[2]],
-  [ANCHOR.archiveStore[0], 10, ANCHOR.archiveStore[2]],
 ], { color: COLOR.archive, speed: 85, size: 1.3, visible: true, roadOpacity: 0.14 })
+
+/* archive_command's one output path: out of the archiver, across the ownership
+ * boundary, along the live timeline, and into the only archive store. */
+route('archive.ship', [
+  [ANCHOR.archiver[0] + 8, 8, ANCHOR.archiver[2] - 4],
+  [284, 8.2, -70],
+  [ANCHOR.archiveGate[0], 8.2, ANCHOR.archiveGate[2]],
+  [CONTINUITY.yard.x0 + 1, CONTINUITY.yard.deckY + 1.6, -52],
+  [CONTINUITY.yard.x0 + 12, CONTINUITY.yard.deckY + 1.6, CONTINUITY.yard.z],
+  [350, CONTINUITY.yard.deckY + 1.6, CONTINUITY.yard.z],
+  [CONTINUITY.yard.x1, CONTINUITY.yard.deckY + 1.6, CONTINUITY.yard.z],
+  [ANCHOR.objectStore[0], 8.0, -62],
+  [ANCHOR.objectStore[0], 7.0, ANCHOR.objectStore[2] + 8],
+], { color: COLOR.archive, speed: 92, size: 1.3, visible: true, roadOpacity: 0.15, tension: 0.4 })
 
 route('wal.stream', [
   [ANCHOR.walVault[0] + 6, 8, 32],
@@ -702,30 +739,31 @@ route('ckpt.fsync', [
 
 route('vac.launch', [
   [ANCHOR.autovacLauncher[0], 12, ANCHOR.autovacLauncher[2]],
+  [ANCHOR.postmaster[0], 12, ANCHOR.postmaster[2]],
   [ANCHOR.vacDepot[0] + 4, 8, 0],
 ], { color: COLOR.vacuum, speed: 90, size: 1.2 })
 
 route('stats.in', [
-  [0, 8, -40],
-  [40, 9, -10],
+  [0, 10, CITY.backend.z + 4],
+  [42, 9, -30],
   [ANCHOR.statsShmem[0], 6, ANCHOR.statsShmem[2]],
 ], { color: COLOR.inkDim, speed: 100, size: 0.8 })
 
 route('clog.in', [
-  [0, 8, 18],
-  [-36, 8, 34],
+  [0, 10, CITY.backend.z + 4],
+  [-42, 9, -22],
   [ANCHOR.clogSlru[0], 6, ANCHOR.clogSlru[2]],
 ], { color: COLOR.shmem, speed: 100, size: 0.8 })
 
 route('procarray.in', [
-  [0, 8, -30],
-  [-38, 9, -40],
+  [0, 10, CITY.backend.z + 4],
+  [-40, 9, -66],
   [ANCHOR.procArray[0], 6, ANCHOR.procArray[2]],
 ], { color: COLOR.shmem, speed: 100, size: 0.8 })
 
 route('bufmap.in', [
-  [-20, 7, -8],
-  [-46, 7, -2],
+  [0, 10, CITY.backend.z + 4],
+  [-42, 8, -62],
   [ANCHOR.bufMapping[0], 6, ANCHOR.bufMapping[2]],
 ], { color: COLOR.shmem, speed: 110, size: 0.8 })
 
@@ -733,26 +771,12 @@ route('bufmap.in', [
  *
  * Three roads matter here and the rest are local moves:
  *
- *   archive.ship   the finished segment leaving the site for good
+ *   wal.archive    the finished segment leaving the site for good
  *   restore.haul   the ONE road back — base backup and archived WAL both ride
  *                  it, because they both come out of the same bucket
  *   net.streamB    the second standby's wire, a third duct in the same bank
  *                  as far as z ≈ 150, then peeling west on its own
  * ------------------------------------------------------------------------*/
-
-/* Out of the cold store, under the archive gate, along the live timeline's
- * through line, and into the bucket. Past the gate the city no longer owns it. */
-route('archive.ship', [
-  [ANCHOR.archiveStore[0] + 16, 8.0, ANCHOR.archiveStore[2]],
-  [284, 8.2, -70],
-  [ANCHOR.archiveGate[0], 8.2, ANCHOR.archiveGate[2]],
-  [CONTINUITY.yard.x0 + 1, CONTINUITY.yard.deckY + 1.6, -52],
-  [CONTINUITY.yard.x0 + 12, CONTINUITY.yard.deckY + 1.6, CONTINUITY.yard.z],
-  [350, CONTINUITY.yard.deckY + 1.6, CONTINUITY.yard.z],
-  [CONTINUITY.yard.x1, CONTINUITY.yard.deckY + 1.6, CONTINUITY.yard.z],
-  [ANCHOR.objectStore[0], 8.0, -62],
-  [ANCHOR.objectStore[0], 7.0, ANCHOR.objectStore[2] + 8],
-], { color: COLOR.archive, speed: 92, size: 1.3, visible: true, roadOpacity: 0.15, tension: 0.4 })
 
 /* pg_basebackup pulls from the STANDBY — the whole point of the exercise —
  * and the result goes straight out to object storage. */

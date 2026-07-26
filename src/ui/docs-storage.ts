@@ -501,7 +501,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         label: 'Index files',
-        get: (s) => fmtBytes(sumTables(s, (t) => t.def.indexes.reduce((n, i) => n + i.pages, 0)) * PAGE),
+        get: (s) => fmtBytes(sumTables(s, (t) => t.indexPages) * PAGE),
       },
       { label: 'pg_wal', get: (s) => fmtBytes(walDirBytes(s)) },
       { label: 'Relations', get: (s) => fmtNum(sumTables(s, (t) => 1 + t.def.indexes.length + (t.def.toast ? 2 : 0))) },
@@ -625,7 +625,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     metrics: [
       {
         label: 'Index files',
-        get: (s) => fmtBytes(sumTables(s, (t) => t.def.indexes.reduce((n, i) => n + i.pages, 0)) * PAGE),
+        get: (s) => fmtBytes(sumTables(s, (t) => t.indexPages) * PAGE),
       },
       { label: 'Indexes', get: (s) => fmtNum(sumTables(s, (t) => t.def.indexes.length)) },
       { label: 'Index scans', get: (s) => fmtNum(sumTables(s, (t) => t.idxScans)) },

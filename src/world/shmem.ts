@@ -23,7 +23,7 @@ import { ANCHOR, CITY, TABLES, bufferTilePos } from './layout'
  *   proc.array      PGPROC slots + the xmin horizon blade
  *   lock.manager    16 lock partitions and their wait-for edges
  *   clog.slru       pg_xact commit bits in an SLRU cache
- *   stats.shmem     cumulative statistics, as a 3D sparkline
+ *   stats.shmem     cumulative statistics, as monotonic counter columns
  *   buf.mapping     the (relation, block) → buffer hash table
  * ==========================================================================*/
 
@@ -90,8 +90,9 @@ const CLOG_XIDS_PER_SLAB = 1024
 const CLOG_SLABS = 12
 const CLOG_BITS = 64
 const LOCK_PARTS = 16
-const MAP_BUCKETS = 32
-const STAT_BARS = 60
+const MAP_BUCKETS = 128
+const STAT_BARS = 5
+const STAT_MAX = new Float64Array([20_000, 1_000, 500_000, 100_000, 50_000])
 const MAX_LOCK_BEAMS = 8
 const LOCK_BEAM_SEGS = 12
 const MAX_MAP_BEAMS = 8
@@ -633,6 +634,20 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
   procGroup.add(pillars)
   const pillarMat = pillars.instanceMatrix.array as Float32Array
   const pillarCol = pillars.instanceColor!.array as Float32Array
+  const mPillarOutline = keep(
+    new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.72,
+      toneMapped: false,
+    }),
+  )
+  const pillarOutlines = instanced(gPillar, mPillarOutline, N_BACKEND_SLOTS)
+  procGroup.add(pillarOutlines)
+  const pillarOutlineMat = pillarOutlines.instanceMatrix.array as Float32Array
+  const pillarOutlineCol = pillarOutlines.instanceColor!.array as Float32Array
   /** World-space pillar tops — the lock manager draws its wait-for edges to these. */
   const pillarPos = new Float32Array(N_BACKEND_SLOTS * 3)
   const pillarH = new Float32Array(N_BACKEND_SLOTS).fill(1)
@@ -641,11 +656,52 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     const x = Math.sin(ang) * PROC_R
     const z = Math.cos(ang) * PROC_R
     setTRS(pillarMat, i, x, MOUNT_Y, z, 1, 1, 1)
+    setTRS(pillarOutlineMat, i, x, MOUNT_Y, z, 0, 0, 0)
+    setColor3(pillarOutlineCol, i, L_BACKEND[0], L_BACKEND[1], L_BACKEND[2])
     pillarPos[i * 3] = ANCHOR.procArray[0] + x
     pillarPos[i * 3 + 1] = MOUNT_Y + 1
     pillarPos[i * 3 + 2] = ANCHOR.procArray[2] + z
   }
   pillars.instanceMatrix.needsUpdate = true
+  pillarOutlines.instanceMatrix.needsUpdate = true
+  pillarOutlines.instanceColor!.needsUpdate = true
+
+  // Horizon inputs that outlive ordinary backend sessions sit outside the
+  // PGPROC circle. A slot/standby-feedback xmin can be active; prepared xacts
+  // are shown as an empty post because this model has none.
+  const externalPosts = instanced(gPillar, mData, 2)
+  const externalOutlines = instanced(gPillar, mPillarOutline, 2)
+  procGroup.add(externalPosts, externalOutlines)
+  const externalMat = externalPosts.instanceMatrix.array as Float32Array
+  const externalCol = externalPosts.instanceColor!.array as Float32Array
+  const externalOutlineMat = externalOutlines.instanceMatrix.array as Float32Array
+  const externalOutlineCol = externalOutlines.instanceColor!.array as Float32Array
+  const externalH = new Float32Array([0.2, 2.2])
+  const EXTERNAL_X = new Float32Array([-13.8, 13.8])
+  for (let i = 0; i < 2; i++) {
+    setTRS(externalMat, i, EXTERNAL_X[i], MOUNT_Y, 0, 0, 0, 0)
+    setTRS(externalOutlineMat, i, EXTERNAL_X[i], MOUNT_Y, 0, 1, 2.2, 1)
+    setColor3(externalCol, i, L_VACUUM[0], L_VACUUM[1], L_VACUUM[2])
+    setColor3(externalOutlineCol, i, L_INK[0], L_INK[1], L_INK[2])
+  }
+  externalPosts.instanceMatrix.needsUpdate = true
+  externalPosts.instanceColor!.needsUpdate = true
+  externalOutlines.instanceMatrix.needsUpdate = true
+  externalOutlines.instanceColor!.needsUpdate = true
+  {
+    const labels = ['slot / feedback xmin', 'prepared xact xmin']
+    const gLabel = keep(new THREE.PlaneGeometry(1, 1))
+    for (let i = 0; i < 2; i++) {
+      const tex = keep(theme.textTexture(labels[i], { size: 48, color: i === 0 ? '#b890ff' : '#8fa5c4', padding: 16 }))
+      const img = tex.image as { width: number; height: number }
+      const mat = keep(new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, toneMapped: false }))
+      const label = new THREE.Mesh(gLabel, mat)
+      label.scale.set(7.6, 7.6 / Math.max(1, img.width / img.height), 1)
+      label.position.set(EXTERNAL_X[i], MOUNT_Y + 0.8, -1.15)
+      label.raycast = () => {}
+      procGroup.add(label)
+    }
+  }
 
   // The xmin horizon: one blade through the ring. Dead tuples newer than this
   // line are still visible to somebody, so vacuum is not allowed to remove them.
@@ -808,17 +864,46 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
   statsGroup.position.set(ANCHOR.statsShmem[0], 0, ANCHOR.statsShmem[2])
   group.add(statsGroup)
 
-  const STAT_PITCH = 0.42
+  const STAT_PITCH = 4.8
   const statBars = instanced(gRiser, mData, STAT_BARS)
   statsGroup.add(statBars)
   const statMat = statBars.instanceMatrix.array as Float32Array
   const statCol = statBars.instanceColor!.array as Float32Array
   for (let i = 0; i < STAT_BARS; i++) {
     const x = (i - (STAT_BARS - 1) / 2) * STAT_PITCH
-    setTRS(statMat, i, x, MOUNT_Y, 0, 0.3, 0.15, 1.7)
+    setTRS(statMat, i, x, MOUNT_Y, 0, 3.4, 0.2, 3.4)
   }
   statBars.instanceMatrix.needsUpdate = true
-  const statH = new Float32Array(STAT_BARS).fill(0.15)
+  const statH = new Float32Array(STAT_BARS).fill(0.2)
+  const statPrev = new Float64Array(STAT_BARS)
+
+  // The bank is a set of cumulative counters, not a timeline. Every column
+  // names both the counter and the catalog view that owns it.
+  {
+    const fields = ['xact_commit', 'xact_rollback', 'blks_hit', 'blks_read', 'n_tup_upd']
+    const homes = ['pg_stat_database', 'pg_stat_database', 'pg_stat_database', 'pg_stat_database', 'pg_stat_all_tables']
+    const gPlate = keep(new THREE.PlaneGeometry(1, 1))
+    for (let i = 0; i < STAT_BARS; i++) {
+      const x = (i - (STAT_BARS - 1) / 2) * STAT_PITCH
+      const fieldTex = theme.textTexture(fields[i], { size: 54, color: '#dbe7ff', padding: 18 })
+      const fieldImg = fieldTex.image as { width: number; height: number }
+      const fieldMat = keep(new THREE.MeshBasicMaterial({ map: fieldTex, transparent: true, depthWrite: false, toneMapped: false }))
+      const field = new THREE.Mesh(gPlate, fieldMat)
+      field.scale.set(4.3, 4.3 / Math.max(1, fieldImg.width / fieldImg.height), 1)
+      field.position.set(x, MOUNT_Y + 1.3, 2.05)
+      field.raycast = () => {}
+      statsGroup.add(field)
+
+      const homeTex = theme.textTexture(homes[i], { size: 44, color: '#8fa5c4', padding: 16 })
+      const homeImg = homeTex.image as { width: number; height: number }
+      const homeMat = keep(new THREE.MeshBasicMaterial({ map: homeTex, transparent: true, depthWrite: false, toneMapped: false }))
+      const home = new THREE.Mesh(gPlate, homeMat)
+      home.scale.set(4.3, 4.3 / Math.max(1, homeImg.width / homeImg.height), 1)
+      home.position.set(x, MOUNT_Y + 0.55, 2.05)
+      home.raycast = () => {}
+      statsGroup.add(home)
+    }
+  }
 
   {
     const gMast = keep(new THREE.CylinderGeometry(0.26, 0.42, 1, 8).translate(0, 0.5, 0))
@@ -851,7 +936,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     e.position.copy(rack.position)
     mapGroup.add(e)
   }
-  const gBucket = keep(withWhite(new THREE.BoxGeometry(1.5, 1.35, 0.5)))
+  const gBucket = keep(withWhite(new THREE.BoxGeometry(0.72, 0.72, 0.5)))
   const buckets = instanced(gBucket, mData, MAP_BUCKETS)
   mapGroup.add(buckets)
   const bucketCol = buckets.instanceColor!.array as Float32Array
@@ -860,10 +945,10 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
   {
     const a = buckets.instanceMatrix.array as Float32Array
     for (let i = 0; i < MAP_BUCKETS; i++) {
-      const cx = (i % 8) - 3.5
-      const cy = 3 - Math.floor(i / 8)
-      const x = cx * 1.82
-      const y = MOUNT_Y + 1.6 + cy * 1.75
+      const cx = (i % 16) - 7.5
+      const cy = 3.5 - Math.floor(i / 16)
+      const x = cx * 0.88
+      const y = MOUNT_Y + 4.2 + cy * 0.92
       setTRS(a, i, x, y, 2.35, 1, 1, 1)
       bucketPos[i * 3] = ANCHOR.bufMapping[0] + x
       bucketPos[i * 3 + 1] = y
@@ -996,7 +1081,9 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     tier: 1,
     color: COLOR.inkDim,
     focus: { target: [ANCHOR.statsShmem[0], MOUNT_Y + 4, ANCHOR.statsShmem[2]], distance: 34, dir: [0.5, 0.5, 0.7] },
-    readout: (s) => `${fmtNum(s.stats.tps)} tps · hit ${fmtPct(s.stats.cacheHitPct / 100, 1)}`,
+    readout: (s) =>
+      `${fmtNum(s.stats.commits)} commits · ${fmtNum(s.stats.rollbacks)} rollbacks · ` +
+      `${fmtNum(s.stats.blksHit)} blocks hit · ${fmtNum(s.stats.blksRead)} blocks read`,
   })
 
   ctx.register({
@@ -1231,17 +1318,22 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     const kH = 1 - Math.exp(-7 * dt)
     let oldest = -1
     let oldestXid = Infinity
+    let bladeH = procY(xid, sim.xminHorizon)
     for (let i = 0; i < N_BACKEND_SLOTS; i++) {
       const b = sim.backends[i]
       if (b && b.active && b.xid > 0 && b.xid < oldestXid) {
         oldestXid = b.xid
         oldest = i
       }
+      if (b && b.active && b.xid > 0) {
+        bladeH = Math.min(bladeH, procY(xid, b.xid))
+      }
     }
 
     for (let i = 0; i < N_BACKEND_SLOTS; i++) {
       const b = sim.backends[i]
       let target = 0.9
+      let outline = false
       let r = 0.02, g = 0.03, bl = 0.05
       if (b && b.active) {
         if (b.xid > 0) {
@@ -1254,8 +1346,10 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
           g = src[1] * inten
           bl = src[2] * inten
         } else {
-          // Connected but not in a transaction: no xid, so nothing to hold back.
+          // Connected but not in a transaction: a hollow slot marker, outside
+          // the transaction-age axis because it has no xid to plot.
           target = 2.2
+          outline = true
           r = L_BACKEND[0] * 0.28
           g = L_BACKEND[1] * 0.28
           bl = L_BACKEND[2] * 0.28
@@ -1269,18 +1363,42 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
       }
       const h = pillarH[i] + (target - pillarH[i]) * kH
       pillarH[i] = h
+      pillarMat[i * 16] = outline ? 0 : 1
       pillarMat[i * 16 + 5] = h
+      pillarMat[i * 16 + 10] = outline ? 0 : 1
+      pillarOutlineMat[i * 16] = outline ? 1 : 0
+      pillarOutlineMat[i * 16 + 5] = outline ? 2.2 : 0
+      pillarOutlineMat[i * 16 + 10] = outline ? 1 : 0
       pillarPos[i * 3 + 1] = MOUNT_Y + h
       setColor3(pillarCol, i, r, g, bl)
+      setColor3(pillarOutlineCol, i, r * 2.4, g * 2.4, bl * 2.4)
     }
+    const externalPin = sim.knobs.standbyLongQuery || sim.replication.logicalEnabled
+    const externalTarget = externalPin ? procY(xid, sim.xminHorizon) : 0
+    externalH[0] += (externalTarget - externalH[0]) * kH
+    setTRS(externalMat, 0, EXTERNAL_X[0], MOUNT_Y, 0, externalPin ? 1 : 0, externalH[0], externalPin ? 1 : 0)
+    setTRS(externalOutlineMat, 0, EXTERNAL_X[0], MOUNT_Y, 0, externalPin ? 0 : 1, externalPin ? 0 : 2.2, externalPin ? 0 : 1)
+    // There is no prepared-transaction state in the model: keep this post
+    // hollow so absence is explicit instead of silently denying the mechanism.
+    setTRS(externalMat, 1, EXTERNAL_X[1], MOUNT_Y, 0, 0, 0, 0)
+    setTRS(externalOutlineMat, 1, EXTERNAL_X[1], MOUNT_Y, 0, 1, 2.2, 1)
+    const pinPulse = 0.8 + 0.5 * SIN[((t * 420) | 0) & 255]
+    setColor3(externalCol, 0, L_VACUUM[0] * pinPulse, L_VACUUM[1] * pinPulse, L_VACUUM[2] * pinPulse)
     pillars.instanceMatrix.needsUpdate = true
     pillars.instanceColor!.needsUpdate = true
+    pillarOutlines.instanceMatrix.needsUpdate = true
+    pillarOutlines.instanceColor!.needsUpdate = true
+    externalPosts.instanceMatrix.needsUpdate = true
+    externalPosts.instanceColor!.needsUpdate = true
+    externalOutlines.instanceMatrix.needsUpdate = true
 
     // The blade. When a long-running transaction pins xmin it sinks to the deck
     // and goes red — everything above it is garbage vacuum is not allowed to take.
     const age = Math.max(0, xid - sim.xminHorizon)
     const pinnedHard = age > XID_SPAN * 0.55
-    const by = MOUNT_Y + Math.max(0.5, procY(xid, sim.xminHorizon))
+    // The horizon is a consequence of the xids actually plotted here. It may
+    // never advance above the oldest live transaction pillar.
+    const by = MOUNT_Y + Math.max(0.5, bladeH)
     bladeDisc.position.y += (by - bladeDisc.position.y) * (1 - Math.exp(-4 * dt))
     bladeRing.position.y = bladeDisc.position.y
     const danger = clamp01(age / (XID_SPAN * 0.8))
@@ -1417,38 +1535,34 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
   }
 
   function updateStats(dt: number, sim: SimState, t: number): void {
-    const hist = sim.stats.history
-    const tpsH = hist ? hist.tps : null
-    const hitH = hist ? hist.hit : null
-    const n = tpsH ? tpsH.length : 0
-
-    let peak = 1
+    const st = sim.stats
+    let reset = false
     for (let i = 0; i < STAT_BARS; i++) {
-      const idx = n - STAT_BARS + i
-      const v = idx >= 0 && tpsH ? tpsH[idx] : 0
-      if (v > peak) peak = v
+      const v =
+        i === 0 ? st.commits :
+        i === 1 ? st.rollbacks :
+        i === 2 ? st.blksHit :
+        i === 3 ? st.blksRead :
+        st.tupUpdated
+      if (v < statPrev[i]) reset = true
+      statPrev[i] = v
     }
+    if (reset) statH.fill(0.2)
+
     const kH = 1 - Math.exp(-10 * dt)
     for (let i = 0; i < STAT_BARS; i++) {
-      const idx = n - STAT_BARS + i
-      const v = idx >= 0 && tpsH ? tpsH[idx] : 0
-      let hit = idx >= 0 && hitH ? hitH[idx] : 1
-      if (hit > 1.5) hit /= 100 // tolerate percent or fraction
-      hit = clamp01(hit)
-      const target = 0.15 + (v / peak) * 7.6
+      const v = statPrev[i]
+      const target = 0.2 + clamp01(Math.log1p(v) / Math.log1p(STAT_MAX[i])) * 12.5
       statH[i] += (target - statH[i]) * kH
       statMat[i * 16 + 5] = statH[i]
-      const newest = i === STAT_BARS - 1 ? 0.55 : 0
-      const inten = 0.5 + (v / peak) * 0.5 + newest
-      const r = (L_CRIT[0] * (1 - hit) + L_OK[0] * hit) * inten
-      const g = (L_CRIT[1] * (1 - hit) + L_OK[1] * hit) * inten
-      const b = (L_CRIT[2] * (1 - hit) + L_OK[2] * hit) * inten
-      setColor3(statCol, i, r, g, b)
+      const src = i === 1 || i === 3 ? L_CRIT : i === 4 ? L_WARN : L_OK
+      const inten = 0.48 + clamp01(v / Math.max(1, STAT_MAX[i])) * 0.9
+      setColor3(statCol, i, src[0] * inten, src[1] * inten, src[2] * inten)
     }
     statBars.instanceMatrix.needsUpdate = true
     statBars.instanceColor!.needsUpdate = true
 
-    // Beacon blinks once per ~40 commits: the stats file is being updated.
+    // A pulse marks shared-counter updates; it is not a collector process.
     beaconPhase += dt * (0.4 + clamp01(sim.stats.tps / 400) * 3)
     const bl = beaconPhase % 1 < 0.12 ? 1.8 : 0.12
     mBeacon.color.setRGB(L_OK[0] * bl, L_OK[1] * bl, L_OK[2] * bl)
