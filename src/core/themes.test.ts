@@ -15,11 +15,18 @@ describe('daylight rendering contract', () => {
     expect(ATMOSPHERE.night.shadows).toBe(false)
     expect(ATMOSPHERE.night.bloomEnabled).toBe(true)
     expect(ATMOSPHERE.night.stars).toBe(true)
+    expect(ATMOSPHERE.night.daylight).toBe(false)
 
     expect(ATMOSPHERE.day.shadows).toBe(true)
     expect(ATMOSPHERE.day.bloomEnabled).toBe(false)
     expect(ATMOSPHERE.day.stars).toBe(false)
+    expect(ATMOSPHERE.day.daylight).toBe(true)
     expect(ATMOSPHERE.day.toneMapping).toBe('neutral')
+  })
+
+  it('gives daylight a saturated zenith above the named horizon blue', () => {
+    expect(ATMOSPHERE.day.skyHorizon).toBe(0xbcdcf2)
+    expect(ATMOSPHERE.day.skyZenith).not.toBe(ATMOSPHERE.day.skyHorizon)
   })
 
   it('maps the district meanings to their hand-picked day colors', () => {

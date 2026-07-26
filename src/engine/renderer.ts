@@ -16,6 +16,7 @@ import {
 import type { Atmosphere, ThemeMode } from '../core/theme'
 import { clamp, damp } from '../core/util'
 import { ANCHOR, CITY } from '../world/layout'
+import { applySkyAtmosphere } from '../world/sky'
 import type { Bus, QualityLevel, QualitySettings } from '../core/types'
 
 /* ============================================================================
@@ -370,27 +371,6 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
 
   /* ---- day / night ------------------------------------------------------*/
 
-  /**
-   * The sky dome is atmosphere, not a district, so the renderer owns its
-   * colours the same way it owns the fog and the clear colour. world/sky.ts
-   * derives them from the night palette by arithmetic; day needs three
-   * hand-picked values instead, and there is no palette entry it could read to
-   * get them. Guarded by name and by uniform presence, so it is a no-op if the
-   * sky ever changes shape. (The proper home for this is sky.ts — see the note
-   * in the theme's report.)
-   */
-  function paintSkyDome(mat: THREE.Material): void {
-    const sm = mat as THREE.ShaderMaterial
-    if (sm.isShaderMaterial !== true || !sm.uniforms) return
-    const set = (name: string, hex: number): void => {
-      const v = sm.uniforms[name]?.value as THREE.Color | undefined
-      if (v && v.isColor) v.setHex(hex)
-    }
-    set('uZenith', air.skyZenith)
-    set('uHorizon', air.skyHorizon)
-    set('uGlow', air.skyGlow)
-  }
-
   function paintObject(obj: THREE.Object3D, target: ThemeMode): void {
     const flags = obj.userData as {
       pgDayOnly?: boolean
@@ -399,18 +379,11 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     }
     if (flags.pgDayOnly) obj.visible = target === 'day'
 
-    // Stars are a night instrument. At noon they are additive white noise over
-    // a bright sky, which is worse than nothing.
-    if (obj.name === 'sky.stars') {
-      obj.visible = air.stars
-      return
-    }
+    // The sky owns custom shader uniforms; district material translation must
+    // never reinterpret its colors. applySkyAtmosphere handles every child.
+    if (obj.name.startsWith('sky.')) return
     const m = (obj as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined
     if (!m) return
-    if (obj.name === 'sky.dome') {
-      if (!Array.isArray(m)) paintSkyDome(m)
-      return
-    }
     if (Array.isArray(m)) {
       for (let i = 0; i < m.length; i++) paintSceneMaterial(m[i], target)
     } else {
@@ -474,6 +447,8 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     applyLightCompensation()
     applyPassToggles()
 
+    const sky = scene.getObjectByName('sky')
+    if (sky) applySkyAtmosphere(sky, air, quality.level)
     scene.traverse((obj) => paintObject(obj, target))
     applyShadowRenderer()
     renderer.shadowMap.needsUpdate = true
@@ -568,6 +543,8 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     quality.maxLabels = preset.maxLabels
     quality.antialias = preset.antialias
     quality.pixelRatio = Math.min(DPR_CAP[level], deviceDpr())
+    const sky = scene.getObjectByName('sky')
+    if (sky) applySkyAtmosphere(sky, air, level)
 
     // Shadow maps: toggling shadowMap.enabled changes shader defines, so every
     // material in the scene has to be recompiled. Once per quality change only.
