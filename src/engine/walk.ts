@@ -32,6 +32,8 @@ export interface WalkOptions {
   dom: HTMLElement
   collision: CollisionWorld
   audio: AudioApi
+  /** Optional visual surface effects; the production city supplies the pool. */
+  water?: { splash(x: number, z: number, intensity: number): void }
   sim: SimState
   bus: Bus
   /** Overrides for any of the feel numbers. */
@@ -185,6 +187,8 @@ const SWIM_SINK = 0.16
 const SWIM_LOOK_RISE = 1.42
 const SWIM_KEY_RISE = 0.9
 const SWIM_KEY_SINK = 0.72
+/** Looking through water has rotational drag as well as translational drag. */
+const SWIM_LOOK_SCALE = 0.58
 
 /**
  * The respawn pad. The buffer grid reaches z = ±46.1 (31 * 2.9 / 2 + tile / 2)
@@ -273,7 +277,7 @@ function prefersReducedMotion(): boolean {
 /* ==========================================================================*/
 
 export function createWalkController(opts: WalkOptions): WalkController {
-  const { camera, dom, collision, audio, sim, bus } = opts
+  const { camera, dom, collision, audio, sim, bus, water } = opts
   const T: WalkTuning = { ...DEFAULT_TUNING, ...(opts.tuning ?? {}) }
   const jumpSpeed = Math.sqrt(2 * T.gravity * T.jumpHeight)
   const poolSurfaceFeet = POOL_SURFACE - T.eyeStand + 0.12
@@ -354,6 +358,12 @@ export function createWalkController(opts: WalkOptions): WalkController {
 
   function inPoolXZ(x: number, z: number): boolean {
     return x >= -POOL_HALF && x <= POOL_HALF && z >= -POOL_HALF && z <= POOL_HALF
+  }
+
+  function splash(intensity: number): void {
+    const amount = clamp01(intensity)
+    audio.splash(amount)
+    water?.splash(pos.x, pos.z, amount)
   }
 
   /* ---- fade overlay ------------------------------------------------------*/
@@ -868,12 +878,13 @@ export function createWalkController(opts: WalkOptions): WalkController {
     if (nextSwimming !== swimming) {
       swimming = nextSwimming
       if (swimming) {
-        audio.splash(clamp01(0.18 + Math.abs(vy) / 11))
+        splash(0.18 + Math.abs(vy) / 11)
         grounded = false
         coyoteT = 0
         lostGroundT = 0
         surface = 'water'
       } else {
+        splash(0.2 + Math.abs(vy) / 12 + Math.hypot(vel.x, vel.z) * 0.08)
         submerged = false
       }
     }
@@ -980,7 +991,7 @@ export function createWalkController(opts: WalkOptions): WalkController {
       }
       const nextSubmerged = pos.y + eyeNow < POOL_SURFACE
       if (submerged && !nextSubmerged) {
-        audio.splash(clamp01(0.24 + ascentSpeed * 0.42 + Math.hypot(vel.x, vel.z) * 0.12))
+        splash(0.24 + ascentSpeed * 0.42 + Math.hypot(vel.x, vel.z) * 0.12)
       }
       submerged = nextSubmerged
       grounded = false
@@ -1066,8 +1077,9 @@ export function createWalkController(opts: WalkOptions): WalkController {
     tickFade(d)
 
     /* --- look ------------------------------------------------------------ */
-    yaw -= lookX * T.lookSensitivity + touchLookX
-    pitch -= lookY * T.lookSensitivity + touchLookY
+    const lookScale = swimming ? SWIM_LOOK_SCALE : 1
+    yaw -= (lookX * T.lookSensitivity + touchLookX) * lookScale
+    pitch -= (lookY * T.lookSensitivity + touchLookY) * lookScale
     lookX = 0
     lookY = 0
     touchLookX = 0

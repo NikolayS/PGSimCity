@@ -149,6 +149,14 @@ export interface CollisionWorld {
    */
   solidNear(x: number, z: number, radius: number): boolean
   /**
+   * Does a static collider sit wholly between two world-space points?
+   *
+   * Colliders containing `to` are ignored: component label anchors commonly
+   * sit inside the object they name, and that object must not occlude itself.
+   * Uses the existing spatial hash and candidate scratch; allocates nothing.
+   */
+  occluded(from: THREE.Vector3, to: THREE.Vector3): boolean
+  /**
    * Slide a vertical capsule horizontally. `from` and `to` are FEET positions;
    * only the horizontal component of `to` is used — `to.y` is passed through to
    * `out.position.y` (plus any step-up), and `from.y` is the height the capsule
@@ -571,6 +579,76 @@ export function createCollisionWorld(): CollisionWorld {
     return false
   }
 
+  function occluded(from: THREE.Vector3, to: THREE.Vector3): boolean {
+    const dx = to.x - from.x
+    const dy = to.y - from.y
+    const dz = to.z - from.z
+    if (dx * dx + dy * dy + dz * dz <= EPS * EPS || n === 0) return false
+
+    queryRect(
+      from.x < to.x ? from.x : to.x,
+      from.z < to.z ? from.z : to.z,
+      from.x > to.x ? from.x : to.x,
+      from.z > to.z ? from.z : to.z,
+    )
+
+    for (let i = 0; i < candN; i++) {
+      const o = cand[i] * 6
+      let enter = 0
+      let exit = 1
+
+      if (Math.abs(dx) < EPS) {
+        if (from.x < data[o] || from.x > data[o + 3]) continue
+      } else {
+        let a = (data[o] - from.x) / dx
+        let b = (data[o + 3] - from.x) / dx
+        if (a > b) {
+          const swap = a
+          a = b
+          b = swap
+        }
+        if (a > enter) enter = a
+        if (b < exit) exit = b
+        if (enter > exit) continue
+      }
+
+      if (Math.abs(dy) < EPS) {
+        if (from.y < data[o + 1] || from.y > data[o + 4]) continue
+      } else {
+        let a = (data[o + 1] - from.y) / dy
+        let b = (data[o + 4] - from.y) / dy
+        if (a > b) {
+          const swap = a
+          a = b
+          b = swap
+        }
+        if (a > enter) enter = a
+        if (b < exit) exit = b
+        if (enter > exit) continue
+      }
+
+      if (Math.abs(dz) < EPS) {
+        if (from.z < data[o + 2] || from.z > data[o + 5]) continue
+      } else {
+        let a = (data[o + 2] - from.z) / dz
+        let b = (data[o + 5] - from.z) / dz
+        if (a > b) {
+          const swap = a
+          a = b
+          b = swap
+        }
+        if (a > enter) enter = a
+        if (b < exit) exit = b
+        if (enter > exit) continue
+      }
+
+      // Starting inside a box is not a useful line-of-sight blocker. Likewise,
+      // a box containing the endpoint is the labelled component itself.
+      if (enter > EPS && enter < 1 - EPS && exit < 1 - EPS) return true
+    }
+    return false
+  }
+
   /**
    * One axis of the slide. `isX` picks the axis; `other` is the walker's
    * position on the perpendicular axis. Boxes the walker is already inside are
@@ -769,6 +847,7 @@ export function createCollisionWorld(): CollisionWorld {
       return groundSurface
     },
     solidNear,
+    occluded,
     move,
     debugMesh,
     get stepHeight(): number {

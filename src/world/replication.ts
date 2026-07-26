@@ -916,7 +916,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
   const TX_LAGB = text.alloc(34, BX, 6.6, BZ + DECK_H + 1.2, 'south', 1.0, COLOR.inkDim, 'center', 0.8, '')
 
   /* --- replica.storage -------------------------------------------------- */
-  /* The standby's $PGDATA. It is drawn as a walled yard at grade rather than
+  /* The standby's data directory. It is drawn as a walled yard at grade rather than
    * a second excavation: the ground plate is not ours to cut, and a buried
    * block would simply be invisible. The shaft head on the deck and the
    * descending conveyor carry the "this is below the buffers" reading. */
@@ -958,7 +958,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
   ])
   const IX_SHAFT = 2
 
-  text.alloc(16, BX, 11.2, YARD_Z + 12.2, 'south', 1.2, COLOR.storage, 'center', 0.95, 'replica $PGDATA')
+  text.alloc(16, BX, 11.2, YARD_Z + 12.2, 'south', 1.2, COLOR.storage, 'center', 0.95, 'REPLICA DATA DIRECTORY')
   text.alloc(24, BX, 3.5, SHAFT_Z + 4.6, 'up', 1.1, COLOR.storage, 'center', 0.55, 'to disk')
 
   /* --- the four LSNs, on one ruler -------------------------------------- */
@@ -1268,7 +1268,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
 
   ctx.register({
     id: 'replica.storage',
-    name: 'standby $PGDATA',
+    name: 'Standby data directory',
     role: 'the standby’s own data files and pg_wal',
     kind: 'storage',
     district: 'replication',

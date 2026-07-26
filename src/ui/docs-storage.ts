@@ -12,6 +12,7 @@ import { clamp, fmtBytes, fmtDuration, fmtLsn, fmtNum, fmtPct } from '../core/ut
 /* ------------------------------ tiny helpers ----------------------------- */
 
 const PAGE = 8192
+const MIB = 1024 * 1024
 
 /** Sum a per-table quantity across the whole model, NaN-safe. */
 function sumTables(s: SimState, pick: (t: TableSim) => number): number {
@@ -473,7 +474,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
   {
     id: 'storage.datadir',
     title: 'Data directory',
-    subtitle: '$PGDATA on disk',
+    subtitle: 'the data directory on disk',
     tldr: 'Every byte the cluster owns, arranged as numbered files that deliberately do not carry table names.',
     sections: [
       {
@@ -490,7 +491,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What you would see in production',
-        body: 'You go looking for the file eating your disk, find `base/16384/24591.3`, and it tells you nothing. Map it back with `SELECT relname FROM pg_class WHERE relfilenode = 24591`. Two more habits worth having: never touch anything under `$PGDATA` while the server is running, and remember that `du` on the directory and `pg_database_size()` can disagree because of deleted-but-still-open files.',
+        body: 'You go looking for the file eating your disk, find `base/16384/24591.3`, and it tells you nothing. Map it back with `SELECT relname FROM pg_class WHERE relfilenode = 24591`. Two more habits worth having: never touch anything inside the data directory while the server is running, and remember that `du` on the directory and `pg_database_size()` can disagree because of deleted-but-still-open files.',
       },
     ],
     metrics: [
@@ -861,7 +862,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     ],
     metrics: [
       { label: 'shared_buffers hit ratio', get: (s) => fmtPct(s.buffers.hitRatio, 1), hint: 'misses may still be RAM hits in the OS cache' },
-      { label: 'shared_buffers', get: (s) => fmtBytes(s.buffers.size * PAGE) },
+      { label: 'shared_buffers', get: (s) => fmtBytes(s.knobs.sharedBuffers * MIB) },
       { label: 'Misses', get: (s) => fmtNum(s.buffers.misses), hint: 'reads that left shared_buffers — not necessarily disk' },
       { label: 'Evictions', get: (s) => fmtNum(s.buffers.evictions) },
     ],
@@ -1613,7 +1614,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
   {
     id: 'replica.storage',
     title: 'Standby data directory',
-    subtitle: 'a physical copy of $PGDATA',
+    subtitle: 'a physical copy of the primary data directory',
     tldr: 'The same files, the same block numbers, a few WAL records behind.',
     sections: [
       {

@@ -5,6 +5,7 @@ import '../styles/labels.css'
 import { COLOR } from '../core/theme'
 import type { Registry } from '../core/registry'
 import type { Bus, ComponentDef, DistrictId, QualitySettings, SimState } from '../core/types'
+import type { CollisionWorld } from './collision'
 
 /* ============================================================================
  * LABELS — map-grade annotation.
@@ -109,6 +110,9 @@ const MIN_DWELL = 0.7
 const HIDE_COOLDOWN = 0.3
 /** How long a tour/scenario focus keeps its priority boost. */
 const FOCUS_TTL = 30
+/** Static-box visibility checks per frame. Three clears all object labels in
+ * roughly a third of a second even at this scene's 1–3 fps floor. */
+export const LABEL_OCCLUSION_BUDGET = 3
 
 /* --- placement geometry, pixels ------------------------------------------- */
 const GAP_X = 16
@@ -212,6 +216,8 @@ interface Entry {
   prio: number
   alpha: number
   place: boolean
+  /** Cached camera-to-anchor visibility, refreshed round-robin. */
+  occluded: boolean
 
   /* sticky state — wall-clock seconds, see MIN_DWELL */
   shown: boolean
@@ -247,7 +253,12 @@ export interface LabelsApi {
   dispose(): void
 }
 
-export function createLabels(container: HTMLElement, registry: Registry, bus: Bus): LabelsApi {
+export function createLabels(
+  container: HTMLElement,
+  registry: Registry,
+  bus: Bus,
+  collision: Pick<CollisionWorld, 'occluded'>,
+): LabelsApi {
   const group = new THREE.Group()
   group.name = 'labels'
 
@@ -293,6 +304,7 @@ export function createLabels(container: HTMLElement, registry: Registry, bus: Bu
   let domHoverId: string | null = null
   let passT = PASS_SEC
   let readT = 0
+  let occlusionCursor = 0
 
   /* --------------------------------- DOM --------------------------------- */
 
@@ -374,6 +386,7 @@ export function createLabels(container: HTMLElement, registry: Registry, bus: Bu
       prio: 0,
       alpha: 0,
       place: false,
+      occluded: false,
       shown: false,
       sinceT: -1e6,
       variant: 0,
@@ -821,6 +834,11 @@ export function createLabels(container: HTMLElement, registry: Registry, bus: Bu
       e.sy = sy
       e.onScreen = true
 
+      // City and district chips are map annotations. Promoted component chips
+      // speak for their whole district too, so they follow the same rule:
+      // buildings occlude object labels, never the map hierarchy.
+      if (e.occluded && e.rank >= 0 && e.rank <= 2 && !e.proxy) continue
+
       const forced = e.id === selectedId || e.id === hoveredId
       const focused = !forced && now < focusUntil && e.id === focusId
       let band: number
@@ -1000,6 +1018,17 @@ export function createLabels(container: HTMLElement, registry: Registry, bus: Bu
       pass(camera)
     }
 
+    let checked = 0
+    let scanned = 0
+    while (checked < LABEL_OCCLUSION_BUDGET && scanned < entries.length) {
+      if (occlusionCursor >= entries.length) occlusionCursor = 0
+      const e = entries[occlusionCursor++]
+      scanned++
+      if (!e.onScreen || e.rank < 0 || e.rank > 2 || e.proxy) continue
+      e.occluded = isLabelAnchorOccluded(collision, camera.position, e.pos)
+      checked++
+    }
+
     for (let i = 0; i < entries.length; i++) {
       const e = entries[i]
 
@@ -1008,7 +1037,7 @@ export function createLabels(container: HTMLElement, registry: Registry, bus: Bu
         e.sinceT = now
       }
 
-      const target = e.shown ? e.alpha : 0
+      const target = e.shown && !e.occluded ? e.alpha : 0
       if (target > 0.01) {
         if (e.phase === 0) {
           // mount this frame, transition next frame — otherwise the element
@@ -1110,6 +1139,14 @@ export function createLabels(container: HTMLElement, registry: Registry, bus: Bu
 
 function byPrio(a: Entry, b: Entry): number {
   return a.prio - b.prio
+}
+
+export function isLabelAnchorOccluded(
+  collision: Pick<CollisionWorld, 'occluded'>,
+  camera: THREE.Vector3,
+  anchor: THREE.Vector3,
+): boolean {
+  return collision.occluded(camera, anchor)
 }
 
 /** 0 below `edge - band`, 1 above `edge`, smooth in between. */

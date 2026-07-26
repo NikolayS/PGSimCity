@@ -19,7 +19,7 @@ import { ANCHOR, CONTINUITY } from './layout'
  *                    SWITCHYARD, the bucket, and the backup vault.
  *
  *   RECOVERY GROUND  south-west, a long haul road away, on its own iron: an
- *                    empty $PGDATA, a winch that lifts one archived segment at
+ *                    empty data directory, a winch that lifts one archived segment at
  *                    a time, a dial set to recovery_target_time, and a replay
  *                    belt with a stop line painted across it.
  *
@@ -102,7 +102,7 @@ const PHASE_LABEL: Readonly<Record<Phase, string>> = {
   archive: 'idle — archiving only',
   basebackup: 'pg_basebackup, from standby_a',
   haul: 'base backup + archived WAL leaving the bucket',
-  unpack: 'unpacking base.tar onto an empty $PGDATA',
+  unpack: 'unpacking base.tar onto an empty data directory',
   replay: 'replaying archived WAL toward the target',
   hold: 'target reached — recovery paused',
   decide: 'promote, or shut down',
@@ -506,7 +506,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   plate('RECOVERY GROUND', RG[0] + 1.7, 16.2, RG[2], Math.PI / 2, 2.6, COLOR.bufClean, 0.9, gRecovery)
   plate('different site · different iron · a restore you have not rehearsed is a rumour', RG[0] + 1.7, 9.4, RG[2], Math.PI / 2, 1.35, COLOR.inkDim, 0.66)
 
-  /** The restored $PGDATA. Grows out of the pad as base.tar is unpacked. */
+  /** The restored data directory. Grows out of the pad as base.tar is unpacked. */
   const pgdata = new THREE.Mesh(unitBox, theme.mat('continuity.pgdata', {
     color: 0x16283a,
     roughness: 0.82,
@@ -523,7 +523,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   const signalFlag = lamp(COLOR.warn, 1.4, 0.4, 2.4, 5.5, RP[0] - 16, 5.4, RP[2] - 10.2, gRecovery)
   signalFlag.visible = false
   plate('recovery.signal', RP[0] - 16, 7.8, RP[2] - 10.2, 0, 1.5, COLOR.warn, 0.8)
-  plate('restored $PGDATA', RP[0], 1.8, RP[2] + 18, 0, 1.8, COLOR.bufClean, 0.75)
+  plate('restored data directory', RP[0], 1.8, RP[2] + 18, 0, 1.8, COLOR.bufClean, 0.75)
 
   /** Shown only when the drill will NOT promote. */
   const drillBoard = plate(

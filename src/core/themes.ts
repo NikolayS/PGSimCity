@@ -126,7 +126,7 @@ export const DAY_PALETTE: Record<ColorKey, number> = {
   wal: 0xb8720a, // deep amber — pg_wal reads as ochre stone in daylight
   walDim: 0x8c7444, // a segment that is no longer current
   archive: 0x7d6018, // brass: shipped and cold
-  storage: 0x17954f, // $PGDATA green
+  storage: 0x17954f, // data-directory green
   index: 0x05a47e, // index aqua, pushed green so bgwriter can have the teal
   toast: 0xc9451f, // oversized values, burnt orange
 

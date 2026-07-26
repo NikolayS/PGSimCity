@@ -21,6 +21,8 @@ import { fmtBytes } from '../core/util'
 import type { Collector } from './collector'
 import type { Subsystem } from './catalog'
 
+const MIB = 1024 * 1024
+
 /* ---------------------------------------------------------------------------
  * Types
  * -------------------------------------------------------------------------*/
@@ -1055,7 +1057,7 @@ const VERDICTS: Verdict[] = [
     mechanism:
       'Postgres has no LRU list. The sweep walks the pool decrementing usage counts and takes the first frame at zero. That is cheap and needs no global lock, and it works beautifully — right up until there is nothing in the pool worth keeping, at which point the sweep degenerates into an expensive way of evicting pages you are about to need again.',
     evidence: (s) => [
-      { label: 'shared_buffers', value: `${s.buffers.size} × 8kB`, tone: 'warn' },
+      { label: 'shared_buffers', value: fmtBytes(s.knobs.sharedBuffers * MIB), tone: 'warn' },
       { label: 'cache hit ratio', value: `${s.stats.cacheHitPct.toFixed(1)}%`, tone: s.stats.cacheHitPct < 90 ? 'crit' : 'warn' },
       { label: 'buffers at usage_count 0', value: `${(coldShare(s) * 100).toFixed(0)}%`, tone: 'crit' },
       { label: 'reads/sec', value: s.stats.ioReadPerSec.toFixed(0) },
@@ -1070,7 +1072,7 @@ const VERDICTS: Verdict[] = [
     },
     resolved: (s) => ({
       ok: coldShare(s) <= 0.55 && s.stats.cacheHitPct >= 92,
-      reading: `shared_buffers ${s.buffers.size} × 8kB · ${(coldShare(s) * 100).toFixed(0)}% of resident buffers still at usage_count 0 · hit ratio ${s.stats.cacheHitPct.toFixed(1)}%`,
+      reading: `shared_buffers ${fmtBytes(s.knobs.sharedBuffers * MIB)} · ${(coldShare(s) * 100).toFixed(0)}% of resident buffers still at usage_count 0 · hit ratio ${s.stats.cacheHitPct.toFixed(1)}%`,
     }),
     city: 'shared.buffers',
     reading: [DOC('runtime-config-resource.html', 'Resource Consumption settings')],

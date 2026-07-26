@@ -213,7 +213,7 @@ release names the ones we know about.
   capsule through the real collision world in code — 17 of 17 passed, and the
   parapet stops you 0.25 m short of the drop.
 - **A descent into the excavation** — seven flights, 301 treads, from the pit rim
-  to the `$PGDATA` floor. At the bottom, a sign reads *"shared memory is 52 m
+  to the data-directory floor. At the bottom, a sign reads *"shared memory is 52 m
   above you"*, and the plaza's pylons are overhead.
 - **The continuity quarter**: anchors for base backups, point-in-time recovery
   and failover — an archive estate with a timeline switchyard, a recovery ground

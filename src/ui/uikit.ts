@@ -13,6 +13,8 @@ export interface UiContext {
   getFps(): number
   getQuality(): QualitySettings
   getFlowStats(): { active: number; dropped: number }
+  /** Optional so isolated UI instruments do not need to construct Web Audio. */
+  getAudioState?(): { enabled: boolean; preferred: boolean; volume: number }
 }
 
 export interface UiModule {
@@ -117,6 +119,7 @@ const ICON_PATHS: Record<string, string> = {
   pin: 'M8 1.8v5M5 6.8h6l1 3H4zM8 9.8v4.4',
   home: 'M2.5 7.5 8 2.8l5.5 4.7M4 7v6.2h8V7',
   bolt: 'M9 1.5 3.5 9H7.5l-.5 5.5L12.5 7H8.5z',
+  sound: 'M2.2 6.2h2.7L8.1 3v10L4.9 9.8H2.2zM10.6 5.5a3.4 3.4 0 0 1 0 5M12.3 3.7a5.9 5.9 0 0 1 0 8.6',
 }
 
 export function icon(name: keyof typeof ICON_PATHS | string, size = 14): SVGSVGElement {

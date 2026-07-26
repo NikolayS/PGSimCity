@@ -17,12 +17,12 @@
  *     absolute numbers are theatre. Rates (tps, bytes/sec, LSNs) are NOT
  *     stretched; those are reported in real units.
  *
- *  2. THE CITY IS A SCALE MODEL. 1024 buffers (8 MiB shared_buffers), 16 backend
- *     slots, 14 visible WAL segments. To let 16 towers represent thousands of
- *     transactions per second, one trip through the backend state machine
- *     carries `batch` transactions, and all work (pages touched, WAL bytes,
- *     dead tuples) is multiplied by that batch, so the pool and the WAL see the
- *     real pressure.
+ *  2. THE CITY IS A SCALE MODEL. The plaza samples at most 1,024 frames from
+ *     the logical shared_buffers pool, alongside 16 backend slots and 14 visible
+ *     WAL segments. To let 16 towers represent thousands of transactions per
+ *     second, one trip through the backend state machine carries `batch`
+ *     transactions, and all work (pages touched, WAL bytes, dead tuples) is
+ *     multiplied by that batch, so the pool and the WAL see the real pressure.
  *
  *     `batch` is a fixed FUNCTION OF THE OFFERED RATE — `tps / NOMINAL_TRIPS` —
  *     and nothing else. It is deliberately NOT a controller. Sizing it from the
@@ -51,6 +51,7 @@ import {
   N_BUFFERS,
   N_VAC_WORKERS,
   N_WAL_SEG_SLOTS,
+  SHARED_BUFFERS_FULL_SAMPLE_MIB,
 } from '../core/types'
 import type {
   BackendSim,
@@ -94,6 +95,18 @@ const STEP_MAX = 1 / 30
 /** Most sub-steps one update() call may run, so a huge delta cannot stall the tab. */
 const MAX_STEPS = 20
 const IDLE_REAP = 22
+
+/**
+ * Convert the real MiB setting into the fixed-size representative plaza.
+ * Thirty-two frames is the model's safe minimum under sixteen concurrent
+ * backends; at 8 GiB the whole sample is active, and larger real pools keep
+ * their value while the visualization stays capped.
+ */
+function sampledBufferFrames(logicalMib: number): number {
+  const scaled = Math.round((logicalMib / SHARED_BUFFERS_FULL_SAMPLE_MIB) * N_BUFFERS)
+  return clamp(scaled, 32, N_BUFFERS)
+}
+
 /** autovacuum_naptime. Real default is 60s; compressed so the yard stays alive. */
 const AV_NAPTIME = 12
 /**
@@ -332,7 +345,7 @@ export function createSim(bus: Bus): SimApi {
     maxConnections: N_BACKEND_SLOTS,
     backends,
     buffers: {
-      size: DEFAULT_KNOBS.sharedBuffers,
+      size: sampledBufferFrames(DEFAULT_KNOBS.sharedBuffers),
       valid: new Uint8Array(N_BUFFERS),
       dirty: new Uint8Array(N_BUFFERS),
       pinned: new Uint8Array(N_BUFFERS),
@@ -1072,8 +1085,8 @@ export function createSim(bus: Bus): SimApi {
     maintenanceWalQueued += bytes
   }
 
-  function resizePool(newSize: number): void {
-    const size = clamp(Math.round(newSize), 32, N_BUFFERS)
+  function resizePool(logicalMib: number): void {
+    const size = sampledBufferFrames(logicalMib)
     // shared_buffers only changes at restart, and the shutdown checkpoint that
     // precedes one writes every dirty buffer out. Dropping the frames without
     // writing them was a silent loss of modified pages — and the one remaining
@@ -3198,7 +3211,6 @@ export function createSim(bus: Bus): SimApi {
     switch (key) {
       case 'sharedBuffers':
         resizePool(K.sharedBuffers)
-        K.sharedBuffers = buf.size
         break
       case 'tps':
         K.tps = Math.max(0, K.tps)
@@ -3383,7 +3395,7 @@ export function createSim(bus: Bus): SimApi {
 
     bufMap.clear()
     accessCounts.clear()
-    buf.size = K.sharedBuffers
+    buf.size = sampledBufferFrames(K.sharedBuffers)
     buf.valid.fill(0)
     buf.dirty.fill(0)
     buf.pinned.fill(0)

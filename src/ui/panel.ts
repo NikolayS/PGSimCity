@@ -73,7 +73,7 @@ type AnatomyView = 'page' | 'directory'
 function discussesPageLayout(id: string, heading: string, body: string, sectionIndex: number): boolean {
   if ((id.startsWith('storage.table.') || id.startsWith('storage.index.')) && sectionIndex === 0) return true
   const copy = `${heading} ${body}`
-  return /\b(?:page layout|inside (?:one )?8 KiB page|8 KiB pages? back to back)\b/i.test(copy)
+  return /\b(?:page layout|8\s*KiB\s+pages?)\b/i.test(copy)
 }
 
 /* ---------------------------------------------------------------------------

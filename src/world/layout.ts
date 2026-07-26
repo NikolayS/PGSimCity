@@ -147,7 +147,7 @@ export const ANCHOR = {
 
   // the recovery ground (south-west, a different machine on a different site)
   recoveryGate: [-286, 0, 300],
-  /** The empty $PGDATA the base backup is unpacked onto. */
+  /** The empty data directory the base backup is unpacked onto. */
   recoveryPad: [-320, 0, 246],
   /** restore_command. One winch, one hook, one segment at a time. */
   restoreWinch: [-262, 0, 214],
@@ -809,7 +809,7 @@ route('restore.haul', [
   [ANCHOR.recoveryGate[0], 3, ANCHOR.recoveryGate[2]],
 ], { color: COLOR.archive, speed: 96, size: 1.2, visible: true, roadOpacity: 0.09 })
 
-/* base.tar onto an empty $PGDATA */
+/* base.tar onto an empty data directory */
 route('restore.unpack', [
   [ANCHOR.recoveryGate[0], 3, ANCHOR.recoveryGate[2]],
   [-306, 3, 278],

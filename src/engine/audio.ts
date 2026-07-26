@@ -1,5 +1,5 @@
 import type { Bus } from '../core/types'
-import { clamp, makeRng, reduceMotion } from '../core/util'
+import { clamp, makeRng } from '../core/util'
 
 export type Surface = 'ground' | 'deck' | 'metal' | 'stair' | 'water'
 export type Gait = 'walk' | 'run' | 'crouch' | 'swim'
@@ -130,9 +130,9 @@ export function createAudio(bus: Bus): AudioApi {
   const stored = readPreference()
   const rng = makeRng(0xa0d10)
 
-  // Reduced motion is treated as a request for a quiet start, even if a louder
-  // volume was stored previously. The user can still opt back in explicitly.
-  let volume = reduceMotion() ? 0 : stored.volume
+  // Reduced motion and sound are independent accessibility preferences. A
+  // visitor who asks the camera not to fly must not get silently zeroed audio.
+  let volume = stored.volume
   let preferenceEnabled = stored.enabled
   let wanted = false
   let live = false

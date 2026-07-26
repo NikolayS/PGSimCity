@@ -91,7 +91,7 @@ const STEPS: TourStep[] = [
     id: 'page',
     title: 'What a page actually is',
     body:
-      'Underneath the city is $PGDATA: ordinary files on an ordinary filesystem, cut into 8 KiB pages. A page holds a small header, a list of pointers at the front, and rows packed in from the back — which is how a row can move inside its page without a single index noticing. Watch one page ride the green road up into the plaza. That climb is precisely what a cache miss costs you.',
+      'Underneath the city is the data directory: ordinary files on an ordinary filesystem, cut into 8 KiB pages. A page holds a small header, a list of pointers at the front, and rows packed in from the back — which is how a row can move inside its page without a single index noticing. Watch one page ride the green road up into the plaza. That climb is precisely what a cache miss costs you.',
     focus: 'storage.table.accounts',
     duration: 16,
     spotlight: ['storage.datadir', 'storage.table.accounts', 'os.cache'],

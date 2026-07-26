@@ -129,7 +129,7 @@ export const KNOB_META: KnobMeta[] = [
     label: 'shared_buffers',
     guc: 'shared_buffers',
     group: 'memory',
-    kind: 'logrange',
+    kind: 'range',
     min: SHARED_BUFFERS_MIN_MIB,
     max: SHARED_BUFFERS_MAX_MIB,
     step: 128,

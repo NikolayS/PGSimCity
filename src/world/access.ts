@@ -25,7 +25,7 @@ import { CITY, ROUTES, routeCurve } from './layout'
  *                           shmem.ts reads) and announced by a gate portal.
  *   THE DESCENT             a seven-flight switchback stair down the north-east
  *                           aisle of the excavation, ground level to the
- *                           $PGDATA floor at y = -52.
+ *                           data-directory floor at y = -52.
  *   THE RIM PARAPET         888 m of 0.9 m wall around the excavation, where
  *                           today there is a 52 m drop and a 0.07 m neon line.
  *   FIVE KERB RAMPS         one per district plinth.
@@ -194,7 +194,7 @@ const CAUSEWAYS: readonly CausewaySpec[] = [
  * (x 94…114) and its conduit (x 93…94.5), north of the OS page cache (|z| < 80)
  * and south of the disk array (z < -94.5). A probe over the whole footprint
  * returns nothing at all between y = -50 and y = +8 — the aisle is empty from
- * the $PGDATA floor to the sky, which is exactly what a stair needs.
+ * the data-directory floor to the sky, which is exactly what a stair needs.
  */
 const STAIR = {
   /** Landing towers; flights run between them along x. */
@@ -888,7 +888,7 @@ export const createAccess: AccessFactory = (ctx: WorldContext): AccessModule => 
   for (const c of CAUSEWAYS) buildCauseway(c)
 
   /* =====================================================================
-   * 2. THE DESCENT — ground level to the $PGDATA floor, 52 m in seven
+   * 2. THE DESCENT — ground level to the data-directory floor, 52 m in seven
    * flights of 43 steps. A freight lift would be quicker, but the walk
    * controller has no moving platform, and a stair you can see all the way
    * down is the better arrival anyway: you come out on the floor of the
@@ -978,7 +978,7 @@ export const createAccess: AccessFactory = (ctx: WorldContext): AccessModule => 
     surfaces.flat(apronX0, apronX1, zLo, zHi, floorY, 0.2)
     bRimS.box((apronX0 + apronX1) / 2, floorY + 0.04, zLo + 0.1, 12, 0.08, 0.14)
     bRimS.box((apronX0 + apronX1) / 2, floorY + 0.04, zHi - 0.1, 12, 0.08, 0.14)
-    signBoard('$PGDATA — FLOOR LEVEL, y = -52 m', apronX0 + 6, floorY, zLo + 0.6, 'x', 8, COLOR.storage)
+    signBoard('DATA DIRECTORY — FLOOR LEVEL, y = -52 m', apronX0 + 6, floorY, zLo + 0.6, 'x', 8, COLOR.storage)
     signBoard('SHARED MEMORY IS 52 m ABOVE YOU', apronX0 + 6, floorY, zHi - 0.6, 'x', 8, COLOR.shmem)
     fingerpost(apronX0 - 1.5, floorY, (zLo + zHi) / 2, [
       ['UNDER THE PLAZA  90 m', COLOR.shmem, '-x'],
@@ -1008,9 +1008,9 @@ export const createAccess: AccessFactory = (ctx: WorldContext): AccessModule => 
     }
 
     /* -- head signage on the rim ----------------------------------------- */
-    signBoard('$PGDATA  ▾  52 m', gangX, topY, rimZ - 3.0, 'x', 5.6, COLOR.storage)
+    signBoard('DATA DIRECTORY  ▾  52 m', gangX, topY, rimZ - 3.0, 'x', 5.6, COLOR.storage)
     fingerpost(gangX - gangW / 2 - 1.8, topY, rimZ - 2.6, [
-      ['$PGDATA DESCENT', COLOR.storage, '+z'],
+      ['DATA DIRECTORY DESCENT', COLOR.storage, '+z'],
       ['BACKENDS', COLOR.backend, '-z'],
     ])
   }
@@ -1131,7 +1131,7 @@ export const createAccess: AccessFactory = (ctx: WorldContext): AccessModule => 
    * 3d. THE FLOOR OF THE EXCAVATION.
    *
    * You can now walk down there, so there has to be something to walk on. The
-   * $PGDATA slab and the pit floor below it are both real geometry — but both
+   * The data-directory slab and the pit floor below it are both real geometry — but both
    * are drawn as PlaneGeometry, and collision.ts drops any box thinner than
    * 0.3 m as a decal. Without these two the descent ends in a 60 m fall and a
    * respawn. The numbers are storage.ts's and ground.ts's own.

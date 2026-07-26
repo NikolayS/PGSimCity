@@ -760,7 +760,7 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
   chargeGroup.add(chargeBeam)
 
   signs.plate('pg_wal · 16 MiB segments', VX, 17.2, -VAULT_Z - 2.2, 'north', 1.4, COLOR.wal, 1.0)
-  signs.plate('inside $PGDATA · often mounted on its own volume', VX, 15.6, -VAULT_Z - 2.2, 'north', 0.66, COLOR.storage, 0.62)
+  signs.plate('inside the data directory · often mounted on its own volume', VX, 15.6, -VAULT_Z - 2.2, 'north', 0.66, COLOR.storage, 0.62)
   signs.plate('16 MiB', VX, 2.0, -VAULT_Z - 2.95, 'north', 0.8, COLOR.archive, 0.7)
   signs.plate('held by slot', VX - 4.2, 18.6, 0, 'west', 0.72, COLOR.warn, 0.62)
   const [SGN_RECYC] = signs.plate('recycled — renamed for reuse, not deleted', VX, 17.2, VAULT_Z + 2.2, 'south', 1.2, COLOR.inkDim, 0.7)

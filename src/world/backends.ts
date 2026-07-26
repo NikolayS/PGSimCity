@@ -447,7 +447,7 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
   privateMemory.add(memoryBackMesh, memoryShellMesh, memoryTickMesh, memoryFillMesh)
 
   // Once a reservoir is full, the overflow runs down that tower, crosses the
-  // rim, and descends into the shared base/pgsql_tmp bay in $PGDATA.
+  // rim, and descends into the shared base/pgsql_tmp bay in the data directory.
   const spillPipeMesh = new THREE.InstancedMesh(unitBox, neonWhite, N)
   const spillRunMesh = new THREE.InstancedMesh(unitBox, neonWhite, N)
   const spillDropMesh = new THREE.InstancedMesh(unitBox, neonWhite, N)

@@ -9,7 +9,7 @@
 Every building is a real mechanism. The plaza in the centre is `shared_buffers` —
 1024 page frames whose height is their clock-sweep usage count and whose colour is
 their true state. The amber district to the east is the write-ahead log. The pit
-under the plaza is `$PGDATA`, and the heap files down there grow when you bloat
+under the plaza is the data directory, and the heap files down there grow when you bloat
 them. To the south, a standby replays what the primary sends it, always a little
 behind.
 
@@ -30,6 +30,12 @@ is really charging them.
 > [open an issue](https://github.com/NikolayS/PGSimCity/issues/new) or send a
 > [pull request](https://github.com/NikolayS/PGSimCity/pulls). Corrections from people who know
 > the engine are exactly what this needs.
+
+---
+
+## A possible future
+
+Today the city uses a hand-written simulation of PostgreSQL’s mechanisms, which is what makes internals such as the clock sweep’s frame-by-frame victim choice observable. A real PostgreSQL compiled to WebAssembly — PGlite and similar projects embed the actual engine — would make query results and plans authoritative, but could expose only what PostgreSQL exposes through catalogs, `pg_stat_*` views, and `EXPLAIN`, not those internal steps. They answer different questions; a future hybrid could let real execution and plans drive the modelled interior, but that is a direction rather than a promise.
 
 ---
 

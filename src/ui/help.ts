@@ -100,7 +100,7 @@ const LEGEND: LegendRow[] = [
   { key: 'bufPinned', name: 'Pinned page', what: 'In use right now — the clock sweep may not take it' },
   { key: 'wal', name: 'WAL', what: 'Write-ahead log records: the durability contract' },
   { key: 'archive', name: 'Archive', what: 'Completed WAL segments shipped to archive storage' },
-  { key: 'storage', name: 'Storage', what: 'Heap files, $PGDATA, and physical disk I/O' },
+  { key: 'storage', name: 'Storage', what: 'Heap files, the data directory, and physical disk I/O' },
   { key: 'index', name: 'Index', what: 'B-tree and GIN structures, and index-only lookups' },
   { key: 'toast', name: 'TOAST', what: 'Oversized values pushed out of the main heap' },
   { key: 'vacuum', name: 'Vacuum', what: 'Autovacuum workers and the dead tuples they collect' },
@@ -117,7 +117,7 @@ const READING: { h: string; p: string }[] = [
   },
   {
     h: 'The pit',
-    p: 'The ground is cut away beneath the plaza. That excavation is <code>$PGDATA</code>: heap files, indexes, TOAST and the disks. Every trip down there is a page that was not in cache.',
+    p: 'The ground is cut away beneath the plaza. That excavation is the data directory: heap files, indexes, TOAST and the disks. Every trip down there is a page that was not in cache.',
   },
   {
     h: 'The WAL district',

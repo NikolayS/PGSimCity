@@ -24,7 +24,7 @@ export const OPACITY_TIER = {
  * Everything below y = 0, seen through the excavation. This is the layer the
  * rest of the city exists to avoid touching.
  *
- *   $PGDATA          the pit floor: a printed blueprint of the data directory
+ *   data directory   the pit floor: a printed blueprint of the cluster files
  *   heap files       five warehouses; the roof is the file, one tile per run of
  *                    8 KiB pages, coloured by what is actually in those pages
  *   indexes          real B-trees — root, internals, leaves, and the doubly
@@ -41,7 +41,7 @@ export const OPACITY_TIER = {
 
 /* ---------------------------------------------------------------- geometry */
 
-const FLOOR_Y = CITY.storage.y // -52, the $PGDATA floor
+const FLOOR_Y = CITY.storage.y // -52, the data-directory floor
 const ROOF_Y = CITY.storage.warehouseTop // -30, where the page tiles live
 const PIT_FLOOR_Y = FLOOR_Y - 8 // ground.ts digs 8 m deeper than the floor
 
@@ -277,7 +277,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     a.push(x, y, z, sx, sy, sz)
   }
 
-  /* =========================================================== 1. $PGDATA */
+  /* =================================================== 1. DATA DIRECTORY */
 
   const dirGroup = new THREE.Group()
   dirGroup.name = 'storage.datadir'
@@ -327,7 +327,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
   tempBayProxy.scale.set(CITY.backend.span + 8, 2.0, 8)
   tempBayGroup.add(tempBayProxy)
 
-  /* Floor markings: the storage-green rim of $PGDATA plus the TOAST link. */
+  /* Floor markings: the storage-green rim of the data directory plus the TOAST link. */
   {
     const pts: number[] = []
     const y = FLOOR_Y + 0.09
@@ -1162,7 +1162,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
 
   ctx.register({
     id: 'storage.datadir',
-    name: '$PGDATA',
+    name: 'Data directory',
     role: 'base/, pg_wal/, and friends',
     kind: 'storage',
     district: 'storage',
@@ -1185,7 +1185,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     color: COLOR.vacuum,
     focus: { target: [0, FLOOR_Y + 2, -89], distance: 150, dir: [0.1, 0.55, -0.83] },
     labelAt: [0, FLOOR_Y + 5, -89],
-    readout: () => '16 private spill runs · one base/pgsql_tmp bay · inside $PGDATA',
+    readout: () => '16 private spill runs · one base/pgsql_tmp bay · inside the data directory',
   })
 
   for (let ti = 0; ti < N_TABLES; ti++) {
@@ -1317,7 +1317,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     color: COLOR.storage,
     focus: { target: [0, CITY.durability.y, 0], distance: 190, dir: [0.3, 0.42, 0.86] },
     labelAt: [0, CITY.durability.y + 2, 82],
-    readout: () => `y ${CITY.durability.y.toFixed(1)} · below the OS page cache · above $PGDATA`,
+    readout: () => `y ${CITY.durability.y.toFixed(1)} · below the OS page cache · above the data directory`,
   })
 
   ctx.register({
@@ -2184,7 +2184,7 @@ function mixLin(a: number, b: number, t: number): number {
 }
 
 /**
- * The printed plan of $PGDATA. Everything typographic in the underworld lives
+ * The printed plan of the data directory. Everything typographic in the underworld lives
  * in this one texture: relation slots with their file paths, page rulers, fork
  * names, the directory listing, and the district title.
  */
@@ -2339,7 +2339,7 @@ function buildFloorTexture(rng: () => number, W: number): THREE.CanvasTexture {
   g.fillStyle = 'rgba(85,214,160,0.34)'
   if ('letterSpacing' in g) (g as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = '16px'
   g.font = `700 ${Math.round(4.4 * px)}px ui-monospace, SFMono-Regular, Menlo, monospace`
-  g.fillText('$PGDATA', X(0), Y(FLOOR_Z1 - 8))
+  g.fillText('DATA DIRECTORY', X(0), Y(FLOOR_Z1 - 8))
   g.font = `600 ${Math.round(2.0 * px)}px ui-monospace, SFMono-Regular, Menlo, monospace`
   g.fillStyle = 'rgba(143,165,196,0.45)'
   g.fillText('base/  global/  pg_xact/  pg_tblspc/   ·   pg_wal shown in east vault', X(0), Y(FLOOR_Z1 - 3))

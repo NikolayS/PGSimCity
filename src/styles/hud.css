@@ -279,6 +279,24 @@
   background: transparent;
 }
 
+.hud-audio {
+  min-width: 94px;
+  justify-content: center;
+  gap: 6px;
+}
+
+.hud-audio.is-ready {
+  color: var(--ink-dim);
+}
+
+.hud-audio__label {
+  font-family: var(--f-ui);
+  font-size: var(--fs-micro);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
 .hud-walk {
   justify-content: center;
 }

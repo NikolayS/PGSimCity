@@ -434,6 +434,20 @@ export function createHud(ctx: UiContext): UiModule {
   const tourBtn = toolBtn('tour', 'Guided tour', 'T', () => toggleTour())
   const paletteBtn = toolBtn('search', 'Command palette', '/', () => openPalette())
   const helpBtn = toolBtn('help', 'Keyboard & legend', '?', () => toggleHelp())
+  const audioLabel = el('span', { class: 'hud-audio__label', text: 'Sound off' })
+  const audioBtn = el(
+    'button',
+    {
+      class: 'pg-btn hud-tool hud-audio',
+      type: 'button',
+      title: 'Turn sound on  (M)',
+      'aria-label': 'Turn sound on',
+      'aria-pressed': 'false',
+      on: { click: () => toggleAudio() },
+    },
+    icon('sound', 15),
+    audioLabel,
+  )
   const walkLabel = el('span', { class: 'hud-walk__label', text: 'Walk' })
   const walkBtn = el(
     'button',
@@ -493,7 +507,17 @@ export function createHud(ctx: UiContext): UiModule {
      the instrument bar; on a phone there is no room for both, and the split
      that survives is instruments on top, controls at the bottom — so this whole
      cluster moves into the transport dock and comes back on rotation. */
-  const toolCluster = el('div', { class: 'hud-tools' }, tourBtn, diagnoseLink, walkBtn, paletteBtn, helpBtn, perf)
+  const toolCluster = el(
+    'div',
+    { class: 'hud-tools' },
+    tourBtn,
+    diagnoseLink,
+    walkBtn,
+    audioBtn,
+    paletteBtn,
+    helpBtn,
+    perf,
+  )
 
   const rightCluster = el('div', { class: 'hud-right' }, ckptBtn, el('span', { class: 'hud-sep' }), toolCluster)
 
@@ -1146,6 +1170,23 @@ export function createHud(ctx: UiContext): UiModule {
     setText(speedEl, fmtSpeed(s.knobs.timeScale))
   }
 
+  function paintAudio(): void {
+    const state = ctx.getAudioState?.() ?? { enabled: false, preferred: false, volume: 0.35 }
+    const enabled = state.enabled && state.volume > 0
+    const ready = !enabled && state.preferred
+    const text = enabled ? 'Sound on' : ready ? 'Sound ready' : 'Sound off'
+    setText(audioLabel, text)
+    setClass(audioBtn, 'is-active', enabled)
+    setClass(audioBtn, 'is-ready', ready)
+    audioBtn.setAttribute('aria-pressed', String(enabled))
+    audioBtn.setAttribute('aria-label', enabled ? 'Turn sound off' : 'Turn sound on')
+    audioBtn.title = enabled
+      ? `Sound on · ${Math.round(state.volume * 100)}%  (M)`
+      : ready
+        ? 'Sound ready — interact to resume  (M)'
+        : 'Turn sound on  (M)'
+  }
+
   let lastScenario: string | null | undefined
 
   function paintScenario(): void {
@@ -1203,6 +1244,7 @@ export function createHud(ctx: UiContext): UiModule {
       paintSparks(s)
       paintCheckpoint(s)
       paintTransport(s)
+      paintAudio()
       paintScenario()
     }
     tMap += dt
@@ -1222,6 +1264,7 @@ export function createHud(ctx: UiContext): UiModule {
   paintSparks(sim.state)
   paintCheckpoint(sim.state)
   paintTransport(sim.state)
+  paintAudio()
   paintScenario()
   paintPerf()
   paintCompass()

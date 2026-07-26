@@ -17,6 +17,7 @@ import { createLabels } from './engine/labels'
 import { createPicker } from './engine/picker'
 import { createCollisionWorld, DEFAULT_EXCLUDE_IDS } from './engine/collision'
 import { createAudio } from './engine/audio'
+import { createBufferWater } from './engine/water'
 import { createWalkController } from './engine/walk'
 
 import { createSim } from './sim/model'
@@ -128,7 +129,7 @@ async function boot(): Promise<void> {
   await progress(42, 'pouring the shared memory plaza…')
   const shmemMod = add(createShmem(ctx))
   // Pedestrian infrastructure: causeways across the excavation and the stair
-  // down to $PGDATA. After shmem, because it lands on the deck shmem builds.
+  // down to the data directory. After shmem, because it lands on the deck shmem builds.
   const access: AccessModule = createAccess(ctx)
   add(access)
 
@@ -139,7 +140,7 @@ async function boot(): Promise<void> {
   await progress(62, 'laying the write-ahead log…')
   add(createWal(ctx))
 
-  await progress(70, 'excavating $PGDATA…')
+  await progress(70, 'excavating the data directory…')
   add(createStorage(ctx))
 
   await progress(78, 'opening the maintenance yard…')
@@ -173,11 +174,14 @@ async function boot(): Promise<void> {
   // MUST follow build(): build() resets the box array and would discard these.
   access.installCollision(collision)
   for (const b of (groundMod.group.userData.rimColliders as THREE.Box3[] | undefined) ?? []) collision.addBox(b)
+  const water = createBufferWater(scene)
+  scene.add(water.group)
   const walk = createWalkController({
     camera,
     dom: renderer.domElement,
     collision,
     audio,
+    water,
     sim: sim.state,
     bus,
     overlayRoot: canvasRoot,
@@ -186,7 +190,7 @@ async function boot(): Promise<void> {
   await progress(90, 'painting the roads…')
   scene.add(createRoads(theme))
   const flows = createFlows(scene, bus, gfx.quality, theme)
-  const labels = createLabels(labelsRoot, registry, bus)
+  const labels = createLabels(labelsRoot, registry, bus, collision)
   scene.add(labels.group)
   const picker = createPicker({ dom: renderer.domElement, camera, registry, bus, theme })
   scene.add(picker.group)
@@ -199,6 +203,11 @@ async function boot(): Promise<void> {
     getFps: () => gfx.fps,
     getQuality: () => gfx.quality,
     getFlowStats: () => ({ active: flows.active, dropped: flows.dropped }),
+    getAudioState: () => ({
+      enabled: audio.enabled,
+      preferred: audio.preferred,
+      volume: audio.volume,
+    }),
   }
   const ui: UiModule[] = [
     createHud(uiCtx),
@@ -218,7 +227,7 @@ async function boot(): Promise<void> {
   }
   const looseBus = bus as unknown as LooseBus
   const offAudioToggle = looseBus.on('audio:toggle', () => {
-    if (audio.preferred) {
+    if (audio.enabled) {
       audio.disable()
       bus.emit('toast', { text: 'Sound off', kind: 'info', ms: 1600 })
       return
@@ -341,6 +350,7 @@ async function boot(): Promise<void> {
     // 2. camera, then everything that depends on where the camera is
     rig.update(dt)
     walk.update(dt)
+    water.update(dt, walk.enabled && walk.submerged)
     // On foot you are always up against the detail, wherever you stand.
     const nextDetail: 0 | 1 | 2 = walk.enabled ? 2 : detailFor(rig.altitude)
     if (nextDetail !== detail) {
@@ -387,6 +397,7 @@ async function boot(): Promise<void> {
     labels.dispose()
     picker.dispose()
     walk.dispose()
+    water.dispose()
     audio.dispose()
     collision.dispose()
     rig.dispose()
@@ -412,7 +423,7 @@ async function boot(): Promise<void> {
 
   // Handy in the console. PGCITY is the pre-rename alias, kept because existing
   // notes and tooling still reach for it; both names are the same object.
-  const handle = { sim, registry, bus, rig, gfx, flows, walk, collision, audio }
+  const handle = { sim, registry, bus, rig, gfx, flows, walk, collision, audio, water }
   Object.assign(window as unknown as Record<string, unknown>, { PGSIMCITY: handle, PGCITY: handle })
 }
 
