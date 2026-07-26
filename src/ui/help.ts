@@ -219,6 +219,82 @@ export function createHelp(ctx: UiContext): UiModule {
     icon('close', 14),
   )
 
+  const controlsSection = el(
+    'div',
+    { class: 'help-cols', 'data-help-section': 'controls' },
+    keyTable('Camera', CAMERA_KEYS),
+    keyTable('Application', APP_KEYS),
+  )
+  const legendHeading = el('h3', {
+    class: 'pg-eyebrow help-h',
+    text: 'Colour legend',
+    'data-help-section': 'legend',
+  })
+  const readingHeading = el('h3', {
+    class: 'pg-eyebrow help-h',
+    text: 'How to read the city',
+    'data-help-section': 'reading',
+  })
+  const helpBody = el(
+    'div',
+    { class: 'pg-panel__body help-body pg-scroll' },
+    controlsSection,
+    el(
+      'p',
+      { class: 'pg-hint help-districts' },
+      el('span', { class: 'pg-tag', text: '1 – 8' }),
+      ' ',
+      DISTRICT_ORDER.join(' · '),
+    ),
+    el('hr', { class: 'pg-divider' }),
+    legendHeading,
+    el('div', { class: 'help-legend' }, ...LEGEND.map(legendItem)),
+    el('hr', { class: 'pg-divider' }),
+    readingHeading,
+    el(
+      'div',
+      { class: 'help-reading pg-body' },
+      ...READING.map((r) =>
+        el(
+          'p',
+          { class: 'help-reading__p' },
+          el('strong', { text: r.h }),
+          ' — ',
+          el('span', { html: r.p }),
+        ),
+      ),
+    ),
+    el('p', {
+      class: 'help-disclaimer',
+      html:
+        '<strong>Prototype, v0.1.</strong> PGSimCity is a teaching model, not a real server: the mechanisms are modelled, ' +
+        'the numbers are simulated, and no PostgreSQL source code runs here. It was built quickly and ' +
+        '<strong>almost certainly contains inaccuracies and mistakes</strong>, in both the simulation and the explanations.' +
+        '<br><br>Found one? Corrections from people who know the engine are exactly what this needs — please ' +
+        '<a href="https://github.com/NikolayS/PGSimCity/issues/new" target="_blank" rel="noopener">open an issue</a> or send a ' +
+        '<a href="https://github.com/NikolayS/PGSimCity/pulls" target="_blank" rel="noopener">pull request</a>.',
+    }),
+  )
+
+  const jumpButton = (label: string, target: 'controls' | 'legend' | 'reading', section: HTMLElement) =>
+    el(
+      'button',
+      {
+        class: 'pg-btn help-nav__button',
+        type: 'button',
+        'data-help-target': target,
+        on: { click: () => section.scrollIntoView({ block: 'start' }) },
+      },
+      label,
+    )
+  const helpNav = el(
+    'nav',
+    { class: 'help-nav', 'aria-label': 'Help sections' },
+    jumpButton('Controls', 'controls', controlsSection),
+    jumpButton('Colours', 'legend', legendHeading),
+    jumpButton('Reading', 'reading', readingHeading),
+  )
+
   const dialog = el(
     'div',
     {
@@ -236,49 +312,11 @@ export function createHelp(ctx: UiContext): UiModule {
         { class: 'help-head__title' },
         el('h2', { class: 'pg-title', id: 'help-title', text: 'Controls & legend' }),
         el('p', { class: 'pg-sub', text: 'Everything you can press, and what every colour in the city means' }),
+        helpNav,
       ),
       closeBtn,
     ),
-    el(
-      'div',
-      { class: 'pg-panel__body help-body pg-scroll' },
-      el('div', { class: 'help-cols' }, keyTable('Camera', CAMERA_KEYS), keyTable('Application', APP_KEYS)),
-      el(
-        'p',
-        { class: 'pg-hint help-districts' },
-        el('span', { class: 'pg-tag', text: '1 – 8' }),
-        ' ',
-        DISTRICT_ORDER.join(' · '),
-      ),
-      el('hr', { class: 'pg-divider' }),
-      el('h3', { class: 'pg-eyebrow help-h', text: 'Colour legend' }),
-      el('div', { class: 'help-legend' }, ...LEGEND.map(legendItem)),
-      el('hr', { class: 'pg-divider' }),
-      el('h3', { class: 'pg-eyebrow help-h', text: 'How to read the city' }),
-      el(
-        'div',
-        { class: 'help-reading pg-body' },
-        ...READING.map((r) =>
-          el(
-            'p',
-            { class: 'help-reading__p' },
-            el('strong', { text: r.h }),
-            ' — ',
-            el('span', { html: r.p }),
-          ),
-        ),
-      ),
-      el('p', {
-        class: 'help-disclaimer',
-        html:
-          '<strong>Prototype, v0.1.</strong> PGSimCity is a teaching model, not a real server: the mechanisms are modelled, ' +
-          'the numbers are simulated, and no PostgreSQL source code runs here. It was built quickly and ' +
-          '<strong>almost certainly contains inaccuracies and mistakes</strong>, in both the simulation and the explanations.' +
-          '<br><br>Found one? Corrections from people who know the engine are exactly what this needs — please ' +
-          '<a href="https://github.com/NikolayS/PGSimCity/issues/new" target="_blank" rel="noopener">open an issue</a> or send a ' +
-          '<a href="https://github.com/NikolayS/PGSimCity/pulls" target="_blank" rel="noopener">pull request</a>.',
-      }),
-    ),
+    helpBody,
   )
 
   root.classList.add('help-overlay')

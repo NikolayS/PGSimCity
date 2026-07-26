@@ -199,13 +199,6 @@ const DEVICE_PAGES_PER_SEC = 900
  * max_wal_size. At the 0.9 default that is 53% of the knob, not 100%. Triggering
  * at the full max_wal_size is what made pg_wal peak at (1 + target) times the
  * number the user set.
- *
- * FOLLOW-UP (needs src/core/types.ts and src/world/maintenance.ts, both outside
- * this workflow's file scope): this belongs next to DEFAULT_KNOBS in
- * core/types.ts so that maintenance.ts's `walFracOf` — the checkpointer dial and
- * its "max_wal_size N%" readout — divides by the same number instead of by the
- * raw knob. Until it moves, that dial reads ~53% when a checkpoint actually
- * fires.
  */
 export const walTriggerBytes = (k: Knobs): number =>
   (k.maxWalSize * 1024 * 1024) / (1 + k.checkpointCompletionTarget)
@@ -3229,6 +3222,7 @@ export function createSim(bus: Bus): SimApi {
    * ====================================================================*/
 
   function setKnob<Key extends keyof Knobs>(key: Key, value: Knobs[Key]): void {
+    const previousCheckpointTimeout = K.checkpointTimeout
     K[key] = value
 
     switch (key) {
@@ -3251,7 +3245,9 @@ export function createSim(bus: Bus): SimApi {
         if (!K.autovacuum) toast('autovacuum off — dead tuples will accumulate', 'warn')
         break
       case 'checkpointTimeout':
-        ckpt.nextInSec = Math.min(ckpt.nextInSec, K.checkpointTimeout)
+        // A reload changes the interval from the last checkpoint start, so keep
+        // elapsed time rather than preserving the old remaining countdown.
+        ckpt.nextInSec += K.checkpointTimeout - previousCheckpointTimeout
         break
       case 'longRunningXact':
       case 'standbyLongQuery':

@@ -29,6 +29,7 @@
     "build": "vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:layout": "node tools/verify-hud-layout.mjs",
     "test:watch": "vitest",
     "preview": "vite preview --port 4173"
   },

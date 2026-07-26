@@ -3,6 +3,7 @@ import { COLOR, mixHex } from '../core/theme'
 import { N_BACKEND_SLOTS, N_BUFFERS, N_VAC_WORKERS } from '../core/types'
 import type { SimState, VacPhase, WorldContext, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, damp, fmtDuration, fmtNum, fmtPct, lerp, makeRng, smoothstep } from '../core/util'
+import { walTriggerBytes } from '../sim/model'
 import {
   ANCHOR, CITY, N_TABLES, TABLES,
   rid, routePoint, routeTangent, vacBayPos,
@@ -56,7 +57,6 @@ const _axisY = new THREE.Vector3(0, 1, 0)
 const _axisZ = new THREE.Vector3(0, 0, 1)
 
 const TAU = Math.PI * 2
-const MB = 1024 * 1024
 
 /** cx, cy, cz, w, h, d — for cylinders w/d are diameters, h is length along Y. */
 type BoxSpec = [number, number, number, number, number, number]
@@ -1235,7 +1235,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   let logSlow = 0
 
   const walFracOf = (s: SimState) =>
-    clamp01((s.wal.insertLsn - s.checkpoint.redoLsn) / Math.max(1, s.knobs.maxWalSize * MB))
+    clamp01((s.wal.insertLsn - s.checkpoint.redoLsn) / Math.max(1, walTriggerBytes(s.knobs)))
 
   ctx.register({
     id: 'checkpointer',

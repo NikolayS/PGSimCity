@@ -556,7 +556,7 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
     focus: { target: [0, 16, BZ], distance: 250, dir: [0.05, 0.5, 1] },
     labelAt: [0, 34, BZ],
     color: COLOR.backend,
-    readout: (s) => `${s.stats.activeBackends} of ${N} slots busy · ${Math.round(s.stats.tps)} tps`,
+    readout: (s) => `${s.stats.activeBackends} of ${N} slots occupied · ${Math.round(s.stats.tps)} tps`,
   })
 
   for (let i = 0; i < N; i++) {

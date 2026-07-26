@@ -754,6 +754,11 @@ export function createHud(ctx: UiContext): UiModule {
   })
 
   const chipRow = el('div', { class: 'hud-chips pg-scroll' }, ...chips.map((c) => c.root))
+  const scenarioCue = el('span', {
+    class: 'hud-scn__cue',
+    text: `${SCENARIOS.length} · scroll →`,
+    'aria-hidden': 'true',
+  })
 
   const nowName = el('span', { class: 'hud-now__name', text: 'No scenario' })
   const nowTime = el('span', { class: 'hud-now__time', text: 'free running' })
@@ -787,6 +792,8 @@ export function createHud(ctx: UiContext): UiModule {
     'div',
     { class: 'hud-transport__scn', id: 'hud-scenarios' },
     el('span', { class: 'pg-eyebrow hud-scn__label', text: 'Scenarios' }),
+    nowBox,
+    scenarioCue,
     chipRow,
   )
 
@@ -799,7 +806,6 @@ export function createHud(ctx: UiContext): UiModule {
     el('div', { class: 'hud-transport__deck' }, playBtn, speedGroup, resetBtn, scnBtn),
     el('span', { class: 'hud-sep' }),
     scnWrap,
-    nowBox,
     dockSlot,
   )
   bottomEl.append(transport)

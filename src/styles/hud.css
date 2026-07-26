@@ -16,21 +16,34 @@
    TOP BAR
    ========================================================================*/
 
-/* auto | 1fr | auto: the brand and the tool cluster keep their natural width,
-   the vitals centre in whatever is left and scroll if that is not enough. */
+/* Controls and vitals own separate rows. The old auto | 1fr | auto row gave
+   the five non-shrinking metrics a 211px track at 1280px, so their text painted
+   underneath the checkpoint and tool controls. */
+#hud-top {
+  min-width: 0;
+  width: calc(100vw - var(--hud-gap) * 2 - var(--safe-l) - var(--safe-r));
+  max-width: 100%;
+}
+
 .hud-bar {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    'brand controls'
+    'vitals vitals';
   align-items: center;
-  gap: 12px;
+  gap: 0 12px;
   min-height: 54px;
-  padding: 0 12px;
+  padding: 4px 12px;
   border-radius: 0;
 }
 
 /* --- identity + health ---------------------------------------------------- */
 
 .hud-brand {
+  grid-area: brand;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -84,6 +97,7 @@
 /* --- vital signs ---------------------------------------------------------- */
 
 .hud-vitals {
+  grid-area: vitals;
   display: flex;
   align-items: stretch;
   gap: 8px;
@@ -159,6 +173,7 @@
 /* --- right cluster -------------------------------------------------------- */
 
 .hud-right {
+  grid-area: controls;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -507,6 +522,15 @@
   opacity: 0.8;
 }
 
+.hud-scn__cue {
+  flex: 0 0 auto;
+  font-family: var(--f-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
 /* Where the tool cluster docks on a phone. It has no business taking a gap
    while it is empty. */
 .hud-transport__dock:empty {
@@ -701,9 +725,20 @@ body.pg-labels-off #labels-root {
 .help-head__title {
   display: grid;
   gap: 3px;
+  min-width: 0;
 }
 .help-close {
   flex: 0 0 auto;
+}
+
+.help-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 5px;
+}
+.help-nav__button {
+  padding: 4px 8px;
 }
 
 .help-body {
@@ -712,6 +747,7 @@ body.pg-labels-off #labels-root {
 
 .help-h {
   margin: 0;
+  scroll-margin-top: 12px;
 }
 
 .help-cols {
@@ -851,8 +887,19 @@ body.pg-labels-off #labels-root {
 }
 
 @media (max-width: 1080px) {
+  .hud-bar {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'brand'
+      'controls'
+      'vitals';
+    row-gap: 2px;
+  }
   .hud-vitals {
     justify-self: stretch;
+  }
+  .hud-right {
+    justify-self: end;
   }
   .hud-perf__nums {
     display: none;
@@ -931,6 +978,8 @@ body.pg-labels-off #labels-root {
   /* --- instrument bar --------------------------------------------------- */
 
   .hud-bar {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: 'brand vitals controls';
     gap: 8px;
     min-height: 48px;
     padding: 0 8px;
@@ -944,7 +993,8 @@ body.pg-labels-off #labels-root {
     letter-spacing: 0.08em;
   }
   .hud-vital[data-vital='wal'],
-  .hud-vital[data-vital='dirty'] {
+  .hud-vital[data-vital='dirty'],
+  .hud-vital[data-vital='lag'] {
     display: none;
   }
   .hud-vital {
@@ -1096,6 +1146,10 @@ body.pg-labels-off #labels-root {
   .help-close {
     width: var(--tap);
     height: var(--tap);
+  }
+  .help-nav__button {
+    min-height: var(--tap);
+    padding-inline: 7px;
   }
 
   /* The minimap is hidden at this width. The View surface replaces the dock

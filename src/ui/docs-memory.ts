@@ -612,7 +612,13 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       },
     ],
     metrics: [
-      { label: 'Pool size', get: (s) => `${fmtNum(nz(s.buffers?.size))} pages (${asBytes(nz(s.buffers?.size))})` },
+      {
+        label: 'Pool size',
+        get: (s) => {
+          const bytes = nz(s.knobs?.sharedBuffers) * 1024 * 1024
+          return `${fmtBytes(bytes)} (${(bytes / PAGE).toLocaleString()} pages)`
+        },
+      },
       { label: 'In use', get: (s) => fmtPct(ratio(nz(s.buffers?.usedCount), nz(s.buffers?.size))) },
       {
         label: 'Dirty',
