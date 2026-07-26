@@ -166,11 +166,13 @@ interface Marker {
 export interface PickerApi {
   /** selection/hover markers live here */
   group: THREE.Object3D
+  /** Resolve the visible registered component under one viewport coordinate. */
+  pick(clientX: number, clientY: number): PickHit | null
   update(dt: number): void
   dispose(): void
 }
 
-interface PickHit {
+export interface PickHit {
   id: string
   part?: 'page'
 }
@@ -558,7 +560,7 @@ export function createPicker(opts: {
     _hits.length = 0
   }
 
-  return { group, update, dispose }
+  return { group, pick: pickAt, update, dispose }
 }
 
 /* -------------------------------- geometry -------------------------------- */

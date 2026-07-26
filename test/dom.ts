@@ -43,6 +43,17 @@ class TestNode extends EventTarget {
   childNodes: TestNode[] = []
   private ownText = ''
 
+  /* Needed by any UI that asks "is focus still inside me?" -- the context menu
+   * closes on click-away and cannot answer that without it. */
+  contains(node: TestNode | null): boolean {
+    let cursor = node
+    while (cursor) {
+      if (cursor === this) return true
+      cursor = cursor.parentNode
+    }
+    return false
+  }
+
   get parentElement(): TestElement | null {
     return this.parentNode instanceof TestElement ? this.parentNode : null
   }
@@ -159,6 +170,12 @@ function matchesSelector(element: TestElement, selector: string): boolean {
 }
 
 class TestElement extends TestNode {
+  /* Keyboard-navigable menus move focus themselves. Without this the stub
+   * throws instead of recording where focus went. */
+  focus(): void {
+    ;(globalThis.document as unknown as { activeElement: unknown }).activeElement = this
+  }
+
   readonly attributes = new Map<string, string>()
   readonly dataset: Record<string, string> = {}
   readonly style = new TestStyle()

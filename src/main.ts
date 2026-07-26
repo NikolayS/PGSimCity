@@ -42,6 +42,7 @@ import { createContinuity } from './world/continuity'
 import { createAccess } from './world/access'
 import type { AccessModule } from './world/access'
 
+import { createContextMenu } from './ui/context-menu'
 import { createHud, setCompassCamera } from './ui/hud'
 import { createHelp } from './ui/help'
 import { createControls } from './ui/controls'
@@ -218,6 +219,9 @@ async function boot(): Promise<void> {
     createInspector(uiCtx),
     createTour(uiCtx),
     createSearch(uiCtx),
+    /* Right-click. The camera gave up that button when rotation moved to
+     * shift-drag, which is what made a contextual menu possible at all. */
+    createContextMenu({ dom: renderer.domElement, picker, registry, bus, rig }),
   ]
   void import('./ui/anatomy').then(({ createAnatomy }) => ui.push(createAnatomy(uiCtx))) // PAGE + DATA-DIRECTORY ANATOMY WIRING
 

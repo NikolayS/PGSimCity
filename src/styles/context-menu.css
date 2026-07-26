@@ -1,0 +1,68 @@
+/* The contextual menu is an instrument, not a card: one quiet edge, one
+   heading, and a compact vertical command list. */
+.pg-context {
+  position: fixed;
+  z-index: 20;
+  width: max-content;
+  min-width: 208px;
+  max-width: min(280px, calc(100vw - 16px));
+  padding: 7px 0;
+  overflow: hidden;
+  color: var(--ink);
+  background: var(--bg-panel);
+  border: 1px solid var(--line-soft);
+}
+
+.pg-context[hidden] {
+  display: none;
+}
+
+.pg-context__head {
+  max-width: 278px;
+  padding: 6px 13px 8px;
+  overflow: hidden;
+  color: var(--ink-faint);
+  font-family: var(--f-mono);
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.pg-context__item {
+  appearance: none;
+  display: block;
+  width: 100%;
+  min-height: 32px;
+  padding: 7px 13px;
+  border: 0;
+  border-top: 1px solid transparent;
+  border-bottom: 1px solid transparent;
+  color: var(--ink-dim);
+  background: transparent;
+  font: 500 var(--fs-sm) / 1.35 var(--f-ui);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.pg-context__item:hover,
+.pg-context__item:focus-visible {
+  color: var(--ink);
+  background: var(--bg-raise);
+  outline: 0;
+}
+
+.pg-context__item:focus-visible {
+  border-top-color: var(--line-hair);
+  border-bottom-color: var(--line-hair);
+}
+
+@media (pointer: coarse) {
+  .pg-context__item {
+    min-height: var(--tap);
+    padding-block: 11px;
+  }
+}

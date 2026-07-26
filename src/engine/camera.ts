@@ -409,6 +409,10 @@ export function createCameraRig(
   }
 
   function onPointerDown(e: PointerEvent): void {
+    // Right-click belongs to the contextual UI in every camera mode. Do not
+    // capture it, cancel a scripted shot, or let it enter a look integrator.
+    if (e.pointerType !== 'touch' && e.button === 2) return
+
     interrupt()
     ptrIds.push(e.pointerId)
     ptrX.set(e.pointerId, e.clientX)
@@ -439,16 +443,17 @@ export function createCameraRig(
       return
     }
 
-    // Map convention, not CAD convention. This reads as a city seen from above,
-    // so left-drag grabs the ground and moves it — the thing every map does —
-    // and right-drag swings the camera around. Ctrl/Cmd+left orbits too, for
-    // anyone arriving with model-viewer habits, and middle-drag still pans.
-    if (e.button === 0 && !e.ctrlKey && !e.metaKey) dragPan = true
-    else if (e.button === 1) {
+    // Google Maps convention, not CAD convention. This reads as a city seen from
+    // above, so left-drag grabs the ground and moves it — the thing every map
+    // does — and shift+left swings the camera around. Ctrl/Cmd+left is the same
+    // orbit alias for anyone arriving with model-viewer habits, middle-drag
+    // keeps its pan muscle memory, and right-click remains entirely available
+    // to the contextual UI, which is the point of moving rotation off it.
+    if (e.button === 0) {
+      if (e.shiftKey || e.ctrlKey || e.metaKey) dragOrbit = true
+      else dragPan = true
+    } else if (e.button === 1) {
       dragPan = true
-      e.preventDefault()
-    } else {
-      dragOrbit = true
       e.preventDefault()
     }
   }
