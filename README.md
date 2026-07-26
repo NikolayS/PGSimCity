@@ -58,8 +58,9 @@ No server, no database, no network calls. It is a single static bundle.
 
 | | |
 |---|---|
-| Left-drag | Orbit around the city |
-| Right-drag or middle-drag | Pan sideways |
+| Left-drag | Pan — grab the ground and move it, the way a map does |
+| Right-drag | Orbit around the city |
+| Middle-drag / `Ctrl`-left-drag | Pan / orbit, if you have model-viewer habits |
 | Wheel | Zoom — the dolly follows the cursor, not the pivot |
 | Click | Select a building. In fly mode, capture the mouse |
 | `W` `A` `S` `D` or the arrow keys | Move |

@@ -34,8 +34,9 @@ interface KeyRow {
 }
 
 const CAMERA_KEYS: KeyRow[] = [
-  { keys: ['LMB drag'], what: 'Orbit around the city' },
-  { keys: ['RMB drag', 'MMB drag'], join: 'or', what: 'Pan sideways' },
+  { keys: ['LMB drag'], what: 'Pan — grab the ground and move it' },
+  { keys: ['RMB drag'], what: 'Orbit around the city' },
+  { keys: ['MMB drag', 'Ctrl+LMB'], join: 'or', what: 'Pan and orbit, for model-viewer habits' },
   { keys: ['Wheel'], what: 'Zoom' },
   { keys: ['Click'], what: 'Select a building — in fly mode, capture the mouse' },
   { keys: ['W', 'A', 'S', 'D'], what: 'Fly — arrow keys work too' },

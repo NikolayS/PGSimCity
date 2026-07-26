@@ -362,9 +362,16 @@ export function createCameraRig(
       return
     }
 
-    if (e.button === 0 && !e.ctrlKey && !e.metaKey) dragOrbit = true
-    else {
+    // Map convention, not CAD convention. This reads as a city seen from above,
+    // so left-drag grabs the ground and moves it — the thing every map does —
+    // and right-drag swings the camera around. Ctrl/Cmd+left orbits too, for
+    // anyone arriving with model-viewer habits, and middle-drag still pans.
+    if (e.button === 0 && !e.ctrlKey && !e.metaKey) dragPan = true
+    else if (e.button === 1) {
       dragPan = true
+      e.preventDefault()
+    } else {
+      dragOrbit = true
       e.preventDefault()
     }
   }
