@@ -536,7 +536,7 @@
   width: 196px;
   height: 168px;
   cursor: crosshair;
-  border-radius: var(--r-sm);
+  border-radius: 0;
 }
 
 /* labels kill-switch (L) — CSS2D output lives in #labels-root */
@@ -565,7 +565,6 @@ body.pg-labels-off #labels-root {
 .help-dialog {
   width: min(940px, 100%);
   max-height: min(86vh, 780px);
-  border-color: var(--line-soft);
   animation: pg-fade-up var(--dur) var(--ease-out-expo) both;
 }
 
@@ -652,7 +651,7 @@ body.pg-labels-off #labels-root {
   height: 11px;
   margin-top: 3px;
   flex: 0 0 auto;
-  border-radius: 3px;
+  border-radius: 0;
   background: var(--sw, var(--ink));
 }
 .help-legend__text {

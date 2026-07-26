@@ -96,7 +96,7 @@
    -------------------------------------------------------------------------*/
 
 .pgc-block {
-  padding: 12px 0;
+  padding: 16px 0;
   border-top: 1px solid var(--line-hair);
 }
 .pgc-block:first-child {
@@ -130,7 +130,7 @@
 
 .pgc-knob {
   gap: 6px;
-  padding: 10px 0 12px;
+  padding: 11px 0 16px;
 }
 .pgc-knob__row {
   gap: 8px;
@@ -241,8 +241,8 @@
   flex: 1 1 auto;
 }
 .pgc-preset {
-  font-size: var(--fs-sm);
-  font-weight: 600;
+  font-size: var(--fs-lg);
+  font-weight: 550;
   letter-spacing: 0.02em;
   color: var(--ink);
   white-space: nowrap;
@@ -294,7 +294,7 @@
 }
 
 .pgc-group__hint {
-  margin: 0 0 4px;
+  margin: 2px 0 7px 20px;
   font-size: var(--fs-micro);
   line-height: 1.5;
   color: var(--ink-faint);
@@ -402,7 +402,7 @@
 /* --- metrics --- */
 .pgc-metrics {
   grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
-  gap: 18px 14px;
+  gap: 22px 18px;
   background: transparent;
 }
 .pgc-metrics .pg-metric__k {
@@ -423,7 +423,7 @@
   font-size: var(--fs-sm);
   font-weight: 600;
   color: var(--ink);
-  padding: 10px 2px;
+  padding: 13px 2px;
 }
 .pgc-section > .pg-collapse__body {
   padding-bottom: 12px;

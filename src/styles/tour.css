@@ -87,7 +87,6 @@ body.pg-tour::after {
 .tour-card {
   width: 100%;
   min-width: 0;
-  border-color: var(--line-soft);
   background: var(--bg-panel);
   overflow: hidden;
 }
@@ -204,7 +203,6 @@ body.pg-tour::after {
 }
 .tour-btn--exit:hover {
   color: var(--ink);
-  border-color: var(--c-crit);
 }
 
 /* --- chapter strip ------------------------------------------------------- */
@@ -268,7 +266,6 @@ body.pg-tour::after {
 .tour-narrate {
   width: min(560px, 100%);
   padding: 12px 16px 14px;
-  border-color: var(--line-hair);
   background: var(--bg-panel);
 }
 .tour-narrate:not(.is-live) {
@@ -310,7 +307,6 @@ body.pg-tour::after {
   width: auto;
   max-width: 100%;
   flex-direction: row;
-  border-color: var(--line-soft);
 }
 .tour-first:not(.is-live) {
   display: none;
@@ -381,7 +377,6 @@ body.pg-tour::after {
   grid-row: 2;
   width: min(680px, 100%);
   max-height: min(70vh, 620px);
-  border-color: var(--line-soft);
   animation: tour-rise var(--dur) var(--ease-out-expo) both;
 }
 

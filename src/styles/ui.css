@@ -21,21 +21,21 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 16px 16px 13px;
+  padding: 18px 18px 15px;
   border-bottom: 0;
   background: transparent;
   flex: 0 0 auto;
 }
 
 .pg-panel__body {
-  padding: 12px 16px 20px;
+  padding: 14px 18px 24px;
   overflow-y: auto;
   overscroll-behavior: contain;
   min-height: 0;
 }
 
 .pg-panel__foot {
-  padding: 12px 16px;
+  padding: 14px 18px;
   border-top: 1px solid var(--line-hair);
   flex: 0 0 auto;
 }
@@ -69,8 +69,8 @@
   color: var(--ink-dim);
 }
 .pg-body {
-  font-size: var(--fs-sm);
-  line-height: 1.62;
+  font-size: var(--fs-md);
+  line-height: 1.66;
   color: var(--ink-dim);
 }
 .pg-body strong {
@@ -113,7 +113,7 @@
   color: var(--ink-dim);
   background: transparent;
   border: 0;
-  border-radius: 2px;
+  border-radius: 0;
   padding: 6px 11px;
   cursor: pointer;
   display: inline-flex;
@@ -206,11 +206,7 @@
 .pg-field {
   display: grid;
   gap: 5px;
-  padding: 9px 0;
-  border-bottom: 1px solid rgba(120, 170, 235, 0.07);
-}
-.pg-field:last-child {
-  border-bottom: 0;
+  padding: 11px 0 15px;
 }
 .pg-field__row {
   display: flex;
@@ -379,7 +375,7 @@
 .pg-metrics {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
-  gap: 18px 14px;
+  gap: 22px 18px;
   background: transparent;
   border: 0;
   border-radius: 0;
@@ -462,7 +458,7 @@
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 9px 2px;
+  padding: 12px 2px;
   background: none;
   border: 0;
   border-top: 1px solid var(--line-hair);

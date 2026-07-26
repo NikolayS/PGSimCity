@@ -16,7 +16,7 @@
   --bg-deep: #070b14;
   /* The city stays visible around a panel, not through its prose. Lower
      opacities made both contrast and rhythm depend on the district behind it. */
-  --bg-panel: rgba(10, 16, 28, 0.94);
+  --bg-panel: rgba(10, 16, 28, 0.97);
   --bg-panel-solid: #0a1020;
   --bg-raise: rgba(20, 30, 50, 0.72);
   --bg-sunken: rgba(3, 6, 12, 0.6);
@@ -75,7 +75,7 @@
 
   /* --- layout --- */
   --hud-gap: 14px;
-  --panel-w: 384px;
+  --panel-w: 420px;
   --rail-w: 296px;
 
   /* The notch, the rounded corners and the home indicator. Zero on a desktop

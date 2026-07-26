@@ -67,7 +67,7 @@
   column-gap: 14px;
   padding: 5px 10px 5px 9px;
   border: 0;
-  border-radius: 2px;
+  border-radius: 0;
   background: rgba(8, 13, 24, 0.9);
   white-space: nowrap;
   overflow: hidden;

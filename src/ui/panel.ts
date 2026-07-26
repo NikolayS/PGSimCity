@@ -360,7 +360,6 @@ export function createInspector(ctx: UiContext): UiModule {
   function renderEmpty(): HTMLElement {
     const wrap = el('div', { class: 'pgc-content pgc-empty pg-enter' })
     wrap.append(
-      el('p', { class: 'pg-eyebrow', text: 'Nothing selected' }),
       el('p', { class: 'pgc-empty__lead', text: 'Click any building.' }),
       el('p', {
         class: 'pg-hint',
