@@ -123,7 +123,9 @@ Use two-space indentation, no tabs, and quote every variable expansion.
 - Use Conventional Commits: `feat:`, `fix:`, `docs:`, `refactor:`, `chore:`.
 - Keep the subject under 50 characters and in the present tense.
 - A commit message must describe what the commit actually did. Inspect the diff
-  before naming it.
+  before naming it. One commit claimed to trace the real PostgreSQL artwork
+  while replacing genuine SVG data with hand-drawn points; that false history
+  cost five failed attempts to locate the regression.
 - Never amend or force-push unless the project owner explicitly asks.
 
 ## Agentic Engineering Rules
