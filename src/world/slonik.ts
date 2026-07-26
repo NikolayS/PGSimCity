@@ -1,4 +1,6 @@
 import * as THREE from 'three'
+import { SVGLoader } from 'three/examples/jsm/loaders/SVGLoader.js'
+import { ANCHOR, DISTRICT_BOUNDS } from './layout'
 
 /* ============================================================================
  * SLONIK — the shape of the ground PGSimCity stands on.
@@ -9,114 +11,117 @@ import * as THREE from 'three'
  * (the `O` preset) it reads as the logo.
  *
  * ---------------------------------------------------------------------------
- * THE FRAME
+ * THE ARTWORK
  *
- * The drawing is authored in "logo space" — x right, y up, exactly as the mark
- * is drawn — and mapped into the world plan by one rotation. The mapping was
- * chosen so the anatomy lands on the districts the city already has:
+ * `LOGO_OUTLINE_D` is not a hand drawing. It is the blue fill path copied from
+ * Daniel Lundin's genuine PostgreSQL elephant SVG:
  *
- *      logo +x (the elephant's back, toward the ear)  ->  world south-west
- *      logo +y (the elephant's crown)                 ->  world south-east
+ *   https://upload.wikimedia.org/wikipedia/commons/2/29/Postgresql_elephant.svg
  *
- * which puts
+ * fetched 2026-07-26, SHA-256
+ * 51f93e19516081fc7d6fe6ab9bbab07abe5f7819e28016eefacea6dea691bc54.
+ * The Commons file identifies Daniel Lundin as the author, PostgreSQL Global
+ * Development Group as copyright holder, and the PostgreSQL 3-clause licence
+ * as its redistribution terms. Slonik is also a PostgreSQL Community
+ * Association of Canada trademark; this use makes no claim of endorsement.
  *
- *      TRUNK      north, over the client terminal, the boundary fence and the
- *                 arrivals avenue — z -180 out to z ≈ -800, tapering into a curl
- *      EAR        south-west, the big rounded flap, over the HA quarter and the
- *                 recovery ground
- *      CROWN      south-east, over the standby and the backup vault
- *      BROW       east, the domed forehead, over the WAL district and the
- *                 archive estate
- *      JAW/CHEEK  west and centre, over the maintenance yard, the backend row,
- *                 the plaza and the excavation
+ * The source SVG contains white strokes, eyes, tusk and other interior paths.
+ * They are deliberately absent here: this is the single closed blue fill path,
+ * i.e. the outer silhouette only.
  *
- * Because a top-down view maps world → screen with a fixed handedness, this is
- * the only family of orientations that draws the mark the right way round (face
- * to the left, trunk falling away from it) rather than mirrored. `PLAN_UP` is
- * the world direction the overview camera puts at the top of frame.
+ * three.js r0.185.1's SVGLoader.parse() returns ShapePath objects in `.paths`;
+ * ShapePath.toShapes() is the current API (SVGLoader.createShapes is deprecated
+ * in r185). Parsing happens once at module initialisation. There is no fetch at
+ * runtime: the static bundle contains the path below.
  *
- * ---------------------------------------------------------------------------
- * EDITING THE DRAWING
+ * THE PLAN TRANSFORM
  *
- * `LOGO_PATH` is the whole design: a start point followed by cubic segments,
- * six numbers each (two control points, one anchor), read in the order the mark
- * is drawn — face, brow, crown, temple dip, ear, notch, jaw, trunk, curl, back
- * up the trunk to the face. Every district must stay inside it with margin;
- * `contains()` and `clearance()` are here so that can be asserted, not assumed.
+ * SVG x is kept rightward and SVG y-down is flipped to world north (-Z), then
+ * the mark is rigidly rotated -0.4 rad in (x,z), uniformly scaled by 2.6, and
+ * translated (-340,+690). It is NOT mirrored or stretched. Thus the trunk runs
+ * north/north-west across the client terminal, the head and ears sit south over
+ * the standby/HA/recovery districts, and the broad face covers the main city.
  * ==========================================================================*/
 
-/** World metres per logo unit. */
-const K = 17.5
-/** Where the elephant's head centre sits in the world plan. */
-const HX = 40
-const HZ = 90
+/**
+ * Outer blue fill path from the genuine SVG cited above. Keep this byte-for-byte
+ * vector data rather than replacing it with hand-authored control points.
+ */
+const LOGO_OUTLINE_D =
+  'M402.395,271.23c-50.302,10.376-53.76-6.655-53.76-6.655c53.111-78.808,75.313-178.843,56.153-203.326c-52.27-66.785-142.752-35.2-144.262-34.38l-0.486,0.087c-9.938-2.063-21.06-3.292-33.56-3.496c-22.761-0.373-40.026,5.967-53.127,15.902c0,0-161.411-66.495-153.904,83.63c1.597,31.938,45.776,241.657,98.471,178.312c19.26-23.163,37.869-42.748,37.869-42.748c9.243,6.14,20.308,9.272,31.908,8.147l0.901-0.765c-0.28,2.876-0.152,5.689,0.361,9.019c-13.575,15.167-9.586,17.83-36.723,23.416c-27.459,5.659-11.328,15.734-0.796,18.367c12.768,3.193,42.307,7.716,62.266-20.224l-0.796,3.188c5.319,4.26,9.054,27.711,8.428,48.969c-0.626,21.259-1.044,35.854,3.147,47.254c4.191,11.4,8.368,37.05,44.042,29.406c29.809-6.388,45.256-22.942,47.405-50.555c1.525-19.631,4.976-16.729,5.194-34.28l2.768-8.309c3.192-26.611,0.507-35.196,18.872-31.203l4.463,0.392c13.517,0.615,31.208-2.174,41.591-7c22.358-10.376,35.618-27.7,13.573-23.148z'
 
-const S = Math.SQRT1_2
+const SVG_TEXT = `<svg xmlns="http://www.w3.org/2000/svg"><path d="${LOGO_OUTLINE_D}"/></svg>`
+const SOURCE_SCALE = 2.6
+const SOURCE_ANGLE = -0.4
+const SOURCE_COS = Math.cos(SOURCE_ANGLE)
+const SOURCE_SIN = Math.sin(SOURCE_ANGLE)
+const SOURCE_TX = -340
+const SOURCE_TZ = 690
+
+/** Original SVG coordinates → world plan; a uniform rigid transform. */
+function sourceToWorld(x: number, y: number): [number, number] {
+  return [
+    SOURCE_TX + SOURCE_SCALE * (x * SOURCE_COS + y * SOURCE_SIN),
+    SOURCE_TZ + SOURCE_SCALE * (x * SOURCE_SIN - y * SOURCE_COS),
+  ]
+}
 
 /**
- * The drawing, in logo space. Start point, then 17 cubic segments of
- * `c1x c1y c2x c2y x y`. Closed by the last segment returning to the start.
+ * Normalised logo space → world plan. Ground dressing uses this small,
+ * source-independent coordinate frame; the plate itself uses sourceToWorld().
  */
-const LOGO_START: readonly [number, number] = [-27.0, -21.0]
-const LOGO_PATH: readonly (readonly number[])[] = [
-  // the face front, and the brow ridge above it
-  [-27.4, -12.0, -28.9, -2.0, -29.0, 6.0],
-  // the domed forehead
-  [-29.3, 15.0, -26.5, 21.5, -19.5, 24.5],
-  // over the crown
-  [-14.5, 27.5, -10.0, 29.1, -5.0, 28.8],
-  // the temple dip, between forehead and ear
-  [0.0, 28.6, 2.5, 26.7, 4.0, 25.0],
-  // the ear, rising
-  [8.0, 22.5, 13.5, 27.6, 19.5, 29.0],
-  // the ear's outer sweep
-  [30.5, 31.2, 39.0, 18.5, 37.0, 4.0],
-  [35.5, -6.0, 33.0, -12.5, 29.0, -16.0],
-  // the bottom of the ear
-  [27.0, -18.0, 25.5, -19.2, 23.5, -19.5],
-  // …and back up into the notch where the ear meets the cheek
-  [21.0, -19.0, 18.5, -16.0, 16.8, -12.2],
-  // the jaw
-  [14.5, -15.5, 9.5, -20.0, 5.0, -22.0],
-  // the corner where the trunk leaves the jaw
-  [1.5, -23.2, -1.2, -23.0, -3.4, -22.4],
-  // the trunk, front edge, tapering
-  [-7.2, -26.0, -11.8, -29.0, -17.0, -31.0],
-  [-21.2, -32.8, -25.4, -34.6, -29.5, -36.3],
-  // round the tip
-  [-33.2, -38.0, -36.8, -36.8, -37.6, -33.4],
-  // the curl, hooking back on itself
-  [-38.1, -31.4, -38.7, -29.4, -37.4, -28.4],
-  [-35.4, -27.9, -33.6, -30.0, -32.8, -32.4],
-  // the trunk's back edge, up to the face
-  [-31.3, -30.1, -28.8, -25.3, -27.0, -21.0],
-]
-
-/** Logo space → world plan. */
 export function logoToWorld(xe: number, ye: number): [number, number] {
-  return [HX + K * S * (ye - xe), HZ + K * S * (xe + ye)]
+  const k = 5.3
+  return [
+    k * (xe * SOURCE_COS - ye * SOURCE_SIN),
+    k * (xe * SOURCE_SIN + ye * SOURCE_COS),
+  ]
 }
 
 /**
  * The world direction that belongs at the top of frame in the overview shot.
- * It is the elephant's own "up" — world south-east.
+ * It is source SVG up (toward the ears), mapped into the world south-east.
  */
-export const PLAN_UP: readonly [number, number] = [S, S]
+export const PLAN_UP: readonly [number, number] = [-SOURCE_SIN, SOURCE_COS]
 
-/** One cubic segment of the outline, in world plan coordinates. */
-export interface PlanCurve {
-  c1: [number, number]
-  c2: [number, number]
-  to: [number, number]
+/** One genuine SVG segment transformed into world plan coordinates. */
+export type PlanCurve =
+  | { readonly kind: 'line'; readonly to: [number, number] }
+  | {
+      readonly kind: 'cubic'
+      readonly c1: [number, number]
+      readonly c2: [number, number]
+      readonly to: [number, number]
+    }
+
+const parsed = new SVGLoader().parse(SVG_TEXT)
+const sourceShapes = parsed.paths[0]?.toShapes() ?? []
+if (parsed.paths.length !== 1 || sourceShapes.length !== 1) {
+  throw new Error(`Slonik outline: expected one SVG path/shape, got ${parsed.paths.length}/${sourceShapes.length}`)
 }
+const sourceShape = sourceShapes[0]
+const firstCurve = sourceShape.curves[0]
+if (!(firstCurve instanceof THREE.LineCurve) && !(firstCurve instanceof THREE.CubicBezierCurve)) {
+  throw new Error('Slonik outline: unsupported first SVG curve')
+}
+const firstPoint = firstCurve instanceof THREE.LineCurve ? firstCurve.v1 : firstCurve.v0
 
-/** The outline as world-space cubics, starting from `PLAN_START`. */
-export const PLAN_START: [number, number] = logoToWorld(LOGO_START[0], LOGO_START[1])
-export const PLAN_CURVES: readonly PlanCurve[] = LOGO_PATH.map((c) => ({
-  c1: logoToWorld(c[0], c[1]),
-  c2: logoToWorld(c[2], c[3]),
-  to: logoToWorld(c[4], c[5]),
-}))
+/** The outline as world-space SVG segments, starting from `PLAN_START`. */
+export const PLAN_START: [number, number] = sourceToWorld(firstPoint.x, firstPoint.y)
+export const PLAN_CURVES: readonly PlanCurve[] = sourceShape.curves.map((curve): PlanCurve => {
+  if (curve instanceof THREE.LineCurve) {
+    return { kind: 'line', to: sourceToWorld(curve.v2.x, curve.v2.y) }
+  }
+  if (curve instanceof THREE.CubicBezierCurve) {
+    return {
+      kind: 'cubic',
+      c1: sourceToWorld(curve.v1.x, curve.v1.y),
+      c2: sourceToWorld(curve.v2.x, curve.v2.y),
+      to: sourceToWorld(curve.v3.x, curve.v3.y),
+    }
+  }
+  throw new Error(`Slonik outline: unsupported SVG curve ${curve.type}`)
+})
 
 /* --------------------------------------------------------------------------
  * Sampling.
@@ -128,7 +133,10 @@ export const PLAN_CURVES: readonly PlanCurve[] = LOGO_PATH.map((c) => ({
  * ring is not repeated at the end.
  */
 export function sampleOutline(seg = 16): Float64Array {
-  const out = new Float64Array(PLAN_CURVES.length * seg * 2)
+  const final = PLAN_CURVES[PLAN_CURVES.length - 1].to
+  const closesItself = Math.hypot(final[0] - PLAN_START[0], final[1] - PLAN_START[1]) < 1e-7
+  const pointCount = PLAN_CURVES.length * seg + (closesItself ? 0 : 1)
+  const out = new Float64Array(pointCount * 2)
   let px = PLAN_START[0]
   let pz = PLAN_START[1]
   out[0] = px
@@ -136,17 +144,22 @@ export function sampleOutline(seg = 16): Float64Array {
   let w = 2
   for (let ci = 0; ci < PLAN_CURVES.length; ci++) {
     const c = PLAN_CURVES[ci]
-    // The final segment lands back on the start point: stop one short of it.
-    const last = ci === PLAN_CURVES.length - 1 ? seg - 1 : seg
+    // Do not duplicate the first point when an SVG happens to close explicitly.
+    const last = ci === PLAN_CURVES.length - 1 && closesItself ? seg - 1 : seg
     for (let i = 1; i <= last; i++) {
       const t = i / seg
-      const u = 1 - t
-      const a = u * u * u
-      const b = 3 * u * u * t
-      const d = 3 * u * t * t
-      const e = t * t * t
-      out[w++] = a * px + b * c.c1[0] + d * c.c2[0] + e * c.to[0]
-      out[w++] = a * pz + b * c.c1[1] + d * c.c2[1] + e * c.to[1]
+      if (c.kind === 'line') {
+        out[w++] = px + (c.to[0] - px) * t
+        out[w++] = pz + (c.to[1] - pz) * t
+      } else {
+        const u = 1 - t
+        const a = u * u * u
+        const b = 3 * u * u * t
+        const d = 3 * u * t * t
+        const e = t * t * t
+        out[w++] = a * px + b * c.c1[0] + d * c.c2[0] + e * c.to[0]
+        out[w++] = a * pz + b * c.c1[1] + d * c.c2[1] + e * c.to[1]
+      }
     }
     px = c.to[0]
     pz = c.to[1]
@@ -259,6 +272,102 @@ export function rectClearance(
 }
 
 /* --------------------------------------------------------------------------
+ * Static containment audit.
+ * ------------------------------------------------------------------------*/
+
+/** Eight metres keeps district plinths comfortably inside the 2.2 m kerb. */
+const REQUIRED_CLEARANCE = 8
+const CONTINUITY_ANCHORS = [
+  'archiveGate',
+  'timelineYard',
+  'objectStore',
+  'backupVault',
+  'backupHost',
+  'recoveryGate',
+  'recoveryPad',
+  'restoreWinch',
+  'recoveryClock',
+  'recoveryReplay',
+  'rejoinBay',
+  'endpoint',
+  'consensus',
+  'leaseNode1',
+  'leaseNode2',
+  'leaseNode3',
+  'standbyB',
+  'standbyBDeck',
+  'standbyBRecv',
+] as const
+
+export interface SlonikContainmentAudit {
+  readonly requiredClearance: number
+  readonly union: PlanBounds
+  readonly districtMinimum: number
+  readonly districtAtMinimum: string
+  readonly anchorMinimum: number
+  readonly anchorAtMinimum: (typeof CONTINUITY_ANCHORS)[number]
+}
+
+/**
+ * Verify the live layout, not a stale hand-copied box. `world` is intentionally
+ * excluded: layout.ts defines it as the whole minimap, not a physical district.
+ * This runs once when the static world module loads and fails loudly if layout
+ * changes ever push a district or continuity work over the kerb.
+ */
+function auditContainment(): SlonikContainmentAudit {
+  const ring = sampleOutline(48)
+  const union: PlanBounds = { x0: Infinity, x1: -Infinity, z0: Infinity, z1: -Infinity }
+  let districtMinimum = Infinity
+  let districtAtMinimum = ''
+
+  for (const [id, bounds] of Object.entries(DISTRICT_BOUNDS)) {
+    if (id === 'world') continue
+    union.x0 = Math.min(union.x0, bounds.x[0])
+    union.x1 = Math.max(union.x1, bounds.x[1])
+    union.z0 = Math.min(union.z0, bounds.z[0])
+    union.z1 = Math.max(union.z1, bounds.z[1])
+    const c = rectClearance(ring, bounds.x[0], bounds.x[1], bounds.z[0], bounds.z[1], 96)
+    if (c < districtMinimum) {
+      districtMinimum = c
+      districtAtMinimum = id
+    }
+  }
+
+  let anchorMinimum = Infinity
+  let anchorAtMinimum: (typeof CONTINUITY_ANCHORS)[number] = CONTINUITY_ANCHORS[0]
+  for (const id of CONTINUITY_ANCHORS) {
+    const [x, , z] = ANCHOR[id]
+    union.x0 = Math.min(union.x0, x)
+    union.x1 = Math.max(union.x1, x)
+    union.z0 = Math.min(union.z0, z)
+    union.z1 = Math.max(union.z1, z)
+    const c = clearance(ring, x, z)
+    if (c < anchorMinimum) {
+      anchorMinimum = c
+      anchorAtMinimum = id
+    }
+  }
+
+  if (districtMinimum < REQUIRED_CLEARANCE || anchorMinimum < REQUIRED_CLEARANCE) {
+    throw new Error(
+      `Slonik containment failed: district ${districtAtMinimum}=${districtMinimum.toFixed(2)} m, ` +
+        `anchor ${anchorAtMinimum}=${anchorMinimum.toFixed(2)} m; required ${REQUIRED_CLEARANCE} m`,
+    )
+  }
+
+  return {
+    requiredClearance: REQUIRED_CLEARANCE,
+    union,
+    districtMinimum,
+    districtAtMinimum,
+    anchorMinimum,
+    anchorAtMinimum,
+  }
+}
+
+export const SLONIK_CONTAINMENT = auditContainment()
+
+/* --------------------------------------------------------------------------
  * Geometry helpers.
  * ------------------------------------------------------------------------*/
 
@@ -269,7 +378,11 @@ export function rectClearance(
 export function writeShape(shape: THREE.Shape): void {
   shape.moveTo(PLAN_START[0], -PLAN_START[1])
   for (const c of PLAN_CURVES) {
-    shape.bezierCurveTo(c.c1[0], -c.c1[1], c.c2[0], -c.c2[1], c.to[0], -c.to[1])
+    if (c.kind === 'line') {
+      shape.lineTo(c.to[0], -c.to[1])
+    } else {
+      shape.bezierCurveTo(c.c1[0], -c.c1[1], c.c2[0], -c.c2[1], c.to[0], -c.to[1])
+    }
   }
   shape.closePath()
 }

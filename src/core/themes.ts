@@ -254,10 +254,16 @@ export const ATMOSPHERE: Record<ThemeMode, Atmosphere> = {
     // top face only returns its own albedo when key + hemi + fill ≈ PI. Under
     // that and every lit surface reads darker than the (unlit) ground plate
     // beside it, which is what made the first pass look like night with the
-    // lights up. 2.3 + 0.95 + 0.25 = 3.5, and 0.95 exposure trims the top.
-    hemiIntensity: 0.95,
+    // lights up. 1.95 + 1.35 + 0.25 = 3.55, and 0.95 exposure trims the top.
+    //
+    // The split between the two matters as much as the sum. A cartoon shadow is
+    // a flat darker tone, not an absence of light: this weighting puts a fully
+    // shadowed face at 0.51x albedo and a sunlit one at 1.13x, which is the
+    // roughly 2:1 the drawing convention wants. Push more into the key and the
+    // excavation and every north wall go to mud.
+    hemiIntensity: 1.35,
     keyColor: 0xfff0c8, // the sun
-    keyIntensity: 2.3,
+    keyIntensity: 1.95,
     // South-east and high: the establishing shot looks north up the city axis,
     // so this lights the faces turned toward the camera and throws the shadows
     // away from it — the SimCity read.
@@ -270,7 +276,7 @@ export const ATMOSPHERE: Record<ThemeMode, Atmosphere> = {
     fillPos: [-300, 150, -230],
     walGlow: 0,
     yardGlow: 0,
-    noBloomHemi: 1.05,
+    noBloomHemi: 1.5,
     noBloomFill: 0.3,
     noBloomWalGlow: 0,
     noBloomYardGlow: 0,
@@ -430,9 +436,15 @@ export function daySurface(hex: number): number {
     // this, and stone that starts near white has nowhere left to go — it clips,
     // and a clipped face cannot show either the toon terminator or its own ink.
     const lit = 0.42 + Math.min(l, 0.4) * 0.66
-    const stone = hexOfHsl(36, 0.24, lit)
+    // Warm sandstone, and committed to it. Every structural colour in the city
+    // is a blue-grey navy, so a translation that keeps much of the source hue
+    // produces a uniformly cold grey model — technically a day theme, visually
+    // a lit night one. The hue therefore comes from the stone and only a
+    // quarter of the original survives, as the tint that keeps a pylon distinct
+    // from the wall beside it.
+    const stone = hexOfHsl(34, 0.32, lit)
     const tint = hexOfHsl(h, Math.min(s, 0.55) * 0.85, lit)
-    return mix(stone, tint, 0.4)
+    return mix(stone, tint, 0.26)
   }
   return hexOfHsl(h, Math.max(0.25, Math.min(0.8, s * 0.85)), Math.max(0.34, Math.min(0.62, 0.26 + l * 0.4)))
 }

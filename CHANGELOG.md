@@ -9,6 +9,110 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.3.0] — 2026-07-26
+
+The numbers stop being wrong, and the city stops looking like a night raid.
+
+### Fixed — the simulator
+
+- **Bottlenecks are reachable at last.** A batch controller was silently
+  cancelling every constraint in the model: sweeping the workload knob from 1 to
+  50,000 tps returned 90–100% of what was offered every time, and breaking
+  *everything* at once — 32 buffers, lock contention, no background writer,
+  `remote_apply` at 400 ms, no autovacuum — still committed 4,724 transactions a
+  second. The causes were all simulated correctly; only the effect was
+  unreachable. Achieved throughput now emerges from the model's own limits:
+  measured over ten simulated minutes at the shipped defaults, 10 tps offered
+  yields **7 achieved**, with nine checkpoints and five autovacuum runs.
+- **WAL-triggered checkpoints fire at the right threshold.** PostgreSQL uses
+  `max_wal_size / (1 + checkpoint_completion_target)` — about 53% of
+  `max_wal_size` at the default — per `CalculateCheckPointSegments()` in
+  `xlog.c`. The model used the whole of `max_wal_size`, and the countdown
+  estimate carried the same error. Both now call one shared function, so the
+  display cannot drift from the behaviour.
+- **The cache hit gauge is computed the way `pg_stat_database` computes it** —
+  `blks_hit / (blks_hit + blks_read)` — rather than as a time-average of ratios.
+  Measured at steady state it reads **87%**, against **57%** before.
+- Vacuum is charged WAL and I/O instead of being free theatre; truncation
+  returns only trailing empty pages; the autovacuum launcher no longer starves
+  large tables behind small hot ones.
+
+### Fixed — the city was telling lies
+
+- **Local memory is part of each backend, not a building beside them.**
+  `work_mem`, `maintenance_work_mem` and `temp_buffers` were drawn as one shared
+  structure next to the backend row. The prose said "per backend" and the
+  geometry said otherwise, and geometry wins: a visitor who correctly reads the
+  plaza as "one shared thing every process maps" then meets a second,
+  similar-looking memory building and reasonably concludes the wrong thing.
+- **`shared_buffers` no longer claims a maximum of 8 MiB.** The slider was
+  labelled with the literal tile count, so its ceiling was 1,024 × 8 KiB — a
+  size nobody runs. The pool is now sized in realistic units and the 1,024 tiles
+  are declared as what they are: *a 1,024-frame sample of the page cache*.
+- The plaza is called the **buffer pool**, which is the structure;
+  `shared_buffers` is the parameter that sizes it.
+
+### Changed — it no longer reads as an aerial assault
+
+- The walsender was a 49 m transmission tower with a parabolic dish, a feed
+  horn, expanding torus pulses launched along the aim vector, and a blinking
+  crimson beacon. Under load it read as a muzzle blast. It is now a cable head
+  topping out at 16.1 m — the same height as its neighbours.
+- The standby's read-only client was a ringed disc at 34 m with a lit beam
+  angling down onto the deck. It is a terminal at grade with its read path along
+  the ground.
+- Nothing was deleted outright; every mechanism was re-housed. The push that
+  spawned the torus pulses now advances a ratchet on the replication slot drum,
+  one tooth per chunk. The archive backlog strobe became a steady lamp whose
+  brightness *is* the queue depth — strictly more informative than a flash,
+  since it was previously black except when critical.
+- **Forty-three translucent materials** had turned the city to fog with no
+  silhouettes. Opacity is now a semantic tier rather than atmosphere.
+
+### Added
+
+- **A daylight theme.** The night model is "structure matte, meaning neon, only
+  neon blooms", which inverts under a bright sky — so daylight is toon shading,
+  ink lines, bloom off, sun and shadows, with every semantic colour re-derived
+  to hold its meaning on a light background.
+- **Open a page and read it.** A heap page can be opened to its real layout:
+  the header with `pd_lower` and `pd_upper`, the line pointer array growing
+  forward with `LP_NORMAL` / `LP_REDIRECT` / `LP_DEAD` distinguished, free space
+  in the middle, and tuples growing *backward* from the end — with a tuple
+  header opened to `t_xmin`, `t_xmax` and `t_ctid`, where MVCC visibility
+  actually lives. The data directory gets the same treatment.
+- **Walk mode has a floor.** It believed it was standing on something 76 m in
+  the air, which is why it felt like flying. Plus procedural footstep audio,
+  synthesised rather than sampled — no assets, no dependency — with cadence
+  driven by distance travelled, so it is correct at every gait and stops dead
+  when you stop.
+- **Backups, PITR and failover**, sited off the primary as they must be: an
+  archive estate with a timeline switchyard where the live timeline is the
+  through line and every fork is a siding that never rejoins, a recovery ground
+  on separate iron, and an HA quarter with a consensus store holding the lock
+  and no user data.
+- **Touch works properly** — one finger pans, two fingers pinch to zoom, twist
+  to turn and drag to tilt. **Mobile is usable**: worst-case chrome coverage at
+  390×844 went from 87.9% of the viewport to 48.9%, horizontal overflow from 26
+  elements to none, and touch targets under 44 px from 49 to none.
+- Left-drag pans and right-drag orbits — map convention rather than CAD.
+
+### Known issues
+
+- **The cache hit ratio is 87%, not the 98–99% a real OLTP database shows.**
+  Much better than the 57% of v0.2.0, and the gauge is now computed correctly,
+  but the working set is still sized so the pool cannot dominate it.
+- Achieved throughput sits at 70% of offered at the defaults. Some shortfall is
+  honest — a real database does not serve everything it is asked — but this has
+  not been calibrated against anything.
+- The elephant-shaped ground plate is derived from the real logo artwork; judge
+  the likeness for yourself from the plan view.
+- Mobile is verified in Chrome emulation with touch, not on a real iPhone.
+
+[0.3.0]: https://github.com/NikolayS/PGSimCity/releases/tag/v0.3.0
+
+---
+
 ## [0.2.0] — 2026-07-26
 
 You can walk into it now. Still a prototype, still contains mistakes, and this
