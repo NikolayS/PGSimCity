@@ -881,6 +881,12 @@ export function createHud(ctx: UiContext): UiModule {
         e.preventDefault()
         bus.emit('camera:mode', { mode: cameraMode === 'fly' ? 'orbit' : 'fly' })
         return
+      case 'g':
+      case 'G':
+        if (e.repeat) return
+        e.preventDefault()
+        bus.emit('camera:mode', { mode: cameraMode === 'walk' ? 'orbit' : 'walk' })
+        return
       case 'h':
       case 'H':
         if (e.repeat) return

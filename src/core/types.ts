@@ -671,7 +671,7 @@ export type ColorKey =
  * Camera.
  * -------------------------------------------------------------------------*/
 
-export type CameraMode = 'orbit' | 'fly' | 'focus' | 'tour'
+export type CameraMode = 'orbit' | 'fly' | 'focus' | 'tour' | 'walk'
 
 export interface CameraApi {
   camera: THREE.PerspectiveCamera
@@ -726,6 +726,58 @@ export interface ContentSection {
   body: string
 }
 
+/**
+ * One external pointer for the inspector's "Go deeper" block.
+ *
+ * `url` is OPTIONAL on purpose: some references are books with no canonical
+ * public page, and a guessed link is a fabricated citation. If there is no URL,
+ * there is no link — panel.ts renders those as plain text.
+ */
+export interface DocRef {
+  /** human label, e.g. "24.1. Routine Vacuuming" */
+  label: string
+  /** absolute https URL. Omit when no stable public page exists. */
+  url?: string
+  /** for source refs: the function(s) worth looking for in that file */
+  symbol?: string
+  /**
+   * false when the link works but the section/chapter number has not been
+   * re-checked against the current release. Rendered with a "†" marker, never
+   * hidden — an unverified citation the reader can see is honest; a silently
+   * confident wrong one is not.
+   */
+  verified?: boolean
+}
+
+/**
+ * Egor Rogov, "PostgreSQL 14 Internals" (Postgres Professional).
+ *
+ * A paper/PDF book. There is DELIBERATELY no `url` field on this type and
+ * panel.ts MUST NOT render one — see the comment in renderRefs().
+ */
+export interface BookRef {
+  /** e.g. "PostgreSQL 14 Internals — Egor Rogov, Postgres Professional" */
+  edition: string
+  /** e.g. "Part II. Buffer Cache and WAL" */
+  part: string
+  /** e.g. "ch. 9 Buffer Cache (Cache Hits; Cache Misses)" */
+  chapter: string
+  /** honest hedge, shown verbatim on hover, e.g. "chapter number not re-checked" */
+  confidence?: string
+}
+
+/** The reading list behind one component. Every field is optional. */
+export interface DocReferences {
+  /** postgresql.org/docs/current — the manual */
+  docs?: DocRef[]
+  /** github.com/postgres/postgres — the source */
+  source?: DocRef[]
+  /** Hironobu Suzuki, "The Internals of PostgreSQL" — interdb.jp, free online */
+  suzuki?: DocRef & { chapter: string }
+  /** Egor Rogov, "PostgreSQL 14 Internals" — citation only, never a link */
+  rogov?: BookRef
+}
+
 export interface ComponentDoc {
   id: string
   title: string
@@ -742,6 +794,14 @@ export interface ComponentDoc {
   see?: string[]
   /** source pointers for the curious, e.g. src/backend/postmaster/checkpointer.c */
   source?: string[]
+  /**
+   * Richer, linkable reading list. Optional and additive: `source` above stays
+   * the plain-path list every doc already populates, and `refs.source` carries
+   * the same files with URLs and symbols. Once all 52 docs have `refs`, a later
+   * pass can drop `source` — but not in the same change, because 52 entries and
+   * the panel renderer both depend on it today.
+   */
+  refs?: DocReferences
 }
 
 export interface TourChapter {

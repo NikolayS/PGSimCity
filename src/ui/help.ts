@@ -53,6 +53,7 @@ const APP_KEYS: KeyRow[] = [
   { keys: ['T'], what: 'Guided tour' },
   { keys: ['R'], what: 'Reset — restart with default settings' },
   { keys: ['F'], what: 'Toggle fly / orbit camera' },
+  { keys: ['G'], what: 'Get down — walk the city on foot, 1.7 m tall' },
   { keys: ['H'], what: 'Establishing shot of the whole city' },
   { keys: ['/', 'Ctrl K'], join: 'or', what: 'Command palette' },
   { keys: ['?'], what: 'This panel' },

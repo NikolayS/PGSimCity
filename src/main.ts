@@ -15,6 +15,8 @@ import { createFlows } from './engine/flows'
 import { createRoads } from './engine/roads'
 import { createLabels } from './engine/labels'
 import { createPicker } from './engine/picker'
+import { createCollisionWorld } from './engine/collision'
+import { createWalkController } from './engine/walk'
 
 import { createSim } from './sim/model'
 
@@ -115,10 +117,10 @@ async function boot(): Promise<void> {
     scene.add(m.group)
     return m
   }
-  add(createGround(ctx))
+  const groundMod = add(createGround(ctx))
 
   await progress(42, 'pouring the shared memory plaza…')
-  add(createShmem(ctx))
+  const shmemMod = add(createShmem(ctx))
 
   await progress(52, 'forking backends…')
   add(createClients(ctx))
@@ -136,6 +138,24 @@ async function boot(): Promise<void> {
   await progress(85, 'connecting the standby…')
   add(createReplication(ctx))
   add(createPlanner(ctx))
+
+  // --- collision + the pedestrian -------------------------------------------
+  // Every district is in the scene, so the registry's bounding boxes are final.
+  scene.updateMatrixWorld(true)
+  const collision = createCollisionWorld()
+  collision.build(registry)
+  // Two walkables, and only two: the ground plate — which has the excavation cut
+  // out of it, so a downward ray correctly finds nothing over the pit — and the
+  // plaza deck. Every other surface is already the top of a collider box.
+  collision.addWalkable(groundMod.group)
+  collision.addWalkable(shmemMod.group)
+  const walk = createWalkController({
+    camera,
+    dom: renderer.domElement,
+    collision,
+    bus,
+    overlayRoot: canvasRoot,
+  })
 
   await progress(90, 'painting the roads…')
   scene.add(createRoads(theme))
@@ -185,7 +205,25 @@ async function boot(): Promise<void> {
     if (applyingMode || rig.mode === mode) return
     applyingMode = true
     try {
-      rig.setMode(mode)
+      if (mode === 'walk') {
+        rig.setMode('walk') // the rig stops driving the camera…
+        void walk.enter() // …and the walker drops in from wherever it was
+      } else if (walk.enabled) {
+        // Stand up. The walker hands back a vantage point up and behind the way
+        // it was looking, and the rig flies to it, so leaving reads as stepping
+        // back out of the model rather than as a cut.
+        const view = walk.exit()
+        const dx = view.position[0] - view.target[0]
+        const dy = view.position[1] - view.target[1]
+        const dz = view.position[2] - view.target[2]
+        rig.setMode('orbit')
+        rig.focusOn(
+          { target: view.target, distance: Math.hypot(dx, dy, dz), dir: [dx, dy, dz] },
+          { duration: 1.1 },
+        )
+      } else {
+        rig.setMode(mode)
+      }
     } finally {
       applyingMode = false
     }
@@ -247,7 +285,9 @@ async function boot(): Promise<void> {
 
     // 2. camera, then everything that depends on where the camera is
     rig.update(dt)
-    const nextDetail = detailFor(rig.altitude)
+    walk.update(dt)
+    // On foot you are always up against the detail, wherever you stand.
+    const nextDetail: 0 | 1 | 2 = walk.enabled ? 2 : detailFor(rig.altitude)
     if (nextDetail !== detail) {
       detail = nextDetail
       for (const m of modules) m.setDetail?.(detail)
@@ -288,6 +328,8 @@ async function boot(): Promise<void> {
     flows.dispose()
     labels.dispose()
     picker.dispose()
+    walk.dispose()
+    collision.dispose()
     rig.dispose()
     gfx.dispose()
     theme.dispose()
@@ -311,7 +353,7 @@ async function boot(): Promise<void> {
 
   // Handy in the console. PGCITY is the pre-rename alias, kept because existing
   // notes and tooling still reach for it; both names are the same object.
-  const handle = { sim, registry, bus, rig, gfx, flows }
+  const handle = { sim, registry, bus, rig, gfx, flows, walk, collision }
   Object.assign(window as unknown as Record<string, unknown>, { PGSIMCITY: handle, PGCITY: handle })
 }
 

@@ -924,6 +924,14 @@ export function createCameraRig(
       release()
       if (m === mode) return
     }
+    if (m === 'walk') {
+      // engine/walk.ts owns camera.position and rotation from here. Zero every
+      // integrator first so nothing is still coasting underneath the walker.
+      dropPendingInput()
+      flyVel.set(0, 0, 0)
+      setMode_('walk')
+      return
+    }
     if (m === 'orbit') {
       syncOrbitFromCamera(clamp(dist, 25, 420))
       applyOrbitTransform()
@@ -970,6 +978,14 @@ export function createCameraRig(
     // A tab that was hidden hands us a huge dt; clamp so nothing teleports.
     const d = dt > 0 ? (dt < 0.1 ? dt : 0.1) : 0
     const sdt = d > 1e-4 ? d : 1e-4
+    if (mode === 'walk') {
+      // The pedestrian writes the transform this frame. Keep re-deriving the
+      // orbit state from it — the same trick the scripted modes use — so that
+      // standing back up is a mode flip with no snap.
+      dropPendingInput()
+      syncOrbitFromCamera(clamp(dist, 25, 420))
+      return
+    }
     if (mode === 'focus') {
       dropPendingInput()
       tickFocus(d)
