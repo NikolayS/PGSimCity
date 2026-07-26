@@ -5,99 +5,30 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="A version-aware 3D architecture map of Postgres observability views, functions, commands, and extensions."
+      content="Start from a symptom — slow queries, stalling writes, a table that will not stop growing — and get walked to the PostgreSQL statistics view and the column that proves it, reading live rows out of a running simulation."
     />
     <meta name="color-scheme" content="dark" />
-    <meta name="theme-color" content="#071019" />
-    <title>Postgres Observability Atlas · PGSimCity</title>
+    <meta name="theme-color" content="#04060c" />
+    <title>Diagnose · PGSimCity</title>
+
+    <!-- ============ icons ============
+         Relative, not root-absolute: this page is served from
+         /PGSimCity/observability/ on GitHub Pages, where /favicon.svg is a 404. -->
+    <link rel="icon" href="../favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="../favicon-32.png" type="image/png" sizes="32x32" />
+    <link rel="apple-touch-icon" href="../favicon-180.png" sizes="180x180" />
   </head>
   <body>
-    <main id="app">
-      <header class="topbar">
-        <a class="brand" href="../" aria-label="Back to PGSimCity">
-          <span>PG</span>SIMCITY
-          <i></i>
-          <strong>OBSERVABILITY ATLAS</strong>
-        </a>
-
-        <label class="search">
-          <span>Find a view, function, column, or subsystem</span>
-          <input id="search" type="search" placeholder="pg_stat_replication" autocomplete="off" />
-          <kbd>/</kbd>
-        </label>
-
-        <div class="view-switch" aria-label="Map projection">
-          <button id="view-depth" class="active" type="button">3D DEPTH</button>
-          <button id="view-flat" type="button">BLUEPRINT</button>
-        </div>
-      </header>
-
-      <aside class="version-panel">
-        <p>VERSION</p>
-        <nav id="versions" aria-label="Postgres version"></nav>
-      </aside>
-
-      <section class="atlas" aria-label="Postgres observability architecture map">
-        <div class="probe-bank probe-bank--left">
-          <p>QUERY & ACCESS</p>
-          <div id="probes-left"></div>
-        </div>
-
-        <div id="architecture" class="architecture">
-          <div class="architecture__heading">
-            <span id="version-caption">POSTGRES 18</span>
-            <h1>Postgres Observability</h1>
-            <p><strong id="visible-count">0</strong> views, functions, extensions & commands mapped to the engine</p>
-          </div>
-          <div class="architecture__board">
-            <svg id="flows" class="flows" aria-hidden="true"></svg>
-            <div id="nodes" class="nodes"></div>
-          </div>
-        </div>
-
-        <div class="probe-bank probe-bank--right">
-          <p>PROCESSES & DURABILITY</p>
-          <div id="probes-right"></div>
-        </div>
-      </section>
-
-      <section class="bottom-bank">
-        <p>FILESYSTEM & PHYSICAL LAYOUT</p>
-        <div id="probes-bottom"></div>
-      </section>
-
-      <aside id="inspector" class="inspector" aria-live="polite">
-        <button id="inspector-close" class="inspector__close" type="button" aria-label="Close inspector">×</button>
-        <p id="detail-type" class="eyebrow">VIEW</p>
-        <h2 id="detail-title">pg_stat_activity</h2>
-        <p id="detail-copy"></p>
-        <div id="detail-meta" class="detail-meta"></div>
-
-        <section>
-          <h3>MAP CONNECTIONS</h3>
-          <div id="detail-targets" class="detail-targets"></div>
-        </section>
-
-        <section>
-          <h3>COLUMNS / OUTPUT</h3>
-          <div id="detail-columns" class="detail-columns"></div>
-        </section>
-
-        <section id="detail-tip-wrap" class="detail-tip" hidden>
-          <h3>DBA NOTE</h3>
-          <p id="detail-tip"></p>
-        </section>
-      </aside>
-
-      <footer class="legend">
-        <div id="legend-groups" class="legend__groups"></div>
-        <p>
-          Select a version to see the observability surface change.
-          <span>Architecture and concept by <a href="https://pgstats.dev/" target="_blank" rel="noreferrer">Alexey Lesovsky / pgstats.dev</a></span>
+    <div id="app">
+      <noscript>
+        <p style="padding: 24px; font-family: system-ui; color: #e8f1ff">
+          This page reads live rows out of a PostgreSQL simulation running in your browser, so it
+          needs JavaScript. The reference it is built beside —
+          <a href="https://pgstats.dev/">Alexey Lesovsky's PostgreSQL Observability map</a> — is a
+          static diagram and needs nothing at all.
         </p>
-      </footer>
-    </main>
-
+      </noscript>
+    </div>
     <script type="module" src="/src/observability/main.ts"></script>
   </body>
 </html>
