@@ -127,10 +127,9 @@ export const KNOB_META: KnobMeta[] = [
   {
     key: 'bgwriterEnabled',
     label: 'Background writer',
-    guc: 'bgwriter_lru_maxpages',
     group: 'memory',
     kind: 'toggle',
-    hint: 'Trickles dirty pages to disk between checkpoints so backends never have to write their own. Setting bgwriter_lru_maxpages = 0 is how you actually turn it off; bgwriter_delay only changes how often it wakes.',
+    hint: 'Trickles dirty pages out just ahead of the clock sweep so backends rarely have to write a victim themselves. There is no on/off GUC — in Postgres you disable it with bgwriter_lru_maxpages = 0, the slider below; bgwriter_delay only changes how often it wakes.',
   },
   {
     key: 'bgwriterLruMaxpages',
@@ -178,7 +177,7 @@ export const KNOB_META: KnobMeta[] = [
     guc: 'full_page_writes',
     group: 'wal',
     kind: 'toggle',
-    hint: 'The first write to a page after a checkpoint logs the entire 8 KiB page — protection against torn writes, and the reason WAL volume spikes after every checkpoint.',
+    hint: 'The first write to a page after a checkpoint logs the entire 8 KiB page — protection against torn writes, and the reason WAL volume surges from the moment each checkpoint starts.',
     danger: true,
   },
   {
@@ -266,7 +265,7 @@ export const KNOB_META: KnobMeta[] = [
     label: 'Long-running transaction',
     group: 'chaos',
     kind: 'toggle',
-    hint: 'One forgotten open transaction pins the xmin horizon, and vacuum stops being able to remove anything newer. Bloat forever.',
+    hint: 'One forgotten open transaction pins the xmin horizon, so vacuum can no longer remove row versions whose deleting transaction has not fallen behind it. Bloat forever.',
     danger: true,
   },
   {

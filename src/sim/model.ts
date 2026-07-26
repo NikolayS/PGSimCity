@@ -681,6 +681,13 @@ export function createSim(bus: Bus): SimApi {
       // fsync latency: mostly fixed cost, a little size-dependent.
       flushDur = 0.085 + Math.min(0.22, flushBytes / (6 * 1024 * 1024))
       flushT = 0
+      // write() happens now; fsync() completes flushDur later. Between the two,
+      // these bytes are in the OS page cache — they survive a Postgres crash
+      // and not a power cut, which is the whole point of the walwriter doc.
+      // Handing them to the kernel is also what frees the wal_buffers ring:
+      // a WAL buffer is reusable once written, not once flushed.
+      wal.writeLsn = Math.max(wal.writeLsn, flushTarget)
+      wal.bufferBytes = Math.min(wal.bufferCapacity, wal.insertLsn - wal.writeLsn)
       flow('wal.flush', 1, 'wal_flush', 1.3)
     }
   }
@@ -698,14 +705,24 @@ export function createSim(bus: Bus): SimApi {
     if (flushing) {
       flushT += dt
       if (flushT >= flushDur) {
-        // Everything inserted while the fsync was in progress rides along with
-        // it — one flush satisfies every backend waiting below flushTarget.
-        wal.writeLsn = Math.max(wal.writeLsn, flushTarget)
-        wal.flushLsn = wal.writeLsn
+        // The fsync hardens exactly what had been written when it started, so
+        // flush catches up with write and the gap closes. One flush satisfies
+        // every backend waiting below that line — that is group commit.
+        // Records inserted while it was in flight are not covered: they stay in
+        // wal_buffers and ride the next flush, which is why a commit arriving
+        // mid-fsync waits for the one after it.
+        wal.flushLsn = Math.max(wal.flushLsn, wal.writeLsn)
         wal.bufferBytes = Math.min(wal.bufferCapacity, wal.insertLsn - wal.writeLsn)
         flushing = false
         flow('wal.write', 1, 'wal', 1.4)
         flow('wal.fsync', 1, 'wal_flush', 1.1)
+        // Anyone who asked for a flush while that one was in flight is still
+        // waiting, and in Postgres they do not wait for the WAL writer's next
+        // tick: the first of them takes WALWriteLock the moment it is free and
+        // starts the next write+fsync immediately. Under sustained load that is
+        // why fsyncs run back to back, and why the write pointer stays ahead of
+        // the flush pointer instead of the two meeting between flushes.
+        if (flushTarget > wal.flushLsn) requestFlush(flushTarget)
       }
     }
 

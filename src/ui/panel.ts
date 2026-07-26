@@ -197,7 +197,7 @@ export function createInspector(ctx: UiContext): UiModule {
       el('p', { class: 'pgc-empty__lead', text: 'Click any building.' }),
       el('p', {
         class: 'pg-hint',
-        text: 'Every structure in the city is one real mechanism inside PostgreSQL. Open one and it explains itself, with its own live counters and the parameters that govern it.',
+        text: 'Every structure in the city is one real mechanism inside Postgres. Open one and it explains itself, with its own live counters and the parameters that govern it.',
       }),
     )
 

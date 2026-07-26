@@ -9,7 +9,7 @@ import type { UiContext, UiModule } from './uikit'
  * PGSimCity — THE GUIDED TOUR
  *
  * Fourteen chapters that tell one story: a connection arrives, becomes a
- * process, becomes a plan, reads a page, writes a log record, commits, gets
+ * process, becomes a plan, reads a page, writes a WAL record, commits, gets
  * checkpointed, leaves a corpse behind, gets vacuumed — or does not — and ends
  * up on a second machine. Each chapter frames one component, may set knobs or
  * run a scenario to make its point, and hands the city back exactly as it
@@ -98,9 +98,9 @@ const STEPS: TourStep[] = [
   },
   {
     id: 'wal',
-    title: 'Writing: the log comes first',
+    title: 'Writing: WAL to disk before the page',
     body:
-      'Now something changes a row. Postgres does not go and edit the file on disk — it edits the page in memory and writes a short description of the edit into the write-ahead log. Log first, then data: that single ordering is the entire reason a crash cannot lose work you were told was committed. Watch the amber stream leave the plaza heading east, long before anything travels down to storage.',
+      'Now something changes a row. Postgres does not go and edit the file on disk — it edits the page in memory and writes a short description of the edit into the write-ahead log (WAL). WAL first, then data: the WAL record describing a change reaches durable storage before the changed page itself ever does, and that single ordering is the entire reason a crash cannot lose work you were told was committed. Watch the amber stream leave the plaza heading east, long before anything travels down to storage.',
     focus: 'wal.buffers',
     duration: 18,
     knobs: { writeRatio: 0.55, updateRatio: 0.6 },
@@ -114,7 +114,7 @@ const STEPS: TourStep[] = [
     id: 'commit',
     title: 'Commit, and what fsync costs',
     body:
-      'A commit does not wait for your data pages to reach disk; those can sit in memory for minutes. It waits for the log record describing the change to be physically flushed, and that flush is an fsync — a real, mechanical, millisecond-scale wait that no amount of RAM removes. We have just set synchronous_commit to off, so nobody waits at all. Watch the queue at the log writer drain: that is the latency you bought, and the last fraction of a second of committed transactions you agreed to lose if the power fails.',
+      'A commit does not wait for your data pages to reach disk; those can sit in memory for minutes. It waits for the WAL record describing the change to be physically flushed, and that flush is an fsync — a real, mechanical, millisecond-scale wait that no amount of RAM removes. We have just set synchronous_commit to off, so nobody waits at all. Watch the queue at the WAL writer drain: that is the latency you bought, and the last fraction of a second of committed transactions you agreed to lose if the power fails.',
     focus: 'walwriter',
     duration: 20,
     knobs: { synchronousCommit: 'off', tps: 600, writeRatio: 0.7 },
@@ -124,7 +124,7 @@ const STEPS: TourStep[] = [
     id: 'checkpoint',
     title: 'Checkpoints, and the spike',
     body:
-      'The log cannot grow forever, so the checkpointer periodically walks the whole buffer pool and writes every modified page down to storage — after which the log before that point is no longer needed to recover. We have deliberately made the log ceiling tiny, so checkpoints now fire back to back. Watch two things: the pink flood down into the pit, and the amber surge right after each one, because the first change to any page after a checkpoint has to log the entire page. That loop is what your users feel as random latency spikes.',
+      'The WAL cannot grow forever, so the checkpointer periodically walks the whole buffer pool and writes every page that was dirty when it began down to storage — after which no WAL older than the point that checkpoint started from is needed to recover. We have deliberately made the WAL ceiling (max_wal_size) tiny, so checkpoints now fire back to back. Watch two things: the pink flood down into the pit, and the amber surge that starts with each checkpoint, because the first change to any page after the checkpoint began puts the entire page into the WAL. That loop is what your users feel as random latency spikes.',
     focus: 'checkpointer',
     duration: 22,
     scenario: 'checkpoint-storm',
@@ -146,7 +146,7 @@ const STEPS: TourStep[] = [
     id: 'vacuum',
     title: 'Autovacuum cleans up',
     body:
-      'Vacuum is the other half of that bargain. The launcher notices a table holds more dead rows than its threshold allows and sends a worker out: one pass over the table, one pass over every index it owns, then back to free the space. Watch a violet worker travel to the table and the bloat bar fall behind it. Notice what does not happen — the file does not shrink. The space inside it becomes reusable, which is all you actually needed.',
+      'Vacuum is the other half of that bargain. The launcher never inspects a table — it sends a worker into one database at a time. The worker reads the statistics, finds the tables holding more dead row versions than their threshold allows, and goes to work: one pass over the table, one pass over every index it owns, then back to free the space. Watch a violet worker travel to the table and the bloat bar fall behind it. Notice what does not happen — the file does not shrink. The space inside it becomes reusable, which is all you actually needed.',
     focus: 'autovac.worker.0',
     duration: 18,
     knobs: { autovacuum: true, autovacuumScaleFactor: 0.08 },
@@ -167,7 +167,7 @@ const STEPS: TourStep[] = [
     id: 'stream',
     title: 'Streaming to a standby',
     body:
-      'The same log that makes a commit durable is what keeps a second server alive. A walsender reads the log as it is written and pushes it down one TCP connection to the standby, where a single startup process replays it into an identical copy of every page. Nothing about your SQL crosses that wire — only the physical changes it produced. Watch a record leave the vault, cross the gap, and land.',
+      'The same write-ahead log that makes a commit durable is what keeps a second server alive. A walsender reads the WAL as it is written and pushes it down one TCP connection to the standby, where a single startup process replays it into an identical copy of every page. Nothing about your SQL crosses that wire — only the physical changes it produced. Watch a record leave the vault, cross the gap, and land.',
     focus: 'walsender',
     duration: 20,
     knobs: { replicaEnabled: true, walLevel: 'replica', replicaSlowApply: false, replicaNetworkLag: 30 },
@@ -181,7 +181,7 @@ const STEPS: TourStep[] = [
     id: 'lag',
     title: 'Lag, and the four LSNs',
     body:
-      'A standby reports four positions, and confusing them is the most common mistake in Postgres monitoring: what the primary has sent, what the standby has written, what it has flushed to its own disk, and what it has actually replayed — `sent_lsn`, `write_lsn`, `flush_lsn` and `replay_lsn`. Only the last one is visible to a query running on the replica. Replay is a single process, and your primary produced that log with sixteen backends at once. Watch sent keep pace while replayed slides away from it — that gap is your replication lag.',
+      '`pg_stat_replication` on the primary carries four positions, and confusing them is the most common mistake in Postgres monitoring: what the primary has sent, and — reported back by the standby — what it has written, what it has flushed to its own disk, and what it has actually replayed: `sent_lsn`, `write_lsn`, `flush_lsn` and `replay_lsn`. Only the last one is visible to a query running on the replica. Replay is a single process, and your primary produced that WAL with sixteen backends at once. Watch sent keep pace while replayed slides away from it — that gap is your replication lag.',
     focus: 'replica.standby',
     duration: 20,
     scenario: 'replication-lag',
@@ -191,7 +191,7 @@ const STEPS: TourStep[] = [
     id: 'city',
     title: 'The whole city again',
     body:
-      'That is the entire machine. Fork a process, plan the query, pull pages into memory, log the change before making it, flush the log to keep the promise, write the pages out later, collect the dead versions, and ship the same log to a second copy. Every performance problem you will ever have in Postgres is one of those steps costing more than you expected. The console on the left drives all of it — break something, and watch which street goes quiet.',
+      'That is the entire machine. Fork a process, plan the query, pull pages into memory, write the change into the WAL before the changed page ever reaches disk, flush that WAL to keep the promise, write the pages out later, collect the dead versions, and ship the same WAL to a second copy. Every performance problem you will ever have in Postgres is one of those steps costing more than you expected. The console on the left drives all of it — break something, and watch which street goes quiet.',
     focus: 'world.ground',
     duration: 18,
     scenario: null,
