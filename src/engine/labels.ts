@@ -97,9 +97,15 @@ const PASS_SEC = 1 / 9
 const READOUT_SEC = 1 / 6
 /** Must match the opacity transition on .lbl. */
 const FADE_SEC = 0.22
-/** A label cannot be collided away inside this long of appearing. */
+/**
+ * A label cannot be collided away inside this long of appearing, nor come back
+ * inside HIDE_COOLDOWN of being dropped. Both are measured against the wall
+ * clock, not the frame delta: main.ts clamps dt to 0.1s so a stalled frame
+ * cannot teleport the city, and accumulating that would stretch a 0.7s pin into
+ * seven real seconds on a slow machine — long enough for pinned labels to sit
+ * visibly on top of each other.
+ */
 const MIN_DWELL = 0.7
-/** …nor come back inside this long of being dropped. */
 const HIDE_COOLDOWN = 0.3
 /** How long a tour/scenario focus keeps its priority boost. */
 const FOCUS_TTL = 30
@@ -111,13 +117,21 @@ const GAP_Y = 16
 const PAD_NEW = 8
 /** …a shown one tolerates this much real overlap before it is dropped. */
 const PAD_KEEP = -3
+/** What a label that MUST be placed will squeeze into as a last resort. */
+const PAD_CRAMP = -14
 /** Keep chips this far off the viewport edge. */
 const EDGE = 6
-/** Candidate offsets: home first, then other side / lifted / below. */
-const VAR_SIDE = [1, -1, 1, -1, 1, -1, 1, -1]
-const VAR_UP = [1, 1, 1, 1, -1, -1, 1, 1]
-const VAR_LIFT = [0, 0, 30, 30, 0, 0, 62, 62]
-const N_VAR = 8
+/**
+ * Candidate offsets, tried in this order: home, other side, lifted, centred,
+ * below, lifted further. 0 = centred over the anchor, which is the only thing
+ * that will seat a wide chip whose anchor sits mid-screen — there is room for
+ * it neither fully left nor fully right, and dropping it is much worse than
+ * hanging it overhead on a vertical leader.
+ */
+const VAR_SIDE = [1, -1, 1, -1, 0, 1, -1, 0, 1, -1]
+const VAR_UP = [1, 1, 1, 1, 1, -1, -1, 1, 1, 1]
+const VAR_LIFT = [0, 0, 30, 30, 0, 0, 0, 34, 62, 62]
+const N_VAR = 10
 
 /* --- collision grid ------------------------------------------------------- */
 const CELL = 96
@@ -199,10 +213,9 @@ interface Entry {
   alpha: number
   place: boolean
 
-  /* sticky state */
+  /* sticky state — wall-clock seconds, see MIN_DWELL */
   shown: boolean
-  shownT: number
-  hiddenT: number
+  sinceT: number
   variant: number
   dx: number
   dy: number
@@ -272,7 +285,10 @@ export function createLabels(container: HTMLElement, registry: Registry, bus: Bu
   let selectedId: string | null = null
   let hoveredId: string | null = null
   let focusId: string | null = null
-  let focusT = 0
+  /** Wall-clock second the focus boost expires at. */
+  let focusUntil = 0
+  /** Wall clock, seconds, sampled once per frame. */
+  let now = performance.now() / 1000
   /** Which chip the pointer is physically over, so we only emit on change. */
   let domHoverId: string | null = null
   let passT = PASS_SEC
@@ -359,8 +375,7 @@ export function createLabels(container: HTMLElement, registry: Registry, bus: Bu
       alpha: 0,
       place: false,
       shown: false,
-      shownT: 0,
-      hiddenT: HIDE_COOLDOWN,
+      sinceT: -1e6,
       variant: 0,
       dx: GAP_X,
       dy: -GAP_Y - 34,
@@ -595,7 +610,7 @@ export function createLabels(container: HTMLElement, registry: Registry, bus: Bu
   // are pointing at outranks everything but the user's own selection.
   const offFocus = bus.on('focus', ({ id }) => {
     focusId = id
-    focusT = id ? FOCUS_TTL : 0
+    focusUntil = id ? performance.now() / 1000 + FOCUS_TTL : 0
     passT = PASS_SEC
   })
 
@@ -736,7 +751,8 @@ export function createLabels(container: HTMLElement, registry: Registry, bus: Bu
 
   /** Chip top-left for variant v, in screen pixels. Writes vx / vy. */
   function variantAt(e: Entry, v: number, w: number, h: number): void {
-    vx = VAR_SIDE[v] > 0 ? e.sx + GAP_X : e.sx - GAP_X - w
+    const side = VAR_SIDE[v]
+    vx = side > 0 ? e.sx + GAP_X : side < 0 ? e.sx - GAP_X - w : e.sx - w * 0.5
     vy = VAR_UP[v] > 0 ? e.sy - GAP_Y - h - VAR_LIFT[v] : e.sy + GAP_Y + VAR_LIFT[v]
   }
 
@@ -806,7 +822,7 @@ export function createLabels(container: HTMLElement, registry: Registry, bus: Bu
       e.onScreen = true
 
       const forced = e.id === selectedId || e.id === hoveredId
-      const focused = !forced && focusT > 0 && e.id === focusId
+      const focused = !forced && now < focusUntil && e.id === focusId
       let band: number
       let vis: number
 
@@ -865,8 +881,9 @@ export function createLabels(container: HTMLElement, registry: Registry, bus: Bu
       const h = e.far ? e.farH : e.nearH
       // Selected and hovered are placed first and are never collided away;
       // anything inside its dwell is held down so nothing can blink.
-      const pinned = e.band <= B_HOVERED || (e.shown && e.shownT < MIN_DWELL)
-      const cooling = !e.shown && e.hiddenT < HIDE_COOLDOWN && e.band > B_FOCUS
+      const age = now - e.sinceT
+      const pinned = e.band <= B_HOVERED || (e.shown && age < MIN_DWELL)
+      const cooling = !e.shown && age < HIDE_COOLDOWN && e.band > B_FOCUS
       const pad = e.shown ? PAD_KEEP : PAD_NEW
       let v = -1
 
@@ -883,9 +900,19 @@ export function createLabels(container: HTMLElement, registry: Registry, bus: Bu
           }
         }
       }
-      // A pinned label goes down wherever it was, even overlapping: an awkward
-      // pair for a few frames beats a label that strobes.
-      if (v < 0 && pinned) v = e.variant
+      // A pinned label has to go down somewhere — it is the selection, or too
+      // young to drop without strobing. Take the least-bad slot: a second sweep
+      // that will accept a real but bounded overlap, and only then fall back to
+      // wherever it was.
+      if (v < 0 && pinned) {
+        for (let k = 0; k < N_VAR; k++) {
+          if (fits(e, k, w, h, PAD_CRAMP)) {
+            v = k
+            break
+          }
+        }
+        if (v < 0) v = e.variant
+      }
 
       if (v < 0) continue
       variantAt(e, v, w, h)
@@ -962,12 +989,11 @@ export function createLabels(container: HTMLElement, registry: Registry, bus: Bu
   /* --------------------------------- frame -------------------------------- */
 
   function update(dt: number, camera: THREE.PerspectiveCamera, sim: SimState): void {
+    now = performance.now() / 1000
     if (componentCount !== registry.all().length) {
       sync()
       passT = PASS_SEC
     }
-    if (focusT > 0) focusT -= dt
-
     passT += dt
     if (passT >= PASS_SEC) {
       passT = 0
@@ -979,10 +1005,8 @@ export function createLabels(container: HTMLElement, registry: Registry, bus: Bu
 
       if (e.place !== e.shown) {
         e.shown = e.place
-        e.shownT = 0
-        e.hiddenT = 0
-      } else if (e.shown) e.shownT += dt
-      else e.hiddenT += dt
+        e.sinceT = now
+      }
 
       const target = e.shown ? e.alpha : 0
       if (target > 0.01) {

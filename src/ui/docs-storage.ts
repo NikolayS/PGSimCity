@@ -65,7 +65,7 @@ const VAC_PHASE: Record<VacPhase, string> = {
   scan_heap: 'scanning heap',
   vacuum_index: 'vacuuming indexes',
   vacuum_heap: 'vacuuming heap',
-  truncate: 'truncating',
+  truncate: 'truncating heap',
   analyze: 'analyzing',
   return: 'finishing',
 }
@@ -96,11 +96,11 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     sections: [
       {
         heading: 'Why it exists',
-        body: 'Every change to a data page is described first as a WAL record, appended to a shared ring in memory called `wal_buffers`. Someone has to move those bytes to the operating system and then force them to durable storage. A committing backend can do that itself, but if every commit walks the whole path alone you pay one flush per transaction. The WAL writer runs in the background so that a large fraction of the log is already written, and often already flushed, by the time a commit asks for it.',
+        body: 'Every change to a data page is described first as a WAL record, appended to a shared ring in memory called `wal_buffers`. Someone has to move those bytes to the operating system and then force them to durable storage. A committing backend can do that itself, but if every commit walks the whole path alone you pay one flush per transaction. The WAL writer runs in the background so that a large fraction of the WAL is already written, and often already flushed, by the time a commit asks for it.',
       },
       {
         heading: 'Written is not flushed',
-        body: 'There are three positions in the log, and confusing them is the single most common misunderstanding about Postgres durability. **Insert** is how far backends have filled the buffer. **Write** is how far the bytes have been handed to the kernel with `write()` — at that point they are in the OS page cache and a Postgres crash cannot lose them, but a power cut can. **Flush** is how far `fsync()` has confirmed, and that is the only line behind which data survives losing the machine. `pg_stat_wal` counts `wal_write` and `wal_sync` separately for exactly this reason.',
+        body: 'There are three positions in the WAL, and confusing them is the single most common misunderstanding about Postgres durability. **Insert** is how far backends have filled the buffer. **Write** is how far the bytes have been handed to the kernel with `write()` — at that point they are in the OS page cache and a Postgres crash cannot lose them, but a power cut can. **Flush** is how far `fsync()` has confirmed, and that is the only line behind which data survives losing the machine. `pg_stat_io` counts WAL `writes` and `fsyncs` separately for exactly this reason (through PostgreSQL 17 those counters lived in `pg_stat_wal`, as `wal_write` and `wal_sync`).',
       },
       {
         heading: 'What actually happens at COMMIT',
@@ -112,7 +112,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'The knob that matters',
-        body: '`wal_writer_delay` and `wal_writer_flush_after` control how eagerly the writer works, but you will rarely touch them. `synchronous_commit` is the dial with real consequences, and `wal_buffers` matters only if it is tiny — the default of 1/32 of `shared_buffers` (capped at 16 MiB) is fine almost everywhere. If backends are spending time in `wal_insert` waits, the bottleneck is the log, not the writer.',
+        body: '`wal_writer_delay` and `wal_writer_flush_after` control how eagerly the writer works, but you will rarely touch them. `synchronous_commit` is the dial with real consequences, and `wal_buffers` matters only if it is tiny — the default of 1/32 of `shared_buffers` (capped at 16 MiB) is fine almost everywhere. If backends are spending time in `WALInsert` waits, the bottleneck is the WAL itself, not the writer.',
       },
     ],
     metrics: [
@@ -146,7 +146,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Recycled, not deleted',
-        body: 'When a checkpoint finishes, the segments in front of the new redo point are no longer needed for crash recovery. Rather than delete them, the checkpointer **renames** them to the filenames they will need next, so a future write lands in an already-allocated, already-zeroed file and never has to extend the filesystem mid-transaction. `min_wal_size` (80 MB by default) is how much it keeps around for that purpose; `max_wal_size` is roughly how much it is willing to accumulate before forcing a checkpoint. Both are targets, not hard limits.',
+        body: 'When a checkpoint finishes, the segments that lie entirely before the new redo point are no longer needed for crash recovery. Rather than delete them, the checkpointer **renames** them to the filenames they will need next, so a future write lands in a file that is already allocated at full size and never has to extend the filesystem mid-transaction. A recycled segment is not zeroed — the old bytes stay where they are and are simply overwritten as the WAL advances, which is why the tail of a partly used segment can still hold readable fragments of an earlier one. `min_wal_size` (80MB by default) is how much it keeps around for that purpose; `max_wal_size` is roughly how much it is willing to accumulate before forcing a checkpoint. Both are targets, not hard limits.',
       },
       {
         heading: 'Every way this directory fills up',
@@ -268,15 +268,15 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     id: 'walsender',
     title: 'WAL sender',
     subtitle: 'background process, one per consumer',
-    tldr: 'Streams WAL to a standby or subscriber, and holds log on disk on that consumer’s behalf.',
+    tldr: 'Streams WAL to a standby or subscriber, and holds WAL segments on disk on that consumer’s behalf.',
     sections: [
       {
         heading: 'What it actually does',
-        body: 'A standby connects to the primary on the normal port with a replication connection, and the postmaster forks a **walsender** dedicated to it. That process reads WAL — from the buffers if the data is still hot, otherwise from the segment files — and pushes it down the socket as it is produced, rather than waiting for a segment to fill. One walsender exists per connected standby or logical subscriber, and each appears as a row in `pg_stat_replication`.',
+        body: 'A standby connects to the primary on the normal port with a replication connection, and the postmaster forks a **walsender** dedicated to it. That process reads WAL — since PostgreSQL 17 straight out of `wal_buffers` when the data is still hot, otherwise from the segment files — and pushes it down the socket as it is produced, rather than waiting for a segment to fill. One walsender exists per connected standby or logical subscriber, and each appears as a row in `pg_stat_replication`.',
       },
       {
         heading: 'Replication slots',
-        body: 'Without a slot, the primary has no idea what a disconnected standby still needs, so a standby that is down for longer than your WAL retention comes back to `requested WAL segment has already been removed` and must be rebuilt. A **replication slot** fixes that by storing the consumer’s position durably on the primary: `restart_lsn` for physical slots, `confirmed_flush_lsn` for logical ones. WAL in front of that position is never recycled. That is the entire point of a slot, and also its entire danger.',
+        body: 'Without a slot, the primary has no idea what a disconnected standby still needs, so a standby that is down for longer than your WAL retention comes back to `requested WAL segment has already been removed` and must be rebuilt. A **replication slot** fixes that by storing the consumer’s position durably on the primary: `restart_lsn` for physical slots, `confirmed_flush_lsn` for logical ones. No WAL from that position onwards is ever recycled. That is the entire point of a slot, and also its entire danger.',
       },
       {
         heading: 'How a slot takes down a primary',
@@ -416,7 +416,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'HOT updates and page pruning',
-        body: 'Writing a new version normally means inserting into every index too, because every index entry points at a physical tuple. **HOT** — Heap Only Tuple — avoids that when two conditions hold: no indexed column changed, and the new version fits on the same page. The old line pointer is redirected to the new tuple, indexes keep pointing at the old pointer, and no index work happens at all. Better still, any backend that later reads a prunable page can run **page pruning** on the spot, collapsing dead HOT versions back into free space without waiting for vacuum. Chase `n_tup_upd` versus `n_tup_hot_upd` in `pg_stat_user_tables`; a low ratio on a hot table usually means an index on a frequently-updated column, or a `fillfactor` of 100 leaving no room to stay on-page.',
+        body: 'Writing a new version normally means inserting into every index too, because every index entry points at a physical tuple. **HOT** — Heap Only Tuple — avoids that when two conditions hold: no indexed column changed, and the new version fits on the same page. The new version goes on that same page, as a **heap-only tuple**; the old version’s `t_ctid` points at it, and the two form a HOT chain; the index entries still point at the original line pointer and an index scan simply walks the chain from there. No index work happens at all. Better still, any backend that later reads a prunable page can run **page pruning** on the spot, throwing away the dead versions without waiting for vacuum — and that is when the original line pointer becomes a **redirect** to the first live tuple in the chain, which is what keeps those index entries valid without the index ever being touched. Chase `n_tup_upd` versus `n_tup_hot_upd` in `pg_stat_user_tables`; a low ratio on a hot table usually means an index on a frequently-updated column, or the default heap `fillfactor` of 100, which leaves a freshly filled page no room for the new version — lowering it to around 90 on an update-heavy table is what buys HOT that room.',
       },
       {
         heading: 'What bloat physically is',
@@ -595,16 +595,16 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What you would see in production',
-        body: 'Install `pg_freespacemap` and `SELECT sum(avail) FROM pg_freespace(\'sessions\')` to see, in bytes, how much reusable space a table is sitting on. A table with 4 GiB of tracked free space is bloated but stable — inserts will refill it. A table with almost none, that is still growing, is either genuinely growing or has an old snapshot pinning its dead rows so vacuum cannot free anything.',
+        body: 'Install `pg_freespacemap` and `SELECT sum(avail) FROM pg_freespace(\'sessions\')` to see, in bytes, how much reusable space a table is sitting on. A table with 4 GiB of tracked free space is bloated but stable — inserts will refill it. A table with almost none, that is still growing, is either genuinely growing or has an old snapshot pinning its dead row versions so vacuum cannot free anything.',
       },
     ],
     metrics: [
       {
         label: 'Reusable space',
         get: (s) => fmtBytes(sumTables(s, (t) => t.deadTuples) * 120),
-        hint: 'rough model estimate: dead tuples × an average tuple width',
+        hint: 'rough model estimate: dead row versions × an average tuple width',
       },
-      { label: 'Dead rows', get: (s) => fmtNum(sumTables(s, (t) => t.deadTuples)) },
+      { label: 'Dead row versions', get: (s) => fmtNum(sumTables(s, (t) => t.deadTuples)) },
       { label: 'Inserts served', get: (s) => fmtNum(sumTables(s, (t) => t.inserts)) },
       { label: 'Since last vacuum', get: (s) => fmtDuration(sinceVacuum(s)), hint: 'the FSM is only refreshed by vacuum' },
     ],
@@ -633,7 +633,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'How the bits move',
-        body: 'Only vacuum sets them; any modification to a page clears them immediately, and the clearing is WAL-logged so a standby stays correct. A page can therefore lose all-visible status because of one UPDATE and stay that way until the next vacuum pass. Use the `pg_visibility` extension to see the real distribution: `pg_visibility_map_summary(\'orders\')` returns how many pages are all-visible and how many are all-frozen, which tells you honestly how much of your table index-only scans can actually skip.',
+        body: 'Vacuum sets them, with one exception: since PostgreSQL 14, `COPY … WITH (FREEZE)` into a table created or truncated in the same transaction marks each page all-visible and all-frozen as it fills it, so a freshly bulk-loaded table is ready for index-only scans without a vacuum. Any modification to a page clears both bits immediately, and the clearing is WAL-logged so a standby stays correct. A page can therefore lose all-visible status because of one UPDATE and stay that way until the next vacuum pass. Use the `pg_visibility` extension to see the real distribution: `pg_visibility_map_summary(\'orders\')` returns how many pages are all-visible and how many are all-frozen, which tells you honestly how much of your table index-only scans can actually skip.',
       },
     ],
     metrics: [
@@ -709,11 +709,11 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Torn pages',
-        body: 'An 8 KiB page is not written atomically by most storage, so a crash can leave half of one page from the new write and half from the old. WAL cannot repair that, because WAL records describe deltas to a page that must be intact to begin with. `full_page_writes` solves it by logging the entire page image the first time it is modified after each checkpoint, so recovery can rebuild the page from scratch and then replay deltas. That is why WAL volume spikes right after every checkpoint, and why turning full page writes off is only defensible on storage that genuinely offers atomic 8 KiB writes.',
+        body: 'An 8 KiB page is not written atomically by most storage, so a crash can leave half of one page from the new write and half from the old. WAL cannot repair that, because WAL records describe deltas to a page that must be intact to begin with. `full_page_writes` solves it by logging the entire page image the first time it is modified after each checkpoint, so recovery can rebuild the page from scratch and then replay deltas. That is why WAL volume surges from the moment each checkpoint begins — the redo point is stamped at the start, and from then on every page owes an image on its first modification — and why turning full page writes off is only defensible on storage that genuinely offers atomic 8 KiB writes.',
       },
       {
         heading: 'What you would see in production',
-        body: 'The healthy signature is fsync latency in the low single-digit milliseconds, with a periodic bump at the end of each checkpoint. The unhealthy one is a queue depth that never drains and commit latency that tracks it, usually because the checkpoint fsync phase collided with a burst of full-page writes. Also worth knowing: if an `fsync()` fails, Postgres deliberately PANICs rather than retrying, because on Linux a failed fsync could drop the error and let a later fsync return success on data that never landed.',
+        body: 'The healthy signature is fsync latency in the low single-digit milliseconds, with a periodic bump at the end of each checkpoint. The unhealthy one is a queue depth that never drains and commit latency that tracks it — storage that cannot absorb the checkpoint’s fsyncs on top of the ordinary WAL flush rate. Under a spread checkpoint the full-page-image surge has largely decayed by the time the fsync phase arrives, so the two costs land at opposite ends of the interval; when they do collide, it is because `max_wal_size` is forcing checkpoints early. Also worth knowing: if an `fsync()` fails, Postgres deliberately PANICs rather than retrying, because on Linux a failed fsync could drop the error and let a later fsync return success on data that never landed.',
       },
     ],
     metrics: [
@@ -725,7 +725,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         hint: 'a backend had to write a page before it could reuse the buffer',
       },
       { label: 'Checkpoint', get: (s) => CKPT_PHASE[s.checkpoint.phase], hint: 'fsync is where the latency spike lives' },
-      { label: 'Full-page burst', get: (s) => fmtPct(s.wal.fpwBurst, 0), hint: 'extra WAL from post-checkpoint page images' },
+      { label: 'Full-page burst', get: (s) => fmtPct(s.wal.fpwBurst, 0), hint: 'extra WAL from the full-page images owed since this checkpoint began' },
     ],
     knobs: ['fullPageWrites', 'synchronousCommit', 'checkpointTimeout', 'maxWalSize'],
     see: ['checkpointer', 'os.cache', 'walwriter', 'wal.vault'],
@@ -747,15 +747,15 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What actually happens',
-        body: 'The checkpointer notes the current insert position as the redo point, takes the list of buffers dirty at that instant, and writes them — nothing more. Buffers dirtied *during* the checkpoint are the next checkpoint’s problem. Once the writes are issued it enters the **fsync phase**, calling `fsync()` on every file that has been modified, including the ones ordinary backends touched and handed off via the fsync request queue. Only then does it update `pg_control` and recycle the WAL segments in front of the new redo point.',
+        body: 'The checkpointer notes the current insert position as the redo point, takes the list of buffers dirty at that instant, and writes them — nothing more. Buffers dirtied *during* the checkpoint are the next checkpoint’s problem. Once the writes are issued it enters the **fsync phase**, calling `fsync()` on every file that has been modified, including the ones ordinary backends touched and handed off via the fsync request queue. Only then does it update `pg_control` and recycle the WAL segments older than the new redo point — the position a crash recovery would now start replaying from.',
       },
       {
         heading: 'Time-triggered or WAL-triggered',
-        body: 'A checkpoint starts when `checkpoint_timeout` elapses (default 5 minutes), when WAL since the last one approaches `max_wal_size` (default 1 GB), or when something demands one — a manual `CHECKPOINT`, a shutdown, the start of a base backup. The distinction matters enormously: `checkpoint_completion_target` spreads the write phase over a fraction of the *expected interval*, so time-triggered checkpoints are gentle and WAL-triggered ones are not, because they arrive early and unexpectedly. Compare `num_timed` against `num_requested` in `pg_stat_checkpointer` (these counters lived in `pg_stat_bgwriter` before PostgreSQL 17). If requested checkpoints dominate, `max_wal_size` is too small for your write rate.',
+        body: 'A checkpoint starts when `checkpoint_timeout` elapses (default 5 minutes), when WAL since the last one approaches `max_wal_size` (default 1GB), or when something demands one — a manual `CHECKPOINT`, a shutdown, the start of a base backup. The distinction matters enormously: `checkpoint_completion_target` spreads the write phase over a fraction of the *expected interval*, so time-triggered checkpoints are gentle and WAL-triggered ones are not, because they arrive early and unexpectedly. Compare `num_timed` against `num_requested` in `pg_stat_checkpointer` (these counters lived in `pg_stat_bgwriter` before PostgreSQL 17). If requested checkpoints dominate, `max_wal_size` is too small for your write rate.',
       },
       {
         heading: 'Where the latency spike comes from',
-        body: 'The write phase is throttled and usually invisible. The fsync phase is not: it asks the storage to durably persist everything the kernel has been lazily accumulating, all at once, and while that queue drains every commit waiting on `fsync` of WAL is stuck behind it. Then, immediately afterwards, the first modification to each page logs a **full page image**, so WAL volume jumps for the next minute or so and the write path gets heavier just as it recovers. That double hump — flat latency, spike, elevated WAL — repeating at exactly `checkpoint_timeout` intervals is the most recognisable pattern in Postgres performance work.',
+        body: 'The write phase is throttled and usually invisible. The fsync phase is not: it asks the storage to durably persist everything the kernel has been lazily accumulating, all at once, and while that queue drains every commit waiting on `fsync` of WAL is stuck behind it. The other cost starts at the other end. The redo point is stamped the moment a checkpoint *begins*, and from that instant the first modification to each page logs a **full page image**, so WAL volume surges as the checkpoint starts and decays as the hot pages pay their toll — largely spent by the time the fsync phase arrives. That rhythm — a WAL surge at each checkpoint’s start, an fsync latency spike at its end, repeating at `checkpoint_timeout` intervals — is the most recognisable pattern in Postgres performance work.',
       },
       {
         heading: 'How to tune it',
@@ -885,11 +885,11 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     sections: [
       {
         heading: 'The phases, in order',
-        body: 'A vacuum is a fixed sequence, and `pg_stat_progress_vacuum` names every step. **Scan heap**: read pages (skipping all-visible ones via the visibility map) and collect the TIDs of dead tuples. **Vacuum indexes**: for each index, remove every entry pointing at a collected TID — this is why vacuum cost scales with index count, not just table size. **Vacuum heap**: return to the collected pages and turn those line pointers into free space, updating the FSM. **Cleaning up indexes**: each index gets its post-vacuum cleanup pass. **Truncate**: give back trailing empty pages if it can, and only those. ANALYZE is *not* one of these phases — autovacuum may run it against the same table straight afterwards, but it is a separate command with its own view, `pg_stat_progress_analyze`.',
+        body: 'A vacuum moves through named phases, and `pg_stat_progress_vacuum` shows which one a worker is in. **Initializing**, then **scanning heap**: read pages (skipping all-visible ones via the visibility map), pruning and freezing along the way, and collect the TIDs of the dead line pointers left behind. **Vacuuming indexes**: for each index, remove every entry pointing at a collected TID — this is why vacuum cost scales with index count, not just table size. **Vacuuming heap**: return to the collected pages and turn those line pointers into free space, recording it in the FSM. Those two are a loop rather than a straight line: if the heap has not been fully scanned yet, the worker goes back to scanning (see "Memory and repeat passes" below). **Cleaning up indexes**: one final call per index to tidy up and refresh its statistics. **Truncating heap**: give back trailing empty pages if it can, and only those. **Performing final cleanup**: vacuum the free space map, update `pg_class`, and report to the cumulative statistics. ANALYZE is *not* one of these phases — autovacuum may run it against the same table straight afterwards, but it is a separate command with its own view, `pg_stat_progress_analyze`.',
       },
       {
         heading: 'Dead is not the same as removable',
-        body: 'A tuple whose `xmax` has committed is dead, but it can only be **removed** if no snapshot anywhere could still need it. Vacuum computes a horizon from the oldest running transaction, the oldest replication slot xmin, and (if enabled) standby feedback; anything newer than that horizon stays, however dead it is. This is the mechanism behind the single most common Postgres incident: one forgotten `idle in transaction` session pins the horizon, every vacuum runs, does work, and removes nothing, and the table bloats for as long as that session stays open. `VACUUM VERBOSE` says so directly — "N dead row versions cannot be removed yet, oldest xmin: …".',
+        body: 'A tuple whose `xmax` has committed is dead, but it can only be **removed** if no snapshot anywhere could still need it. Vacuum computes a horizon from the oldest running transaction, the oldest replication slot xmin, and (if enabled) standby feedback; anything newer than that horizon stays, however dead it is. This is the mechanism behind the single most common Postgres incident: one forgotten `idle in transaction` session pins the horizon, every vacuum runs, does work, and removes nothing, and the table bloats for as long as that session stays open. `VACUUM VERBOSE` says so directly: on PostgreSQL 16 and later it prints a `tuples:` line ending "… are dead but not yet removable", followed by a `removable cutoff:` line giving the xid it was allowed to use and how many transactions old that already was when the run ended.',
       },
       {
         heading: 'Why the file usually does not shrink',
@@ -897,7 +897,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Freezing and wraparound',
-        body: 'Transaction ids are 32-bit and wrap, so every row must eventually be marked frozen — meaning "older than everything, visible to all" — before the counter laps its `xmin`. Vacuum freezes as it goes, and once a table’s oldest xid reaches `autovacuum_freeze_max_age` (200 million) an **anti-wraparound** vacuum is launched that will not be skipped and will not politely step aside for your DDL. Ignoring those is how a cluster ends up refusing new transactions with "database is not accepting commands to avoid wraparound data loss", recoverable only by a vacuum in single-user mode. Since PostgreSQL 14 a failsafe kicks in near the limit and abandons cost delays and index cleanup to finish freezing at any price.',
+        body: 'Transaction ids are 32-bit and wrap, so every row must eventually be marked frozen — meaning "older than everything, visible to all" — before the counter laps its `xmin`. Vacuum freezes as it goes, and once a table’s oldest xid reaches `autovacuum_freeze_max_age` (200 million) an **anti-wraparound** vacuum is launched that will not be skipped and will not politely step aside for your DDL. Ignoring those is how a cluster ends up refusing new transactions with "database is not accepting commands that assign new XIDs to avoid wraparound data loss in database …". Recovery is undramatic and does not need single-user mode: read-only transactions still start and `VACUUM` still runs, and the safety margin exists precisely so that you can connect normally and vacuum the offending databases. Since PostgreSQL 14 a failsafe kicks in near the limit and abandons cost delays and index cleanup to finish freezing at any price.',
       },
       {
         heading: 'Memory and repeat passes',
@@ -918,7 +918,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       {
         label: 'Blocked by horizon',
         get: (s) => (s.autovac.workers.some((w) => w.active && w.stalledByHorizon) ? 'YES — an old snapshot pins xmin' : 'no'),
-        hint: 'dead rows exist but cannot be removed yet',
+        hint: 'dead row versions exist but cannot be removed yet',
       },
       {
         label: 'Oldest snapshot',
@@ -951,7 +951,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'VACUUM FULL and the alternatives',
-        body: '`VACUUM FULL` rewrites the entire table into a fresh relfilenode, tightly packed, and rebuilds every index. It gives the space back completely, and it holds an `ACCESS EXCLUSIVE` lock for the whole rewrite — reads and writes both blocked, for as long as it takes to copy the table — while needing enough free disk for a second copy. `pg_repack` and `pg_squeeze` do the same job online, maintaining a shadow copy through triggers and swapping at the end under a brief exclusive lock. They are extensions, they need that free space too, and they are the right tool when downtime is not available.',
+        body: '`VACUUM FULL` rewrites the entire table into a fresh relfilenode, tightly packed, and rebuilds every index. It gives the space back completely, and it holds an `ACCESS EXCLUSIVE` lock for the whole rewrite — reads and writes both blocked, for as long as it takes to copy the table — while needing enough free disk for a second copy. `pg_repack` and `pg_squeeze` do the same job online: each builds a tightly packed shadow copy while the table stays writable — `pg_repack` captures the concurrent changes with triggers, `pg_squeeze` decodes them out of the WAL through a replication slot, so it needs `wal_level = logical` — and swaps the copy in at the end under a brief exclusive lock. They are extensions, they need that free space too, and they are the right tool when downtime is not available.',
       },
       {
         heading: 'What you would see in production',
@@ -987,11 +987,11 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     sections: [
       {
         heading: 'What it actually does',
-        body: 'Backends write log lines to stderr. With `logging_collector = on`, a dedicated process reads that pipe and writes rotated files under `log_directory`, which is what makes the log survive restarts, rotate by size and age, and not interleave badly across processes. `log_destination` chooses the format: `stderr`, `csvlog`, or `jsonlog` (added in PostgreSQL 15), the latter two being the ones you want if anything machine-readable consumes the log.',
+        body: 'Backends write log lines to stderr. With `logging_collector = on`, a dedicated process reads that pipe and writes rotated files under `log_directory`, which is what makes the server log survive restarts, rotate by size and age, and not interleave badly across processes. `log_destination` chooses the format: `stderr`, `csvlog`, or `jsonlog` (added in PostgreSQL 15), the latter two being the ones you want if anything machine-readable consumes the server log.',
       },
       {
         heading: 'log_line_prefix comes first',
-        body: 'A log without context is a log you cannot use. Set `log_line_prefix` to something like `%m [%p] %q%u@%d app=%a ` so every line carries a timestamp with milliseconds, the process id, and — for lines from real sessions — the user, database and application name. The default is close to useless, and every log-analysis tool worth running (pgBadger among them) needs the prefix to be sane before it can tell you anything.',
+        body: 'A log line without context is a log line you cannot use. Set `log_line_prefix` to something like `%m [%p] %q%u@%d app=%a ` so every line carries a timestamp with milliseconds, the process id, and — for lines from real sessions — the user, database and application name. The default is close to useless, and every log-analysis tool worth running (pgBadger among them) needs the prefix to be sane before it can tell you anything.',
       },
       {
         heading: 'The four settings that matter',
@@ -1127,11 +1127,11 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Three positions, three guarantees',
-        body: '**Received** means the bytes are in the standby’s memory. **Written** means they have gone to the kernel with `write()`, so a Postgres crash on the standby will not lose them. **Flushed** means `fsync()` has returned and they survive the standby losing power. These map exactly onto `synchronous_commit` levels: `remote_write` waits for written, plain `on` waits for flushed. The difference is not academic — a synchronous standby that only ever writes is not protecting you against the failure mode where both machines lose power together.',
+        body: '**Received** means the bytes are in the standby’s memory. **Written** means they have gone to the kernel with `write()`, so a Postgres crash on the standby will not lose them. **Flushed** means `fsync()` has returned and they survive the standby losing power. These map onto the `synchronous_commit` levels that involve a standby at all — which only happens once this standby is named in `synchronous_standby_names`: `remote_write` then waits for written, plain `on` for flushed, `remote_apply` for applied. Without that setting, `on` means a local flush on the primary and nothing here is in the commit path at all. The difference is not academic — a synchronous standby that only ever writes is not protecting you against the failure mode where both machines lose power together.',
       },
       {
         heading: 'When the link breaks',
-        body: 'If the connection drops the receiver retries every `wal_retrieve_retry_interval`, and if a `restore_command` is configured it can fall back to reading segments from the archive instead, which is how a standby that was offline for a day catches up without a rebuild. If neither source can supply the needed segment — because the primary recycled it and there was no slot — the standby stops with `requested WAL segment has already been removed` and must be re-seeded.',
+        body: 'If the connection drops, the receiver simply exits — what happens next is the startup process’s decision. It waits `wal_retrieve_retry_interval` and starts a fresh walreceiver, and if a `restore_command` is configured it can pull the missing segments out of the archive instead, which is how a standby that was offline for a day catches up without a rebuild. If neither source can supply the needed segment — because the primary recycled it and there was no slot — the standby stops with `requested WAL segment has already been removed` and must be re-seeded.',
       },
       {
         heading: 'What you would see in production',
@@ -1141,7 +1141,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     metrics: [
       { label: 'Link', get: (s) => (s.replication.connected ? 'streaming' : s.replication.enabled ? 'reconnecting' : 'no standby') },
       { label: 'Written', get: (s) => fmtLsn(s.replication.writeLsn) },
-      { label: 'Flushed', get: (s) => fmtLsn(s.replication.flushLsn), hint: 'durable on the standby — what synchronous_commit=on waits for' },
+      { label: 'Flushed', get: (s) => fmtLsn(s.replication.flushLsn), hint: 'durable on the standby — what synchronous_commit=on waits for, once this standby is in synchronous_standby_names' },
       {
         label: 'Not yet applied',
         get: (s) => fmtBytes(Math.max(0, s.replication.flushLsn - s.replication.replayLsn)),
@@ -1206,7 +1206,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Read-only, with a catch',
-        body: 'With `hot_standby = on` (the default) you can run queries while replay continues. But replay and queries want opposing things: replay wants to remove a dead row, your query wants to keep reading it. When they collide the standby waits up to `max_standby_streaming_delay` (30 seconds by default) and then **cancels the query** — `canceling statement due to conflict with recovery`. Setting that to `-1` means replay waits forever instead, converting query cancellations into unbounded replication lag. There is no setting that avoids the trade; you choose which side pays.',
+        body: 'With `hot_standby = on` (the default) you can run queries while replay continues. But replay and queries want opposing things: replay wants to remove a dead row, your query wants to keep reading it. When they collide the standby is allowed to hold replay back by up to `max_standby_streaming_delay` (30 seconds by default) and then **cancels the conflicting query** — `canceling statement due to conflict with recovery`. It is a budget for how far behind replay may fall, measured from when the WAL arrived, not a grace period each query is granted: on a standby that is already lagging, the budget can be spent before your query even starts. Setting that to `-1` means replay waits forever instead, converting query cancellations into unbounded replication lag. There is no setting that avoids the trade; you choose which side pays.',
       },
       {
         heading: 'The four LSNs',

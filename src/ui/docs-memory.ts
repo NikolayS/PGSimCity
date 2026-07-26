@@ -106,7 +106,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What you would see in production',
         body:
-          'On a real box, `ps` shows one `postgres` parent and a long list of children: `checkpointer`, `background writer`, `walwriter`, `autovacuum launcher`, `logical replication launcher`, plus one process per client. `pg_stat_activity` has exactly one row per backend. If the Linux OOM killer picks off any one of those children, every connection dies at once and the log says the database system is in recovery mode. That is not a bug; it is the price of the shared segment.',
+          'On a real box, `ps` shows one `postgres` parent and a long list of children: `checkpointer`, `background writer`, `walwriter`, `autovacuum launcher`, `logical replication launcher`, plus one process per client. `pg_stat_activity` has exactly one row per backend. If the Linux OOM killer picks off any one of those children, every connection dies at once and the server log says the database system is in recovery mode. That is not a bug; it is the price of the shared segment.',
       },
     ],
     metrics: [
@@ -130,7 +130,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'One line, two worlds',
         body:
-          'Postgres moves data in fixed 8 KiB pages, and every page is in exactly one of three places: in `shared_buffers`, in the operating system page cache, or on the storage device. Reading a page from shared memory is a pointer dereference measured in nanoseconds. Reading it from the OS cache costs a syscall and a copy, typically single-digit microseconds. Reading it from an NVMe device is typically tens to hundreds of microseconds, and from network storage, milliseconds. Those gaps are not a detail of the implementation — they are the shape of every performance problem you will ever have.',
+          'Postgres moves data in fixed 8 KiB pages, and a page can be served from three places: `shared_buffers`, the operating system page cache, or the storage device. Those are layers, not alternatives — Postgres does ordinary buffered file I/O, so a page pulled into `shared_buffers` usually leaves a copy in the OS cache, with a version on disk underneath it (an older one, until the dirty page is written back). What decides your latency is the shallowest layer that still holds the page. Reading a page from shared memory is a pointer dereference measured in nanoseconds. Reading it from the OS cache costs a syscall and a copy, typically single-digit microseconds. Reading it from an NVMe device is typically tens to hundreds of microseconds, and from network storage, milliseconds. Those gaps are not a detail of the implementation — they are the shape of every performance problem you will ever have.',
       },
       {
         heading: 'Why almost every question reduces to this',
@@ -145,7 +145,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What you would see in production',
         body:
-          'A cache miss is not the end of the world; a *storm* of them is. In `pg_stat_io` you can see reads attributed to client backends, to vacuum and to the checkpointer separately. When a table stops fitting in memory, latency does not degrade gently — it steps, because a plan that was doing random index lookups against RAM is now doing random reads against a device. The same query, the same plan, ten to a hundred times slower.',
+          'A cache miss is not the end of the world; a *storm* of them is. In `pg_stat_io` you can see reads attributed to client backends and to autovacuum workers separately — and note that the checkpointer and the background writer never read pages at all, so their `reads` cells are NULL. When a table stops fitting in memory, latency does not degrade gently — it steps, because a plan that was doing random index lookups against RAM is now doing random reads against a device. The same query, the same plan, ten to a hundred times slower.',
       },
     ],
     metrics: [
@@ -191,7 +191,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What you would see in production',
         body:
-          "The classic shape is a system that is fine at 200 connections and falls over at 600, with CPU dominated by system time and `pg_stat_activity` full of sessions in state 'idle'. Idle is not free: an idle session still owns a process and a slot, and an idle session inside a transaction is far worse — it holds its locks and can hold back cleanup for the whole cluster. Set `idle_in_transaction_session_timeout` so a forgotten transaction cannot do that indefinitely.",
+          "The classic shape is a system that is fine at 200 connections and falls over at 600, with CPU dominated by system time and `pg_stat_activity` full of sessions in state 'idle'. Idle is not free: an idle session still owns a process and a slot, and an idle session inside a transaction is far worse — it holds its locks and, once it has written anything or is holding a snapshot open, holds back cleanup for every table in its database. Set `idle_in_transaction_session_timeout` so a forgotten transaction cannot do that indefinitely.",
       },
     ],
     metrics: [
@@ -265,7 +265,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What you would see in production',
         body:
-          'In the log this looks like a terse sequence: a message that a server process was terminated by signal 9, then that the server is terminating all other active server processes, then that all connections were closed because another server process exited abnormally, then the database system is in recovery mode. Applications see every connection drop at the same instant. Recovery time is bounded by how much WAL was written since the last checkpoint, which is exactly what `checkpoint_timeout` and `max_wal_size` are trading against.',
+          'In the server log this looks like a terse sequence: a message that a server process was terminated by signal 9, then that the server is terminating all other active server processes, then that all connections were closed because another server process exited abnormally, then the database system is in recovery mode. Applications see every connection drop at the same instant. Recovery time is bounded by how much WAL was written since the last checkpoint, which is exactly what `checkpoint_timeout` and `max_wal_size` are trading against.',
       },
     ],
     metrics: [
@@ -336,12 +336,12 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'Every state this tower can be in',
         body:
-          "`idle` means connected with no transaction open — harmless. `parse` and `plan` are usually microseconds unless the statement is enormous. `exec_cpu` is real work on real data in memory; `exec_io` is the same query waiting for a page to arrive from storage. `sort` means a sort or hash exceeded `work_mem` and is spilling to a temp file. `wal_insert` is copying a WAL record into the shared WAL buffers; `commit_wait` is the fsync at commit, and possibly a round trip to a synchronous standby. `blocked` means it is queued behind someone else's heavyweight lock. `sending` is pushing result rows down the socket, which can dominate for wide result sets on slow clients.",
+          "`idle` means connected with no transaction open — harmless. `parse` and `plan` are usually microseconds unless the statement is enormous. `exec_cpu` is real work on real data in memory; `exec_io` is the same query waiting for a page to arrive from storage. `sort` means the backend is inside a sort or hash node — where a real one would discover whether the data fits in `work_mem` or has to spill to a temp file. `wal_insert` is copying a WAL record into the shared WAL buffers; `commit_wait` is the fsync at commit, and possibly a round trip to a synchronous standby. `blocked` means it is queued behind someone else's heavyweight lock. `sending` is pushing result rows down the socket, which can dominate for wide result sets on slow clients.",
       },
       {
         heading: 'Idle in transaction, and why it is dangerous',
         body:
-          "`idle in transaction` means the client ran `BEGIN`, did some work, and then went away to do something else — an HTTP call, a queue publish, a garbage collection pause. The transaction is still open, so every lock it took is still held, its transaction id is still marked running, and the cleanup horizon for the entire cluster may not advance past it. Minutes of that on a busy table produce bloat that outlives the incident by weeks. Set `idle_in_transaction_session_timeout`, and in modern versions `transaction_timeout` (PG 17) as a backstop for transactions that are slow rather than idle.",
+          "`idle in transaction` means the client ran `BEGIN`, did some work, and then went away to do something else — an HTTP call, a queue publish, a garbage collection pause. The transaction is still open, so every lock it took is still held. Whether it also blocks cleanup depends on what it holds: if it has written anything, its transaction id is still marked running and the cleanup horizon for every table in that database cannot advance past it; if it is in `REPEATABLE READ` or `SERIALIZABLE`, or it left a cursor open, its snapshot pins the horizon the same way. A read-only `READ COMMITTED` session sitting between statements holds neither — which is why `backend_xid` and `backend_xmin` in `pg_stat_activity`, and not the `idle in transaction` state on its own, tell you who is holding the line. Minutes of that on a busy table produce bloat that outlives the incident by weeks. Set `idle_in_transaction_session_timeout`, and in modern versions `transaction_timeout` (PG 17) as a backstop for transactions that are slow rather than idle.",
       },
       {
         heading: 'What you would see in production',
@@ -375,7 +375,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'The unit that catches everyone',
         body:
-          'A backend allocates its private memory in contexts that are reset when a query ends, so leaks are rare. What is not rare is misjudging the multiplier. `work_mem` (default 4MB) is the budget for *one* sort, hash join, hash aggregate or bitmap. A plan with three hash joins and a sort can use four times `work_mem`; run it with two parallel workers and each worker gets its own copy. The correct mental model is `work_mem` multiplied by concurrent memory-hungry nodes multiplied by concurrent backends, and that product is what the machine must actually have.',
+          'A backend allocates its private memory in contexts that are reset when a query ends, so leaks are rare. What is not rare is misjudging the multiplier. `work_mem` (default 4 MiB) is the budget for *one* sort, hash join, hash aggregate or bitmap. A plan with three hash joins and a sort can use four times `work_mem`; run it with two parallel workers and each worker gets its own copy. The correct mental model is `work_mem` multiplied by concurrent memory-hungry nodes multiplied by concurrent backends, and that product is what the machine must actually have.',
       },
       {
         heading: 'What happens when it is not enough',
@@ -385,7 +385,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'The other two budgets',
         body:
-          '`maintenance_work_mem` (default 64MB) is used by `VACUUM`, `CREATE INDEX` and `ALTER TABLE`, not by ordinary queries — there are few of these running at once, so it can be far larger than `work_mem`, and index builds get dramatically faster with more of it. Autovacuum workers use `autovacuum_work_mem` if it is set, otherwise the same value, multiplied by `autovacuum_max_workers`. `temp_buffers` (default 8MB) is a per-session cache for temporary tables only; it is allocated lazily and cannot be changed once the session has touched a temp table.',
+          '`maintenance_work_mem` (default 64 MiB) is used by `VACUUM`, `CREATE INDEX` and `ALTER TABLE`, not by ordinary queries — there are few of these running at once, so it can be far larger than `work_mem`, and index builds get dramatically faster with more of it. Autovacuum workers use `autovacuum_work_mem` if it is set, otherwise the same value, multiplied by `autovacuum_max_workers`. `temp_buffers` (default 8 MiB) is a per-session cache for temporary tables only; it is allocated lazily and cannot be changed once the session has touched a temp table.',
       },
       {
         heading: 'What you would see in production',
@@ -394,7 +394,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       },
     ],
     metrics: [
-      { label: 'Spilling to disk', get: (s) => `${fmtNum(nIn(s, 'sort'))} backends`, hint: 'sorts and hashes exceeding work_mem' },
+      { label: 'Sorting or hashing', get: (s) => `${fmtNum(nIn(s, 'sort'))} backends`, hint: 'backends inside a sort or hash node — the model does not simulate work_mem, so it cannot say which of them would spill' },
       { label: 'Running', get: (s) => fmtNum(nIn(s, ...BUSY)) },
       { label: 'Seq scan share', get: (s) => fmtPct(nz(s.knobs?.seqScanRatio)), hint: 'more scanning means more to sort and hash' },
       { label: 'Rows returned', get: (s) => fmtNum(nz(s.stats?.tupReturned)), hint: 'cumulative tuples handed to clients' },
@@ -452,12 +452,12 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What it actually is',
         body:
-          'A single array of 8 KiB frames, and a parallel array of descriptors — one per frame — holding the page identity (relation, fork, block number), a reference count, a usage count and flags such as dirty and valid. No process reads or writes a data page anywhere else. To read a row you find or load its page here; to modify a row you modify the copy here and mark the frame dirty. Writing to disk is a separate concern handled later by somebody else. The default `shared_buffers` of 128MB is a starting value chosen to boot anywhere, not a recommendation.',
+          'A single array of 8 KiB frames, and a parallel array of descriptors — one per frame — holding the page identity (relation, fork, block number), a reference count, a usage count and flags such as dirty and valid. No process reads or writes a data page anywhere else. To read a row you find or load its page here; to modify a row you modify the copy here and mark the frame dirty. Writing to disk is a separate concern handled later by somebody else. The default `shared_buffers` of 128 MiB is a starting value chosen to boot anywhere, not a recommendation.',
       },
       {
         heading: 'Pins, content locks and usage counts',
         body:
-          'Before touching a page a backend *pins* it, which increments the reference count and guarantees the frame will not be recycled underneath it. A pin says nothing about the contents, so a second, shorter lock protects those: shared for readers, exclusive for writers, held only while the page is actually being examined or changed. Pinning also bumps the frame usage count, which saturates at 5. Pins are the reason a hot page never gets evicted mid-scan, and a leaked pin is the reason a vacuum can occasionally not truncate a page it otherwise could.',
+          'Before touching a page a backend *pins* it, which increments the reference count and guarantees the frame will not be recycled underneath it. A pin says nothing about the contents, so a second, shorter lock protects those: shared for readers, exclusive for writers, held only while the page is actually being examined or changed. Pinning also bumps the frame usage count, which saturates at 5. Pins are the reason a hot page never gets evicted mid-scan, and a page somebody else has pinned is the reason vacuum sometimes leaves dead tuples behind: pruning a page needs a *cleanup lock* — the exclusive content lock plus the only pin on the frame — so a page still pinned when vacuum arrives, classically by a cursor paused on it, keeps its corpses until a later pass.',
       },
       {
         heading: 'Finding a victim: the clock sweep',
@@ -547,7 +547,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'How a row version is judged',
         body:
-          'Each row version carries `xmin` (the transaction that created it) and `xmax` (the transaction that deleted or superseded it, if any). A version is visible if its creator committed and is visible to your snapshot, and its deleter either does not exist, aborted, or is not visible to your snapshot. That test needs commit status, which comes from the commit log, cached and then cached again in the row itself as a hint bit. This is MVCC: readers never block writers and writers never block readers, at the cost of leaving old versions behind for vacuum.',
+          'Each row version carries `xmin` (the transaction that created it) and `xmax` (the transaction that deleted or superseded it, if any). A version is visible if its creator committed and is visible to your snapshot, and its deleter either does not exist, aborted, or is not visible to your snapshot. That test needs commit status, which comes from the commit log, cached and then cached again in the row itself as a hint bit. Your own open transaction is the one case the snapshot does not decide: you do see rows your earlier statements inserted and you no longer see rows they deleted, although nothing has committed — that is settled by the command counters `cmin` and `cmax`, checked before any commit status is consulted. This is MVCC: readers never block writers and writers never block readers, at the cost of leaving old versions behind for vacuum.',
       },
       {
         heading: 'Why taking one has to be cheap',
@@ -562,7 +562,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What you would see in production',
         body:
-          '`pg_stat_activity.backend_xid` is set only once a transaction has written something — read-only transactions do not consume transaction ids. `backend_xmin` shows what a session is holding the cluster back to. `SELECT pg_current_snapshot()` returns the raw `xmin:xmax:in-progress` triple if you want to see one directly.',
+          '`pg_stat_activity.backend_xid` is set only once a transaction has written something — read-only transactions do not consume transaction ids. `backend_xmin` is the xmin horizon of that one backend — how far back it is pinning cleanup for every table in its database. `SELECT pg_current_snapshot()` returns the raw `xmin:xmax:in-progress` triple if you want to see one directly.',
       },
     ],
     metrics: [
@@ -585,12 +585,12 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     id: 'xmin.horizon',
     title: 'The xmin Horizon',
     subtitle: 'the oldest thing anybody might still need to see',
-    tldr: 'Vacuum may only remove row versions dead to everyone — one old transaction freezes that line for the whole cluster.',
+    tldr: 'Vacuum may only remove row versions dead to everyone — one old transaction pins that line for every table in its database.',
     sections: [
       {
         heading: 'What the horizon is',
         body:
-          'Take the `xmin` of every snapshot currently held anywhere in the cluster and keep the oldest. That number is the horizon. A dead row version can be removed only if the transaction that deleted it committed *before* the horizon — otherwise somebody could still legitimately need to see the old version. This is not a per-table or per-session rule. One session holds the line for everyone.',
+          'Take the `xmin` of every snapshot held by a backend in your database and keep the oldest — that number is the horizon. Replication slots, and any standby sending `hot_standby_feedback`, feed their xmins in too, and those hold the horizon back in every database. A dead row version can be removed only once the transaction that deleted it has committed *and* its xid has fallen behind the horizon — otherwise somebody could still legitimately need to see the old version. This is not a per-table or per-session rule: one session pins the line for every table in its own database, and the shared catalogs are pinned by the oldest snapshot anywhere in the cluster.',
       },
       {
         heading: 'The most destructive mistake in Postgres',
@@ -619,16 +619,16 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         label: 'Vacuum stalled',
         get: (s) => `${fmtNum((s.autovac?.workers ?? []).filter((w) => w && w.active && w.stalledByHorizon).length)} workers`,
-        hint: 'workers that found dead rows they are not allowed to remove',
+        hint: 'workers that found dead row versions they are not yet allowed to remove',
       },
-      { label: 'Dead tuples', get: (s) => fmtNum(sumTables(s, (t) => t.deadTuples)), hint: 'across all tables' },
+      { label: 'Dead row versions', get: (s) => fmtNum(sumTables(s, (t) => t.deadTuples)), hint: 'across all tables' },
       {
         label: 'Worst table',
         get: (s) => {
           const w = worstBloat(s)
           return `${w.name} ${fmtPct(w.bloat)}`
         },
-        hint: 'highest dead-tuple fraction',
+        hint: 'highest fraction of dead row versions',
       },
     ],
     knobs: ['longRunningXact', 'autovacuum', 'autovacuumScaleFactor'],
@@ -718,7 +718,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What you would see in production',
         body:
-          'Wait events named after the SLRUs — `SLRU` as the wait event type, with names like `TransactionBuffer` or `SubtransBuffer` — mean a working set of transaction ids larger than the cache, typically from very long transactions coexisting with a high commit rate, or from subtransaction overflow. Vacuum eventually truncates `pg_xact` as the frozen transaction id advances, which is one of the quieter reasons vacuum is not optional.',
+          'Wait events named after the SLRUs mean a working set of transaction ids larger than the cache, typically from very long transactions coexisting with a high commit rate, or from subtransaction overflow. There is no `SLRU` wait event type: `wait_event_type` is `LWLock`, and the names are `XactBuffer` and `XactSLRU` for `pg_xact`, `SubtransBuffer` and `SubtransSLRU` for `pg_subtrans` — the `…Buffer` events are waits on page I/O, the `…SLRU` events waits to reach the cache itself. PG 17 renamed the sizing parameters to `transaction_buffers` and `subtransaction_buffers`, but the wait events kept the older `Xact` and `Subtrans` spellings. `pg_stat_slru` gives the hit and read counts for each cache directly. Vacuum eventually truncates `pg_xact` as the frozen transaction id advances, which is one of the quieter reasons vacuum is not optional.',
       },
     ],
     metrics: [
@@ -751,12 +751,12 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What is counted, and where to read it',
         body:
-          '`pg_stat_user_tables` has sequential and index scans, tuples inserted, updated, deleted, live and dead tuple estimates, and the timestamps of the last vacuum and analyze. `pg_statio_user_tables` and `pg_stat_io` (PG 16) cover block reads and writes; `pg_stat_database` aggregates per database; `pg_stat_wal` covers WAL volume; `pg_stat_replication` covers standbys; and since PG 17 checkpoint counters live in `pg_stat_checkpointer` rather than `pg_stat_bgwriter`. All are cumulative since the last `pg_stat_reset*` call, so what you want from them is almost always a rate, not a value.',
+          "`pg_stat_user_tables` has sequential and index scans, tuples inserted, updated, deleted, live and dead tuple estimates, and the timestamps of the last vacuum and analyze. `pg_statio_user_tables` and `pg_stat_io` (PG 16) cover block reads and writes; `pg_stat_database` aggregates per database; `pg_stat_wal` covers WAL volume; and since PG 17 checkpoint counters live in `pg_stat_checkpointer` rather than `pg_stat_bgwriter`. (`pg_stat_replication`, despite the name, is a live view of each standby's positions, not a counter set.) The cumulative views count from the last `pg_stat_reset*` call, so what you want from them is almost always a rate, not a value.",
       },
       {
         heading: 'What autovacuum does with them',
         body:
-          'The autovacuum launcher reads these counters to decide what to work on. A table qualifies for vacuum when its dead tuple estimate exceeds `autovacuum_vacuum_threshold` plus `autovacuum_vacuum_scale_factor` times its live tuple count — 50 plus 20% by default, which is far too lazy for a large hot table and is the most commonly overridden pair of settings in Postgres. Analyze has its own threshold, and since PG 13 inserts alone can trigger a vacuum through `autovacuum_vacuum_insert_threshold`, so that append-only tables still get their visibility map maintained.',
+          'Autovacuum workers read these counters to decide what to work on; the launcher only picks which database gets the next worker. A table qualifies for vacuum when its dead tuple estimate exceeds `autovacuum_vacuum_threshold` plus `autovacuum_vacuum_scale_factor` times its live tuple count — 50 plus 20% by default, which is far too lazy for a large hot table and is the most commonly overridden pair of settings in Postgres. Analyze has its own threshold, and since PG 13 inserts alone can trigger a vacuum through `autovacuum_vacuum_insert_threshold`, so that append-only tables still get their visibility map maintained.',
       },
       {
         heading: 'Two things people conflate',
@@ -785,7 +785,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'How a record gets in',
         body:
-          'A backend builds a WAL record in its own memory first — the change, the block references, and any full-page images. Then it reserves space in the shared ring with an atomic bump of the insert position, takes one of a small number of WAL insertion locks (eight of them, so several backends can copy in parallel), copies the bytes in, and releases. The reservation and the copy are separate on purpose: the position advances without serialising everyone behind a single lock.',
+          'A backend builds a WAL record in its own memory first — the change, the block references, and any full-page images. Then it takes one of a small number of WAL insertion locks (eight of them, so several backends can copy in parallel), reserves its space with an atomic bump of the shared insert position, copies the bytes in, and releases the lock. Reserving the position is a handful of instructions; copying the bytes is not, and that is exactly why there are eight locks rather than one — several backends can be copying into different parts of the ring at the same time instead of queueing behind a single writer.',
       },
       {
         heading: 'Insert, write, flush — three different LSNs',

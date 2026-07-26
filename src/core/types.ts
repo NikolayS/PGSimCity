@@ -119,7 +119,12 @@ export const DEFAULT_KNOBS: Knobs = {
   walLevel: 'replica',
   fullPageWrites: true,
   autovacuum: true,
-  autovacuumScaleFactor: 0.2,
+  // PostgreSQL's own default is 0.2. This city ships the per-table tuning its
+  // own docs recommend for a busy relation, because at 0.2 the demo tables need
+  // ~5,900 dead rows to cross the threshold — which at this transaction rate is
+  // most of an hour, and the autovacuum yard, its three bays, its landfill and
+  // tour chapter 10 would all sit dead for the whole of a visit.
+  autovacuumScaleFactor: 0.02,
   longRunningXact: false,
   lockContention: false,
   replicaEnabled: true,

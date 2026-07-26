@@ -226,7 +226,7 @@ function lagClimbing(lag: readonly number[]): boolean {
 function health(s: SimState): Health {
   if (s.checkpoint.phase !== 'idle' && s.checkpoint.reason === 'wal') return 'crit'
   if (s.locks.length >= 3) return 'crit'
-  if (s.stats.cacheHitPct < 55) return 'warn'
+  if (s.stats.cacheHitPct < 50) return 'warn'
   if (s.replication.enabled && (s.replication.lagSec > 5 || lagClimbing(s.stats.history.lag))) return 'warn'
   if (s.buffers.size > 0 && s.buffers.dirtyCount / s.buffers.size > 0.7) return 'warn'
   return 'ok'
@@ -236,7 +236,7 @@ function healthReason(s: SimState, h: Health): string {
   if (s.checkpoint.phase !== 'idle' && s.checkpoint.reason === 'wal')
     return 'Checkpoint triggered by WAL volume — max_wal_size is being outrun'
   if (s.locks.length >= 3) return `${s.locks.length} backends waiting on a heavyweight lock`
-  if (s.stats.cacheHitPct < 55) return `Cache hit ratio ${s.stats.cacheHitPct.toFixed(1)}% — most reads are going to storage`
+  if (s.stats.cacheHitPct < 50) return `Cache hit ratio ${s.stats.cacheHitPct.toFixed(1)}% — most reads are going to storage`
   if (s.replication.enabled && s.replication.lagSec > 5) return `Standby is ${s.replication.lagSec.toFixed(1)}s behind`
   if (s.replication.enabled && lagClimbing(s.stats.history.lag)) return 'Replication lag is climbing'
   if (h === 'warn') return 'Most of the buffer pool is dirty'
@@ -257,7 +257,7 @@ function vitalValue(key: VitalKey, s: SimState): { text: string; state: State } 
       // dial is turned down. Bands tuned to a real server's 99% would leave
       // this vital stuck on a warning for every visitor, which teaches nothing.
       const v = s.stats.cacheHitPct
-      return { text: `${v.toFixed(1)}%`, state: v < 55 ? 'crit' : v < 80 ? 'warn' : v >= 95 ? 'ok' : '' }
+      return { text: `${v.toFixed(1)}%`, state: v < 50 ? 'crit' : v < 70 ? 'warn' : v >= 90 ? 'ok' : '' }
     }
     case 'wal': {
       const bps = s.wal.bytesPerSec

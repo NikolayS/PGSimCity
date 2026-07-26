@@ -234,7 +234,7 @@ export const KNOB_META: KnobMeta[] = [
     min: 0.01,
     max: 0.5,
     step: 0.01,
-    hint: 'A table is vacuumed once this fraction of its rows are dead. Lower means more frequent, cheaper vacuums.',
+    hint: 'A table is vacuumed once this fraction of its rows are dead. Lower means more frequent, cheaper vacuums. PostgreSQL defaults to 0.2; this city starts at 0.02, the kind of per-table setting the docs recommend for a busy relation, so the yard is not idle for a whole visit.',
   },
   {
     key: 'replicaEnabled',

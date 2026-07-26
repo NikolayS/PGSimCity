@@ -60,6 +60,11 @@
   scrollbar-width: thin;
   /* Firefox counterpart of the .pg-scroll webkit thumb defined in ui.css */
   scrollbar-color: color-mix(in srgb, var(--c-backend) 22%, transparent) transparent;
+  /* On a 1280x800 laptop the console's group list is cut after MEMORY, with a
+     hairline scrollbar as the only clue that WRITE-AHEAD LOG, CHECKPOINTS,
+     AUTOVACUUM, REPLICATION and the rest are below the fold. The fade says so
+     without costing a pixel of content. */
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 26px), transparent);
 }
 .pgc-rail__body:focus-visible,
 .pgc-insp__body:focus-visible {

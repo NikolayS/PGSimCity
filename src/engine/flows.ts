@@ -262,7 +262,7 @@ export function createFlows(
 
   /* ---- particle pool ----------------------------------------------------*/
 
-  let pool = Math.max(64, Math.floor(quality.maxParticles))
+  let pool = Math.max(64, Math.floor(quality.maxParticles * (reduceMotion() ? 0.28 : 1)))
   let mesh!: THREE.InstancedMesh
   let mArr!: Float32Array
   let cArr!: Float32Array

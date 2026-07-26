@@ -19,9 +19,9 @@
        ╱                                    ← .lbl__leader, --lbl-lead long
       ●                                     ← .lbl__dot, the world anchor (0,0)
 
-   The 320px containing block is deliberate: it is what caps a long role line,
-   and it makes the off-screen measurement in labels.ts agree exactly with the
-   on-screen layout.
+   The fixed containing block below is deliberate: it bounds how wide a chip can
+   grow, and it makes the off-screen measurement in labels.ts agree exactly with
+   the on-screen layout.
 
    Colour comes from --lbl-accent, set inline per component by labels.ts, so a
    WAL chip is amber and a vacuum chip is violet without a class per district.
@@ -118,7 +118,7 @@
   grid-area: 2 / 1;
   /* the sentence-long roles ("a whole OS process, private memory and all")
      would otherwise set the width of the entire chip */
-  max-width: 180px;
+  max-width: 170px;
   font-family: var(--f-ui);
   font-size: var(--fs-micro);
   font-style: normal;
@@ -131,7 +131,7 @@
 /* live readout — spans both rows, right-aligned, tabular so it never jitters */
 .lbl__read {
   grid-area: 1 / 2 / 3 / 3;
-  max-width: 150px;
+  max-width: 140px;
   font-family: var(--f-mono);
   font-size: var(--fs-xs);
   font-style: normal;
