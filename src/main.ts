@@ -6,6 +6,12 @@ import './styles/ui.css'
 import { createBus } from './core/bus'
 import { Registry } from './core/registry'
 import { createTheme, setThemeMode, themeMode } from './core/theme'
+import {
+  createFrameTimebase,
+  MAX_VISUAL_DELTA_SECONDS,
+  simulationAnimationDelta,
+  wallDelta,
+} from './core/timebase'
 import { clamp } from './core/util'
 import type { ComponentDef, FlowRequest, QualitySettings, WorldContext, WorldModule } from './core/types'
 
@@ -330,6 +336,7 @@ async function boot(): Promise<void> {
 
   const timer = new THREE.Timer()
   timer.connect(document)
+  const frameTimebase = createFrameTimebase(sim.update)
   let running = true
 
   function frame(): void {
@@ -337,20 +344,21 @@ async function boot(): Promise<void> {
     requestAnimationFrame(frame)
 
     timer.update()
-    // rawDt is real wall-clock time — the only honest input to the fps readout
-    // and the adaptive-quality timers. dt is clamped so that one slow frame
-    // cannot teleport the simulation or the camera.
+    // rawDt feeds FPS and adaptive quality. The world stays on the animation
+    // clamp; the model consumes bounded wall time as fixed steps.
     const rawDt = timer.getDelta()
-    const dt = clamp(rawDt, 0, 0.1)
+    const dt = clamp(rawDt, 0, MAX_VISUAL_DELTA_SECONDS)
+    const elapsed = wallDelta(rawDt)
     const s = sim.state
 
     // 1. advance the model
-    if (!s.knobs.paused) sim.update(dt * s.knobs.timeScale)
+    frameTimebase.advance(elapsed, s.knobs.paused, s.knobs.timeScale)
+    const cityDt = simulationAnimationDelta(dt, s.knobs.paused, s.knobs.timeScale)
 
     // 2. camera, then everything that depends on where the camera is
     rig.update(dt)
     walk.update(dt)
-    water.update(dt, walk.enabled && walk.submerged)
+    water.update(cityDt, walk.enabled && walk.submerged)
     // On foot you are always up against the detail, wherever you stand.
     const nextDetail: 0 | 1 | 2 = walk.enabled ? 2 : detailFor(rig.altitude)
     if (nextDetail !== detail) {
@@ -359,8 +367,8 @@ async function boot(): Promise<void> {
     }
 
     // 3. the city
-    for (let i = 0; i < modules.length; i++) modules[i].update(dt, s, s.t)
-    flows.update(dt)
+    for (let i = 0; i < modules.length; i++) modules[i].update(cityDt, s, s.t)
+    flows.update(cityDt)
     picker.update(dt)
 
     // 4. draw
@@ -370,7 +378,7 @@ async function boot(): Promise<void> {
 
     // 5. chrome
     setCompassCamera(camera.position.x, camera.position.z, Math.atan2(-camera.matrix.elements[8], -camera.matrix.elements[10]))
-    for (let i = 0; i < ui.length; i++) ui[i].update(dt)
+    for (let i = 0; i < ui.length; i++) ui[i].update(dt, elapsed)
   }
 
   await progress(100, 'ready')

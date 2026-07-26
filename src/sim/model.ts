@@ -79,7 +79,7 @@ import {
   walSegName,
   weightedPick,
 } from '../core/util'
-import { SCENARIOS } from './scenarios'
+import { SCENARIOS, SCENARIO_NARRATION_SECONDS } from './scenarios'
 
 /* --------------------------------------------------------------------------
  * Constants
@@ -3179,7 +3179,11 @@ export function createSim(bus: Bus): SimApi {
     bus.emit('scenario', { id: def.id })
     if (def.focus) bus.emit('focus', { id: def.focus })
     if (def.beats && def.beats.length && def.beats[0][0] <= 0) {
-      bus.emit('narrate', { title: def.beats[0][1], body: def.beats[0][2], ms: 9000 })
+      bus.emit('narrate', {
+        title: def.beats[0][1],
+        body: def.beats[0][2],
+        seconds: SCENARIO_NARRATION_SECONDS,
+      })
       beatIdx = 1
     }
   }
@@ -3210,7 +3214,11 @@ export function createSim(bus: Bus): SimApi {
     if (beats) {
       while (beatIdx < beats.length && state.scenarioT >= beats[beatIdx][0]) {
         const b = beats[beatIdx]
-        bus.emit('narrate', { title: b[1], body: b[2], ms: 9000 })
+        bus.emit('narrate', {
+          title: b[1],
+          body: b[2],
+          seconds: SCENARIO_NARRATION_SECONDS,
+        })
         beatIdx++
       }
     }
@@ -3354,11 +3362,9 @@ export function createSim(bus: Bus): SimApi {
   function update(dt: number): void {
     if (!isFinite(dt) || dt <= 0) return
     if (K.paused) return
-    // What arrives here is the caller's already-clamped frame delta multiplied
-    // by the speed knob. Re-clamping it to 0.1 is what used to make the knob a
-    // silent no-op below ~50 fps: at 10 fps the frame delta is already 0.1, so
-    // every multiplier collapsed to 1x. Sub-step instead — STEP_MAX bounds each
-    // step, MAX_STEPS bounds the total work one frame can ask for.
+    // The frame timebase normally sends fixed wall-clock steps multiplied by
+    // the speed knob. Re-clamping to 0.1 would make higher speeds a silent
+    // no-op, so subdivide instead; MAX_STEPS still bounds direct API callers.
     const cap = STEP_MAX * MAX_STEPS
     const d = dt > cap ? cap : dt
     state.realT += d / Math.max(0.05, K.timeScale)

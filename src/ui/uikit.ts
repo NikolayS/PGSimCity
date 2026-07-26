@@ -18,8 +18,11 @@ export interface UiContext {
 }
 
 export interface UiModule {
-  /** called every frame; keep it cheap and throttle your own DOM writes */
-  update(dt: number): void
+  /**
+   * Called every frame. `dt` is animation-safe; `elapsed` is accepted wall time
+   * for clocks that must agree with the viewer's watch.
+   */
+  update(dt: number, elapsed?: number): void
   dispose(): void
 }
 

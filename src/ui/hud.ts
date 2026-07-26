@@ -175,8 +175,9 @@ function fmtSpeed(v: number): string {
 }
 
 function fmtClock(sec: number): string {
-  const m = Math.floor(sec / 60)
-  const s = Math.floor(sec % 60)
+  const whole = Math.floor(sec + 1e-6)
+  const m = Math.floor(whole / 60)
+  const s = whole % 60
   return `${m}:${s.toString().padStart(2, '0')}`
 }
 
@@ -1433,9 +1434,9 @@ export function createHud(ctx: UiContext): UiModule {
   let tSlow = 0
   let tMap = 0
 
-  function update(dt: number): void {
+  function update(dt: number, wallDt = dt): void {
     const s = sim.state
-    tFast += dt
+    tFast += wallDt
     if (tFast >= 0.125) {
       tFast = 0
       paintTop(s)
@@ -1450,7 +1451,7 @@ export function createHud(ctx: UiContext): UiModule {
       tMap = 0
       paintCompass()
     }
-    tSlow += dt
+    tSlow += wallDt
     if (tSlow >= 0.5) {
       tSlow = 0
       paintPerf()
