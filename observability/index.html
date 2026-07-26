@@ -5,67 +5,97 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="PGSimCity Observability Lab — an experimental 3D map of PostgreSQL subsystems and the statistics that expose them."
+      content="A version-aware 3D architecture map of Postgres observability views, functions, commands, and extensions."
     />
     <meta name="color-scheme" content="dark" />
-    <meta name="theme-color" content="#050812" />
-    <title>Observability Lab · PGSimCity</title>
+    <meta name="theme-color" content="#071019" />
+    <title>Postgres Observability Atlas · PGSimCity</title>
   </head>
   <body>
     <main id="app">
-      <canvas id="scene" aria-label="Interactive 3D PostgreSQL observability map"></canvas>
-
       <header class="topbar">
         <a class="brand" href="../" aria-label="Back to PGSimCity">
-          <span class="brand__pg">PG</span><span>SIMCITY</span>
+          <span>PG</span>SIMCITY
           <i></i>
-          <strong>OBSERVABILITY LAB</strong>
+          <strong>OBSERVABILITY ATLAS</strong>
         </a>
 
-        <div class="search-wrap">
-          <label for="search">Find a view, function, or subsystem</label>
-          <input id="search" type="search" placeholder="Try pg_stat_replication" autocomplete="off" />
+        <label class="search">
+          <span>Find a view, function, column, or subsystem</span>
+          <input id="search" type="search" placeholder="pg_stat_replication" autocomplete="off" />
           <kbd>/</kbd>
-        </div>
+        </label>
 
-        <nav class="view-actions" aria-label="Camera controls">
-          <button id="view-3d" class="active" type="button">3D</button>
-          <button id="view-top" type="button">TOP</button>
-          <button id="reset" type="button">RESET</button>
-        </nav>
+        <div class="view-switch" aria-label="Map projection">
+          <button id="view-depth" class="active" type="button">3D DEPTH</button>
+          <button id="view-flat" type="button">BLUEPRINT</button>
+        </div>
       </header>
 
-      <section class="intro" aria-labelledby="intro-title">
-        <p class="eyebrow">EXPERIMENT 001</p>
-        <h1 id="intro-title">See where<br />Postgres tells on itself.</h1>
-        <p>
-          Subsystems are buildings. Statistics are probes. Connections show the execution and durability path.
-          Select anything to inspect the observability surface.
-        </p>
-        <button id="start" type="button">ENTER THE MAP <span>→</span></button>
+      <aside class="version-panel">
+        <p>VERSION</p>
+        <nav id="versions" aria-label="Postgres version"></nav>
+      </aside>
+
+      <section class="atlas" aria-label="Postgres observability architecture map">
+        <div class="probe-bank probe-bank--left">
+          <p>QUERY & ACCESS</p>
+          <div id="probes-left"></div>
+        </div>
+
+        <div id="architecture" class="architecture">
+          <div class="architecture__heading">
+            <span id="version-caption">POSTGRES 18</span>
+            <h1>Postgres Observability</h1>
+            <p><strong id="visible-count">0</strong> views, functions, extensions & commands mapped to the engine</p>
+          </div>
+          <div class="architecture__board">
+            <svg id="flows" class="flows" aria-hidden="true"></svg>
+            <div id="nodes" class="nodes"></div>
+          </div>
+        </div>
+
+        <div class="probe-bank probe-bank--right">
+          <p>PROCESSES & DURABILITY</p>
+          <div id="probes-right"></div>
+        </div>
+      </section>
+
+      <section class="bottom-bank">
+        <p>FILESYSTEM & PHYSICAL LAYOUT</p>
+        <div id="probes-bottom"></div>
       </section>
 
       <aside id="inspector" class="inspector" aria-live="polite">
         <button id="inspector-close" class="inspector__close" type="button" aria-label="Close inspector">×</button>
-        <p id="detail-kind" class="eyebrow">SUBSYSTEM</p>
-        <h2 id="detail-title">PostgreSQL</h2>
-        <p id="detail-copy">Choose a subsystem or probe in the map.</p>
-        <div id="detail-stats" class="stat-list"></div>
+        <p id="detail-type" class="eyebrow">VIEW</p>
+        <h2 id="detail-title">pg_stat_activity</h2>
+        <p id="detail-copy"></p>
+        <div id="detail-meta" class="detail-meta"></div>
+
+        <section>
+          <h3>MAP CONNECTIONS</h3>
+          <div id="detail-targets" class="detail-targets"></div>
+        </section>
+
+        <section>
+          <h3>COLUMNS / OUTPUT</h3>
+          <div id="detail-columns" class="detail-columns"></div>
+        </section>
+
+        <section id="detail-tip-wrap" class="detail-tip" hidden>
+          <h3>DBA NOTE</h3>
+          <p id="detail-tip"></p>
+        </section>
       </aside>
 
-      <div id="labels" class="labels" aria-hidden="true"></div>
-
       <footer class="legend">
-        <div id="categories" class="categories" aria-label="Filter by category"></div>
+        <div id="legend-groups" class="legend__groups"></div>
         <p>
-          Drag to orbit · scroll to zoom · click to inspect
-          <span>Inspired by <a href="https://pgstats.dev/" target="_blank" rel="noreferrer">Alexey Lesovsky’s PostgreSQL Observability</a></span>
+          Select a version to see the observability surface change.
+          <span>Architecture and concept by <a href="https://pgstats.dev/" target="_blank" rel="noreferrer">Alexey Lesovsky / pgstats.dev</a></span>
         </p>
       </footer>
-
-      <div id="fallback" class="fallback" hidden>
-        The 3D renderer could not start.
-      </div>
     </main>
 
     <script type="module" src="/src/observability/main.ts"></script>
