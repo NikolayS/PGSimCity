@@ -535,7 +535,9 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
   )
   const towerObjects: THREE.Mesh[] = []
   for (let i = 0; i < N; i++) {
-    const geo = own(new THREE.BoxGeometry(BW + 3.6, H[i] + 1.4, BW + 3.6))
+    // Keep the proxy behind the facade reservoir so clicking the gauge reaches
+    // backend.localmem instead of being swallowed by the tower's larger proxy.
+    const geo = own(new THREE.BoxGeometry(BW + 3.6, H[i] + 1.4, BW + 0.6))
     const mesh = new THREE.Mesh(geo, pickMat)
     mesh.position.set(XS[i], (H[i] + 1.4) / 2, BZ)
     mesh.renderOrder = -1

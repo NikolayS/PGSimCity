@@ -105,7 +105,7 @@ export const NIGHT_PALETTE: Record<ColorKey, number> = {
 export const DAY_PALETTE: Record<ColorKey, number> = {
   /* --- surfaces: warm stone under a blue sky --- */
   bg: 0xbcdcf2, // clear colour behind the sky dome
-  fog: 0xcfe2f0, // pale distance haze, not a dark curtain
+  fog: 0xc3d8ea, // distance haze — pale, but still a colour
   grid: 0xb0a998, // 10 m survey line, drawn ON the stone
   gridBright: 0x8d8573, // 50 m block line, one step darker again
   ground: 0xd2ccbb, // the pavement itself
@@ -235,15 +235,21 @@ export const ATMOSPHERE: Record<ThemeMode, Atmosphere> = {
     // holds hue and saturation and rolls the top end off instead of clipping,
     // which is what a poster-flat city needs.
     toneMapping: 'neutral',
-    exposure: 1.0,
-    // Daylight sees further, and the haze is pale rather than a dark curtain.
-    fogNearScale: 1.3,
-    fogFarScale: 1.55,
+    // Under 1. The whole budget here is arithmetic: ambient + the toon ramp's
+    // brightest band must land near 1.0 on a 0.55-albedo stone, or the city
+    // clips to white and the ink lines have nothing to draw against. Measured
+    // on the establishing shot: hemisphere 0.62 + key 1.35 gives 0.90–1.30
+    // irradiance, and 0.92 exposure brings the top of that back under the knee.
+    exposure: 0.92,
+    // Daylight sees a long way. The haze has to start well outside the city or
+    // the districts read through a white curtain.
+    fogNearScale: 2.1,
+    fogFarScale: 2.5,
     hemiSky: 0xdff0ff,
     hemiGround: 0xcbbf9e, // warm bounce off the stone
-    hemiIntensity: 1.15,
+    hemiIntensity: 0.62,
     keyColor: 0xfff2d6, // the sun
-    keyIntensity: 2.15,
+    keyIntensity: 1.35,
     // South-east and high: the establishing shot looks north up the city axis,
     // so this lights the faces turned toward the camera and throws the shadows
     // away from it — the SimCity read.
@@ -252,19 +258,20 @@ export const ATMOSPHERE: Record<ThemeMode, Atmosphere> = {
     shadowBias: -0.0004,
     shadowNormalBias: 0.45,
     fillColor: 0xbfd8ff, // sky bounce from behind
-    fillIntensity: 0.3,
+    fillIntensity: 0.18,
     fillPos: [-300, 150, -230],
     walGlow: 0,
     yardGlow: 0,
-    noBloomHemi: 1.25,
-    noBloomFill: 0.34,
+    noBloomHemi: 0.72,
+    noBloomFill: 0.22,
     noBloomWalGlow: 0,
     noBloomYardGlow: 0,
-    // Nearly off. What is left is a half-stop of air around the few surfaces
-    // the sun genuinely blows out; nothing semantic reaches it.
-    bloomStrength: 0.13,
-    bloomRadius: 0.4,
-    bloomThreshold: 1.05,
+    // Nearly off, and threshold-limited above anything the city can produce, so
+    // only the clipped toon highlight ever reaches it. A glow is meaningless at
+    // noon; this is a sparkle on chrome, nothing more.
+    bloomStrength: 0.1,
+    bloomRadius: 0.35,
+    bloomThreshold: 1.2,
     skyZenith: 0x2f78c8,
     skyHorizon: 0xd8e9f5,
     skyGlow: 0x40300f,
@@ -407,12 +414,15 @@ export function daySurface(hex: number): number {
   if (hit !== undefined) return hit
   const [h, s, l] = hslOf(hex)
   if (l < 0.34) {
-    const lit = 0.6 + Math.min(l, 0.4) * 0.72
-    const stone = hexOfHsl(36, 0.15, lit)
+    // 0.46–0.71, not 0.6–0.9: a sunlit surface still has a light term on top of
+    // this, and stone that starts near white has nowhere left to go — it clips,
+    // and a clipped face cannot show either the toon terminator or its own ink.
+    const lit = 0.46 + Math.min(l, 0.4) * 0.62
+    const stone = hexOfHsl(36, 0.17, lit)
     const tint = hexOfHsl(h, Math.min(s, 0.55) * 0.8, lit)
     return mix(stone, tint, 0.32)
   }
-  return hexOfHsl(h, Math.max(0.25, Math.min(0.8, s * 0.85)), Math.max(0.42, Math.min(0.72, 0.3 + l * 0.42)))
+  return hexOfHsl(h, Math.max(0.25, Math.min(0.8, s * 0.85)), Math.max(0.34, Math.min(0.62, 0.26 + l * 0.4)))
 }
 
 /**

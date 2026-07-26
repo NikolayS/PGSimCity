@@ -205,6 +205,7 @@ interface Extra {
   hot: boolean
   seqScan: boolean
   scanBlk: number
+  scanBase: number
   visitT: number
   idleT: number
   holdsLock: boolean
@@ -232,6 +233,7 @@ function makeExtra(): Extra {
     hot: false,
     seqScan: false,
     scanBlk: 0,
+    scanBase: 0,
     visitT: 0,
     idleT: 0,
     holdsLock: false,
@@ -520,21 +522,14 @@ export function createSim(bus: Bus): SimApi {
   const scanGridN = (t: TableSim): number =>
     Math.max(1, Math.min(t.pages, Math.max(8, Math.ceil(t.pages / SCAN_STRIDE))))
   /**
-   * Step `i` of the scan. Two scans of one relation read the SAME blocks — that
-   * is what a sequential scan is — so the sampled walk has to be the same walk
-   * every time, spread evenly across the whole relation.
-   *
-   * It used to start at `floor(rng() * t.pages)` and run contiguously, which made
-   * every scan of a relation a different, essentially disjoint slice of it: to
-   * the buffer pool, re-scanning one table looked like scanning a fresh table, so
-   * a repeated scan could never hit and 98% of all blks_read in the city came out
-   * of sequential scans no matter how large shared_buffers was. That also broke
-   * the shared_buffers lesson outright, because ring-strategy misses do not
-   * respond to the pool size at all.
+   * Step `i` of an evenly-spaced sample of the whole relation. The base changes
+   * for each independent transaction represented by a batch; otherwise a batch
+   * of fourteen unrelated client scans would become fourteen re-reads of one
+   * identical 1/32 sample and the tps knob itself would inflate the hit ratio.
    */
-  const scanBlkOf = (t: TableSim, i: number): number => {
+  const scanBlkOf = (t: TableSim, i: number, base: number): number => {
     const n = scanGridN(t)
-    return (i % n) * Math.max(1, Math.floor(t.pages / n))
+    return (base + (i % n) * Math.max(1, Math.floor(t.pages / n))) % Math.max(1, t.pages)
   }
   /** Dead tuples that predate the xmin horizon and may therefore be removed. */
   const deadRemovable: number[] = TABLES.map(() => 0)
@@ -2215,7 +2210,7 @@ export function createSim(bus: Bus): SimApi {
       if (t.bloat > 0.15 && rng() < 0.6) return Math.floor(t.pages * rng())
       return Math.max(0, t.pages - 1 - Math.floor(rng() * 2))
     }
-    if (mode === 'scan' && x) return scanBlkOf(t, x.scanBlk++)
+    if (mode === 'scan' && x) return scanBlkOf(t, x.scanBlk++, x.scanBase)
     // The hot set takes almost everything, skewed hard within it; the rest is a
     // cold tail spread over the whole relation. The tail is what sets the
     // WORKING SET, and it used to be 2.5% uniform over 10,920 heap pages — so
@@ -2323,9 +2318,11 @@ export function createSim(bus: Bus): SimApi {
     const rbase = slot * RING
     for (let i = 0; i < RING; i++) ringBuf[rbase + i] = -1
     x.ringPos = 0
-    // Step 0 of the relation's sampling grid. It is deliberately NOT a random
-    // offset: see scanBlkOf().
+    // Each transaction in a scaled batch represents an independent scan. A
+    // fresh offset keeps batching from turning N unrelated client scans into N
+    // re-reads of the exact same tiny sample.
     x.scanBlk = 0
+    x.scanBase = Math.floor(rng() * Math.max(1, tables[ti].pages))
 
     if (++sBufReq >= 2) {
       sBufReq = 0
@@ -2399,7 +2396,10 @@ export function createSim(bus: Bus): SimApi {
     // 1/batch dilution straight back: past MAX_VISIT_PAGES every further
     // transaction would contribute no pages at all.
     const cap = Math.max(MAX_VISIT_PAGES, 24 * x.txCount)
-    const total = Math.min(cap, work)
+    // The CPU backstop can account a scan's unanimated tail as ring misses, so
+    // scans keep their full event weight. Capping them here would dilute scan
+    // traffic again once the batch grew past MAX_VISIT_PAGES.
+    const total = x.seqScan ? work : Math.min(cap, work)
     x.pagesTotal = total
     x.pagesLeft = total
     x.execElapsed = 0
@@ -2415,7 +2415,10 @@ export function createSim(bus: Bus): SimApi {
     // climbing past the fleet's asymptote (measured 1.5k tps at 5,000 offered
     // but 9.2k at 50,000). Charge on `work`. `base` is the cost on an
     // unloaded device; ioPressure() adds what the queue in front of it costs.
-    const base = Math.max(0.1, 0.06 + work * (0.00035 + missFrac * 0.0045))
+    const base = Math.max(
+      0.1,
+      0.06 + work * (0.00035 + missFrac * missFrac * 0.007),
+    )
 
     const ioShare = missFrac > 0.02 ? clamp(0.25 + missFrac * 0.6, 0.2, 0.85) : 0
     // Only the I/O half is stretched by device pressure, and that asymmetry is
@@ -2424,7 +2427,12 @@ export function createSim(bus: Bus): SimApi {
     // page the checkpointer is pushing at it. Stretching the CPU half too would
     // make shared_buffers look useless during a checkpoint, which is backwards.
     const ioDur = base * ioShare * ioPressure()
-    const dur = ioDur + base * (1 - ioShare)
+    // Once most requests miss, random reads queue behind one another and the
+    // cost per miss rises as well as the number of misses. Normalise around the
+    // healthy ~40% miss point so the scale constant remains stable, while a
+    // 32-frame thrash run pays the nonlinear latency a real device would.
+    const cacheThrash = Math.max(0.65, (1 + 2 * missFrac) / 1.8)
+    const dur = (ioDur + base * (1 - ioShare)) * cacheThrash
     x.execTotal = dur
 
     if (ioShare > 0) {
@@ -2518,6 +2526,7 @@ export function createSim(bus: Bus): SimApi {
           const rb = slot * RING
           for (let j = 0; j < RING; j++) ringBuf[rb + j] = -1
           x.ringPos = 0
+          x.scanBase = Math.floor(rng() * Math.max(1, t.pages))
         }
         blk = pickBlk(ti, 'scan', x)
       } else if (b.query === 'insert') {
@@ -2790,7 +2799,6 @@ export function createSim(bus: Bus): SimApi {
             } else {
               // flush any page work the timing model left behind
               if (x.pagesLeft > 0) {
-                pageBudget += x.pagesLeft
                 drainPages(slot, x.execTotal)
               }
               if (x.needsSort) {

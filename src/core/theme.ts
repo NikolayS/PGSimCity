@@ -187,11 +187,13 @@ void RE_Direct_Toon( const in IncidentLight directLight, const in vec3 geometryP
 	float dotNL = saturate( dot( geometryNormal, directLight.direction ) );
 
 	// Three bands: shade, mid, light. The edge width follows the screen-space
-	// gradient of dotNL so it is always about a pixel wide.
+	// gradient of dotNL so it is always about a pixel wide. The shade band is
+	// low on purpose — the hemisphere is the ambient floor, and if this band is
+	// raised to meet it the two merge and the city loses its terminator.
 	float w = fwidth( dotNL ) * 0.9 + 0.01;
 	float b1 = smoothstep( 0.20 - w, 0.20 + w, dotNL );
 	float b2 = smoothstep( 0.62 - w, 0.62 + w, dotNL );
-	vec3 irradiance = ( 0.40 + 0.32 * b1 + 0.28 * b2 ) * directLight.color;
+	vec3 irradiance = ( 0.26 + 0.34 * b1 + 0.40 * b2 ) * directLight.color;
 
 	// One clipped highlight instead of a smooth lobe: glass and metal still read
 	// as glass and metal, but as a cartoon would draw them.
@@ -446,6 +448,16 @@ export function paintSceneMaterial(m: THREE.Material, target: ThemeMode): void {
       paintLine(line, { color: night.color, opacity: night.opacity }, target)
     }
     return
+  }
+
+  // Additive blending is a night device: a halo only exists because there is
+  // darkness for it to sit in. Added to a sunlit street it is white haze, and
+  // the light cones, spill bands and lamp glows across the districts turn the
+  // whole city into fog. Keep them — they still say "this thing is emitting" —
+  // but at a fraction of the weight.
+  if (m.blending === THREE.AdditiveBlending) {
+    if (first) night.opacity = m.opacity
+    if (night.opacity !== undefined) m.opacity = target === 'day' ? night.opacity * 0.16 : night.opacity
   }
 
   const lit = isStandard(m)
