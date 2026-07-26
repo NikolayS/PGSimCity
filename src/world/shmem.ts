@@ -852,7 +852,9 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
 
   ctx.register({
     id: 'shared.buffers',
-    name: 'shared_buffers',
+    // "Buffer pool" is the structure; shared_buffers is the parameter that
+    // sizes it. Naming it only by the GUC conflates the two.
+    name: 'Buffer pool (shared_buffers)',
     role: 'the page cache every backend reads through',
     kind: 'memory',
     district: 'shmem',
