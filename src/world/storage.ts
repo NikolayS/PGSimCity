@@ -504,6 +504,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     const proxy = new THREE.Mesh(gUnit, mPick)
     proxy.position.set(tx, ROOF_Y + 1.2, FILE_Z0 + len0 / 2)
     proxy.scale.set(HALF_W * 2 + 1, 3.4, len0)
+    proxy.userData.anatomyPart = 'page'
     g.add(proxy)
     roofProxies.push(proxy)
 

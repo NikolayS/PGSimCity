@@ -34,6 +34,9 @@
   min-height: 0;
   max-height: 100%;
 }
+.pgc-host.is-plan-hidden {
+  display: none;
+}
 .pgc-host--right {
   flex-direction: row-reverse;
 }
@@ -60,11 +63,6 @@
   scrollbar-width: thin;
   /* Firefox counterpart of the .pg-scroll webkit thumb defined in ui.css */
   scrollbar-color: color-mix(in srgb, var(--c-backend) 22%, transparent) transparent;
-  /* On a 1280x800 laptop the console's group list is cut after MEMORY, with a
-     hairline scrollbar as the only clue that WRITE-AHEAD LOG, CHECKPOINTS,
-     AUTOVACUUM, REPLICATION and the rest are below the fold. The fade says so
-     without costing a pixel of content. */
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 26px), transparent);
 }
 .pgc-rail__body:focus-visible,
 .pgc-insp__body:focus-visible {
@@ -81,9 +79,6 @@
   height: var(--pgc-tab);
   flex: 0 0 auto;
   background: var(--bg-panel);
-  backdrop-filter: blur(18px) saturate(140%);
-  -webkit-backdrop-filter: blur(18px) saturate(140%);
-  box-shadow: var(--glow-soft);
   display: none;
 }
 .pgc-host:not(.is-open) .pgc-tab,
@@ -124,23 +119,9 @@
   height: 5px;
   border-radius: 50%;
   background: var(--c-ok);
-  box-shadow: 0 0 8px -1px var(--c-ok);
-  animation: pgc-breathe 2.4s var(--ease) infinite;
 }
 .pgc-live-dot.is-paused {
   background: var(--ink-faint);
-  box-shadow: none;
-  animation: none;
-}
-
-@keyframes pgc-breathe {
-  0%,
-  100% {
-    opacity: 0.25;
-  }
-  50% {
-    opacity: 1;
-  }
 }
 
 /* ---------------------------------------------------------------------------
@@ -234,30 +215,11 @@
 
 /* danger: present but quiet, louder once it is actually armed */
 .pgc-knob.is-danger {
-  position: relative;
   padding-inline: 9px;
   margin-inline: -9px;
 }
 .pgc-knob.is-danger.is-armed {
   background: none;
-}
-.pgc-knob.is-danger.is-armed::before,
-.pgc-knob.is-danger.is-armed::after {
-  content: '';
-  position: absolute;
-  width: 9px;
-  height: 9px;
-  border-color: var(--c-crit);
-  border-style: solid;
-  pointer-events: none;
-}
-.pgc-knob.is-danger.is-armed::before {
-  inset: 3px auto auto 0;
-  border-width: 1px 0 0 1px;
-}
-.pgc-knob.is-danger.is-armed::after {
-  inset: auto 0 3px auto;
-  border-width: 0 1px 1px 0;
 }
 .pgc-knob.is-danger.is-armed .pgc-val__n {
   color: var(--c-crit);
@@ -313,14 +275,14 @@
   margin-left: auto;
   font-family: var(--f-mono);
   font-size: var(--fs-micro);
-  font-weight: 500;
+  font-weight: 650;
   letter-spacing: 0;
-  color: var(--ink-invert);
-  background: var(--c-warn);
-  border-radius: var(--r-pill);
-  min-width: 15px;
+  color: var(--c-warn);
+  background: transparent;
+  border-radius: 0;
+  min-width: 1ch;
   text-align: center;
-  padding: 1px 5px;
+  padding: 0;
   opacity: 0;
   transition: opacity var(--dur) var(--ease);
 }
@@ -366,24 +328,6 @@
   padding-top: 10px;
 }
 
-/* Sheet furniture is information, not decoration: each scrollable drawing
-   identifies itself once, like the title block on a plan. */
-.pgc-rail__body::before,
-.pgc-insp__body::before {
-  display: block;
-  margin: 0 0 9px;
-  padding: 0 0 7px;
-  border-bottom: 1px solid var(--sheet-rule);
-  color: var(--ink-faint);
-  font: 500 8px/1.3 var(--f-mono);
-  letter-spacing: 0.16em;
-}
-.pgc-rail__body::before {
-  content: 'CONTROL SHEET / C-01 / REV A';
-}
-.pgc-insp__body::before {
-  content: 'INSPECTION SHEET / I-02 / LIVE';
-}
 .pgc-insp__top {
   display: flex;
   align-items: center;
@@ -422,13 +366,12 @@
   font-size: var(--fs-micro);
   text-transform: uppercase;
   letter-spacing: 0.16em;
-  font-weight: 600;
-  padding: 3px 8px;
-  border-radius: var(--r-pill);
+  font-weight: 700;
+  padding: 0;
+  border-radius: 0;
   color: var(--kind, var(--c-backend));
-  border: 1px solid currentColor;
-  background: color-mix(in srgb, currentColor 12%, transparent);
-  box-shadow: inset 0 0 14px -8px currentColor;
+  border: 0;
+  background: transparent;
 }
 .pgc-kind[hidden] {
   display: none;
@@ -456,18 +399,11 @@
   flex: 0 0 auto;
 }
 
-/* --- metrics ---
-   The hairlines are drawn by the tiles rather than by the container's gap, so a
-   row that does not divide evenly leaves an empty cell that reads as part of
-   the instrument instead of a hole. The panel's overflow clips the outermost
-   shadow, so the border never doubles up. */
+/* --- metrics --- */
 .pgc-metrics {
   grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
-  gap: 0;
-  background: var(--bg-sunken);
-}
-.pgc-metrics .pg-metric {
-  box-shadow: 1px 0 0 0 var(--line-hair), 0 1px 0 0 var(--line-hair);
+  gap: 18px 14px;
+  background: transparent;
 }
 .pgc-metrics .pg-metric__k {
   white-space: normal;
@@ -502,6 +438,52 @@
   margin-bottom: 0;
 }
 
+.pgc-anatomy-entry {
+  min-width: 0;
+  margin: 11px 0 2px;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid color-mix(in srgb, var(--c-storage) 34%, var(--line-soft));
+  border-radius: var(--r-md);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--c-storage) 9%, transparent), transparent 70%),
+    var(--bg-sunken);
+}
+.pgc-anatomy-entry__copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.pgc-anatomy-entry__title {
+  color: var(--ink);
+  font-size: var(--fs-xs);
+  line-height: 1.35;
+}
+.pgc-anatomy-entry__hint {
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+  line-height: 1.45;
+}
+.pgc-anatomy-entry__button {
+  flex: 0 0 auto;
+  min-height: 38px;
+  padding-inline: 10px;
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--c-storage) 40%, var(--line-soft));
+  background: color-mix(in srgb, var(--c-storage) 11%, var(--bg-raise));
+  white-space: nowrap;
+}
+.pgc-anatomy-entry__button:hover {
+  border-color: color-mix(in srgb, var(--c-storage) 65%, var(--line-soft));
+}
+.pgc-anatomy-entry__arrow {
+  color: var(--c-storage);
+  font-family: var(--f-mono);
+}
+
 /* --- inline knobs --- */
 .pgc-block--knobs .pgc-knob:first-of-type {
   padding-top: 2px;
@@ -530,10 +512,10 @@
 .pgc-src__i {
   font-size: var(--fs-micro);
   color: var(--ink-faint);
-  padding: 4px 8px;
-  border-radius: var(--r-sm);
-  background: var(--bg-sunken);
-  border: 1px solid var(--line-hair);
+  padding: 2px 0;
+  border-radius: 0;
+  background: transparent;
+  border: 0;
   overflow-wrap: anywhere;
 }
 
@@ -776,6 +758,12 @@
   }
   .pgc-panel .pg-btn {
     min-height: var(--tap);
+  }
+  .pgc-anatomy-entry {
+    grid-template-columns: 1fr;
+  }
+  .pgc-anatomy-entry__button {
+    width: 100%;
   }
   .pgc-knob__row {
     min-height: 26px;

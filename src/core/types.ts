@@ -475,8 +475,8 @@ export interface BusEvents {
   flow: FlowRequest
   /** camera should frame a component */
   focus: { id: string | null; instant?: boolean }
-  /** inspector panel target changed */
-  select: { id: string | null }
+  /** inspector panel target changed; `part` names a directly-picked substructure */
+  select: { id: string | null; part?: 'page' }
   hover: { id: string | null }
   knob: { key: keyof Knobs; value: unknown }
   scenario: { id: string | null }
@@ -485,7 +485,11 @@ export interface BusEvents {
   'tour:start': { chapter?: number }
   'tour:stop': Record<string, never>
   'tour:chapter': { index: number; total: number; title: string }
+  /** open one of the physical anatomy instruments, optionally for a component */
+  'anatomy:open': { view: 'page' | 'directory'; id?: string }
   'camera:mode': { mode: CameraMode }
+  /** named framing preset currently controlling the composition */
+  'camera:preset': { preset: 'plan' | null }
   'quality': { level: QualityLevel }
   'sim:reset': Record<string, never>
   /** something dramatic happened — shake / flash */

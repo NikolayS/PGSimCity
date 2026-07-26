@@ -170,6 +170,11 @@ export interface PickerApi {
   dispose(): void
 }
 
+interface PickHit {
+  id: string
+  part?: 'page'
+}
+
 export function createPicker(opts: {
   dom: HTMLElement
   camera: THREE.PerspectiveCamera
@@ -265,7 +270,7 @@ export function createPicker(opts: {
     return true
   }
 
-  function pickAt(clientX: number, clientY: number): string | null {
+  function pickAt(clientX: number, clientY: number): PickHit | null {
     if (rectDirty) readRect()
     _ndc.set(((clientX - rectX) / rectW) * 2 - 1, -((clientY - rectY) / rectH) * 2 + 1)
     if (_ndc.x < -1 || _ndc.x > 1 || _ndc.y < -1 || _ndc.y > 1) return null
@@ -276,7 +281,12 @@ export function createPicker(opts: {
       const obj = _hits[i].object
       if (!shown(obj)) continue
       const def = registry.resolve(obj)
-      if (def) return def.id
+      if (def) {
+        return {
+          id: def.id,
+          ...(obj.userData.anatomyPart === 'page' ? { part: 'page' as const } : {}),
+        }
+      }
     }
     return null
   }
@@ -320,8 +330,9 @@ export function createPicker(opts: {
       return
     }
 
-    const id = pickAt(ev.clientX, ev.clientY)
-    bus.emit('select', { id })
+    const hit = pickAt(ev.clientX, ev.clientY)
+    const id = hit?.id ?? null
+    bus.emit('select', hit ? { id, ...(hit.part ? { part: hit.part } : {}) } : { id: null })
 
     const now = ev.timeStamp
     if (id !== null && id === lastClickId && now - lastClickT < DBL_MS) {
@@ -502,7 +513,7 @@ export function createPicker(opts: {
       pickT = 0
       if (inside && pickDirty && !dragging && downId === -1) {
         pickDirty = false
-        setHover(pickAt(pointerX, pointerY))
+        setHover(pickAt(pointerX, pointerY)?.id ?? null)
       }
     }
 

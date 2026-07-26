@@ -63,6 +63,7 @@ const APP_KEYS: KeyRow[] = [
   { keys: ['?'], what: 'This panel' },
   { keys: ['L'], what: 'Toggle floating labels' },
   { keys: ['N'], what: 'Daylight / night — the city, and this console, in either theme' },
+  { keys: ['M'], what: 'Sound on / off — audio starts off and remembers your choice' },
   { keys: ['Esc'], what: 'Close the topmost overlay' },
   { keys: ['1', '…', '8'], what: 'Jump to a district' },
 ]

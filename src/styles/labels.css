@@ -12,9 +12,8 @@
    there, which is what lets engine/labels.ts nudge a chip off its anchor to
    dodge a collision and still draw an honest leader back to it:
 
-        ┌ CHECKPOINTER        2.3 MB/s  ┐   ← .lbl__chip, at (--lbl-dx, --lbl-dy)
+          CHECKPOINTER        2.3 MB/s      ← .lbl__chip, at (--lbl-dx, --lbl-dy)
           background process
-        └                              ┘
        ╱                                    ← .lbl__leader, --lbl-lead long
       ●                                     ← .lbl__dot, the world anchor (0,0)
 
@@ -27,7 +26,7 @@
 
    Variants:  .lbl--district  a whole district
               .lbl--city      the model's own name, from far out
-              .has-more       carries a "+N" collapse pill
+              .has-more       carries a "+N" collapsed-count readout
               .is-far         degraded to a bare name plate
               .is-nudged      moved off its home offset; leader emphasised
    ==========================================================================*/
@@ -67,12 +66,9 @@
   align-items: center;
   column-gap: 14px;
   padding: 5px 10px 5px 9px;
-  border: 1px solid var(--line-hair);
-  border-radius: var(--r-sm);
-  background: rgba(8, 13, 24, 0.62);
-  backdrop-filter: blur(10px) saturate(135%);
-  -webkit-backdrop-filter: blur(10px) saturate(135%);
-  box-shadow: 0 10px 28px -20px #000;
+  border: 0;
+  border-radius: 2px;
+  background: rgba(8, 13, 24, 0.9);
   white-space: nowrap;
   overflow: hidden;
   pointer-events: auto;
@@ -81,34 +77,11 @@
   transform: translate(var(--lbl-dx), calc(var(--lbl-dy) + 6px));
   transition:
     transform 200ms var(--ease),
-    background var(--dur) var(--ease),
-    border-color var(--dur) var(--ease),
-    box-shadow var(--dur) var(--ease);
+    background var(--dur) var(--ease);
 }
 
 .lbl.is-on .lbl__chip {
   transform: translate(var(--lbl-dx), var(--lbl-dy));
-}
-
-/* Opposed setting-out brackets: the same measured-corner language as the
-   selection drawing, with colour confined to the ticks and live readout. */
-.lbl__chip::before,
-.lbl__chip::after {
-  content: "";
-  position: absolute;
-  width: 8px;
-  height: 8px;
-  border-color: var(--lbl-accent);
-  border-style: solid;
-  pointer-events: none;
-}
-.lbl__chip::before {
-  inset: 3px auto auto 3px;
-  border-width: 1px 0 0 1px;
-}
-.lbl__chip::after {
-  inset: auto 3px 3px auto;
-  border-width: 0 1px 1px 0;
 }
 
 .lbl__name {
@@ -162,7 +135,7 @@
   height: 1px;
   transform-origin: 0 50%;
   transform: rotate(var(--lbl-lead-a));
-  background: linear-gradient(90deg, var(--lbl-accent), rgba(140, 180, 235, 0.12));
+  background: color-mix(in srgb, var(--lbl-accent) 58%, transparent);
   opacity: 0.55;
   transition:
     width 200ms var(--ease),
@@ -179,7 +152,6 @@
   margin: -1.5px 0 0 -1.5px;
   border-radius: 50%;
   background: var(--lbl-accent);
-  box-shadow: 0 0 8px 0 var(--lbl-accent);
   pointer-events: auto;
   cursor: pointer;
 }
@@ -188,10 +160,9 @@
    the eye needs the line to make the association */
 .lbl.is-nudged .lbl__leader {
   opacity: 0.78;
-  background: linear-gradient(90deg, var(--lbl-accent), rgba(140, 180, 235, 0.3));
 }
 
-/* --------------------------- the collapse pill ---------------------------- */
+/* ------------------------- collapsed-item count --------------------------- */
 
 /* "+7" — seven named things are in there, not labelled at this zoom. Always in
    the last track, whether that is beside a readout or on its own. */
@@ -199,10 +170,9 @@
   grid-column: -2 / -1;
   grid-row: 1 / -1;
   align-self: center;
-  padding: 1px 5px 2px;
-  border: 1px solid var(--line-hair);
-  border-radius: 999px;
-  background: rgba(140, 180, 235, 0.09);
+  padding: 0;
+  border: 0;
+  background: transparent;
   font-family: var(--f-mono);
   font-size: var(--fs-micro);
   font-style: normal;
@@ -216,7 +186,7 @@
   display: none;
 }
 
-/* name | readout | pill */
+/* name | readout | collapsed count */
 .lbl.has-more .lbl__chip {
   grid-template-columns: minmax(0, 1fr) auto auto;
 }
@@ -225,8 +195,7 @@
 
 .lbl__chip:hover,
 .lbl.is-hovered .lbl__chip {
-  border-color: var(--line-hard);
-  background: rgba(12, 20, 34, 0.78);
+  background: rgba(12, 20, 34, 0.96);
 }
 
 .lbl.is-hovered .lbl__leader {
@@ -240,15 +209,10 @@
 
 .lbl.is-selected .lbl__chip {
   background: var(--bg-panel-solid);
-  border-color: transparent;
-  box-shadow:
-    0 0 0 1px var(--lbl-accent),
-    0 0 26px -8px var(--lbl-accent),
-    0 12px 30px -22px #000;
 }
 
 .lbl.is-selected .lbl__name {
-  color: #fff;
+  color: var(--lbl-accent);
 }
 
 .lbl.is-selected .lbl__leader,
@@ -265,7 +229,7 @@
 
 .lbl.is-far .lbl__chip {
   padding: 3px 8px 3px 8px;
-  background: rgba(8, 13, 24, 0.5);
+  background: rgba(8, 13, 24, 0.84);
 }
 
 /* collapse to the tracks that still carry something, otherwise the (now empty)
@@ -297,7 +261,7 @@
   grid-template-columns: minmax(0, 1fr);
   column-gap: 0;
   padding: 4px 9px 4px 8px;
-  background: rgba(6, 11, 20, 0.72);
+  background: rgba(6, 11, 20, 0.9);
 }
 
 .lbl--district.has-more .lbl__chip {
@@ -330,7 +294,7 @@
   grid-template-columns: minmax(0, 1fr);
   column-gap: 0;
   padding: 5px 13px 5px 12px;
-  background: rgba(6, 11, 20, 0.5);
+  background: rgba(6, 11, 20, 0.88);
 }
 
 .lbl--city .lbl__name {

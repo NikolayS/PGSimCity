@@ -68,6 +68,14 @@ function proseBody(text: string): HTMLElement {
   return wrap
 }
 
+type AnatomyView = 'page' | 'directory'
+
+function discussesPageLayout(id: string, heading: string, body: string, sectionIndex: number): boolean {
+  if ((id.startsWith('storage.table.') || id.startsWith('storage.index.')) && sectionIndex === 0) return true
+  const copy = `${heading} ${body}`
+  return /\b(?:page layout|inside (?:one )?8 KiB page|8 KiB pages? back to back)\b/i.test(copy)
+}
+
 /* ---------------------------------------------------------------------------
  * References — the reading list behind each component.
  *
@@ -252,11 +260,13 @@ export function createInspector(ctx: UiContext): UiModule {
   let openWide = loadFlag(OPEN_KEY, true)
   let openNarrow = false
   let tall = false
+  let planPreset = false
 
   const isOpen = (): boolean => (compact ? openNarrow : openWide)
 
   function applyOpen(): void {
     const open = isOpen()
+    setClass(host, 'is-plan-hidden', planPreset)
     setClass(host, 'is-compact', compact)
     setClass(host, 'is-open', open)
     tab.setAttribute('aria-expanded', String(open))
@@ -307,6 +317,42 @@ export function createInspector(ctx: UiContext): UiModule {
     tiles = []
     liveDot = null
     clear(body)
+  }
+
+  function anatomyEntry(view: AnatomyView, id: string): HTMLElement {
+    const page = view === 'page'
+    return el(
+      'aside',
+      {
+        class: 'pgc-anatomy-entry',
+        data: { anatomyEntry: view },
+        ariaLabel: page ? 'Open the 8 KiB page anatomy' : 'Open the data directory anatomy',
+      },
+      el(
+        'div',
+        { class: 'pgc-anatomy-entry__copy' },
+        el('strong', {
+          class: 'pgc-anatomy-entry__title',
+          text: page ? 'What is inside that 8 KiB page?' : 'What is actually inside the data directory?',
+        }),
+        el('span', {
+          class: 'pgc-anatomy-entry__hint',
+          text: page
+            ? 'Open the byte-scaled header, line pointers, free space and tuple layout.'
+            : 'Open base/, relation forks, segment suffixes, WAL and configuration files.',
+        }),
+      ),
+      el(
+        'button',
+        {
+          class: 'pg-btn pgc-anatomy-entry__button',
+          type: 'button',
+          on: { click: () => ctx.bus.emit('anatomy:open', { view, id }) },
+        },
+        el('span', { text: page ? 'Open page' : 'Open directory' }),
+        el('span', { class: 'pgc-anatomy-entry__arrow', ariaHidden: 'true', text: '→' }),
+      ),
+    )
   }
 
   /* --- empty state ------------------------------------------------------- */
@@ -412,6 +458,12 @@ export function createInspector(ctx: UiContext): UiModule {
         })
         collapse.root.classList.add('pgc-section')
         collapse.body.append(proseBody(section.body))
+        if (id === 'storage.datadir' && section.heading === 'The layout') {
+          collapse.body.append(anatomyEntry('directory', id))
+        }
+        if (discussesPageLayout(id, section.heading, section.body, i)) {
+          collapse.body.append(anatomyEntry('page', id))
+        }
         prose.append(collapse.root)
       })
       sectionState.set(id, flags)
@@ -555,6 +607,11 @@ export function createInspector(ctx: UiContext): UiModule {
   /* --- wiring ------------------------------------------------------------ */
 
   const offSelect = ctx.bus.on('select', ({ id }) => select(id))
+  const offCameraPreset = ctx.bus.on('camera:preset', ({ preset }) => {
+    planPreset = preset === 'plan'
+    applyOpen()
+    ctx.bus.emit('ui:layout', {})
+  })
 
   const onNarrow = (): void => {
     compact = narrow.matches
@@ -599,6 +656,7 @@ export function createInspector(ctx: UiContext): UiModule {
     },
     dispose() {
       offSelect()
+      offCameraPreset()
       narrow.removeEventListener('change', onNarrow)
       window.removeEventListener(SHEET_EVENT, onSheet)
       teardown()

@@ -140,6 +140,9 @@ const PLAN_FRAME = (() => {
     spanY: (b1 - b0) * 1.06,
   }
 })()
+/** Space occupied by the persistent top and bottom instruments, including
+ * their HUD gaps. The side panels are removed for this preset by the UI. */
+const PLAN_HUD_VERTICAL = 152
 
 const CITY_CENTER = new THREE.Vector3(ANCHOR.cityCenter[0], ANCHOR.cityCenter[1], ANCHOR.cityCenter[2])
 const WORLD_UP = new THREE.Vector3(0, 1, 0)
@@ -265,6 +268,7 @@ export function createCameraRig(
   let dragLook = false
   let locked = false
   let disposed = false
+  let activePreset: 'plan' | null = null
 
   // scripted moves
   let tweenT = 0
@@ -368,6 +372,12 @@ export function createCameraRig(
     if (resolve) resolve()
   }
 
+  function setActivePreset(next: 'plan' | null): void {
+    if (next === activePreset) return
+    activePreset = next
+    bus.emit('camera:preset', { preset: next })
+  }
+
   function requestLock(): void {
     if (locked || disposed) return
     const el = domElement as HTMLElement & { requestPointerLock?: () => unknown }
@@ -383,6 +393,7 @@ export function createCameraRig(
   /* ---- input -------------------------------------------------------------*/
 
   function interrupt(): void {
+    setActivePreset(null)
     // Any user input during a scripted move hands control straight back.
     if (scriptedNow()) release()
   }
@@ -878,7 +889,8 @@ export function createCameraRig(
 
   /* ---- public API --------------------------------------------------------*/
 
-  function focusOn(spec: FocusSpec, opts?: { instant?: boolean; duration?: number }): void {
+  function focusOn(spec: FocusSpec, opts?: { instant?: boolean; duration?: number }, preservePreset = false): void {
+    if (!preservePreset) setActivePreset(null)
     if (scriptedNow()) cancelScript()
 
     tweenTarget.set(spec.target[0], spec.target[1], spec.target[2])
@@ -959,6 +971,7 @@ export function createCameraRig(
     lookAt: [number, number, number][],
     duration: number,
   ): Promise<void> {
+    setActivePreset(null)
     if (scriptedNow()) cancelScript()
     if (!points || points.length < 2) return Promise.resolve()
 
@@ -993,6 +1006,7 @@ export function createCameraRig(
   }
 
   function release(): void {
+    setActivePreset(null)
     if (!scriptedNow()) {
       velTheta = 0
       velPhi = 0
@@ -1011,6 +1025,7 @@ export function createCameraRig(
   }
 
   function setMode(m: CameraMode): void {
+    setActivePreset(null)
     if (m === mode) return
     if (m === 'focus' || m === 'tour') return // scripted modes are entered by focusOn/flyPath
     if (scriptedNow()) {
@@ -1068,8 +1083,11 @@ export function createCameraRig(
   function plan(instant = false): void {
     const tanV = Math.tan((camera.fov * Math.PI) / 360)
     const aspect = Math.max(camera.aspect, 0.35)
-    const d = Math.max(PLAN_FRAME.spanY / 2 / tanV, PLAN_FRAME.spanX / 2 / (tanV * aspect))
+    const usableH = Math.max(viewH * 0.55, viewH - PLAN_HUD_VERTICAL)
+    const verticalFit = (PLAN_FRAME.spanY / 2 / tanV) * (viewH / usableH)
+    const d = Math.max(verticalFit, PLAN_FRAME.spanX / 2 / (tanV * aspect))
     if (mode === 'fly') setMode('orbit')
+    setActivePreset('plan')
     focusOn(
       {
         target: [PLAN_FRAME.pivot.x, PLAN_FRAME.pivot.y, PLAN_FRAME.pivot.z],
@@ -1077,11 +1095,13 @@ export function createCameraRig(
         dir: [PLAN_DIR.x, PLAN_DIR.y, PLAN_DIR.z],
       },
       { instant, duration: 1.4 },
+      true,
     )
     bus.emit('toast', { text: 'Overview — the plate is the PostgreSQL elephant', kind: 'info', ms: 2600 })
   }
 
   function setPivot(p: THREE.Vector3 | [number, number, number]): void {
+    setActivePreset(null)
     if (Array.isArray(p)) pivotT.set(p[0], p[1], p[2])
     else pivotT.copy(p)
     clampPivotTarget()

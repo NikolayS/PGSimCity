@@ -16,6 +16,7 @@ import { createRoads } from './engine/roads'
 import { createLabels } from './engine/labels'
 import { createPicker } from './engine/picker'
 import { createCollisionWorld, DEFAULT_EXCLUDE_IDS } from './engine/collision'
+import { createAudio } from './engine/audio'
 import { createWalkController } from './engine/walk'
 
 import { createSim } from './sim/model'
@@ -87,6 +88,7 @@ async function boot(): Promise<void> {
   probeCtx.getExtension('WEBGL_lose_context')?.loseContext()
 
   const bus = createBus()
+  const audio = createAudio(bus)
   const registry = new Registry()
   const theme = createTheme()
 
@@ -159,14 +161,14 @@ async function boot(): Promise<void> {
   // Two walkables, and only two: the ground plate — which has the excavation cut
   // out of it, so a downward ray correctly finds nothing over the pit — and the
   // plaza deck. Every other surface is already the top of a collider box.
-  collision.addWalkable(groundMod.group)
+  collision.addWalkable(groundMod.group, 'ground')
   // The DECK, not the whole shared-memory group. The 1024 buffer tiles standing
   // on it change height every frame with usage_count, and a walkable surface
   // that moves is not a floor: it rises into your feet and drops away from
   // under them while you stand still. You walk *through* the buffer tiles —
   // being inside a lit buffer is the point — so only the slab underneath them
   // is ground. (Falls back to the whole group if shmem ever renames the deck.)
-  collision.addWalkable(shmemMod.group.getObjectByName('shmem.deck') ?? shmemMod.group)
+  collision.addWalkable(shmemMod.group.getObjectByName('shmem.deck') ?? shmemMod.group, 'deck')
   // MUST follow build(): build() resets the box array and would discard these.
   access.installCollision(collision)
   for (const b of (groundMod.group.userData.rimColliders as THREE.Box3[] | undefined) ?? []) collision.addBox(b)
@@ -174,6 +176,8 @@ async function boot(): Promise<void> {
     camera,
     dom: renderer.domElement,
     collision,
+    audio,
+    sim: sim.state,
     bus,
     overlayRoot: canvasRoot,
   })
@@ -206,6 +210,33 @@ async function boot(): Promise<void> {
   void import('./ui/anatomy').then(({ createAnatomy }) => ui.push(createAnatomy(uiCtx))) // PAGE + DATA-DIRECTORY ANATOMY WIRING
 
   /* --- bus wiring ---------------------------------------------------------- */
+
+  interface LooseBus {
+    on(type: string, fn: (payload: unknown) => void): () => void
+  }
+  const looseBus = bus as unknown as LooseBus
+  const offAudioToggle = looseBus.on('audio:toggle', () => {
+    if (audio.preferred) {
+      audio.disable()
+      bus.emit('toast', { text: 'Sound off', kind: 'info', ms: 1600 })
+      return
+    }
+    void audio.enable()
+      .then(() => bus.emit('toast', { text: 'Sound on', kind: 'good', ms: 1600 }))
+      .catch(() => {})
+  })
+
+  // A remembered opt-in resumes only from the next real interaction. No
+  // AudioContext exists, and no sound can play, before that gesture.
+  const resumePreferredAudio = (): void => {
+    window.removeEventListener('pointerdown', resumePreferredAudio, true)
+    window.removeEventListener('keydown', resumePreferredAudio, true)
+    if (audio.preferred) void audio.enable().catch(() => {})
+  }
+  if (audio.preferred) {
+    window.addEventListener('pointerdown', resumePreferredAudio, { capture: true, once: true })
+    window.addEventListener('keydown', resumePreferredAudio, { capture: true, once: true })
+  }
 
   bus.on('focus', ({ id, instant }) => {
     if (!id) {
@@ -344,6 +375,9 @@ async function boot(): Promise<void> {
     disposed = true
     running = false
     window.removeEventListener('resize', onResize)
+    window.removeEventListener('pointerdown', resumePreferredAudio, true)
+    window.removeEventListener('keydown', resumePreferredAudio, true)
+    offAudioToggle()
     timer.disconnect()
     for (const m of modules) m.dispose?.()
     for (const u of ui) u.dispose()
@@ -351,6 +385,7 @@ async function boot(): Promise<void> {
     labels.dispose()
     picker.dispose()
     walk.dispose()
+    audio.dispose()
     collision.dispose()
     rig.dispose()
     gfx.dispose()
@@ -375,7 +410,7 @@ async function boot(): Promise<void> {
 
   // Handy in the console. PGCITY is the pre-rename alias, kept because existing
   // notes and tooling still reach for it; both names are the same object.
-  const handle = { sim, registry, bus, rig, gfx, flows, walk, collision }
+  const handle = { sim, registry, bus, rig, gfx, flows, walk, collision, audio }
   Object.assign(window as unknown as Record<string, unknown>, { PGSIMCITY: handle, PGCITY: handle })
 }
 

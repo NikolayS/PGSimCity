@@ -1,7 +1,8 @@
 import * as THREE from 'three'
-import type { Bus } from '../core/types'
+import type { Bus, SimState } from '../core/types'
 import { clamp, clamp01, damp, easeInOutCubic } from '../core/util'
 import { CITY } from '../world/layout'
+import type { AudioApi, Gait, Surface } from './audio'
 import { createMoveResult } from './collision'
 import type { CollisionWorld, MoveResult } from './collision'
 
@@ -30,6 +31,8 @@ export interface WalkOptions {
   /** Element that owns pointer lock — the renderer's canvas. */
   dom: HTMLElement
   collision: CollisionWorld
+  audio: AudioApi
+  sim: SimState
   bus: Bus
   /** Overrides for any of the feel numbers. */
   tuning?: Partial<WalkTuning>
@@ -74,8 +77,13 @@ export interface WalkController {
   exit(): WalkExitView
   update(dt: number): void
   readonly grounded: boolean
+  readonly gait: Gait
+  readonly submerged: boolean
+  readonly surface: Surface
   /** Horizontal speed, m/s. */
   readonly speed: number
+  /** Cumulative horizontal body travel, in metres. */
+  readonly distance: number
   /** Live feet position. Do not mutate. */
   readonly position: THREE.Vector3
   dispose(): void
@@ -150,6 +158,21 @@ const EYE_RATE = 13
 /** Fade-to-black, hold, fade-back. */
 const FADE_OUT = 0.18
 const FADE_IN = 0.45
+
+/** The shared-buffer grid's exact outside edge. */
+const POOL_HALF = ((CITY.buf.grid - 1) * CITY.buf.pitch + CITY.buf.tile) / 2
+/** The deck is a real lower boundary; buffer instances remain deliberately non-solid. */
+const POOL_BOTTOM = CITY.deck.top
+/** Top of the conceptual water volume: the tallest ordinary usage_count column. */
+const POOL_SURFACE = CITY.buf.baseY + CITY.buf.maxRise + 0.4
+/** Swimming is slower to start and stop than walking. */
+const SWIM_SPEED = 1.55
+const SWIM_ACCEL = 2.35
+const SWIM_VERTICAL_SETTLE = 3.2
+const SWIM_SINK = 0.16
+const SWIM_LOOK_RISE = 1.42
+const SWIM_KEY_RISE = 0.9
+const SWIM_KEY_SINK = 0.72
 
 /**
  * The respawn pad. The buffer grid reaches z = ±46.1 (31 * 2.9 / 2 + tile / 2)
@@ -238,15 +261,20 @@ function prefersReducedMotion(): boolean {
 /* ==========================================================================*/
 
 export function createWalkController(opts: WalkOptions): WalkController {
-  const { camera, dom, collision, bus } = opts
+  const { camera, dom, collision, audio, sim, bus } = opts
   const T: WalkTuning = { ...DEFAULT_TUNING, ...(opts.tuning ?? {}) }
   const jumpSpeed = Math.sqrt(2 * T.gravity * T.jumpHeight)
+  const poolSurfaceFeet = POOL_SURFACE - T.eyeStand + 0.12
   const noBob = prefersReducedMotion()
 
   /* ---- state -------------------------------------------------------------*/
 
   let enabled = false
   let grounded = false
+  let swimming = false
+  let submerged = false
+  let gait: Gait = 'walk'
+  let surface: Surface = 'ground'
 
   /** Feet. The camera sits eyeNow above this. */
   const pos = new THREE.Vector3(SAFE_X, SAFE_Y, SAFE_Z)
@@ -293,8 +321,22 @@ export function createWalkController(opts: WalkOptions): WalkController {
   let disposed = false
   /** Ground covered this frame, summed over the substeps. Drives the head bob. */
   let frameTravel = 0
+  /** Cumulative body travel. Audio cadence consumes this, just as bob consumes distance. */
+  let distanceTravelled = 0
+  const audioStep = {
+    distance: 0,
+    speed: 0,
+    gait: 'walk' as Gait,
+    grounded: false,
+    surface: 'ground' as Surface,
+    submerged: false,
+  }
 
   camera.rotation.order = 'YXZ'
+
+  function inPoolXZ(x: number, z: number): boolean {
+    return x >= -POOL_HALF && x <= POOL_HALF && z >= -POOL_HALF && z <= POOL_HALF
+  }
 
   /* ---- fade overlay ------------------------------------------------------*/
 
@@ -306,6 +348,89 @@ export function createWalkController(opts: WalkOptions): WalkController {
     fade.style.cssText =
       'position:fixed;inset:0;background:#05070c;opacity:0;pointer-events:none;z-index:60;display:none'
     overlayRoot.appendChild(fade)
+  }
+
+  let poolReadout: HTMLElement | null = null
+  let poolTitle: HTMLElement | null = null
+  let poolState: HTMLElement | null = null
+  let swimVeil: HTMLElement | null = null
+  let poolReadoutT = 0
+  let lastPoolTile = -1
+  let lastPoolKey = ''
+  let lastVeil = ''
+  if (overlayRoot && typeof document !== 'undefined') {
+    swimVeil = document.createElement('div')
+    swimVeil.style.cssText =
+      'position:absolute;inset:0;pointer-events:none;z-index:16;opacity:0;transition:opacity 180ms ease;' +
+      'box-shadow:inset 0 0 110px rgba(45,82,180,.36);background:linear-gradient(rgba(30,55,125,.05),rgba(12,25,76,.12))'
+    overlayRoot.appendChild(swimVeil)
+
+    poolReadout = document.createElement('aside')
+    poolReadout.hidden = true
+    poolReadout.style.cssText =
+      'position:absolute;left:50%;bottom:76px;transform:translateX(-50%);z-index:25;pointer-events:none;' +
+      'min-width:310px;max-width:calc(100% - 36px);padding:9px 13px;border:1px solid rgba(123,108,255,.42);' +
+      'border-left:3px solid rgba(123,108,255,.9);border-radius:3px;background:rgba(6,10,20,.82);' +
+      'box-shadow:0 8px 28px rgba(0,0,0,.28);font-family:ui-monospace,SFMono-Regular,Menlo,monospace'
+    poolTitle = document.createElement('div')
+    poolTitle.style.cssText = 'color:#dbe7ff;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase'
+    poolState = document.createElement('div')
+    poolState.style.cssText = 'margin-top:4px;color:#8fa5c4;font-size:11px;line-height:1.35'
+    poolReadout.append(poolTitle, poolState)
+    overlayRoot.appendChild(poolReadout)
+  }
+
+  function updatePoolReadout(dt: number): void {
+    const veil = submerged ? '1' : swimming ? '0.35' : '0'
+    if (swimVeil && veil !== lastVeil) {
+      lastVeil = veil
+      swimVeil.style.opacity = veil
+    }
+    if (!poolReadout || !poolTitle || !poolState) return
+    if (!swimming) {
+      poolReadout.hidden = true
+      poolReadoutT = 0
+      lastPoolTile = -1
+      lastPoolKey = ''
+      return
+    }
+    poolReadout.hidden = false
+    poolReadoutT -= dt
+    if (poolReadoutT > 0) return
+    poolReadoutT = 0.15
+
+    const centreHalf = ((CITY.buf.grid - 1) * CITY.buf.pitch) / 2
+    let col = Math.round((pos.x + centreHalf) / CITY.buf.pitch)
+    let row = Math.round((pos.z + centreHalf) / CITY.buf.pitch)
+    if (col < 0) col = 0
+    else if (col >= CITY.buf.grid) col = CITY.buf.grid - 1
+    if (row < 0) row = 0
+    else if (row >= CITY.buf.grid) row = CITY.buf.grid - 1
+    const tile = row * CITY.buf.grid + col
+    const b = sim.buffers
+    const active = tile < b.size
+    const valid = active && b.valid[tile] !== 0
+    const state = !active ? 'inactive' : !valid ? 'free' : b.dirty[tile] !== 0 ? 'dirty' : 'clean'
+    const pinned = active && b.pinned[tile] !== 0
+    const usage = active ? b.usage[tile] : 0
+    const rel = valid && b.rel[tile] < sim.tables.length ? sim.tables[b.rel[tile]].def.name : 'no relation'
+    const block = valid ? b.blk[tile] : 0
+    const size = Math.max(1, b.size)
+    const clockDistance = active ? (tile - b.clockHand + size) % size : 0
+    const key = `${state}|${pinned ? 1 : 0}|${usage}|${rel}|${block}|${clockDistance}`
+    if (tile !== lastPoolTile) {
+      lastPoolTile = tile
+      poolTitle.textContent = `Buffer pool (shared_buffers) · frame ${String(tile).padStart(4, '0')}`
+    }
+    if (key !== lastPoolKey) {
+      lastPoolKey = key
+      const pin = pinned ? ' · PINNED' : ''
+      const owner = valid ? ` · ${rel} block ${block}` : ''
+      const clock = active ? (clockDistance === 0 ? ' · CLOCK SWEEP HERE' : ` · clock +${clockDistance}`) : ''
+      poolState.textContent = `${state.toUpperCase()}${pin} · usage_count ${usage} → height${owner}${clock}`
+      poolState.style.color =
+        state === 'dirty' ? '#ff6b82' : state === 'clean' ? '#69bfff' : pinned ? '#ffd36a' : '#8fa5c4'
+    }
   }
   function setFade(a: number): void {
     if (!fade) return
@@ -472,6 +597,10 @@ export function createWalkController(opts: WalkOptions): WalkController {
     vel.set(0, 0, 0)
     vy = 0
     grounded = false
+    swimming = false
+    submerged = false
+    gait = 'walk'
+    surface = 'ground'
     lostGroundT = 0
     coyoteT = 0
     bobAmp = 0
@@ -545,6 +674,9 @@ export function createWalkController(opts: WalkOptions): WalkController {
     vel.set(0, 0, 0)
     vy = 0
     grounded = false
+    swimming = false
+    submerged = false
+    gait = 'walk'
     lostGroundT = 0
     crouching = false
     running = false
@@ -554,6 +686,7 @@ export function createWalkController(opts: WalkOptions): WalkController {
     bobAmp = 0
     landDip = 0
     frameTravel = 0
+    distanceTravelled = 0
     yaw = descentYaw
     pitch = descentPitch0
 
@@ -601,6 +734,10 @@ export function createWalkController(opts: WalkOptions): WalkController {
     setFade(0)
     fadeT = -1
     fadePending = false
+    swimming = false
+    submerged = false
+    gait = 'walk'
+    updatePoolReadout(0)
 
     // Stand up and back off: 60 m up, 60 m back along the way we were looking.
     _fwd.set(Math.sin(yaw), 0, Math.cos(yaw)).multiplyScalar(-1) // horizontal view dir
@@ -645,9 +782,24 @@ export function createWalkController(opts: WalkOptions): WalkController {
    * once per frame, in update(), and read from here.
    */
   function step(d: number): void {
+    const nextSwimming =
+      inPoolXZ(pos.x, pos.z) && pos.y >= POOL_BOTTOM - 0.05 && pos.y <= POOL_SURFACE
+    if (nextSwimming !== swimming) {
+      swimming = nextSwimming
+      if (swimming) {
+        audio.splash(clamp01(0.18 + Math.abs(vy) / 11))
+        grounded = false
+        coyoteT = 0
+        lostGroundT = 0
+        surface = 'water'
+      } else {
+        submerged = false
+      }
+    }
+
     /* --- stance ---------------------------------------------------------- */
-    crouching = keys.has('KeyC')
-    running = !crouching && (keys.has('ShiftLeft') || keys.has('ShiftRight'))
+    crouching = !swimming && keys.has('KeyC')
+    running = !swimming && !crouching && (keys.has('ShiftLeft') || keys.has('ShiftRight'))
     const eyeTarget = crouching ? T.eyeCrouch : T.eyeStand
     eyeNow = damp(eyeNow, eyeTarget, EYE_RATE, d)
     capsuleH = crouching ? T.capsuleHeightCrouch : T.capsuleHeight
@@ -655,7 +807,7 @@ export function createWalkController(opts: WalkOptions): WalkController {
     /* --- wish direction, in yaw space ------------------------------------ */
     const fA = axisForward()
     const sA = axisStrafe()
-    const targetSpeed = crouching ? T.speedCrouch : running ? T.speedRun : T.speedWalk
+    const targetSpeed = swimming ? SWIM_SPEED : crouching ? T.speedCrouch : running ? T.speedRun : T.speedWalk
     // yaw 0 looks down -Z: forward = (-sin yaw, 0, -cos yaw), right = (cos yaw, 0, -sin yaw)
     const sy = Math.sin(yaw)
     const cy = Math.cos(yaw)
@@ -672,7 +824,7 @@ export function createWalkController(opts: WalkOptions): WalkController {
     }
 
     /* --- accelerate ------------------------------------------------------ */
-    const accel = (grounded ? T.accelGround : T.accelAir) * d
+    const accel = (swimming ? SWIM_ACCEL : grounded ? T.accelGround : T.accelAir) * d
     let dvx = wx - vel.x
     let dvz = wz - vel.z
     const dv = Math.sqrt(dvx * dvx + dvz * dvz)
@@ -686,13 +838,15 @@ export function createWalkController(opts: WalkOptions): WalkController {
 
     /* --- jump ------------------------------------------------------------ */
     if (jumpBufferT > 0) jumpBufferT -= d
-    if (grounded) coyoteT = COYOTE
+    if (swimming) coyoteT = 0
+    else if (grounded) coyoteT = COYOTE
     else if (coyoteT > 0) coyoteT -= d
-    if (jumpBufferT > 0 && coyoteT > 0 && !crouching) {
+    if (!swimming && jumpBufferT > 0 && coyoteT > 0 && !crouching) {
       vy = jumpSpeed
       grounded = false
       coyoteT = 0
       jumpBufferT = 0
+      audio.jump()
     }
 
     /* --- horizontal move, with slide and step-up ------------------------- */
@@ -711,6 +865,34 @@ export function createWalkController(opts: WalkOptions): WalkController {
     if (mv.stepped > 0 && grounded) pos.y = mv.position.y
 
     /* --- vertical -------------------------------------------------------- */
+    if (swimming) {
+      const vy0 = vy
+      const input = Math.min(1, Math.hypot(fA, sA))
+      const lookRise = Math.max(0, Math.sin(pitch)) * input * SWIM_LOOK_RISE
+      let targetVy = -SWIM_SINK + lookRise
+      if (keys.has('Space')) targetVy += SWIM_KEY_RISE
+      if (keys.has('KeyC')) targetVy -= SWIM_KEY_SINK
+      vy = damp(vy, targetVy, SWIM_VERTICAL_SETTLE, d)
+      pos.y += (vy0 + vy) * 0.5 * d
+      const ascentSpeed = vy > 0 ? vy : 0
+      if (pos.y < POOL_BOTTOM) {
+        pos.y = POOL_BOTTOM
+        if (vy < 0) vy = 0
+      } else if (pos.y > poolSurfaceFeet) {
+        pos.y = poolSurfaceFeet
+        if (vy > 0) vy = 0
+      }
+      const nextSubmerged = pos.y + eyeNow < POOL_SURFACE
+      if (submerged && !nextSubmerged) {
+        audio.splash(clamp01(0.24 + ascentSpeed * 0.42 + Math.hypot(vel.x, vel.z) * 0.12))
+      }
+      submerged = nextSubmerged
+      grounded = false
+      lostGroundT = 0
+      surface = 'water'
+      return
+    }
+
     const wasGrounded = grounded
     const yBefore = pos.y
     const vy0 = vy
@@ -740,6 +922,8 @@ export function createWalkController(opts: WalkOptions): WalkController {
     const g = collision.groundAt(_probe, (fell > 0 ? fell : 0) + snap + slopeTol)
     if (g !== null && vy <= 0) {
       if (!wasGrounded && vy < -6) landDip = clamp01(-vy / 14) * 0.11
+      surface = collision.groundSurface
+      if (!wasGrounded) audio.land(-vy)
       pos.y = g
       vy = 0
       grounded = true
@@ -799,11 +983,20 @@ export function createWalkController(opts: WalkOptions): WalkController {
     if (steps > MAX_SUBSTEPS) steps = MAX_SUBSTEPS
     const sd = d / steps
     for (let i = 0; i < steps; i++) step(sd)
+    distanceTravelled += frameTravel
 
     /* --- head bob, driven by distance ------------------------------------ */
     const sy = Math.sin(yaw)
     const cy = Math.cos(yaw)
     const speed = Math.hypot(vel.x, vel.z)
+    audioStep.distance = distanceTravelled
+    audioStep.speed = speed
+    gait = swimming ? 'swim' : crouching ? 'crouch' : running ? 'run' : 'walk'
+    audioStep.gait = gait
+    audioStep.grounded = grounded
+    audioStep.surface = swimming ? 'water' : surface
+    audioStep.submerged = submerged
+    audio.step(d, audioStep)
     let bobY = 0
     let bobX = 0
     if (!noBob) {
@@ -827,6 +1020,7 @@ export function createWalkController(opts: WalkOptions): WalkController {
     camera.position.copy(_eye)
     camera.rotation.set(pitch, yaw, 0, 'YXZ')
     camera.updateMatrixWorld()
+    updatePoolReadout(d)
   }
 
   /* ---- lifecycle ---------------------------------------------------------*/
@@ -855,6 +1049,12 @@ export function createWalkController(opts: WalkOptions): WalkController {
     keys.clear()
     if (fade && fade.parentNode) fade.parentNode.removeChild(fade)
     fade = null
+    if (poolReadout && poolReadout.parentNode) poolReadout.parentNode.removeChild(poolReadout)
+    if (swimVeil && swimVeil.parentNode) swimVeil.parentNode.removeChild(swimVeil)
+    poolReadout = null
+    poolTitle = null
+    poolState = null
+    swimVeil = null
   }
 
   return {
@@ -867,8 +1067,20 @@ export function createWalkController(opts: WalkOptions): WalkController {
     get grounded(): boolean {
       return grounded
     },
+    get gait(): Gait {
+      return gait
+    },
+    get submerged(): boolean {
+      return submerged
+    },
+    get surface(): Surface {
+      return swimming ? 'water' : surface
+    },
     get speed(): number {
       return Math.hypot(vel.x, vel.z)
+    },
+    get distance(): number {
+      return distanceTravelled
     },
     get position(): THREE.Vector3 {
       return pos

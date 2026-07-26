@@ -26,11 +26,6 @@
   --line-hair: rgba(120, 170, 235, 0.14);
   --line-soft: rgba(120, 170, 235, 0.26);
   --line-hard: rgba(150, 200, 255, 0.45);
-  /* Technical-sheet furniture. These are structural ink, never semantic
-     status colours: component meaning still comes from the palette below. */
-  --sheet-grid: rgba(120, 170, 235, 0.035);
-  --sheet-mark: rgba(150, 200, 255, 0.58);
-  --sheet-rule: rgba(120, 170, 235, 0.2);
 
   /* --- type --- */
   --ink: #e8f1ff;
@@ -128,9 +123,6 @@
   --line-hair: rgba(24, 34, 46, 0.11);
   --line-soft: rgba(24, 34, 46, 0.2);
   --line-hard: rgba(24, 34, 46, 0.4);
-  --sheet-grid: rgba(24, 34, 46, 0.028);
-  --sheet-mark: rgba(24, 34, 46, 0.52);
-  --sheet-rule: rgba(24, 34, 46, 0.17);
 
   /* --- type --- */
   --ink: #18222e;
@@ -172,12 +164,6 @@
   background: rgba(24, 34, 46, 0.08);
 }
 
-:root[data-theme="day"] .pg-panel__head {
-  background:
-    linear-gradient(var(--sheet-grid) 1px, transparent 1px) 0 0 / 24px 24px,
-    linear-gradient(90deg, var(--sheet-grid) 1px, transparent 1px) 0 0 / 24px 24px;
-}
-
 :root[data-theme="day"] .pg-scroll::-webkit-scrollbar-thumb {
   background: rgba(24, 34, 46, 0.22);
 }
@@ -196,45 +182,33 @@
   background: rgba(24, 34, 46, 0.16);
 }
 
-/* Floating city labels. A 62%-black chip with dark ink on it is unreadable —
-   over a sunlit city the chip has to be the light thing. */
+/* Floating city labels stay opaque enough that their type does not depend on
+   the brightness of the building behind them. */
 :root[data-theme="day"] .lbl__chip {
-  background: rgba(252, 251, 247, 0.82);
-  box-shadow: 0 8px 20px -16px rgba(24, 34, 46, 0.8);
+  background: rgba(252, 251, 247, 0.94);
 }
 :root[data-theme="day"] .lbl__chip:hover,
 :root[data-theme="day"] .lbl.is-hovered .lbl__chip {
-  background: rgba(255, 255, 255, 0.94);
+  background: rgba(255, 255, 255, 0.98);
 }
 :root[data-theme="day"] .lbl.is-far .lbl__chip {
-  background: rgba(252, 251, 247, 0.74);
+  background: rgba(252, 251, 247, 0.9);
 }
 :root[data-theme="day"] .lbl--district .lbl__chip,
 :root[data-theme="day"] .lbl--city .lbl__chip {
-  background: rgba(252, 251, 247, 0.86);
+  background: rgba(252, 251, 247, 0.94);
 }
 :root[data-theme="day"] .lbl.is-selected .lbl__name {
   color: var(--ink);
-}
-:root[data-theme="day"] .lbl__more {
-  background: rgba(24, 34, 46, 0.07);
-}
-/* Registration ticks are flat ink at noon; a halo only muddies the drawing. */
-:root[data-theme="day"] .lbl__chip::before,
-:root[data-theme="day"] .lbl__chip::after {
-  box-shadow: none;
 }
 
 /* The tour deck, the narration card and the command palette. */
 :root[data-theme="day"] .tour-card,
 :root[data-theme="day"] .tour-narrate {
   background: var(--bg-panel);
-  box-shadow: var(--glow-soft), 0 0 0 1px rgba(24, 34, 46, 0.08);
 }
 :root[data-theme="day"] body.pg-tour::after {
-  background:
-    radial-gradient(120% 78% at 50% 34%, transparent 46%, rgba(24, 34, 46, 0.24) 100%),
-    linear-gradient(0deg, rgba(24, 34, 46, 0.18) 0%, transparent 34%);
+  background: rgba(24, 34, 46, 0.18);
 }
 :root[data-theme="day"] .tour-step::after {
   background: rgba(24, 34, 46, 0.2);
@@ -255,18 +229,17 @@
   background: rgba(24, 34, 46, 0.28);
 }
 :root[data-theme="day"] .pal-dialog {
-  box-shadow: var(--glow-soft), 0 0 0 1px rgba(24, 34, 46, 0.1), 0 40px 120px -40px rgba(24, 34, 46, 0.35);
+  background: var(--bg-panel-solid);
 }
 :root[data-theme="day"] .pal-row.is-sel {
   background: rgba(0, 137, 181, 0.12);
-  border-color: rgba(0, 137, 181, 0.4);
 }
 
 :root[data-theme="day"] .hud-vital:hover {
   background: rgba(24, 34, 46, 0.05);
 }
 :root[data-theme="day"] .hud-chip.is-active {
-  background: rgba(0, 137, 181, 0.12);
+  color: var(--c-backend);
 }
 
 * {
@@ -382,11 +355,11 @@ body {
   z-index: 50;
   display: grid;
   place-items: center;
-  background: radial-gradient(120% 90% at 50% 20%, #0b1424 0%, #04060c 70%);
+  background: var(--bg-void);
   transition: opacity 700ms var(--ease), visibility 700ms;
 }
 :root[data-theme="day"] #boot {
-  background: radial-gradient(120% 90% at 50% 20%, #e9f2fa 0%, #cfe0ee 70%);
+  background: var(--bg-void);
 }
 :root[data-theme="day"] .boot-bar {
   background: rgba(24, 34, 46, 0.14);
@@ -425,14 +398,13 @@ body {
   width: 260px;
   height: 2px;
   background: rgba(120, 170, 235, 0.16);
-  border-radius: var(--r-pill);
   overflow: hidden;
 }
 .boot-bar i {
   display: block;
   height: 100%;
   width: 0%;
-  background: linear-gradient(90deg, var(--c-backend), var(--c-shmem));
+  background: var(--c-backend);
   transition: width 300ms var(--ease);
 }
 .boot-status {

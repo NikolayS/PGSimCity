@@ -894,6 +894,10 @@ export function createHud(ctx: UiContext): UiModule {
     bus.emit('toast', { text: labelsOn ? 'Labels on' : 'Labels hidden', kind: 'info', ms: 1400 })
   }
 
+  function toggleAudio(): void {
+    emitLoose(bus, 'audio:toggle', {})
+  }
+
   function escape(): void {
     const payload = { handled: false }
     emitLoose(bus, 'ui:escape', payload)
@@ -989,6 +993,12 @@ export function createHud(ctx: UiContext): UiModule {
         if (e.repeat) return
         e.preventDefault()
         toggleTheme()
+        return
+      case 'm':
+      case 'M':
+        if (e.repeat) return
+        e.preventDefault()
+        toggleAudio()
         return
       case '/':
         e.preventDefault()

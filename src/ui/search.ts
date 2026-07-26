@@ -20,6 +20,7 @@ import type { UiContext, UiModule } from './uikit'
  *               scrolls to the dial and flashes it
  *   scenarios   the guided experiments in sim/scenarios.ts
  *   chapters    the guided tour, jumped to directly
+ *   anatomy     the physical page and directory instruments
  *
  * Opened with / or Ctrl+K (also from the HUD's toolbar over the loose
  * 'ui:palette' channel), closed with Escape, a backdrop click, or activating
@@ -31,7 +32,7 @@ interface LooseBus {
   on(type: string, fn: (p: unknown) => void): () => void
 }
 
-type ItemKind = 'component' | 'setting' | 'scenario' | 'chapter'
+type ItemKind = 'component' | 'setting' | 'scenario' | 'chapter' | 'anatomy'
 
 interface Item {
   kind: ItemKind
@@ -49,9 +50,23 @@ const GROUPS: { kind: ItemKind; label: string }[] = [
   { kind: 'setting', label: 'Settings' },
   { kind: 'scenario', label: 'Scenarios' },
   { kind: 'chapter', label: 'Tour chapters' },
+  { kind: 'anatomy', label: 'Anatomy' },
 ]
 
-const LIMITS: Record<ItemKind, number> = { component: 8, setting: 6, scenario: 5, chapter: 5 }
+const LIMITS: Record<ItemKind, number> = { component: 8, setting: 6, scenario: 5, chapter: 5, anatomy: 2 }
+
+const ANATOMY = [
+  {
+    view: 'page',
+    title: '8 KiB page anatomy',
+    sub: 'Open a byte-scaled heap page: header, line pointers, free space and tuples',
+  },
+  {
+    view: 'directory',
+    title: 'Data directory anatomy',
+    sub: 'Open the physical cluster tree: base/, relation forks, segments, WAL and config',
+  },
+] as const
 
 /**
  * Curated starting points for an empty query — the eight places worth going
@@ -161,6 +176,10 @@ export function createSearch(ctx: UiContext): UiModule {
     bus.emit('tour:start', { chapter: i })
   }
 
+  function openAnatomy(view: 'page' | 'directory'): void {
+    bus.emit('anatomy:open', { view })
+  }
+
   /**
    * Settings live in the console, not here. Ask for the rail, then walk the
    * DOM the way a user would: open the drawer, open the group, scroll the dial
@@ -250,6 +269,17 @@ export function createSearch(ctx: UiContext): UiModule {
     }
   }
 
+  function anatomyItem(def: (typeof ANATOMY)[number]): Item {
+    return {
+      kind: 'anatomy',
+      key: def.view,
+      badge: 'open',
+      title: def.title,
+      sub: def.sub,
+      run: () => openAnatomy(def.view),
+    }
+  }
+
   /* =======================================================================
    * COLLECTION
    * =====================================================================*/
@@ -327,6 +357,18 @@ export function createSearch(ctx: UiContext): UiModule {
     )
     for (const { c, i } of chapterHits) out.push(chapterItem(c, i))
 
+    for (const def of rank(
+      ANATOMY,
+      (item) => [
+        [item.title, 1],
+        [item.view, 0.95],
+        [item.sub, 0.55],
+      ],
+      LIMITS.anatomy,
+    )) {
+      out.push(anatomyItem(def))
+    }
+
     return out
   }
 
@@ -338,7 +380,7 @@ export function createSearch(ctx: UiContext): UiModule {
     class: 'pal-input pg-mono',
     type: 'text',
     id: 'pal-input',
-    placeholder: 'Search the city — buildings, settings, scenarios, chapters',
+    placeholder: 'Search the city — buildings, settings, scenarios, anatomy',
     autocomplete: 'off',
     autocapitalize: 'off',
     role: 'combobox',
@@ -440,7 +482,7 @@ export function createSearch(ctx: UiContext): UiModule {
           el('p', { class: 'pal-empty__t', text: `Nothing matches “${query.trim()}”` }),
           el('p', {
             class: 'pal-empty__s',
-            text: 'Try a building (buffers, walsender), a parameter (max_wal_size), or a scenario (bloat).',
+            text: 'Try a building (buffers), a parameter (max_wal_size), a scenario (bloat), or anatomy (page).',
           }),
         ),
       )

@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import type { ComponentDef, DistrictId } from '../core/types'
+import type { Surface } from './audio'
 
 /* ============================================================================
  * THE COLLISION WORLD
@@ -122,9 +123,9 @@ export interface CollisionWorld {
   /** Rebuild the static collider set from a component registry. */
   build(source: ComponentSource, opts?: CollisionBuildOptions): void
   /** Add one static box by hand (guard rails, invisible walls). */
-  addBox(box: THREE.Box3): void
+  addBox(box: THREE.Box3, surface?: Surface): void
   /** Register a surface root the ground ray may hit. Safe to call twice. */
-  addWalkable(obj: THREE.Object3D): void
+  addWalkable(obj: THREE.Object3D, surface?: Surface): void
   removeWalkable(obj: THREE.Object3D): void
   /**
    * Height of the highest surface under `p` that lies in
@@ -134,6 +135,8 @@ export interface CollisionWorld {
    * registered its roof.
    */
   groundAt(p: THREE.Vector3, maxDrop: number): number | null
+  /** Surface selected by the most recent successful groundAt() query. */
+  readonly groundSurface: Surface
   /**
    * Is there any structure a pedestrian could meet within `radius` of this XZ?
    *
@@ -196,6 +199,7 @@ const EPS = 1e-4
 const NEAR_FLOOR = -1
 /** …and one whose underside is above this hangs in the sky and does not either. */
 const NEAR_CEILING = 30
+const SURFACES: readonly Surface[] = ['ground', 'deck', 'metal', 'stair', 'water']
 
 const DEFAULTS = {
   maxSpan: 60,
@@ -231,6 +235,7 @@ export function createCollisionWorld(): CollisionWorld {
 
   // 6 floats per box: minX minY minZ maxX maxY maxZ
   let data = new Float32Array(256 * 6)
+  let boxSurface = new Uint8Array(256)
   let n = 0
 
   // uniform grid, CSR-encoded
@@ -249,8 +254,10 @@ export function createCollisionWorld(): CollisionWorld {
   let gen = 0
 
   const walkables: THREE.Object3D[] = []
+  const walkableSurfaces: Surface[] = []
   let debug: THREE.LineSegments | null = null
   let debugStale = true
+  let groundSurface: Surface = 'ground'
 
   let stepHeight = 0.45
 
@@ -263,9 +270,27 @@ export function createCollisionWorld(): CollisionWorld {
     const next = new Float32Array(cap * 6)
     next.set(data)
     data = next
+    const nextSurface = new Uint8Array(cap)
+    nextSurface.set(boxSurface)
+    boxSurface = nextSurface
   }
 
-  function pushBox(b: THREE.Box3, pad: number): void {
+  function surfaceCode(surface: Surface): number {
+    switch (surface) {
+      case 'ground':
+        return 0
+      case 'deck':
+        return 1
+      case 'metal':
+        return 2
+      case 'stair':
+        return 3
+      case 'water':
+        return 4
+    }
+  }
+
+  function pushBox(b: THREE.Box3, pad: number, surface: Surface): void {
     ensureCapacity(n + 1)
     const o = n * 6
     data[o] = b.min.x - pad
@@ -274,6 +299,7 @@ export function createCollisionWorld(): CollisionWorld {
     data[o + 3] = b.max.x + pad
     data[o + 4] = b.max.y
     data[o + 5] = b.max.z + pad
+    boxSurface[n] = surfaceCode(surface)
     n++
     debugStale = true
   }
@@ -299,17 +325,22 @@ export function createCollisionWorld(): CollisionWorld {
     return 2
   }
 
-  function addObject(obj: THREE.Object3D, depth: number, o: Required<CollisionBuildOptions>): void {
+  function addObject(
+    obj: THREE.Object3D,
+    depth: number,
+    o: Required<CollisionBuildOptions>,
+    surface: Surface,
+  ): void {
     _box.setFromObject(obj)
     if (_box.isEmpty()) return
     const verdict = classify(_box, o)
     if (verdict === 1) {
-      pushBox(_box, o.pad)
+      pushBox(_box, o.pad, surface)
       return
     }
     if (verdict === 2 && depth < o.maxDepth) {
       const kids = obj.children
-      for (let i = 0; i < kids.length; i++) addObject(kids[i], depth + 1, o)
+      for (let i = 0; i < kids.length; i++) addObject(kids[i], depth + 1, o, surface)
     }
   }
 
@@ -340,14 +371,14 @@ export function createCollisionWorld(): CollisionWorld {
       if (skipId.has(def.id)) continue
       if (skipDistrict.has(def.district)) continue
       def.object.updateWorldMatrix(true, false)
-      addObject(def.object, 0, o)
+      addObject(def.object, 0, o, def.id === 'shmem.deck' ? 'deck' : 'metal')
     }
     rebuildGrid()
   }
 
-  function addBox(b: THREE.Box3): void {
+  function addBox(b: THREE.Box3, surface: Surface = 'metal'): void {
     if (b.isEmpty()) return
-    pushBox(b, 0)
+    pushBox(b, 0, surface)
     rebuildGrid()
   }
 
@@ -473,6 +504,7 @@ export function createCollisionWorld(): CollisionWorld {
     const lo = p.y - maxDrop
     const hi = p.y + GROUND_TOL
     let best = -Infinity
+    let bestSurface: Surface = 'ground'
 
     // (a) tops of the static boxes directly under the point
     if (n > 0) {
@@ -482,7 +514,10 @@ export function createCollisionWorld(): CollisionWorld {
         if (p.x < data[o] || p.x > data[o + 3]) continue
         if (p.z < data[o + 2] || p.z > data[o + 5]) continue
         const top = data[o + 4]
-        if (top >= lo && top <= hi && top > best) best = top
+        if (top >= lo && top <= hi && top > best) {
+          best = top
+          bestSurface = SURFACES[boxSurface[cand[i]]]
+        }
       }
     }
 
@@ -500,12 +535,24 @@ export function createCollisionWorld(): CollisionWorld {
         const y = _hits[i].point.y
         if (y > hi) continue
         if (y < lo) break
-        if (y > best) best = y
+        if (y > best) {
+          best = y
+          let hit = _hits[i].object as THREE.Object3D | null
+          while (hit) {
+            const walkable = walkables.indexOf(hit)
+            if (walkable >= 0) {
+              bestSurface = walkableSurfaces[walkable]
+              break
+            }
+            hit = hit.parent
+          }
+        }
         break
       }
       _hits.length = 0
     }
 
+    if (best !== -Infinity) groundSurface = bestSurface
     return best === -Infinity ? null : best
   }
 
@@ -618,12 +665,21 @@ export function createCollisionWorld(): CollisionWorld {
 
   /* ---- walkables ---------------------------------------------------------*/
 
-  function addWalkable(obj: THREE.Object3D): void {
-    if (walkables.indexOf(obj) < 0) walkables.push(obj)
+  function addWalkable(obj: THREE.Object3D, surface: Surface = 'ground'): void {
+    const i = walkables.indexOf(obj)
+    if (i >= 0) {
+      walkableSurfaces[i] = surface
+      return
+    }
+    walkables.push(obj)
+    walkableSurfaces.push(surface)
   }
   function removeWalkable(obj: THREE.Object3D): void {
     const i = walkables.indexOf(obj)
-    if (i >= 0) walkables.splice(i, 1)
+    if (i >= 0) {
+      walkables.splice(i, 1)
+      walkableSurfaces.splice(i, 1)
+    }
   }
 
   /* ---- debug -------------------------------------------------------------*/
@@ -686,12 +742,14 @@ export function createCollisionWorld(): CollisionWorld {
     n = 0
     gw = 0
     gh = 0
+    groundSurface = 'ground'
     debugStale = true
   }
 
   function dispose(): void {
     clear()
     walkables.length = 0
+    walkableSurfaces.length = 0
     _hits.length = 0
     if (debug) {
       debug.geometry.dispose()
@@ -707,6 +765,9 @@ export function createCollisionWorld(): CollisionWorld {
     addWalkable,
     removeWalkable,
     groundAt,
+    get groundSurface(): Surface {
+      return groundSurface
+    },
     solidNear,
     move,
     debugMesh,

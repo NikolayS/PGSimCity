@@ -558,8 +558,8 @@ class SignAtlas {
 
 /** What we need from collision.ts. Structural, so world/ never imports engine/. */
 export interface CollisionSink {
-  addWalkable(obj: THREE.Object3D): void
-  addBox(box: THREE.Box3): void
+  addWalkable(obj: THREE.Object3D, surface?: 'ground' | 'deck' | 'metal' | 'stair' | 'water'): void
+  addBox(box: THREE.Box3, surface?: 'ground' | 'deck' | 'metal' | 'stair' | 'water'): void
 }
 
 export interface AccessModule extends WorldModule {
@@ -1272,7 +1272,8 @@ export const createAccess: AccessFactory = (ctx: WorldContext): AccessModule => 
   const walkables: THREE.Object3D[] = [surfaceMesh, stairMesh]
 
   function installCollision(sink: CollisionSink): void {
-    for (const w of walkables) sink.addWalkable(w)
+    sink.addWalkable(surfaceMesh, 'metal')
+    sink.addWalkable(stairMesh, 'stair')
     for (const b of blockers) sink.addBox(b)
   }
 

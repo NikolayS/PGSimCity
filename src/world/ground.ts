@@ -118,13 +118,15 @@ void main() {
   float q = ( r - ph * uSweepR ) / 30.0;
   float sweep = exp( - q * q ) * ( 1.0 - ph ) * 0.5;
 
-  // Poured concrete reads darker where it meets its own edge.
-  vec3 col = uBase * mix( 0.52, 1.0, smoothstep( 0.0, 210.0, edge ) );
+  // Keep enough surface value at the boundary to separate the poured plate
+  // from the void before the practical lights are added.
+  vec3 col = uBase * mix( 0.72, 1.08, smoothstep( 0.0, 230.0, edge ) );
   col = mix( col, uMinor, minor * 0.9 );
   col = mix( col, uMajor, major );
   col += uSweep * sweep * ( 0.35 + 0.65 * max( minor, major ) );
-  // …and then the edge light spills back in over it.
-  col += uRim * exp( - max( edge, 0.0 ) / 34.0 ) * 0.85;
+  // …and then the kerb light spills back in over it. The broad, quiet falloff
+  // survives the plan altitude; the physical cap below supplies the hard edge.
+  col += uRim * exp( - max( edge, 0.0 ) / 52.0 ) * 1.05;
 
   gl_FragColor = vec4( col, 1.0 );
   #include <tonemapping_fragment>
@@ -260,8 +262,14 @@ function siteMasts(ring: Float64Array, ccw: boolean, want: number): [number, num
 const SKIRT_DROP = 14
 /** Kerb upstand. Chest height on a 1.8 m body — this is also the parapet. */
 const KERB_H = 1.15
-/** How far in from the true edge the kerb's inner face stands. */
-const KERB_W = 2.2
+/** How far in from the true edge the kerb's inner face stands. At the plan
+ * altitude 2.2 m was sub-pixel; this still reads as a kerb at street level but
+ * gives the overview a dependable two-pixel cap. */
+const KERB_W = 4.2
+/** A very low outer spill separates the cap from the void without becoming a
+ * neon outline. Two bands avoid asking a hardware-width line to fake a glow. */
+const HALO_NEAR = 5
+const HALO_FAR = 14
 /** Samples per cubic along the outline. 17 cubics × 16 ≈ 15 m of kerb each. */
 const RIM_SEG = 16
 const RIM_SEG_LOW = 9
@@ -283,7 +291,7 @@ const CONES: readonly (readonly [number, number, number, number, number])[] = [
 const cssHex = (c: number) => '#' + (c >>> 0).toString(16).padStart(6, '0')
 
 /** Cool architectural white for the kerb light. Structure, not a Postgres fact. */
-const RIM_LIGHT = mixHex(COLOR.gridBright, COLOR.ink, 0.46)
+const RIM_LIGHT = mixHex(COLOR.gridBright, COLOR.ink, 0.58)
 /** How short the plate and its rim read the scene fog. See groundVert. */
 const FOG_K = 0.32
 
@@ -428,7 +436,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
       uMinor: { value: new THREE.Color(COLOR.grid) },
       uMajor: { value: new THREE.Color(COLOR.gridBright) },
       uSweep: { value: new THREE.Color(mixHex(COLOR.gridBright, COLOR.backend, 0.55)) },
-      uRim: { value: new THREE.Color(mixHex(0x000000, RIM_LIGHT, 0.5)) },
+      uRim: { value: new THREE.Color(mixHex(0x000000, RIM_LIGHT, 0.72)) },
       uTime: { value: 0 },
       uSweepR: { value: 900 },
       uFogK: { value: FOG_K },
@@ -478,11 +486,11 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
 
   const rimMat = dampFog(
     new THREE.MeshStandardMaterial({
-      color: 0x0a1120,
+      color: 0x111b2d,
       roughness: 0.94,
       metalness: 0.1,
-      emissive: 0x05080f,
-      emissiveIntensity: 0.9,
+      emissive: 0x080e1b,
+      emissiveIntensity: 1.0,
       side: THREE.DoubleSide,
     }),
   )
@@ -493,7 +501,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   // overview and as a lit edge to walk along when you are standing on it.
   const kerbTopMat = dampFog(
     new THREE.MeshBasicMaterial({
-      color: mixHex(0x000000, RIM_LIGHT, 0.62),
+      color: mixHex(0x000000, RIM_LIGHT, 0.84),
       toneMapped: false,
       side: THREE.DoubleSide,
     }),
@@ -537,6 +545,51 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   edgeLine.renderOrder = 4
   edgeLine.raycast = () => {}
   group.add(edgeLine)
+
+  // A restrained spill just outside the slab makes the silhouette separable
+  // from a near-black clear colour. It is geometry-backed because WebGL line
+  // width is fixed to one pixel on the browsers this project targets.
+  const haloNearRing = offsetRing(ring, -HALO_NEAR, ccw)
+  const haloFarRing = offsetRing(ring, -HALO_FAR, ccw)
+  const haloNearGeo = ribbon(ring, -0.04, haloNearRing, -0.04)
+  const haloFarGeo = ribbon(haloNearRing, -0.05, haloFarRing, -0.05)
+  geos.push(haloNearGeo, haloFarGeo)
+  const haloNearMat = dampFog(
+    new THREE.MeshBasicMaterial({
+      color: RIM_LIGHT,
+      transparent: true,
+      opacity: 0.11,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+      side: THREE.DoubleSide,
+      forceSinglePass: true,
+    }),
+  )
+  const haloFarMat = dampFog(
+    new THREE.MeshBasicMaterial({
+      color: RIM_LIGHT,
+      transparent: true,
+      opacity: 0.035,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+      side: THREE.DoubleSide,
+      forceSinglePass: true,
+    }),
+  )
+  mats.push(haloNearMat, haloFarMat)
+  for (const [g, m] of [
+    [haloFarGeo, haloFarMat],
+    [haloNearGeo, haloNearMat],
+  ] as const) {
+    const halo = new THREE.Mesh(g, m)
+    halo.name = 'ground.edgeHalo'
+    halo.frustumCulled = false
+    halo.renderOrder = -4
+    halo.raycast = () => {}
+    group.add(halo)
+  }
 
   /* Solids for the pedestrian: one box per kerb segment. world.ground is on
    * collision.ts's exclude list (it is a *walkable*, not an obstacle), so these

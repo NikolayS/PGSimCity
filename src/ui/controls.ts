@@ -420,11 +420,13 @@ export function createControls(ctx: UiContext): UiModule {
   let openWide = loadFlag(OPEN_KEY, true)
   let openNarrow = false
   let tall = false
+  let planPreset = false
 
   const isOpen = (): boolean => (compact ? openNarrow : openWide)
 
   function applyOpen(): void {
     const open = isOpen()
+    setClass(host, 'is-plan-hidden', planPreset)
     setClass(host, 'is-compact', compact)
     setClass(host, 'is-open', open)
     tab.setAttribute('aria-expanded', String(open))
@@ -609,6 +611,11 @@ export function createControls(ctx: UiContext): UiModule {
     for (const c of controls) c.sync(true)
     refresh()
   })
+  const offCameraPreset = ctx.bus.on('camera:preset', ({ preset }) => {
+    planPreset = preset === 'plan'
+    applyOpen()
+    ctx.bus.emit('ui:layout', {})
+  })
 
   applyOpen()
   refresh()
@@ -627,6 +634,7 @@ export function createControls(ctx: UiContext): UiModule {
       window.removeEventListener(SHEET_EVENT, onSheet)
       offScenario()
       offReset()
+      offCameraPreset()
       for (const c of controls) c.dispose()
       host.remove()
       syncSheetFlags()

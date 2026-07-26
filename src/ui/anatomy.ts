@@ -1155,17 +1155,7 @@ export function createAnatomy(ctx: UiContext): UiModule {
     hidden: true,
   }, panel)
 
-  const launchPage = el('button', { class: 'an-launcher__button', type: 'button', text: 'Page' })
-  const launchDirectory = el('button', { class: 'an-launcher__button', type: 'button', text: 'Directory' })
-  const launcher = el(
-    'div',
-    { class: 'an-launcher pg-panel', ariaLabel: 'Open physical anatomy' },
-    el('span', { class: 'an-launcher__label', text: 'INSPECT' }),
-    launchPage,
-    launchDirectory,
-  )
-
-  document.body.append(launcher, overlay)
+  document.body.append(overlay)
 
   let view: AnatomyView = 'page'
   let open = false
@@ -1369,18 +1359,29 @@ export function createAnatomy(ctx: UiContext): UiModule {
     setText(directory.walSegments, state.wal.segmentCount.toLocaleString())
   }
 
-  const offSelect = ctx.bus.on('select', ({ id }) => {
-    if (!id) return
-    if (id === 'storage.datadir') {
-      show('directory')
-      return
+  function useRelation(id: string): void {
+    let found = -1
+    if (id.startsWith('storage.table.')) {
+      const relationId = id.slice('storage.table.'.length)
+      found = ctx.sim.state.tables.findIndex((table) => table.def.id === relationId)
+    } else if (id.startsWith('storage.index.')) {
+      const indexId = id.slice('storage.index.'.length)
+      found = ctx.sim.state.tables.findIndex((table) => table.def.indexes.some((index) => index.id === indexId))
     }
-    if (!id.startsWith('storage.table.')) return
-    const relationId = id.slice('storage.table.'.length)
-    const found = ctx.sim.state.tables.findIndex((table) => table.def.id === relationId)
-    if (found >= 0) tableIndex = found
+    if (found < 0) return
+    tableIndex = found
     lastShape = ''
-    show('page')
+  }
+
+  const offSelect = ctx.bus.on('select', ({ id, part }) => {
+    if (!id) return
+    useRelation(id)
+    if (part === 'page') show('page')
+  })
+
+  const offOpen = ctx.bus.on('anatomy:open', ({ view: next, id }) => {
+    if (id) useRelation(id)
+    show(next)
   })
 
   const onKey = (event: KeyboardEvent) => {
@@ -1398,8 +1399,6 @@ export function createAnatomy(ctx: UiContext): UiModule {
   pageTab.addEventListener('click', () => switchView('page'))
   directoryTab.addEventListener('click', () => switchView('directory'))
   close.addEventListener('click', () => hide())
-  launchPage.addEventListener('click', () => show('page'))
-  launchDirectory.addEventListener('click', () => show('directory'))
   overlay.addEventListener('pointerdown', (event) => {
     if (event.target === overlay) hide()
   })
@@ -1418,11 +1417,11 @@ export function createAnatomy(ctx: UiContext): UiModule {
     },
     dispose(): void {
       offSelect()
+      offOpen()
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('hashchange', syncLocation)
       window.removeEventListener('popstate', syncLocation)
       document.body.classList.remove('pg-anatomy-open')
-      launcher.remove()
       overlay.remove()
     },
   }

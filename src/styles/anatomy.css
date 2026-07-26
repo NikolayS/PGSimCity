@@ -10,6 +10,11 @@
   display: none !important;
 }
 
+.an-overlay,
+.an-overlay :is(a, button, input, select, textarea, .interactive) {
+  pointer-events: auto;
+}
+
 .an-overlay {
   position: fixed;
   inset: 0;
@@ -218,54 +223,6 @@
 
 .an-refs__links--text span {
   color: var(--ink-dim);
-}
-
-/* --- persistent launcher ------------------------------------------------- */
-
-.an-launcher {
-  position: fixed;
-  right: max(14px, var(--safe-r));
-  bottom: calc(76px + var(--safe-b));
-  z-index: 22;
-  min-height: 34px;
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 1px;
-  padding: 3px;
-  border-radius: var(--r-md);
-}
-
-.an-launcher__label {
-  padding: 0 7px;
-  color: var(--c-storage);
-  font: 650 9px var(--f-mono);
-  letter-spacing: 0.13em;
-}
-
-.an-launcher__button {
-  min-height: 28px;
-  padding: 4px 8px;
-  border: 0;
-  border-left: 1px solid var(--line-hair);
-  color: var(--ink-dim);
-  background: transparent;
-  font: 550 var(--fs-micro) var(--f-ui);
-  cursor: pointer;
-}
-
-.an-launcher__button:hover {
-  color: var(--ink);
-  background: var(--bg-raise);
-}
-
-.an-launcher__button:focus-visible {
-  outline: 2px solid var(--c-storage);
-  outline-offset: -1px;
-}
-
-body.pg-anatomy-open .an-launcher {
-  visibility: hidden;
 }
 
 /* --- page: live strip ----------------------------------------------------- */
@@ -1314,14 +1271,6 @@ body.pg-anatomy-open .an-launcher {
     display: none;
   }
 
-  .an-launcher {
-    right: 8px;
-    bottom: calc(68px + var(--safe-b));
-  }
-
-  .an-launcher__label {
-    display: none;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -8,6 +8,8 @@ export interface AudioApi {
   /** Lazily creates the AudioContext. Must be called from a user gesture. */
   enable(): Promise<void>
   disable(): void
+  /** The persisted opt-in, even while the AudioContext is still gesture-gated. */
+  readonly preferred: boolean
   readonly enabled: boolean
   /** 0..1 */
   volume: number
@@ -485,6 +487,9 @@ export function createAudio(bus: Bus): AudioApi {
   return {
     enable,
     disable,
+    get preferred(): boolean {
+      return preferenceEnabled
+    },
     get enabled(): boolean {
       return live && context?.state === 'running'
     },
