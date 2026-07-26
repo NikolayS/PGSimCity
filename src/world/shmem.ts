@@ -3,6 +3,8 @@ import { COLOR } from '../core/theme'
 import { BUF_GRID, N_BACKEND_SLOTS } from '../core/types'
 import type { SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, fmtBytes, fmtLsn, fmtNum, fmtPct, makeRng } from '../core/util'
+import { DECK_GATES } from './access'
+import type { DeckGate } from './access'
 import { ANCHOR, CITY, TABLES, bufferTilePos } from './layout'
 
 /* ============================================================================
@@ -322,21 +324,56 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     brace.instanceMatrix.needsUpdate = true
     fine.add(brace)
 
-    // Perimeter railing: posts + top rail. Reads as a real service deck up close.
+    // Perimeter railing: posts + top rail. Reads as a real service deck up
+    // close. DECK_GATES (world/access.ts) punches the openings where the four
+    // causeways land: posts inside a gate are skipped and the top rail is split
+    // around it. Every gate centre sits between two posts, so exactly one post
+    // in the whole plaza is deleted — x = 0 on the north rail, on the axis the
+    // backend approach arrives on.
     const inset = 2.4
     const rx = DECK_W / 2 - inset
     const rz = DECK_D / 2 - inset
     const step = 7.2
     const nx = Math.floor((rx * 2) / step)
     const nz = Math.floor((rz * 2) / step)
+
+    type Span = [number, number]
+    const gateSpans = (side: DeckGate['side']): Span[] => {
+      const out: Span[] = []
+      for (const g of DECK_GATES) if (g.side === side) out.push([g.at - g.width / 2, g.at + g.width / 2])
+      return out.sort((a, b) => a[0] - b[0])
+    }
+    const inGate = (spans: Span[], v: number): boolean => {
+      for (let i = 0; i < spans.length; i++) if (v > spans[i][0] && v < spans[i][1]) return true
+      return false
+    }
+    /** The lengths of rail left between the gates on one side. */
+    const railBars = (spans: Span[], lo: number, hi: number): Span[] => {
+      const out: Span[] = []
+      let cur = lo
+      for (const s of spans) {
+        if (s[1] <= cur) continue
+        if (s[0] > cur) out.push([cur, Math.min(s[0], hi)])
+        cur = Math.max(cur, s[1])
+      }
+      if (cur < hi) out.push([cur, hi])
+      return out
+    }
+    const gN = gateSpans('north')
+    const gS = gateSpans('south')
+    const gE = gateSpans('east')
+    const gW = gateSpans('west')
+
     const posts: number[][] = []
     for (let i = 0; i <= nx; i++) {
       const x = -rx + (i * rx * 2) / nx
-      posts.push([x, -rz], [x, rz])
+      if (!inGate(gN, x)) posts.push([x, -rz])
+      if (!inGate(gS, x)) posts.push([x, rz])
     }
     for (let i = 1; i < nz; i++) {
       const z = -rz + (i * rz * 2) / nz
-      posts.push([-rx, z], [rx, z])
+      if (!inGate(gW, z)) posts.push([-rx, z])
+      if (!inGate(gE, z)) posts.push([rx, z])
     }
     const gPost = keep(new THREE.BoxGeometry(0.22, 1.5, 0.22))
     const post = new THREE.InstancedMesh(gPost, mStructHi, posts.length)
@@ -345,12 +382,21 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     post.instanceMatrix.needsUpdate = true
     fine.add(post)
 
-    const rail = new THREE.InstancedMesh(gRiser, theme.neon(COLOR.shmem, 0.55), 4)
+    const nBars = railBars(gN, -rx, rx)
+    const sBars = railBars(gS, -rx, rx)
+    const wBars = railBars(gW, -rz, rz)
+    const eBars = railBars(gE, -rz, rz)
+    const rail = new THREE.InstancedMesh(
+      gRiser,
+      theme.neon(COLOR.shmem, 0.55),
+      nBars.length + sBars.length + wBars.length + eBars.length,
+    )
     const ra = rail.instanceMatrix.array as Float32Array
-    setTRS(ra, 0, 0, DECK_TOP + 1.44, -rz, rx * 2, 0.1, 0.1)
-    setTRS(ra, 1, 0, DECK_TOP + 1.44, rz, rx * 2, 0.1, 0.1)
-    setTRS(ra, 2, -rx, DECK_TOP + 1.44, 0, 0.1, 0.1, rz * 2)
-    setTRS(ra, 3, rx, DECK_TOP + 1.44, 0, 0.1, 0.1, rz * 2)
+    let rk = 0
+    for (const [a, b] of nBars) setTRS(ra, rk++, (a + b) / 2, DECK_TOP + 1.44, -rz, b - a, 0.1, 0.1)
+    for (const [a, b] of sBars) setTRS(ra, rk++, (a + b) / 2, DECK_TOP + 1.44, rz, b - a, 0.1, 0.1)
+    for (const [a, b] of wBars) setTRS(ra, rk++, -rx, DECK_TOP + 1.44, (a + b) / 2, 0.1, 0.1, b - a)
+    for (const [a, b] of eBars) setTRS(ra, rk++, rx, DECK_TOP + 1.44, (a + b) / 2, 0.1, 0.1, b - a)
     rail.instanceMatrix.needsUpdate = true
     fine.add(rail)
   }
