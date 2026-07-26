@@ -57,39 +57,22 @@ async function createRenderer(): Promise<THREE.WebGLRenderer> {
   throw lastError
 }
 
-function showRendererError(error: unknown): void {
-  if (!fallback) return
-
-  const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
-  fallback.replaceChildren()
-
-  const title = document.createElement('strong')
-  title.textContent = 'The 3D renderer could not start.'
-
-  const detail = document.createElement('span')
-  detail.textContent = `Build e0ad821-r2 · ${message}`
-
-  const hint = document.createElement('span')
-  hint.textContent = 'Close other PGSimCity tabs, then retry. Chrome can temporarily exhaust its graphics contexts.'
-
-  const retry = document.createElement('button')
-  retry.type = 'button'
-  retry.textContent = 'RETRY'
-  retry.addEventListener('click', () => window.location.reload())
-
-  fallback.append(title, detail, hint, retry)
-  fallback.hidden = false
+let renderer: THREE.WebGLRenderer | null = null
+const forceSoftwareRenderer = new URLSearchParams(window.location.search).get('renderer') === 'software'
+if (forceSoftwareRenderer) {
+  await import('./software-map')
+} else {
+  try {
+    renderer = await createRenderer()
+  } catch (error) {
+    console.error('Falling back to the CSS observability map.', error)
+    await import('./software-map')
+  }
 }
 
-let renderer: THREE.WebGLRenderer
-try {
-  renderer = await createRenderer()
-} catch (error) {
-  showRendererError(error)
-  throw error
-}
-
-const canvas = renderer.domElement
+if (renderer) {
+const activeRenderer = renderer
+const canvas = activeRenderer.domElement
 canvas.id = 'scene'
 canvas.setAttribute('aria-label', canvasPlaceholder.getAttribute('aria-label') ?? 'Interactive 3D map')
 canvasPlaceholder.replaceWith(canvas)
@@ -102,11 +85,11 @@ canvas.addEventListener('webglcontextlost', (event) => {
   }
 })
 
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75))
-renderer.setSize(window.innerWidth, window.innerHeight, false)
-renderer.outputColorSpace = THREE.SRGBColorSpace
-renderer.toneMapping = THREE.ACESFilmicToneMapping
-renderer.toneMappingExposure = 1.15
+activeRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75))
+activeRenderer.setSize(window.innerWidth, window.innerHeight, false)
+activeRenderer.outputColorSpace = THREE.SRGBColorSpace
+activeRenderer.toneMapping = THREE.ACESFilmicToneMapping
+activeRenderer.toneMappingExposure = 1.15
 
 const scene = new THREE.Scene()
 scene.background = new THREE.Color(0x050812)
@@ -115,7 +98,7 @@ scene.fog = new THREE.FogExp2(0x050812, 0.018)
 const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 180)
 camera.position.set(35, 28, 42)
 
-const controls = new OrbitControls(camera, renderer.domElement)
+const controls = new OrbitControls(camera, activeRenderer.domElement)
 controls.enableDamping = true
 controls.dampingFactor = 0.055
 controls.minDistance = 14
@@ -541,8 +524,8 @@ function resize(): void {
   const height = window.innerHeight
   camera.aspect = width / height
   camera.updateProjectionMatrix()
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, width < 700 ? 1.25 : 1.75))
-  renderer.setSize(width, height, false)
+  activeRenderer.setPixelRatio(Math.min(window.devicePixelRatio, width < 700 ? 1.25 : 1.75))
+  activeRenderer.setSize(width, height, false)
 }
 window.addEventListener('resize', resize, { passive: true })
 
@@ -577,10 +560,11 @@ function frame(): void {
 
   warm.intensity = 38 + Math.sin(elapsed * 0.8) * 5
   updateLabels()
-  renderer.render(scene, camera)
+  activeRenderer.render(scene, camera)
   requestAnimationFrame(frame)
 }
 
 applyState()
 resize()
 requestAnimationFrame(frame)
+}
