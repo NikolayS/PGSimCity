@@ -285,11 +285,23 @@
   gap: 6px;
 }
 
+.hud-theme {
+  min-width: 88px;
+  justify-content: center;
+  gap: 6px;
+}
+
+.hud-theme__icon {
+  display: grid;
+  place-items: center;
+}
+
 .hud-audio.is-ready {
   color: var(--ink-dim);
 }
 
-.hud-audio__label {
+.hud-audio__label,
+.hud-theme__label {
   font-family: var(--f-ui);
   font-size: var(--fs-micro);
   font-weight: 650;
@@ -303,6 +315,81 @@
 
 .hud-walk__label {
   display: none;
+}
+
+/* --- view and destinations ------------------------------------------------ */
+
+.hud-view-panel {
+  position: fixed;
+  z-index: 18;
+  top: calc(var(--hud-gap) + var(--safe-t) + 62px);
+  right: calc(var(--hud-gap) + var(--safe-r));
+  width: min(380px, calc(100vw - var(--hud-gap) * 2 - var(--safe-l) - var(--safe-r)));
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.hud-view-panel[hidden] {
+  display: none;
+}
+
+.hud-view__head {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.hud-view__close {
+  flex: 0 0 auto;
+}
+
+.hud-view__actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.hud-view__action {
+  min-width: 0;
+  min-height: var(--tap);
+  justify-content: center;
+  gap: 6px;
+  padding-inline: 8px;
+}
+
+.hud-view__district-label {
+  margin-top: 2px;
+}
+
+.hud-view__districts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.hud-view__district {
+  min-width: 0;
+  min-height: var(--tap);
+  justify-content: flex-start;
+  gap: 5px;
+  padding-inline: 7px;
+  overflow: hidden;
+  font-size: var(--fs-micro);
+}
+
+.hud-view__district > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hud-view__key {
+  color: var(--c-backend);
+  font-family: var(--f-mono);
+  flex: 0 0 auto;
 }
 
 .hud-perf {
@@ -890,6 +977,11 @@ body.pg-labels-off #labels-root {
   .hud-tools {
     gap: 6px;
   }
+  .hud-tools > button,
+  .hud-tools > a,
+  .hud-tools > .hud-perf {
+    flex: 0 0 auto;
+  }
 
   /* thumb-sized everything in the dock and the bar */
   .hud-transport .pg-btn,
@@ -904,6 +996,9 @@ body.pg-labels-off #labels-root {
   .hud-tools .hud-walk {
     min-width: var(--tap);
     padding-inline: 0;
+  }
+  .hud-theme {
+    min-width: 88px;
   }
   .hud-play {
     width: var(--tap);
@@ -981,6 +1076,35 @@ body.pg-labels-off #labels-root {
   .help-close {
     width: var(--tap);
     height: var(--tap);
+  }
+
+  /* The minimap is hidden at this width. The View surface replaces the dock
+     while open; stacking it above the dock cost another quarter of the screen. */
+  .hud-transport.is-view-open {
+    visibility: hidden;
+  }
+  .hud-view-panel {
+    top: auto;
+    right: calc(var(--hud-gap) + var(--safe-r));
+    bottom: calc(var(--hud-gap) + var(--safe-b));
+  }
+  .hud-view__close {
+    width: var(--tap);
+    height: var(--tap);
+  }
+  .hud-view__actions {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .hud-view__desktop-only {
+    display: none;
+  }
+  .hud-view__districts {
+    display: flex;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+  .hud-view__district {
+    flex: 0 0 92px;
   }
 }
 

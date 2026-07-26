@@ -43,6 +43,10 @@ class TestNode extends EventTarget {
   childNodes: TestNode[] = []
   private ownText = ''
 
+  get parentElement(): TestElement | null {
+    return this.parentNode instanceof TestElement ? this.parentNode : null
+  }
+
   get children(): TestElement[] {
     return this.childNodes.filter((node): node is TestElement => node instanceof TestElement)
   }
@@ -68,6 +72,21 @@ class TestNode extends EventTarget {
       node.parentNode = this
       this.childNodes.push(node)
     }
+  }
+
+  prepend(...nodes: (TestNode | string)[]): void {
+    const prepared = nodes.map((value) => (typeof value === 'string' ? new TestText(value) : value))
+    for (const node of prepared) {
+      if (node.parentNode) node.parentNode.removeChild(node)
+      node.parentNode = this
+    }
+    this.childNodes.unshift(...prepared)
+  }
+
+  replaceChildren(...nodes: (TestNode | string)[]): void {
+    for (const child of this.childNodes) child.parentNode = null
+    this.childNodes = []
+    this.append(...nodes)
   }
 
   removeChild(node: TestNode): TestNode {
@@ -158,6 +177,10 @@ class TestElement extends TestNode {
   checked = false
   scrollTop = 0
   innerHTML = ''
+  clientWidth = 0
+  clientHeight = 0
+  width = 0
+  height = 0
 
   constructor(readonly tagName: string) {
     super()
@@ -183,17 +206,47 @@ class TestElement extends TestNode {
     return this.querySelectorAll(selector)[0] ?? null
   }
 
+  closest(selector: string): TestElement | null {
+    let cursor: TestElement | null = this
+    while (cursor) {
+      if (matchesSelector(cursor, selector)) return cursor
+      cursor = cursor.parentElement
+    }
+    return null
+  }
+
+  getContext(): null {
+    return null
+  }
+
+  getBoundingClientRect(): DOMRect {
+    return {
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: this.clientWidth,
+      bottom: this.clientHeight,
+      width: this.clientWidth,
+      height: this.clientHeight,
+      toJSON: () => ({}),
+    }
+  }
+
   click(): void {
     this.dispatchEvent(new Event('click'))
   }
 }
 
 class TestDocument extends TestNode {
+  readonly documentElement = new TestElement('html')
   readonly body = new TestElement('body')
+  activeElement: TestElement | null = null
 
   constructor() {
     super()
-    this.append(this.body)
+    this.append(this.documentElement)
+    this.documentElement.append(this.body)
   }
 
   createElement(tag: string): TestElement {
@@ -240,9 +293,18 @@ class TestMediaQuery extends EventTarget {
 class TestWindow extends EventTarget {
   readonly localStorage = new TestStorage()
   readonly location = { pathname: '/', search: '', hash: '' }
+  readonly devicePixelRatio = 1
 
   matchMedia(): TestMediaQuery {
     return new TestMediaQuery()
+  }
+
+  setTimeout(fn: () => void, delay?: number): number {
+    return globalThis.setTimeout(fn, delay) as unknown as number
+  }
+
+  clearTimeout(timer: number): void {
+    globalThis.clearTimeout(timer)
   }
 }
 

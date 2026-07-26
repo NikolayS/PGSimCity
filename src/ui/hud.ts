@@ -1,6 +1,6 @@
 import '../styles/hud.css'
 
-import { COLOR, cssColor, toggleThemeMode } from '../core/theme'
+import { COLOR, cssColor, onThemeMode, themeMode, toggleThemeMode } from '../core/theme'
 import { clamp, fmtBytes, fmtDuration, fmtNum } from '../core/util'
 import type { Bus, CameraMode, QualityLevel, SimApi, SimState } from '../core/types'
 import { SCENARIOS } from '../sim/scenarios'
@@ -69,16 +69,16 @@ export function emitLoose(bus: Bus, type: string, payload: unknown): void {
 
 const SPEEDS = [0.1, 0.25, 0.5, 1, 2, 3, 5]
 
-/** 1..8 — the district jump keys, in the order the whole app agrees on. */
-const DISTRICT_KEYS = [
-  'client.pool',
-  'backend.row',
-  'shared.buffers',
-  'wal.vault',
-  'storage.datadir',
-  'checkpointer',
-  'autovac.launcher',
-  'replica.standby',
+/** 1..8 — keyboard destinations and the phone menu use this same order. */
+const DISTRICT_DESTINATIONS = [
+  { id: 'client.pool', label: 'Clients' },
+  { id: 'backend.row', label: 'Backends' },
+  { id: 'shared.buffers', label: 'Buffers' },
+  { id: 'wal.vault', label: 'WAL' },
+  { id: 'storage.datadir', label: 'Storage' },
+  { id: 'checkpointer', label: 'Checkpoint' },
+  { id: 'autovac.launcher', label: 'Vacuum' },
+  { id: 'replica.standby', label: 'Standby' },
 ] as const
 
 type VitalKey = 'tps' | 'hit' | 'wal' | 'dirty' | 'lag'
@@ -329,6 +329,7 @@ export function createHud(ctx: UiContext): UiModule {
   let cameraMode: CameraMode = 'orbit'
   let tourRunning = false
   let labelsOn = true
+  let viewOpen = false
 
   /* =======================================================================
    * TOP BAR
@@ -448,6 +449,32 @@ export function createHud(ctx: UiContext): UiModule {
     icon('sound', 15),
     audioLabel,
   )
+  const themeIcon = el('span', { class: 'hud-theme__icon' })
+  const themeLabel = el('span', { class: 'hud-theme__label', text: 'Night' })
+  const themeBtn = el(
+    'button',
+    {
+      class: 'pg-btn hud-tool hud-theme',
+      type: 'button',
+      on: { click: () => toggleTheme() },
+    },
+    themeIcon,
+    themeLabel,
+  )
+  const viewBtn = el(
+    'button',
+    {
+      class: 'pg-btn hud-tool hud-view-toggle',
+      type: 'button',
+      title: 'View, display, and destinations',
+      'aria-label': 'Open view and destination controls',
+      'aria-expanded': 'false',
+      'aria-controls': 'hud-view-panel',
+      on: { click: () => setViewOpen(!viewOpen) },
+    },
+    icon('eye', 15),
+    el('span', { text: 'View' }),
+  )
   const walkLabel = el('span', { class: 'hud-walk__label', text: 'Walk' })
   const walkBtn = el(
     'button',
@@ -510,10 +537,12 @@ export function createHud(ctx: UiContext): UiModule {
   const toolCluster = el(
     'div',
     { class: 'hud-tools' },
+    audioBtn,
+    themeBtn,
+    viewBtn,
     tourBtn,
     diagnoseLink,
     walkBtn,
-    audioBtn,
     paletteBtn,
     helpBtn,
     perf,
@@ -523,6 +552,126 @@ export function createHud(ctx: UiContext): UiModule {
 
   const topBar = el('div', { class: 'pg-panel hud-bar' }, brand, vitalsRow, rightCluster)
   topEl.append(topBar)
+
+  /* The phone hides the minimap, so camera presets, labels, and all eight
+     district jumps need a compact touch surface of their own. It is also useful
+     on desktop: a shortcut is a convenience, never the only entrance. */
+  const labelsViewLabel = el('span', { text: 'Labels on' })
+  const labelsViewBtn = el(
+    'button',
+    {
+      class: 'pg-btn hud-view__action',
+      type: 'button',
+      data: { viewAction: 'labels' },
+      'aria-pressed': 'true',
+      title: 'Show or hide floating labels  (L)',
+      on: { click: () => toggleLabels() },
+    },
+    icon('layers', 15),
+    labelsViewLabel,
+  )
+  const homeViewBtn = el(
+    'button',
+    {
+      class: 'pg-btn hud-view__action',
+      type: 'button',
+      data: { viewAction: 'home' },
+      title: 'Establishing shot  (H)',
+      on: {
+        click: () => {
+          bus.emit('focus', { id: 'world.ground' })
+          setViewOpen(false)
+        },
+      },
+    },
+    icon('home', 15),
+    el('span', { text: 'Home' }),
+  )
+  const overviewViewBtn = el(
+    'button',
+    {
+      class: 'pg-btn hud-view__action',
+      type: 'button',
+      data: { viewAction: 'overview' },
+      title: 'Straight-down overview  (O)',
+      on: {
+        click: () => {
+          emitLoose(bus, 'ui:camera-preset', { preset: 'plan' })
+          setViewOpen(false)
+        },
+      },
+    },
+    icon('eye', 15),
+    el('span', { text: 'Overview' }),
+  )
+  const flyViewBtn = el(
+    'button',
+    {
+      class: 'pg-btn hud-view__action hud-view__desktop-only',
+      type: 'button',
+      data: { viewAction: 'fly' },
+      title: 'Toggle fly / orbit camera  (F)',
+      on: {
+        click: () => {
+          bus.emit('camera:mode', { mode: cameraMode === 'fly' ? 'orbit' : 'fly' })
+          setViewOpen(false)
+        },
+      },
+    },
+    icon('camera', 15),
+    el('span', { text: 'Fly' }),
+  )
+  const districtViewButtons = DISTRICT_DESTINATIONS.map((destination, index) =>
+    el(
+      'button',
+      {
+        class: 'pg-btn hud-view__district',
+        type: 'button',
+        data: { viewDistrict: destination.id },
+        title: `${destination.label}  (${index + 1})`,
+        on: {
+          click: () => {
+            bus.emit('focus', { id: destination.id })
+            setViewOpen(false)
+          },
+        },
+      },
+      el('span', { class: 'hud-view__key', text: String(index + 1) }),
+      el('span', { text: destination.label }),
+    ),
+  )
+  const closeViewBtn = el(
+    'button',
+    {
+      class: 'pg-btn pg-btn--icon hud-view__close',
+      type: 'button',
+      title: 'Close view controls',
+      'aria-label': 'Close view controls',
+      on: { click: () => setViewOpen(false) },
+    },
+    icon('close', 14),
+  )
+  const viewPanel = el(
+    'section',
+    {
+      class: 'pg-panel hud-view-panel interactive',
+      id: 'hud-view-panel',
+      role: 'dialog',
+      'aria-labelledby': 'hud-view-title',
+      hidden: true,
+    },
+    el(
+      'div',
+      { class: 'hud-view__head' },
+      el('span', { class: 'pg-eyebrow', id: 'hud-view-title', text: 'View & destinations' }),
+      closeViewBtn,
+    ),
+    el('div', { class: 'hud-view__actions' }, labelsViewBtn, homeViewBtn, overviewViewBtn, flyViewBtn),
+    el('span', { class: 'pg-eyebrow hud-view__district-label', text: 'Fly to a district' }),
+    el('div', { class: 'hud-view__districts' }, ...districtViewButtons),
+  )
+  topEl.append(viewPanel)
+  cleanup.push(onThemeMode((mode) => paintTheme(mode)))
 
   /* =======================================================================
    * TRANSPORT BAR
@@ -657,6 +806,15 @@ export function createHud(ctx: UiContext): UiModule {
     setClass(transport, 'is-scn-open', next)
     setClass(scnBtn, 'is-active', next)
     scnBtn.setAttribute('aria-expanded', String(next))
+  }
+
+  function setViewOpen(next: boolean): void {
+    viewOpen = next
+    viewPanel.hidden = !next
+    setClass(viewBtn, 'is-active', next)
+    setClass(transport, 'is-view-open', next)
+    viewBtn.setAttribute('aria-expanded', String(next))
+    if (next && scenariosOpen) setScenariosOpen(false)
   }
 
   /* ---- phone layout: instruments on top, every control in the dock -------- */
@@ -930,6 +1088,9 @@ export function createHud(ctx: UiContext): UiModule {
   function toggleLabels(): void {
     labelsOn = !labelsOn
     document.body.classList.toggle('pg-labels-off', !labelsOn)
+    setText(labelsViewLabel, labelsOn ? 'Labels on' : 'Labels off')
+    labelsViewBtn.setAttribute('aria-pressed', String(labelsOn))
+    setClass(labelsViewBtn, 'is-active', labelsOn)
     emitLoose(bus, 'ui:labels', { on: labelsOn })
     bus.emit('toast', { text: labelsOn ? 'Labels on' : 'Labels hidden', kind: 'info', ms: 1400 })
   }
@@ -939,6 +1100,10 @@ export function createHud(ctx: UiContext): UiModule {
   }
 
   function escape(): void {
+    if (viewOpen) {
+      setViewOpen(false)
+      return
+    }
     const payload = { handled: false }
     emitLoose(bus, 'ui:escape', payload)
     if (payload.handled) return
@@ -1057,7 +1222,7 @@ export function createHud(ctx: UiContext): UiModule {
 
     if (k >= '1' && k <= '8') {
       e.preventDefault()
-      bus.emit('focus', { id: DISTRICT_KEYS[Number(k) - 1] })
+      bus.emit('focus', { id: DISTRICT_DESTINATIONS[Number(k) - 1].id })
     }
   }
 
@@ -1187,6 +1352,19 @@ export function createHud(ctx: UiContext): UiModule {
         : 'Turn sound on  (M)'
   }
 
+  function paintTheme(mode = themeMode()): void {
+    if (themeIcon.dataset.mode !== mode) {
+      themeIcon.dataset.mode = mode
+      themeIcon.replaceChildren(icon(mode === 'day' ? 'sun' : 'moon', 15))
+    }
+    const day = mode === 'day'
+    setText(themeLabel, day ? 'Day' : 'Night')
+    setClass(themeBtn, 'is-active', day)
+    themeBtn.setAttribute('aria-pressed', String(day))
+    themeBtn.setAttribute('aria-label', day ? 'Day theme; switch to night' : 'Night theme; switch to daylight')
+    themeBtn.title = day ? 'Daylight theme — switch to night  (N)' : 'Night theme — switch to daylight  (N)'
+  }
+
   let lastScenario: string | null | undefined
 
   function paintScenario(): void {
@@ -1265,6 +1443,7 @@ export function createHud(ctx: UiContext): UiModule {
   paintCheckpoint(sim.state)
   paintTransport(sim.state)
   paintAudio()
+  paintTheme()
   paintScenario()
   paintPerf()
   paintCompass()
@@ -1276,6 +1455,7 @@ export function createHud(ctx: UiContext): UiModule {
     toasts.length = 0
     document.body.classList.remove('pg-labels-off')
     topBar.remove()
+    viewPanel.remove()
     transport.remove()
     compassRoot.remove()
     toastEl.replaceChildren()

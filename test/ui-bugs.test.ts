@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createBus } from '../src/core/bus'
+import { setThemeMode, storedThemeMode, themeMode } from '../src/core/theme'
 import {
   DEFAULT_KNOBS,
   SHARED_BUFFERS_MAX_MIB,
@@ -9,6 +10,7 @@ import {
 import { createSim } from '../src/sim/model'
 import { knobMeta } from '../src/ui/content'
 import { createKnobControl } from '../src/ui/controls'
+import { createHud } from '../src/ui/hud'
 import { createInspector } from '../src/ui/panel'
 import type { UiContext } from '../src/ui/uikit'
 import { installTestDom } from './dom'
@@ -123,5 +125,100 @@ describe('storage anatomy entry points', () => {
     expect(button).not.toBeNull()
     button!.click()
     expect(opened).toHaveBeenCalledWith({ view: 'page', id })
+  })
+})
+
+describe('theme toggle entry point', () => {
+  beforeEach(() => {
+    const dom = installTestDom()
+    for (const id of ['hud-top', 'hud-bottom', 'toast-stack', 'compass']) dom.mount(id)
+    setThemeMode('night', { persist: false })
+  })
+
+  it('changes and persists the visible HUD theme control', () => {
+    const hud = createHud(context())
+    const button = document.querySelector('#hud-top .hud-theme') as HTMLButtonElement | null
+
+    expect(button).not.toBeNull()
+    expect(button!.textContent).toContain('Night')
+    expect(button!.title).toContain('(N)')
+    expect(themeMode()).toBe('night')
+
+    button!.dispatchEvent(new Event('click'))
+
+    expect(themeMode()).toBe('day')
+    expect(document.documentElement.dataset.theme).toBe('day')
+    expect(storedThemeMode()).toBe('day')
+    expect(button!.textContent).toContain('Day')
+    hud.dispose()
+  })
+
+  it('exposes working touch routes for labels and camera presets', () => {
+    const ctx = context()
+    const labels = vi.fn()
+    const presets = vi.fn()
+    const focuses = vi.fn()
+    ;(ctx.bus as unknown as { on(type: string, fn: (payload: unknown) => void): () => void }).on(
+      'ui:labels',
+      labels,
+    )
+    ;(ctx.bus as unknown as { on(type: string, fn: (payload: unknown) => void): () => void }).on(
+      'ui:camera-preset',
+      presets,
+    )
+    ctx.bus.on('focus', focuses)
+
+    const hud = createHud(ctx)
+    const view = document.querySelector('.hud-view-toggle') as HTMLButtonElement | null
+    expect(view).not.toBeNull()
+    view!.dispatchEvent(new Event('click'))
+
+    const panel = document.querySelector('.hud-view-panel') as HTMLElement | null
+    expect(panel).not.toBeNull()
+    expect(panel!.hidden).toBe(false)
+
+    const labelToggle = document.querySelector('[data-view-action="labels"]') as HTMLButtonElement | null
+    const home = document.querySelector('[data-view-action="home"]') as HTMLButtonElement | null
+    const overview = document.querySelector('[data-view-action="overview"]') as HTMLButtonElement | null
+    expect(labelToggle).not.toBeNull()
+    expect(home).not.toBeNull()
+    expect(overview).not.toBeNull()
+
+    labelToggle!.dispatchEvent(new Event('click'))
+    expect(document.body.classList.contains('pg-labels-off')).toBe(true)
+    expect(labels).toHaveBeenCalledWith({ on: false })
+
+    home!.dispatchEvent(new Event('click'))
+    expect(focuses).toHaveBeenCalledWith({ id: 'world.ground' })
+
+    overview!.dispatchEvent(new Event('click'))
+    expect(presets).toHaveBeenCalledWith({ preset: 'plan' })
+    hud.dispose()
+  })
+
+  it('exposes every hidden-phone district destination as a button', () => {
+    const ctx = context()
+    const focuses: string[] = []
+    ctx.bus.on('focus', ({ id }) => {
+      if (id) focuses.push(id)
+    })
+    const hud = createHud(ctx)
+    const buttons = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[data-view-district]'),
+    )
+
+    expect(buttons).toHaveLength(8)
+    for (const button of buttons) button.dispatchEvent(new Event('click'))
+    expect(focuses).toEqual([
+      'client.pool',
+      'backend.row',
+      'shared.buffers',
+      'wal.vault',
+      'storage.datadir',
+      'checkpointer',
+      'autovac.launcher',
+      'replica.standby',
+    ])
+    hud.dispose()
   })
 })

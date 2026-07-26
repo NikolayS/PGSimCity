@@ -120,6 +120,8 @@ const ICON_PATHS: Record<string, string> = {
   home: 'M2.5 7.5 8 2.8l5.5 4.7M4 7v6.2h8V7',
   bolt: 'M9 1.5 3.5 9H7.5l-.5 5.5L12.5 7H8.5z',
   sound: 'M2.2 6.2h2.7L8.1 3v10L4.9 9.8H2.2zM10.6 5.5a3.4 3.4 0 0 1 0 5M12.3 3.7a5.9 5.9 0 0 1 0 8.6',
+  sun: 'M8 3.2V1.5M8 14.5v-1.7M3.2 8H1.5M14.5 8h-1.7M4.6 4.6 3.4 3.4M12.6 12.6l-1.2-1.2M11.4 4.6l1.2-1.2M3.4 12.6l1.2-1.2M11 8a3 3 0 1 1-6 0 3 3 0 0 1 6 0z',
+  moon: 'M12.8 10.5A5.8 5.8 0 0 1 5.5 3.2 5.8 5.8 0 1 0 12.8 10.5z',
 }
 
 export function icon(name: keyof typeof ICON_PATHS | string, size = 14): SVGSVGElement {
