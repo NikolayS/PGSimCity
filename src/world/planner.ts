@@ -397,6 +397,9 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
     transparent: true,
     opacity: OPACITY_TIER.volume,
   })
+  // The shell has no translucent front wall and writes depth, so its sparse
+  // floor/roof/posts cannot sort behind farther transparent districts.
+  matShell.depthWrite = true
   const matBack = theme.mat('planner.back', {
     color: 0x10182a,
     roughness: 0.92,

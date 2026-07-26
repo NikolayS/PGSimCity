@@ -101,7 +101,9 @@ void main() {
   minor *= 1.0 - smoothstep( 0.20, 0.80, dMinor );
   major *= 1.0 - smoothstep( 0.28, 1.05, dMajor );
 
-  float camFade = 1.0 - smoothstep( 700.0, 1800.0, distance( vWorld, cameraPosition ) );
+  // Survives the overview shot: the camera sits 1.3 km up there and the survey
+  // grid is most of what makes the plate read as a poured surface at all.
+  float camFade = 1.0 - smoothstep( 950.0, 2700.0, distance( vWorld, cameraPosition ) );
   minor *= camFade;
   major *= camFade;
 
@@ -118,12 +120,12 @@ void main() {
   float sweep = exp( - q * q ) * ( 1.0 - ph ) * 0.5;
 
   // Poured concrete reads darker where it meets its own edge.
-  vec3 col = uBase * mix( 0.46, 1.0, smoothstep( 0.0, 260.0, edge ) );
+  vec3 col = uBase * mix( 0.52, 1.0, smoothstep( 0.0, 210.0, edge ) );
   col = mix( col, uMinor, minor * 0.9 );
   col = mix( col, uMajor, major );
   col += uSweep * sweep * ( 0.35 + 0.65 * max( minor, major ) );
   // …and then the edge light spills back in over it.
-  col += uRim * exp( - max( edge, 0.0 ) / 26.0 ) * 0.5;
+  col += uRim * exp( - max( edge, 0.0 ) / 34.0 ) * 0.85;
 
   gl_FragColor = vec4( col, 1.0 );
   #include <tonemapping_fragment>
@@ -260,7 +262,7 @@ const cssHex = (c: number) => '#' + (c >>> 0).toString(16).padStart(6, '0')
 /** Cool architectural white for the kerb light. Structure, not a Postgres fact. */
 const RIM_LIGHT = mixHex(COLOR.gridBright, COLOR.ink, 0.46)
 /** How short the plate and its rim read the scene fog. See groundVert. */
-const FOG_K = 0.42
+const FOG_K = 0.32
 
 /* ---------------------------------------------------------------------------
  * Rim construction.
@@ -280,6 +282,16 @@ function dampFog<T extends THREE.Material>(m: T): T {
   }
   m.customProgramCacheKey = () => 'pgc-rim-fog'
   return m
+}
+
+/**
+ * A private, fog-damped copy of a shared theme material. The theme cache hands
+ * the same object to everybody, so this clones before patching — and it is why
+ * the district kerbs, the floor signage and the pit rim are still legible from
+ * the overview shot 1.3 km up, where full fog would erase all three.
+ */
+function damped<T extends THREE.Material>(src: T): T {
+  return dampFog(src.clone() as T)
 }
 
 /**
@@ -453,12 +465,30 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   )
   rimMat.name = 'ground.rim'
   mats.push(rimMat)
-  for (const g of [skirtGeo, kerbOutGeo, kerbTopGeo, kerbInGeo]) {
-    const m = new THREE.Mesh(g, rimMat)
-    m.name = 'ground.rim'
-    m.frustumCulled = false
-    m.raycast = () => {}
-    group.add(m)
+
+  // The kerb's capping is lit. 2.2 m of it reads as a hairline from the
+  // overview and as a lit edge to walk along when you are standing on it.
+  const kerbTopMat = dampFog(
+    new THREE.MeshBasicMaterial({
+      color: mixHex(0x000000, RIM_LIGHT, 0.62),
+      toneMapped: false,
+      side: THREE.DoubleSide,
+    }),
+  )
+  kerbTopMat.name = 'ground.kerbTop'
+  mats.push(kerbTopMat)
+
+  for (const [g, m] of [
+    [skirtGeo, rimMat],
+    [kerbOutGeo, rimMat],
+    [kerbTopGeo, kerbTopMat],
+    [kerbInGeo, rimMat],
+  ] as const) {
+    const mesh = new THREE.Mesh(g, m)
+    mesh.name = 'ground.rim'
+    mesh.frustumCulled = false
+    mesh.raycast = () => {}
+    group.add(mesh)
   }
 
   // The edge light. A line, not a strip: it is the one element that has to
@@ -475,7 +505,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   edgeGeo.setAttribute('position', new THREE.BufferAttribute(edgePts, 3))
   geos.push(edgeGeo)
   const edgeMat = dampFog(
-    new THREE.LineBasicMaterial({ color: RIM_LIGHT, transparent: true, opacity: 0.62, toneMapped: false }),
+    new THREE.LineBasicMaterial({ color: RIM_LIGHT, transparent: true, opacity: 0.95, toneMapped: false }),
   )
   mats.push(edgeMat)
   const edgeLine = new THREE.LineLoop(edgeGeo, edgeMat)
@@ -534,7 +564,9 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   const rimGeo = new THREE.BufferGeometry()
   rimGeo.setAttribute('position', new THREE.BufferAttribute(rimPts, 3))
   geos.push(rimGeo)
-  const rim = new THREE.LineLoop(rimGeo, theme.line(COLOR.storage, 0.9))
+  const rimLineMat = damped(theme.line(COLOR.storage, 0.9))
+  mats.push(rimLineMat)
+  const rim = new THREE.LineLoop(rimGeo, rimLineMat)
   rim.renderOrder = 4
   rim.raycast = () => {}
   pit.add(rim)
@@ -555,15 +587,17 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   bandShape.holes.push(bandHole)
   const bandGeo = new THREE.ShapeGeometry(bandShape)
   geos.push(bandGeo)
-  const bandMat = new THREE.MeshBasicMaterial({
-    color: COLOR.storage,
-    transparent: true,
-    opacity: 0.13,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-    forceSinglePass: true,
-  })
+  const bandMat = dampFog(
+    new THREE.MeshBasicMaterial({
+      color: COLOR.storage,
+      transparent: true,
+      opacity: 0.13,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      forceSinglePass: true,
+    }),
+  )
   mats.push(bandMat)
   const band = new THREE.Mesh(bandGeo, bandMat)
   band.rotation.x = -Math.PI / 2
@@ -631,13 +665,17 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   const unitPlane = new THREE.PlaneGeometry(1, 1)
   geos.push(unitBox, unitPlane)
 
-  const slabMat = theme.mat('ground.plinth', {
-    color: 0x0c1322,
-    roughness: 0.92,
-    metalness: 0.12,
-    emissive: 0x060a12,
-    emissiveIntensity: 0.8,
-  })
+  const slabMat = dampFog(
+    new THREE.MeshStandardMaterial({
+      color: 0x0c1322,
+      roughness: 0.92,
+      metalness: 0.12,
+      emissive: 0x060a12,
+      emissiveIntensity: 0.8,
+    }),
+  )
+  slabMat.name = 'ground.plinth'
+  mats.push(slabMat)
 
   /** Flat wayfinding label. `along` 0 = text runs east–west, 1 = north–south. */
   function addDecal(text: string, color: number, cx: number, cy: number, cz: number, along: 0 | 1, avail: number) {
@@ -650,7 +688,9 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     const w = avail * 0.62
     const h = w / aspect
 
-    const m = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.3, depthWrite: false })
+    const m = dampFog(
+      new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.3, depthWrite: false }),
+    )
     mats.push(m)
     const mesh = new THREE.Mesh(unitPlane, m)
     mesh.scale.set(w, h, 1)
@@ -701,7 +741,9 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     kerb.holes.push(inner)
     const kerbGeo = new THREE.ShapeGeometry(kerb)
     geos.push(kerbGeo)
-    const kerbMesh = new THREE.Mesh(kerbGeo, theme.neon(spec.color, 1.15))
+    const kerbMat = damped(theme.neon(spec.color, 1.15))
+    mats.push(kerbMat)
+    const kerbMesh = new THREE.Mesh(kerbGeo, kerbMat)
     kerbMesh.rotation.x = -Math.PI / 2
     kerbMesh.position.set(cx, PLINTH_H + 0.02, cz)
     kerbMesh.raycast = () => {}

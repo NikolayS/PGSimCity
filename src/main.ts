@@ -203,6 +203,7 @@ async function boot(): Promise<void> {
     createTour(uiCtx),
     createSearch(uiCtx),
   ]
+  void import('./ui/anatomy').then(({ createAnatomy }) => ui.push(createAnatomy(uiCtx))) // PAGE + DATA-DIRECTORY ANATOMY WIRING
 
   /* --- bus wiring ---------------------------------------------------------- */
 

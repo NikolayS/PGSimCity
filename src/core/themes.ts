@@ -106,9 +106,9 @@ export const DAY_PALETTE: Record<ColorKey, number> = {
   /* --- surfaces: warm stone under a blue sky --- */
   bg: 0xbcdcf2, // clear colour behind the sky dome
   fog: 0xc3d8ea, // distance haze — pale, but still a colour
-  grid: 0xb0a998, // 10 m survey line, drawn ON the stone
-  gridBright: 0x8d8573, // 50 m block line, one step darker again
-  ground: 0xd2ccbb, // the pavement itself
+  grid: 0xa79f8c, // 10 m survey line, drawn ON the stone
+  gridBright: 0x827a68, // 50 m block line, one step darker again
+  ground: 0xcbc4b1, // the pavement itself
 
   /* --- the plaza: page state --- */
   bufClean: 0x1d5fcb, // clean page — deep true blue
@@ -184,6 +184,8 @@ export interface Atmosphere {
   noBloomFill: number
   noBloomWalGlow: number
   noBloomYardGlow: number
+  /** Whether the bloom pass runs at all. Off at noon: see the day entry. */
+  bloomEnabled: boolean
   bloomStrength: number
   bloomRadius: number
   bloomThreshold: number
@@ -220,6 +222,7 @@ export const ATMOSPHERE: Record<ThemeMode, Atmosphere> = {
     noBloomFill: 0.46,
     noBloomWalGlow: 66,
     noBloomYardGlow: 44,
+    bloomEnabled: true,
     bloomStrength: 0.62,
     bloomRadius: 0.55,
     bloomThreshold: 0.85,
@@ -240,16 +243,21 @@ export const ATMOSPHERE: Record<ThemeMode, Atmosphere> = {
     // clips to white and the ink lines have nothing to draw against. Measured
     // on the establishing shot: hemisphere 0.62 + key 1.35 gives 0.90–1.30
     // irradiance, and 0.92 exposure brings the top of that back under the knee.
-    exposure: 0.92,
+    exposure: 0.95,
     // Daylight sees a long way. The haze has to start well outside the city or
     // the districts read through a white curtain.
     fogNearScale: 2.1,
     fogFarScale: 2.5,
-    hemiSky: 0xdff0ff,
-    hemiGround: 0xcbbf9e, // warm bounce off the stone
-    hemiIntensity: 0.62,
-    keyColor: 0xfff2d6, // the sun
-    keyIntensity: 1.35,
+    hemiSky: 0xd7ecff,
+    hemiGround: 0xd6c49b, // warm bounce off the stone
+    // The budget is a Lambert one: reflectance is irradiance/PI, so a sunlit
+    // top face only returns its own albedo when key + hemi + fill ≈ PI. Under
+    // that and every lit surface reads darker than the (unlit) ground plate
+    // beside it, which is what made the first pass look like night with the
+    // lights up. 2.3 + 0.95 + 0.25 = 3.5, and 0.95 exposure trims the top.
+    hemiIntensity: 0.95,
+    keyColor: 0xfff0c8, // the sun
+    keyIntensity: 2.3,
     // South-east and high: the establishing shot looks north up the city axis,
     // so this lights the faces turned toward the camera and throws the shadows
     // away from it — the SimCity read.
@@ -258,17 +266,21 @@ export const ATMOSPHERE: Record<ThemeMode, Atmosphere> = {
     shadowBias: -0.0004,
     shadowNormalBias: 0.45,
     fillColor: 0xbfd8ff, // sky bounce from behind
-    fillIntensity: 0.18,
+    fillIntensity: 0.25,
     fillPos: [-300, 150, -230],
     walGlow: 0,
     yardGlow: 0,
-    noBloomHemi: 0.72,
-    noBloomFill: 0.22,
+    noBloomHemi: 1.05,
+    noBloomFill: 0.3,
     noBloomWalGlow: 0,
     noBloomYardGlow: 0,
-    // Nearly off, and threshold-limited above anything the city can produce, so
-    // only the clipped toon highlight ever reaches it. A glow is meaningless at
-    // noon; this is a sparkle on chrome, nothing more.
+    // OFF, and it has to be off rather than merely quiet. Several districts
+    // over-drive their per-instance colours well past 1.0 so that the night
+    // bloom will halo them — the plaza's hot page tiles, the WAL insert ring,
+    // the lamp crowns. Leave the pass on at any threshold and those halo at
+    // noon too, and the city disappears into white fog. The threshold below is
+    // what the pass would run at if a future mode wanted a trace of it.
+    bloomEnabled: false,
     bloomStrength: 0.1,
     bloomRadius: 0.35,
     bloomThreshold: 1.2,
@@ -417,10 +429,10 @@ export function daySurface(hex: number): number {
     // 0.46–0.71, not 0.6–0.9: a sunlit surface still has a light term on top of
     // this, and stone that starts near white has nowhere left to go — it clips,
     // and a clipped face cannot show either the toon terminator or its own ink.
-    const lit = 0.46 + Math.min(l, 0.4) * 0.62
-    const stone = hexOfHsl(36, 0.17, lit)
-    const tint = hexOfHsl(h, Math.min(s, 0.55) * 0.8, lit)
-    return mix(stone, tint, 0.32)
+    const lit = 0.42 + Math.min(l, 0.4) * 0.66
+    const stone = hexOfHsl(36, 0.24, lit)
+    const tint = hexOfHsl(h, Math.min(s, 0.55) * 0.85, lit)
+    return mix(stone, tint, 0.4)
   }
   return hexOfHsl(h, Math.max(0.25, Math.min(0.8, s * 0.85)), Math.max(0.34, Math.min(0.62, 0.26 + l * 0.4)))
 }
@@ -449,11 +461,11 @@ export function dayAccent(hex: number): number {
  */
 export function dayInk(hex: number): number {
   const [h, s, l] = hslOf(hex)
-  return hexOfHsl(h, Math.min(s, 0.6) * 0.85, 0.15 + l * 0.1)
+  return hexOfHsl(h, Math.min(s, 0.6) * 0.85, 0.12 + l * 0.08)
 }
 
 export function dayInkOpacity(opacity: number): number {
-  return Math.min(1, opacity * 1.6 + 0.22)
+  return Math.min(1, opacity * 1.8 + 0.28)
 }
 
 /**
@@ -471,5 +483,5 @@ export function dayEmissive(hex: number): number {
 
 /** Neon intensity is a bloom lever at night; at noon it is nearly flat. */
 export function dayNeonIntensity(intensity: number): number {
-  return Math.max(0.88, Math.min(1.1, 0.92 + (intensity - 1) * 0.08))
+  return Math.max(0.98, Math.min(1.18, 1.0 + (intensity - 1) * 0.1))
 }

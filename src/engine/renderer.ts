@@ -281,7 +281,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
 
   function applyPassToggles(): void {
     if (bloomPass) {
-      bloomPass.enabled = quality.bloom
+      bloomPass.enabled = quality.bloom && air.bloomEnabled
       bloomPass.strength = air.bloomStrength
       bloomPass.radius = air.bloomRadius
       bloomPass.threshold = air.bloomThreshold

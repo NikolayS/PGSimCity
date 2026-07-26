@@ -1088,7 +1088,8 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
 
   text.alloc(20, CX, 10.0, CZ - 7.2, 'north', 1.4, COLOR.client, 'center', 1.0, 'read-only client')
   const TX_RCLIENT = text.alloc(34, CX, 8.6, CZ - 7.2, 'north', 0.9, COLOR.inkDim, 'center', 0.75, '')
-  const TX_FEEDBACK = text.alloc(40, CX, 1.9, CZ - 11.6, 'north', 0.95, COLOR.vacuum, 'center', 0.1, '')
+  // 48 characters, because at grade this one is close enough to actually read.
+  const TX_FEEDBACK = text.alloc(48, CX, 1.9, CZ - 11.6, 'north', 0.95, COLOR.vacuum, 'center', 0.1, '')
 
   /* =====================================================================
    * 6. LOGICAL SUBSCRIBER — rows, not blocks. Only at wal_level=logical.

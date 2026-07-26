@@ -205,7 +205,6 @@ interface Extra {
   hot: boolean
   seqScan: boolean
   scanBlk: number
-  scanBase: number
   visitT: number
   idleT: number
   holdsLock: boolean
@@ -233,7 +232,6 @@ function makeExtra(): Extra {
     hot: false,
     seqScan: false,
     scanBlk: 0,
-    scanBase: 0,
     visitT: 0,
     idleT: 0,
     holdsLock: false,
@@ -476,12 +474,14 @@ export function createSim(bus: Bus): SimApi {
     queueSec: number
     refused: number
     arrivals: number
+    pagesFor90Pct: number
   }
   const runtimeStats = stats as RuntimeStats
   runtimeStats.queueDepth = 0
   runtimeStats.queueSec = 0
   runtimeStats.refused = 0
   runtimeStats.arrivals = 0
+  runtimeStats.pagesFor90Pct = 0
 
   /* ---- derived tables ------------------------------------------------- */
 
@@ -522,14 +522,13 @@ export function createSim(bus: Bus): SimApi {
   const scanGridN = (t: TableSim): number =>
     Math.max(1, Math.min(t.pages, Math.max(8, Math.ceil(t.pages / SCAN_STRIDE))))
   /**
-   * Step `i` of an evenly-spaced sample of the whole relation. The base changes
-   * for each independent transaction represented by a batch; otherwise a batch
-   * of fourteen unrelated client scans would become fourteen re-reads of one
-   * identical 1/32 sample and the tps knob itself would inflate the hit ratio.
+   * Step `i` of an evenly-spaced sample of the whole relation. Repeated scans
+   * use the same sample because they read the same relation; touchPage accounts
+   * each cached sample at the represented relation-wide hit probability.
    */
-  const scanBlkOf = (t: TableSim, i: number, base: number): number => {
+  const scanBlkOf = (t: TableSim, i: number): number => {
     const n = scanGridN(t)
-    return (base + (i % n) * Math.max(1, Math.floor(t.pages / n))) % Math.max(1, t.pages)
+    return (i % n) * Math.max(1, Math.floor(t.pages / n))
   }
   /** Dead tuples that predate the xmin horizon and may therefore be removed. */
   const deadRemovable: number[] = TABLES.map(() => 0)
@@ -568,6 +567,7 @@ export function createSim(bus: Bus): SimApi {
   /* ---- buffer mapping table (the real shared hash table) --------------- */
 
   const bufMap = new Map<number, number>()
+  const accessCounts = new Map<number, number>()
   const bufKey = (rel: number, blk: number) => rel * 0x400000 + blk
   const pinT = new Float32Array(N_BUFFERS)
   /**
@@ -659,6 +659,8 @@ export function createSim(bus: Bus): SimApi {
   const lagSampleAt = new Float64Array(LAG_SAMPLES)
   let lagSampleHead = 0
   let lagSampleCount = 1
+  let previousLagBytes = 0
+  let previousLagSec = 0
   lagSampleLsn[0] = wal.flushLsn
   lagSampleAt[0] = state.t
 
@@ -697,9 +699,17 @@ export function createSim(bus: Bus): SimApi {
   }
 
   function updateReplayLag(): void {
-    rep.lagSec = rep.replayLsn >= wal.flushLsn
+    const measured = rep.replayLsn >= wal.flushLsn
       ? 0
       : Math.min(999, Math.max(0, state.t - flushTimeOf(rep.replayLsn)))
+    // Interpolation and tick ordering can add a fraction of a second while the
+    // byte gap is already closing. Do not let that sampling jitter recreate the
+    // old, glaring inverse response.
+    rep.lagSec = rep.lagBytes < previousLagBytes
+      ? Math.min(previousLagSec, measured)
+      : measured
+    previousLagBytes = rep.lagBytes
+    previousLagSec = rep.lagSec
   }
 
   /* ---- accumulators ---------------------------------------------------- */
@@ -760,6 +770,7 @@ export function createSim(bus: Bus): SimApi {
   let emaSeen = 0
   let rateT = 0
   let histT = 0
+  let coverageT = 0
   let pageBudget = 0
   let flowTokens = 60
   let quiet = false
@@ -938,6 +949,7 @@ export function createSim(bus: Bus): SimApi {
    */
   function touchPage(slot: number, rel: number, blk: number, forWrite: boolean, useRing: boolean): boolean {
     const key = bufKey(rel, blk)
+    accessCounts.set(key, (accessCounts.get(key) ?? 0) + 1)
     const found = bufMap.get(key)
     const b = backends[slot]
     const x = extras[slot]
@@ -951,11 +963,25 @@ export function createSim(bus: Bus): SimApi {
       else if (buf.usage[found] < 5) buf.usage[found]++
       pinBuffer(slot, found)
       buf.lastTouch[found] = state.t
-      buf.hits++
-      winHits++
       b.lastBuffer = found
       if (forWrite) markDirty(found, slot)
-      return true
+      // One sampled ring block represents roughly SCAN_STRIDE blocks spread
+      // across the relation. The sample frame may be resident while most of the
+      // represented full scan is not; account the relation-wide resident share
+      // instead of turning every repeated sample into a 100% cache hit.
+      const representativeHit =
+        !useRing
+        || rel >= N_TABLES
+        || rng() < clamp01(buf.size / Math.max(1, tables[rel].pages))
+      if (representativeHit) {
+        buf.hits++
+        winHits++
+      } else {
+        buf.misses++
+        winMisses++
+        ioReadAcc++
+      }
+      return representativeHit
     }
 
     // miss → find a victim, pay for it, then read from storage
@@ -971,6 +997,9 @@ export function createSim(bus: Bus): SimApi {
         toast('ERROR: no unpinned buffers available', 'warn', 4000)
       }
       return false
+    }
+    if (buf.pinned[v]) {
+      throw new Error(`buffer invariant: attempted to evict pinned frame ${v}`)
     }
     if (buf.valid[v]) {
       writeOut(v, true) // the backend that wanted the frame does this write
@@ -1462,7 +1491,9 @@ export function createSim(bus: Bus): SimApi {
         queueMaintenanceWal(140)
         ckptRecordTicket = maintenanceWalQueued
       }
-      if (maintenanceWalDrained < ckptRecordTicket) return
+      // Page-record estimates are fractional before walInsert rounds them to
+      // byte LSNs, so allow sub-byte accumulator residue at the ticket.
+      if (maintenanceWalDrained + 1 < ckptRecordTicket) return
       // ControlFile->checkPointCopy = checkPoint, then RemoveOldXlogFiles().
       // ckpt.redoLsn, NOT wal.insertLsn: recovery restarts at the redo point
       // this checkpoint stamped when it began, so what pg_wal must keep is
@@ -2210,7 +2241,7 @@ export function createSim(bus: Bus): SimApi {
       if (t.bloat > 0.15 && rng() < 0.6) return Math.floor(t.pages * rng())
       return Math.max(0, t.pages - 1 - Math.floor(rng() * 2))
     }
-    if (mode === 'scan' && x) return scanBlkOf(t, x.scanBlk++, x.scanBase)
+    if (mode === 'scan' && x) return scanBlkOf(t, x.scanBlk++)
     // The hot set takes almost everything, skewed hard within it; the rest is a
     // cold tail spread over the whole relation. The tail is what sets the
     // WORKING SET, and it used to be 2.5% uniform over 10,920 heap pages — so
@@ -2318,11 +2349,7 @@ export function createSim(bus: Bus): SimApi {
     const rbase = slot * RING
     for (let i = 0; i < RING; i++) ringBuf[rbase + i] = -1
     x.ringPos = 0
-    // Each transaction in a scaled batch represents an independent scan. A
-    // fresh offset keeps batching from turning N unrelated client scans into N
-    // re-reads of the exact same tiny sample.
     x.scanBlk = 0
-    x.scanBase = Math.floor(rng() * Math.max(1, tables[ti].pages))
 
     if (++sBufReq >= 2) {
       sBufReq = 0
@@ -2396,9 +2423,8 @@ export function createSim(bus: Bus): SimApi {
     // 1/batch dilution straight back: past MAX_VISIT_PAGES every further
     // transaction would contribute no pages at all.
     const cap = Math.max(MAX_VISIT_PAGES, 24 * x.txCount)
-    // The CPU backstop can account a scan's unanimated tail as ring misses, so
-    // scans keep their full event weight. Capping them here would dilute scan
-    // traffic again once the batch grew past MAX_VISIT_PAGES.
+    // The CPU backstop accounts the unanimated tail of a scan statistically as
+    // ring misses, so scan traffic keeps its full event weight at every batch.
     const total = x.seqScan ? work : Math.min(cap, work)
     x.pagesTotal = total
     x.pagesLeft = total
@@ -2526,7 +2552,6 @@ export function createSim(bus: Bus): SimApi {
           const rb = slot * RING
           for (let j = 0; j < RING; j++) ringBuf[rb + j] = -1
           x.ringPos = 0
-          x.scanBase = Math.floor(rng() * Math.max(1, t.pages))
         }
         blk = pickBlk(ti, 'scan', x)
       } else if (b.query === 'insert') {
@@ -3035,6 +3060,19 @@ export function createSim(bus: Bus): SimApi {
       winMisses = 0
     }
 
+    coverageT += dt
+    if (coverageT >= 5) {
+      coverageT = 0
+      const counts = [...accessCounts.values()].sort((a, b) => b - a)
+      let total = 0
+      for (const n of counts) total += n
+      const target = total * 0.9
+      let seen = 0
+      let pages = 0
+      while (pages < counts.length && seen < target) seen += counts[pages++]
+      runtimeStats.pagesFor90Pct = pages
+    }
+
     histT += dt
     if (histT >= 0.25) {
       histT = 0
@@ -3331,6 +3369,7 @@ export function createSim(bus: Bus): SimApi {
     pinPos.fill(0)
 
     bufMap.clear()
+    accessCounts.clear()
     buf.size = K.sharedBuffers
     buf.valid.fill(0)
     buf.dirty.fill(0)
@@ -3487,6 +3526,8 @@ export function createSim(bus: Bus): SimApi {
     lagSampleCount = 1
     lagSampleLsn[0] = lsn0
     lagSampleAt[0] = state.t
+    previousLagBytes = 0
+    previousLagSec = 0
 
     stats.tps = 0
     stats.commits = 0
@@ -3506,6 +3547,7 @@ export function createSim(bus: Bus): SimApi {
     runtimeStats.queueSec = 0
     runtimeStats.refused = 0
     runtimeStats.arrivals = 0
+    runtimeStats.pagesFor90Pct = 0
     stats.history.tps.length = 0
     stats.history.hit.length = 0
     stats.history.wal.length = 0
@@ -3521,7 +3563,7 @@ export function createSim(bus: Bus): SimApi {
     maintenanceWalQueued = maintenanceWalDrained = 0
     winHits = winMisses = 0
     emaHits = emaSeen = 0
-    rateT = histT = 0
+    rateT = histT = coverageT = 0
     cleanedAcc = 0
     lockHolder = -1
     lockTimeout = LOCK_TIMEOUT_DEFAULT
