@@ -184,7 +184,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   // PCFSoft is deprecated in r185 and silently substituted with PCF — ask for
   // what we actually get, so the console stays clean and the code stays honest.
   renderer.shadowMap.type = THREE.PCFShadowMap
-  renderer.shadowMap.enabled = quality.shadows
+  renderer.shadowMap.enabled = quality.shadows && air.shadows
   renderer.info.autoReset = true
 
   const dom = renderer.domElement
@@ -215,28 +215,68 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   scene.add(hemi)
 
   // Key: cold moonlight from high north-east at night, the sun from the
-  // south-east at noon. Casts the only shadow in the city, in both modes.
+  // south-east at noon. Only the sun casts; night keeps its original render.
   const key = new THREE.DirectionalLight(air.keyColor, air.keyIntensity)
   key.position.set(air.keyPos[0], air.keyPos[1], air.keyPos[2])
   key.target.position.set(air.keyTarget[0], air.keyTarget[1], air.keyTarget[2])
   scene.add(key)
   scene.add(key.target)
 
-  // Shadow frustum is deliberately tight: it only has to cover the plaza and the
-  // backend row (x ±150, z -160..90). Anything outside simply doesn't cast.
+  // One modest map, fitted to the actual built city rather than to the whole
+  // Slonik plate. At 1024² the texel density stays useful without asking the
+  // software renderer to fill a 2048² depth target before every frame.
   const sc = key.shadow.camera
-  sc.left = -200
-  sc.right = 200
-  sc.top = 185
-  sc.bottom = -185
-  sc.near = 200
-  sc.far = 900
-  sc.updateProjectionMatrix()
-  key.shadow.mapSize.set(2048, 2048)
+  key.shadow.mapSize.set(1024, 1024)
   key.shadow.bias = air.shadowBias
   key.shadow.normalBias = air.shadowNormalBias
   key.shadow.intensity = air.shadowIntensity
-  key.castShadow = quality.shadows
+  key.castShadow = quality.shadows && air.shadows
+
+  const shadowPoint = new THREE.Vector3()
+  const shadowLo = new THREE.Vector3(-330, -78, -390)
+  const shadowHi = new THREE.Vector3(330, 118, 370)
+
+  function fitShadowCamera(): void {
+    // Mirror DirectionalLightShadow.updateMatrices() so the fit is expressed in
+    // the shadow camera's own axes. The box covers every district, including
+    // the excavation floor, while excluding the decorative empty plate lobes.
+    sc.position.copy(key.position)
+    sc.lookAt(key.target.position)
+    sc.updateMatrixWorld(true)
+    sc.matrixWorldInverse.copy(sc.matrixWorld).invert()
+
+    let minX = Infinity
+    let maxX = -Infinity
+    let minY = Infinity
+    let maxY = -Infinity
+    let minD = Infinity
+    let maxD = -Infinity
+    for (let ix = 0; ix < 2; ix++) {
+      for (let iy = 0; iy < 2; iy++) {
+        for (let iz = 0; iz < 2; iz++) {
+          shadowPoint
+            .set(ix ? shadowHi.x : shadowLo.x, iy ? shadowHi.y : shadowLo.y, iz ? shadowHi.z : shadowLo.z)
+            .applyMatrix4(sc.matrixWorldInverse)
+          minX = Math.min(minX, shadowPoint.x)
+          maxX = Math.max(maxX, shadowPoint.x)
+          minY = Math.min(minY, shadowPoint.y)
+          maxY = Math.max(maxY, shadowPoint.y)
+          const depth = -shadowPoint.z
+          minD = Math.min(minD, depth)
+          maxD = Math.max(maxD, depth)
+        }
+      }
+    }
+    sc.left = minX - 18
+    sc.right = maxX + 18
+    sc.bottom = minY - 24
+    sc.top = maxY + 24
+    sc.near = Math.max(1, minD - 70)
+    sc.far = maxD + 70
+    sc.updateProjectionMatrix()
+  }
+
+  fitShadowCamera()
 
   // Fill: colder and from the south-west at night, sky bounce from behind at
   // noon. No shadow either way — it only shapes the dark side.
@@ -352,6 +392,13 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   }
 
   function paintObject(obj: THREE.Object3D, target: ThemeMode): void {
+    const flags = obj.userData as {
+      pgDayOnly?: boolean
+      pgNoShadow?: boolean
+      pgShadowReceiver?: boolean
+    }
+    if (flags.pgDayOnly) obj.visible = target === 'day'
+
     // Stars are a night instrument. At noon they are additive white noise over
     // a bright sky, which is worse than nothing.
     if (obj.name === 'sky.stars') {
@@ -369,6 +416,23 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     } else {
       paintSceneMaterial(m, target)
     }
+
+    const mesh = obj as THREE.Mesh
+    if (mesh.isMesh !== true) return
+    const materials = Array.isArray(m) ? m : [m]
+    const standard = materials.some((mat) => {
+      const sm = mat as THREE.MeshStandardMaterial
+      return sm.isMeshStandardMaterial === true && !sm.transparent && sm.opacity >= 0.99
+    })
+    const count = (mesh as THREE.InstancedMesh).isInstancedMesh === true ? (mesh as THREE.InstancedMesh).count : 1
+    const day = target === 'day' && air.shadows
+    // Large state fields (notably the 1,024 buffer frames) carry meaning through
+    // colour. Letting every cell cast turns the zone into a dark checkerboard
+    // and spends the shadow budget on noise instead of architectural massing.
+    mesh.castShadow = day && standard && count <= 256 && !flags.pgNoShadow
+    mesh.receiveShadow =
+      day &&
+      (standard || flags.pgShadowReceiver === true || (materials[0] as THREE.ShadowMaterial).isShadowMaterial === true)
   }
 
   /**
@@ -398,6 +462,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     key.position.set(air.keyPos[0], air.keyPos[1], air.keyPos[2])
     key.target.position.set(air.keyTarget[0], air.keyTarget[1], air.keyTarget[2])
     key.target.updateMatrixWorld()
+    fitShadowCamera()
     key.shadow.bias = air.shadowBias
     key.shadow.normalBias = air.shadowNormalBias
     key.shadow.intensity = air.shadowIntensity
@@ -410,6 +475,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     applyPassToggles()
 
     scene.traverse((obj) => paintObject(obj, target))
+    applyShadowRenderer()
     renderer.shadowMap.needsUpdate = true
   }
 
@@ -505,13 +571,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
 
     // Shadow maps: toggling shadowMap.enabled changes shader defines, so every
     // material in the scene has to be recompiled. Once per quality change only.
-    const shadowsChanged = renderer.shadowMap.enabled !== quality.shadows
-    renderer.shadowMap.enabled = quality.shadows
-    key.castShadow = quality.shadows
-    if (shadowsChanged) {
-      invalidateMaterials()
-      renderer.shadowMap.needsUpdate = true
-    }
+    applyShadowRenderer()
 
     if (useComposer()) buildComposer()
     applyPassToggles()
@@ -531,6 +591,15 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
 
   function invalidateMaterials(): void {
     scene.traverse(markMaterialDirty)
+  }
+
+  function applyShadowRenderer(): void {
+    const enabled = quality.shadows && air.shadows
+    const changed = renderer.shadowMap.enabled !== enabled
+    renderer.shadowMap.enabled = enabled
+    key.castShadow = enabled
+    if (changed) invalidateMaterials()
+    renderer.shadowMap.needsUpdate = true
   }
 
   function markMaterialDirty(obj: THREE.Object3D): void {
@@ -667,7 +736,8 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   }
 
   function onContextRestored(): void {
-    renderer.shadowMap.enabled = quality.shadows
+    renderer.shadowMap.enabled = quality.shadows && air.shadows
+    key.castShadow = renderer.shadowMap.enabled
     renderer.shadowMap.needsUpdate = true
     invalidateMaterials()
     viewW = -1

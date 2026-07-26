@@ -175,6 +175,8 @@ export interface Atmosphere {
   shadowNormalBias: number
   /** 0..1 — how dark a cast shadow goes. A cartoon shadow is a tone, not a hole. */
   shadowIntensity: number
+  /** Night keeps its original unshadowed render; the sun alone casts. */
+  shadows: boolean
   fillColor: number
   fillIntensity: number
   fillPos: readonly [number, number, number]
@@ -216,6 +218,7 @@ export const ATMOSPHERE: Record<ThemeMode, Atmosphere> = {
     shadowBias: -0.0006,
     shadowNormalBias: 0.6,
     shadowIntensity: 1,
+    shadows: false,
     fillColor: 0x4a6fa5,
     fillIntensity: 0.35,
     fillPos: [-320, 168, 296],
@@ -279,6 +282,7 @@ export const ATMOSPHERE: Record<ThemeMode, Atmosphere> = {
     // surface they are supposed to sit on. A drawn shadow is a flat tone about
     // two thirds of the lit value, and that is what this is.
     shadowIntensity: 0.55,
+    shadows: true,
     fillColor: 0xbfd8ff, // sky bounce from behind
     fillIntensity: 0.25,
     fillPos: [-300, 150, -230],
@@ -440,10 +444,10 @@ export function daySurface(hex: number): number {
   if (hit !== undefined) return hit
   const [h, s, l] = hslOf(hex)
   if (l < 0.34) {
-    // 0.46–0.71, not 0.6–0.9: a sunlit surface still has a light term on top of
+    // 0.48–0.74, not 0.7–0.95: a sunlit surface still has a light term on top of
     // this, and stone that starts near white has nowhere left to go — it clips,
     // and a clipped face cannot show either the toon terminator or its own ink.
-    const lit = 0.36 + Math.min(l, 0.4) * 0.62
+    const lit = 0.48 + Math.min(l, 0.4) * 0.65
     // Warm sandstone, and committed to it. Every structural colour in the city
     // is a blue-grey navy, so a translation that keeps much of the source hue
     // produces a uniformly cold grey model — technically a day theme, visually

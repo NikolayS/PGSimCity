@@ -186,7 +186,7 @@ applyDocument(readStoredMode())
  *    and are already referenced by a thousand meshes — so swapping the class for
  *    MeshToonMaterial is off the table. Instead the standard material's direct
  *    lighting term is replaced at compile time: RE_Direct is redefined to a
- *    three-band ramp, and the GGX lobe is clipped into a single hard highlight.
+ *    two-value sun/shade split, and GGX is clipped into one hard highlight.
  *
  *    The ramp edge is widened by fwidth(), so the terminator stays a clean curve
  *    at every distance instead of stair-stepping across a roof. Shadows come for
@@ -219,14 +219,12 @@ void RE_Direct_Toon( const in IncidentLight directLight, const in vec3 geometryP
 
 	float dotNL = saturate( dot( geometryNormal, directLight.direction ) );
 
-	// Three bands: shade, mid, light. The edge width follows the screen-space
-	// gradient of dotNL so it is always about a pixel wide. The shade band is
-	// low on purpose — the hemisphere is the ambient floor, and if this band is
-	// raised to meet it the two merge and the city loses its terminator.
+	// One hard SimCity split: a face is either in the sun or on the shaded side
+	// of the model. The edge width follows the screen-space gradient of dotNL so
+	// the terminator stays about one pixel wide instead of aliasing at distance.
 	float w = fwidth( dotNL ) * 0.9 + 0.01;
-	float b1 = smoothstep( 0.20 - w, 0.20 + w, dotNL );
-	float b2 = smoothstep( 0.62 - w, 0.62 + w, dotNL );
-	vec3 irradiance = ( 0.26 + 0.34 * b1 + 0.40 * b2 ) * directLight.color;
+	float sun = smoothstep( 0.42 - w, 0.42 + w, dotNL );
+	vec3 irradiance = ( 0.34 + 0.66 * sun ) * directLight.color;
 
 	// One clipped highlight instead of a smooth lobe: glass and metal still read
 	// as glass and metal, but as a cartoon would draw them.
@@ -481,6 +479,7 @@ interface CapturedNight {
   roughness?: number
   metalness?: number
   opacity?: number
+  blending?: THREE.Blending
   uniforms?: Record<string, number>
 }
 
@@ -490,6 +489,8 @@ interface ThemeUserData {
   /** Whether the toon ramp is currently compiled into this material. */
   pgToon?: boolean
   pgNight?: CapturedNight
+  /** Exact daylight albedo for semantic zone surfaces. */
+  pgDayColor?: number
 }
 
 function userData(m: THREE.Material): ThemeUserData {
@@ -570,9 +571,15 @@ export function paintSceneMaterial(m: THREE.Material, target: ThemeMode): void {
   // the light cones, spill bands and lamp glows across the districts turn the
   // whole city into fog. Keep them — they still say "this thing is emitting" —
   // but at a fraction of the weight.
-  if (m.blending === THREE.AdditiveBlending) {
+  if (first) night.blending = m.blending
+  if (night.blending === THREE.AdditiveBlending) {
     if (first) night.opacity = m.opacity
     if (night.opacity !== undefined) m.opacity = target === 'day' ? night.opacity * 0.1 : night.opacity
+    const blending = target === 'day' ? THREE.NormalBlending : THREE.AdditiveBlending
+    if (m.blending !== blending) {
+      m.blending = blending
+      m.needsUpdate = true
+    }
   }
 
   installThemeShader(m, target)
@@ -586,8 +593,12 @@ export function paintSceneMaterial(m: THREE.Material, target: ThemeMode): void {
     if (first) night.color = basic.color.getHex()
     const src = night.color
     if (src !== undefined && !isNeutralExtreme(src)) {
+      /* Two independent overrides meet here. Day takes an explicit
+       * pgDayColor when a module has picked one, falling back to the derived
+       * surface/accent. Night routes unlit basic materials through the neon
+       * repaint so meaning survives when bloom is unavailable. */
       if (target === 'day') {
-        basic.color.setHex(lit ? daySurface(src) : dayAccent(src))
+        basic.color.setHex(ud.pgDayColor ?? (lit ? daySurface(src) : dayAccent(src)))
       } else if (basic.isMeshBasicMaterial === true && basic.toneMapped === false) {
         paintNightNeonColor(basic.color, src, 1)
       } else {
