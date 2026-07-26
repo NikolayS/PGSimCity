@@ -27,6 +27,15 @@ body {
 
 #app {
   display: grid;
+  /* The column is stated explicitly, and it has to be. Left implicit it is an
+     `auto` track, which takes its growth limit from max-content — and the
+     max-content of the top bar is the six vitals at their min-width, about
+     806px. The track then sizes to 806 inside a 390px viewport, and because
+     `body` clips overflow the excess is not scrolled to, it is destroyed: on a
+     phone the right-hand third of every row, including half the complaint text,
+     simply ceased to exist. minmax(0, 1fr) caps the track at the container and
+     lets the `min-width: 0` / `overflow-x: auto` already on .vitals do its job. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   height: 100dvh;
 }
@@ -480,6 +489,48 @@ body {
 .blindspot .note__k { color: var(--c-crit); }
 .note p, .blindspot p { margin: 0; font-size: var(--fs-sm); line-height: 1.6; color: var(--ink-dim); }
 .blindspot p code, .note p code { color: var(--c-warn); background: rgba(255, 204, 85, 0.09); }
+
+/* --- resolution band ---
+   Live "did the fix work?" on a verdict. Three states, and the neutral one is
+   load-bearing: on counter-based views there is genuinely nothing to judge for
+   the first few seconds after a reset, and saying so is more honest than
+   grading an empty counter as a pass. */
+
+.rez {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border: 1px solid var(--line-hair);
+  border-left-width: 2px;
+  border-radius: var(--r-sm);
+  background: var(--bg-sunken);
+  max-width: 96ch;
+}
+.rez__flag {
+  font-family: var(--f-mono);
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  white-space: nowrap;
+  border-radius: var(--r-pill);
+  padding: 3px 9px;
+  border: 1px solid currentColor;
+}
+.rez__read {
+  flex: 1 1 340px;
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  color: var(--ink-dim);
+  font-family: var(--f-mono);
+}
+
+.rez--ok { border-left-color: var(--c-ok); background: rgba(87, 227, 137, 0.06); }
+.rez--ok .rez__flag { color: var(--c-ok); }
+.rez--bad { border-left-color: var(--c-crit); background: rgba(255, 95, 109, 0.05); }
+.rez--bad .rez__flag { color: var(--c-crit); }
+.rez--wait { border-left-color: var(--line-hard); }
+.rez--wait .rez__flag { color: var(--ink-faint); }
 
 /* --- branches --- */
 

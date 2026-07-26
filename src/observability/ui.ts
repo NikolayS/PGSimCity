@@ -98,7 +98,11 @@ export function dataTable(): LiveTable {
       scroll.hidden = isEmpty
       empty.hidden = !isEmpty
       if (isEmpty) setText(empty, p.empty ?? 'No rows.')
-      caption.hidden = !p.caption
+      /* A caption annotates rows — it points at a marker, or explains a column
+       * that was computed by hand. With no rows it is describing something that
+       * is not on screen ("▸ is the holder" under an empty pg_locks), so the
+       * empty message carries the explanation on its own. */
+      caption.hidden = !p.caption || isEmpty
       if (p.caption) setText(caption, p.caption)
     },
   }

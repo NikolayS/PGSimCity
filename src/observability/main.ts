@@ -498,6 +498,28 @@ function renderVerdict(sc: Extract<Screen, { kind: 'console' }>, v: Verdict): HT
   }
   liveRefresh.push(() => syncs.forEach((f) => f()))
 
+  /* The scoreboard. A diagram can tell you what is wrong; only a page with a
+   * running server behind it can tell you whether you fixed it, and that is the
+   * one thing this whole feature exists to be able to do. So it is stated
+   * plainly, live, in the view's own vocabulary — and it is allowed to say "not
+   * enough evidence", because on counter-based views that is often the truth. */
+  const verdictBand = (() => {
+    if (!v.resolved) return null
+    const flag = el('span', { class: 'rez__flag' })
+    const read = el('span', { class: 'rez__read' })
+    const band = el('div', { class: 'rez' }, flag, read)
+    const paint = () => {
+      const r = v.resolved!(sim.state, coll)
+      const state = r.ok === null ? 'wait' : r.ok ? 'ok' : 'bad'
+      band.className = `rez rez--${state}`
+      setText(flag, r.ok === null ? 'NO EVIDENCE YET' : r.ok ? 'RESOLVED' : 'STILL PRESENT')
+      setText(read, r.reading)
+    }
+    paint()
+    liveRefresh.push(paint)
+    return band
+  })()
+
   const others = SYMPTOMS.filter((s) => s.id !== sc.symptom.id).slice(0, 3)
   const next = el('div', { class: 'nextrow' })
   for (const s of others) {
@@ -524,6 +546,7 @@ function renderVerdict(sc: Extract<Screen, { kind: 'console' }>, v: Verdict): HT
           'section',
           { class: 'block' },
           el('h3', { text: 'Turn the dial, then confirm it' }),
+          verdictBand,
           el('p', {
             class: 'fine',
             text:
@@ -691,12 +714,23 @@ function stagedBanner(sc: Extract<Screen, { kind: 'console' }>): HTMLElement {
 }
 
 function footer(): HTMLElement {
+  /* This line reports the model clock and how much statistics history exists.
+   * Rendered once and left alone it goes stale within seconds and then quietly
+   * misreports both — which on the one line of the page whose job is to say
+   * "these are not measurements" is the worst place to be wrong. */
+  const stamp = el('p')
+  const paintStamp = () =>
+    setText(
+      stamp,
+      `Model time ${fmtNum(sim.state.t)} s · counters since ${coll.resetStamp} · ${fmtNum(coll.total.elapsed)} s of statistics. Numbers come from a simulation, not a server.`,
+    )
+  paintStamp()
+  liveRefresh.push(paintStamp)
+
   return el(
     'footer',
     { class: 'foot' },
-    el('p', {
-      text: `Model time ${fmtNum(sim.state.t)} s · counters since ${coll.resetStamp} · ${fmtNum(coll.total.elapsed)} s of statistics. Numbers come from a simulation, not a server.`,
-    }),
+    stamp,
     el('p', {
       html: 'Inspired by <a href="https://pgstats.dev/" target="_blank" rel="noreferrer noopener">Alexey Lesovsky\'s PostgreSQL Observability map</a>. Names verified against the <a href="https://www.postgresql.org/docs/current/monitoring-stats.html" target="_blank" rel="noreferrer noopener">PostgreSQL 18 manual</a>. Apache-2.0.',
     }),

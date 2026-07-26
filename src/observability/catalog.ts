@@ -72,7 +72,7 @@ export const CATALOG: CatalogEntry[] = [
     coverageNote:
       'The model has sixteen backend slots and drives state, wait_event_type, wait_event, backend_xid, backend_xmin, xact_start and query from the same state machine the city draws. It has no users, no client addresses and no query_id, so those columns are blank rather than fabricated.',
     version:
-      'wait_event_type and wait_event arrived in 9.6 — before that a waiting backend only showed waiting = true. query_id needs compute_query_id and arrived in 14. leader_pid arrived in 13.',
+      'wait_event_type and wait_event arrived in 9.6 — before that a waiting backend only showed waiting = true. query_id needs compute_query_id and arrived in 14. leader_pid arrived in 13. Watch the wait event *names* across releases too: PostgreSQL 17 started generating them from a table and normalised the capitalisation, so the WAL flush wait is WALSync on 16 and older and WalSync from 17 on. A dashboard filtering on the old spelling does not error on a new server — it silently matches nothing and reports zero.',
     projection: 'activity',
     city: 'backend.row',
   },

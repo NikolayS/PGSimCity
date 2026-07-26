@@ -40,6 +40,15 @@ other Postgres learning resource has, and this page is built to spend it.
 * **Verdicts** that end at a diagnosis, live evidence, the mechanism, the fix,
   and the GUC you can turn right there — under its real name — plus a query to
   re-run and confirm the fix worked.
+* **A verdict that grades itself.** Thirteen of the diagnoses re-run their own
+  finding against live state and report `STILL PRESENT`, `RESOLVED`, or
+  `NO EVIDENCE YET`, with the reading that decided it. This is the one thing a
+  diagram structurally cannot do — it can tell you what is wrong and it cannot
+  tell you whether you fixed it — and it is the reason the page is built on a
+  running model rather than on a picture. The third state is not padding:
+  counter-based views genuinely have nothing to say for the first few seconds
+  after a reset, and grading an empty counter as a pass would be this page
+  committing the exact error it spends a paragraph warning against.
 * **An instrument list**: every view the model can serve, live, with the full
   verified column list, what changed in which release, and a PG version rail.
   Select PostgreSQL 15 and `pg_stat_io` and `pg_stat_checkpointer` become blind
@@ -57,16 +66,29 @@ These are hard constraints in the code, not aspirations.
    `wait_event_type`/`wait_event` pair, every vacuum `phase` string, every
    `pg_stat_io` `object` and `context` value — was checked against
    postgresql.org/docs/current (PostgreSQL 18.4) while it was written. Where a
-   name changed between releases the change is recorded and shown.
-2. **Numbers are the model's, and the page says so.** A column appears only if
+   name changed between releases the change is recorded and shown. The
+   capitalisation counts: PostgreSQL 17 began generating the wait event list
+   from a table and normalised it on the way through, so the WAL flush wait is
+   `WALSync` on 16 and older and `WalSync` from 17 on. This page says `WalSync`,
+   and says why.
+2. **The query above a table is the query that produced it.** If a step prints a
+   `WHERE` clause or an `ORDER BY`, the rows underneath honour it. A page whose
+   whole argument is "these names are checkable" cannot afford a result set its
+   own query would not have returned.
+3. **Hand-computed ratios say "—" when there is nothing to divide.** `forced %`,
+   `hit %` and `fpi share` are arithmetic on counters, not columns, and zero over
+   zero is undefined rather than zero. This matters at precisely the moment the
+   reader cares most — just after a fix and a `pg_stat_reset()` — where printing
+   a reassuring green `0%` would be the page inventing a measurement.
+4. **Numbers are the model's, and the page says so.** A column appears only if
    the model genuinely produces it. Nothing is padded with a plausible-looking
    figure. Each instrument carries a coverage badge — `live`, `partial` or
    `absent` — and the partial ones say exactly which columns the model cannot
    fill and why.
-3. **Two counters are derived, and are labelled as derived.** `wal_bytes` is
+5. **Two counters are derived, and are labelled as derived.** `wal_bytes` is
    exact (it is the LSN advance); `wal_records` and `wal_fpi` are shaped by the
    model rather than measured, and the caption says so on the table itself.
-4. **`pg_stat_statements` and `pg_stat_slru` are marked absent.** The model has
+6. **`pg_stat_statements` and `pg_stat_slru` are marked absent.** The model has
    no per-statement history and no SLRU counters, and the page will not fake
    them. That absence is instructive: `pg_stat_statements` is not installed by
    default on a real server either.
@@ -104,6 +126,18 @@ npm run build
 `src/observability/main.ts` and `src/observability/style.css` all exist. Never
 leave the tree with one of those missing.
 
+## How you get here
+
+The city links to this page from one HUD button (the bolt icon, next to the
+tour and the command palette). That single link in `src/ui/hud.ts` is the only
+edit this feature makes outside `observability/**` and `src/observability/**`.
+It is a plain `<a href="observability/">` — relative, so it survives being
+served from `/PGSimCity/` on GitHub Pages — and it needs no wiring because the
+console runs its own instance of the simulation.
+
+Every verdict links back the other way, into the city component that implements
+the mechanism, via `../#/c/<component-id>`.
+
 ## Known limits
 
 * The model has one global xmin horizon rather than a per-session
@@ -119,3 +153,18 @@ leave the tree with one of those missing.
   three.js, because `src/sim/model.ts` imports `src/world/layout.ts` for its
   table definitions. Moving those definitions to a renderer-free module would
   shrink this page; that change is outside this feature's files.
+* The eight complaints cover the failures this model can actually produce. The
+  ones it cannot — transaction ID wraparound, a lost replication slot, a bad
+  plan after a missing ANALYZE, temp file spill — are absent rather than faked,
+  and they are the obvious next paths if the model grows to support them.
+
+## Layout note, recorded because it was a real bug
+
+`#app` states `grid-template-columns: minmax(0, 1fr)` explicitly. Left implicit
+the single column is an `auto` track, which takes its growth limit from
+max-content — and the max-content of the top bar is the six vitals at their
+minimum width, about 806px. On a 390px phone the track sized to 806, and since
+`body` clips overflow the excess was not scrolled to, it was *destroyed*: the
+right-hand third of every row, including half of each complaint, ceased to
+exist with no scrollbar to reveal it. The old page failed the same test at
+900px. Check narrow widths before shipping anything here.

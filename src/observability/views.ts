@@ -58,6 +58,25 @@ const n = (v: number, digits = 0): Cell => ({ v: fmtNum(v, digits) })
 const ctr = (totalV: number, rateV: number, mode: Mode): Cell =>
   mode === 'rate' ? { v: `${fmtNum(rateV, rateV < 10 ? 1 : 0)}/s`, tone: 'dim' } : { v: fmtNum(totalV) }
 
+/**
+ * A hand-computed ratio, rendered honestly.
+ *
+ * Zero over zero is undefined, not zero. This matters most at exactly the
+ * moment the reader cares most: they have just applied a fix and run
+ * pg_stat_reset(), so every counter is empty. Printing "0%" in healthy green
+ * there is the page inventing a reading — and inventing a *reassuring* one,
+ * which is worse. Until there is something to divide, say so.
+ */
+const ratio = (
+  part: number,
+  whole: number,
+  tone: (r: number) => Tone,
+  digits = 0,
+): Cell =>
+  whole > 0
+    ? { v: `${((part / whole) * 100).toFixed(digits)}%`, tone: tone(part / whole) }
+    : { v: '—', tone: 'dim' }
+
 const age = (sec: number): string => {
   if (sec < 0) return '—'
   if (sec < 60) return `00:00:${sec.toFixed(0).padStart(2, '0')}`
@@ -88,8 +107,15 @@ interface ActRow {
 /**
  * The model's backend state machine mapped onto what pg_stat_activity would
  * actually report. Every (wait_event_type, wait_event) pair below is in the
- * manual: IO/DataFileRead, IO/WALSync, IPC/SyncRep, Lock/relation,
- * Client/ClientRead, Client/ClientWrite.
+ * manual: IO/DataFileRead, IO/WalSync, IPC/SyncRep, Lock/relation,
+ * Client/ClientRead, Client/ClientWrite, and the Activity events the auxiliary
+ * processes park in.
+ *
+ * On the spelling of WalSync: PostgreSQL 17 began generating the wait event
+ * names from a table (wait_event_names.txt) and normalised the capitalisation
+ * while doing it, so this event is `WALSync` on 16 and older and `WalSync` from
+ * 17 on. It is exactly the kind of name that gets copied out of an old blog
+ * post into a monitoring query that then silently matches nothing.
  */
 function actOf(b: BackendSim, s: SimState): { state: string; wet: string; we: string; tone: Tone } {
   const syncRep = s.replication.mode === 'sync' && s.replication.enabled
@@ -105,7 +131,7 @@ function actOf(b: BackendSim, s: SimState): { state: string; wet: string; we: st
     case 'commit_wait':
       return syncRep
         ? { state: 'active', wet: 'IPC', we: 'SyncRep', tone: 'accent' }
-        : { state: 'active', wet: 'IO', we: 'WALSync', tone: 'accent' }
+        : { state: 'active', wet: 'IO', we: 'WalSync', tone: 'accent' }
     case 'blocked':
       return { state: 'active', wet: 'Lock', we: 'relation', tone: 'crit' }
     case 'sending':
@@ -239,19 +265,24 @@ function activityRows(s: SimState, c: Collector, opts: { aux: boolean }): ActRow
 }
 
 const activity: ProjectionFn = (s, c) => {
-  const rows = activityRows(s, c, { aux: true }).map<Row>((r) => ({
-    key: String(r.pid),
-    tone: r.tone,
-    cells: {
-      pid: String(r.pid),
-      backend_type: { v: r.backendType, tone: r.backendType === 'client backend' ? '' : 'dim' },
-      state: r.state ? { v: r.state, tone: r.tone } : NULLC,
-      wait_event_type: r.wet ? { v: r.wet, tone: r.tone } : NULLC,
-      wait_event: r.we ? { v: r.we, tone: r.tone } : NULLC,
-      xact_age: r.xactAge >= 0 ? age(r.xactAge) : NULLC,
-      query: r.query ? r.query : NULLC,
-    },
-  }))
+  /* Sorted by pid because the query printed above this table says ORDER BY pid.
+   * The rows a page shows have to be the rows its own query would return, or
+   * every other promise on the page is worth less. */
+  const rows = activityRows(s, c, { aux: true })
+    .sort((a, b) => a.pid - b.pid)
+    .map<Row>((r) => ({
+      key: String(r.pid),
+      tone: r.tone,
+      cells: {
+        pid: String(r.pid),
+        backend_type: { v: r.backendType, tone: r.backendType === 'client backend' ? '' : 'dim' },
+        state: r.state ? { v: r.state, tone: r.tone } : NULLC,
+        wait_event_type: r.wet ? { v: r.wet, tone: r.tone } : NULLC,
+        wait_event: r.we ? { v: r.we, tone: r.tone } : NULLC,
+        xact_age: r.xactAge >= 0 ? age(r.xactAge) : NULLC,
+        query: r.query ? r.query : NULLC,
+      },
+    }))
   return {
     cols: [
       { key: 'pid', label: 'pid', num: true },
@@ -346,7 +377,6 @@ const activityXmin: ProjectionFn = (s, c) => {
 const database: ProjectionFn = (s, c, mode) => {
   const t = c.total
   const r = c.rate
-  const hitPct = t.blksHit + t.blksRead > 0 ? (t.blksHit / (t.blksHit + t.blksRead)) * 100 : 100
   return {
     cols: [
       { key: 'datname', label: 'datname' },
@@ -371,7 +401,7 @@ const database: ProjectionFn = (s, c, mode) => {
           xact_rollback: ctr(t.xactRollback, r.xactRollback, mode),
           blks_hit: ctr(t.blksHit, r.blksHit, mode),
           blks_read: ctr(t.blksRead, r.blksRead, mode),
-          hit_ratio: { v: `${hitPct.toFixed(1)}%`, tone: hitPct < 90 ? 'warn' : 'ok' },
+          hit_ratio: ratio(t.blksHit, t.blksHit + t.blksRead, (x) => (x < 0.9 ? 'warn' : 'ok'), 1),
           tup_returned: ctr(t.tupReturned, r.tupReturned, mode),
           tup_inserted: ctr(t.tupInserted, r.tupInserted, mode),
           tup_updated: ctr(t.tupUpdated, r.tupUpdated, mode),
@@ -380,7 +410,7 @@ const database: ProjectionFn = (s, c, mode) => {
       },
     ],
     caption:
-      'hit % is not a column — it is blks_hit / (blks_hit + blks_read), computed by hand, and it is the reason blks_read alone tells you nothing. Everything here is cumulative since stats_reset.',
+      'hit % is not a column — it is blks_hit / (blks_hit + blks_read), computed by hand, and it is the reason blks_read alone tells you nothing. Everything here is cumulative since stats_reset, so a hand-computed ratio reads "—" until there is something to divide.',
   }
 }
 
@@ -456,8 +486,9 @@ const bgwriter: ProjectionFn = (s, c, mode) => ({
 
 const checkpointer: ProjectionFn = (s, c, mode) => {
   const t = c.total
-  const forced = t.ckptTimed + t.ckptRequested > 0 ? t.ckptRequested / (t.ckptTimed + t.ckptRequested) : 0
-  const tone: Tone = forced > 0.5 ? 'crit' : forced > 0.2 ? 'warn' : 'ok'
+  const done = t.ckptTimed + t.ckptRequested
+  const forced = done > 0 ? t.ckptRequested / done : 0
+  const tone: Tone = done === 0 ? 'dim' : forced > 0.5 ? 'crit' : forced > 0.2 ? 'warn' : 'ok'
   return {
     cols: [
       { key: 'num_timed', label: 'num_timed', num: true },
@@ -474,7 +505,7 @@ const checkpointer: ProjectionFn = (s, c, mode) => {
         cells: {
           num_timed: ctr(t.ckptTimed, c.rate.ckptTimed, mode),
           num_requested: { v: mode === 'rate' ? `${c.rate.ckptRequested.toFixed(2)}/s` : fmtNum(t.ckptRequested), tone },
-          forced: { v: `${(forced * 100).toFixed(0)}%`, tone },
+          forced: ratio(t.ckptRequested, done, (x) => (x > 0.5 ? 'crit' : x > 0.2 ? 'warn' : 'ok')),
           buffers_written: ctr(t.ckptBuffers, c.rate.ckptBuffers, mode),
           write_time: n(t.ckptWriteMs),
           phase: {
@@ -485,7 +516,9 @@ const checkpointer: ProjectionFn = (s, c, mode) => {
       },
     ],
     caption:
-      'forced % is num_requested / (num_timed + num_requested), computed by hand. Above roughly a fifth, max_wal_size is setting your checkpoint schedule and checkpoint_timeout is a decoration. The last column is not a column in any release — it is the model showing you what the checkpointer is doing this second.',
+      done === 0
+        ? `No checkpoint has completed since the counters were reset ${fmtNum(c.total.elapsed)} s ago, so forced % has nothing to divide and reads "—". That is not the page failing to load: on a healthy server with room in max_wal_size, an empty row here after a minute is exactly what you want to see, because it means the next checkpoint is still waiting for the timer. The phase column on the right is the one still moving.`
+        : 'forced % is num_requested / (num_timed + num_requested), computed by hand. Above roughly a fifth, max_wal_size is setting your checkpoint schedule and checkpoint_timeout is a decoration. The last column is not a column in any release — it is the model showing you what the checkpointer is doing this second.',
   }
 }
 
@@ -513,7 +546,7 @@ const wal: ProjectionFn = (s, c, mode) => {
           wal_records: ctr(t.walRecords, c.rate.walRecords, mode),
           wal_fpi: { v: mode === 'rate' ? `${fmtNum(c.rate.walFpi, 1)}/s` : fmtNum(t.walFpi), tone },
           wal_bytes: { v: fmtBytes(mode === 'rate' ? c.rate.walBytes : t.walBytes) + (mode === 'rate' ? '/s' : '') },
-          fpi_share: { v: `${(fpiShare * 100).toFixed(0)}%`, tone },
+          fpi_share: ratio(t.walFpi * 8192, t.walBytes, (x) => (x > 0.5 ? 'crit' : x > 0.25 ? 'warn' : '')),
           rate: { v: `${fmtBytes(s.wal.bytesPerSec)}/s` },
         },
       },
@@ -637,7 +670,10 @@ const io: ProjectionFn = (s, c, mode) => {
         },
       },
     ],
-    caption: `client backend writes are ${(backendShare * 100).toFixed(0)}% of all writes. A user query only writes a page when the frame it wanted was dirty and it had to clean it first — that write is charged to somebody's latency. The model does not simulate autovacuum's own I/O, so there is no 'autovacuum worker' row here; on a real server there would be.`,
+    caption:
+      totalWrites > 0
+        ? `client backend writes are ${(backendShare * 100).toFixed(0)}% of all writes. A user query only writes a page when the frame it wanted was dirty and it had to clean it first — that write is charged to somebody's latency. The model does not simulate autovacuum's own I/O, so there is no 'autovacuum worker' row here; on a real server there would be.`
+        : `Nothing has been written by anybody since the counters were reset, so there is no share to compute yet. The row that matters is the first one: when writes start appearing against 'client backend' rather than against the checkpointer, they are being paid for out of somebody's query latency. The model does not simulate autovacuum's own I/O, so there is no 'autovacuum worker' row here; on a real server there would be.`,
   }
 }
 

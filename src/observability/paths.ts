@@ -81,6 +81,21 @@ export interface KnobSpec {
   fmt?: (v: number) => string
 }
 
+/**
+ * Whether the diagnosis is still true of the model this second.
+ *
+ * `ok` is deliberately three-valued. Half of these views are counters since a
+ * reset, so immediately after the reader turns a dial and runs pg_stat_reset()
+ * there is genuinely nothing to divide — and answering "fixed" from an empty
+ * counter would be the page committing the exact error it spends a paragraph
+ * warning about. `null` means "no evidence yet", and it says so.
+ */
+export interface Resolution {
+  ok: boolean | null
+  /** the reading that decides it, in the view's own vocabulary */
+  reading: string
+}
+
 export interface Verdict {
   id: string
   kind: 'verdict'
@@ -96,6 +111,13 @@ export interface Verdict {
   knobs: KnobSpec[]
   /** what to re-read to confirm the fix worked */
   confirm?: { projection: string; instrument: string; sql: string }
+  /**
+   * Re-run the finding against live state, so the reader who turns the dial gets
+   * an answer instead of a table they have to re-interpret unaided. This is the
+   * whole point of building the page on a running model rather than a diagram:
+   * a diagram cannot tell you whether you fixed it.
+   */
+  resolved?: (s: SimState, c: Collector) => Resolution
   city?: string
   reading: { label: string; url: string }[]
 }
@@ -166,6 +188,47 @@ const share = (part: number, whole: number) => (whole > 0 ? part / whole : 0)
 export function forcedShare(c: Collector): number {
   const t = c.total.ckptTimed + c.total.ckptRequested
   return t > 0 ? c.total.ckptRequested / t : 0
+}
+
+/** How long the counters must have been running before an absence means anything. */
+const QUIET_SECONDS = 25
+
+/**
+ * Has the checkpoint storm actually stopped?
+ *
+ * Graded on whether num_requested is still *moving*, not on the forced share —
+ * and the difference is the whole reason this function exists rather than a
+ * one-line ratio test. Immediately after a fix the counters are nearly empty, so
+ * a single checkpoint that was already in flight when the setting changed makes
+ * the share read 100% and the page would report failure for a fix that worked.
+ * That is the small-denominator trap, and it is the same mistake as alerting on
+ * a cumulative counter — which this page spends a paragraph warning against, so
+ * it had better not make it.
+ *
+ * "num_requested stops moving" is also exactly what the fix text tells the
+ * reader to watch, so the tool and the advice agree.
+ */
+function ckptResolved(c: Collector): Resolution {
+  const forced = Math.round(c.total.ckptRequested)
+  const secs = Math.round(c.total.elapsed)
+  if (forced > 0)
+    return {
+      ok: false,
+      reading: `num_requested has moved ${forced} time${forced === 1 ? '' : 's'} in the ${secs} s since the counters were reset — WAL volume is still forcing checkpoints`,
+    }
+  if (secs < QUIET_SECONDS)
+    return {
+      ok: null,
+      reading: `num_requested has not moved, but there is only ${secs} s of counter history — too little to call it either way`,
+    }
+  const timed = Math.round(c.total.ckptTimed)
+  return {
+    ok: true,
+    reading:
+      timed > 0
+        ? `num_requested has not moved in ${secs} s and ${timed} checkpoint${timed === 1 ? '' : 's'} fired on the timer — the schedule is yours again`
+        : `num_requested has not moved in ${secs} s — nothing has crossed max_wal_size, so the next checkpoint is the timer's to call`,
+  }
 }
 
 export function fpiShare(c: Collector): number {
@@ -421,7 +484,7 @@ const STEPS: Step[] = [
     branches: [
       { label: 'Most of them are waiting on `Lock`.', next: 'lock.1', test: (s) => share(waits(s).lock, waits(s).total) > 0.25 },
       { label: 'Most of them are waiting on `IO`.', next: 'io.1', test: (s) => share(waits(s).io, waits(s).total) > 0.3 },
-      { label: 'They are waiting to commit — `IO / WALSync` or `IPC / SyncRep`.', next: 'commit.1', test: (s) => share(waits(s).commit, waits(s).total) > 0.25 },
+      { label: 'They are waiting to commit — `IO / WalSync` or `IPC / SyncRep`.', next: 'commit.1', test: (s) => share(waits(s).commit, waits(s).total) > 0.25 },
       { label: 'Sessions are sitting in `idle in transaction`.', next: 'bloat.2', test: (s) => waits(s).idleTx > 0 },
       {
         label: 'Everything is `active`, nothing is waiting, and every connection slot is busy.',
@@ -486,10 +549,9 @@ const STEPS: Step[] = [
        n_tup_upd, n_tup_hot_upd,
        last_autovacuum, autovacuum_count
   FROM pg_stat_all_tables
- WHERE n_dead_tup > 0
  ORDER BY n_dead_tup DESC;`,
     look:
-      'Compare `n_tup_hot_upd` with `n_tup_upd`. A HOT update keeps the new row version on the same page and touches no index, and Postgres can prune those during ordinary page access without vacuum at all. A table where the two numbers diverge is a table that depends on vacuum — and will bloat the moment vacuum cannot keep up.',
+      'Compare `n_tup_hot_upd` with `n_tup_upd`. A HOT update keeps the new row version on the same page and touches no index, and Postgres can prune those during ordinary page access without vacuum at all. A table where the two numbers diverge is a table that depends on vacuum — and will bloat the moment vacuum cannot keep up. The healthy table at the bottom of the list is worth as much as the sick one at the top: `events` is insert-only, so it has no dead rows to collect and vacuum has nothing to do on it. Bloat is a property of your write pattern before it is a property of your vacuum settings.',
     branches: [
       { label: 'Dead tuples are climbing although autovacuum ran recently.', next: 'bloat.2', test: (s) => s.tables.some((t) => t.bloat > 0.12 && s.t - t.lastVacuum < 90) },
       { label: 'autovacuum has never run on it.', next: 'v.av_off', test: (s) => !s.knobs.autovacuum },
@@ -554,7 +616,8 @@ const STEPS: Step[] = [
     sql: `SELECT backend_type, object, context,
        reads, hits, writes, evictions
   FROM pg_stat_io
- WHERE reads > 0 OR writes > 0;`,
+ WHERE object = 'relation'
+   AND context = 'normal';`,
     look:
       'Reads on the `client backend` row are normal — that is queries fetching pages. **Writes** on that row are not. A user query only writes a page when the frame it wanted was dirty and it had to clean it first, which means somebody\'s SELECT is paying for somebody else\'s UPDATE. Compare that number with the checkpointer\'s and the background writer\'s.',
     note:
@@ -595,13 +658,15 @@ SELECT * FROM pg_buffercache_usage_counts();`,
     instrument: 'pg_blocking_pids',
     projection: 'locks',
     city: 'lock.manager',
-    sql: `SELECT a.pid, a.state, l.locktype, l.mode, l.granted,
-       now() - l.waitstart AS waiting_for,
-       pg_blocking_pids(a.pid) AS blocked_by,
-       a.query
+    sql: `SELECT a.pid, a.state, l.locktype,
+       l.relation::regclass AS relation, l.mode, l.granted,
+       now() - l.waitstart AS wait_age,
+       pg_blocking_pids(a.pid) AS blocked_by
   FROM pg_locks l
   JOIN pg_stat_activity a USING (pid)
- WHERE l.relation = 'sessions'::regclass;`,
+ WHERE NOT l.granted
+    OR l.pid IN (SELECT unnest(pg_blocking_pids(w.pid))
+                   FROM pg_stat_activity w);`,
     look:
       'One pid appears in every `blocked_by` array and is itself blocked by nobody. That is your holder — and look at its state. It is not running a query; it finished the statement and left the transaction open. Cancelling the waiters achieves nothing at all.',
     note:
@@ -649,13 +714,15 @@ SELECT * FROM pg_buffercache_usage_counts();`,
     sql: `SELECT state, wait_event_type, wait_event, count(*)
   FROM pg_stat_activity
  WHERE backend_type = 'client backend'
-   AND wait_event_type IN ('IO', 'IPC')
- GROUP BY 1, 2, 3;`,
+ GROUP BY 1, 2, 3
+ ORDER BY 4 DESC;`,
     look:
-      '`IO / WALSync` is the local fsync — the backend is waiting for your own disk to confirm the WAL record is durable. `IPC / SyncRep` is a different animal entirely: the backend is waiting for a **standby** to confirm. One is a storage problem; the other is a configuration decision someone made on purpose.',
+      '`IO / WalSync` is the local fsync — the backend is waiting for your own disk to confirm the WAL record is durable. `IPC / SyncRep` is a different animal entirely: the backend is waiting for a **standby** to confirm. One is a storage problem; the other is a configuration decision someone made on purpose. Resist the urge to filter this query down to the two commit waits: the size of the commit bucket only means something next to the buckets it is competing with.',
+    note:
+      'The name of the local flush wait changed. PostgreSQL 17 started generating the wait event list from a table and normalised the capitalisation on the way through, so this event is `WALSync` on 16 and older and `WalSync` from 17 on. A monitoring query that greps for the old spelling on a new server matches nothing at all, and reports a healthy zero while doing it.',
     branches: [
       { label: 'They are waiting on `IPC / SyncRep`.', next: 'v.sync_remote', test: (s) => s.replication.mode === 'sync' && waits(s).commit > 0 },
-      { label: 'They are waiting on `IO / WALSync`.', next: 'v.sync_local', test: (s) => s.replication.mode !== 'sync' && waits(s).commit > 0 },
+      { label: 'They are waiting on `IO / WalSync`.', next: 'v.sync_local', test: (s) => s.replication.mode !== 'sync' && waits(s).commit > 0 },
       { label: 'Nobody is waiting to commit.', next: 'v.commit_ok', test: (s) => waits(s).commit === 0 },
     ],
   },
@@ -692,7 +759,7 @@ SELECT * FROM pg_buffercache_usage_counts();`,
        wait_event_type, wait_event,
        now() - xact_start AS xact_age, query
   FROM pg_stat_activity
- ORDER BY backend_type, pid;`,
+ ORDER BY pid;`,
     look:
       'Note the background processes: the checkpointer parked on `Activity / CheckpointerMain`, the background writer on `BgwriterHibernate` when it has nothing to clean. Those are not stuck — an Activity wait is a process asleep on its own main loop, and it is the single most common false alarm in Postgres monitoring.',
     branches: [{ label: 'Next: is the write path keeping up?', next: 'normal.3', test: () => true }],
@@ -760,6 +827,7 @@ const VERDICTS: Verdict[] = [
       instrument: 'pg_stat_checkpointer',
       sql: `SELECT num_timed, num_requested FROM pg_stat_checkpointer;`,
     },
+    resolved: (_s, c) => ckptResolved(c),
     city: 'checkpointer',
     reading: [
       DOC('wal-configuration.html', 'WAL Configuration'),
@@ -782,6 +850,12 @@ const VERDICTS: Verdict[] = [
     fix:
       'Raise max_wal_size to cover several minutes of WAL at your peak rate, then confirm num_requested stops climbing. If the volume itself is the surprise, look at what is writing: wal_level = logical costs extra, and an UPDATE that cannot be HOT writes every index entry as well as the row.',
     knobs: [KB.maxWalSize],
+    confirm: {
+      projection: 'checkpointer',
+      instrument: 'pg_stat_checkpointer',
+      sql: `SELECT num_timed, num_requested FROM pg_stat_checkpointer;`,
+    },
+    resolved: (_s, c) => ckptResolved(c),
     city: 'wal.vault',
     reading: [DOC('wal-configuration.html', 'WAL Configuration')],
   },
@@ -826,6 +900,19 @@ const VERDICTS: Verdict[] = [
       instrument: 'pg_stat_all_tables',
       sql: `SELECT relname, n_dead_tup, last_autovacuum FROM pg_stat_all_tables ORDER BY n_dead_tup DESC;`,
     },
+    /* Two conditions, and the order matters. Releasing the snapshot is the fix;
+     * the dead rows then take a few vacuum passes to actually come back. Saying
+     * "fixed" the instant the horizon moves would teach the wrong lesson, since
+     * the whole point is that the damage outlives the cause. */
+    resolved: (s) => {
+      if (s.knobs.longRunningXact)
+        return { ok: false, reading: `a snapshot is still open, ${s.oldestSnapshotAge.toFixed(0)} s old — the horizon has not moved` }
+      const worst = [...s.tables].sort((a, b) => b.bloat - a.bloat)[0]
+      return {
+        ok: worst.bloat < 0.12,
+        reading: `horizon released · worst table ${worst.def.name} is ${(worst.bloat * 100).toFixed(0)}% dead and ${worst.bloat < 0.12 ? 'has been collected' : 'is still being worked off'}`,
+      }
+    },
     city: 'proc.array',
     reading: [
       DOC('routine-vacuuming.html', 'Routine Vacuuming'),
@@ -846,6 +933,19 @@ const VERDICTS: Verdict[] = [
     fix:
       'Turn it on. There is no production configuration in which off is correct — and if someone turned it off to "reduce I/O", they traded a steady trickle for an eventual emergency VACUUM FULL that takes an ACCESS EXCLUSIVE lock on the table.',
     knobs: [KB.autovacuum, KB.autovacuumScaleFactor],
+    confirm: {
+      projection: 'tables',
+      instrument: 'pg_stat_all_tables',
+      sql: `SELECT relname, n_dead_tup, last_autovacuum FROM pg_stat_all_tables ORDER BY n_dead_tup DESC;`,
+    },
+    resolved: (s) => {
+      if (!s.knobs.autovacuum) return { ok: false, reading: 'autovacuum is still off — last_autovacuum will never advance' }
+      const worst = [...s.tables].sort((a, b) => b.bloat - a.bloat)[0]
+      return {
+        ok: worst.bloat < 0.12,
+        reading: `autovacuum on · worst table ${worst.def.name} is ${(worst.bloat * 100).toFixed(0)}% dead`,
+      }
+    },
     city: 'autovac.launcher',
     reading: [DOC('routine-vacuuming.html', 'Routine Vacuuming')],
   },
@@ -869,6 +969,13 @@ const VERDICTS: Verdict[] = [
       projection: 'tables',
       instrument: 'pg_stat_all_tables',
       sql: `SELECT relname, n_dead_tup, n_live_tup FROM pg_stat_all_tables ORDER BY n_dead_tup DESC;`,
+    },
+    resolved: (s) => {
+      const worst = [...s.tables].sort((a, b) => b.bloat - a.bloat)[0]
+      return {
+        ok: worst.bloat < 0.12,
+        reading: `scale factor ${s.knobs.autovacuumScaleFactor.toFixed(2)} · worst table ${worst.def.name} is ${(worst.bloat * 100).toFixed(0)}% dead`,
+      }
     },
     city: 'autovac.launcher',
     reading: [DOC('runtime-config-autovacuum.html', 'Automatic Vacuuming settings')],
@@ -914,7 +1021,24 @@ const VERDICTS: Verdict[] = [
     confirm: {
       projection: 'io',
       instrument: 'pg_stat_io',
-      sql: `SELECT backend_type, writes FROM pg_stat_io WHERE writes > 0;`,
+      sql: `SELECT backend_type, object, context,
+       reads, hits, writes, evictions
+  FROM pg_stat_io
+ WHERE object = 'relation'
+   AND context = 'normal';`,
+    },
+    /* Judged on the *rate*, not the total, and that is the lesson rather than an
+     * implementation detail: the cumulative share is dominated by everything
+     * that happened before the reader touched the dial, so a page that graded
+     * the fix on it would report failure for minutes after a successful fix. */
+    resolved: (_s, c) => {
+      const moving = c.rate.backendWrites + c.rate.ckptBuffers + c.rate.bgwClean
+      if (moving < 0.05) return { ok: null, reading: 'nothing is being written this second — no rate to judge yet' }
+      const now = recentBackendWriteShare(c)
+      return {
+        ok: now <= 0.2,
+        reading: `${(now * 100).toFixed(0)}% of writes in the last two seconds are still charged to client backends (cumulative share is ${(backendWriteShare(c) * 100).toFixed(0)}%, and lags badly)`,
+      }
     },
     city: 'bgwriter',
     reading: [
@@ -944,6 +1068,10 @@ const VERDICTS: Verdict[] = [
       instrument: 'pg_buffercache',
       sql: `SELECT * FROM pg_buffercache_usage_counts();`,
     },
+    resolved: (s) => ({
+      ok: coldShare(s) <= 0.55 && s.stats.cacheHitPct >= 92,
+      reading: `shared_buffers ${s.buffers.size} × 8kB · ${(coldShare(s) * 100).toFixed(0)}% of resident buffers still at usage_count 0 · hit ratio ${s.stats.cacheHitPct.toFixed(1)}%`,
+    }),
     city: 'shared.buffers',
     reading: [DOC('runtime-config-resource.html', 'Resource Consumption settings')],
   },
@@ -985,8 +1113,23 @@ const VERDICTS: Verdict[] = [
     confirm: {
       projection: 'locks',
       instrument: 'pg_locks',
-      sql: `SELECT pid, granted, pg_blocking_pids(pid) FROM pg_locks JOIN pg_stat_activity USING (pid);`,
+      sql: `SELECT a.pid, a.state, l.locktype,
+       l.relation::regclass AS relation, l.mode, l.granted,
+       now() - l.waitstart AS wait_age,
+       pg_blocking_pids(a.pid) AS blocked_by
+  FROM pg_locks l
+  JOIN pg_stat_activity a USING (pid)
+ WHERE NOT l.granted
+    OR l.pid IN (SELECT unnest(pg_blocking_pids(w.pid))
+                   FROM pg_stat_activity w);`,
     },
+    resolved: (s) => ({
+      ok: s.locks.length === 0,
+      reading:
+        s.locks.length === 0
+          ? 'pg_locks has no ungranted rows — the queue has drained and every waiter got its lock'
+          : `${s.locks.length} session${s.locks.length === 1 ? '' : 's'} still queued behind the holder, oldest ${Math.max(0, ...s.locks.map((l) => l.ageSec)).toFixed(0)} s`,
+    }),
     city: 'lock.manager',
     reading: [DOC('explicit-locking.html', 'Explicit Locking')],
   },
@@ -1027,6 +1170,14 @@ const VERDICTS: Verdict[] = [
       instrument: 'pg_stat_replication',
       sql: `SELECT replay_lag, pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn) FROM pg_stat_replication;`,
     },
+    resolved: (s) => {
+      if (!s.replication.enabled || !s.replication.connected)
+        return { ok: false, reading: 'pg_stat_replication is empty — the walsender is gone, which is worse than lag, not better' }
+      return {
+        ok: s.replication.lagSec <= 2,
+        reading: `replay_lag ${s.replication.lagSec.toFixed(2)} s, ${fmtBytes(s.replication.lagBytes)} behind the primary`,
+      }
+    },
     city: 'replica.standby',
     reading: [
       DOC('warm-standby.html', 'Log-Shipping Standby Servers'),
@@ -1047,6 +1198,22 @@ const VERDICTS: Verdict[] = [
     ],
     fix: 'Fix the link, or move the standby closer. Nothing you change inside Postgres will make bytes cross the wire faster.',
     knobs: [KB.replicaNetworkLag],
+    confirm: {
+      projection: 'replication',
+      instrument: 'pg_stat_replication',
+      sql: `SELECT application_name, state, sent_lsn, write_lsn, flush_lsn, replay_lsn,
+       write_lag, flush_lag, replay_lag
+  FROM pg_stat_replication;`,
+    },
+    resolved: (s) => {
+      if (!s.replication.enabled || !s.replication.connected)
+        return { ok: false, reading: 'pg_stat_replication is empty — no walsender is connected at all' }
+      const behind = s.wal.writeLsn - s.replication.sentLsn
+      return {
+        ok: behind < 256 * 1024,
+        reading: `primary − sent_lsn is ${fmtBytes(Math.max(0, behind))} at ${s.replication.networkLagMs} ms round trip`,
+      }
+    },
     city: 'net.wire',
     reading: [DOC('warm-standby.html', 'Log-Shipping Standby Servers')],
   },
@@ -1087,8 +1254,16 @@ const VERDICTS: Verdict[] = [
     confirm: {
       projection: 'activity_agg',
       instrument: 'pg_stat_activity',
-      sql: `SELECT state, count(*) FROM pg_stat_activity GROUP BY 1;`,
+      sql: `SELECT state, wait_event_type, wait_event, count(*)
+  FROM pg_stat_activity
+ WHERE backend_type = 'client backend'
+ GROUP BY 1, 2, 3
+ ORDER BY 4 DESC;`,
     },
+    resolved: (s) => ({
+      ok: s.stats.activeBackends < s.maxConnections - 1,
+      reading: `${s.stats.activeBackends} of ${s.maxConnections} connection slots in use, achieving ${s.stats.tps.toFixed(0)} tps against ${Math.round(s.knobs.tps)} offered`,
+    }),
     city: 'postmaster',
     reading: [DOC('runtime-config-connection.html', 'Connection settings')],
   },
@@ -1115,7 +1290,7 @@ const VERDICTS: Verdict[] = [
     kind: 'verdict',
     title: 'Commits are waiting on your own disk — this is the durability contract.',
     because:
-      'Backends are stacked on `IO / WALSync`. Each one is waiting until flush_lsn passes its own commit LSN, which is exactly what synchronous_commit = on promises.',
+      'Backends are stacked on `IO / WalSync`. Each one is waiting until flush_lsn passes its own commit LSN, which is exactly what synchronous_commit = on promises.',
     mechanism:
       'Watch them release together: one fsync satisfies every backend queued behind it. That is group commit, and it is why throughput does not collapse under a high commit rate even though every commit waits. What you are paying is latency per transaction, not bandwidth.',
     evidence: (s) => [
@@ -1131,6 +1306,14 @@ const VERDICTS: Verdict[] = [
       instrument: 'pg_current_wal_lsn',
       sql: `SELECT pg_current_wal_insert_lsn(), pg_current_wal_lsn(), pg_current_wal_flush_lsn();`,
     },
+    /* Note what "resolved" means here, because it is not "faster". Turning
+     * synchronous_commit off empties the queue by giving up a durability
+     * guarantee, so the reading names the setting that bought the result rather
+     * than congratulating the reader on an empty column. */
+    resolved: (s) => ({
+      ok: waits(s).commit === 0,
+      reading: `synchronous_commit = ${s.knobs.synchronousCommit} · ${waits(s).commit} backend${waits(s).commit === 1 ? '' : 's'} waiting on the flush, insert − flush ${fmtBytes(Math.max(0, s.wal.insertLsn - s.wal.flushLsn))}`,
+    }),
     city: 'walwriter',
     reading: [DOC('runtime-config-wal.html', 'Write Ahead Log settings')],
   },
@@ -1139,7 +1322,7 @@ const VERDICTS: Verdict[] = [
     kind: 'verdict',
     title: 'Every commit is waiting for a standby to answer.',
     because:
-      'The wait is `IPC / SyncRep`, not `IO / WALSync`. These backends are not waiting for a disk — they are waiting for a network round trip, the standby\'s fsync, and at remote_apply the standby\'s replay as well.',
+      'The wait is `IPC / SyncRep`, not `IO / WalSync`. These backends are not waiting for a disk — they are waiting for a network round trip, the standby\'s fsync, and at remote_apply the standby\'s replay as well.',
     mechanism:
       'This is the one everybody gets wrong in the other direction: synchronous_commit = on guarantees a **local** flush only. If the primary\'s disk survives but the machine does not, the standby may never have seen that commit. Synchronous replication requires synchronous_standby_names, and once you have it, every commit costs a full round trip.',
     evidence: (s) => [
@@ -1151,6 +1334,15 @@ const VERDICTS: Verdict[] = [
     fix:
       'Confirm you meant to buy this. If you did, keep the standby close and watch replay_lag, because at remote_apply your commit latency is your replica\'s replay latency. If you did not, `local` gives you the local durability guarantee without the round trip.',
     knobs: [KB.synchronousCommit, KB.replicaNetworkLag],
+    confirm: {
+      projection: 'wal_lsn',
+      instrument: 'pg_current_wal_lsn',
+      sql: `SELECT pg_current_wal_insert_lsn(), pg_current_wal_lsn(), pg_current_wal_flush_lsn();`,
+    },
+    resolved: (s) => ({
+      ok: waits(s).commit === 0,
+      reading: `synchronous_commit = ${s.knobs.synchronousCommit} at ${s.replication.networkLagMs} ms round trip · ${waits(s).commit} backend${waits(s).commit === 1 ? '' : 's'} still waiting for the standby`,
+    }),
     city: 'walsender',
     reading: [DOC('runtime-config-replication.html', 'Replication settings')],
   },
@@ -1158,7 +1350,7 @@ const VERDICTS: Verdict[] = [
     id: 'v.commit_ok',
     kind: 'verdict',
     title: 'Nothing is waiting to commit.',
-    because: 'No backend is on WALSync or SyncRep. The WAL flush path is keeping up with the commit rate.',
+    because: 'No backend is on WalSync or SyncRep. The WAL flush path is keeping up with the commit rate.',
     mechanism:
       'A commit waits for one thing: the WAL record describing the change reaching durable storage. Your data pages can stay dirty in shared_buffers for minutes afterwards. That inversion — log first, data later — is why a database can be both durable and fast.',
     evidence: (s) => [
