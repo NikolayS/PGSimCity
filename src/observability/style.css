@@ -489,6 +489,10 @@ a {
   text-align: center;
 }
 
+.fallback[hidden] {
+  display: none;
+}
+
 .fallback strong {
   font: 650 18px/1.3 'IBM Plex Mono', monospace;
 }
