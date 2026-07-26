@@ -43,6 +43,7 @@ import { createInspector } from './ui/panel'
 import { createTour } from './ui/tour'
 import { createSearch } from './ui/search'
 import { createTouchpad } from './ui/touchpad'
+import { BOOT_STEPS, failBoot, finishBoot, presentBootStep } from './ui/boot'
 import type { UiContext, UiModule } from './ui/uikit'
 
 /* ============================================================================
@@ -56,21 +57,15 @@ import type { UiContext, UiModule } from './ui/uikit'
 const bootEl = document.getElementById('boot')
 const bootFill = document.getElementById('boot-fill')
 const bootStatus = document.getElementById('boot-status')
+const bootSurface = { root: bootEl, fill: bootFill, status: bootStatus }
 
-function progress(pct: number, label: string): Promise<void> {
-  if (bootFill) bootFill.style.width = `${pct}%`
-  if (bootStatus) bootStatus.textContent = label
-  // yield a frame so the boot bar actually paints between construction steps
-  return new Promise((resolve) => requestAnimationFrame(() => resolve()))
+function progress(step: { pct: number; label: string }): Promise<void> {
+  return presentBootStep(bootSurface, step)
 }
 
 function fatal(message: string, detail?: unknown): void {
   console.error('[PGSimCity]', message, detail)
-  if (bootStatus) {
-    bootStatus.textContent = message
-    bootStatus.style.color = 'var(--c-crit)'
-  }
-  if (bootFill) bootFill.style.background = 'var(--c-crit)'
+  failBoot(bootSurface, message)
 }
 
 async function boot(): Promise<void> {
@@ -94,14 +89,14 @@ async function boot(): Promise<void> {
   const registry = new Registry()
   const theme = createTheme()
 
-  await progress(8, 'starting the renderer…')
+  await progress(BOOT_STEPS.renderer)
   const gfx = createRenderer(canvasRoot, bus)
   const { scene, camera, renderer } = gfx
 
-  await progress(16, 'placing the camera…')
+  await progress(BOOT_STEPS.camera)
   const rig = createCameraRig(camera, renderer.domElement, bus)
 
-  await progress(24, 'warming up the cluster…')
+  await progress(BOOT_STEPS.simulation)
   const sim = createSim(bus)
 
   // --- the context every district is built against ---------------------------
@@ -116,7 +111,7 @@ async function boot(): Promise<void> {
     flow: (req: FlowRequest) => bus.emit('flow', req),
   }
 
-  await progress(32, 'grading the ground…')
+  await progress(BOOT_STEPS.ground)
   scene.add(createSky(theme))
   const modules: WorldModule[] = []
   const add = (m: WorldModule) => {
@@ -126,27 +121,27 @@ async function boot(): Promise<void> {
   }
   const groundMod = add(createGround(ctx))
 
-  await progress(42, 'pouring the shared memory plaza…')
+  await progress(BOOT_STEPS.sharedMemory)
   const shmemMod = add(createShmem(ctx))
   // Pedestrian infrastructure: causeways across the excavation and the stair
   // down to the data directory. After shmem, because it lands on the deck shmem builds.
   const access: AccessModule = createAccess(ctx)
   add(access)
 
-  await progress(52, 'forking backends…')
+  await progress(BOOT_STEPS.backends)
   add(createClients(ctx))
   add(createBackends(ctx))
 
-  await progress(62, 'laying the write-ahead log…')
+  await progress(BOOT_STEPS.wal)
   add(createWal(ctx))
 
-  await progress(70, 'excavating the data directory…')
+  await progress(BOOT_STEPS.storage)
   add(createStorage(ctx))
 
-  await progress(78, 'opening the maintenance yard…')
+  await progress(BOOT_STEPS.maintenance)
   add(createMaintenance(ctx))
 
-  await progress(85, 'connecting the standby…')
+  await progress(BOOT_STEPS.standby)
   add(createReplication(ctx))
   add(createPlanner(ctx))
   // After replication: the continuity quarter reads the standby's anchors and
@@ -187,7 +182,7 @@ async function boot(): Promise<void> {
     overlayRoot: canvasRoot,
   })
 
-  await progress(90, 'painting the roads…')
+  await progress(BOOT_STEPS.roads)
   scene.add(createRoads(theme))
   const flows = createFlows(scene, bus, gfx.quality, theme)
   const labels = createLabels(labelsRoot, registry, bus, collision)
@@ -195,7 +190,7 @@ async function boot(): Promise<void> {
   const picker = createPicker({ dom: renderer.domElement, camera, registry, bus, theme })
   scene.add(picker.group)
 
-  await progress(96, 'wiring the console…')
+  await progress(BOOT_STEPS.console)
   const uiCtx: UiContext = {
     bus,
     sim,
@@ -373,11 +368,11 @@ async function boot(): Promise<void> {
     for (let i = 0; i < ui.length; i++) ui[i].update(dt)
   }
 
-  await progress(100, 'ready')
+  await progress(BOOT_STEPS.firstFrame)
   rig.home(true)
   frame()
 
-  window.setTimeout(() => bootEl?.classList.add('done'), 260)
+  finishBoot(bootSurface)
 
   /* --- teardown (hot reload / navigation) ---------------------------------- */
 

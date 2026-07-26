@@ -267,7 +267,7 @@ export function createHelp(ctx: UiContext): UiModule {
     el('p', {
       class: 'help-disclaimer',
       html:
-        '<strong>Prototype, v0.1.</strong> PGSimCity is a teaching model, not a real server: the mechanisms are modelled, ' +
+        '<strong>Early, unreviewed prototype.</strong> PGSimCity is a teaching model, not a real server: the mechanisms are modelled, ' +
         'the numbers are simulated, and no PostgreSQL source code runs here. It was built quickly and ' +
         '<strong>almost certainly contains inaccuracies and mistakes</strong>, in both the simulation and the explanations.' +
         '<br><br>Found one? Corrections from people who know the engine are exactly what this needs — please ' +

@@ -204,7 +204,6 @@ const VITALS: Vital[] = [
       return { v: `${v.toFixed(1)}%`, tone: v < 85 ? 'crit' : v < 95 ? 'warn' : 'ok' }
     },
     history: (sim) => sim.state.stats.history.hit,
-    min: 0,
     max: 100,
   },
   {
