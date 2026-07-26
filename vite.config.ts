@@ -39,4 +39,11 @@ export default defineConfig({
     chunkSizeWarningLimit: 2000,
     rollupOptions: { input },
   },
+  /* Agent worktrees land under .claude/worktrees/, inside the repo. Without this
+   * exclude, vitest globs into them and runs another agent's in-progress
+   * red tests as though they were this tree's -- which reported 166 tests and
+   * 12 failures in a working tree that was clean. dist/ is built output. */
+  test: {
+    exclude: ['**/node_modules/**', '**/dist/**', '.claude/**'],
+  },
 })

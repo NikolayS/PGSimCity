@@ -636,6 +636,9 @@ export function createLabels(
   const hudLeft = document.getElementById('hud-left')
   const hudRight = document.getElementById('hud-right')
   const hudCompass = document.getElementById('compass')
+  const hudToasts = document.getElementById('toast-stack')
+  /** Constructed after labels.ts; resolved once when the tour module mounts. */
+  let hudFirstRun: HTMLElement | null = null
   let boxL = 0
   let boxT = 0
   let boxR = 0
@@ -937,6 +940,9 @@ export function createLabels(
     ensureGrid()
     gridReset()
     reserveHudRect(hudCompass)
+    reserveHudRect(hudToasts)
+    if (!hudFirstRun) hudFirstRun = document.querySelector('.tour-first')
+    reserveHudRect(hudFirstRun)
     let budget = maxLabels
 
     for (let i = 0; i < cand.length; i++) {
