@@ -99,7 +99,7 @@ export function fmtLsn(bytes: number): string {
   return `${hi.toString(16).toUpperCase().padStart(1, '0')}/${lo.toString(16).toUpperCase().padStart(8, '0')}`
 }
 
-/** WAL segment file name from a segment number (16MB segments, timeline 1). */
+/** WAL segment file name from a segment number (16 MiB segments, timeline 1). */
 export function walSegName(seg: number, timeline = 1): string {
   const logId = Math.floor(seg / 256)
   const segId = seg % 256

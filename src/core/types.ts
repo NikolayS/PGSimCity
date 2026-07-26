@@ -14,7 +14,7 @@ import type * as THREE from 'three'
 
 /** Shared-buffer visual grid is BUF_GRID x BUF_GRID tiles. */
 export const BUF_GRID = 32
-export const N_BUFFERS = BUF_GRID * BUF_GRID // 1024 "8kB pages" on screen
+export const N_BUFFERS = BUF_GRID * BUF_GRID // 1024 "8 KiB pages" on screen
 /** How many backend slots exist in the Backend District. */
 export const N_BACKEND_SLOTS = 16
 /** Visible WAL segment slots in the vault (a moving window of pg_wal). */

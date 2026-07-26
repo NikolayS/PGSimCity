@@ -81,7 +81,7 @@ const STEPS: TourStep[] = [
     id: 'buffers',
     title: 'Reading a page: the cache',
     body:
-      'Postgres never reads a single row off disk. It reads the whole 8 kB page that contains it into shared_buffers — the lit plaza in the middle of the city — and every backend then reads that one copy. Blue tiles match what is on disk; the sweeping hand is the clock algorithm looking for a frame nobody wants any more. Watch the cache hit figure in the top bar. A tuned OLTP server sits above 99% because nearly every read lands on a tile that is already here; this city reads lower, because its workload also sweeps whole tables that were never going to fit. The seq-scan dial is what moves that number.',
+      'Postgres never reads a single row off disk. It reads the whole 8 KiB page that contains it into shared_buffers — the lit plaza in the middle of the city — and every backend then reads that one copy. Blue tiles match what is on disk; the sweeping hand is the clock algorithm looking for a frame nobody wants any more. Watch the cache hit figure in the top bar. A tuned OLTP server sits above 99% because nearly every read lands on a tile that is already here; this city reads lower, because its workload also sweeps whole tables that were never going to fit. The seq-scan dial is what moves that number.',
     focus: 'shared.buffers',
     duration: 18,
     knobs: { seqScanRatio: 0.12 },
@@ -91,7 +91,7 @@ const STEPS: TourStep[] = [
     id: 'page',
     title: 'What a page actually is',
     body:
-      'Underneath the city is $PGDATA: ordinary files on an ordinary filesystem, cut into 8 kB pages. A page holds a small header, a list of pointers at the front, and rows packed in from the back — which is how a row can move inside its page without a single index noticing. Watch one page ride the green road up into the plaza. That climb is precisely what a cache miss costs you.',
+      'Underneath the city is $PGDATA: ordinary files on an ordinary filesystem, cut into 8 KiB pages. A page holds a small header, a list of pointers at the front, and rows packed in from the back — which is how a row can move inside its page without a single index noticing. Watch one page ride the green road up into the plaza. That climb is precisely what a cache miss costs you.',
     focus: 'storage.table.accounts',
     duration: 16,
     spotlight: ['storage.datadir', 'storage.table.accounts', 'os.cache'],

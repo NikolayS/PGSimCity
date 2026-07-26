@@ -49,7 +49,7 @@ const SWEEP_TRAIL = 26
 /** Visible xid range on the ProcArray height axis. Beyond this the blade bottoms out. */
 const XID_SPAN = 600
 const PROC_H = 13.5
-/** Transactions per visible SLRU slab. Real pg_xact packs 32768 xids into an 8kB page. */
+/** Transactions per visible SLRU slab. Real pg_xact packs 32768 xids into an 8 KiB page. */
 const CLOG_XIDS_PER_SLAB = 1024
 const CLOG_SLABS = 12
 const CLOG_BITS = 64
@@ -963,7 +963,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
           if (isDirty) {
             // Dirty pages breathe: they are debt the checkpointer has to pay.
             const p = 0.86 + 0.24 * SIN[(tilePhase[i] + timeOff) & 255]
-            inten = 1.24 * p
+            inten = 1.06 * p
             r = L_DIRTY[0] * inten
             g = L_DIRTY[1] * inten
             bl = L_DIRTY[2] * inten
@@ -990,14 +990,19 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
           target = 0.4 + (u / 5) * MAX_RISE + (pinned[i] ? 1.6 : 0)
         }
 
-        // Fresh touches flash white and decay: this is the working set.
+        // Fresh touches flash and decay: this is the working set. The lift is
+        // mostly multiplicative so a busy frame gets BRIGHTER rather than
+        // WHITER — an additive white term large enough to read at 10 tps turns
+        // the whole grid into a featureless sheet at 1,200 tps, which is
+        // exactly when the clean/dirty/pinned signal matters most.
         const age = t - touch[i]
         if (age >= 0 && age < 0.9) {
           const f = 1 - age / 0.9
-          const ff = f * f * 1.5
-          r += 0.55 * ff
-          g += 0.62 * ff
-          bl += 0.78 * ff
+          const ff = f * f
+          const lift = 1 + 1.15 * ff
+          r = r * lift + 0.16 * ff
+          g = g * lift + 0.18 * ff
+          bl = bl * lift + 0.23 * ff
         }
 
         // Clock-sweep trail. d is how many frames ago the hand passed here.
@@ -1406,7 +1411,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     g2.textAlign = 'left'
     g2.font = '600 46px ui-monospace, SFMono-Regular, Menlo, monospace'
     g2.fillStyle = '#dbe7ff'
-    g2.fillText(`shared_buffers  ${fmtNum(b.size)} × 8kB = ${fmtBytes(b.size * 8192)}`, 34, 52)
+    g2.fillText(`shared_buffers  ${fmtNum(b.size)} × 8 KiB = ${fmtBytes(b.size * 8192)}`, 34, 52)
 
     g2.font = '500 40px ui-monospace, SFMono-Regular, Menlo, monospace'
     g2.fillStyle = '#8fa5c4'
@@ -1759,7 +1764,7 @@ function makeDeckTexture(rng: () => number): THREE.CanvasTexture {
     g.fillText(text, X(wx), Y(wz))
   }
 
-  label('SHARED_BUFFERS · 1024 × 8kB PAGE FRAMES', 0, b0 + 3.4, 2.4, 'center', 'rgba(63,167,255,0.7)')
+  label('SHARED_BUFFERS · 1024 × 8 KiB PAGE FRAMES', 0, b0 + 3.4, 2.4, 'center', 'rgba(63,167,255,0.7)')
   label('CLOCK SWEEP →', -HALF_GRID + 10, -b0 - 5.2, 1.9, 'center', 'rgba(255,204,85,0.65)')
   label('wal_buffers', ANCHOR.walBuffers[0], ANCHOR.walBuffers[2] + 13.6, 2.3, 'center', 'rgba(255,176,58,0.8)')
   label('circular · insert → write → flush', ANCHOR.walBuffers[0], ANCHOR.walBuffers[2] + 16.4, 1.5)

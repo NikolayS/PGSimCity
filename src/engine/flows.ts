@@ -6,7 +6,7 @@ import { clamp, makeRng } from '../core/util'
 /* ============================================================================
  * FLOWS — every moving packet in the city.
  *
- * A query arriving at a backend, an 8kB page climbing out of storage, a WAL
+ * A query arriving at a backend, an 8 KiB page climbing out of storage, a WAL
  * record heading east to the vault, a dead tuple riding to the landfill: all of
  * them are one instance of one InstancedMesh travelling along one route.
  *

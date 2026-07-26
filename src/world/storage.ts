@@ -13,7 +13,7 @@ import { ANCHOR, CITY, N_TABLES, TABLES, indexPos, rid, routeCurve, tableX } fro
  *
  *   $PGDATA          the pit floor: a printed blueprint of the data directory
  *   heap files       five warehouses; the roof is the file, one tile per run of
- *                    8 kB pages, coloured by what is actually in those pages
+ *                    8 KiB pages, coloured by what is actually in those pages
  *   indexes          real B-trees — root, internals, leaves, and the doubly
  *                    linked leaf chain that makes range scans cheap
  *   TOAST            the sidecar where oversized values get sliced and filed
@@ -1004,7 +1004,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     ctx.register({
       id: `storage.table.${def.id}`,
       name: def.name,
-      role: 'heap file — 8 kB pages of row versions',
+      role: 'heap file — 8 KiB pages of row versions',
       kind: 'storage',
       district: 'storage',
       object: tableGroups[ti],
@@ -2026,11 +2026,11 @@ function buildFloorTexture(rng: () => number, W: number): THREE.CanvasTexture {
 
   /* pg_toast yard + the annex. */
   label('pg_toast', ANCHOR.toastYard[0], ANCHOR.toastYard[2] - 13, 2.6, 'rgba(255,143,90,0.75)')
-  label('documents.body → 2 kB chunks', ANCHOR.toastYard[0], ANCHOR.toastYard[2] - 10, 1.5, 'rgba(143,165,196,0.5)')
+  label('documents.body → 2 KiB chunks', ANCHOR.toastYard[0], ANCHOR.toastYard[2] - 10, 1.5, 'rgba(143,165,196,0.5)')
   for (const [name, ax, az] of ANNEX) {
     label(name + '/', ax, az + 7.5, 1.7, 'rgba(143,165,196,0.6)')
   }
-  label('one tile = 12 × 8 kB pages', -84, -88, 1.9, 'rgba(143,165,196,0.55)')
+  label('one tile = 12 × 8 KiB pages', -84, -88, 1.9, 'rgba(143,165,196,0.55)')
   label('↑ N', -104, -80, 2.2, 'rgba(143,165,196,0.5)')
 
   /* District title. */

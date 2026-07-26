@@ -178,7 +178,7 @@ export const KNOB_META: KnobMeta[] = [
     guc: 'full_page_writes',
     group: 'wal',
     kind: 'toggle',
-    hint: 'The first write to a page after a checkpoint logs the entire 8kB page — protection against torn writes, and the reason WAL volume spikes after every checkpoint.',
+    hint: 'The first write to a page after a checkpoint logs the entire 8 KiB page — protection against torn writes, and the reason WAL volume spikes after every checkpoint.',
     danger: true,
   },
   {

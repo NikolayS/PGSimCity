@@ -130,7 +130,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'One line, two worlds',
         body:
-          'Postgres moves data in fixed 8kB pages, and every page is in exactly one of three places: in `shared_buffers`, in the operating system page cache, or on the storage device. Reading a page from shared memory is a pointer dereference measured in nanoseconds. Reading it from the OS cache costs a syscall and a copy, typically single-digit microseconds. Reading it from an NVMe device is typically tens to hundreds of microseconds, and from network storage, milliseconds. Those gaps are not a detail of the implementation — they are the shape of every performance problem you will ever have.',
+          'Postgres moves data in fixed 8 KiB pages, and every page is in exactly one of three places: in `shared_buffers`, in the operating system page cache, or on the storage device. Reading a page from shared memory is a pointer dereference measured in nanoseconds. Reading it from the OS cache costs a syscall and a copy, typically single-digit microseconds. Reading it from an NVMe device is typically tens to hundreds of microseconds, and from network storage, milliseconds. Those gaps are not a detail of the implementation — they are the shape of every performance problem you will ever have.',
       },
       {
         heading: 'Why almost every question reduces to this',
@@ -149,7 +149,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       },
     ],
     metrics: [
-      { label: 'Buffer pool', get: (s) => asBytes(nz(s.buffers?.size)), hint: 'shared_buffers, at 8kB per page' },
+      { label: 'Buffer pool', get: (s) => asBytes(nz(s.buffers?.size)), hint: 'shared_buffers, at 8 KiB per page' },
       { label: 'Hit ratio', get: (s) => fmtPct(nz(s.buffers?.hitRatio)) },
       { label: 'Reads', get: (s) => `${fmtNum(nz(s.stats?.ioReadPerSec))} pages/s`, hint: 'pages pulled up from storage' },
       { label: 'Writes', get: (s) => `${fmtNum(nz(s.stats?.ioWritePerSec))} pages/s`, hint: 'pages pushed down to storage' },
@@ -390,7 +390,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What you would see in production',
         body:
-          'The failure mode is not a slow query, it is a memory cliff: everything is fine until a plan flips from index scan to hash join across the fleet, and suddenly hundreds of backends each want hundreds of megabytes. Prefer raising `work_mem` for the specific session or role that needs it (`SET LOCAL work_mem` inside the transaction that runs the report) over raising it globally. In PG 17 the vacuum side got better too: dead tuple tracking was rewritten into a compact structure, so `maintenance_work_mem` above 1 GB is finally useful to `VACUUM`.',
+          'The failure mode is not a slow query, it is a memory cliff: everything is fine until a plan flips from index scan to hash join across the fleet, and suddenly hundreds of backends each want hundreds of megabytes. Prefer raising `work_mem` for the specific session or role that needs it (`SET LOCAL work_mem` inside the transaction that runs the report) over raising it globally. In PG 17 the vacuum side got better too: dead tuple tracking was rewritten into a compact structure, so `maintenance_work_mem` above 1 GiB is finally useful to `VACUUM`.',
       },
     ],
     metrics: [
@@ -425,7 +425,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'Huge pages and the OS view',
         body:
-          'On Linux this is anonymous shared memory, and with tens of gigabytes of it the page tables alone become expensive — every backend maps the whole segment, so 4kB pages mean a great many page table entries per process. `huge_pages = try` is the default; setting it to `on` and reserving the pages properly is close to free performance on large instances. Since PG 15 the server will tell you exactly how many to reserve: `SHOW shared_memory_size_in_huge_pages`.',
+          'On Linux this is anonymous shared memory, and with tens of gigabytes of it the page tables alone become expensive — every backend maps the whole segment, so 4 KiB pages mean a great many page table entries per process. `huge_pages = try` is the default; setting it to `on` and reserving the pages properly is close to free performance on large instances. Since PG 15 the server will tell you exactly how many to reserve: `SHOW shared_memory_size_in_huge_pages`.',
       },
       {
         heading: 'The exception: dynamic shared memory',
@@ -447,12 +447,12 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     id: 'shared.buffers',
     title: 'Shared Buffers',
     subtitle: 'the page cache Postgres owns',
-    tldr: 'A fixed array of 8kB frames that every page must pass through to be read or modified.',
+    tldr: 'A fixed array of 8 KiB frames that every page must pass through to be read or modified.',
     sections: [
       {
         heading: 'What it actually is',
         body:
-          'A single array of 8kB frames, and a parallel array of descriptors — one per frame — holding the page identity (relation, fork, block number), a reference count, a usage count and flags such as dirty and valid. No process reads or writes a data page anywhere else. To read a row you find or load its page here; to modify a row you modify the copy here and mark the frame dirty. Writing to disk is a separate concern handled later by somebody else. The default `shared_buffers` of 128MB is a starting value chosen to boot anywhere, not a recommendation.',
+          'A single array of 8 KiB frames, and a parallel array of descriptors — one per frame — holding the page identity (relation, fork, block number), a reference count, a usage count and flags such as dirty and valid. No process reads or writes a data page anywhere else. To read a row you find or load its page here; to modify a row you modify the copy here and mark the frame dirty. Writing to disk is a separate concern handled later by somebody else. The default `shared_buffers` of 128MB is a starting value chosen to boot anywhere, not a recommendation.',
       },
       {
         heading: 'Pins, content locks and usage counts',
@@ -703,7 +703,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'Two bits, and why they are enough',
         body:
-          'Commit status lives in `pg_xact`: two bits per transaction id, meaning in progress, committed, aborted, or sub-committed. Two bits means 32768 transactions fit in one 8kB page and about a million in one 256kB segment file, so even a very busy database keeps its recent commit history in a handful of pages. When a visibility check finds a row version whose creating transaction it does not recognise, this is where it looks, through a small shared cache called an SLRU.',
+          'Commit status lives in `pg_xact`: two bits per transaction id, meaning in progress, committed, aborted, or sub-committed. Two bits means 32768 transactions fit in one 8 KiB page and about a million in one 256 KiB segment file, so even a very busy database keeps its recent commit history in a handful of pages. When a visibility check finds a row version whose creating transaction it does not recognise, this is where it looks, through a small shared cache called an SLRU.',
       },
       {
         heading: 'Hint bits, and the bulk-load surprise',
@@ -728,7 +728,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         label: 'pg_xact pages',
         get: (s) => `${fmtNum(Math.ceil(nz(s.xid) / 32768))} pages`,
-        hint: '32768 transactions per 8kB page at two bits each',
+        hint: '32768 transactions per 8 KiB page at two bits each',
       },
       { label: 'Commit rate', get: (s) => `${fmtNum(nz(s.stats?.tps))} /s` },
     ],
@@ -795,7 +795,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'When the ring fills',
         body:
-          'The buffer is circular, so eventually the insert position comes back around to a page that has not been written out yet. Whichever backend gets there must write WAL itself before it can continue — a transaction doing an ordinary `UPDATE` suddenly paying for I/O. That is what `wal_buffers` exists to absorb, together with the walwriter draining it in the background every `wal_writer_delay`. The default `wal_buffers = -1` means one thirty-second of `shared_buffers` capped at one 16MB segment, which is plenty for most systems; write-heavy systems with bursty commits are the ones that benefit from pinning it at 16MB or a little more.',
+          'The buffer is circular, so eventually the insert position comes back around to a page that has not been written out yet. Whichever backend gets there must write WAL itself before it can continue — a transaction doing an ordinary `UPDATE` suddenly paying for I/O. That is what `wal_buffers` exists to absorb, together with the walwriter draining it in the background every `wal_writer_delay`. The default `wal_buffers = -1` means one thirty-second of `shared_buffers` capped at one 16 MiB segment, which is plenty for most systems; write-heavy systems with bursty commits are the ones that benefit from pinning it at 16 MiB or a little more.',
       },
       {
         heading: 'What you would see in production',

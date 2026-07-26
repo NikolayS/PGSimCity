@@ -25,7 +25,7 @@ import type { UiContext, UiModule } from './uikit'
  * while never fighting a control the user has their hand on.
  * ==========================================================================*/
 
-/** One 8 kB page, so shared_buffers can be shown in bytes as well as frames. */
+/** One 8 KiB page, so shared_buffers can be shown in bytes as well as frames. */
 const PAGE_BYTES = 8192
 
 /** How long after the last interaction a control is left alone by the poll. */

@@ -112,7 +112,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'The knob that matters',
-        body: '`wal_writer_delay` and `wal_writer_flush_after` control how eagerly the writer works, but you will rarely touch them. `synchronous_commit` is the dial with real consequences, and `wal_buffers` matters only if it is tiny — the default of 1/32 of `shared_buffers` (capped at 16 MB) is fine almost everywhere. If backends are spending time in `wal_insert` waits, the bottleneck is the log, not the writer.',
+        body: '`wal_writer_delay` and `wal_writer_flush_after` control how eagerly the writer works, but you will rarely touch them. `synchronous_commit` is the dial with real consequences, and `wal_buffers` matters only if it is tiny — the default of 1/32 of `shared_buffers` (capped at 16 MiB) is fine almost everywhere. If backends are spending time in `wal_insert` waits, the bottleneck is the log, not the writer.',
       },
     ],
     metrics: [
@@ -138,11 +138,11 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     id: 'wal.vault',
     title: 'pg_wal',
     subtitle: 'the write-ahead log on disk',
-    tldr: 'A directory of 16 MB segments holding every change, and the most common way a Postgres server dies.',
+    tldr: 'A directory of 16 MiB segments holding every change, and the most common way a Postgres server dies.',
     sections: [
       {
         heading: 'What is actually in there',
-        body: 'The write-ahead log is one enormous append-only byte stream, cut into files of 16 MB (fixed at `initdb` time with `--wal-segsize`). A position in that stream is an **LSN**, printed as two hex halves like `1A/3F0C8B20`; it is simply a byte offset, so subtracting two LSNs gives you bytes of WAL, which is how every replication-lag query works. The 24-character filenames are not sequential prettiness: they are timeline, log id and segment number in hex, which is why `000000010000000000000023` follows `…22`.',
+        body: 'The write-ahead log is one enormous append-only byte stream, cut into files of 16 MiB (fixed at `initdb` time with `--wal-segsize`). A position in that stream is an **LSN**, printed as two hex halves like `1A/3F0C8B20`; it is simply a byte offset, so subtracting two LSNs gives you bytes of WAL, which is how every replication-lag query works. The 24-character filenames are not sequential prettiness: they are timeline, log id and segment number in hex, which is why `000000010000000000000023` follows `…22`.',
       },
       {
         heading: 'Recycled, not deleted',
@@ -162,7 +162,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
     ],
     metrics: [
-      { label: 'pg_wal size', get: (s) => fmtBytes(walDirBytes(s)), hint: 'segmentCount × 16 MB in this model' },
+      { label: 'pg_wal size', get: (s) => fmtBytes(walDirBytes(s)), hint: 'segmentCount × 16 MiB in this model' },
       { label: 'Segments', get: (s) => fmtNum(s.wal.segmentCount) },
       {
         label: 'Current segment',
@@ -238,7 +238,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What you would see in production',
-        body: 'The failure mode is not a bad backup, it is an untested one. Restores expose the things monitoring does not: a `restore_command` that cannot see the archive from the restore host, a missing tablespace symlink, a backup taken with the old exclusive-backup API that was removed in PostgreSQL 15, or simply that a full restore of 4 TB from object storage takes six hours and your RTO said one. Restore on a schedule, into a throwaway host, and time it.',
+        body: 'The failure mode is not a bad backup, it is an untested one. Restores expose the things monitoring does not: a `restore_command` that cannot see the archive from the restore host, a missing tablespace symlink, a backup taken with the old exclusive-backup API that was removed in PostgreSQL 15, or simply that a full restore of 4 TiB from object storage takes six hours and your RTO said one. Restore on a schedule, into a throwaway host, and time it.',
       },
     ],
     metrics: [
@@ -372,7 +372,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What a relation file really is',
-        body: 'A table is a file whose name is a number, containing 8 kB pages back to back with no header and no metadata: block 0 starts at byte 0, block N at byte 8192×N. When a file reaches 1 GB, Postgres starts a new one with a `.1`, `.2`, … suffix, because that limit predates large-file support everywhere and is now simply how it works. Alongside the main fork sit `_fsm` (free space map), `_vm` (visibility map) and, for unlogged relations, `_init`.',
+        body: 'A table is a file whose name is a number, containing 8 KiB pages back to back with no header and no metadata: block 0 starts at byte 0, block N at byte 8192×N. When a file reaches 1 GiB, Postgres starts a new one with a `.1`, `.2`, … suffix, because that limit predates large-file support everywhere and is now simply how it works. Alongside the main fork sit `_fsm` (free space map), `_vm` (visibility map) and, for unlogged relations, `_init`.',
       },
       {
         heading: 'relfilenode is not oid',
@@ -404,10 +404,10 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     id: 'storage.table',
     title: 'Heap file',
     subtitle: 'a table on disk',
-    tldr: 'A stack of 8 kB pages holding row versions, where an UPDATE writes a new one and leaves the old behind.',
+    tldr: 'A stack of 8 KiB pages holding row versions, where an UPDATE writes a new one and leaves the old behind.',
     sections: [
       {
-        heading: 'Inside one 8 kB page',
+        heading: 'Inside one 8 KiB page',
         body: 'Every page has the same shape. A 24-byte header at the front records the page’s LSN and where its free space begins and ends. Immediately after it grows an array of 4-byte **line pointers**, one per tuple slot, added front to back. Tuples themselves are written from the **end** of the page backwards. Free space is the shrinking gap in the middle, and a tuple is addressed by its `ctid` — the pair (block number, line pointer index) — which is why `ctid` is stable only until something moves the row.',
       },
       {
@@ -469,7 +469,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     sections: [
       {
         heading: 'What a B-tree looks like',
-        body: 'A Postgres B-tree is a shallow tree of 8 kB pages: a root, one or two internal levels, and the leaves that hold the actual keys. Even a table with a billion rows is typically four levels deep, so a unique lookup is a handful of page reads, usually all cached above the leaf. The leaf level is a **doubly linked list** in key order, which is the part people forget: it is why `ORDER BY id LIMIT 10` can be free, why range predicates are cheap, and why a backwards `ORDER BY … DESC` costs the same as forwards.',
+        body: 'A Postgres B-tree is a shallow tree of 8 KiB pages: a root, one or two internal levels, and the leaves that hold the actual keys. Even a table with a billion rows is typically four levels deep, so a unique lookup is a handful of page reads, usually all cached above the leaf. The leaf level is a **doubly linked list** in key order, which is the part people forget: it is why `ORDER BY id LIMIT 10` can be free, why range predicates are cheap, and why a backwards `ORDER BY … DESC` costs the same as forwards.',
       },
       {
         heading: 'Why the index alone is not enough',
@@ -477,7 +477,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Bloat and rebuilding',
-        body: 'Index pages do not compact themselves. Deletes and non-HOT updates leave entries that vacuum must remove, and pages that end up half empty stay half empty unless they become completely empty. A 40 GB index over a 30 GB table is a normal sight on an update-heavy workload. Since PostgreSQL 14, **bottom-up index deletion** cleans version churn before a page is allowed to split, which dramatically reduces this on tables whose updates repeatedly touch the same indexed values. When you do need to fix it, `REINDEX INDEX CONCURRENTLY` rebuilds without blocking writes; it needs room for a second copy and it can fail, leaving an invalid index behind for you to drop.',
+        body: 'Index pages do not compact themselves. Deletes and non-HOT updates leave entries that vacuum must remove, and pages that end up half empty stay half empty unless they become completely empty. A 40 GiB index over a 30 GiB table is a normal sight on an update-heavy workload. Since PostgreSQL 14, **bottom-up index deletion** cleans version churn before a page is allowed to split, which dramatically reduces this on tables whose updates repeatedly touch the same indexed values. When you do need to fix it, `REINDEX INDEX CONCURRENTLY` rebuilds without blocking writes; it needs room for a second copy and it can fail, leaving an invalid index behind for you to drop.',
       },
       {
         heading: 'When the planner refuses to use it',
@@ -523,11 +523,11 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     sections: [
       {
         heading: 'Why it exists',
-        body: 'A tuple cannot span pages, so with 8 kB pages nothing could hold a 2 MB document without a trick. **The Oversized-Attribute Storage Technique** is that trick. When a row would exceed roughly 2 kB, Postgres works through its widest variable-length columns and, for each, first tries compression, and if the row is still too big, moves the value out of line entirely — leaving an 18-byte pointer in the tuple where the value was.',
+        body: 'A tuple cannot span pages, so with 8 KiB pages nothing could hold a 2 MiB document without a trick. **The Oversized-Attribute Storage Technique** is that trick. When a row would exceed roughly 2 KiB, Postgres works through its widest variable-length columns and, for each, first tries compression, and if the row is still too big, moves the value out of line entirely — leaving an 18-byte pointer in the tuple where the value was.',
       },
       {
         heading: 'Where the bytes go',
-        body: 'Out-of-line values are chopped into roughly 2 kB chunks and inserted into a private table in the `pg_toast` schema, keyed by (chunk_id, chunk_seq), with its own B-tree index. That table is invisible in `\\dt` but completely real: it has pages, it takes writes, it bloats, and autovacuum has to process it like anything else. `pg_relation_size(\'documents\')` does not include it — `pg_total_relation_size` does, and the gap between the two is the usual "why does the table look small but the disk is full" answer.',
+        body: 'Out-of-line values are chopped into roughly 2 KiB chunks and inserted into a private table in the `pg_toast` schema, keyed by (chunk_id, chunk_seq), with its own B-tree index. That table is invisible in `\\dt` but completely real: it has pages, it takes writes, it bloats, and autovacuum has to process it like anything else. `pg_relation_size(\'documents\')` does not include it — `pg_total_relation_size` does, and the gap between the two is the usual "why does the table look small but the disk is full" answer.',
       },
       {
         heading: 'What a wide column costs to read',
@@ -595,7 +595,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What you would see in production',
-        body: 'Install `pg_freespacemap` and `SELECT sum(avail) FROM pg_freespace(\'sessions\')` to see, in bytes, how much reusable space a table is sitting on. A table with 4 GB of tracked free space is bloated but stable — inserts will refill it. A table with almost none, that is still growing, is either genuinely growing or has an old snapshot pinning its dead rows so vacuum cannot free anything.',
+        body: 'Install `pg_freespacemap` and `SELECT sum(avail) FROM pg_freespace(\'sessions\')` to see, in bytes, how much reusable space a table is sitting on. A table with 4 GiB of tracked free space is bloated but stable — inserts will refill it. A table with almost none, that is still growing, is either genuinely growing or has an old snapshot pinning its dead rows so vacuum cannot free anything.',
       },
     ],
     metrics: [
@@ -621,7 +621,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     sections: [
       {
         heading: 'Two bits, enormous leverage',
-        body: 'The `_vm` fork stores two bits per heap page. **All-visible** means every tuple on that page is visible to every possible transaction — nothing there is in-flight or newly dead. **All-frozen** means every tuple has been frozen and can never need freezing again. Two bits per 8 kB page means the map for a 100 GB table is a couple of megabytes, small enough to stay resident, which is the whole point.',
+        body: 'The `_vm` fork stores two bits per heap page. **All-visible** means every tuple on that page is visible to every possible transaction — nothing there is in-flight or newly dead. **All-frozen** means every tuple has been frozen and can never need freezing again. Two bits per 8 KiB page means the map for a 100 GiB table is a couple of megabytes, small enough to stay resident, which is the whole point.',
       },
       {
         heading: 'What all-visible buys',
@@ -629,7 +629,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What all-frozen buys',
-        body: 'Freezing exists because transaction ids are 32 bits and must be reused, so old rows have to be marked "older than everything" before the counter laps them. Without the all-frozen bit, every anti-wraparound vacuum would have to read every page of every table forever. With it, vacuum skips pages that are already frozen, so the work becomes proportional to what changed rather than to how big the table is. That is the difference between a 10 TB archive table being fine and being an outage.',
+        body: 'Freezing exists because transaction ids are 32 bits and must be reused, so old rows have to be marked "older than everything" before the counter laps them. Without the all-frozen bit, every anti-wraparound vacuum would have to read every page of every table forever. With it, vacuum skips pages that are already frozen, so the work becomes proportional to what changed rather than to how big the table is. That is the difference between a 10 TiB archive table being fine and being an outage.',
       },
       {
         heading: 'How the bits move',
@@ -667,7 +667,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Double buffering',
-        body: 'A page can sit in both caches at once, so RAM is spent twice on the same 8 kB. This is the main reason the usual advice caps `shared_buffers` around 25% of memory rather than 80%: past a point you are not adding cache, you are moving it from a cache with a good replacement policy and free readahead to one with a clock sweep. It is also why the answer to "should I raise shared_buffers" is almost always "measure the ratio of shared hits to reads first".',
+        body: 'A page can sit in both caches at once, so RAM is spent twice on the same 8 KiB. This is the main reason the usual advice caps `shared_buffers` around 25% of memory rather than 80%: past a point you are not adding cache, you are moving it from a cache with a good replacement policy and free readahead to one with a clock sweep. It is also why the answer to "should I raise shared_buffers" is almost always "measure the ratio of shared hits to reads first".',
       },
       {
         heading: 'effective_cache_size is a lie you tell the planner',
@@ -709,7 +709,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Torn pages',
-        body: 'An 8 kB page is not written atomically by most storage, so a crash can leave half of one page from the new write and half from the old. WAL cannot repair that, because WAL records describe deltas to a page that must be intact to begin with. `full_page_writes` solves it by logging the entire page image the first time it is modified after each checkpoint, so recovery can rebuild the page from scratch and then replay deltas. That is why WAL volume spikes right after every checkpoint, and why turning full page writes off is only defensible on storage that genuinely offers atomic 8 kB writes.',
+        body: 'An 8 KiB page is not written atomically by most storage, so a crash can leave half of one page from the new write and half from the old. WAL cannot repair that, because WAL records describe deltas to a page that must be intact to begin with. `full_page_writes` solves it by logging the entire page image the first time it is modified after each checkpoint, so recovery can rebuild the page from scratch and then replay deltas. That is why WAL volume spikes right after every checkpoint, and why turning full page writes off is only defensible on storage that genuinely offers atomic 8 KiB writes.',
       },
       {
         heading: 'What you would see in production',
@@ -792,7 +792,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     sections: [
       {
         heading: 'What it does that the checkpointer does not',
-        body: 'The checkpointer writes the buffers that were dirty at a moment in time, on a schedule, for durability. The background writer writes the buffers that are about to be **evicted**, continuously, for latency. It walks the clock sweep slightly ahead of where allocation is happening and flushes dirty victims, so that when a backend needs a free buffer it finds a clean one and can reuse it immediately instead of writing 8 kB to disk in the middle of your query.',
+        body: 'The checkpointer writes the buffers that were dirty at a moment in time, on a schedule, for durability. The background writer writes the buffers that are about to be **evicted**, continuously, for latency. It walks the clock sweep slightly ahead of where allocation is happening and flushes dirty victims, so that when a backend needs a free buffer it finds a clean one and can reuse it immediately instead of writing 8 KiB to disk in the middle of your query.',
       },
       {
         heading: 'It does not reduce I/O',
@@ -901,7 +901,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Memory and repeat passes',
-        body: 'The dead TIDs collected in the heap scan have to fit in `maintenance_work_mem` (or `autovacuum_work_mem`). If they do not, vacuum stops, does a full pass over every index, empties the list and resumes — so a large table with five indexes and a small memory setting can read all five indexes several times in one vacuum. PostgreSQL 17 replaced the old flat TID array with a much more compact structure and removed the 1 GB ceiling that used to force this, which made large-table vacuums substantially cheaper.',
+        body: 'The dead TIDs collected in the heap scan have to fit in `maintenance_work_mem` (or `autovacuum_work_mem`). If they do not, vacuum stops, does a full pass over every index, empties the list and resumes — so a large table with five indexes and a small memory setting can read all five indexes several times in one vacuum. PostgreSQL 17 replaced the old flat TID array with a much more compact structure and removed the 1 GiB ceiling that used to force this, which made large-table vacuums substantially cheaper.',
       },
     ],
     metrics: [

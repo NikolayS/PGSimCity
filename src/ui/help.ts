@@ -102,7 +102,7 @@ const LEGEND: LegendRow[] = [
 const READING: { h: string; p: string }[] = [
   {
     h: 'The plaza',
-    p: 'The lit grid in the centre is <code>shared_buffers</code> — one tile per 8 kB page, blue when it matches disk, red when it has been modified in memory and not yet written. The rotating hand is the clock sweep looking for a frame to reuse.',
+    p: 'The lit grid in the centre is <code>shared_buffers</code> — one tile per 8 KiB page, blue when it matches disk, red when it has been modified in memory and not yet written. The rotating hand is the clock sweep looking for a frame to reuse.',
   },
   {
     h: 'The pit',

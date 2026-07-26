@@ -17,7 +17,7 @@
  *     absolute numbers are theatre. Rates (tps, bytes/sec, LSNs) are NOT
  *     stretched; those are reported in real units.
  *
- *  2. THE CITY IS A SCALE MODEL. 1024 buffers (8 MB shared_buffers), 16 backend
+ *  2. THE CITY IS A SCALE MODEL. 1024 buffers (8 MiB shared_buffers), 16 backend
  *     slots, 14 visible WAL segments. To let 16 towers represent thousands of
  *     transactions per second, one trip through the backend state machine
  *     carries `batch` transactions — the controller sizes `batch` from the
@@ -67,9 +67,9 @@ import { SCENARIOS } from './scenarios'
 
 const PAGE = 8192
 const WAL_SEG = 16 * 1024 * 1024
-/** wal_buffers: PostgreSQL auto-tunes this to shared_buffers/32 → 256 kB here. */
+/** wal_buffers: PostgreSQL auto-tunes this to shared_buffers/32 → 256 KiB here. */
 const WAL_BUF_CAP = 256 * 1024
-/** BAS_BULKREAD: a big seq scan gets a 256 kB ring so it cannot evict the pool. */
+/** BAS_BULKREAD: a big seq scan gets a 256 KiB ring so it cannot evict the pool. */
 const RING = 32
 const STEP_MAX = 1 / 30
 const IDLE_REAP = 22
@@ -616,7 +616,7 @@ export function createSim(bus: Bus): SimApi {
     buf.dirty[b] = 1
     if (!K.fullPageWrites) return
     // full_page_writes: the first modification of a page after a checkpoint
-    // carries an entire 8 kB image into the WAL, so that replay can always
+    // carries an entire 8 KiB image into the WAL, so that replay can always
     // start from a page it trusts. This is why WAL volume explodes immediately
     // after every checkpoint and then decays as the write working set pays off.
     const key = bufKey(buf.rel[b], buf.blk[b])
