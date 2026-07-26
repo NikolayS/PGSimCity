@@ -60,16 +60,14 @@ body.pg-tour #hud-bottom:focus-within {
   opacity: 1;
 }
 
-/* a cinema vignette under the HUD, over the city */
+/* A flat scrim keeps the narration readable without adding an effect layer. */
 body.pg-tour::after {
   content: '';
   position: fixed;
   inset: 0;
   z-index: 3;
   pointer-events: none;
-  background:
-    radial-gradient(120% 78% at 50% 34%, transparent 42%, rgba(2, 4, 9, 0.62) 100%),
-    linear-gradient(0deg, rgba(2, 4, 9, 0.5) 0%, transparent 34%);
+  background: rgba(2, 4, 9, 0.38);
   animation: tour-vignette var(--dur-slow) var(--ease) both;
 }
 
@@ -91,7 +89,6 @@ body.pg-tour::after {
   min-width: 0;
   border-color: var(--line-soft);
   background: var(--bg-panel);
-  box-shadow: var(--glow-soft), 0 0 0 1px rgba(90, 209, 255, 0.06);
   overflow: hidden;
 }
 /* Both halves are two-class selectors so neither depends on this file being
@@ -141,7 +138,6 @@ body.pg-tour::after {
   line-height: 1;
   font-variant-numeric: tabular-nums;
   color: var(--c-backend);
-  text-shadow: 0 0 22px rgba(90, 209, 255, 0.45);
 }
 .tour-card__of {
   font-family: var(--f-mono);
@@ -226,7 +222,7 @@ body.pg-tour::after {
   min-width: 6px;
   padding: 0;
   border: 0;
-  border-radius: var(--r-pill);
+  border-radius: 0;
   background: rgba(120, 170, 235, 0.16);
   cursor: pointer;
   transition: background var(--dur) var(--ease), transform var(--dur-fast) var(--ease);
@@ -240,7 +236,6 @@ body.pg-tour::after {
 }
 .tour-step.is-now {
   background: var(--c-backend);
-  box-shadow: 0 0 12px -2px var(--c-backend);
 }
 .tour-step:focus-visible {
   outline: 2px solid var(--c-backend);
@@ -253,18 +248,17 @@ body.pg-tour::after {
   height: 2px;
   background: rgba(120, 170, 235, 0.12);
   overflow: hidden;
-  border-radius: 0 0 var(--r-lg) var(--r-lg);
+  border-radius: 0;
 }
 .tour-bar__fill {
   display: block;
   height: 100%;
   width: 0%;
-  background: linear-gradient(90deg, var(--c-backend), var(--c-shmem));
-  box-shadow: 0 0 12px -2px var(--c-backend);
+  background: var(--c-backend);
   transition: width 140ms linear;
 }
 .tour-card.is-held .tour-bar__fill {
-  background: linear-gradient(90deg, var(--c-warn), var(--c-wal));
+  background: var(--c-warn);
 }
 
 /* ==========================================================================
@@ -342,14 +336,13 @@ body.pg-tour::after {
   flex: 0 0 auto;
 }
 .tour-first__go {
-  color: var(--ink-invert);
-  background: var(--c-backend);
-  border-color: var(--c-backend);
+  color: var(--c-backend);
+  background: transparent;
+  font-weight: 700;
 }
 .tour-first__go:hover {
-  background: color-mix(in srgb, var(--c-backend) 82%, white);
-  border-color: color-mix(in srgb, var(--c-backend) 82%, white);
-  color: var(--ink-invert);
+  background: var(--bg-raise);
+  color: var(--c-backend);
 }
 .tour-first__no {
   color: var(--ink-faint);
@@ -368,9 +361,7 @@ body.pg-tour::after {
   justify-items: center;
   padding: 0 16px;
   pointer-events: auto;
-  background: rgba(3, 6, 12, 0.62);
-  backdrop-filter: blur(6px) saturate(120%);
-  -webkit-backdrop-filter: blur(6px) saturate(120%);
+  background: var(--bg-overlay);
   animation: pal-fade var(--dur-fast) var(--ease) both;
 }
 .pal-overlay[hidden] {
@@ -391,7 +382,6 @@ body.pg-tour::after {
   width: min(680px, 100%);
   max-height: min(70vh, 620px);
   border-color: var(--line-soft);
-  box-shadow: var(--glow-soft), 0 0 0 1px rgba(90, 209, 255, 0.08), 0 40px 120px -40px rgba(0, 0, 0, 0.9);
   animation: tour-rise var(--dur) var(--ease-out-expo) both;
 }
 
@@ -451,13 +441,12 @@ body.pg-tour::after {
   align-items: center;
   gap: 10px;
   padding: 7px 10px;
-  border-radius: var(--r-sm);
-  border: 1px solid transparent;
+  border-radius: 0;
+  border: 0;
   cursor: pointer;
 }
 .pal-row.is-sel {
-  background: rgba(90, 209, 255, 0.09);
-  border-color: rgba(90, 209, 255, 0.28);
+  background: var(--bg-sunken);
 }
 
 .pal-row__badge {
@@ -465,11 +454,11 @@ body.pg-tour::after {
   font-size: var(--fs-micro);
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  text-align: center;
-  padding: 2px 0;
-  border-radius: 4px;
-  border: 1px solid var(--line-hair);
-  background: var(--bg-sunken);
+  text-align: left;
+  padding: 0;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
   color: var(--ink-faint);
   white-space: nowrap;
   overflow: hidden;
@@ -577,21 +566,18 @@ body.pg-tour::after {
 
 .pal-flash {
   animation: pal-flash 2s var(--ease) 1;
-  border-radius: var(--r-sm);
+  border-radius: 0;
 }
 
 @keyframes pal-flash {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(90, 209, 255, 0);
     background: transparent;
   }
   12% {
-    box-shadow: 0 0 0 1px rgba(90, 209, 255, 0.55), 0 0 26px -6px rgba(90, 209, 255, 0.8);
     background: rgba(90, 209, 255, 0.1);
   }
   60% {
-    box-shadow: 0 0 0 1px rgba(90, 209, 255, 0.35);
     background: rgba(90, 209, 255, 0.05);
   }
 }
@@ -772,7 +758,7 @@ body.pg-tour::after {
     top: 50%;
     height: 3px;
     margin-top: -1.5px;
-    border-radius: var(--r-pill);
+    border-radius: 0;
     background: rgba(120, 170, 235, 0.16);
     transition: background var(--dur) var(--ease);
   }
@@ -784,7 +770,6 @@ body.pg-tour::after {
   }
   .tour-step.is-now::after {
     background: var(--c-backend);
-    box-shadow: 0 0 12px -2px var(--c-backend);
   }
 }
 

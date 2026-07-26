@@ -470,16 +470,14 @@ for (let i = 0; i < N_BACKEND_SLOTS; i++) {
   ], { color: COLOR.postmaster, speed: 110, size: 1.4 })
 
   /* The connection conduit. `query` is the duct's centre line, so the tube in
-   * world/clients.ts is built straight off this curve and the packets ride
-   * inside it; `result` is the same line run backwards in the other lane. */
+   * world/clients.ts is built straight off this curve. `result` reverses that
+   * same spine: PostgreSQL requests and rows share one bidirectional socket,
+   * while the flow renderer's sub-radius scatter keeps passing packets apart. */
   const cx = conduitX(i)
   const cy = CONDUIT.y
   let mx = cx + (bx - cx) * 0.25
   if (Math.abs(mx) < CONDUIT.clearX) mx = mx < 0 ? -CONDUIT.clearX : CONDUIT.clearX
   const fx = cx + (bx - cx) * 0.72
-  /** Lane offset: rows come home beside the query, not through it. */
-  const lane = 1.0
-
   route(rid.query(i), [
     [cx, cy, CONDUIT.terminalFace],
     [cx, cy, -262],
@@ -490,12 +488,12 @@ for (let i = 0; i < N_BACKEND_SLOTS; i++) {
   ], { color: COLOR.client, speed: 96, size: 1.1, tension: 0.4 })
 
   route(rid.result(i), [
-    [bx + lane, cy, CONDUIT.backendFace],
-    [bx + lane, cy, -150],
-    [fx + lane, cy, -180],
-    [mx + lane, cy, -224],
-    [cx + lane, cy, -262],
-    [cx + lane, cy, CONDUIT.terminalFace],
+    [bx, cy, CONDUIT.backendFace],
+    [bx, cy, -150],
+    [fx, cy, -180],
+    [mx, cy, -224],
+    [cx, cy, -262],
+    [cx, cy, CONDUIT.terminalFace],
   ], { color: COLOR.ok, speed: 104, size: 0.95, tension: 0.4 })
 
   // backend asks shared buffers for a page, and gets one back

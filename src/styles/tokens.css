@@ -14,13 +14,13 @@
   /* --- surfaces --- */
   --bg-void: #04060c;
   --bg-deep: #070b14;
-  /* 0.85, not 0.72: at 0.72 the effective contrast of panel text depends on
-     which district happens to be behind it, and over the bloom-lit plaza the
-     dim ink dropped under the AA floor. */
-  --bg-panel: rgba(10, 16, 28, 0.85);
+  /* The city stays visible around a panel, not through its prose. Lower
+     opacities made both contrast and rhythm depend on the district behind it. */
+  --bg-panel: rgba(10, 16, 28, 0.94);
   --bg-panel-solid: #0a1020;
   --bg-raise: rgba(20, 30, 50, 0.72);
   --bg-sunken: rgba(3, 6, 12, 0.6);
+  --bg-overlay: rgba(3, 6, 12, 0.78);
 
   /* --- strokes --- */
   --line-hair: rgba(120, 170, 235, 0.14);
@@ -51,15 +51,10 @@
   --c-warn: #ffcc55;
   --c-crit: #ff5f6d;
 
-  /* --- glow --- */
-  --glow-cyan: 0 0 0 1px rgba(90, 209, 255, 0.35), 0 0 24px -6px rgba(90, 209, 255, 0.65);
-  --glow-soft: 0 10px 40px -18px rgba(0, 0, 0, 0.9);
-
   /* --- geometry --- */
   --r-sm: 2px;
   --r-md: 3px;
   --r-lg: 4px;
-  --r-pill: 999px;
 
   /* --- type ramp --- */
   --f-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, Roboto, sans-serif;
@@ -99,7 +94,7 @@
 /* ============================================================
    DAY — the console at noon.
 
-   A dark glass panel over a bright city is unreadable, so day mode is not a
+   A dark panel over a bright city is unreadable, so day mode is not a
    tint of night: the panels become paper, the type becomes ink, and the
    semantic colours are the re-picked deep values from src/core/themes.ts —
    NOT the night ones, which turn into pastel washes on white. Contrast is held
@@ -114,10 +109,11 @@
   /* Same reasoning as the night value: high enough that panel text does not
      depend on which district happens to be behind it. Sunlit stone is a much
      busier backdrop than a night street, so this is opaquer still. */
-  --bg-panel: rgba(250, 248, 243, 0.9);
+  --bg-panel: rgba(250, 248, 243, 0.96);
   --bg-panel-solid: #faf8f3;
   --bg-raise: rgba(255, 255, 255, 0.82);
   --bg-sunken: rgba(24, 34, 46, 0.07);
+  --bg-overlay: rgba(24, 34, 46, 0.28);
 
   /* --- strokes: ink, not glow --- */
   --line-hair: rgba(24, 34, 46, 0.11);
@@ -148,9 +144,6 @@
   --c-warn: #d18a04;
   --c-crit: #b01030;
 
-  /* --- shadow, where night had glow --- */
-  --glow-cyan: 0 0 0 1px rgba(0, 137, 181, 0.5), 0 2px 10px -4px rgba(0, 137, 181, 0.45);
-  --glow-soft: 0 12px 34px -18px rgba(24, 34, 46, 0.4);
 }
 
 /* --- day patches for the darks hardcoded outside this file -----------------
@@ -169,11 +162,6 @@
 }
 :root[data-theme="day"] .pg-scroll::-webkit-scrollbar-thumb:hover {
   background: rgba(24, 34, 46, 0.38);
-}
-
-:root[data-theme="day"] .pg-body code,
-:root[data-theme="day"] .pg-tag {
-  background: rgba(24, 34, 46, 0.07);
 }
 
 :root[data-theme="day"] .pg-range::-webkit-slider-runnable-track,
@@ -232,7 +220,7 @@
   background: var(--bg-panel-solid);
 }
 :root[data-theme="day"] .pal-row.is-sel {
-  background: rgba(0, 137, 181, 0.12);
+  background: var(--bg-sunken);
 }
 
 :root[data-theme="day"] .hud-vital:hover {

@@ -55,6 +55,8 @@ export interface WalkTuning {
   gravity: number
   jumpHeight: number
   lookSensitivity: number
+  /** Touch look sensitivity in degrees per centimetre of finger travel. */
+  touchLookSensitivity: number
   pitchLimit: number
   bobAmplitude: number
   /** Metres of travel per full bob cycle. */
@@ -86,6 +88,14 @@ export interface WalkController {
   readonly distance: number
   /** Live feet position. Do not mutate. */
   readonly position: THREE.Vector3
+  /** Analogue touch movement: both axes are in the range -1..1. */
+  setTouchMove(strafe: number, forward: number): void
+  /** Relative touch look travel measured in CSS centimetres. */
+  addTouchLook(xCm: number, yCm: number): void
+  /** Press/release. Holding this while swimming rises toward the surface. */
+  setTouchJump(pressed: boolean): void
+  /** Touch stance. The UI toggles this on land and holds it to dive. */
+  setTouchCrouch(pressed: boolean): void
   dispose(): void
 }
 
@@ -108,6 +118,7 @@ const DEFAULT_TUNING: WalkTuning = {
   gravity: 22,
   jumpHeight: 0.9,
   lookSensitivity: 0.0022,
+  touchLookSensitivity: 18,
   pitchLimit: 1.4835, // 85°
   bobAmplitude: 0.035,
   bobWavelength: 1.55,
@@ -158,6 +169,7 @@ const EYE_RATE = 13
 /** Fade-to-black, hold, fade-back. */
 const FADE_OUT = 0.18
 const FADE_IN = 0.45
+const DEG_TO_RAD = Math.PI / 180
 
 /** The shared-buffer grid's exact outside edge. */
 const POOL_HALF = ((CITY.buf.grid - 1) * CITY.buf.pitch + CITY.buf.tile) / 2
@@ -285,8 +297,14 @@ export function createWalkController(opts: WalkOptions): WalkController {
   let pitch = 0
   let lookX = 0
   let lookY = 0
+  let touchLookX = 0
+  let touchLookY = 0
   let locked = false
   let dragLook = false
+  let touchStrafe = 0
+  let touchForward = 0
+  let touchJump = false
+  let touchCrouch = false
 
   let crouching = false
   let running = false
@@ -466,10 +484,14 @@ export function createWalkController(opts: WalkOptions): WalkController {
     dragLook = false
     lookX = 0
     lookY = 0
+    resetTouchInput()
   }
 
   function onPointerDown(e: PointerEvent): void {
     if (!enabled) return
+    // Touch look is owned by ui/touchpad.ts. Pointer lock is unavailable on
+    // iOS Safari and a relative drag already supplies exactly the input needed.
+    if (e.pointerType === 'touch') return
     if (e.button === 0 && !locked) requestLock()
     dragLook = true
   }
@@ -520,14 +542,65 @@ export function createWalkController(opts: WalkOptions): WalkController {
   /* ---- helpers -----------------------------------------------------------*/
 
   function axisForward(): number {
-    return (
-      (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0)
+    return clamp(
+      (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) -
+        (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0) +
+        touchForward,
+      -1,
+      1,
     )
   }
   function axisStrafe(): number {
-    return (
-      (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0)
+    return clamp(
+      (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) -
+        (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0) +
+        touchStrafe,
+      -1,
+      1,
     )
+  }
+
+  function keyboardMoving(): boolean {
+    return (
+      keys.has('KeyW') ||
+      keys.has('KeyA') ||
+      keys.has('KeyS') ||
+      keys.has('KeyD') ||
+      keys.has('ArrowUp') ||
+      keys.has('ArrowDown') ||
+      keys.has('ArrowLeft') ||
+      keys.has('ArrowRight')
+    )
+  }
+
+  function resetTouchInput(): void {
+    touchStrafe = 0
+    touchForward = 0
+    touchLookX = 0
+    touchLookY = 0
+    touchJump = false
+    touchCrouch = false
+  }
+
+  function setTouchMove(strafe: number, forward: number): void {
+    touchStrafe = clamp(strafe, -1, 1)
+    touchForward = clamp(forward, -1, 1)
+  }
+
+  function addTouchLook(xCm: number, yCm: number): void {
+    if (!enabled || descending) return
+    const radiansPerCm = T.touchLookSensitivity * DEG_TO_RAD
+    touchLookX += xCm * radiansPerCm
+    touchLookY += yCm * radiansPerCm
+  }
+
+  function setTouchJump(pressed: boolean): void {
+    if (pressed && !touchJump) jumpBufferT = JUMP_BUFFER
+    touchJump = pressed
+  }
+
+  function setTouchCrouch(pressed: boolean): void {
+    touchCrouch = pressed
   }
 
   /** Ground under an arbitrary XZ, searching a generous vertical window. */
@@ -655,6 +728,7 @@ export function createWalkController(opts: WalkOptions): WalkController {
     if (enabled) return Promise.resolve()
     enabled = true
     keys.clear()
+    resetTouchInput()
     lookX = 0
     lookY = 0
 
@@ -700,8 +774,14 @@ export function createWalkController(opts: WalkOptions): WalkController {
     descending = true
     descentT = 0
 
+    const touchControls =
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(pointer: coarse)').matches
     bus.emit('toast', {
-      text: 'On foot — WASD or arrows to walk, Shift to run, Space to jump, C to crouch. Press G to stand back up.',
+      text: touchControls
+        ? 'On foot — left thumb moves, right thumb looks. Jump rises in water; crouch toggles or dives. Tap Exit to leave.'
+        : 'On foot — WASD or arrows to walk, Shift to run, Space to jump, C to crouch. Press G to stand back up.',
       kind: 'info',
       ms: 5200,
     })
@@ -730,6 +810,7 @@ export function createWalkController(opts: WalkOptions): WalkController {
     enabled = false
     if (descending) finishDescent()
     keys.clear()
+    resetTouchInput()
     if (typeof document !== 'undefined' && document.pointerLockElement === dom) document.exitPointerLock()
     setFade(0)
     fadeT = -1
@@ -798,8 +879,14 @@ export function createWalkController(opts: WalkOptions): WalkController {
     }
 
     /* --- stance ---------------------------------------------------------- */
-    crouching = !swimming && keys.has('KeyC')
-    running = !swimming && !crouching && (keys.has('ShiftLeft') || keys.has('ShiftRight'))
+    const touchMagnitude = Math.min(1, Math.hypot(touchForward, touchStrafe))
+    crouching = !swimming && (keys.has('KeyC') || touchCrouch)
+    running =
+      !swimming &&
+      !crouching &&
+      (keys.has('ShiftLeft') ||
+        keys.has('ShiftRight') ||
+        (!keyboardMoving() && touchMagnitude > T.speedWalk / T.speedRun))
     const eyeTarget = crouching ? T.eyeCrouch : T.eyeStand
     eyeNow = damp(eyeNow, eyeTarget, EYE_RATE, d)
     capsuleH = crouching ? T.capsuleHeightCrouch : T.capsuleHeight
@@ -807,7 +894,17 @@ export function createWalkController(opts: WalkOptions): WalkController {
     /* --- wish direction, in yaw space ------------------------------------ */
     const fA = axisForward()
     const sA = axisStrafe()
-    const targetSpeed = swimming ? SWIM_SPEED : crouching ? T.speedCrouch : running ? T.speedRun : T.speedWalk
+    const inputMagnitude = Math.min(1, Math.hypot(fA, sA))
+    const touchDriven = !keyboardMoving() && (Math.abs(touchForward) > 1e-5 || Math.abs(touchStrafe) > 1e-5)
+    const targetSpeed = swimming
+      ? SWIM_SPEED * inputMagnitude
+      : crouching
+        ? T.speedCrouch * inputMagnitude
+        : touchDriven
+          ? T.speedRun * inputMagnitude
+          : running
+            ? T.speedRun
+            : T.speedWalk
     // yaw 0 looks down -Z: forward = (-sin yaw, 0, -cos yaw), right = (cos yaw, 0, -sin yaw)
     const sy = Math.sin(yaw)
     const cy = Math.cos(yaw)
@@ -867,11 +964,10 @@ export function createWalkController(opts: WalkOptions): WalkController {
     /* --- vertical -------------------------------------------------------- */
     if (swimming) {
       const vy0 = vy
-      const input = Math.min(1, Math.hypot(fA, sA))
-      const lookRise = Math.max(0, Math.sin(pitch)) * input * SWIM_LOOK_RISE
+      const lookRise = Math.max(0, Math.sin(pitch)) * inputMagnitude * SWIM_LOOK_RISE
       let targetVy = -SWIM_SINK + lookRise
-      if (keys.has('Space')) targetVy += SWIM_KEY_RISE
-      if (keys.has('KeyC')) targetVy -= SWIM_KEY_SINK
+      if (keys.has('Space') || touchJump) targetVy += SWIM_KEY_RISE
+      if (keys.has('KeyC') || touchCrouch) targetVy -= SWIM_KEY_SINK
       vy = damp(vy, targetVy, SWIM_VERTICAL_SETTLE, d)
       pos.y += (vy0 + vy) * 0.5 * d
       const ascentSpeed = vy > 0 ? vy : 0
@@ -961,6 +1057,8 @@ export function createWalkController(opts: WalkOptions): WalkController {
     if (descending) {
       lookX = 0
       lookY = 0
+      touchLookX = 0
+      touchLookY = 0
       tickDescent(d)
       return
     }
@@ -968,10 +1066,12 @@ export function createWalkController(opts: WalkOptions): WalkController {
     tickFade(d)
 
     /* --- look ------------------------------------------------------------ */
-    yaw -= lookX * T.lookSensitivity
-    pitch -= lookY * T.lookSensitivity
+    yaw -= lookX * T.lookSensitivity + touchLookX
+    pitch -= lookY * T.lookSensitivity + touchLookY
     lookX = 0
     lookY = 0
+    touchLookX = 0
+    touchLookY = 0
     pitch = clamp(pitch, -T.pitchLimit, T.pitchLimit)
     // Wrap yaw so it never grows without bound over a long session.
     if (yaw > Math.PI) yaw -= Math.PI * 2
@@ -1047,6 +1147,7 @@ export function createWalkController(opts: WalkOptions): WalkController {
     dom.removeEventListener('pointerup', onPointerUp)
     dom.removeEventListener('pointercancel', onPointerUp)
     keys.clear()
+    resetTouchInput()
     if (fade && fade.parentNode) fade.parentNode.removeChild(fade)
     fade = null
     if (poolReadout && poolReadout.parentNode) poolReadout.parentNode.removeChild(poolReadout)
@@ -1085,6 +1186,10 @@ export function createWalkController(opts: WalkOptions): WalkController {
     get position(): THREE.Vector3 {
       return pos
     },
+    setTouchMove,
+    addTouchLook,
+    setTouchJump,
+    setTouchCrouch,
     dispose,
   }
 }

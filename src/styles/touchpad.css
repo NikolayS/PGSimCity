@@ -1,0 +1,183 @@
+/* ==========================================================================
+   Touch pedestrian controls.
+
+   This layer exists only for coarse pointers while walk mode is active. Its
+   transparent halves intercept the canvas gestures without painting over the
+   city; only the active stick and compact actions carry visible chrome.
+   ========================================================================*/
+
+.touchpad {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 12;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+@media (pointer: coarse) {
+  .touchpad[data-enabled='true'] {
+    display: block;
+  }
+
+  body.touch-walk-active #hud-top,
+  body.touch-walk-active #hud-bottom,
+  body.touch-walk-active #compass {
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  /* At eye level the floating building plates can cover most of a phone view.
+     The walk controls are the legend here, so leave the city itself readable. */
+  body.touch-walk-active #labels-root {
+    visibility: hidden;
+  }
+}
+
+.touchpad__move-zone,
+.touchpad__look-zone {
+  position: absolute;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.touchpad__move-zone {
+  left: calc(58px + var(--safe-l));
+  right: 50%;
+  top: 42%;
+  bottom: calc(72px + var(--safe-b));
+}
+
+.touchpad__look-zone {
+  right: 0;
+  width: 50%;
+  inset-block: 0;
+}
+
+.touchpad__hint {
+  position: absolute;
+  color: var(--ink-faint);
+  font-family: var(--f-mono);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  opacity: 0.48;
+  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.touchpad__hint--move {
+  left: calc(22px + var(--safe-l));
+  bottom: calc(84px + var(--safe-b));
+}
+
+.touchpad__hint--look {
+  right: calc(24% + var(--safe-r));
+  top: 51%;
+  transform: translate(50%, -50%);
+}
+
+.touchpad__hint--look.is-active {
+  opacity: 0.16;
+}
+
+.touchpad__stick {
+  --stick-x: 0px;
+  --stick-y: 0px;
+  --knob-x: 0px;
+  --knob-y: 0px;
+  position: absolute;
+  left: var(--stick-x);
+  top: var(--stick-y);
+  width: 116px;
+  height: 116px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 90ms linear;
+}
+
+.touchpad__stick[data-active='true'] {
+  opacity: 1;
+}
+
+.touchpad__stick-ring,
+.touchpad__stick-knob {
+  position: absolute;
+  border-radius: 50%;
+}
+
+.touchpad__stick-ring {
+  inset: 0;
+  border: 1px solid var(--line-soft);
+  background: var(--bg-panel);
+  opacity: 0.72;
+}
+
+.touchpad__stick-knob {
+  width: 42px;
+  height: 42px;
+  left: 37px;
+  top: 37px;
+  transform: translate(var(--knob-x), var(--knob-y));
+  border: 1px solid var(--c-backend);
+  background: var(--bg-panel-solid);
+}
+
+.touchpad__actions {
+  position: absolute;
+  right: calc(14px + var(--safe-r));
+  bottom: calc(14px + var(--safe-b));
+  z-index: 2;
+  display: flex;
+  gap: 10px;
+  pointer-events: auto;
+}
+
+.touchpad__action,
+.touchpad__exit {
+  appearance: none;
+  min-width: 52px;
+  min-height: 52px;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: var(--ink-dim);
+  background: var(--bg-panel);
+  font: 600 10px/1 var(--f-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  touch-action: none;
+}
+
+.touchpad__action.is-active,
+.touchpad__action.is-pressed {
+  color: var(--c-backend);
+  background: var(--bg-panel-solid);
+}
+
+.touchpad__exit {
+  position: absolute;
+  top: calc(12px + var(--safe-t));
+  right: calc(12px + var(--safe-r));
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 108px;
+  min-height: var(--tap);
+  padding: 0 12px;
+  pointer-events: auto;
+}
+
+.touchpad__exit span {
+  color: var(--c-backend);
+  font-size: 15px;
+}
+
+@media (orientation: landscape) and (pointer: coarse) {
+  .touchpad__move-zone {
+    top: 28%;
+  }
+}

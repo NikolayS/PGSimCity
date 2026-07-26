@@ -24,10 +24,10 @@ import { ANCHOR, DISTRICT_BOUNDS } from './layout'
  *
  * So this is a drawing, in the same language as the project's own mark in
  * public/favicon.svg: domed brow, temple dip, one big fanned ear, the notch
- * where the ear meets the cheek, and a long tapering trunk with a curl. It is
- * drawn to hold the city — the trunk is fat because the client terminal is
- * 300 m wide, the ear is huge because the recovery ground sits 130 m out — and
- * every departure from the official mark is in service of what stands on it.
+ * where the ear meets the cheek, and a long tapering trunk with a curl. The
+ * occupied client tier sits only in the trunk's root; beyond it the trunk is an
+ * empty promontory, free to become as thin and long as the silhouette needs.
+ * The ear remains broad because the recovery ground sits 130 m out.
  *
  * ---------------------------------------------------------------------------
  * THE FRAME
@@ -41,8 +41,8 @@ import { ANCHOR, DISTRICT_BOUNDS } from './layout'
  *
  * which puts
  *
- *      TRUNK      north, over the client terminal, the boundary fence and the
- *                 arrivals avenue — z -180 out to z ≈ -800, tapering to a curl
+ *      TRUNK      north, rooted around the client terminal and then continuing
+ *                 far beyond every district as empty plate, tapering to a curl
  *      EAR        south-west, the big rounded flap, over the HA quarter and the
  *                 recovery ground
  *      CROWN      south-east, over the standby and the backup vault
@@ -76,7 +76,7 @@ const HZ = 90
 const S = Math.SQRT1_2
 
 /**
- * The drawing, in logo space. Start point, then 17 cubic segments of
+ * The drawing, in logo space. Start point, then 28 cubic segments of
  * `c1x c1y c2x c2y x y`. Closed by the last segment returning to the start.
  */
 const LOGO_START: readonly [number, number] = [-27.0, -21.0]
@@ -86,33 +86,46 @@ const LOGO_PATH: readonly (readonly number[])[] = [
   // the domed forehead
   [-29.3, 15.0, -26.5, 21.5, -19.5, 24.5],
   // over the crown
-  [-14.5, 27.5, -10.0, 29.1, -5.0, 28.8],
-  // the temple dip, between forehead and ear
-  [0.0, 28.6, 2.5, 26.7, 4.0, 25.0],
+  [-15.0, 27.8, -10.5, 29.6, -6.0, 29.5],
+  // the temple V separates the domed brow from the ear
+  [-1.0, 29.4, 1.8, 25.8, 3.0, 23.0],
   // the ear, rising
-  [8.0, 22.5, 13.5, 27.6, 19.5, 29.0],
+  [7.5, 22.8, 13.5, 29.3, 19.5, 30.5],
   // the ear's outer sweep
-  [30.5, 31.2, 39.0, 18.5, 37.0, 4.0],
-  [36.8, -7.0, 35.0, -14.2, 31.2, -18.4],
-  // the bottom of the ear — pushed out to hold the recovery ground, which is
-  // the tightest thing on the whole plate
-  [29.4, -20.4, 28.0, -21.8, 26.0, -22.4],
-  // …and back up into the notch where the ear meets the cheek
-  [23.4, -21.0, 21.3, -17.4, 19.8, -14.6],
-  // the jaw
-  [18.4, -18.4, 10.5, -20.8, 5.0, -22.4],
+  [31.0, 32.5, 40.5, 19.0, 38.5, 5.0],
+  [38.2, -6.5, 36.2, -14.8, 34.0, -18.0],
+  // The ear's bottom clears the recovery works before cutting a real V in
+  // unused plate, rather than flattening the notch against that district.
+  [33.0, -20.2, 32.0, -21.8, 31.0, -22.0],
+  [30.5, -17.0, 29.0, -11.0, 28.0, -9.0],
+  [27.5, -12.0, 26.0, -17.0, 25.0, -19.0],
+  // the long lower cheek and jaw
+  [20.0, -20.5, 13.0, -22.5, 7.0, -23.0],
   // the corner where the trunk leaves the jaw
-  [1.5, -23.2, -1.2, -23.0, -3.4, -22.4],
-  // the trunk, front edge, tapering
-  [-7.2, -26.0, -11.8, -29.0, -17.0, -31.0],
-  [-21.2, -32.8, -25.4, -34.6, -29.5, -36.3],
-  // round the tip
-  [-33.2, -38.0, -36.8, -36.8, -37.6, -33.4],
-  // the curl, hooking back on itself
-  [-38.1, -31.4, -38.7, -29.4, -37.4, -28.4],
-  [-35.4, -27.9, -33.6, -30.0, -32.8, -32.4],
-  // the trunk's back edge, up to the face
-  [-31.3, -30.1, -28.8, -25.3, -27.0, -21.0],
+  [4.5, -23.2, 2.5, -23.2, 1.0, -23.0],
+  // The client terminal occupies only this root. The empty shaft narrows hard
+  // as soon as it clears the apron, then swings left across unused plate.
+  [-3.0, -26.0, -10.0, -30.5, -16.0, -32.0],
+  [-23.0, -35.0, -32.0, -37.5, -40.0, -38.0],
+  [-49.0, -39.5, -59.0, -40.5, -68.0, -40.0],
+  [-77.0, -39.5, -84.0, -38.0, -88.0, -36.0],
+  // The far end rises into a strong hook. Keeping the long axis horizontal
+  // lets plan() frame the city and the full trunk at its existing distance.
+  [-87.0, -33.0, -90.0, -29.5, -91.0, -26.0],
+  [-92.5, -22.0, -93.0, -16.5, -92.0, -13.0],
+  [-91.5, -8.0, -90.0, -4.5, -88.5, -2.5],
+  [-87.0, -0.5, -85.5, 0.5, -84.0, 0.0],
+  // Round the upturned tip, then cut back down its concave inside.
+  [-82.0, -1.0, -81.0, -3.0, -81.5, -5.0],
+  [-82.0, -8.5, -84.5, -11.5, -84.5, -14.0],
+  [-84.5, -17.0, -84.0, -19.0, -83.0, -20.5],
+  // the back edge of the shaft — only 6–8 logo units wide at its tip
+  [-82.0, -24.0, -80.0, -28.0, -78.0, -29.0],
+  [-78.0, -31.0, -72.0, -32.5, -67.0, -33.0],
+  [-58.0, -33.5, -48.0, -32.5, -40.0, -32.0],
+  [-30.0, -31.5, -22.0, -30.5, -16.0, -29.0],
+  // flare back around the client tier and rejoin the face
+  [-20.0, -27.0, -24.5, -23.5, -27.0, -21.0],
 ]
 
 /** Logo space → world plan. */

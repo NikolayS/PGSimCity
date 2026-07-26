@@ -127,8 +127,10 @@ void main() {
 
   vec3 tint = mix( mix( uIdle, uBusy, lit ), uStuck, stuck );
 
-  // The travelling light inside. Its direction is the traffic's: the phase
-  // climbs while a statement goes in and falls while rows come back out.
+  // The travelling wall light marks an active socket and always runs from the
+  // terminal to the backend. Coloured packets, not the wall, show the two data
+  // directions; reversing this phase for results makes the duct itself appear
+  // to oscillate over every statement cycle.
   float w = fract( vU * uBands - phase );
   float band = pow( 1.0 - w, 4.0 );
 
@@ -140,8 +142,9 @@ void main() {
   // bands frozen in the pipe is what idle_in_transaction actually looks like.
   float sick = stuck * 0.018;
 
-  // Matte near-black infrastructure, lifted at the rim. Traffic is a coloured
-  // band on the surface, not additive light shining through everything.
+  // Matte near-black infrastructure, lifted at the rim. The wall stays present
+  // around the traffic but is translucent enough that the two coloured packet
+  // streams remain legible inside their one shared socket.
   float wall = 0.11 + 0.10 * lit + sick;
   float stripe = band * ( 0.08 + 0.42 * lit ) * ( 1.0 - stuck * 0.78 );
   vec3 base = vec3( 0.014, 0.021, 0.037 ) * ( 0.72 + 0.28 * rim );
@@ -149,7 +152,7 @@ void main() {
     wall * ( 0.35 + 0.65 * rim ) +
     stripe * ( 0.45 + 0.55 * rim )
   );
-  gl_FragColor = vec4( col, 1.0 );
+  gl_FragColor = vec4( col, 0.72 );
 
   #ifdef USE_FOG
     #ifdef FOG_EXP2
@@ -196,7 +199,7 @@ function fillBoxes(mesh: THREE.InstancedMesh, specs: BoxSpec[]): void {
   mesh.instanceMatrix.needsUpdate = true
 }
 
-/** How fast the duct's light travels, and which way. Sign is the direction. */
+/** How fast the duct's terminal-to-backend wall light travels. */
 function phaseRate(st: BackendState): number {
   switch (st) {
     case 'starting':
@@ -212,9 +215,9 @@ function phaseRate(st: BackendState): number {
     case 'commit_wait':
       return 0.5
     case 'sending':
-      return -2.8 // rows, coming home
+      return 2.8
     case 'ending':
-      return -1.2
+      return 1.2
     case 'idle':
       return 0.05 // a held socket is not a dead one
     default:
@@ -719,6 +722,7 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
       vertexShader: CONDUIT_VERT,
       fragmentShader: CONDUIT_FRAG,
       depthWrite: true,
+      transparent: true,
       side: THREE.FrontSide,
       fog: true,
     }),

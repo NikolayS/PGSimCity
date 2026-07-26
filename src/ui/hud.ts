@@ -434,6 +434,22 @@ export function createHud(ctx: UiContext): UiModule {
   const tourBtn = toolBtn('tour', 'Guided tour', 'T', () => toggleTour())
   const paletteBtn = toolBtn('search', 'Command palette', '/', () => openPalette())
   const helpBtn = toolBtn('help', 'Keyboard & legend', '?', () => toggleHelp())
+  const walkLabel = el('span', { class: 'hud-walk__label', text: 'Walk' })
+  const walkBtn = el(
+    'button',
+    {
+      class: 'pg-btn hud-tool hud-walk',
+      type: 'button',
+      title: 'Walk the city  (G)',
+      'aria-label': 'Walk the city',
+      'aria-pressed': 'false',
+      on: {
+        click: () => bus.emit('camera:mode', { mode: cameraMode === 'walk' ? 'orbit' : 'walk' }),
+      },
+    },
+    icon('camera', 15),
+    walkLabel,
+  )
 
   /* ---- ENTRY POINT: the Diagnose console (observability/) -----------------
    * The only edit this feature makes outside observability/** and
@@ -477,7 +493,7 @@ export function createHud(ctx: UiContext): UiModule {
      the instrument bar; on a phone there is no room for both, and the split
      that survives is instruments on top, controls at the bottom — so this whole
      cluster moves into the transport dock and comes back on rotation. */
-  const toolCluster = el('div', { class: 'hud-tools' }, tourBtn, diagnoseLink, paletteBtn, helpBtn, perf)
+  const toolCluster = el('div', { class: 'hud-tools' }, tourBtn, diagnoseLink, walkBtn, paletteBtn, helpBtn, perf)
 
   const rightCluster = el('div', { class: 'hud-right' }, ckptBtn, el('span', { class: 'hud-sep' }), toolCluster)
 
@@ -1031,6 +1047,12 @@ export function createHud(ctx: UiContext): UiModule {
   cleanup.push(
     bus.on('camera:mode', ({ mode }) => {
       cameraMode = mode
+      const walking = mode === 'walk'
+      setClass(walkBtn, 'is-active', walking)
+      walkBtn.setAttribute('aria-pressed', String(walking))
+      walkBtn.setAttribute('aria-label', walking ? 'Exit walk mode' : 'Walk the city')
+      walkBtn.title = walking ? 'Exit walk mode  (G)' : 'Walk the city  (G)'
+      setText(walkLabel, walking ? 'Exit' : 'Walk')
     }),
     bus.on('tour:start', () => {
       tourRunning = true

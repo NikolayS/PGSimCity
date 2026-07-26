@@ -26,21 +26,13 @@
     max(18px, var(--safe-r))
     max(18px, var(--safe-b))
     max(18px, var(--safe-l));
-  background:
-    radial-gradient(circle at 50% 38%, color-mix(in srgb, var(--c-storage) 9%, transparent), transparent 54%),
-    color-mix(in srgb, var(--bg-void) 86%, transparent);
-  backdrop-filter: blur(10px) saturate(80%);
-  -webkit-backdrop-filter: blur(10px) saturate(80%);
+  background: var(--bg-overlay);
 }
 
 .an-overlay__panel {
   width: min(1540px, 100%);
   height: min(930px, calc(100vh - 36px - var(--safe-t) - var(--safe-b)));
-  border-color: color-mix(in srgb, var(--c-storage) 28%, var(--line-soft));
   background: color-mix(in srgb, var(--bg-panel-solid) 95%, transparent);
-  box-shadow:
-    0 34px 100px -42px color-mix(in srgb, var(--c-storage) 36%, #000),
-    0 0 0 1px color-mix(in srgb, var(--c-storage) 9%, transparent);
 }
 
 .an-overlay__head {
@@ -80,10 +72,10 @@
   align-items: center;
   gap: 3px;
   margin-left: auto;
-  padding: 3px;
-  border: 1px solid var(--line-hair);
-  border-radius: var(--r-md);
-  background: var(--bg-sunken);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .an-tab {
@@ -103,9 +95,9 @@
 }
 
 .an-tab.is-active {
-  color: var(--ink);
-  background: var(--bg-raise);
-  box-shadow: inset 0 0 0 1px var(--line-soft);
+  color: var(--c-storage);
+  background: transparent;
+  font-weight: 700;
 }
 
 .an-tab:focus-visible {
@@ -237,9 +229,9 @@
 
 .an-live__identity,
 .an-live__stats {
-  border: 1px solid var(--line-hair);
-  border-radius: var(--r-md);
-  background: var(--bg-sunken);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .an-live__identity {
@@ -274,6 +266,7 @@
 .an-live__stats {
   display: grid;
   grid-template-columns: repeat(5, minmax(80px, 1fr));
+  column-gap: 18px;
 }
 
 .an-live__stat {
@@ -281,11 +274,7 @@
   align-content: center;
   gap: 4px;
   padding: 9px 11px;
-  border-left: 1px solid var(--line-hair);
-}
-
-.an-live__stat:first-child {
-  border-left: 0;
+  border: 0;
 }
 
 .an-live__stat span {
@@ -315,28 +304,9 @@
   align-items: flex-start;
   gap: 9px;
   margin-bottom: 16px;
-  padding: 8px 10px;
-  border: 1px solid var(--line-hair);
-  background: var(--bg-sunken);
-  position: relative;
-}
-
-.an-honesty::before,
-.an-honesty::after {
-  content: '';
-  position: absolute;
-  width: 9px;
-  height: 9px;
-  border-color: var(--c-warn);
-  border-style: solid;
-}
-.an-honesty::before {
-  inset: 3px auto auto 3px;
-  border-width: 1px 0 0 1px;
-}
-.an-honesty::after {
-  inset: auto 3px 3px auto;
-  border-width: 0 1px 1px 0;
+  padding: 8px 0;
+  border: 0;
+  background: transparent;
 }
 
 .an-honesty__mark {
@@ -345,8 +315,8 @@
   display: grid;
   place-items: center;
   flex: 0 0 auto;
-  border: 1px solid color-mix(in srgb, var(--c-warn) 45%, transparent);
-  border-radius: 50%;
+  border: 0;
+  border-radius: 0;
   color: var(--c-warn);
   font: 700 9px var(--f-mono);
 }
@@ -604,39 +574,18 @@
   align-content: center;
   gap: 3px;
   padding: 7px 9px;
-  border: 1px solid var(--line-hair);
-  border-radius: var(--r-sm);
+  border: 0;
+  border-radius: 0;
   color: var(--ink-dim);
   text-align: left;
-  background: var(--bg-raise);
+  background: transparent;
   cursor: help;
-  transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
-  position: relative;
-}
-
-.an-region-card::before,
-.an-region-card::after {
-  content: '';
-  position: absolute;
-  width: 7px;
-  height: 7px;
-  border-color: currentColor;
-  border-style: solid;
-  pointer-events: none;
-}
-.an-region-card::before {
-  inset: 2px auto auto 2px;
-  border-width: 1px 0 0 1px;
-}
-.an-region-card::after {
-  inset: auto 2px 2px auto;
-  border-width: 0 1px 1px 0;
+  transition: background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
 }
 
 .an-region-card:hover,
 .an-region-card:focus-visible,
 .an-region-card.is-explained {
-  border-color: currentColor;
   background: var(--bg-raise);
   outline: 0;
   transform: translateY(-1px);
@@ -644,7 +593,7 @@
 
 .an-region-card__name {
   overflow: hidden;
-  color: var(--ink);
+  color: currentColor;
   font-size: 10px;
   font-weight: 600;
   text-overflow: ellipsis;

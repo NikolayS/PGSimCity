@@ -41,6 +41,7 @@ import { createControls } from './ui/controls'
 import { createInspector } from './ui/panel'
 import { createTour } from './ui/tour'
 import { createSearch } from './ui/search'
+import { createTouchpad } from './ui/touchpad'
 import type { UiContext, UiModule } from './ui/uikit'
 
 /* ============================================================================
@@ -201,6 +202,7 @@ async function boot(): Promise<void> {
   }
   const ui: UiModule[] = [
     createHud(uiCtx),
+    createTouchpad({ bus, walk }),
     createHelp(uiCtx),
     createControls(uiCtx),
     createInspector(uiCtx),

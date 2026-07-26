@@ -441,16 +441,15 @@
 .pgc-anatomy-entry {
   min-width: 0;
   margin: 11px 0 2px;
-  padding: 10px;
+  padding: 14px 0 2px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
-  border: 1px solid color-mix(in srgb, var(--c-storage) 34%, var(--line-soft));
-  border-radius: var(--r-md);
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--c-storage) 9%, transparent), transparent 70%),
-    var(--bg-sunken);
+  border: 0;
+  border-top: 1px solid var(--line-hair);
+  border-radius: 0;
+  background: transparent;
 }
 .pgc-anatomy-entry__copy {
   min-width: 0;
@@ -458,7 +457,7 @@
   gap: 3px;
 }
 .pgc-anatomy-entry__title {
-  color: var(--ink);
+  color: var(--c-storage);
   font-size: var(--fs-xs);
   line-height: 1.35;
 }
@@ -471,13 +470,13 @@
   flex: 0 0 auto;
   min-height: 38px;
   padding-inline: 10px;
-  color: var(--ink);
-  border-color: color-mix(in srgb, var(--c-storage) 40%, var(--line-soft));
-  background: color-mix(in srgb, var(--c-storage) 11%, var(--bg-raise));
+  color: var(--c-storage);
+  background: transparent;
   white-space: nowrap;
 }
 .pgc-anatomy-entry__button:hover {
-  border-color: color-mix(in srgb, var(--c-storage) 65%, var(--line-soft));
+  color: var(--c-storage);
+  background: var(--bg-raise);
 }
 .pgc-anatomy-entry__arrow {
   color: var(--c-storage);

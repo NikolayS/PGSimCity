@@ -25,7 +25,7 @@
   gap: 12px;
   min-height: 54px;
   padding: 0 12px;
-  border-radius: var(--r-md);
+  border-radius: 0;
 }
 
 /* --- identity + health ---------------------------------------------------- */
@@ -44,16 +44,13 @@
   border-radius: 50%;
   flex: 0 0 auto;
   background: var(--c-ok);
-  box-shadow: 0 0 12px -1px var(--c-ok);
-  transition: background var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+  transition: background var(--dur) var(--ease);
 }
 .hud-status.is-warn {
   background: var(--c-warn);
-  box-shadow: 0 0 12px -1px var(--c-warn);
 }
 .hud-status.is-crit {
   background: var(--c-crit);
-  box-shadow: 0 0 14px 0 var(--c-crit);
   animation: hud-blink 1.1s var(--ease) infinite;
 }
 
@@ -89,6 +86,7 @@
 .hud-vitals {
   display: flex;
   align-items: stretch;
+  gap: 8px;
   justify-self: center;
   min-width: 0;
   max-width: 100%;
@@ -108,7 +106,6 @@
   cursor: pointer;
   background: none;
   border: 0;
-  border-left: 1px solid var(--line-hair);
   /* A scroller's children must never shrink. Without this the five tiles
      divided a 176px strip between them on a phone and every readout was
      squeezed to a 16px sliver of itself. */
@@ -123,9 +120,6 @@
   row-gap: 1px;
   align-items: end;
   transition: background var(--dur-fast) var(--ease);
-}
-.hud-vital:first-child {
-  border-left: 0;
 }
 .hud-vital:hover {
   background: rgba(120, 170, 235, 0.06);
@@ -191,13 +185,13 @@
   align-items: center;
   gap: 9px;
   padding: 4px 10px 4px 4px;
-  background: var(--bg-sunken);
-  border: 1px solid var(--line-hair);
-  border-radius: var(--r-pill);
-  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  transition: background var(--dur) var(--ease);
 }
 .hud-ckpt:hover {
-  border-color: var(--line-soft);
+  background: var(--bg-raise);
 }
 .hud-ckpt:focus-visible {
   outline: 2px solid var(--c-backend);
@@ -262,8 +256,7 @@
   color: var(--c-checkpoint);
 }
 .hud-ckpt.is-running {
-  border-color: var(--c-checkpoint);
-  box-shadow: inset 0 0 22px -12px var(--c-checkpoint);
+  background: transparent;
 }
 .hud-ckpt.is-running .hud-ckpt__state {
   color: var(--c-checkpoint);
@@ -282,9 +275,16 @@
 }
 
 .hud-tool.is-active {
-  color: var(--ink-invert);
-  background: var(--c-backend);
-  border-color: var(--c-backend);
+  color: var(--c-backend);
+  background: transparent;
+}
+
+.hud-walk {
+  justify-content: center;
+}
+
+.hud-walk__label {
+  display: none;
 }
 
 .hud-perf {
@@ -332,7 +332,7 @@
   align-items: center;
   gap: 12px;
   padding: 8px 12px;
-  border-radius: var(--r-md);
+  border-radius: 0;
   min-height: 52px;
 }
 
@@ -404,9 +404,6 @@
   overflow-x: auto;
   scrollbar-width: thin;
   padding: 3px 2px;
-  /* Scenarios past the right edge are unreachable unless you know the rail
-     scrolls. The fade is the only thing that says so. */
-  mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent);
 }
 
 .hud-chip {
@@ -424,7 +421,7 @@
 }
 .hud-chip.is-active {
   color: var(--c-backend);
-  background: rgba(90, 209, 255, 0.08);
+  background: transparent;
 }
 .hud-chip.is-active .hud-chip__name {
   color: var(--ink);
@@ -460,7 +457,6 @@
 }
 .hud-now__bar {
   height: 2px;
-  border-radius: var(--r-pill);
   background: var(--line-hair);
   overflow: hidden;
 }
@@ -468,7 +464,7 @@
   display: block;
   height: 100%;
   width: 0;
-  background: linear-gradient(90deg, var(--c-backend), var(--c-shmem));
+  background: var(--c-backend);
   transition: width 220ms linear;
 }
 .hud-now.is-live .hud-now__name {
@@ -488,7 +484,6 @@
 }
 
 .hud-toast {
-  --toast-accent: var(--c-backend);
   pointer-events: auto;
   appearance: none;
   font: inherit;
@@ -502,35 +497,13 @@
   gap: 9px;
   padding: 9px 12px;
   background: var(--bg-panel);
-  border: 1px solid var(--line-hair);
-  border-radius: 1px;
-  backdrop-filter: blur(16px) saturate(140%);
-  -webkit-backdrop-filter: blur(16px) saturate(140%);
-  box-shadow: var(--glow-soft);
+  border: 0;
+  border-radius: 0;
   transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease-out-expo);
-  position: relative;
-}
-.hud-toast::before,
-.hud-toast::after {
-  content: '';
-  position: absolute;
-  width: 9px;
-  height: 9px;
-  border-color: var(--toast-accent);
-  border-style: solid;
-  pointer-events: none;
-}
-.hud-toast::before {
-  inset: 3px auto auto 3px;
-  border-width: 1px 0 0 1px;
-}
-.hud-toast::after {
-  inset: auto 3px 3px auto;
-  border-width: 0 1px 1px 0;
 }
 .hud-toast:hover {
   color: var(--ink);
-  border-color: var(--line-soft);
+  background: var(--bg-panel-solid);
 }
 .hud-toast__dot {
   color: var(--c-backend);
@@ -539,14 +512,8 @@
 .hud-toast__txt {
   min-width: 0;
 }
-.hud-toast--warn {
-  --toast-accent: var(--c-warn);
-}
 .hud-toast--warn .hud-toast__dot {
   color: var(--c-warn);
-}
-.hud-toast--good {
-  --toast-accent: var(--c-ok);
 }
 .hud-toast--good .hud-toast__dot {
   color: var(--c-ok);
@@ -562,7 +529,7 @@
 
 .hud-compass {
   padding: 5px;
-  border-radius: var(--r-md);
+  border-radius: 0;
 }
 .hud-compass__canvas {
   display: block;
@@ -587,9 +554,7 @@ body.pg-labels-off #labels-root {
   z-index: 30;
   display: none;
   padding: 24px;
-  background: var(--bg-sunken);
-  backdrop-filter: blur(5px);
-  -webkit-backdrop-filter: blur(5px);
+  background: var(--bg-overlay);
 }
 .help-overlay:not([hidden]) {
   display: grid;
@@ -689,7 +654,6 @@ body.pg-labels-off #labels-root {
   flex: 0 0 auto;
   border-radius: 3px;
   background: var(--sw, var(--ink));
-  box-shadow: 0 0 12px -2px var(--sw, var(--ink));
 }
 .help-legend__text {
   display: grid;
@@ -778,7 +742,6 @@ body.pg-labels-off #labels-root {
 @media (max-width: 1080px) {
   .hud-vitals {
     scrollbar-width: thin;
-    mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
   }
   .hud-vitals::-webkit-scrollbar {
     display: block;
@@ -882,7 +845,7 @@ body.pg-labels-off #labels-root {
     gap: 6px;
     padding: 6px;
     min-height: 0;
-    border-radius: var(--r-md);
+    border-radius: 0;
   }
 
   /* Two full-width rows, each scrolling inside itself. `flex: 1 1 100%` is what
@@ -897,8 +860,6 @@ body.pg-labels-off #labels-root {
     overflow-x: auto;
     overflow-y: hidden;
     scrollbar-width: none;
-    /* the fade is the only thing that says the row keeps going */
-    mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
   }
   .hud-transport__deck::-webkit-scrollbar,
   .hud-transport__dock::-webkit-scrollbar,
@@ -922,6 +883,10 @@ body.pg-labels-off #labels-root {
   .hud-tools .pg-btn--icon {
     width: var(--tap);
     height: var(--tap);
+  }
+  .hud-tools .hud-walk {
+    min-width: var(--tap);
+    padding-inline: 0;
   }
   .hud-play {
     width: var(--tap);
@@ -971,7 +936,6 @@ body.pg-labels-off #labels-root {
     overflow-x: auto;
     scrollbar-width: none;
     padding: 0;
-    mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
   }
   .hud-chip {
     min-height: var(--tap);
@@ -1011,6 +975,15 @@ body.pg-labels-off #labels-root {
    ========================================================================*/
 
 @media (max-width: 900px) and (pointer: coarse) {
+  #hud .hud-walk {
+    width: auto;
+    min-width: var(--tap);
+    padding-inline: 12px;
+    gap: 7px;
+  }
+  #hud .hud-walk__label {
+    display: inline;
+  }
   #hud .pg-btn--icon,
   #hud .pgc-tab {
     width: var(--tap);
