@@ -424,7 +424,10 @@ export function createCameraRig(
         if (dAng > Math.PI) dAng -= Math.PI * 2
         else if (dAng < -Math.PI) dAng += Math.PI * 2
         // inRotX is consumed as (2*PI*inRotX)/viewH radians, so convert back.
-        inRotX += (dAng * viewH) / (Math.PI * 2)
+        // Negated: screen Y points down, so a visually clockwise twist gives a
+        // POSITIVE atan2 delta, and feeding that straight in turned the city
+        // against the fingers. The map has to follow the hand.
+        inRotX -= (dAng * viewH) / (Math.PI * 2)
 
         // both fingers moving together vertically -> tilt
         inRotY += my - pinchMy
