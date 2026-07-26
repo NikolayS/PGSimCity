@@ -173,6 +173,8 @@ export interface Atmosphere {
   keyTarget: readonly [number, number, number]
   shadowBias: number
   shadowNormalBias: number
+  /** 0..1 — how dark a cast shadow goes. A cartoon shadow is a tone, not a hole. */
+  shadowIntensity: number
   fillColor: number
   fillIntensity: number
   fillPos: readonly [number, number, number]
@@ -213,6 +215,7 @@ export const ATMOSPHERE: Record<ThemeMode, Atmosphere> = {
     keyTarget: [0, 0, -35],
     shadowBias: -0.0006,
     shadowNormalBias: 0.6,
+    shadowIntensity: 1,
     fillColor: 0x4a6fa5,
     fillIntensity: 0.35,
     fillPos: [-320, 168, 296],
@@ -243,7 +246,7 @@ export const ATMOSPHERE: Record<ThemeMode, Atmosphere> = {
     // clips to white and the ink lines have nothing to draw against. Measured
     // on the establishing shot: hemisphere 0.62 + key 1.35 gives 0.90–1.30
     // irradiance, and 0.92 exposure brings the top of that back under the knee.
-    exposure: 0.95,
+    exposure: 1.0,
     // Daylight sees a long way. The haze has to start well outside the city or
     // the districts read through a white curtain.
     fogNearScale: 2.1,
@@ -271,6 +274,11 @@ export const ATMOSPHERE: Record<ThemeMode, Atmosphere> = {
     keyTarget: [0, 0, -20],
     shadowBias: -0.0004,
     shadowNormalBias: 0.45,
+    // The plaza is 1024 towers on one deck: at full strength their own shadows
+    // turn the buffer pool into a dark field and the page colours lose the
+    // surface they are supposed to sit on. A drawn shadow is a flat tone about
+    // two thirds of the lit value, and that is what this is.
+    shadowIntensity: 0.55,
     fillColor: 0xbfd8ff, // sky bounce from behind
     fillIntensity: 0.25,
     fillPos: [-300, 150, -230],

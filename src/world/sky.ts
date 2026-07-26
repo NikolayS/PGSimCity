@@ -34,7 +34,7 @@ const N_STARS = 1400
 
 /** Where the figure sits: azimuth in the XZ plane, then elevation. */
 const ASTERISM_AZ = Math.atan2(0.851, 0.522)
-const ASTERISM_EL = 0.50 // ~29°
+const ASTERISM_EL = 0.42 // ~24°, high enough to clear the skyline
 /** Degrees of sky per unit of the figure below. */
 const ASTERISM_SCALE = 1.42
 
@@ -256,11 +256,13 @@ export function createSky(theme: ThemeApi): THREE.Object3D {
     // Cool white, a shade brighter than the field they sit in — but still under
     // the bloom threshold, because the sky is a backdrop and never a light.
     c.setHex(0xdce9ff)
-    const b = 0.34 + mag * 0.5
+    // Brighter than the field so the figure carries, still under the bloom
+    // threshold so it stays a backdrop.
+    const b = 0.45 + mag * 0.5
     col[i * 3] = c.r * b
     col[i * 3 + 1] = c.g * b
     col[i * 3 + 2] = c.b * b
-    siz[i] = 1.5 + mag * 3.6
+    siz[i] = 2.0 + mag * 4.4
     pha[i] = (k * 0.37) % 1
   }
   for (let l = 0; l < ASTERISM_LINKS.length; l++) {
@@ -276,7 +278,7 @@ export function createSky(theme: ThemeApi): THREE.Object3D {
     // Same queue trick as the stars: opaque queue, additive blend, no depth.
     transparent: false,
     blending: THREE.AdditiveBlending,
-    opacity: 0.085,
+    opacity: 0.07,
     depthWrite: false,
     depthTest: false,
     toneMapped: false,

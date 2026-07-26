@@ -12,10 +12,9 @@
    there, which is what lets engine/labels.ts nudge a chip off its anchor to
    dodge a collision and still draw an honest leader back to it:
 
-        ┌───────────────────────────────┐
-        │ ▌CHECKPOINTER      2.3 MB/s   │   ← .lbl__chip, at (--lbl-dx, --lbl-dy)
-        │ ▌background process           │
-        └───────────────────────────────┘
+        ┌ CHECKPOINTER        2.3 MB/s  ┐   ← .lbl__chip, at (--lbl-dx, --lbl-dy)
+          background process
+        └                              ┘
        ╱                                    ← .lbl__leader, --lbl-lead long
       ●                                     ← .lbl__dot, the world anchor (0,0)
 
@@ -91,14 +90,25 @@
   transform: translate(var(--lbl-dx), var(--lbl-dy));
 }
 
-/* the 2px semantic accent bar */
-.lbl__chip::before {
+/* Opposed setting-out brackets: the same measured-corner language as the
+   selection drawing, with colour confined to the ticks and live readout. */
+.lbl__chip::before,
+.lbl__chip::after {
   content: "";
   position: absolute;
-  inset: 0 auto 0 0;
-  width: 2px;
-  background: var(--lbl-accent);
-  box-shadow: 0 0 10px -1px var(--lbl-accent);
+  width: 8px;
+  height: 8px;
+  border-color: var(--lbl-accent);
+  border-style: solid;
+  pointer-events: none;
+}
+.lbl__chip::before {
+  inset: 3px auto auto 3px;
+  border-width: 1px 0 0 1px;
+}
+.lbl__chip::after {
+  inset: auto 3px 3px auto;
+  border-width: 0 1px 1px 0;
 }
 
 .lbl__name {

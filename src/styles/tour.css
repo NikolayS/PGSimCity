@@ -90,7 +90,7 @@ body.pg-tour::after {
   width: 100%;
   min-width: 0;
   border-color: var(--line-soft);
-  background: linear-gradient(180deg, rgba(14, 22, 38, 0.82), rgba(8, 12, 22, 0.9));
+  background: var(--bg-panel);
   box-shadow: var(--glow-soft), 0 0 0 1px rgba(90, 209, 255, 0.06);
   overflow: hidden;
 }
@@ -275,7 +275,7 @@ body.pg-tour::after {
   width: min(560px, 100%);
   padding: 12px 16px 14px;
   border-color: var(--line-hair);
-  background: linear-gradient(180deg, rgba(14, 22, 38, 0.8), rgba(8, 12, 22, 0.88));
+  background: var(--bg-panel);
 }
 .tour-narrate:not(.is-live) {
   display: none;

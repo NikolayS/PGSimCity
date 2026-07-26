@@ -213,6 +213,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   key.shadow.mapSize.set(2048, 2048)
   key.shadow.bias = air.shadowBias
   key.shadow.normalBias = air.shadowNormalBias
+  key.shadow.intensity = air.shadowIntensity
   key.castShadow = quality.shadows
 
   // Fill: colder and from the south-west at night, sky bounce from behind at
@@ -377,6 +378,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     key.target.updateMatrixWorld()
     key.shadow.bias = air.shadowBias
     key.shadow.normalBias = air.shadowNormalBias
+    key.shadow.intensity = air.shadowIntensity
 
     fill.color.setHex(air.fillColor)
     fill.position.set(air.fillPos[0], air.fillPos[1], air.fillPos[2])

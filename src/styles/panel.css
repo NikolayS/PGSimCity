@@ -234,13 +234,30 @@
 
 /* danger: present but quiet, louder once it is actually armed */
 .pgc-knob.is-danger {
-  padding-left: 9px;
-  margin-left: -9px;
-  border-left: 1px solid transparent;
+  position: relative;
+  padding-inline: 9px;
+  margin-inline: -9px;
 }
 .pgc-knob.is-danger.is-armed {
-  border-left-color: var(--c-crit);
-  background: linear-gradient(90deg, color-mix(in srgb, var(--c-crit) 8%, transparent), transparent 62%);
+  background: none;
+}
+.pgc-knob.is-danger.is-armed::before,
+.pgc-knob.is-danger.is-armed::after {
+  content: '';
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  border-color: var(--c-crit);
+  border-style: solid;
+  pointer-events: none;
+}
+.pgc-knob.is-danger.is-armed::before {
+  inset: 3px auto auto 0;
+  border-width: 1px 0 0 1px;
+}
+.pgc-knob.is-danger.is-armed::after {
+  inset: auto 0 3px auto;
+  border-width: 0 1px 1px 0;
 }
 .pgc-knob.is-danger.is-armed .pgc-val__n {
   color: var(--c-crit);
@@ -347,6 +364,25 @@
   align-items: stretch;
   gap: 5px;
   padding-top: 10px;
+}
+
+/* Sheet furniture is information, not decoration: each scrollable drawing
+   identifies itself once, like the title block on a plan. */
+.pgc-rail__body::before,
+.pgc-insp__body::before {
+  display: block;
+  margin: 0 0 9px;
+  padding: 0 0 7px;
+  border-bottom: 1px solid var(--sheet-rule);
+  color: var(--ink-faint);
+  font: 500 8px/1.3 var(--f-mono);
+  letter-spacing: 0.16em;
+}
+.pgc-rail__body::before {
+  content: 'CONTROL SHEET / C-01 / REV A';
+}
+.pgc-insp__body::before {
+  content: 'INSPECTION SHEET / I-02 / LIVE';
 }
 .pgc-insp__top {
   display: flex;

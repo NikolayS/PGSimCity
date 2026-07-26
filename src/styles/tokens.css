@@ -26,6 +26,11 @@
   --line-hair: rgba(120, 170, 235, 0.14);
   --line-soft: rgba(120, 170, 235, 0.26);
   --line-hard: rgba(150, 200, 255, 0.45);
+  /* Technical-sheet furniture. These are structural ink, never semantic
+     status colours: component meaning still comes from the palette below. */
+  --sheet-grid: rgba(120, 170, 235, 0.035);
+  --sheet-mark: rgba(150, 200, 255, 0.58);
+  --sheet-rule: rgba(120, 170, 235, 0.2);
 
   /* --- type --- */
   --ink: #e8f1ff;
@@ -56,9 +61,9 @@
   --glow-soft: 0 10px 40px -18px rgba(0, 0, 0, 0.9);
 
   /* --- geometry --- */
-  --r-sm: 6px;
-  --r-md: 10px;
-  --r-lg: 16px;
+  --r-sm: 2px;
+  --r-md: 3px;
+  --r-lg: 4px;
   --r-pill: 999px;
 
   /* --- type ramp --- */
@@ -123,6 +128,9 @@
   --line-hair: rgba(24, 34, 46, 0.11);
   --line-soft: rgba(24, 34, 46, 0.2);
   --line-hard: rgba(24, 34, 46, 0.4);
+  --sheet-grid: rgba(24, 34, 46, 0.028);
+  --sheet-mark: rgba(24, 34, 46, 0.52);
+  --sheet-rule: rgba(24, 34, 46, 0.17);
 
   /* --- type --- */
   --ink: #18222e;
@@ -165,7 +173,9 @@
 }
 
 :root[data-theme="day"] .pg-panel__head {
-  background: linear-gradient(180deg, rgba(24, 34, 46, 0.05), transparent);
+  background:
+    linear-gradient(var(--sheet-grid) 1px, transparent 1px) 0 0 / 24px 24px,
+    linear-gradient(90deg, var(--sheet-grid) 1px, transparent 1px) 0 0 / 24px 24px;
 }
 
 :root[data-theme="day"] .pg-scroll::-webkit-scrollbar-thumb {
@@ -209,15 +219,16 @@
 :root[data-theme="day"] .lbl__more {
   background: rgba(24, 34, 46, 0.07);
 }
-/* The accent bar is a 2px ink stripe now; a halo around it only muddies it. */
-:root[data-theme="day"] .lbl__chip::before {
+/* Registration ticks are flat ink at noon; a halo only muddies the drawing. */
+:root[data-theme="day"] .lbl__chip::before,
+:root[data-theme="day"] .lbl__chip::after {
   box-shadow: none;
 }
 
 /* The tour deck, the narration card and the command palette. */
 :root[data-theme="day"] .tour-card,
 :root[data-theme="day"] .tour-narrate {
-  background: linear-gradient(180deg, rgba(252, 251, 247, 0.94), rgba(244, 241, 233, 0.96));
+  background: var(--bg-panel);
   box-shadow: var(--glow-soft), 0 0 0 1px rgba(24, 34, 46, 0.08);
 }
 :root[data-theme="day"] body.pg-tour::after {

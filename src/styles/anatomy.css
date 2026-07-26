@@ -359,8 +359,27 @@ body.pg-anatomy-open .an-launcher {
   gap: 9px;
   margin-bottom: 16px;
   padding: 8px 10px;
-  border-left: 2px solid var(--c-warn);
-  background: color-mix(in srgb, var(--c-warn) 6%, transparent);
+  border: 1px solid var(--line-hair);
+  background: var(--bg-sunken);
+  position: relative;
+}
+
+.an-honesty::before,
+.an-honesty::after {
+  content: '';
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  border-color: var(--c-warn);
+  border-style: solid;
+}
+.an-honesty::before {
+  inset: 3px auto auto 3px;
+  border-width: 1px 0 0 1px;
+}
+.an-honesty::after {
+  inset: auto 3px 3px auto;
+  border-width: 0 1px 1px 0;
 }
 
 .an-honesty__mark {
@@ -629,20 +648,39 @@ body.pg-anatomy-open .an-launcher {
   gap: 3px;
   padding: 7px 9px;
   border: 1px solid var(--line-hair);
-  border-left: 2px solid currentColor;
   border-radius: var(--r-sm);
   color: var(--ink-dim);
   text-align: left;
   background: var(--bg-raise);
   cursor: help;
   transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+  position: relative;
+}
+
+.an-region-card::before,
+.an-region-card::after {
+  content: '';
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-color: currentColor;
+  border-style: solid;
+  pointer-events: none;
+}
+.an-region-card::before {
+  inset: 2px auto auto 2px;
+  border-width: 1px 0 0 1px;
+}
+.an-region-card::after {
+  inset: auto 2px 2px auto;
+  border-width: 0 1px 1px 0;
 }
 
 .an-region-card:hover,
 .an-region-card:focus-visible,
 .an-region-card.is-explained {
   border-color: currentColor;
-  background: color-mix(in srgb, currentColor 9%, var(--bg-raise));
+  background: var(--bg-raise);
   outline: 0;
   transform: translateY(-1px);
 }

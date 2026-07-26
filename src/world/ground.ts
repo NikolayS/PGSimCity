@@ -888,6 +888,8 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   function dispose(): void {
     for (const g of geos) g.dispose()
     for (const m of mats) m.dispose()
+    // The edge field is ours alone — the theme cache never saw it.
+    edgeTex.dispose()
     group.clear()
   }
 

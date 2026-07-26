@@ -224,31 +224,40 @@ void RE_Direct_Toon( const in IncidentLight directLight, const in vec3 geometryP
 #define RE_Direct RE_Direct_Toon
 `
 
-const VCOLOR_GLSL = /* glsl */ `
-vec3 pgDayVertexColor( vec3 c ) {
-	float m = max( max( c.r, c.g ), max( c.b, 1e-4 ) );
-	float lum = clamp( dot( c, vec3( 0.2126, 0.7152, 0.0722 ) ), 0.0, 1.0 );
-	// Bright at night becomes deep in daylight, and dark becomes pale. The 0.62
-	// exponent spends most of the band on the dim half, where the buffer grid
-	// actually lives.
-	float v = mix( 0.62, 0.05, pow( lum, 0.45 ) );
-	// Normalising by the largest channel keeps the hue and the saturation while
-	// throwing away the magnitude, which is the part being re-decided.
-	vec3 chroma = c / m;
-	// ...but only for colours that had a magnitude to begin with. A near-black
-	// navy is "this frame is empty", not "this frame is blue".
-	float sat = clamp( m * 6.0, 0.25, 1.0 );
-	return mix( vec3( v ), chroma * v, sat );
-}
-`
-
 const TOON_ANCHOR = '#include <lights_physical_pars_fragment>'
 const VCOLOR_ANCHOR = '#include <color_fragment>'
+
+/*
+ * Written inline rather than as a function called from the chunk. A helper
+ * declared at the top of the shader is not reliably in scope by the time the
+ * colour chunk runs — three assembles the fragment source from a prefix, the
+ * material shader and resolved includes, and a hoisted definition put in front
+ * of that lot fails to link. A brace-scoped block substituted for the chunk
+ * itself has no such problem and needs nothing declared anywhere else.
+ *
+ * `vColor.rgb` is valid whether vColor is a vec3 or (with alpha) a vec4.
+ */
 const VCOLOR_BODY = /* glsl */ `
-#if defined( USE_COLOR_ALPHA )
-	diffuseColor *= vec4( pgDayVertexColor( vColor.rgb ), vColor.a );
-#elif defined( USE_COLOR )
-	diffuseColor.rgb *= pgDayVertexColor( vColor );
+#if defined( USE_COLOR_ALPHA ) || defined( USE_COLOR )
+	{
+		vec3 pgC = vColor.rgb;
+		float pgM = max( max( pgC.r, pgC.g ), max( pgC.b, 1e-4 ) );
+		float pgL = clamp( dot( pgC, vec3( 0.2126, 0.7152, 0.0722 ) ), 0.0, 1.0 );
+		// Bright at night becomes deep in daylight, and dark becomes pale. The
+		// 0.45 exponent spends most of the band on the dim half, where the
+		// buffer grid actually lives.
+		float pgV = mix( 0.46, 0.04, pow( pgL, 0.45 ) );
+		// Normalising by the largest channel keeps the hue and the saturation
+		// while throwing away the magnitude, which is the part being re-decided
+		// — but only for colours that had a magnitude to begin with. A
+		// near-black navy means "this frame is empty", not "this frame is blue".
+		vec3 pgOut = mix( vec3( pgV ), ( pgC / pgM ) * pgV, clamp( pgM * 6.0, 0.25, 1.0 ) );
+		#if defined( USE_COLOR_ALPHA )
+			diffuseColor *= vec4( pgOut, vColor.a );
+		#else
+			diffuseColor.rgb *= pgOut;
+		#endif
+	}
 #endif
 `
 
@@ -263,7 +272,7 @@ function themeHook(shader: { fragmentShader: string }): void {
   if (f.indexOf(TOON_ANCHOR) >= 0) f = f.replace(TOON_ANCHOR, TOON_ANCHOR + '\n' + TOON_GLSL)
   // The replacement is inert unless the material declares vertex colours: the
   // body it substitutes carries the same #if guards as the chunk it replaces.
-  if (f.indexOf(VCOLOR_ANCHOR) >= 0) f = VCOLOR_GLSL + f.replace(VCOLOR_ANCHOR, VCOLOR_BODY)
+  if (f.indexOf(VCOLOR_ANCHOR) >= 0) f = f.replace(VCOLOR_ANCHOR, VCOLOR_BODY)
   shader.fragmentShader = f
 }
 

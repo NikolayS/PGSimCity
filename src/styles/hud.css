@@ -488,6 +488,7 @@
 }
 
 .hud-toast {
+  --toast-accent: var(--c-backend);
   pointer-events: auto;
   appearance: none;
   font: inherit;
@@ -502,12 +503,30 @@
   padding: 9px 12px;
   background: var(--bg-panel);
   border: 1px solid var(--line-hair);
-  border-left: 2px solid var(--c-backend);
-  border-radius: var(--r-sm);
+  border-radius: 1px;
   backdrop-filter: blur(16px) saturate(140%);
   -webkit-backdrop-filter: blur(16px) saturate(140%);
   box-shadow: var(--glow-soft);
   transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease-out-expo);
+  position: relative;
+}
+.hud-toast::before,
+.hud-toast::after {
+  content: '';
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  border-color: var(--toast-accent);
+  border-style: solid;
+  pointer-events: none;
+}
+.hud-toast::before {
+  inset: 3px auto auto 3px;
+  border-width: 1px 0 0 1px;
+}
+.hud-toast::after {
+  inset: auto 3px 3px auto;
+  border-width: 0 1px 1px 0;
 }
 .hud-toast:hover {
   color: var(--ink);
@@ -521,13 +540,13 @@
   min-width: 0;
 }
 .hud-toast--warn {
-  border-left-color: var(--c-warn);
+  --toast-accent: var(--c-warn);
 }
 .hud-toast--warn .hud-toast__dot {
   color: var(--c-warn);
 }
 .hud-toast--good {
-  border-left-color: var(--c-ok);
+  --toast-accent: var(--c-ok);
 }
 .hud-toast--good .hud-toast__dot {
   color: var(--c-ok);
