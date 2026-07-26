@@ -4,7 +4,15 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
-import { COLOR, applyStoredThemeMode, atmosphere, onThemeMode, paintSceneMaterial } from '../core/theme'
+import {
+  COLOR,
+  applyStoredThemeMode,
+  atmosphere,
+  onThemeMode,
+  paintSceneMaterial,
+  setBloomAvailable,
+  themeMode,
+} from '../core/theme'
 import type { Atmosphere, ThemeMode } from '../core/theme'
 import { clamp, damp } from '../core/util'
 import { ANCHOR, CITY } from '../world/layout'
@@ -65,16 +73,19 @@ export interface RendererApi {
  * Quality presets.
  * ------------------------------------------------------------------------*/
 
-const LEVELS: readonly QualityLevel[] = ['low', 'medium', 'high', 'ultra']
+const LEVELS: readonly QualityLevel[] = ['low', 'reduced', 'medium', 'high', 'ultra']
 
 /** Device-pixel-ratio ceiling per level. Re-evaluated on every resize. */
-const DPR_CAP: Record<QualityLevel, number> = { low: 1, medium: 1.5, high: 2, ultra: 2 }
+const DPR_CAP: Record<QualityLevel, number> = {
+  low: 1,
+  reduced: 1,
+  medium: 1.5,
+  high: 2,
+  ultra: 2,
+}
 
 function deviceDpr(): number {
   return typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1
-}
-function dprFor(level: QualityLevel): number {
-  return Math.min(DPR_CAP[level], deviceDpr())
 }
 /** SMAA is a full extra pass — only worth it once we can afford shadows too. */
 function wantsSmaa(level: QualityLevel): boolean {
@@ -84,7 +95,7 @@ function wantsSmaa(level: QualityLevel): boolean {
 export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
   low: {
     level: 'low',
-    pixelRatio: dprFor('low'),
+    pixelRatio: DPR_CAP.low,
     bloom: false,
     shadows: false,
     maxParticles: 700,
@@ -93,18 +104,27 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     // could happen — and 'low' exists precisely because we can't afford it.
     antialias: false,
   },
+  reduced: {
+    level: 'reduced',
+    pixelRatio: DPR_CAP.reduced,
+    bloom: true,
+    shadows: false,
+    maxParticles: 700,
+    maxLabels: 18,
+    antialias: false,
+  },
   medium: {
     level: 'medium',
-    pixelRatio: dprFor('medium'),
+    pixelRatio: DPR_CAP.medium,
     bloom: true,
     shadows: false,
     maxParticles: 1500,
     maxLabels: 26,
-    antialias: true,
+    antialias: false,
   },
   high: {
     level: 'high',
-    pixelRatio: dprFor('high'),
+    pixelRatio: DPR_CAP.high,
     bloom: true,
     shadows: true,
     maxParticles: 2600,
@@ -113,7 +133,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
   },
   ultra: {
     level: 'ultra',
-    pixelRatio: dprFor('ultra'),
+    pixelRatio: DPR_CAP.ultra,
     bloom: true,
     shadows: true,
     maxParticles: 4200,
@@ -149,7 +169,9 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   /* ---- renderer ---------------------------------------------------------*/
 
   const renderer = new THREE.WebGLRenderer({
-    antialias: quality.antialias,
+    // The default framebuffer is the low-tier path, so keep its context cheap.
+    // High tiers get SMAA in the composer instead.
+    antialias: false,
     powerPreference: 'high-performance',
     stencil: false,
     alpha: false,
@@ -494,6 +516,9 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     if (useComposer()) buildComposer()
     applyPassToggles()
     applyLightCompensation()
+    if (setBloomAvailable(quality.bloom)) {
+      scene.traverse((obj) => paintObject(obj, themeMode()))
+    }
 
     // Force a full re-size so pixel ratio / composer targets follow the level.
     viewW = -1
@@ -530,16 +555,26 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   function stepDown(): void {
     const i = levelIndex(quality.level)
     if (i <= 0) return
+    const previous = quality.level
     const next = LEVELS[i - 1]
+    const losesBloom = quality.bloom && !QUALITY_PRESETS[next].bloom
+    const preset = QUALITY_PRESETS[next]
+    const reductions: string[] = []
+    if (preset.pixelRatio < quality.pixelRatio) reductions.push('render scale')
+    if (preset.maxParticles < quality.maxParticles) reductions.push('particles')
+    if (preset.maxLabels < quality.maxLabels) reductions.push('labels')
+    if (quality.antialias && !preset.antialias) reductions.push('antialiasing')
+    if (quality.shadows && !preset.shadows) reductions.push('shadows')
     autoDowngrades++
     applyQuality(next)
     bus.emit('quality', { level: next })
     bus.emit('toast', {
-      text: manualOverride
-        ? `Frame rate low — graphics quality reduced to ${next}. Set it back in the top bar; it will not be lowered again.`
-        : `Frame rate low — graphics quality reduced to ${next}.`,
+      text: losesBloom
+        ? 'Frame rate stayed low — bloom lighting disabled. Bright-colour fallback is active.'
+        : `Frame rate stayed low — reduced ${reductions.join(', ')}; quality is now ${next}.`,
       kind: 'warn',
-      ms: manualOverride ? 6000 : 4200,
+      ms: 7000,
+      action: { label: `Restore ${previous}`, quality: previous },
     })
   }
 

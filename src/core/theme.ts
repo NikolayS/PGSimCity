@@ -74,6 +74,9 @@ function writeStoredMode(m: ThemeMode): void {
 /** Always night at import — see the note on COLOR. */
 let mode: ThemeMode = DEFAULT_MODE
 
+/** Whether night-mode semantic materials can rely on a bloom pass. */
+let bloomAvailable = true
+
 /** The viewer's remembered choice. Night unless they have asked for daylight. */
 export function storedThemeMode(): ThemeMode {
   return readStoredMode()
@@ -102,6 +105,19 @@ export function onThemeMode(fn: ModeListener): () => void {
 
 /** Every live theme cache, so a mode change can repaint all of them. */
 const caches = new Set<{ repaint(m: ThemeMode): void }>()
+
+/**
+ * Repaint semantic materials when the renderer adds or removes bloom.
+ *
+ * Returns whether availability changed so the renderer can repaint uncached
+ * scene materials in the same quality-change transaction.
+ */
+export function setBloomAvailable(available: boolean): boolean {
+  if (available === bloomAvailable) return false
+  bloomAvailable = available
+  for (const c of caches) c.repaint(mode)
+  return true
+}
 
 function applyPalette(m: ThemeMode): void {
   const p = PALETTES[m]
@@ -392,10 +408,40 @@ interface NeonSpec {
   intensity: number
 }
 
+/** Linear luminance floor for semantic colour when no halo can carry it. */
+const NO_BLOOM_NEON_LUMINANCE = 0.24
+
+function colorLuminance(c: THREE.Color): number {
+  return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
+}
+
+/**
+ * Bloom-off night neon is a saturated fill. Preserve the authored hue, but
+ * stop low intensity from turning semantic state into a near-black surface.
+ */
+function paintNightNeonColor(color: THREE.Color, hex: number, intensity: number): void {
+  color.setHex(hex)
+  if (bloomAvailable) {
+    color.multiplyScalar(intensity)
+    return
+  }
+
+  const luminance = colorLuminance(color)
+  if (luminance <= 0) return
+  const maxChannel = Math.max(color.r, color.g, color.b)
+  const target = Math.max(
+    NO_BLOOM_NEON_LUMINANCE,
+    luminance * Math.min(1.35, Math.max(1, intensity)),
+  )
+  color.multiplyScalar(Math.min(target / luminance, 1 / maxChannel))
+}
+
 function paintNeon(m: THREE.MeshBasicMaterial, s: NeonSpec, target: ThemeMode): void {
-  const hex = target === 'day' ? dayAccent(s.color) : s.color
-  const k = target === 'day' ? dayNeonIntensity(s.intensity) : s.intensity
-  m.color.setHex(hex).multiplyScalar(k)
+  if (target === 'day') {
+    m.color.setHex(dayAccent(s.color)).multiplyScalar(dayNeonIntensity(s.intensity))
+  } else {
+    paintNightNeonColor(m.color, s.color, s.intensity)
+  }
   installThemeShader(m, target)
 }
 
@@ -540,7 +586,13 @@ export function paintSceneMaterial(m: THREE.Material, target: ThemeMode): void {
     if (first) night.color = basic.color.getHex()
     const src = night.color
     if (src !== undefined && !isNeutralExtreme(src)) {
-      basic.color.setHex(target === 'day' ? (lit ? daySurface(src) : dayAccent(src)) : src)
+      if (target === 'day') {
+        basic.color.setHex(lit ? daySurface(src) : dayAccent(src))
+      } else if (basic.isMeshBasicMaterial === true && basic.toneMapped === false) {
+        paintNightNeonColor(basic.color, src, 1)
+      } else {
+        basic.color.setHex(src)
+      }
     }
   }
 

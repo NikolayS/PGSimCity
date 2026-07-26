@@ -485,7 +485,12 @@ export interface BusEvents {
   hover: { id: string | null }
   knob: { key: keyof Knobs; value: unknown }
   scenario: { id: string | null }
-  toast: { text: string; kind?: 'info' | 'warn' | 'good'; ms?: number }
+  toast: {
+    text: string
+    kind?: 'info' | 'warn' | 'good'
+    ms?: number
+    action?: { label: string; quality: QualityLevel }
+  }
   narrate: { title: string; body: string; ms?: number } | null
   'tour:start': { chapter?: number }
   'tour:stop': Record<string, never>
@@ -581,7 +586,7 @@ export interface QualitySettings {
   antialias: boolean
 }
 
-export type QualityLevel = 'low' | 'medium' | 'high' | 'ultra'
+export type QualityLevel = 'low' | 'reduced' | 'medium' | 'high' | 'ultra'
 
 export interface WorldContext {
   scene: THREE.Scene

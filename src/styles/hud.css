@@ -616,6 +616,13 @@
 }
 .hud-toast__txt {
   min-width: 0;
+  flex: 1;
+}
+.hud-toast__action {
+  flex: none;
+  color: var(--ink);
+  font-weight: 700;
+  white-space: nowrap;
 }
 .hud-toast--warn .hud-toast__dot {
   color: var(--c-warn);
