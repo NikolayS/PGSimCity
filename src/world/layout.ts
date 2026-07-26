@@ -447,18 +447,30 @@ route('logical.decode', [
 
 /* --- replication over the wire ------------------------------------------- */
 
+/* A cable route, not a trajectory. The duct climbs a riser out of the
+ * walsender's cabinet, dives into the ground, runs south at grade for 130 m
+ * along the east verge — clear of the excavation and of the logical decoder's
+ * apron — and climbs a second riser into the landfall gantry at the
+ * walreceiver. The ack duct is the same route in reverse, six metres inboard,
+ * so the two share one bank. */
 route('net.stream', [
-  [ANCHOR.walSender[0], 14, ANCHOR.walSender[2] + 6],
-  [206, 46, 118],
-  [168, 40, 172],
-  [ANCHOR.walReceiver[0] + 4, 14, ANCHOR.walReceiver[2] - 8],
+  [ANCHOR.walSender[0] + 1, 7.0, ANCHOR.walSender[2] + 12],
+  [207, 1.9, 68],
+  [190, 1.6, 100],
+  [176, 1.6, 140],
+  [152, 1.8, 172],
+  [132, 2.0, 184],
+  [ANCHOR.walReceiver[0] + 4, 7.0, ANCHOR.walReceiver[2] - 12],
 ], { color: COLOR.replication, speed: 115, size: 1.4, visible: true, roadOpacity: 0.2 })
 
 route('net.ack', [
-  [ANCHOR.walReceiver[0] - 6, 14, ANCHOR.walReceiver[2] - 10],
-  [162, 38, 172],
-  [200, 44, 118],
-  [ANCHOR.walSender[0] - 6, 14, ANCHOR.walSender[2] + 6],
+  [ANCHOR.walReceiver[0] - 2, 7.0, ANCHOR.walReceiver[2] - 14],
+  [127, 1.8, 181],
+  [147, 1.5, 167],
+  [171, 1.4, 136],
+  [185, 1.4, 97],
+  [201, 1.7, 67],
+  [ANCHOR.walSender[0] - 5, 7.0, ANCHOR.walSender[2] + 12],
 ], { color: COLOR.ok, speed: 130, size: 1.0 })
 
 route('replica.apply', [
