@@ -370,14 +370,14 @@ const scenarioName = (id: string | null): string | null => {
  * createControls — the rail.
  * =========================================================================*/
 
-const OPEN_KEY = 'pgcity.console.open'
-const GROUP_KEY = (id: string): string => `pgcity.console.group.${id}`
+const OPEN_KEY = 'pgsimcity.console.open'
+const GROUP_KEY = (id: string): string => `pgsimcity.console.group.${id}`
 const OPEN_BY_DEFAULT: Record<string, boolean> = { workload: true, sim: true }
 
 export function createControls(ctx: UiContext): UiModule {
   const mount = document.getElementById('hud-left')
   if (!mount) {
-    console.warn('[pgcity] #hud-left is missing — the console has nowhere to live')
+    console.warn('[PGSimCity] #hud-left is missing — the console has nowhere to live')
     return { update() {}, dispose() {} }
   }
 

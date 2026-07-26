@@ -62,7 +62,7 @@ interface LooseBus {
 
 export function emitLoose(bus: Bus, type: string, payload: unknown): void {
   ;(bus as unknown as LooseBus).emit(type, payload)
-  window.dispatchEvent(new CustomEvent(`pgcity:${type.replace(/^ui:/, '')}`, { detail: payload }))
+  window.dispatchEvent(new CustomEvent(`pgsimcity:${type.replace(/^ui:/, '')}`, { detail: payload }))
 }
 
 /* --------------------------------- config -------------------------------- */

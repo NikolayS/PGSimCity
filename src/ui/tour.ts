@@ -209,7 +209,7 @@ const TOTAL_SECONDS = STEPS.reduce((n, c) => n + c.duration, 0)
  * Small local helpers.
  * -------------------------------------------------------------------------*/
 
-const SEEN_KEY = 'pgcity.seen'
+const SEEN_KEY = 'pgsimcity.seen'
 const FIRST_RUN_DELAY_MS = 2800
 const NARRATE_MS = 9000
 

@@ -20,7 +20,7 @@ const TICK = 1 / 6
 
 const SUGGESTIONS = ['shared.buffers', 'checkpointer', 'autovac.worker.0', 'replica.standby']
 
-const OPEN_KEY = 'pgcity.inspector.open'
+const OPEN_KEY = 'pgsimcity.inspector.open'
 
 /* ---------------------------------------------------------------------------
  * Kind badge. The registry is authoritative; this is the fallback for docs
@@ -66,7 +66,7 @@ function proseBody(text: string): HTMLElement {
 export function createInspector(ctx: UiContext): UiModule {
   const mount = document.getElementById('hud-right')
   if (!mount) {
-    console.warn('[pgcity] #hud-right is missing — the inspector has nowhere to live')
+    console.warn('[PGSimCity] #hud-right is missing — the inspector has nowhere to live')
     return { update() {}, dispose() {} }
   }
 

@@ -1,5 +1,5 @@
 /* ============================================================================
-   PGCITY — in-world label chips.
+   PGSimCity — in-world label chips.
 
    These live in #labels-root, positioned every frame by CSS2DRenderer. The
    renderer owns each `.lbl` element's inline `position`, `display` and

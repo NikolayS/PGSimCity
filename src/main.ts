@@ -57,7 +57,7 @@ function progress(pct: number, label: string): Promise<void> {
 }
 
 function fatal(message: string, detail?: unknown): void {
-  console.error('[pgcity]', message, detail)
+  console.error('[PGSimCity]', message, detail)
   if (bootStatus) {
     bootStatus.textContent = message
     bootStatus.style.color = 'var(--c-crit)'
@@ -172,7 +172,7 @@ async function boot(): Promise<void> {
     }
     const def = registry.get(id)
     if (!def) {
-      console.warn(`[pgcity] focus on unknown component "${id}"`)
+      console.warn(`[PGSimCity] focus on unknown component "${id}"`)
       return
     }
     rig.focusOn(def.focus, { instant })
@@ -309,8 +309,10 @@ async function boot(): Promise<void> {
   })
   if (import.meta.hot) import.meta.hot.dispose(dispose)
 
-  // handy in the console
-  Object.assign(window as unknown as Record<string, unknown>, { PGCITY: { sim, registry, bus, rig, gfx, flows } })
+  // Handy in the console. PGCITY is the pre-rename alias, kept because existing
+  // notes and tooling still reach for it; both names are the same object.
+  const handle = { sim, registry, bus, rig, gfx, flows }
+  Object.assign(window as unknown as Record<string, unknown>, { PGSIMCITY: handle, PGCITY: handle })
 }
 
 boot().catch((err) => fatal('PGSimCity failed to start — see the console.', err))
