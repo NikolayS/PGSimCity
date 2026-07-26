@@ -1,6 +1,6 @@
 import '../styles/hud.css'
 
-import { COLOR } from '../core/theme'
+import { COLOR, onThemeMode } from '../core/theme'
 import type { Bus, ColorKey } from '../core/types'
 import { el, icon } from './uikit'
 import { emitLoose } from './hud'
@@ -38,6 +38,8 @@ const CAMERA_KEYS: KeyRow[] = [
   { keys: ['RMB drag'], what: 'Orbit around the city' },
   { keys: ['MMB drag', 'Ctrl+LMB'], join: 'or', what: 'Pan and orbit, for model-viewer habits' },
   { keys: ['Wheel'], what: 'Zoom' },
+  { keys: ['1 finger'], what: 'Pan the map' },
+  { keys: ['2 fingers'], what: 'Pinch to zoom · twist to turn · drag up or down to tilt' },
   { keys: ['Click'], what: 'Select a building — in fly mode, capture the mouse' },
   { keys: ['W', 'A', 'S', 'D'], what: 'Fly — arrow keys work too' },
   { keys: ['Space', 'E'], join: 'or', what: 'Rise' },
@@ -59,6 +61,7 @@ const APP_KEYS: KeyRow[] = [
   { keys: ['/', 'Ctrl K'], join: 'or', what: 'Command palette' },
   { keys: ['?'], what: 'This panel' },
   { keys: ['L'], what: 'Toggle floating labels' },
+  { keys: ['N'], what: 'Daylight / night — the city, and this console, in either theme' },
   { keys: ['Esc'], what: 'Close the topmost overlay' },
   { keys: ['1', '…', '8'], what: 'Jump to a district' },
 ]
@@ -158,18 +161,37 @@ export function createHelp(ctx: UiContext): UiModule {
       ),
     )
 
+  /* The legend is the contract between the colours in the city and their
+     meanings, so it has to follow the day/night switch — a swatch that still
+     shows the night hex after the city has moved to daylight is a lie about the
+     thing it exists to explain. */
+  interface LegendUi {
+    row: LegendRow
+    swatch: HTMLElement
+    hex: HTMLElement
+  }
+  const legendUi: LegendUi[] = []
+
+  const paintLegend = (): void => {
+    for (const item of legendUi) {
+      const hex = '#' + COLOR[item.row.key].toString(16).padStart(6, '0')
+      item.swatch.style.setProperty('--sw', hex)
+      item.hex.textContent = hex
+    }
+  }
+
   const legendItem = (row: LegendRow): HTMLElement => {
-    const hex = '#' + COLOR[row.key].toString(16).padStart(6, '0')
-    const sw = el('span', { class: 'help-swatch' })
-    sw.style.setProperty('--sw', hex)
+    const swatch = el('span', { class: 'help-swatch' })
+    const hex = el('code', { class: 'help-legend__hex' })
+    legendUi.push({ row, swatch, hex })
     return el(
       'div',
       { class: 'help-legend__row' },
-      sw,
+      swatch,
       el(
         'div',
         { class: 'help-legend__text' },
-        el('span', { class: 'help-legend__name' }, row.name, el('code', { class: 'help-legend__hex', text: hex })),
+        el('span', { class: 'help-legend__name' }, row.name, hex),
         el('span', { class: 'help-legend__what', text: row.what }),
       ),
     )
@@ -252,6 +274,8 @@ export function createHelp(ctx: UiContext): UiModule {
   root.classList.add('help-overlay')
   root.hidden = true
   root.replaceChildren(dialog)
+  paintLegend()
+  cleanup.push(onThemeMode(paintLegend))
 
   /* ------------------------------ behaviour ------------------------------ */
 

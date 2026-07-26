@@ -62,6 +62,7 @@ No server, no database, no network calls. It is a single static bundle.
 | Right-drag | Orbit around the city |
 | Middle-drag / `Ctrl`-left-drag | Pan / orbit, if you have model-viewer habits |
 | Wheel | Zoom — the dolly follows the cursor, not the pivot |
+| Touch | 1 finger pans · 2 fingers pinch to zoom, twist to turn, drag up/down to tilt |
 | Click | Select a building. In fly mode, capture the mouse |
 | `W` `A` `S` `D` or the arrow keys | Move |
 | `Space` or `E` · `C` or `Q` | Rise · descend (fly mode) |

@@ -235,6 +235,8 @@ export function createCameraRig(
   let pinchDist = 0
   let pinchMx = 0
   let pinchMy = 0
+  /** Two-finger twist, radians, for yaw. NaN until the gesture has a reference. */
+  let pinchAngle = 0
 
   const keys = new Set<string>()
   let shiftDown = false
@@ -348,8 +350,11 @@ export function createCameraRig(
     }
 
     if (e.pointerType === 'touch' && ptrIds.length >= 2) {
-      // second finger: leave orbit, start a pinch on the next move
-      dragOrbit = false
+      // Second finger: stop panning and start a pinch on the next move. Keep
+      // dragOrbit ON, because twist and tilt feed the same rotate integrator a
+      // mouse drag does — without it inRotX/inRotY accumulate and are thrown
+      // away, which is exactly why touch could zoom and pan but never turn.
+      dragOrbit = true
       dragPan = false
       pinchActive = false
       return
@@ -405,15 +410,29 @@ export function createCameraRig(
       const d = Math.sqrt(sx * sx + sy * sy) || 1
       const mx = (ax + bx) * 0.5
       const my = (ay + by) * 0.5
+      // Map gestures, the set every phone user already knows: pinch to zoom,
+      // twist to swing the camera round, and drag both fingers up or down to
+      // tilt. Panning stays on one finger, so nothing here has to compete with
+      // it and each gesture stays unambiguous.
+      const ang = Math.atan2(sy, sx)
       if (pinchActive) {
         pendingZoom *= clamp(pinchDist / d, 0.5, 2)
         ndcFromEvent({ clientX: mx, clientY: my })
-        inPanX += mx - pinchMx
-        inPanY += my - pinchMy
+
+        // twist -> yaw. Shortest-arc difference so crossing PI does not spin.
+        let dAng = ang - pinchAngle
+        if (dAng > Math.PI) dAng -= Math.PI * 2
+        else if (dAng < -Math.PI) dAng += Math.PI * 2
+        // inRotX is consumed as (2*PI*inRotX)/viewH radians, so convert back.
+        inRotX += (dAng * viewH) / (Math.PI * 2)
+
+        // both fingers moving together vertically -> tilt
+        inRotY += my - pinchMy
       }
       pinchDist = d
       pinchMx = mx
       pinchMy = my
+      pinchAngle = ang
       pinchActive = true
       return
     }
