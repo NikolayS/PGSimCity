@@ -843,6 +843,7 @@ body.pg-labels-off #labels-root {
   }
   .hud-vital {
     padding: 4px 10px;
+    min-width: var(--tap);
     min-height: var(--tap);
     align-items: center;
   }
@@ -1003,6 +1004,10 @@ body.pg-labels-off #labels-root {
   #hud .hud-ckpt,
   .pal-dialog .pg-btn {
     min-height: var(--tap);
+  }
+  #hud .hud-vital,
+  #hud .hud-ckpt {
+    min-width: var(--tap);
   }
   #hud .hud-play {
     width: var(--tap);

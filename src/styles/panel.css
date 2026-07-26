@@ -608,14 +608,17 @@
     transition-delay: 0s;
   }
 
+  /* 40vw is the ceiling that keeps a tablet honest: at 768x1024 a 384px panel
+     over a 384px sliver of city is not "the city with a panel over it", it is a
+     document with a diagram beside it. */
   .pgc-host--left.is-compact .pgc-panel {
     left: calc(var(--pgc-tab) + 6px);
-    width: min(var(--rail-w), calc(100vw - var(--pgc-tab) - 18px));
+    width: min(var(--rail-w), 40vw, calc(100vw - var(--pgc-tab) - 18px));
     transform: translateX(calc(-100% - var(--pgc-tab) - 12px));
   }
   .pgc-host--right.is-compact .pgc-panel {
     right: calc(var(--pgc-tab) + 6px);
-    width: min(var(--panel-w), calc(100vw - var(--pgc-tab) - 18px));
+    width: min(var(--panel-w), 40vw, calc(100vw - var(--pgc-tab) - 18px));
     transform: translateX(calc(100% + var(--pgc-tab) + 12px));
   }
 }
@@ -655,6 +658,14 @@
     top: 38%;
     width: var(--tap);
     height: var(--tap);
+    transition: opacity var(--dur) var(--ease);
+  }
+  /* A tall sheet reaches past them, and a tab floating over the panel it opened
+     clips the first control underneath it. The sheet's own header is the way
+     out; the tabs come back the moment it shrinks. */
+  body.pg-sheet-tall .pgc-host.is-compact .pgc-tab {
+    opacity: 0;
+    pointer-events: none;
   }
   .pgc-host--left.is-compact .pgc-tab {
     border-radius: 0 var(--r-md) var(--r-md) 0;

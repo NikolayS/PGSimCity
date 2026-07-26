@@ -1,6 +1,6 @@
 import '../styles/hud.css'
 
-import { COLOR, cssColor } from '../core/theme'
+import { COLOR, cssColor, toggleThemeMode } from '../core/theme'
 import { clamp, fmtBytes, fmtDuration, fmtNum } from '../core/util'
 import type { Bus, CameraMode, QualityLevel, SimApi, SimState } from '../core/types'
 import { SCENARIOS } from '../sim/scenarios'
@@ -868,6 +868,25 @@ export function createHud(ctx: UiContext): UiModule {
     emitLoose(bus, 'ui:palette', { open: true })
   }
 
+  /**
+   * N — daylight or night, for the whole city and the whole console at once.
+   *
+   * core/theme.ts does the work (palette, every cached material, the toon ramp)
+   * and remembers the choice; the renderer answers the same notification with
+   * the light rig and the tone mapping curve. The loose 'theme:mode' channel is
+   * here so any module that needs to re-derive something can listen without
+   * BusEvents having to grow an entry.
+   */
+  function toggleTheme(): void {
+    const next = toggleThemeMode()
+    emitLoose(bus, 'theme:mode', { mode: next })
+    bus.emit('toast', {
+      text: next === 'day' ? 'Daylight — the city at noon' : 'Night — the city lit by its own data',
+      kind: 'info',
+      ms: 1800,
+    })
+  }
+
   function toggleLabels(): void {
     labelsOn = !labelsOn
     document.body.classList.toggle('pg-labels-off', !labelsOn)
@@ -964,6 +983,12 @@ export function createHud(ctx: UiContext): UiModule {
         if (e.repeat) return
         e.preventDefault()
         toggleLabels()
+        return
+      case 'n':
+      case 'N':
+        if (e.repeat) return
+        e.preventDefault()
+        toggleTheme()
         return
       case '/':
         e.preventDefault()

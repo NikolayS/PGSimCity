@@ -1,6 +1,13 @@
 /* ============================================================
    PGSimCity design tokens — the single source of truth for colour.
    Keep in sync with src/core/theme.ts (3D side).
+
+   TWO THEMES. The default is night; `N` toggles, and core/theme.ts stamps the
+   choice onto <html data-theme="day|night"> (and sets color-scheme, so the
+   browser's own scrollbars and form controls come along). Every rule below is
+   written against the tokens, so the day block near the bottom of this file is
+   the whole DOM half of the daylight theme — plus a short list of patches for
+   the handful of places in the other stylesheets that hardcoded a dark.
    ============================================================ */
 
 :root {
@@ -87,6 +94,168 @@
 
   /* The smallest thing a thumb can reliably hit. Used, not decorative. */
   --tap: 44px;
+}
+
+/* ============================================================
+   DAY — the console at noon.
+
+   A dark glass panel over a bright city is unreadable, so day mode is not a
+   tint of night: the panels become paper, the type becomes ink, and the
+   semantic colours are the re-picked deep values from src/core/themes.ts —
+   NOT the night ones, which turn into pastel washes on white. Contrast is held
+   to the same discipline as night: --ink is 14:1 on the panel, --ink-dim 6.6:1,
+   --ink-faint 4.1:1, and every semantic colour clears 2:1 against paper.
+   ============================================================ */
+
+:root[data-theme="day"] {
+  /* --- surfaces: paper over a bright city --- */
+  --bg-void: #cfe0ee;
+  --bg-deep: #e8e3d8;
+  /* Same reasoning as the night value: high enough that panel text does not
+     depend on which district happens to be behind it. Sunlit stone is a much
+     busier backdrop than a night street, so this is opaquer still. */
+  --bg-panel: rgba(250, 248, 243, 0.9);
+  --bg-panel-solid: #faf8f3;
+  --bg-raise: rgba(255, 255, 255, 0.82);
+  --bg-sunken: rgba(24, 34, 46, 0.07);
+
+  /* --- strokes: ink, not glow --- */
+  --line-hair: rgba(24, 34, 46, 0.11);
+  --line-soft: rgba(24, 34, 46, 0.2);
+  --line-hard: rgba(24, 34, 46, 0.4);
+
+  /* --- type --- */
+  --ink: #18222e;
+  --ink-dim: #47576a;
+  --ink-faint: #6a7b8c;
+  --ink-invert: #faf8f3;
+
+  /* --- semantic system colours (mirrored in core/themes.ts DAY_PALETTE) --- */
+  --c-client: #5f96c4;
+  --c-backend: #0089b5;
+  --c-shmem: #4b2fd0;
+  --c-buffer-clean: #1d5fcb;
+  --c-buffer-dirty: #e02b46;
+  --c-buffer-pinned: #efbc16;
+  --c-wal: #b8720a;
+  --c-storage: #17954f;
+  --c-vacuum: #8b2bc0;
+  --c-checkpoint: #c42d92;
+  --c-bgwriter: #0e8f8c;
+  --c-replication: #e2690d;
+  --c-lock: #c62f28;
+  --c-ok: #3f9c22;
+  --c-warn: #d18a04;
+  --c-crit: #b01030;
+
+  /* --- shadow, where night had glow --- */
+  --glow-cyan: 0 0 0 1px rgba(0, 137, 181, 0.5), 0 2px 10px -4px rgba(0, 137, 181, 0.45);
+  --glow-soft: 0 12px 34px -18px rgba(24, 34, 46, 0.4);
+}
+
+/* --- day patches for the darks hardcoded outside this file -----------------
+   These five stylesheets predate the second theme and bake a few dark values
+   directly. Each rule below is the day counterpart of exactly one of them, and
+   is scoped under [data-theme="day"] so it outranks the original by specificity
+   rather than by import order. The right long-term fix is to tokenise the
+   originals; until then this list is the complete set. */
+
+:root[data-theme="day"] .pg-btn:hover {
+  background: rgba(24, 34, 46, 0.08);
+}
+
+:root[data-theme="day"] .pg-panel__head {
+  background: linear-gradient(180deg, rgba(24, 34, 46, 0.05), transparent);
+}
+
+:root[data-theme="day"] .pg-scroll::-webkit-scrollbar-thumb {
+  background: rgba(24, 34, 46, 0.22);
+}
+:root[data-theme="day"] .pg-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(24, 34, 46, 0.38);
+}
+
+:root[data-theme="day"] .pg-body code,
+:root[data-theme="day"] .pg-tag {
+  background: rgba(24, 34, 46, 0.07);
+}
+
+:root[data-theme="day"] .pg-range::-webkit-slider-runnable-track,
+:root[data-theme="day"] .pg-range::-moz-range-track,
+:root[data-theme="day"] .pg-toggle {
+  background: rgba(24, 34, 46, 0.16);
+}
+
+/* Floating city labels. A 62%-black chip with dark ink on it is unreadable —
+   over a sunlit city the chip has to be the light thing. */
+:root[data-theme="day"] .lbl__chip {
+  background: rgba(252, 251, 247, 0.82);
+  box-shadow: 0 8px 20px -16px rgba(24, 34, 46, 0.8);
+}
+:root[data-theme="day"] .lbl__chip:hover,
+:root[data-theme="day"] .lbl.is-hovered .lbl__chip {
+  background: rgba(255, 255, 255, 0.94);
+}
+:root[data-theme="day"] .lbl.is-far .lbl__chip {
+  background: rgba(252, 251, 247, 0.74);
+}
+:root[data-theme="day"] .lbl--district .lbl__chip,
+:root[data-theme="day"] .lbl--city .lbl__chip {
+  background: rgba(252, 251, 247, 0.86);
+}
+:root[data-theme="day"] .lbl.is-selected .lbl__name {
+  color: var(--ink);
+}
+:root[data-theme="day"] .lbl__more {
+  background: rgba(24, 34, 46, 0.07);
+}
+/* The accent bar is a 2px ink stripe now; a halo around it only muddies it. */
+:root[data-theme="day"] .lbl__chip::before {
+  box-shadow: none;
+}
+
+/* The tour deck, the narration card and the command palette. */
+:root[data-theme="day"] .tour-card,
+:root[data-theme="day"] .tour-narrate {
+  background: linear-gradient(180deg, rgba(252, 251, 247, 0.94), rgba(244, 241, 233, 0.96));
+  box-shadow: var(--glow-soft), 0 0 0 1px rgba(24, 34, 46, 0.08);
+}
+:root[data-theme="day"] body.pg-tour::after {
+  background:
+    radial-gradient(120% 78% at 50% 34%, transparent 46%, rgba(24, 34, 46, 0.24) 100%),
+    linear-gradient(0deg, rgba(24, 34, 46, 0.18) 0%, transparent 34%);
+}
+:root[data-theme="day"] .tour-step::after {
+  background: rgba(24, 34, 46, 0.2);
+}
+:root[data-theme="day"] .tour-step:hover::after {
+  background: rgba(24, 34, 46, 0.5);
+}
+:root[data-theme="day"] .tour-step.is-done::after {
+  background: var(--c-backend);
+}
+:root[data-theme="day"] .tour-bar {
+  background: rgba(24, 34, 46, 0.14);
+}
+:root[data-theme="day"] .tour-card__n {
+  text-shadow: none;
+}
+:root[data-theme="day"] .pal-overlay {
+  background: rgba(24, 34, 46, 0.28);
+}
+:root[data-theme="day"] .pal-dialog {
+  box-shadow: var(--glow-soft), 0 0 0 1px rgba(24, 34, 46, 0.1), 0 40px 120px -40px rgba(24, 34, 46, 0.35);
+}
+:root[data-theme="day"] .pal-row.is-sel {
+  background: rgba(0, 137, 181, 0.12);
+  border-color: rgba(0, 137, 181, 0.4);
+}
+
+:root[data-theme="day"] .hud-vital:hover {
+  background: rgba(24, 34, 46, 0.05);
+}
+:root[data-theme="day"] .hud-chip.is-active {
+  background: rgba(0, 137, 181, 0.12);
 }
 
 * {
@@ -204,6 +373,12 @@ body {
   place-items: center;
   background: radial-gradient(120% 90% at 50% 20%, #0b1424 0%, #04060c 70%);
   transition: opacity 700ms var(--ease), visibility 700ms;
+}
+:root[data-theme="day"] #boot {
+  background: radial-gradient(120% 90% at 50% 20%, #e9f2fa 0%, #cfe0ee 70%);
+}
+:root[data-theme="day"] .boot-bar {
+  background: rgba(24, 34, 46, 0.14);
 }
 #boot.done {
   opacity: 0;

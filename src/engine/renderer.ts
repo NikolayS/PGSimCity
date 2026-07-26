@@ -4,7 +4,8 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
-import { COLOR } from '../core/theme'
+import { COLOR, applyStoredThemeMode, atmosphere, onThemeMode, paintSceneMaterial } from '../core/theme'
+import type { Atmosphere, ThemeMode } from '../core/theme'
 import { clamp, damp } from '../core/util'
 import { ANCHOR, CITY } from '../world/layout'
 import type { Bus, QualityLevel, QualitySettings } from '../core/types'
@@ -12,9 +13,19 @@ import type { Bus, QualityLevel, QualitySettings } from '../core/types'
 /* ============================================================================
  * THE RENDERER
  *
- * Night city, lit by its own data. Structure is matte PBR lit by a cold key +
- * fill; meaning is neon (toneMapped:false, emissive > 1) and is the only thing
- * that clears the bloom threshold.
+ * Two rendering models, one pipeline.
+ *
+ * NIGHT — a city lit by its own data. Structure is matte PBR lit by a cold key
+ * + fill; meaning is neon (toneMapped:false, emissive > 1) and is the only
+ * thing that clears the bloom threshold.
+ *
+ * DAY — the same city at noon, and deliberately NOT the night rig turned up.
+ * The sun is the key and casts real shadows, hemisphere bounce fills the rest,
+ * bloom is all but switched off (nothing semantic is allowed to glow, because
+ * a glow is invisible against a bright sky), and tone mapping moves from ACES
+ * to Khronos PBR Neutral — ACES at a noon exposure washes saturated colour into
+ * pastel, which is precisely the failure this mode exists to avoid. Structure
+ * is cel-shaded by core/theme.ts and outlined in ink. See core/themes.ts.
  *
  * COLOUR PIPELINE — the part everybody gets wrong.
  *   Direct path ('low'): renderer.render() draws to the default framebuffer, so
@@ -122,16 +133,18 @@ const FPS_CEIL_SECONDS = 12
 const WARMUP_SECONDS = 3 // shader compilation + first-frame uploads: ignore
 const SETTLE_SECONDS = 4 // grace period after any quality change
 
-/* Bloom tuning — high threshold so ONLY neon (emissive > 1) blooms. */
-const BLOOM_STRENGTH = 0.62
-const BLOOM_RADIUS = 0.55
-const BLOOM_THRESHOLD = 0.85
+/* Bloom, the light rig, tone mapping and the sky all come from the palette
+ * module now — one table per mode, in core/themes.ts. */
+function toneMappingFor(a: Atmosphere): THREE.ToneMapping {
+  return a.toneMapping === 'neutral' ? THREE.NeutralToneMapping : THREE.ACESFilmicToneMapping
+}
 
 /* Module-scope scratch — nothing is allocated inside render(). */
 const _size = new THREE.Vector2()
 
 export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   const quality: QualitySettings = { ...QUALITY_PRESETS[DEFAULT_LEVEL] }
+  let air: Atmosphere = atmosphere()
 
   /* ---- renderer ---------------------------------------------------------*/
 
@@ -143,8 +156,8 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     logarithmicDepthBuffer: false,
   })
   renderer.outputColorSpace = THREE.SRGBColorSpace
-  renderer.toneMapping = THREE.ACESFilmicToneMapping
-  renderer.toneMappingExposure = 1.06
+  renderer.toneMapping = toneMappingFor(air)
+  renderer.toneMappingExposure = air.exposure
   renderer.setClearColor(COLOR.bg, 1)
   // PCFSoft is deprecated in r185 and silently substituted with PCF — ask for
   // what we actually get, so the console stays clean and the code stays honest.
@@ -162,7 +175,8 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
 
   const scene = new THREE.Scene()
   scene.background = new THREE.Color(COLOR.bg)
-  scene.fog = new THREE.Fog(COLOR.fog, CITY.fog.near, CITY.fog.far)
+  const fog = new THREE.Fog(COLOR.fog, CITY.fog.near * air.fogNearScale, CITY.fog.far * air.fogFarScale)
+  scene.fog = fog
 
   const camera = new THREE.PerspectiveCamera(52, measureAspect(), 0.5, 4000)
   // Establishing shot: high above the plaza, looking north up the city axis.
@@ -173,13 +187,16 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   /* ---- lighting rig -----------------------------------------------------*/
 
   // Sky/ground bounce. Cheap, and it keeps north-facing walls from going black.
-  const hemi = new THREE.HemisphereLight(0x2a4a7a, 0x05070c, 0.55)
+  // At noon it is doing most of the work: it is the ambient floor the toon
+  // ramp's darkest band lands on, which is what stops cel shadows going to mud.
+  const hemi = new THREE.HemisphereLight(air.hemiSky, air.hemiGround, air.hemiIntensity)
   scene.add(hemi)
 
-  // Key: cold moonlight from high north-east. Casts the only shadow in the city.
-  const key = new THREE.DirectionalLight(0xa8c8ff, 1.15)
-  key.position.set(322, 374, -196)
-  key.target.position.set(0, 0, -35)
+  // Key: cold moonlight from high north-east at night, the sun from the
+  // south-east at noon. Casts the only shadow in the city, in both modes.
+  const key = new THREE.DirectionalLight(air.keyColor, air.keyIntensity)
+  key.position.set(air.keyPos[0], air.keyPos[1], air.keyPos[2])
+  key.target.position.set(air.keyTarget[0], air.keyTarget[1], air.keyTarget[2])
   scene.add(key)
   scene.add(key.target)
 
@@ -194,13 +211,14 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   sc.far = 900
   sc.updateProjectionMatrix()
   key.shadow.mapSize.set(2048, 2048)
-  key.shadow.bias = -0.0006
-  key.shadow.normalBias = 0.6
+  key.shadow.bias = air.shadowBias
+  key.shadow.normalBias = air.shadowNormalBias
   key.castShadow = quality.shadows
 
-  // Fill from the south-west: colder, no shadow, just shapes the dark side.
-  const fill = new THREE.DirectionalLight(0x4a6fa5, 0.35)
-  fill.position.set(-320, 168, 296)
+  // Fill: colder and from the south-west at night, sky bounce from behind at
+  // noon. No shadow either way — it only shapes the dark side.
+  const fill = new THREE.DirectionalLight(air.fillColor, air.fillIntensity)
+  fill.position.set(air.fillPos[0], air.fillPos[1], air.fillPos[2])
   fill.target.position.set(0, 0, 20)
   scene.add(fill)
   scene.add(fill.target)
@@ -208,11 +226,11 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   // District identity lights. decay = 1 (not physical): these are mood lights
   // covering a ~250-unit district, and inverse-square would make them invisible
   // at any intensity a human would type.
-  const walGlow = new THREE.PointLight(0xffb03a, 40, 260, 1)
+  const walGlow = new THREE.PointLight(0xffb03a, air.walGlow, 260, 1)
   walGlow.position.set(ANCHOR.walVault[0], 44, ANCHOR.walVault[2])
   scene.add(walGlow)
 
-  const yardGlow = new THREE.PointLight(0xb57bff, 26, 240, 1)
+  const yardGlow = new THREE.PointLight(0xb57bff, air.yardGlow, 240, 1)
   yardGlow.position.set((ANCHOR.checkpointer[0] + ANCHOR.autovacLauncher[0]) / 2, 40, 12)
   scene.add(yardGlow)
 
@@ -242,9 +260,9 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     // soft signal; nobody can tell, and it is ~4x cheaper.
     bloomPass = new UnrealBloomPass(
       new THREE.Vector2(Math.max(1, (w * pr) / 2), Math.max(1, (h * pr) / 2)),
-      BLOOM_STRENGTH,
-      BLOOM_RADIUS,
-      BLOOM_THRESHOLD,
+      air.bloomStrength,
+      air.bloomRadius,
+      air.bloomThreshold,
     )
     composer.addPass(bloomPass)
 
@@ -262,23 +280,116 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   }
 
   function applyPassToggles(): void {
-    if (bloomPass) bloomPass.enabled = quality.bloom
+    if (bloomPass) {
+      bloomPass.enabled = quality.bloom
+      bloomPass.strength = air.bloomStrength
+      bloomPass.radius = air.bloomRadius
+      bloomPass.threshold = air.bloomThreshold
+    }
     if (smaaPass) smaaPass.enabled = wantsSmaa(quality.level)
   }
 
   /**
-   * The WAL vault and the maintenance yard are lit almost entirely by emissive
-   * neon, and their form is carried by the bloom halo around it. 'low' drops the
-   * whole post chain, which is right for a weak GPU but leaves those districts as
-   * near-black silhouettes. Paying it back with real lights costs nothing.
+   * At night the WAL vault and the maintenance yard are lit almost entirely by
+   * emissive neon, and their form is carried by the bloom halo around it. 'low'
+   * drops the whole post chain, which is right for a weak GPU but leaves those
+   * districts as near-black silhouettes. Paying it back with real lights costs
+   * nothing. At noon there is no halo to lose, so the compensation is only the
+   * half-stop of hemisphere that the (barely-there) bloom would have added.
    */
   function applyLightCompensation(): void {
     const noBloom = !quality.bloom
-    hemi.intensity = noBloom ? 0.78 : 0.55
-    fill.intensity = noBloom ? 0.46 : 0.35
-    walGlow.intensity = noBloom ? 66 : 40
-    yardGlow.intensity = noBloom ? 44 : 26
+    hemi.intensity = noBloom ? air.noBloomHemi : air.hemiIntensity
+    fill.intensity = noBloom ? air.noBloomFill : air.fillIntensity
+    walGlow.intensity = noBloom ? air.noBloomWalGlow : air.walGlow
+    yardGlow.intensity = noBloom ? air.noBloomYardGlow : air.yardGlow
   }
+
+  /* ---- day / night ------------------------------------------------------*/
+
+  /**
+   * The sky dome is atmosphere, not a district, so the renderer owns its
+   * colours the same way it owns the fog and the clear colour. world/sky.ts
+   * derives them from the night palette by arithmetic; day needs three
+   * hand-picked values instead, and there is no palette entry it could read to
+   * get them. Guarded by name and by uniform presence, so it is a no-op if the
+   * sky ever changes shape. (The proper home for this is sky.ts — see the note
+   * in the theme's report.)
+   */
+  function paintSkyDome(mat: THREE.Material): void {
+    const sm = mat as THREE.ShaderMaterial
+    if (sm.isShaderMaterial !== true || !sm.uniforms) return
+    const set = (name: string, hex: number): void => {
+      const v = sm.uniforms[name]?.value as THREE.Color | undefined
+      if (v && v.isColor) v.setHex(hex)
+    }
+    set('uZenith', air.skyZenith)
+    set('uHorizon', air.skyHorizon)
+    set('uGlow', air.skyGlow)
+  }
+
+  function paintObject(obj: THREE.Object3D, target: ThemeMode): void {
+    // Stars are a night instrument. At noon they are additive white noise over
+    // a bright sky, which is worse than nothing.
+    if (obj.name === 'sky.stars') {
+      obj.visible = air.stars
+      return
+    }
+    const m = (obj as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined
+    if (!m) return
+    if (obj.name === 'sky.dome') {
+      if (!Array.isArray(m)) paintSkyDome(m)
+      return
+    }
+    if (Array.isArray(m)) {
+      for (let i = 0; i < m.length; i++) paintSceneMaterial(m[i], target)
+    } else {
+      paintSceneMaterial(m, target)
+    }
+  }
+
+  /**
+   * Swap the whole rendering model. Nothing is rebuilt: the palette module has
+   * already repainted every cached material in place, and this walks the scene
+   * once for the materials the cache never saw — the ground plate's shader
+   * uniforms, the pit, the light cones, every district's own ad-hoc material.
+   * The walk captures each material's authored night value on first sight, so
+   * it is exact in both directions and idempotent.
+   */
+  function applyThemeMode(target: ThemeMode): void {
+    air = atmosphere()
+
+    renderer.toneMapping = toneMappingFor(air)
+    renderer.toneMappingExposure = air.exposure
+    renderer.setClearColor(COLOR.bg, 1)
+    if (scene.background instanceof THREE.Color) scene.background.setHex(COLOR.bg)
+
+    fog.color.setHex(COLOR.fog)
+    fog.near = CITY.fog.near * air.fogNearScale
+    fog.far = CITY.fog.far * air.fogFarScale
+
+    hemi.color.setHex(air.hemiSky)
+    hemi.groundColor.setHex(air.hemiGround)
+
+    key.color.setHex(air.keyColor)
+    key.position.set(air.keyPos[0], air.keyPos[1], air.keyPos[2])
+    key.target.position.set(air.keyTarget[0], air.keyTarget[1], air.keyTarget[2])
+    key.target.updateMatrixWorld()
+    key.shadow.bias = air.shadowBias
+    key.shadow.normalBias = air.shadowNormalBias
+
+    fill.color.setHex(air.fillColor)
+    fill.position.set(air.fillPos[0], air.fillPos[1], air.fillPos[2])
+    fill.target.updateMatrixWorld()
+
+    applyLightCompensation()
+    applyPassToggles()
+
+    scene.traverse((obj) => paintObject(obj, target))
+    renderer.shadowMap.needsUpdate = true
+  }
+
+  const offTheme = onThemeMode(applyThemeMode)
 
   /** Bloom runs at half the composer's device resolution; call after setSize. */
   function sizeBloom(): void {
@@ -482,7 +593,19 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
 
   /* ---- frame ------------------------------------------------------------*/
 
+  /**
+   * The remembered theme is restored on the first frame, not at construction:
+   * this is the first moment at which every district is in the scene graph, and
+   * it is still before anything has been presented, so a viewer who chose
+   * daylight never sees a frame of night.
+   */
+  let themeRestored = false
+
   function render(dt: number, rawDt?: number): void {
+    if (!themeRestored) {
+      themeRestored = true
+      applyStoredThemeMode()
+    }
     const d = clamp(dt, 1 / 1000, 0.25)
     // The fps readout and the adapt timers run on real time, not on the delta
     // the simulation was given. A machine drawing 1 frame a second must be able
@@ -562,6 +685,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   /* ---- teardown ---------------------------------------------------------*/
 
   function dispose(): void {
+    offTheme()
     window.removeEventListener('resize', onWindowResize)
     dom.removeEventListener('webglcontextlost', onContextLost)
     dom.removeEventListener('webglcontextrestored', onContextRestored)
