@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createBus } from '../src/core/bus'
+import { DESTINATIONS } from '../src/core/destinations'
 import { setThemeMode, storedThemeMode, themeMode } from '../src/core/theme'
 import {
   DEFAULT_KNOBS,
@@ -11,6 +12,7 @@ import { createSim } from '../src/sim/model'
 import { knobMeta } from '../src/ui/content'
 import { createKnobControl } from '../src/ui/controls'
 import { createHud } from '../src/ui/hud'
+import { createHelp } from '../src/ui/help'
 import { createInspector } from '../src/ui/panel'
 import type { UiContext } from '../src/ui/uikit'
 import { installTestDom } from './dom'
@@ -215,10 +217,75 @@ describe('theme toggle entry point', () => {
       'shared.buffers',
       'wal.vault',
       'storage.datadir',
+      'planner.lab',
       'checkpointer',
-      'autovac.launcher',
       'replica.standby',
     ])
+    expect(buttons.map((button) => button.textContent.replace(/^\d+/, ''))).toEqual([
+      'Clients',
+      'Backends',
+      'Buffer pool (shared_buffers)',
+      'WAL',
+      'Storage',
+      'Query lab',
+      'Maintenance',
+      'Standby',
+    ])
+    hud.dispose()
+  })
+
+  it('uses semantic glyphs and accessible names for icon-only top-bar actions', () => {
+    const hud = createHud(context())
+    const iconOnly = Array.from(
+      document.querySelectorAll<HTMLElement>('#hud-top .hud-tools .pg-btn--icon'),
+    )
+
+    expect(iconOnly.length).toBeGreaterThan(0)
+    for (const control of iconOnly) {
+      expect(control.title).not.toBe('')
+      expect(control.getAttribute('aria-label')).not.toBeNull()
+    }
+
+    const controls = [
+      ...Array.from(document.querySelectorAll<HTMLElement>('#hud-top .hud-tools button')),
+      ...Array.from(document.querySelectorAll<HTMLElement>('#hud-top .hud-tools a')),
+    ]
+    const glyph = (label: string) =>
+      controls.find((control) => control.getAttribute('aria-label') === label)?.querySelector('svg')?.dataset.icon
+    expect(glyph('Guided tour')).toBe('tour')
+    expect(glyph('Walk the city')).toBe('walk')
+    expect(glyph('Diagnose')).toBe('diagnose')
+    hud.dispose()
+  })
+
+  it('reports one canonical name across navigation, help, and destination inspectors', () => {
+    const helpRoot = document.createElement('div')
+    helpRoot.id = 'help-overlay'
+    document.body.append(helpRoot)
+    const inspectorRoot = document.createElement('div')
+    inspectorRoot.id = 'hud-right'
+    document.body.append(inspectorRoot)
+
+    const ctx = context()
+    const hud = createHud(ctx)
+    const help = createHelp(ctx)
+    const inspector = createInspector(ctx)
+    const names = DESTINATIONS.map((destination) => destination.name)
+
+    expect(
+      Array.from(document.querySelectorAll<HTMLElement>('[data-view-district]')).map((button) =>
+        button.textContent.replace(/^\d+/, ''),
+      ),
+    ).toEqual(names)
+    expect(document.querySelector('.help-districts')?.textContent).toContain(names.join(' · '))
+
+    for (const destination of DESTINATIONS) {
+      ctx.bus.emit('select', { id: destination.id })
+      expect(document.querySelector('.pgc-insp__title')?.textContent).toBe(destination.name)
+    }
+
+    inspector.dispose()
+    help.dispose()
     hud.dispose()
   })
 })

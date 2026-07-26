@@ -1,5 +1,6 @@
 import '../styles/hud.css'
 
+import { DESTINATIONS, destinationForDistrict } from '../core/destinations'
 import { COLOR, cssColor, onThemeMode, themeMode, toggleThemeMode } from '../core/theme'
 import { clamp, fmtBytes, fmtDuration, fmtNum } from '../core/util'
 import type { Bus, CameraMode, QualityLevel, SimApi, SimState } from '../core/types'
@@ -69,18 +70,6 @@ export function emitLoose(bus: Bus, type: string, payload: unknown): void {
 
 const SPEEDS = [0.1, 0.25, 0.5, 1, 2, 3, 5]
 
-/** 1..8 — keyboard destinations and the phone menu use this same order. */
-const DISTRICT_DESTINATIONS = [
-  { id: 'client.pool', label: 'Clients' },
-  { id: 'backend.row', label: 'Backends' },
-  { id: 'shared.buffers', label: 'Buffers' },
-  { id: 'wal.vault', label: 'WAL' },
-  { id: 'storage.datadir', label: 'Storage' },
-  { id: 'checkpointer', label: 'Checkpoint' },
-  { id: 'autovac.launcher', label: 'Vacuum' },
-  { id: 'replica.standby', label: 'Standby' },
-] as const
-
 type VitalKey = 'tps' | 'hit' | 'wal' | 'dirty' | 'lag'
 
 interface VitalDef {
@@ -136,16 +125,27 @@ interface MapDistrict {
   color: number
 }
 
+function mapDistrict(key: Exclude<Parameters<typeof destinationForDistrict>[0], 'world'>, color: number): MapDistrict {
+  const destination = destinationForDistrict(key)
+  if (!destination) throw new Error(`missing destination for district ${key}`)
+  return {
+    key,
+    label: destination.shortName.toUpperCase(),
+    id: destination.id,
+    color,
+  }
+}
+
 /** Minimap footprints, painted back to front. */
 const MAP_DISTRICTS: MapDistrict[] = [
-  { key: 'storage', label: 'STORAGE', id: 'storage.datadir', color: COLOR.storage },
-  { key: 'planner', label: 'PLANNER', id: 'planner.lab', color: COLOR.postmaster },
-  { key: 'clients', label: 'CLIENTS', id: 'client.pool', color: COLOR.client },
-  { key: 'backends', label: 'BACKENDS', id: 'backend.row', color: COLOR.backend },
-  { key: 'shmem', label: 'SHARED MEM', id: 'shared.buffers', color: COLOR.shmem },
-  { key: 'wal', label: 'WAL', id: 'wal.vault', color: COLOR.wal },
-  { key: 'maintenance', label: 'MAINT', id: 'checkpointer', color: COLOR.vacuum },
-  { key: 'replication', label: 'STANDBY', id: 'replica.standby', color: COLOR.replication },
+  mapDistrict('storage', COLOR.storage),
+  mapDistrict('planner', COLOR.postmaster),
+  mapDistrict('clients', COLOR.client),
+  mapDistrict('backends', COLOR.backend),
+  mapDistrict('shmem', COLOR.shmem),
+  mapDistrict('wal', COLOR.wal),
+  mapDistrict('maintenance', COLOR.vacuum),
+  mapDistrict('replication', COLOR.replication),
 ]
 
 const QUALITY_LEVELS: QualityLevel[] = ['low', 'reduced', 'medium', 'high', 'ultra']
@@ -461,6 +461,18 @@ export function createHud(ctx: UiContext): UiModule {
     themeIcon,
     themeLabel,
   )
+  const sourceLink = el(
+    'a',
+    {
+      class: 'pg-btn hud-tool hud-source',
+      href: 'https://github.com/NikolayS/PGSimCity',
+      target: '_blank',
+      rel: 'noopener',
+      title: 'View the PGSimCity source code on GitHub',
+      'aria-label': 'Source code on GitHub',
+    },
+    'Source',
+  )
   const viewBtn = el(
     'button',
     {
@@ -488,7 +500,7 @@ export function createHud(ctx: UiContext): UiModule {
         click: () => bus.emit('camera:mode', { mode: cameraMode === 'walk' ? 'orbit' : 'walk' }),
       },
     },
-    icon('camera', 15),
+    icon('walk', 15),
     walkLabel,
   )
 
@@ -504,7 +516,7 @@ export function createHud(ctx: UiContext): UiModule {
       title: 'Diagnose — start from a symptom, end at the pg_stat_* column that proves it',
       'aria-label': 'Diagnose',
     },
-    icon('bolt', 15),
+    icon('diagnose', 15),
   )
 
   const fpsEl = el('span', { class: 'hud-perf__fps', text: '—' })
@@ -539,6 +551,7 @@ export function createHud(ctx: UiContext): UiModule {
     { class: 'hud-tools' },
     audioBtn,
     themeBtn,
+    sourceLink,
     viewBtn,
     tourBtn,
     diagnoseLink,
@@ -621,14 +634,14 @@ export function createHud(ctx: UiContext): UiModule {
     icon('camera', 15),
     el('span', { text: 'Fly' }),
   )
-  const districtViewButtons = DISTRICT_DESTINATIONS.map((destination, index) =>
+  const districtViewButtons = DESTINATIONS.map((destination, index) =>
     el(
       'button',
       {
         class: 'pg-btn hud-view__district',
         type: 'button',
         data: { viewDistrict: destination.id },
-        title: `${destination.label}  (${index + 1})`,
+        title: `${destination.name}  (${index + 1})`,
         on: {
           click: () => {
             bus.emit('focus', { id: destination.id })
@@ -637,7 +650,7 @@ export function createHud(ctx: UiContext): UiModule {
         },
       },
       el('span', { class: 'hud-view__key', text: String(index + 1) }),
-      el('span', { text: destination.label }),
+      el('span', { text: destination.name }),
     ),
   )
   const closeViewBtn = el(
@@ -1242,7 +1255,7 @@ export function createHud(ctx: UiContext): UiModule {
 
     if (k >= '1' && k <= '8') {
       e.preventDefault()
-      bus.emit('focus', { id: DISTRICT_DESTINATIONS[Number(k) - 1].id })
+      bus.emit('focus', { id: DESTINATIONS[Number(k) - 1].id })
     }
   }
 

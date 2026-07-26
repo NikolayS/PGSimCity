@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { destinationForDistrict } from '../core/destinations'
 import { COLOR, DAY_PALETTE, mixHex } from '../core/theme'
 import { clamp01, fmtBytes, fmtNum } from '../core/util'
 import { ANCHOR, CITY, DISTRICT_BOUNDS } from './layout'
@@ -198,12 +199,12 @@ interface PlinthSpec {
 /** Everything that stands on the surface. 'storage' is underground, 'planner'
  *  is in the air, 'world' is the whole map — none of them get a platform. */
 const PLINTHS: readonly PlinthSpec[] = [
-  { district: 'clients', label: 'CLIENTS', color: COLOR.client, dayColor: DAY_PALETTE.client },
-  { district: 'backends', label: 'BACKENDS', color: COLOR.backend, dayColor: DAY_PALETTE.backend },
-  { district: 'shmem', label: 'SHARED MEMORY', color: COLOR.shmem, dayColor: DAY_PALETTE.shmem },
-  { district: 'wal', label: 'pg_wal', color: COLOR.wal, dayColor: DAY_PALETTE.wal },
-  { district: 'maintenance', label: 'MAINTENANCE', color: COLOR.vacuum, dayColor: DAY_PALETTE.vacuum },
-  { district: 'replication', label: 'STANDBY', color: COLOR.replication, dayColor: DAY_PALETTE.replication },
+  { district: 'clients', label: destinationForDistrict('clients')?.name ?? '', color: COLOR.client, dayColor: DAY_PALETTE.client },
+  { district: 'backends', label: destinationForDistrict('backends')?.name ?? '', color: COLOR.backend, dayColor: DAY_PALETTE.backend },
+  { district: 'shmem', label: destinationForDistrict('shmem')?.name ?? '', color: COLOR.shmem, dayColor: DAY_PALETTE.shmem },
+  { district: 'wal', label: destinationForDistrict('wal')?.name ?? '', color: COLOR.wal, dayColor: DAY_PALETTE.wal },
+  { district: 'maintenance', label: destinationForDistrict('maintenance')?.name ?? '', color: COLOR.vacuum, dayColor: DAY_PALETTE.vacuum },
+  { district: 'replication', label: destinationForDistrict('replication')?.name ?? '', color: COLOR.replication, dayColor: DAY_PALETTE.replication },
 ]
 
 const PLINTH_H = 0.6

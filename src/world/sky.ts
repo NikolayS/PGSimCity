@@ -37,6 +37,8 @@ const ASTERISM_AZ = Math.atan2(0.851, 0.522)
 const ASTERISM_EL = 0.42 // ~24°, high enough to clear the skyline
 /** Degrees of sky per unit of the figure below. */
 const ASTERISM_SCALE = 1.42
+/** Faint but deliberately visible against the night dome. */
+export const SLONIK_LINK_OPACITY = 0.22
 
 /** x, y, magnitude 0..1. */
 const ASTERISM: readonly (readonly [number, number, number])[] = [
@@ -278,7 +280,7 @@ export function createSky(theme: ThemeApi): THREE.Object3D {
     // Same queue trick as the stars: opaque queue, additive blend, no depth.
     transparent: false,
     blending: THREE.AdditiveBlending,
-    opacity: 0.07,
+    opacity: SLONIK_LINK_OPACITY,
     depthWrite: false,
     depthTest: false,
     toneMapped: false,
@@ -289,7 +291,6 @@ export function createSky(theme: ThemeApi): THREE.Object3D {
   links.frustumCulled = false
   links.renderOrder = -998
   links.raycast = () => {}
-  group.add(links)
 
   const starGeo = new THREE.BufferGeometry()
   starGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
@@ -321,6 +322,9 @@ export function createSky(theme: ThemeApi): THREE.Object3D {
   stars.frustumCulled = false
   stars.renderOrder = -999
   stars.raycast = () => {}
+  // The renderer hides the starfield in daylight. Parenting the asterism here
+  // gives its links the same night-only lifecycle without a second theme hook.
+  stars.add(links)
   group.add(stars)
 
   /* ---- self-driving: pin to the camera, advance the twinkle clock ----

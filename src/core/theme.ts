@@ -22,10 +22,10 @@ export { ATMOSPHERE, DAY_PALETTE, NIGHT_PALETTE, PALETTES } from './themes'
 /**
  * PGSimCity palette — LIVE. Two modes share one object.
  *
- * NIGHT (the default): the renderer uses ACESFilmic tone mapping and the bloom
- * pass runs with a high threshold, so *only* surfaces whose output exceeds ~1.0
- * will glow. Paint structure with `mat()` (PBR, no glow); paint meaning — data,
- * state, energy — with `neon()`.
+ * NIGHT (the authoring baseline): the renderer uses ACESFilmic tone mapping and
+ * the bloom pass runs with a high threshold, so *only* surfaces whose output
+ * exceeds ~1.0 will glow. Paint structure with `mat()` (PBR, no glow); paint
+ * meaning — data, state, energy — with `neon()`.
  *
  * DAY: the same call sites, a different rendering model. `mat()` becomes light
  * warm stone under a stepped toon ramp lit by a real sun; `neon()` becomes a
@@ -45,7 +45,7 @@ export { ATMOSPHERE, DAY_PALETTE, NIGHT_PALETTE, PALETTES } from './themes'
  * the mode. Read COLOR.* per frame instead, or paint through the theme cache,
  * or subscribe with onThemeMode().
  */
-export const COLOR: Record<ColorKey, number> = { ...PALETTES[DEFAULT_MODE] }
+export const COLOR: Record<ColorKey, number> = { ...PALETTES.night }
 
 /* ============================================================================
  * MODE
@@ -72,12 +72,12 @@ function writeStoredMode(m: ThemeMode): void {
 }
 
 /** Always night at import — see the note on COLOR. */
-let mode: ThemeMode = DEFAULT_MODE
+let mode: ThemeMode = 'night'
 
 /** Whether night-mode semantic materials can rely on a bloom pass. */
 let bloomAvailable = true
 
-/** The viewer's remembered choice. Night unless they have asked for daylight. */
+/** The viewer's remembered choice. Daylight unless they have asked for night. */
 export function storedThemeMode(): ThemeMode {
   return readStoredMode()
 }

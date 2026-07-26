@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { createTheme, setBloomAvailable } from './theme'
+import { createTheme, setBloomAvailable, setThemeMode } from './theme'
 import { NIGHT_PALETTE } from './themes'
 
 const READABLE_LUMINANCE = 0.24
@@ -10,6 +10,14 @@ function luminance({ r, g, b }: { r: number; g: number; b: number }): number {
 }
 
 describe('bloom-off neon fallback', () => {
+  /* This suite is about NIGHT behaviour -- the neon repaint that carries meaning
+   * when the bloom pass is unavailable. It used to rely on night being the
+   * default mode, which quietly coupled it to an unrelated product decision.
+   * Say which mode it means. */
+  beforeEach(() => {
+    setThemeMode('night', { persist: false })
+  })
+
   afterEach(() => {
     setBloomAvailable(true)
   })

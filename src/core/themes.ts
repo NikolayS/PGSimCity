@@ -32,7 +32,10 @@ export type ThemeMode = 'night' | 'day'
 
 export const THEME_MODES: readonly ThemeMode[] = ['night', 'day']
 
-export const DEFAULT_MODE: ThemeMode = 'night'
+/* Day is the default. Most people meet this city for the first time on
+ * unknown hardware, and a sunlit model reads as a place immediately, where the
+ * night render asks the viewer to work out what they are looking at first. */
+export const DEFAULT_MODE: ThemeMode = 'day'
 
 /** localStorage key. Values are exactly the ThemeMode strings. */
 export const THEME_STORAGE_KEY = 'pgsimcity.theme'

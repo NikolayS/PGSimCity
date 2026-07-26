@@ -104,12 +104,13 @@ const ICON_PATHS: Record<string, string> = {
   play: 'M5 3.5v9l8-4.5z',
   pause: 'M5.5 3.5h2.2v9H5.5zm4.8 0h2.2v9h-2.2z',
   reset: 'M8 3a5 5 0 1 0 4.6 3M12.8 2.4v3.4H9.4',
-  tour: 'M2 12.5 8 2l6 10.5zM8 6.5v3',
+  tour: 'M3.2 14V2.2M3.5 3h8l-1.8 2.4 1.8 2.4h-8',
   help: 'M6 6a2 2 0 1 1 2.6 1.9c-.5.2-.6.6-.6 1v.4M8 12.1h.01',
   search: 'M7.2 11.4a4.2 4.2 0 1 0 0-8.4 4.2 4.2 0 0 0 0 8.4zm3.2-1 3.1 3.1',
   close: 'M4 4l8 8M12 4l-8 8',
   chevron: 'M6 4l4 4-4 4',
   camera: 'M2.5 5.5h2l1-1.5h5l1 1.5h2v7h-11zM8 11a2.2 2.2 0 1 0 0-4.4A2.2 2.2 0 0 0 8 11z',
+  walk: 'M8 3.4a1.4 1.4 0 1 0 0-2.8 1.4 1.4 0 0 0 0 2.8zM6.2 6.2 8 4.2l2.2 2.3M8 4.4v4l-2.4 2.4M8 8.4l2.6 3.3M5.2 14l1.3-1.3M10.2 14h2.4',
   eye: 'M1.5 8S4 4 8 4s6.5 4 6.5 4-2.5 4-6.5 4-6.5-4-6.5-4zm6.5 1.7a1.7 1.7 0 1 0 0-3.4 1.7 1.7 0 0 0 0 3.4z',
   gear: 'M8 10a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM8 1.6v1.6M8 12.8v1.6M2.5 4.8l1.4.8M12.1 10.4l1.4.8M2.5 11.2l1.4-.8M12.1 5.6l1.4-.8',
   layers: 'M8 2 1.8 5.4 8 8.8l6.2-3.4zM2 8.6 8 12l6-3.4M2 11.4 8 14.8l6-3.4',
@@ -118,7 +119,7 @@ const ICON_PATHS: Record<string, string> = {
   prev: 'M12 3.5l-6 4.5 6 4.5zM4.5 3.5v9',
   pin: 'M8 1.8v5M5 6.8h6l1 3H4zM8 9.8v4.4',
   home: 'M2.5 7.5 8 2.8l5.5 4.7M4 7v6.2h8V7',
-  bolt: 'M9 1.5 3.5 9H7.5l-.5 5.5L12.5 7H8.5z',
+  diagnose: 'M1.5 8h2.2l1.2-3.4 2.2 7 1.8-5.2 1.1 3h4.5M11.8 12.2l2.3 2.3',
   sound: 'M2.2 6.2h2.7L8.1 3v10L4.9 9.8H2.2zM10.6 5.5a3.4 3.4 0 0 1 0 5M12.3 3.7a5.9 5.9 0 0 1 0 8.6',
   sun: 'M8 3.2V1.5M8 14.5v-1.7M3.2 8H1.5M14.5 8h-1.7M4.6 4.6 3.4 3.4M12.6 12.6l-1.2-1.2M11.4 4.6l1.2-1.2M3.4 12.6l1.2-1.2M11 8a3 3 0 1 1-6 0 3 3 0 0 1 6 0z',
   moon: 'M12.8 10.5A5.8 5.8 0 0 1 5.5 3.2 5.8 5.8 0 1 0 12.8 10.5z',
@@ -131,6 +132,7 @@ export function icon(name: keyof typeof ICON_PATHS | string, size = 14): SVGSVGE
   svg.setAttribute('height', String(size))
   svg.setAttribute('fill', 'none')
   svg.setAttribute('aria-hidden', 'true')
+  svg.dataset.icon = name
   const p = document.createElementNS('http://www.w3.org/2000/svg', 'path')
   p.setAttribute('d', ICON_PATHS[name] ?? ICON_PATHS.help)
   p.setAttribute('stroke', 'currentColor')

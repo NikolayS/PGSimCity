@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { CSS2DObject, CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
 
 import '../styles/labels.css'
+import { destinationForDistrict } from '../core/destinations'
 import { COLOR } from '../core/theme'
 import type { Registry } from '../core/registry'
 import type { Bus, ComponentDef, DistrictId, QualitySettings, SimState } from '../core/types'
@@ -157,14 +158,14 @@ const DISTRICT_COLOR: Record<DistrictId, number> = {
 
 /** Name on a district chip. Empty = this district never gets one. */
 const DISTRICT_NAME: Record<DistrictId, string> = {
-  clients: 'Clients',
-  backends: 'Backends',
-  shmem: 'Shared memory',
-  wal: 'WAL',
-  storage: 'Storage',
-  maintenance: 'Maintenance',
-  replication: 'Standby',
-  planner: 'Query lab',
+  clients: destinationForDistrict('clients')?.name ?? '',
+  backends: destinationForDistrict('backends')?.name ?? '',
+  shmem: destinationForDistrict('shmem')?.name ?? '',
+  wal: destinationForDistrict('wal')?.name ?? '',
+  storage: destinationForDistrict('storage')?.name ?? '',
+  maintenance: destinationForDistrict('maintenance')?.name ?? '',
+  replication: destinationForDistrict('replication')?.name ?? '',
+  planner: destinationForDistrict('planner')?.name ?? '',
   world: '', // the model's own name is a component already, at the city level
 }
 
@@ -529,6 +530,7 @@ export function createLabels(
         pendingMeasure.push(chip)
       }
       districts.set(id, chip)
+      chip.el.dataset.destination = id
       chip.members = list
       if (chip.rank !== 3) continue
 
@@ -633,6 +635,7 @@ export function createLabels(
   const hudBottom = document.getElementById('hud-bottom')
   const hudLeft = document.getElementById('hud-left')
   const hudRight = document.getElementById('hud-right')
+  const hudCompass = document.getElementById('compass')
   let boxL = 0
   let boxT = 0
   let boxR = 0
@@ -775,13 +778,45 @@ export function createLabels(
     return !hits(vx - pad, vy - pad, w + pad * 2, h + pad * 2)
   }
 
-  function anyVisible(d: Entry): boolean {
-    const m = d.members
-    for (let i = 0; i < m.length; i++) {
-      const def = m[i].def
-      if (def && def.object.visible) return true
+  /**
+   * Destination chips must remain readable even when their anchor is under a
+   * side panel or the minimap. Search the usable screen on a coarse grid and
+   * take the nearest clear slot. This is a last resort for at most eight map
+   * labels, not the object-label hot path.
+   */
+  function placeDestinationFallback(e: Entry, w: number, h: number): void {
+    let bestX = Math.max(boxL, Math.min(boxR - w, vx))
+    let bestY = Math.max(boxT, Math.min(boxB - h, vy))
+    let bestD = Infinity
+    const step = 12
+    const maxX = Math.max(boxL, boxR - w)
+    const maxY = Math.max(boxT, boxB - h)
+
+    for (let y = boxT; y <= maxY; y += step) {
+      for (let x = boxL; x <= maxX; x += step) {
+        if (hits(x - 3, y - 3, w + 6, h + 6)) continue
+        const dx = x + w * 0.5 - e.sx
+        const dy = y + h * 0.5 - e.sy
+        const d = dx * dx + dy * dy
+        if (d >= bestD) continue
+        bestD = d
+        bestX = x
+        bestY = y
+      }
     }
-    return false
+    vx = bestX
+    vy = bestY
+  }
+
+  function reserveHudRect(node: HTMLElement | null): void {
+    if (!node) return
+    const r = node.getBoundingClientRect()
+    if (r.width <= 0 || r.height <= 0) return
+    addRect(r.left - 6, r.top - 6, r.width + 12, r.height + 12)
+  }
+
+  function isDestination(e: Entry): boolean {
+    return e.rank === 3 || e.proxy
   }
 
   function pass(camera: THREE.PerspectiveCamera): void {
@@ -817,7 +852,10 @@ export function createLabels(
       e.dist = camera.position.distanceTo(e.pos)
 
       if (e.rank === 3) {
-        if (e.members.length < DISTRICT_MIN || !anyVisible(e)) continue
+        // A destination still exists when its presentation is dormant. The
+        // Query lab deliberately dissolves between statements, for example,
+        // but its map identity and navigation target must not disappear too.
+        if (e.members.length < DISTRICT_MIN) continue
       } else if (e.def && !e.def.object.visible) {
         continue
       }
@@ -829,7 +867,14 @@ export function createLabels(
       if (nz < -1 || nz > 1) continue // CSS2DRenderer would hide it anyway
       const sx = (_v4.x / cw) * hw + hw
       const sy = -(_v4.y / cw) * hh + hh
-      if (sx < boxL - 90 || sx > boxR + 90 || sy < boxT - 90 || sy > boxB + 90) continue
+      // Destination labels may pull an on-screen anchor out from under HUD
+      // chrome. Object labels do not: there is no value in a leader pointing
+      // behind an inspector to a building the visitor cannot see.
+      if (isDestination(e)) {
+        if (sx < EDGE || sx > viewW - EDGE || sy < EDGE || sy > viewH - EDGE) continue
+      } else if (sx < boxL - 90 || sx > boxR + 90 || sy < boxT - 90 || sy > boxB + 90) {
+        continue
+      }
       e.sx = sx
       e.sy = sy
       e.onScreen = true
@@ -891,6 +936,7 @@ export function createLabels(
     /* ---- place ---------------------------------------------------------- */
     ensureGrid()
     gridReset()
+    reserveHudRect(hudCompass)
     let budget = maxLabels
 
     for (let i = 0; i < cand.length; i++) {
@@ -900,14 +946,21 @@ export function createLabels(
       // Selected and hovered are placed first and are never collided away;
       // anything inside its dwell is held down so nothing can blink.
       const age = now - e.sinceT
-      const pinned = e.band <= B_HOVERED || (e.shown && age < MIN_DWELL)
+      // The eight destination identities are map furniture, not optional
+      // detail. Keeping them placed also prevents two colliding districts from
+      // taking turns inheriting the same screen position.
+      const pinned = isDestination(e) || e.band <= B_HOVERED || (e.shown && age < MIN_DWELL)
       const cooling = !e.shown && age < HIDE_COOLDOWN && e.band > B_FOCUS
       const pad = e.shown ? PAD_KEEP : PAD_NEW
       let v = -1
+      let forcedDestination = false
 
       if ((budget > 0 || pinned) && (!cooling || pinned)) {
-        if (fits(e, 0, w, h, pad)) v = 0
-        else if (e.variant > 0 && fits(e, e.variant, w, h, pad)) v = e.variant
+        // Preserve the last successful slot whenever it remains valid.
+        // Trying "home" first defeated the placer’s own hysteresis: two labels
+        // could repeatedly reclaim one another's pixels at a fixed camera.
+        if (e.shown && fits(e, e.variant, w, h, pad)) v = e.variant
+        else if (fits(e, 0, w, h, pad)) v = 0
         else {
           for (let k = 1; k < N_VAR; k++) {
             if (k === e.variant) continue
@@ -929,11 +982,15 @@ export function createLabels(
             break
           }
         }
-        if (v < 0) v = e.variant
+        if (v < 0) {
+          v = e.variant
+          forcedDestination = isDestination(e)
+        }
       }
 
       if (v < 0) continue
       variantAt(e, v, w, h)
+      if (forcedDestination) placeDestinationFallback(e, w, h)
       e.variant = v
       e.dx = vx - e.sx
       e.dy = vy - e.sy

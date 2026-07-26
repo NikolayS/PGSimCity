@@ -306,6 +306,12 @@
   gap: 6px;
 }
 
+.hud-source {
+  min-width: 68px;
+  min-height: var(--tap);
+  justify-content: center;
+}
+
 .hud-theme__icon {
   display: grid;
   place-items: center;

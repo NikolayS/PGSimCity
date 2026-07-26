@@ -1,5 +1,6 @@
 import '../styles/panel.css'
 
+import { destinationForId } from '../core/destinations'
 import type { ComponentDef, ComponentDoc, ComponentKind, DocRef, DocReferences, Knobs, SimState } from '../core/types'
 import { doc, knobMeta, mdToHtml } from './content'
 import {
@@ -588,7 +589,7 @@ export function createInspector(ctx: UiContext): UiModule {
     if (def?.color != null) kindBadge.style.setProperty('--kind', hex6(def.color))
     else kindBadge.style.removeProperty('--kind')
 
-    setText(title, def?.name ?? info?.title ?? id)
+    setText(title, destinationForId(id)?.name ?? def?.name ?? info?.title ?? id)
     const sub = def?.role ?? info?.subtitle ?? ''
     setText(subtitle, sub)
     subtitle.hidden = !sub

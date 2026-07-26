@@ -1,11 +1,28 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="day">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <meta name="description" content="PGSimCity — an explorable 3D city that shows how PostgreSQL actually works." />
-    <meta name="color-scheme" content="dark" />
-    <meta name="theme-color" content="#04060c" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#cfe0ee" />
+    <script>
+      ;(() => {
+        const root = document.documentElement
+        let mode = root.dataset.theme
+        try {
+          const stored = window.localStorage.getItem('pgsimcity.theme')
+          if (stored === 'day' || stored === 'night') mode = stored
+        } catch {
+          // Storage can be unavailable; the daylight attribute above is the fallback.
+        }
+        root.dataset.theme = mode
+        root.style.colorScheme = mode === 'night' ? 'dark' : 'light'
+        document
+          .querySelector('meta[name="theme-color"]')
+          ?.setAttribute('content', mode === 'night' ? '#04060c' : '#cfe0ee')
+      })()
+    </script>
     <title>PGSimCity · How PostgreSQL Works, in 3D</title>
 
     <!-- ============ icons ============ -->
@@ -103,7 +120,7 @@
     </div>
 
     <noscript>
-      <div style="padding:2rem;font:16px system-ui;color:#dbe7ff;background:#05070d">
+      <div style="min-height:100%;padding:2rem;font:16px system-ui;color:#18222e;background:#cfe0ee">
         PGSimCity needs JavaScript and WebGL2 to run.
       </div>
     </noscript>

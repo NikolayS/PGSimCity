@@ -1,5 +1,6 @@
 import '../styles/hud.css'
 
+import { DESTINATIONS } from '../core/destinations'
 import { COLOR, onThemeMode } from '../core/theme'
 import type { Bus, ColorKey } from '../core/types'
 import { el, icon } from './uikit'
@@ -70,17 +71,6 @@ const APP_KEYS: KeyRow[] = [
   { keys: ['M'], what: 'Sound on / off — audio starts off and remembers your choice' },
   { keys: ['Esc'], what: 'Close the topmost overlay' },
   { keys: ['1', '…', '8'], what: 'Jump to a district · View menu on phones' },
-]
-
-const DISTRICT_ORDER = [
-  'Clients',
-  'Backends',
-  'Shared buffers',
-  'WAL vault',
-  'Storage',
-  'Checkpointer',
-  'Autovacuum',
-  'Standby',
 ]
 
 interface LegendRow {
@@ -244,7 +234,7 @@ export function createHelp(ctx: UiContext): UiModule {
       { class: 'pg-hint help-districts' },
       el('span', { class: 'pg-tag', text: '1 – 8' }),
       ' ',
-      DISTRICT_ORDER.join(' · '),
+      DESTINATIONS.map((destination) => destination.name).join(' · '),
     ),
     el('hr', { class: 'pg-divider' }),
     legendHeading,

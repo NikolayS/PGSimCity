@@ -54,3 +54,8 @@ TASK-*.md
 
 # Agent verification artifacts -- screenshots and probe output, not project files
 artifacts/
+
+# Agent scratch probes -- temporary instrumentation, never part of the suite
+test/zz-*.test.ts
+src/**/zz_*.test.ts
+src/**/__instr*.test.ts

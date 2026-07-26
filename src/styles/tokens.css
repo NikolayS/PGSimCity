@@ -2,12 +2,13 @@
    PGSimCity design tokens — the single source of truth for colour.
    Keep in sync with src/core/theme.ts (3D side).
 
-   TWO THEMES. The default is night; `N` toggles, and core/theme.ts stamps the
-   choice onto <html data-theme="day|night"> (and sets color-scheme, so the
-   browser's own scrollbars and form controls come along). Every rule below is
-   written against the tokens, so the day block near the bottom of this file is
-   the whole DOM half of the daylight theme — plus a short list of patches for
-   the handful of places in the other stylesheets that hardcoded a dark.
+   TWO THEMES. The unqualified tokens are the night fallback; index.html stamps
+   the stored choice onto <html data-theme="day|night"> before CSS can paint,
+   using day when there is no choice. core/theme.ts keeps that attribute and
+   color-scheme in sync after startup. Every rule below is written against the
+   tokens, so the day block near the bottom of this file is the whole DOM half
+   of the daylight theme — plus a short list of patches for the handful of
+   places in the other stylesheets that hardcoded a dark.
    ============================================================ */
 
 :root {
