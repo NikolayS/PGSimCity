@@ -9,6 +9,69 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.5.0] — 2026-07-26
+
+Daylight arrives, and the city stops going dark on ordinary hardware.
+
+### Fixed
+
+- **The city no longer goes black when the frame rate drops.** A user sent two
+  screenshots side by side: a vivid city at `medium` quality, and near-black
+  silhouettes on the same build. The night theme's whole visual language rides
+  on the bloom pass — structure is matte, meaning is neon, and only emissive
+  above 1.0 crosses the threshold — so turning bloom off did not dim the city,
+  it stopped it communicating. And it was automatic, which meant the people who
+  saw it were those on the weakest hardware. Bloom is now the **last** thing
+  dropped: a new `reduced` tier turns down pixel ratio, particles, labels and
+  antialiasing while keeping the lighting, and measures about 40% faster than
+  `medium`. Below that, neon repaints as saturated base colour with a minimum
+  luminance, so a dirty page still reads as dirty.
+- **The quality downgrade no longer fires on a boot stall.** Three seconds
+  ignored, a four-second settle, then three sustained seconds under the floor.
+  The notice now names what was lost and offers one click to undo it.
+- **Labels no longer draw through solid buildings.** They are DOM elements
+  positioned by `CSS2DRenderer`, so they never took part in depth testing; a
+  label behind a tower had always drawn over it. They are now occluded by
+  raycasting against the collision structure the walker already maintains,
+  amortised across frames and faded rather than snapped.
+- **`$PGDATA` is gone from the user-facing text.** It names an environment
+  variable, and in a configuration where it points at a config-only directory
+  the data lives elsewhere. The excavation is the **data directory**. A test
+  holds the line — and immediately caught a regression that a later merge
+  reintroduced.
+
+### Added
+
+- **A daylight theme for the city, not just the panels.** Day mode used to stop
+  at the edge of the UI: paper panels over a city still lit for night. It is now
+  a sunlit model in the spirit of SimCity — flat saturated colour with a hard
+  split between the lit and shaded faces of every mass, a warm directional sun
+  casting real shadows from 172 architectural casters (about 4% of frame time,
+  with the buffer field excluded because its heights change every frame), light
+  ground the city sits on top of, and **districts wearing their semantic colours
+  as zones** so the layout can be read from altitude before a single label.
+  Night's rule is structure matte, meaning neon; day's is structure sunlit,
+  meaning saturated. The colours keep their meanings exactly.
+- **A visible theme switcher.** Daylight was toggled by pressing `N` and by
+  nothing else — undiscoverable on a desktop and unreachable on a phone.
+- **Google Maps mouse convention.** Left-drag pans, shift-left-drag rotates and
+  tilts, and right-click is freed for a **context menu** that offers what the
+  thing under the cursor actually supports — including opening the page anatomy
+  view directly from a heap file or an index, which is a better home for it than
+  any panel. Touch is unchanged.
+- **`CLAUDE.md`, `AGENTS.md` and `CONTRIBUTING.md`.** Every rule carries the
+  reason it exists, because a rule without one gets dropped the first time it is
+  inconvenient. Red/green TDD is mandatory and CI fails the build on a red test.
+
+### Known issues
+
+- Cache hit ratio settles near 87% where a healthy production system sits at
+  98–99%.
+- The touch controls have been verified only in Chrome's mobile emulation, which
+  differs from iOS Safari in touch handling and viewport units.
+
+---
+
 ## [0.4.0] — 2026-07-26
 
 The buildings start telling the truth, and the elephant comes back.
