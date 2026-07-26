@@ -15,7 +15,7 @@ import { createFlows } from './engine/flows'
 import { createRoads } from './engine/roads'
 import { createLabels } from './engine/labels'
 import { createPicker } from './engine/picker'
-import { createCollisionWorld } from './engine/collision'
+import { createCollisionWorld, DEFAULT_EXCLUDE_IDS } from './engine/collision'
 import { createWalkController } from './engine/walk'
 
 import { createSim } from './sim/model'
@@ -30,6 +30,8 @@ import { createStorage } from './world/storage'
 import { createMaintenance } from './world/maintenance'
 import { createReplication } from './world/replication'
 import { createPlanner } from './world/planner'
+import { createAccess } from './world/access'
+import type { AccessModule } from './world/access'
 
 import { createHud, setCompassCamera } from './ui/hud'
 import { createHelp } from './ui/help'
@@ -121,6 +123,10 @@ async function boot(): Promise<void> {
 
   await progress(42, 'pouring the shared memory plaza…')
   const shmemMod = add(createShmem(ctx))
+  // Pedestrian infrastructure: causeways across the excavation and the stair
+  // down to $PGDATA. After shmem, because it lands on the deck shmem builds.
+  const access: AccessModule = createAccess(ctx)
+  add(access)
 
   await progress(52, 'forking backends…')
   add(createClients(ctx))
@@ -143,12 +149,16 @@ async function boot(): Promise<void> {
   // Every district is in the scene, so the registry's bounding boxes are final.
   scene.updateMatrixWorld(true)
   const collision = createCollisionWorld()
-  collision.build(registry)
+  // The deck is excluded because its registry box is a solid 156 x 124 slab —
+  // it would seal the causeway landings. Its surface is a walkable mesh instead.
+  collision.build(registry, { excludeIds: [...DEFAULT_EXCLUDE_IDS, 'shmem.deck'] })
   // Two walkables, and only two: the ground plate — which has the excavation cut
   // out of it, so a downward ray correctly finds nothing over the pit — and the
   // plaza deck. Every other surface is already the top of a collider box.
   collision.addWalkable(groundMod.group)
   collision.addWalkable(shmemMod.group)
+  // MUST follow build(): build() resets the box array and would discard these.
+  access.installCollision(collision)
   const walk = createWalkController({
     camera,
     dom: renderer.domElement,

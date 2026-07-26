@@ -485,8 +485,12 @@ class SignAtlas {
     return this.row
   }
 
-  /** One line of text, `h` metres tall, centred on (x,y,z) and facing `facing`. */
-  plate(text: string, x: number, y: number, z: number, facing: Facing, h: number, color: number, bright = 1): void {
+  /**
+   * One line of text, `h` metres tall, centred on (x,y,z) and facing `facing`.
+   * `lift` pushes the quad off the plate it is painted on — a sign board is a
+   * real slab, and text buried inside it is text you cannot read.
+   */
+  plate(text: string, x: number, y: number, z: number, facing: Facing, h: number, color: number, bright = 1, lift = 0.012): void {
     const [row, w] = this.draw(text)
     const qw = (h * w) / SIGN_ROW
     const r = FACE_R[facing]
@@ -499,9 +503,9 @@ class SignAtlas {
     const v0 = 1 - (row + 1) / SIGN_ROWS
     _col.setHex(color).multiplyScalar(bright)
     const base = this.quads * 4
-    const ox = x + n[0] * 0.012
-    const oy = y + n[1] * 0.012
-    const oz = z + n[2] * 0.012
+    const ox = x + n[0] * lift
+    const oy = y + n[1] * lift
+    const oz = z + n[2] * lift
     const corners: [number, number, number, number][] = [
       [-hw, -hh, u0, v0], [hw, -hh, u1, v0], [hw, hh, u1, v1], [-hw, hh, u0, v1],
     ]
@@ -515,9 +519,9 @@ class SignAtlas {
   }
 
   /** The same line on both faces of a board — you have to read it coming and going. */
-  plate2(text: string, x: number, y: number, z: number, a: Facing, b: Facing, h: number, color: number, bright = 1): void {
-    this.plate(text, x, y, z, a, h, color, bright)
-    this.plate(text, x, y, z, b, h, color, bright)
+  plate2(text: string, x: number, y: number, z: number, a: Facing, b: Facing, h: number, color: number, bright = 1, lift = 0.012): void {
+    this.plate(text, x, y, z, a, h, color, bright, lift)
+    this.plate(text, x, y, z, b, h, color, bright, lift)
   }
 
   build(): THREE.Mesh | null {
@@ -534,7 +538,11 @@ class SignAtlas {
       vertexColors: true,
       depthWrite: false,
       toneMapped: false,
-      side: THREE.DoubleSide,
+      // Front faces only: every plate is built with its normal pointing the way
+      // it is meant to be read, and `plate2` adds the second face itself. Draw
+      // both sides of one quad and the far side of a gate sign shows through
+      // the near one, mirrored.
+      side: THREE.FrontSide,
     })
     const mesh = new THREE.Mesh(g, mat)
     mesh.name = 'access.signs'
@@ -670,22 +678,25 @@ export const createAccess: AccessFactory = (ctx: WorldContext): AccessModule => 
    * 2.05 m — eye height for a 1.7 m walker at twenty paces.
    */
   function signBoard(text: string, x: number, y: number, z: number, span: Axis, w: number, color: number): void {
-    const th = 0.42
-    const top = y + 2.05
+    const th = 0.44
+    // 2.4 m of headroom under the board: it is a gantry over a footway, not a
+    // beam to walk into.
+    const top = y + 2.72
+    const postH = top + th / 2 + 0.09 - y
     for (const s of [-1, 1]) {
       const px = span === 'x' ? x + s * (w / 2) : x
       const pz = span === 'z' ? z + s * (w / 2) : z
-      bSteel.box(px, y + 1.1, pz, 0.12, 2.2, 0.12)
-      box3(px - 0.1, y, pz - 0.1, px + 0.1, y + 2.2, pz + 0.1)
+      bSteel.box(px, y + postH / 2, pz, 0.13, postH, 0.13)
+      box3(px - 0.11, y, pz - 0.11, px + 0.11, y + postH, pz + 0.11)
     }
     if (span === 'x') {
-      bSteel.box(x, top, z, w, th + 0.18, 0.1)
-      bRimP.box(x, top - th / 2 - 0.12, z, w, 0.05, 0.12)
-      signs.plate2(text, x, top, z, '+z', '-z', th * 0.72, color, 1.3)
+      bSteel.box(x, top, z, w, th + 0.18, 0.12)
+      bRimP.box(x, top - th / 2 - 0.13, z, w, 0.05, 0.14)
+      signs.plate2(text, x, top, z, '+z', '-z', th * 0.7, color, 1.3, 0.075)
     } else {
-      bSteel.box(x, top, z, 0.1, th + 0.18, w)
-      bRimP.box(x, top - th / 2 - 0.12, z, 0.12, 0.05, w)
-      signs.plate2(text, x, top, z, '+x', '-x', th * 0.72, color, 1.3)
+      bSteel.box(x, top, z, 0.12, th + 0.18, w)
+      bRimP.box(x, top - th / 2 - 0.13, z, 0.14, 0.05, w)
+      signs.plate2(text, x, top, z, '+x', '-x', th * 0.7, color, 1.3, 0.075)
     }
   }
 
@@ -700,7 +711,7 @@ export const createAccess: AccessFactory = (ctx: WorldContext): AccessModule => 
       const n = FACE_N[facing]
       bSteel.box(x + n[0] * 0.6, y + h, z + n[2] * 0.6, n[0] ? 1.2 : 0.09, 0.26, n[2] ? 1.2 : 0.09)
       const f: [Facing, Facing] = n[0] !== 0 ? ['+z', '-z'] : ['+x', '-x']
-      signs.plate2(text, x + n[0] * 0.66, y + h, z + n[2] * 0.66, f[0], f[1], 0.2, color, 1.3)
+      signs.plate2(text, x + n[0] * 0.66, y + h, z + n[2] * 0.66, f[0], f[1], 0.2, color, 1.3, 0.055)
       h -= 0.44
     }
   }
@@ -919,6 +930,10 @@ export const createAccess: AccessFactory = (ctx: WorldContext): AccessModule => 
       bStruct.box((x0 + x1) / 2, y - 0.66, zLo + 0.2, x1 - x0, 0.8, 0.4)
       bStruct.box((x0 + x1) / 2, y - 0.66, zHi - 0.2, x1 - x0, 0.8, 0.4)
       bStruct.box(outerX + (east ? -0.2 : 0.2), y - 0.66, (zLo + zHi) / 2, 0.4, 0.8, zHi - zLo)
+      // Lit nosing on every landing: eight rungs of light you can count from
+      // the floor of the excavation, which is how deep 52 m reads.
+      bRimS.box((x0 + x1) / 2, y - 0.16, zLo + 0.06, x1 - x0, 0.09, 0.12)
+      bRimS.box((x0 + x1) / 2, y - 0.16, zHi - 0.06, x1 - x0, 0.09, 0.12)
       // A column to the landing two levels down, so the tower reads as a tower.
       if (i + 2 <= N_FLIGHTS) {
         const cx = east ? x1 - 0.55 : x0 + 0.55
@@ -949,6 +964,10 @@ export const createAccess: AccessFactory = (ctx: WorldContext): AccessModule => 
       for (const s of [-1, 1]) {
         const at = lane + s * (STAIR_W / 2)
         bStruct.bar(a, yA - 0.62, at, b, yB - 0.62, at, 0.3, 0.62)
+        // A lit line down the stringer. The excavation has no light of its own;
+        // without this the stair is a black shape in a black hole, and the walk
+        // down is the whole point of building it.
+        bRimS.bar(a, yA - 0.14, at + s * 0.13, b, yB - 0.14, at + s * 0.13, 0.06, 0.1)
         railRun('x', a, b, yA, yB, at - s * 0.16, 5)
       }
     }
@@ -965,6 +984,28 @@ export const createAccess: AccessFactory = (ctx: WorldContext): AccessModule => 
       ['UNDER THE PLAZA  90 m', COLOR.shmem, '-x'],
       ['THE SURFACE  ▴ 52 m', COLOR.storage, '+x'],
     ])
+
+    /* -- the lit path across the excavation floor -------------------------
+     * From the foot of the stair to the underside of the plaza: 90 m of open
+     * floor between the heap warehouses, with the eight pylons carrying shared
+     * memory 52 m overhead. It is the best view in the city and it is pitch
+     * dark, so the route is painted in storage green and every pylon foot gets
+     * a lit pad. Walked and verified: this dog-leg clears the `events`
+     * warehouse (x ±9.5, z -89…-37) and the checkpointer's floor pads. */
+    const PATH: readonly [number, number][] = [
+      [apronX0, -90], [40, -90], [30, -92], [30, -30], [22, -20], [12, -16], [4, -12],
+    ]
+    for (let i = 0; i < PATH.length - 1; i++) {
+      const [ax, az] = PATH[i]
+      const [bx, bz] = PATH[i + 1]
+      bRimS.bar(ax, floorY + 0.05, az, bx, floorY + 0.05, bz, 1.1, 0.06)
+    }
+    for (const px of [-58, -20, 20, 58]) {
+      for (const pz of [-44, 44]) {
+        bRimS.box(px, floorY + 0.05, pz, 7.4, 0.06, 0.5)
+        bRimS.box(px, floorY + 0.05, pz, 0.5, 0.06, 7.4)
+      }
+    }
 
     /* -- head signage on the rim ----------------------------------------- */
     signBoard('$PGDATA  ▾  52 m', gangX, topY, rimZ - 3.0, 'x', 5.6, COLOR.storage)
@@ -1085,6 +1126,19 @@ export const createAccess: AccessFactory = (ctx: WorldContext): AccessModule => 
       }
     }
   }
+
+  /* =====================================================================
+   * 3d. THE FLOOR OF THE EXCAVATION.
+   *
+   * You can now walk down there, so there has to be something to walk on. The
+   * $PGDATA slab and the pit floor below it are both real geometry — but both
+   * are drawn as PlaneGeometry, and collision.ts drops any box thinner than
+   * 0.3 m as a decal. Without these two the descent ends in a 60 m fall and a
+   * respawn. The numbers are storage.ts's and ground.ts's own.
+   * ===================================================================*/
+
+  box3(-112, CITY.storage.y - 1, -95, 112, CITY.storage.y, 100)
+  box3(-CITY.pit.x, CITY.storage.y - 9, -CITY.pit.z, CITY.pit.x, CITY.storage.y - 8, CITY.pit.z)
 
   /* =====================================================================
    * 4. KERB RAMPS onto the five district plinths.
