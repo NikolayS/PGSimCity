@@ -313,6 +313,20 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     addBox(boxHi, ax, FLOOR_Y + ah + 0.25, az, 12, 0.5, 10)
   }
 
+  // All sixteen private spill runs terminate in one shared on-volume bay.
+  // The animated slabs themselves belong to the backend module; this plinth
+  // establishes their real containment under base/pgsql_tmp.
+  const tempBayGroup = new THREE.Group()
+  tempBayGroup.name = 'storage.tempfiles'
+  group.add(tempBayGroup)
+  addBox(boxLo, 0, FLOOR_Y + 0.18, -89, CITY.backend.span + 8, 0.36, 7.5)
+  addBox(boxHi, 0, FLOOR_Y + 0.5, -92.5, CITY.backend.span + 8, 0.28, 0.3)
+  addBox(boxHi, 0, FLOOR_Y + 0.5, -85.5, CITY.backend.span + 8, 0.28, 0.3)
+  const tempBayProxy = new THREE.Mesh(gUnit, mPick)
+  tempBayProxy.position.set(0, FLOOR_Y + 0.8, -89)
+  tempBayProxy.scale.set(CITY.backend.span + 8, 2.0, 8)
+  tempBayGroup.add(tempBayProxy)
+
   /* Floor markings: the storage-green rim of $PGDATA plus the TOAST link. */
   {
     const pts: number[] = []
@@ -450,6 +464,8 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
   vmGroup.add(vmBits)
   const vmMat = vmBits.instanceMatrix.array as Float32Array
   const vmCol = vmBits.instanceColor!.array as Float32Array
+  const fsmGroups: THREE.Group[] = []
+  const vmGroups: THREE.Group[] = []
 
   const rowFree = new Float32Array(rowTotal)
   const rowVm = new Float32Array(rowTotal)
@@ -458,6 +474,24 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
 
   for (let ti = 0; ti < N_TABLES; ti++) {
     const tx = tableX(ti)
+    const fsmOne = new THREE.Group()
+    fsmOne.name = `storage.fsm.${TABLES[ti].id}`
+    const fsmProxy = new THREE.Mesh(gUnit, mPick)
+    fsmProxy.position.set(tx - PANEL_X, ROOF_Y + 1.8, FILE_Z0 + (rowCap[ti] * PITCH) / 2)
+    fsmProxy.scale.set(2.2, 4.0, rowCap[ti] * PITCH)
+    fsmOne.add(fsmProxy)
+    fsmGroup.add(fsmOne)
+    fsmGroups.push(fsmOne)
+
+    const vmOne = new THREE.Group()
+    vmOne.name = `storage.vm.${TABLES[ti].id}`
+    const vmProxy = new THREE.Mesh(gUnit, mPick)
+    vmProxy.position.set(tx + PANEL_X, ROOF_Y + 0.4, FILE_Z0 + (rowCap[ti] * PITCH) / 2)
+    vmProxy.scale.set(2.2, 1.2, rowCap[ti] * PITCH)
+    vmOne.add(vmProxy)
+    vmGroup.add(vmOne)
+    vmGroups.push(vmOne)
+
     for (let r = 0; r < rowCap[ti]; r++) {
       const ri = rowBase[ti] + r
       const z = FILE_Z0 + (r + 0.5) * PITCH
@@ -621,15 +655,44 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
   idxMasts.instanceColor = null
   group.add(idxMasts)
 
+  // Every heap and every non-hash index has its own _fsm fork. These short
+  // strips sit on the index plinths so page reuse is not depicted as heap-only.
+  const IDX_FSM_BITS = 6
+  const idxFsm = instanced(gRiser, mData, idx.length * IDX_FSM_BITS)
+  group.add(idxFsm)
+  const idxFsmMat = idxFsm.instanceMatrix.array as Float32Array
+  const idxFsmCol = idxFsm.instanceColor!.array as Float32Array
+  for (let s = 0; s < idx.length; s++) {
+    const it = idx[s]
+    for (let i = 0; i < IDX_FSM_BITS; i++) {
+      setTRS(idxFsmMat, s * IDX_FSM_BITS + i, it.x + (i - 2.5) * 2.8, FLOOR_Y + 1.4, it.z + 4.2, 1.6, 0.2, 0.75)
+    }
+  }
+  idxFsm.instanceMatrix.needsUpdate = true
+
   const ginEntries = instanced(gRiser, mData, GIN_ENTRIES + GIN_LISTS)
   ginEntries.raycast = () => {}
   group.add(ginEntries)
   const ginMat = ginEntries.instanceMatrix.array as Float32Array
   const ginCol = ginEntries.instanceColor!.array as Float32Array
   const ginHeat = new Float32Array(GIN_ENTRIES + GIN_LISTS)
+  const GIN_TREE_N = 4
+  const ginTreeNodes = instanced(gRiser, mData, GIN_TREE_N)
+  group.add(ginTreeNodes)
+  const ginTreeMat = ginTreeNodes.instanceMatrix.array as Float32Array
+  const ginTreeCol = ginTreeNodes.instanceColor!.array as Float32Array
+  const ginTreeHeat = new Float32Array(GIN_TREE_N)
+  for (let i = 0; i < GIN_TREE_N; i++) setTRS(ginTreeMat, i, 0, FLOOR_Y, 0, 0.001, 0.001, 0.001)
 
   /** slot -> tree number (btree only), or -1 for the GIN. */
   const treeOf = new Int32Array(idx.length).fill(-1)
+  const baseLeafCount = new Uint8Array(idx.length)
+  const liveLeafCount = new Uint8Array(idx.length)
+  const tableBaseIndexPages = new Float32Array(N_TABLES)
+  for (let ti = 0; ti < N_TABLES; ti++) {
+    const defs = TABLES[ti].indexes
+    for (let i = 0; i < defs.length; i++) tableBaseIndexPages[ti] += defs[i].pages
+  }
   {
     let tree = 0
     const mastArr = idxMasts.instanceMatrix.array as Float32Array
@@ -645,10 +708,13 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
       it.group.add(proxy)
 
       if (it.gin) {
-        // GIN: no tall tree — a wide, flat posting structure with many entries.
+        // GIN gets a short entry B-tree below, fanning into posting structures.
         addBox(boxHi, it.x, LEAF_Y + 1.2, it.z, 20, 1.0, 7)
         continue
       }
+      const baseLeaves = clamp(Math.round(5 + Math.sqrt(it.pages) / 3), 6, 10)
+      baseLeafCount[s] = baseLeaves
+      liveLeafCount[s] = baseLeaves
       treeOf[s] = tree
       const nb = tree * NODES_PER_TREE
       const put = (n: number, x: number, y: number, z: number, sx: number, sy: number, sz: number) => {
@@ -693,10 +759,31 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     idxMasts.instanceMatrix.needsUpdate = true
   }
 
-  /* GIN layout: a grid of small entries over a fan of posting lists. */
+  /* GIN layout: a short entry B-tree over a fan of posting lists. */
   const ginSlot = idx.findIndex((i) => i.gin)
   if (ginSlot >= 0) {
     const it = idx[ginSlot]
+    setTRS(ginTreeMat, 0, it.x, ROOT_Y, it.z, 3.4, 1.0, 2.6)
+    for (let i = 0; i < 3; i++) {
+      setTRS(ginTreeMat, 1 + i, it.x + (i - 1) * 6.2, INNER_Y, it.z, 2.8, 0.9, 2.1)
+    }
+    ginTreeNodes.instanceMatrix.needsUpdate = true
+
+    const linePos = new Float32Array(6 * 6)
+    let lo = 0
+    for (let i = 0; i < 3; i++) {
+      const ix = it.x + (i - 1) * 6.2
+      linePos[lo++] = it.x; linePos[lo++] = ROOT_Y + 1; linePos[lo++] = it.z
+      linePos[lo++] = ix; linePos[lo++] = INNER_Y + 0.9; linePos[lo++] = it.z
+      linePos[lo++] = ix; linePos[lo++] = INNER_Y; linePos[lo++] = it.z
+      linePos[lo++] = it.x + (i - 1) * 6.2; linePos[lo++] = LEAF_Y + 2.0; linePos[lo++] = it.z
+    }
+    const ginTreeLinesGeo = keep(new THREE.BufferGeometry())
+    ginTreeLinesGeo.setAttribute('position', new THREE.BufferAttribute(linePos, 3))
+    const ginTreeLines = new THREE.LineSegments(ginTreeLinesGeo, theme.line(COLOR.index, 0.42))
+    ginTreeLines.raycast = () => {}
+    group.add(ginTreeLines)
+
     for (let i = 0; i < GIN_ENTRIES; i++) {
       const c = i % 16
       const r = Math.floor(i / 16)
@@ -745,7 +832,8 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
   const siloMat = siloFill.instanceMatrix.array as Float32Array
   const siloCol = siloFill.instanceColor!.array as Float32Array
 
-  // Intake gantry: values arrive here, get sliced, compressed, then filed.
+  // Intake gantry: values arrive here, get compressed as one datum, then the
+  // shortened datum is sliced and filed.
   addBox(boxHi, ANCHOR.toastYard[0], FLOOR_Y + 9.2, ANCHOR.toastYard[2] - 7, 26, 0.7, 1.4)
   for (const s of [-1, 1]) addBox(boxHi, ANCHOR.toastYard[0] + s * 12, FLOOR_Y + 4.6, ANCHOR.toastYard[2] - 7, 0.7, 8.6, 0.7)
 
@@ -808,6 +896,56 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     const fe = theme.edges(gFrame, COLOR.gridBright, 0.28)
     fe.position.set(0, OC_Y - 0.35, 0)
     osGroup.add(fe)
+  }
+
+  // A dedicated durability plane separates volatile kernel memory from the
+  // filesystem. The excavation rim at y=0 is only PostgreSQL's address-space
+  // boundary; it no longer has to pretend the kernel page cache is durable.
+  const durabilityGroup = new THREE.Group()
+  durabilityGroup.name = 'storage.durability'
+  group.add(durabilityGroup)
+  {
+    const w = CITY.osCache.w + 8
+    const d = CITY.osCache.d + 8
+    const gPlane = keep(new THREE.PlaneGeometry(w, d).rotateX(-Math.PI / 2))
+    const mPlane = keep(
+      new THREE.MeshBasicMaterial({
+        color: COLOR.storage,
+        transparent: true,
+        opacity: 0.12,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+    )
+    const plane = new THREE.Mesh(gPlane, mPlane)
+    plane.position.y = CITY.durability.y
+    plane.renderOrder = 2
+    plane.raycast = () => {}
+    durabilityGroup.add(plane)
+
+    const frameGeo = keep(new THREE.BoxGeometry(w, 0.5, d))
+    const frame = theme.edges(frameGeo, COLOR.storage, 0.9)
+    frame.position.y = CITY.durability.y
+    frame.raycast = () => {}
+    durabilityGroup.add(frame)
+
+    const tex = theme.textTexture('MEMORY ENDS  /  DISK BEGINS', {
+      size: 68,
+      color: '#57e389',
+      letterSpacing: '3px',
+    })
+    const img = tex.image as { width: number; height: number }
+    const mLabel = keep(new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, toneMapped: false }))
+    const gLabel = keep(new THREE.PlaneGeometry(1, 1))
+    for (const side of [-1, 1]) {
+      const label = new THREE.Mesh(gLabel, mLabel)
+      label.scale.set(42, 42 / Math.max(1, img.width / img.height), 1)
+      label.position.set(0, CITY.durability.y + 1.8, side * (d / 2 + 0.2))
+      label.rotation.y = side < 0 ? Math.PI : 0
+      label.raycast = () => {}
+      durabilityGroup.add(label)
+    }
   }
 
   /* ==================================================== 6. DISK ARRAY */
@@ -960,17 +1098,27 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
   /* ============================================================ 8. STATE */
 
   const readEvents = new Float32Array(N_TABLES)
+  const diskReadEvents = new Float32Array(N_TABLES)
+  const cacheReadEvents = new Float32Array(N_TABLES)
   const writeEvents = new Float32Array(N_TABLES)
   const routeKind = new Map<string, number>()
   for (let ti = 0; ti < N_TABLES; ti++) {
-    routeKind.set(rid.ioRead(ti), ti * 2)
-    routeKind.set(rid.ioWrite(ti), ti * 2 + 1)
+    routeKind.set(rid.ioRead(ti), ti * 3)
+    routeKind.set(rid.ioReadCache(ti), ti * 3 + 1)
+    routeKind.set(rid.ioWrite(ti), ti * 3 + 2)
   }
   const offFlow = ctx.bus.on('flow', (req: FlowRequest) => {
     const k = routeKind.get(req.route)
     if (k === undefined) return
-    if (k & 1) writeEvents[k >> 1] += 1
-    else readEvents[k >> 1] += 1
+    const ti = (k / 3) | 0
+    const kind = k % 3
+    if (kind === 2) {
+      writeEvents[ti] += 1
+    } else {
+      readEvents[ti] += 1
+      if (kind === 0) diskReadEvents[ti] += 1
+      else cacheReadEvents[ti] += 1
+    }
   })
 
   const prevIdxScans = new Float32Array(N_TABLES)
@@ -1009,6 +1157,8 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     for (let i = 0; i < s.tables.length; i++) n += s.tables[i].pages
     return n
   }
+  const liveIndexPages = (s: SimState, it: IdxSlot) =>
+    s.tables[it.table].indexPages * (it.pages / Math.max(1, tableBaseIndexPages[it.table]))
 
   ctx.register({
     id: 'storage.datadir',
@@ -1022,6 +1172,20 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     focus: { target: [0, FLOOR_Y + 6, -20], distance: 250, dir: [0.26, 0.62, 0.74] },
     labelAt: [0, FLOOR_Y + 4, 62],
     readout: (s) => `${fmtNum(totalPages(s))} pages · ${fmtBytes(totalPages(s) * 8192)} in ${s.tables.length} relations`,
+  })
+
+  ctx.register({
+    id: 'storage.tempfiles',
+    name: 'base/pgsql_tmp',
+    role: 'shared on-volume bay for private backend temp files',
+    kind: 'storage',
+    district: 'storage',
+    object: tempBayGroup,
+    tier: 1,
+    color: COLOR.vacuum,
+    focus: { target: [0, FLOOR_Y + 2, -89], distance: 150, dir: [0.1, 0.55, -0.83] },
+    labelAt: [0, FLOOR_Y + 5, -89],
+    readout: () => '16 private spill runs · one base/pgsql_tmp bay · inside $PGDATA',
   })
 
   for (let ti = 0; ti < N_TABLES; ti++) {
@@ -1052,17 +1216,23 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     ctx.register({
       id: `storage.index.${it.id}`,
       name: it.name,
-      role: it.gin ? 'GIN index — posting lists of ctids' : 'B-tree index — root, internals, linked leaves',
+      role: it.gin ? 'GIN index — entry B-tree feeding posting lists of ctids' : 'B-tree index — root, internals, linked leaves',
       kind: 'storage',
       district: 'storage',
       object: it.group,
       tier: 2,
       color: COLOR.index,
-      focus: { target: [it.x, LEAF_Y + 3, it.z], distance: 42, dir: [0.2, 0.5, 0.84] },
+      focus: {
+        target: [it.x, it.gin ? INNER_Y + 1 : LEAF_Y + 3, it.z],
+        distance: it.gin ? 46 : 58,
+        // Stay inside the excavation for GIN so the shared-memory deck cannot
+        // occlude its entry tree and posting structures.
+        dir: it.gin ? [0.68, 0.35, 0.65] : [-0.52, 0.72, -0.46],
+      },
       labelAt: [it.x, ROOT_Y + 3, it.z],
       readout: (sim) => {
         const t = sim.tables[it.table]
-        return `${fmtNum(it.pages)} pages · ${fmtNum(t.idxScans)} scans · ${fmtPct(
+        return `${fmtNum(liveIndexPages(sim, it))} pages · ${fmtNum(t.idxScans)} scans · ${fmtPct(
           clamp01(t.bloat * 1.2),
           0,
         )} dead pointers`
@@ -1084,48 +1254,42 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     readout: () => `${fmtNum(toastChunks)} chunks · ${fmtBytes(toastBytes)} out of line`,
   })
 
-  ctx.register({
-    id: 'storage.fsm',
-    name: 'Free space map',
-    role: '_fsm fork — where the next INSERT will fit',
-    kind: 'storage',
-    district: 'storage',
-    object: fsmGroup,
-    tier: 2,
-    color: COLOR.warn,
-    focus: { target: [tableX(3) - PANEL_X, ROOF_Y + 2, FILE_Z0 + 4], distance: 30, dir: [-0.6, 0.5, 0.62] },
-    labelAt: [tableX(3) - PANEL_X - 2, ROOF_Y + 5, FILE_Z0 + 4],
-    readout: (s) => {
-      let free = 0
-      let n = 0
-      for (let i = 0; i < s.tables.length; i++) {
-        const t = s.tables[i]
-        const cap = t.pages * t.def.tuplesPerPage
-        free += clamp01(1 - (t.liveTuples + t.deadTuples) / Math.max(1, cap)) * t.pages
-        n += t.pages
-      }
-      return `${fmtPct(free / Math.max(1, n), 1)} free space across ${fmtNum(n)} pages`
-    },
-  })
-
-  ctx.register({
-    id: 'storage.vm',
-    name: 'Visibility map',
-    role: '_vm fork — one all-visible bit per page',
-    kind: 'storage',
-    district: 'storage',
-    object: vmGroup,
-    tier: 2,
-    color: COLOR.ok,
-    focus: { target: [tableX(2) + PANEL_X, ROOF_Y + 2, FILE_Z0 + 10], distance: 34, dir: [0.62, 0.5, 0.6] },
-    labelAt: [tableX(2) + PANEL_X + 2, ROOF_Y + 5, FILE_Z0 + 10],
-    readout: () => {
-      let cov = 0
-      for (let i = 0; i < N_TABLES; i++) cov += vmCover[i]
-      cov /= N_TABLES
-      return `${fmtPct(cov, 0)} of pages all-visible · index-only scans ${cov > 0.5 ? 'cheap' : 'degraded'}`
-    },
-  })
+  for (let ti = 0; ti < N_TABLES; ti++) {
+    const def = TABLES[ti]
+    const tx = tableX(ti)
+    ctx.register({
+      id: `storage.fsm.${def.id}`,
+      name: `${def.name} free space map`,
+      role: 'one _fsm fork for this heap relation',
+      kind: 'storage',
+      district: 'storage',
+      object: fsmGroups[ti],
+      tier: 2,
+      color: COLOR.warn,
+      focus: { target: [tx - PANEL_X, ROOF_Y + 2, FILE_Z0 + 4], distance: 30, dir: [-0.6, 0.5, 0.62] },
+      labelAt: [tx - PANEL_X - 1.5, ROOF_Y + 5, FILE_Z0 + 4],
+      readout: (s) => {
+        const table = s.tables[ti]
+        const cap = table.pages * table.def.tuplesPerPage
+        const free = clamp01(1 - (table.liveTuples + table.deadTuples) / Math.max(1, cap))
+        return `${fmtPct(free, 1)} free space · ${fmtNum(table.pages)} heap pages`
+      },
+    })
+    ctx.register({
+      id: `storage.vm.${def.id}`,
+      name: `${def.name} visibility map`,
+      role: 'one _vm fork for this heap relation',
+      kind: 'storage',
+      district: 'storage',
+      object: vmGroups[ti],
+      tier: 2,
+      color: COLOR.ok,
+      focus: { target: [tx + PANEL_X, ROOF_Y + 2, FILE_Z0 + 10], distance: 34, dir: [0.62, 0.5, 0.6] },
+      labelAt: [tx + PANEL_X + 1.5, ROOF_Y + 5, FILE_Z0 + 10],
+      readout: () =>
+        `${fmtPct(vmCover[ti], 0)} of pages all-visible · index-only scans ${vmCover[ti] > 0.5 ? 'cheap' : 'degraded'}`,
+    })
+  }
 
   ctx.register({
     id: 'os.cache',
@@ -1140,6 +1304,20 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     labelAt: [0, OC_Y + 4, -74],
     readout: () =>
       `${fmtPct(osHitRatio, 0)} of shared_buffers misses served from RAM · ${fmtPct(osResidentPct, 0)} slab resident`,
+  })
+
+  ctx.register({
+    id: 'storage.durability',
+    name: 'Durability boundary',
+    role: 'volatile kernel memory ends; durable storage begins',
+    kind: 'concept',
+    district: 'storage',
+    object: durabilityGroup,
+    tier: 1,
+    color: COLOR.storage,
+    focus: { target: [0, CITY.durability.y, 0], distance: 190, dir: [0.3, 0.42, 0.86] },
+    labelAt: [0, CITY.durability.y + 2, 82],
+    readout: () => `y ${CITY.durability.y.toFixed(1)} · below the OS page cache · above $PGDATA`,
   })
 
   ctx.register({
@@ -1468,7 +1646,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     pNext = (pNext + 1) % MAX_PROBES
     pTable[i] = ti
     pSlot[i] = slot
-    pLeaf[i] = (rnd() * LEAVES) | 0
+    pLeaf[i] = (rnd() * Math.max(1, liveLeafCount[slot] || LEAVES)) | 0
     pTile[i] = tileBase[ti] + ((rnd() * Math.max(1, tilesUsed[ti])) | 0)
     pAge[i] = 0
     pKind[i] = kind
@@ -1480,6 +1658,27 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     for (let i = 0; i < nodeHeat.length; i++) nodeHeat[i] *= decay
     for (let i = 0; i < strutHeat.length; i++) strutHeat[i] *= decay
     for (let i = 0; i < ginHeat.length; i++) ginHeat[i] *= decay
+    for (let i = 0; i < ginTreeHeat.length; i++) ginTreeHeat[i] *= decay
+
+    // The number of visible leaves and the readout derive from the same live
+    // index-page value. Bloat therefore grows indexes beside growing heaps.
+    for (let s = 0; s < idx.length; s++) {
+      const tree = treeOf[s]
+      if (tree < 0) continue
+      const it = idx[s]
+      const pages = liveIndexPages(sim, it)
+      const leaves = clamp(Math.ceil(baseLeafCount[s] * pages / Math.max(1, it.pages)), 1, LEAVES)
+      liveLeafCount[s] = leaves
+      const nb = tree * NODES_PER_TREE
+      for (let leaf = 0; leaf < LEAVES; leaf++) {
+        const n = nb + 5 + leaf
+        if (leaf < leaves) {
+          setTRS(nodeMat, n, nodePos[n * 3], LEAF_Y, nodePos[n * 3 + 2], 1.3, 0.8, 1.8)
+        } else {
+          setTRS(nodeMat, n, nodePos[n * 3], LEAF_Y, nodePos[n * 3 + 2], 0.001, 0.001, 0.001)
+        }
+      }
+    }
 
     /* --- spawn ---------------------------------------------------------- */
     for (let ti = 0; ti < N_TABLES; ti++) {
@@ -1514,14 +1713,23 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
       const kind = pKind[i]
 
       if (tree < 0) {
-        // GIN: the whole posting structure lights in a wave, not a path.
-        const w = clamp01(1 - Math.abs(age - 0.25) / 0.3)
-        for (let e = 0; e < GIN_ENTRIES; e++) {
-          const phase = (e % 16) / 16
-          const d = Math.abs(phase - clamp01(age / 0.6))
-          if (d < 0.18) ginHeat[e] = Math.max(ginHeat[e], (1 - d / 0.18) * w)
+        // GIN probe: descend the entry B-tree, then fan into one key range and
+        // its posting trees. It is not a flat mat.
+        const branch = pLeaf[i] % 3
+        if (age < 0.5) ginTreeHeat[0] = 1
+        if (age > 0.08) ginTreeHeat[1 + branch] = 1
+        if (age > 0.18) {
+          const first = branch * 16
+          const u = clamp01((age - 0.18) / 0.38)
+          for (let e = 0; e < 16; e++) {
+            const d = Math.abs(e / 15 - u)
+            if (d < 0.24) ginHeat[first + e] = Math.max(ginHeat[first + e], 1 - d / 0.24)
+          }
         }
-        for (let e = 0; e < GIN_LISTS; e++) if (rnd() < 0.25) ginHeat[GIN_ENTRIES + e] = Math.max(ginHeat[GIN_ENTRIES + e], w)
+        if (age > 0.34) {
+          const first = branch * 4
+          for (let e = 0; e < 4; e++) ginHeat[GIN_ENTRIES + first + e] = 1
+        }
       } else {
         const nb = tree * NODES_PER_TREE
         const sb = tree * STRUTS_PER_TREE
@@ -1555,7 +1763,9 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
           vmFlash[rowBase[ti] + clamp(r, 0, rowCap[ti] - 1)] = 1
         } else {
           ctx.flow({
-            route: rid.idxLookup(ti),
+            // Lookups descend index → heap. Inserts and vacuum maintenance
+            // originate at the heap/worker side and travel the opposite road.
+            route: kind === 0 ? rid.idxLookup(ti) : rid.vacIdx(ti),
             count: 1,
             kind: kind === 1 ? 'page_write' : 'page_read',
             color: kind === 1 ? COLOR.bufDirty : kind === 2 ? COLOR.vacuum : COLOR.index,
@@ -1569,10 +1779,23 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     /* --- paint ---------------------------------------------------------- */
     for (let s = 0; s < idx.length; s++) {
       const tree = treeOf[s]
-      if (tree < 0) continue
       const bloat = idxBloat[idx[s].table]
+      const leaves = liveLeafCount[s]
+      const reusable = 0.15 + bloat * 0.75
+      for (let i = 0; i < IDX_FSM_BITS; i++) {
+        const n = s * IDX_FSM_BITS + i
+        const h = 0.15 + reusable * (0.45 + ((i * 37 + s * 11) % 7) / 12) * 2.2
+        idxFsmMat[n * 16 + 5] = h
+        const k = 0.28 + reusable * 0.9
+        setColor3(idxFsmCol, n, L_WARN[0] * k, L_WARN[1] * k * 0.9, L_WARN[2] * k * 0.55)
+      }
+      if (tree < 0) continue
       const nb = tree * NODES_PER_TREE
       for (let n = 0; n < NODES_PER_TREE; n++) {
+        if (n >= 5 && n - 5 >= leaves) {
+          setColor3(nodeCol, nb + n, 0, 0, 0)
+          continue
+        }
         const h = nodeHeat[nb + n]
         // Leaves grey out as dead index pointers accumulate: index bloat.
         const grey = n >= 5 ? bloat : bloat * 0.35
@@ -1588,6 +1811,18 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
       }
       const sb = tree * STRUTS_PER_TREE
       for (let n = 0; n < STRUTS_PER_TREE; n++) {
+        const leafLink = n >= 4 && n < 4 + LEAVES
+        const chainLink = n >= 4 + LEAVES
+        const active = leafLink ? n - 4 < leaves : chainLink ? n - (4 + LEAVES) < leaves - 1 : true
+        if (!active) {
+          const o = (sb + n) * 6
+          for (let j = 0; j < 6; j += 3) {
+            strutCol[o + j] = 0
+            strutCol[o + j + 1] = 0
+            strutCol[o + j + 2] = 0
+          }
+          continue
+        }
         const h = strutHeat[sb + n]
         const chain = n >= 4 + LEAVES
         const k = (chain ? 0.16 : 0.1) + h * 1.9
@@ -1601,6 +1836,11 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     }
     if (ginSlot >= 0) {
       const bloat = idxBloat[idx[ginSlot].table]
+      for (let n = 0; n < GIN_TREE_N; n++) {
+        const k = (n === 0 ? 0.5 : 0.4) + ginTreeHeat[n] * 1.7
+        setColor3(ginTreeCol, n, L_INDEX[0] * k, L_INDEX[1] * k, L_INDEX[2] * k)
+      }
+      ginTreeNodes.instanceColor!.needsUpdate = true
       for (let e = 0; e < GIN_ENTRIES + GIN_LISTS; e++) {
         const h = ginHeat[e]
         const k = 0.3 + h * 1.7
@@ -1615,6 +1855,9 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
       ginEntries.instanceColor!.needsUpdate = true
     }
     idxNodes.instanceColor!.needsUpdate = true
+    idxNodes.instanceMatrix.needsUpdate = true
+    idxFsm.instanceMatrix.needsUpdate = true
+    idxFsm.instanceColor!.needsUpdate = true
     strutColAttr.needsUpdate = true
   }
 
@@ -1646,31 +1889,49 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
       const a = (tAge[i] += dt * 0.85)
       if (a > 3.2) {
         tAge[i] = -1
-        toastChunks += TOAST_CHUNKS
-        toastBytes += 4 * 2048
+        const storedChunks = TOAST_CHUNKS - 1
+        toastChunks += storedChunks
+        toastBytes += storedChunks * 2048
         siloLevel = Math.min(0.94, siloLevel + 0.012)
         continue
       }
       const lane = (i - 1) * 3
 
-      // 0–1 arrive · 1–1.7 chop · 1.7–2.3 compress · 2.3–3.2 file
+      // 0–1 arrive · 1–1.4 compress · 1.4–2.3 chop · 2.3–3.2 file
       if (a < 1.4) {
         const u = clamp01(a)
-        const w = 3.4 * (a < 1 ? 1 : 1 - (a - 1) * 0.2)
+        const comp = a > 1 ? clamp01((a - 1) / 0.4) : 0
+        const w = 3.4 * (1 - comp * 0.35)
+        const d = 2.6 * (1 - comp * 0.35)
         setTRS(tbMat, o, lane, FLOOR_Y + 10.5, -14 + u * 7, w, 2.2, 2.6)
-        const k = 1.1
+        tbMat[o * 16 + 10] = d
+        const k = 1.1 + comp * 0.4
         setColor3(tbCol, o, L_TOAST[0] * k, L_TOAST[1] * k, L_TOAST[2] * k)
         for (let k2 = 0; k2 < TOAST_CHUNKS; k2++) tbMat[(o + 1 + k2) * 16 + 5] = 0.001
       } else {
         tbMat[o * 16 + 5] = 0.001
         const u = clamp01((a - 1.4) / 1.8)
-        const comp = a > 1.9 ? clamp01((a - 1.9) / 0.5) : 0
+        const chop = clamp01((a - 1.4) / 0.9)
+        const storedChunks = TOAST_CHUNKS - 1
         for (let k2 = 0; k2 < TOAST_CHUNKS; k2++) {
-          const sx = 0.8 * (1 - comp * 0.35)
-          const targetX = lane + (k2 - 1.5) * 7 * u
+          if (k2 >= storedChunks) {
+            tbMat[(o + 1 + k2) * 16 + 5] = 0.001
+            continue
+          }
+          const sx = 0.8 * (0.65 + chop * 0.35)
+          const targetX = lane + (k2 - (storedChunks - 1) / 2) * 7 * u
           const y = FLOOR_Y + 10.5 - u * u * 6
-          setTRS(tbMat, (o + 1 + k2), lane + (k2 - 1.5) * 1.0 + (targetX - lane) * 0.9, y, -7 + u * 9, sx, 0.9, 1.5)
-          const k3 = 0.7 + comp * 0.8
+          setTRS(
+            tbMat,
+            o + 1 + k2,
+            lane + (k2 - (storedChunks - 1) / 2) * chop + (targetX - lane) * 0.9,
+            y,
+            -7 + u * 9,
+            sx,
+            0.9,
+            1.0,
+          )
+          const k3 = 0.7 + chop * 0.8
           setColor3(tbCol, o + 1 + k2, L_TOAST[0] * k3, L_TOAST[1] * k3 * 0.85, L_TOAST[2] * k3 * 0.7)
         }
       }
@@ -1718,7 +1979,8 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
   }
 
   /** Reads and writes handed over by the flow bus before the heap consumed them. */
-  const pendRead = new Float32Array(N_TABLES)
+  const pendDiskRead = new Float32Array(N_TABLES)
+  const pendCacheRead = new Float32Array(N_TABLES)
   const pendWrite = new Float32Array(N_TABLES)
 
   function updateOsCache(dt: number, sim: SimState, t: number): void {
@@ -1732,24 +1994,28 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     let diskReads = 0
 
     for (let ti = 0; ti < N_TABLES; ti++) {
-      let n = pendRead[ti]
-      pendRead[ti] = 0
+      let n = pendDiskRead[ti]
+      pendDiskRead[ti] = 0
       while (n >= 1) {
         n -= 1
         const i = neighbour(readTile[ti])
-        if (osHole[i] || osResident[i] < 0.42) {
-          // Straight through to the platters — the expensive path.
-          misses++
-          diskReads++
-          osResident[i] = osHole[i] ? 0 : 1
-          osFlash[i] = Math.max(osFlash[i], 0.7)
-          osKind[i] = 2
-        } else {
-          hits++
-          osResident[i] = Math.min(1, osResident[i] + 0.25)
-          osFlash[i] = 1
-          osKind[i] = 0
-        }
+        // The source selected the full route, so this event reaches media.
+        misses++
+        diskReads++
+        osResident[i] = osHole[i] ? 0 : 1
+        osFlash[i] = Math.max(osFlash[i], 0.7)
+        osKind[i] = 2
+      }
+      n = pendCacheRead[ti]
+      pendCacheRead[ti] = 0
+      while (n >= 1) {
+        n -= 1
+        const i = neighbour(readTile[ti])
+        // The shortened route starts here: kernel RAM supplied the page.
+        hits++
+        if (!osHole[i]) osResident[i] = Math.min(1, osResident[i] + 0.25)
+        osFlash[i] = 1
+        osKind[i] = 0
       }
       let m = pendWrite[ti]
       pendWrite[ti] = 0
@@ -1823,7 +2089,9 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     osTiles.instanceColor!.needsUpdate = true
 
     /* --------------------------------------------------------- disk LEDs */
-    ledBudget += (sim.stats.ioReadPerSec * 0.35 + sim.stats.ioWritePerSec * 0.25) * dt + diskReads
+    // Read LEDs consume the same disk-miss count that selected the full route;
+    // OS-cache hits never light media. Writes light here only as fsync drains.
+    ledBudget += diskReads
     if (syncing) ledBudget += dt * 90
     let guard = 0
     while (ledBudget >= 1 && guard++ < 24) {
@@ -1862,8 +2130,11 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     // The heap consumes the raw event counters, so copy them for the OS cache
     // first: the same page crossing lights both layers.
     for (let ti = 0; ti < N_TABLES; ti++) {
-      pendRead[ti] += readEvents[ti]
+      pendDiskRead[ti] += diskReadEvents[ti]
+      pendCacheRead[ti] += cacheReadEvents[ti]
       pendWrite[ti] += writeEvents[ti]
+      diskReadEvents[ti] = 0
+      cacheReadEvents[ti] = 0
     }
     updateHeap(d, sim, t)
     updateIndexes(d, sim, t)
@@ -2047,6 +2318,7 @@ function buildFloorTexture(rng: () => number, W: number): THREE.CanvasTexture {
       const z = indexPos(ti)[2] + (k === 0 ? 4 : -18)
       label(defs[k].name, tableX(ti), z + 6.4, 1.7, 'rgba(100,255,218,0.62)')
       label(`${defs[k].kind} · ${defs[k].pages} pages`, tableX(ti), z + 9, 1.4, 'rgba(143,165,196,0.45)')
+      label('_fsm', tableX(ti) + 8.8, z + 4.2, 1.2, 'rgba(255,204,85,0.62)')
     }
   }
 
@@ -2057,6 +2329,7 @@ function buildFloorTexture(rng: () => number, W: number): THREE.CanvasTexture {
     label(name + '/', ax, az + 7.5, 1.7, 'rgba(143,165,196,0.6)')
   }
   label('one tile = 12 × 8 KiB pages', -84, -88, 1.9, 'rgba(143,165,196,0.55)')
+  label('base/pgsql_tmp/ · backend spill files', 0, -92, 1.6, 'rgba(184,144,255,0.72)')
   label('↑ N', -104, -80, 2.2, 'rgba(143,165,196,0.5)')
 
   /* District title. */
@@ -2069,7 +2342,7 @@ function buildFloorTexture(rng: () => number, W: number): THREE.CanvasTexture {
   g.fillText('$PGDATA', X(0), Y(FLOOR_Z1 - 8))
   g.font = `600 ${Math.round(2.0 * px)}px ui-monospace, SFMono-Regular, Menlo, monospace`
   g.fillStyle = 'rgba(143,165,196,0.45)'
-  g.fillText('base/  global/  pg_wal/  pg_xact/  pg_tblspc/', X(0), Y(FLOOR_Z1 - 3))
+  g.fillText('base/  global/  pg_xact/  pg_tblspc/   ·   pg_wal shown in east vault', X(0), Y(FLOOR_Z1 - 3))
   if ('letterSpacing' in g) (g as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = '0px'
   g.restore()
 

@@ -3,7 +3,7 @@ import { COLOR } from '../core/theme'
 import { N_BACKEND_SLOTS } from '../core/types'
 import type { BackendSim, PlanNode, SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, damp, easeOutCubic, fmtNum } from '../core/util'
-import { ANCHOR, CITY, backendX } from './layout'
+import { ANCHOR, CITY, backendPid, backendX } from './layout'
 import { OPACITY_TIER } from './storage'
 
 /* ============================================================================
@@ -1170,7 +1170,7 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
     if (textT >= 0.125) {
       textT = 0
       text.set(TX_SQL, b ? (b.sql || '(idle - no statement in flight)') : '')
-      text.set(TX_WHO, b ? `backend ${b.slot} | pid ${9000 + b.slot * 7} | ${b.state.replace(/_/g, ' ')}` : '')
+      text.set(TX_WHO, b ? `backend ${b.slot} | pid ${backendPid(b.slot)} | ${b.state.replace(/_/g, ' ')}` : '')
       text.set(TX_EXEC, b ? `${fmtNum(b.rowsSent)} rows returned` : '')
       for (let i = 0; i < 3; i++) {
         const isWin = priced && i === candWinner

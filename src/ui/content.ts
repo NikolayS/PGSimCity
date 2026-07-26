@@ -26,6 +26,8 @@ export function doc(id: string | null | undefined): ComponentDoc | undefined {
   if (/^autovac\.worker\.\d+$/.test(id)) return _byId.get('autovac.worker')
   if (id.startsWith('storage.table.')) return _byId.get('storage.table')
   if (id.startsWith('storage.index.')) return _byId.get('storage.index')
+  if (id.startsWith('storage.fsm.')) return _byId.get('storage.fsm')
+  if (id.startsWith('storage.vm.')) return _byId.get('storage.vm')
   return undefined
 }
 
@@ -269,6 +271,14 @@ export const KNOB_META: KnobMeta[] = [
     group: 'replication',
     kind: 'toggle',
     hint: 'The standby receives WAL fine but cannot apply it fast enough — the classic source of replication lag.',
+  },
+  {
+    key: 'standbyLongQuery',
+    label: 'Long standby query',
+    group: 'replication',
+    kind: 'toggle',
+    hint: 'A long read on the standby reports its xmin through hot_standby_feedback and pins cleanup on the primary.',
+    danger: true,
   },
   {
     key: 'longRunningXact',

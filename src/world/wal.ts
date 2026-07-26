@@ -45,7 +45,7 @@ type BoxSpec = [number, number, number, number, number, number]
 const WW = ANCHOR.walWriter // pumping station
 const WV = ANCHOR.walVault // the ingot hall
 const AR = ANCHOR.archiver // gantry crane
-const AS = ANCHOR.archiveStore // cold store
+const AS = ANCHOR.archiveStore // pg_wal/archive_status marker board
 const WS = ANCHOR.walSender // the cable head at the top of the line
 const LD = ANCHOR.logicalDecoder // the prism
 
@@ -487,7 +487,7 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
   wheelSpokes.instanceMatrix.needsUpdate = true
   wheelGroup.add(wheelSpokes)
 
-  /* Neon: window slits, the two LSN gauges, the fsync bypass. */
+  /* Neon: window slits, the two LSN gauges, and the early-ack signal wire. */
   const WW_GAUGE_H = 6.6
   const GAUGE_Y0 = 5.6
   const wwNeonSpecs: BoxSpec[] = [
@@ -501,7 +501,7 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
     [WX + 7, GAUGE_Y0, WZ + 9.12, 2.6, 0.1, 0.3], // 7: FLUSH gauge bar (scaled)
     [WX + 1, GAUGE_Y0 - 0.2, WZ + 9.12, 3.0, 0.12, 0.42], // 8: base tick, west
     [WX + 7, GAUGE_Y0 - 0.2, WZ + 9.12, 3.0, 0.12, 0.42], // 9: base tick, east
-    [0, 0, 0, 1, 1, 1], // 10..12: synchronous_commit bypass duct, placed below
+    [0, 0, 0, 1, 1, 1], // 10..12: synchronous_commit early-ack wire, placed below
     [0, 0, 0, 1, 1, 1],
     [0, 0, 0, 1, 1, 1],
     [0, 0, 0, 1, 1, 1], // 13: intake gasket, placed below
@@ -519,16 +519,17 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
   const IX_PIST = 15
   const IX_LAMP = 17
 
-  // The synchronous_commit bypass: a duct that hops over the fsync valve. It is
-  // dark unless the user turns durability off, and then it is the only lit path.
+  // synchronous_commit=off bypasses the client's waiting, not WAL I/O. This is
+  // deliberately a thin signal wire leaving the gauge board; the WAL main and
+  // piston remain the only byte path and keep running.
   {
     _q.setFromAxisAngle(_axisY, outletYaw)
     _p2.copy(outletAt).addScaledVector(outletDir, 2.6)
-    setTRS(wwNeon, IX_BYP, _p2.x, _p2.y + 3.4, _p2.z, 0.7, 6.8, 0.7)
+    setTRS(wwNeon, IX_BYP, _p2.x, _p2.y + 3.4, _p2.z, 0.22, 6.8, 0.22)
     _p2.copy(outletAt).addScaledVector(outletDir, 5.8)
-    setTRS(wwNeon, IX_BYP + 1, _p2.x, _p2.y + 6.8, _p2.z, 0.7, 0.7, 6.8, _q)
+    setTRS(wwNeon, IX_BYP + 1, _p2.x, _p2.y + 6.8, _p2.z, 0.22, 0.22, 6.8, _q)
     _p2.copy(outletAt).addScaledVector(outletDir, 9.0)
-    setTRS(wwNeon, IX_BYP + 2, _p2.x, _p2.y + 3.4, _p2.z, 0.7, 6.8, 0.7)
+    setTRS(wwNeon, IX_BYP + 2, _p2.x, _p2.y + 3.4, _p2.z, 0.22, 6.8, 0.22)
     // lit gaskets where the mains penetrate the wall
     _q.setFromUnitVectors(new THREE.Vector3(0, 0, 1), intakeDir)
     _p2.copy(intakeAt).addScaledVector(intakeDir, -0.9)
@@ -576,13 +577,14 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
     stS[i] = 3.4 + srng() * 3.4
   }
 
-  signs.plate('walwriter', HALL_CX, 14.9, WZ + 9.2, 'south', 1.4, COLOR.wal, 1.1)
+  signs.plate('WAL WRITE / FLUSH PATH', HALL_CX, 14.9, WZ + 9.2, 'south', 1.25, COLOR.wal, 1.1)
+  signs.plate('XLogWrite + fsync · requested by walwriter or committing backends', HALL_CX, 16.5, WZ + 9.2, 'south', 0.58, COLOR.inkDim, 0.62)
   signs.plate('write_lsn → OS', WX + 1, 4.8, WZ + 9.3, 'south', 0.72, COLOR.wal, 0.85)
   signs.plate('flush_lsn → disk', WX + 7, 4.8, WZ + 9.3, 'south', 0.72, COLOR.ok, 0.85)
   signs.plate('written ≠ durable', WX + 6, 1.2, WZ + 11.6, 'up', 1.5, COLOR.ink, 0.5)
   _p2.copy(outletAt).addScaledVector(outletDir, 5.8)
   const [SGN_BYPASS] = signs.plate(
-    'synchronous_commit = off · bypass',
+    'synchronous_commit = off · ACK LEAVES EARLY · WAL STILL FSYNCS',
     _p2.x, _p2.y + 8.6, _p2.z,
     'north', 0.95, COLOR.ok, 0.2,
   )
@@ -684,14 +686,19 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
   gVault.add(segCaps)
 
   const segMarks = new THREE.InstancedMesh(unitBox, neonWhite, N_WAL_SEG_SLOTS)
+  const segHoldMarks = new THREE.InstancedMesh(unitBox, neonWhite, N_WAL_SEG_SLOTS)
   _c.setRGB(0, 0, 0)
   for (let i = 0; i < N_WAL_SEG_SLOTS; i++) {
     setBox(segMarks, i, [VX + 3.95, 5.6, walSegZ(i), 0.3, 1.4, 5.6])
     segMarks.setColorAt(i, _c)
+    setBox(segHoldMarks, i, [VX - 3.95, 5.6, walSegZ(i), 0.3, 1.4, 5.6])
+    segHoldMarks.setColorAt(i, _c)
   }
   segMarks.instanceMatrix.needsUpdate = true
   segMarks.instanceColor!.setUsage(THREE.DynamicDrawUsage)
-  gVault.add(segMarks)
+  segHoldMarks.instanceMatrix.needsUpdate = true
+  segHoldMarks.instanceColor!.setUsage(THREE.DynamicDrawUsage)
+  gVault.add(segMarks, segHoldMarks)
 
   // Envelope outlines: a recycled segment is a ghost of a file that still exists.
   const outPos: number[] = []
@@ -753,11 +760,13 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
   chargeGroup.add(chargeBeam)
 
   signs.plate('pg_wal · 16 MiB segments', VX, 17.2, -VAULT_Z - 2.2, 'north', 1.4, COLOR.wal, 1.0)
+  signs.plate('inside $PGDATA · often mounted on its own volume', VX, 15.6, -VAULT_Z - 2.2, 'north', 0.66, COLOR.storage, 0.62)
   signs.plate('16 MiB', VX, 2.0, -VAULT_Z - 2.95, 'north', 0.8, COLOR.archive, 0.7)
+  signs.plate('held by slot', VX - 4.2, 18.6, 0, 'west', 0.72, COLOR.warn, 0.62)
   const [SGN_RECYC] = signs.plate('recycled — renamed for reuse, not deleted', VX, 17.2, VAULT_Z + 2.2, 'south', 1.2, COLOR.inkDim, 0.7)
 
   /* =======================================================================
-   * 3. ARCHIVER + ARCHIVE STORE.
+   * 3. ARCHIVER + ARCHIVE STATUS.
    * =====================================================================*/
 
   const gArchiver = new THREE.Group()
@@ -845,51 +854,43 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
   signs.plate('archive_command', AR[0], 8.8, AR[2] - 11.8, 'north', 0.9, COLOR.ink, 0.55)
   const [SGN_QUEUE] = signs.plate('archive queue', AR[0] - 11, 24.4, AR[2] - 6, 'north', 0.9, COLOR.archive, 0.5)
 
-  /* --- archive store: cold, dim, and it only ever grows ------------------- */
+  /* --- pg_wal/archive_status: local .ready / .done marker files ----------- */
 
-  const gStore = new THREE.Group()
-  gStore.name = 'archive.store'
-  group.add(gStore)
+  const gStatus = new THREE.Group()
+  gStatus.name = 'archive.status'
+  group.add(gStatus)
 
-  const storeMass: BoxSpec[] = [
-    [AS[0], 0.6, AS[2], 30, 1.2, 24],
-    [AS[0] + 14, 5.4, AS[2], 2, 10, 24], // back wall (east)
-    [AS[0], 5.4, AS[2] - 11, 30, 10, 2], // north wall
-    [AS[0], 5.4, AS[2] + 11, 30, 10, 2], // south wall
-    [AS[0], 10.9, AS[2], 30, 1.0, 24], // roof
+  const statusMass: BoxSpec[] = [
+    [AS[0], 0.6, AS[2], 24, 1.2, 10],
+    [AS[0] - 11, 5.2, AS[2], 1.0, 9.2, 1.0],
+    [AS[0] + 11, 5.2, AS[2], 1.0, 9.2, 1.0],
+    [AS[0], 9.8, AS[2], 24, 1.0, 1.0],
+    [AS[0], 5.2, AS[2] + 0.6, 22, 8.2, 0.8],
   ]
-  const storeStruct = batch(gStore, unitBox, matStruct, storeMass, true)
+  const statusStruct = batch(gStatus, unitBox, matStruct, statusMass, true)
 
-  const storeShelves: BoxSpec[] = []
-  for (let r = 0; r < 3; r++) storeShelves.push([AS[0] + 1, 1.2 + r * 2.6, AS[2], 24, 0.3, 21])
-  for (let c = 0; c < 4; c++) storeShelves.push([AS[0] - 10 + c * 7, 5.0, AS[2], 0.4, 8.0, 21])
-  const storeShelfMesh = batch(gStore, unitBox, matDeep, storeShelves)
+  const statusShelves: BoxSpec[] = [
+    [AS[0], 3.0, AS[2] - 0.2, 21, 0.25, 1.2],
+    [AS[0], 7.1, AS[2] - 0.2, 21, 0.25, 1.2],
+  ]
+  const statusShelfMesh = batch(gStatus, unitBox, matDeep, statusShelves)
 
-  const N_STORE = 45
-  const storeSlots = new THREE.InstancedMesh(unitBox, neonWhite, N_STORE)
-  const storeSlotY = new Float32Array(N_STORE)
+  const N_STATUS = 12
+  const statusSlots = new THREE.InstancedMesh(unitBox, neonWhite, N_STATUS)
   {
-    let i = 0
-    for (let ry = 0; ry < 3; ry++) {
-      for (let cz = 0; cz < 5; cz++) {
-        for (let cx = 0; cx < 3; cx++) {
-          const x = AS[0] - 7 + cx * 7
-          const y = 2.4 + ry * 2.6
-          const z = AS[2] - 8 + cz * 4
-          setBox(storeSlots, i, [x, y, z, 6.0, 1.9, 3.4])
-          storeSlotY[i] = y
-          i++
-        }
-      }
+    for (let i = 0; i < N_STATUS; i++) {
+      const row = i < 6 ? 0 : 1
+      const col = i % 6
+      setBox(statusSlots, i, [AS[0] - 8.4 + col * 3.35, 4.1 + row * 4.1, AS[2] - 0.7, 2.5, 2.1, 0.35])
     }
   }
-  storeSlots.instanceMatrix.needsUpdate = true
+  statusSlots.instanceMatrix.needsUpdate = true
   _c.setRGB(0, 0, 0)
-  for (let i = 0; i < N_STORE; i++) storeSlots.setColorAt(i, _c)
-  storeSlots.instanceColor!.setUsage(THREE.DynamicDrawUsage)
-  gStore.add(storeSlots)
+  for (let i = 0; i < N_STATUS; i++) statusSlots.setColorAt(i, _c)
+  statusSlots.instanceColor!.setUsage(THREE.DynamicDrawUsage)
+  gStatus.add(statusSlots)
 
-  signs.plate('archive store · cold', AS[0], 12.6, AS[2] - 11.2, 'north', 1.1, COLOR.archive, 0.85)
+  signs.plate('pg_wal/archive_status · latest .ready / .done markers', AS[0], 11.3, AS[2] - 1.0, 'north', 0.9, COLOR.archive, 0.85)
 
   /* =======================================================================
    * 4. WALSENDER — the cable head at the top of the line, and the slot spool.
@@ -932,16 +933,41 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
   ]
   const sendDetailMesh = batch(gSender, unitBox, matDeep, sendDetail)
 
-  /* The replication slot, as a spool of WAL we have promised to keep. */
+  // One termination bay per consumer. The cabinet is shared architecture, but
+  // a physical standby and a logical subscriber each own a walsender and slot.
+  const consumerBays = new THREE.InstancedMesh(unitBox, neonWhite, 2)
+  const consumerRatchetGeo = own(new THREE.TorusGeometry(1.2, 0.22, 6, 18))
+  const consumerRatchets = new THREE.InstancedMesh(consumerRatchetGeo, neonWhite, 2)
+  _c.setRGB(0, 0, 0)
+  for (let i = 0; i < 2; i++) {
+    const x = WS[0] + (i === 0 ? -3.4 : 3.4)
+    setBox(consumerBays, i, [x, 5.6, WS[2] + 7.15, 5.4, 3.2, 0.8])
+    _p.set(x, 5.6, WS[2] + 7.7)
+    _e.set(Math.PI / 2, 0, 0)
+    _q.setFromEuler(_e)
+    _sc.set(1, 1, 1)
+    _m.compose(_p, _q, _sc)
+    consumerRatchets.setMatrixAt(i, _m)
+    consumerBays.setColorAt(i, _c)
+    consumerRatchets.setColorAt(i, _c)
+  }
+  consumerBays.instanceMatrix.needsUpdate = true
+  consumerBays.instanceColor!.setUsage(THREE.DynamicDrawUsage)
+  consumerRatchets.instanceMatrix.needsUpdate = true
+  consumerRatchets.instanceColor!.setUsage(THREE.DynamicDrawUsage)
+  gSender.add(consumerBays, consumerRatchets)
+
+  /* A replication slot is a retention position, so it is a small ratchet.
+   * Retained bytes light the real segment ingots back in pg_wal. */
   const SPX = WS[0] + 15
   const SPZ = WS[2] + 13
-  const SPY = 6.2
+  const SPY = 4.0
   const SIGX = SPX - 5.8
   const SIGZ = SPZ - 4.0
   const spoolMass: BoxSpec[] = [
-    [SPX, 0.6, SPZ, 13, 1.2, 9],
-    [SPX - 3.4, SPY / 2, SPZ, 1.4, SPY, 1.4], // bearing posts
-    [SPX + 3.4, SPY / 2, SPZ, 1.4, SPY, 1.4],
+    [SPX, 0.6, SPZ, 7, 1.2, 6],
+    [SPX - 1.8, SPY / 2, SPZ, 0.8, SPY, 0.8], // bearing posts
+    [SPX + 1.8, SPY / 2, SPZ, 0.8, SPY, 0.8],
     [SIGX, 6.2, SIGZ, 0.8, 12.4, 0.8], // signal post
     [SIGX, 12.6, SIGZ, 2.6, 0.4, 2.0], // and its head plate
   ]
@@ -949,15 +975,15 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
 
   const spoolAxis = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2)
   const spoolFlanges = new THREE.InstancedMesh(unitCyl, matHeavy, 3)
-  setTRS(spoolFlanges, 0, SPX - 2.3, SPY, SPZ, 11.4, 0.5, 11.4, spoolAxis)
-  setTRS(spoolFlanges, 1, SPX + 2.3, SPY, SPZ, 11.4, 0.5, 11.4, spoolAxis)
-  setTRS(spoolFlanges, 2, SPX, SPY, SPZ, 1.6, 9.4, 1.6, spoolAxis)
+  setTRS(spoolFlanges, 0, SPX - 1.2, SPY, SPZ, 4.2, 0.35, 4.2, spoolAxis)
+  setTRS(spoolFlanges, 1, SPX + 1.2, SPY, SPZ, 4.2, 0.35, 4.2, spoolAxis)
+  setTRS(spoolFlanges, 2, SPX, SPY, SPZ, 1.0, 4.8, 1.0, spoolAxis)
   spoolFlanges.instanceMatrix.needsUpdate = true
   gSender.add(spoolFlanges)
 
   const spoolWind = new THREE.InstancedMesh(unitCyl, neonWhite, 1)
   spoolWind.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
-  setTRS(spoolWind, 0, SPX, SPY, SPZ, 2.4, 4.2, 2.4, spoolAxis)
+  setTRS(spoolWind, 0, SPX, SPY, SPZ, 2.1, 2.0, 2.1, spoolAxis)
   spoolWind.instanceMatrix.needsUpdate = true
   _c.setHex(COLOR.wal)
   spoolWind.setColorAt(0, _c)
@@ -969,13 +995,13 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
    * a short trail behind it. Same event, same rhythm, same countability — a
    * turning drum at 6 m instead of a ring launched into the sky. */
   const N_TOOTH = 8
-  const TOOTH_R = 4.2
+  const TOOTH_R = 1.65
   const spoolTeeth = new THREE.InstancedMesh(unitBox, neonWhite, N_TOOTH)
   spoolTeeth.raycast = () => {}
   _c.setRGB(0, 0, 0)
   for (let i = 0; i < N_TOOTH; i++) {
     const a = (i / N_TOOTH) * TAU
-    setBox(spoolTeeth, i, [SPX - 2.75, SPY + TOOTH_R * Math.cos(a), SPZ + TOOTH_R * Math.sin(a), 0.5, 1.15, 1.15])
+    setBox(spoolTeeth, i, [SPX - 1.5, SPY + TOOTH_R * Math.cos(a), SPZ + TOOTH_R * Math.sin(a), 0.35, 0.55, 0.55])
     spoolTeeth.setColorAt(i, _c)
   }
   spoolTeeth.instanceMatrix.needsUpdate = true
@@ -996,6 +1022,8 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
   const IX_SLOTWARN = 6
 
   signs.plate('walsender', WS[0], 4.9, WS[2] + 10.1, 'south', 1.1, COLOR.replication, 1.0)
+  signs.plate('physical', WS[0] - 3.4, 7.8, WS[2] + 7.8, 'south', 0.52, COLOR.replication, 0.64)
+  signs.plate('logical', WS[0] + 3.4, 7.8, WS[2] + 7.8, 'south', 0.52, COLOR.toast, 0.64)
   const [SGN_SLOT] = signs.plate('replication slot', SIGX, 14.4, SIGZ, 'west', 1.1, COLOR.replication, 0.7)
 
   /* =======================================================================
@@ -1170,9 +1198,9 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
 
   ctx.register({
     id: 'walwriter',
-    name: 'walwriter',
-    role: 'writes WAL out of shared memory, and fsyncs it',
-    kind: 'process',
+    name: 'WAL write / flush path',
+    role: 'XLogWrite + fsync — shared by walwriter and committing backends',
+    kind: 'concept',
     district: 'wal',
     object: gWalWriter,
     tier: 0,
@@ -1180,7 +1208,9 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
     labelAt: [WX + 4, 41, WZ],
     color: COLOR.wal,
     readout: (s: SimState) =>
-      `${flushHz.toFixed(1)} flush/s · ${fmtBytes(s.wal.bytesPerSec)}/s · ${fmtBytes(s.wal.insertLsn - s.wal.flushLsn)} not durable`,
+      s.knobs.synchronousCommit === 'off'
+        ? `ACK leaves early · ${flushHz.toFixed(1)} flush/s still running · ${fmtBytes(s.wal.insertLsn - s.wal.flushLsn)} not durable`
+        : `${flushHz.toFixed(1)} flush/s · ${fmtBytes(s.wal.bytesPerSec)}/s · ${fmtBytes(s.wal.insertLsn - s.wal.flushLsn)} not durable`,
   })
 
   ctx.register({
@@ -1220,17 +1250,17 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
   })
 
   ctx.register({
-    id: 'archive.store',
-    name: 'archive store',
-    role: 'where archived WAL goes to be forgotten about',
+    id: 'archive.status',
+    name: 'pg_wal/archive_status',
+    role: '.ready and .done marker files beside the WAL segments',
     kind: 'storage',
     district: 'wal',
-    object: gStore,
+    object: gStatus,
     tier: 1,
-    focus: { target: [AS[0], 6, AS[2]], distance: 68, dir: [-0.7, 0.45, -0.55] },
-    labelAt: [AS[0], 16, AS[2]],
+    focus: { target: [AS[0], 6, AS[2]], distance: 62, dir: [-0.7, 0.45, -0.55] },
+    labelAt: [AS[0], 14, AS[2]],
     color: COLOR.archive,
-    readout: (s: SimState) => `${s.wal.archived} segments · ${fmtBytes(s.wal.archived * s.wal.segmentSize)}`,
+    readout: (s: SimState) => `${s.wal.archiveQueue} .ready · latest ${Math.min(s.wal.archived, 6)} .done markers shown`,
   })
 
   ctx.register({
@@ -1246,8 +1276,11 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
     color: COLOR.replication,
     readout: (s: SimState) => {
       const r = s.replication
-      if (!r.connected) return `disconnected · slot holding ${fmtBytes(r.lagBytes)}`
-      return `sent ${fmtLsn(r.sentLsn)} · lag ${fmtBytes(r.lagBytes)}`
+      const consumers = (r.enabled ? 1 : 0) + (r.logicalEnabled ? 1 : 0)
+      if (!r.connected) {
+        return `${consumers} consumer bay${consumers === 1 ? '' : 's'} · disconnected · slot holding ${fmtBytes(r.lagBytes)}`
+      }
+      return `${consumers} consumer bay${consumers === 1 ? '' : 's'} · sent ${fmtLsn(r.sentLsn)} · lag ${fmtBytes(r.lagBytes)}`
     },
   })
 
@@ -1443,6 +1476,9 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
 
     const segs = wal.segments
     const sentSeg = Math.floor(rep.sentLsn / Math.max(1, wal.segmentSize))
+    const slotRestartLsn = rep.logicalEnabled ? Math.min(rep.flushLsn, rep.logicalSlotLsn) : rep.flushLsn
+    const slotRestartSeg = Math.floor(slotRestartLsn / Math.max(1, wal.segmentSize))
+    const currentSeg = Math.floor(wal.insertLsn / Math.max(1, wal.segmentSize))
     let curIdx = -1
     const outArr = outColAttr.array as Float32Array
     for (let i = 0; i < N_WAL_SEG_SLOTS; i++) {
@@ -1484,13 +1520,14 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
           bright = 0
           fill = 0
       }
-      // The segment currently in the crane's hook is out of its cradle.
-      if (craneCarrying && craneSlot === i) fill = 0
-
       const h = SEG_H * fill
       if (h > 0.02) setTRS(segFillMesh, i, VX, SEG_Y0 + h / 2, walSegZ(i), 7.0, h, 7.2)
       else hideInst(segFillMesh, i)
-      _c.setHex(base).multiplyScalar(bright)
+      // archive_command copies a completed segment. The source file remains in
+      // pg_wal until checkpoint-driven recycling; dim it while the duplicate is
+      // visibly in flight, but never empty its cradle.
+      const copyDim = craneCarrying && craneSlot === i ? 0.42 : 1
+      _c.setHex(base).multiplyScalar(bright * copyDim)
       segFillMesh.setColorAt(i, _c)
 
       // cap: a completed segment is closed
@@ -1502,6 +1539,9 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
       const streamed = rep.connected && s.id < sentSeg && st !== 'recycled'
       _c.setHex(COLOR.replication).multiplyScalar(streamed ? 1.6 : 0)
       segMarks.setColorAt(i, _c)
+      const held = rep.enabled && s.id >= slotRestartSeg && s.id < currentSeg && st !== 'recycled'
+      _c.setHex(COLOR.warn).multiplyScalar(held ? 1.7 : 0)
+      segHoldMarks.setColorAt(i, _c)
 
       // envelope outline: bright ghost for recycled, faint elsewhere
       if (st === 'recycled') _c.setHex(COLOR.inkDim).multiplyScalar(0.34)
@@ -1519,6 +1559,7 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
     segFillMesh.instanceColor!.needsUpdate = true
     segCaps.instanceMatrix.needsUpdate = true
     segMarks.instanceColor!.needsUpdate = true
+    segHoldMarks.instanceColor!.needsUpdate = true
     outColAttr.needsUpdate = true
 
     // Charging head slides to whichever segment is current and pours into it.
@@ -1546,7 +1587,6 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
       craneClock = 0
       craneFrom.copy(cranePos)
       craneCarrying = false
-      ctx.flow({ route: 'wal.archive', count: 2, kind: 'archive', color: COLOR.archive, stagger: 0.08 })
     } else if (archIdx < 0 && craneSlot >= 0 && cranePhase >= 1 && cranePhase < 4) {
       // The sim finished before the crane did — put it down and go home.
       cranePhase = 4
@@ -1581,7 +1621,7 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
         break
       }
       case 3: {
-        // out along the runway to the cold store
+        // carry the completed segment from its cradle into archive_command
         const k = clamp01(craneClock / (ARCH_WINDOW * 0.52))
         craneT = k
         routePoint('wal.archive', craneT, _p)
@@ -1598,14 +1638,13 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
         break
       }
       case 4: {
-        // lower it into the stack
+        // lower the copy into archive_command's handoff bay
         const k = clamp01(craneClock / (ARCH_WINDOW * 0.14))
         routePoint('wal.archive', 1, cranePos)
         cranePos.y += CRANE_LIFT
         craneHook = smoothstep(k)
         if (craneCarrying && k > 0.7) {
           craneCarrying = false
-          ctx.flow({ route: 'wal.archive', count: 3, kind: 'archive', color: COLOR.archive, stagger: 0.05 })
         }
         if (k >= 1) {
           cranePhase = 5
@@ -1641,7 +1680,7 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
       craneGroup.rotation.y = damp(craneGroup.rotation.y, 0, 4, dt)
     }
     // In the hall the hook has 1 m of travel — that is all the headroom there is
-    // between the cradles and the charging rail. Over the store it can drop far.
+    // between the cradles and the charging rail. Over the handoff bay it can drop.
     const hookRange = cranePhase === 4 ? 5.0 : 1.0
     const drop = 0.6 + craneHook * hookRange
     setTRS(craneBody, IX_CABLE, CRANE_ARM, -1.4 - drop / 2, 0, 0.16, drop, 0.16)
@@ -1671,15 +1710,19 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
     archQueue.instanceColor!.needsUpdate = true
     signs.setColor(SGN_QUEUE, qCrit > 0.3 ? COLOR.warn : COLOR.archive, 0.35 + qCrit * 0.9)
 
-    // Cold store fill.
-    const stored = clamp(wal.archived, 0, N_STORE)
-    for (let i = 0; i < N_STORE; i++) {
-      const on = i < stored
-      const fresh = i === stored - 1
-      _c.setHex(COLOR.archive).multiplyScalar(on ? (fresh ? 1.4 : 0.34) : 0.015)
-      storeSlots.setColorAt(i, _c)
+    // Local marker files: .ready waits on the first row, recent .done markers
+    // occupy the second. This is metadata beside pg_wal, not another WAL store.
+    const ready = clamp(wal.archiveQueue, 0, 6)
+    const done = clamp(wal.archived, 0, 6)
+    for (let i = 0; i < N_STATUS; i++) {
+      const row = i < 6 ? 0 : 1
+      const slot = i % 6
+      const on = slot < (row === 0 ? ready : done)
+      const fresh = on && slot === (row === 0 ? ready : done) - 1
+      _c.setHex(row === 0 ? COLOR.warn : COLOR.ok).multiplyScalar(on ? (fresh ? 1.4 : 0.48) : 0.015)
+      statusSlots.setColorAt(i, _c)
     }
-    storeSlots.instanceColor!.needsUpdate = true
+    statusSlots.instanceColor!.needsUpdate = true
 
     /* --- 4. WALSENDER ---------------------------------------------------- */
 
@@ -1700,6 +1743,14 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
     streamPulse = Math.max(0, streamPulse - dt * 2.2)
 
     const connected = rep.connected && rep.enabled
+    _c.setHex(COLOR.replication).multiplyScalar(rep.enabled ? (connected ? 1.35 : 0.35) : 0.035)
+    consumerBays.setColorAt(0, _c)
+    consumerRatchets.setColorAt(0, _c)
+    _c.setHex(COLOR.toast).multiplyScalar(rep.logicalEnabled ? 1.25 : 0.035)
+    consumerBays.setColorAt(1, _c)
+    consumerRatchets.setColorAt(1, _c)
+    consumerBays.instanceColor!.needsUpdate = true
+    consumerRatchets.instanceColor!.needsUpdate = true
 
     // The drum turns while the sender is working, and stands still when it is
     // not. Brightness only — the teeth never move.
@@ -1710,11 +1761,9 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
     }
     spoolTeeth.instanceColor!.needsUpdate = true
 
-    // The slot spool: WAL we promised to keep because the standby has not
-    // replayed it yet. This is exactly how a forgotten slot fills your disk.
+    // The ratchet marks the slot position; retained bytes light pg_wal itself.
     const lagFrac = clamp01(Math.sqrt(rep.lagBytes / (192 * MB)))
-    const spoolR = lerp(2.4, 10.6, lagFrac)
-    setTRS(spoolWind, 0, SPX, SPY, SPZ, spoolR, 4.2, spoolR, spoolAxis)
+    setTRS(spoolWind, 0, SPX, SPY, SPZ, 2.1, 2.0, 2.1, spoolAxis)
     spoolWind.instanceMatrix.needsUpdate = true
     const spoolCrit = clamp01((lagFrac - 0.72) / 0.28)
     _c.setHex(COLOR.wal).lerp(_c2.setHex(COLOR.warn), spoolCrit).multiplyScalar(0.55 + lagFrac * 1.5)
@@ -1805,9 +1854,10 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
 
     archDetailMesh.visible = near
     runwayMasts.visible = near
-    storeShelfMesh.visible = near
+    statusShelfMesh.visible = near
 
     sendDetailMesh.visible = near
+    consumerRatchets.visible = near
     spoolFlanges.visible = near
     spoolTeeth.visible = near
 
@@ -1826,10 +1876,11 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
     for (const m of [
       wwStruct, wwRoundMesh, wwDetailMesh, pistonMesh, wheelSpokes, wwNeon, steam,
       vaultStruct, vaultPiers, vaultRoof, doorPlate, vaultDoorDetail, segCradles, segCradleSides,
-      segFillMesh, segCaps, segMarks, chargeBody,
+      segFillMesh, segCaps, segMarks, segHoldMarks, chargeBody,
       archStruct, archDetailMesh, archQueue, runwayMasts, craneBody,
-      storeStruct, storeShelfMesh, storeSlots,
-      sendStruct, sendTowerMesh, sendDetailMesh, spoolStruct, spoolFlanges, spoolWind, spoolTeeth, sendNeon,
+      statusStruct, statusShelfMesh, statusSlots,
+      sendStruct, sendTowerMesh, sendDetailMesh, consumerBays, consumerRatchets,
+      spoolStruct, spoolFlanges, spoolWind, spoolTeeth, sendNeon,
       logStruct, logDetailMesh, beamOut, logNeon,
       collars,
     ]) {

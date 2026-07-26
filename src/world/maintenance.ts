@@ -995,10 +995,12 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   const dbS = new Float32Array(N_DEBRIS)
   const dbRot = new Float32Array(N_DEBRIS)
   const dbLive = new Uint8Array(N_DEBRIS)
+  const dbReturned = new Uint8Array(N_DEBRIS)
+  const dbTable = new Uint8Array(N_DEBRIS)
   let dbNext = 0
   let dbCount = 0
 
-  signs.plate('landfill', DECK_X, 12.6, LF[2] - 6.8, 'north', 1.5, COLOR.vacuum, 0.9)
+  signs.plate('removed dead tuples', DECK_X, 12.6, LF[2] - 6.8, 'north', 1.25, COLOR.vacuum, 0.9)
   signs.plate('space goes back to the table,', PILE_X, PAINT_Y + 0.02, PILE_Z + 15, 'up', 1.5, COLOR.inkDim, 0.42)
   signs.plate('never to the filesystem', PILE_X, PAINT_Y + 0.02, PILE_Z + 19, 'up', 1.5, COLOR.inkDim, 0.42)
 
@@ -1100,15 +1102,10 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   ], true)
 
   const dishAt = new THREE.Vector3(SX + 5, 20.6, SZ)
-  const dishAim = new THREE.Vector3(
-    ANCHOR.statsShmem[0] - dishAt.x,
-    ANCHOR.statsShmem[1] + 8 - dishAt.y,
-    ANCHOR.statsShmem[2] - dishAt.z,
-  ).normalize()
   const dishGeo = own(new THREE.SphereGeometry(3.4, 16, 8, 0, TAU, 0, Math.PI * 0.35))
   const dish = new THREE.Mesh(dishGeo, matStruct)
   dish.position.copy(dishAt)
-  dish.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), dishAim)
+  dish.rotation.z = Math.PI * 0.12
   gStats.add(dish)
 
   const statsNeon: BoxSpec[] = []
@@ -1116,17 +1113,11 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   const IX_ST_WIN = sn([SX, 3.8, SZ - 6.1, 12, 0.5, 0.14])
   sn([SX, 3.8, SZ + 6.1, 12, 0.5, 0.14])
   const ST_WIN_N = 2
-  const IX_ST_CHASE = statsNeon.length
-  const CHASE_N = 7
-  for (let i = 0; i < CHASE_N; i++) {
-    _p3.copy(dishAt).addScaledVector(dishAim, 4 + i * 3.6)
-    sn([_p3.x, _p3.y, _p3.z, 0.7, 0.7, 0.7])
-  }
   const statsNeonMesh = neonBatch(gStats, statsNeon)
 
-  signs.plate('cumulative statistics', SX, 9.6, SZ - 6.3, 'north', 1.2, COLOR.inkDim, 0.8)
-  signs.plate('shared memory since PG15', SX, 8.0, SZ - 6.3, 'north', 0.75, COLOR.inkDim, 0.45)
-  signs.plate('this is only a relay', SX, 7.0, SZ - 6.3, 'north', 0.7, COLOR.ok, 0.4)
+  signs.plate('DECOMMISSIONED', SX, 9.6, SZ - 6.3, 'north', 1.2, COLOR.crit, 0.7)
+  signs.plate('stats collector · removed in PG15', SX, 8.0, SZ - 6.3, 'north', 0.75, COLOR.inkDim, 0.4)
+  signs.plate('counters live in stats.shmem on the plaza', SX, 6.9, SZ - 6.3, 'north', 0.66, COLOR.ok, 0.48)
 
   /* =======================================================================
    * 8. THE YARD ITSELF — fence, lamps, and paint.
@@ -1336,8 +1327,8 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
 
   ctx.register({
     id: 'landfill',
-    name: 'reclaimed space',
-    role: 'removed tuples — reusable inside the file, never returned to disk',
+    name: 'removed dead tuples',
+    role: 'temporary teaching pile — reusable space returns to each relation’s _fsm fork',
     kind: 'storage',
     district: 'maintenance',
     object: gLand,
@@ -1348,7 +1339,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     readout: (s: SimState) => {
       let dead = 0
       for (let i = 0; i < s.tables.length; i++) dead += s.tables[i].deadTuples
-      return `${fmtNum(s.autovac.landfill)} tuples reclaimed · ${fmtNum(dead)} still dead in the heap`
+      return `${fmtNum(s.autovac.landfill)} tuple bodies removed · ${fmtNum(dead)} still dead · space returns to _fsm`
     },
   })
 
@@ -1369,17 +1360,16 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
 
   ctx.register({
     id: 'stats.collector',
-    name: 'statistics relay',
-    role: 'no collector process since PG15 — the counters live in shared memory',
-    kind: 'memory',
+    name: 'decommissioned stats collector',
+    role: 'dark memorial — current counters live in stats.shmem',
+    kind: 'concept',
     district: 'maintenance',
     object: gStats,
     tier: 1,
     focus: { target: [SX, 6, SZ], distance: 50, dir: [0.6, 0.5, 0.6] },
     labelAt: [SX, 16, SZ],
     color: COLOR.inkDim,
-    readout: (s: SimState) =>
-      `${fmtNum(s.stats.tps)} tps · ${fmtPct(s.stats.cacheHitPct / 100, 1)} hit · relaying to stats.shmem`,
+    readout: () => 'removed in PG15 · no process · no traffic',
   })
 
   /* =======================================================================
@@ -1400,8 +1390,6 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   let launchFlash = 0
   let sweepAngle = 0
   let sweepPark = 0
-  let statsAcc = 0
-  let statsBeat = 0
   let logAcc = 0
   let logWin = 0
   let logSlowAcc = 0
@@ -1432,7 +1420,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     }
   }
 
-  function spawnDebris(fromX: number, fromY: number, fromZ: number): void {
+  function spawnDebris(fromX: number, fromY: number, fromZ: number, table: number): void {
     let i = -1
     for (let k = 0; k < N_DEBRIS; k++) {
       const j = (dbNext + k) % N_DEBRIS
@@ -1445,6 +1433,8 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     else dbCount++
     dbNext = (i + 1) % N_DEBRIS
     dbLive[i] = 1
+    dbReturned[i] = 0
+    dbTable[i] = table
     // A cone: the closer to the middle, the higher it can rest.
     const a = rng() * TAU
     const r = Math.sqrt(rng()) * 8.4
@@ -1896,7 +1886,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       if (tipping && !tr.dumped) {
         tr.dumped = true
         const n = Math.round(clamp01(tr.hopper) * (low ? 10 : 22))
-        for (let k = 0; k < n; k++) spawnDebris(tr.pos.x, tr.pos.y + 3.6, tr.pos.z)
+        for (let k = 0; k < n; k++) spawnDebris(tr.pos.x, tr.pos.y + 3.6, tr.pos.z, w.table)
         if (n > 0) pushEntry(1.2, COLOR.vacuum, 1.2)
       }
 
@@ -2028,6 +2018,14 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       dbAge[i] += dts
       const age = dbAge[i]
       // It fades because the space is handed back to the table and reused.
+      if (!dbReturned[i] && age > 26) {
+        dbReturned[i] = 1
+        // Sample the return traffic so a large dump does not become a visual
+        // firehose; every packet still lands on the correct relation fork.
+        if ((i & 3) === 0) {
+          ctx.flow({ route: rid.fsmReturn(dbTable[i]), count: 1, kind: 'stat', color: COLOR.vacuum, size: 0.8 })
+        }
+      }
       const fade = age > 26 ? Math.max(0, 1 - (age - 26) / 40) : 1
       if (fade <= 0.002) {
         dbLive[i] = 0
@@ -2133,23 +2131,9 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     logNeonMesh.setColorAt(IX_LG_REEL, _c)
     logNeonMesh.instanceColor!.needsUpdate = true
 
-    /* --- 7. STATS RELAY --------------------------------------------------- */
-
-    statsAcc += dts
-    statsBeat += dt
-    if (statsAcc > 1.1) {
-      statsAcc = 0
-      ctx.flow({ route: 'stats.in', count: 1, kind: 'stat', size: 0.8 })
-    }
-    const load = clamp01(sim.stats.tps / 400)
-    _c.setHex(COLOR.inkDim).multiplyScalar(0.2 + load * 0.7)
+    /* --- 7. DECOMMISSIONED STATS COLLECTOR ------------------------------- */
+    _c.setHex(COLOR.inkDim).multiplyScalar(0.055)
     for (let i = 0; i < ST_WIN_N; i++) statsNeonMesh.setColorAt(IX_ST_WIN + i, _c)
-    for (let i = 0; i < CHASE_N; i++) {
-      const ph = (statsBeat * 1.4 - i * 0.12) % 1
-      const lit = ph > 0 && ph < 0.22 ? 1 : 0
-      _c.setHex(COLOR.shmem).multiplyScalar(0.1 + lit * (0.5 + load * 1.8))
-      statsNeonMesh.setColorAt(IX_ST_CHASE + i, _c)
-    }
     statsNeonMesh.instanceColor!.needsUpdate = true
 
   }

@@ -34,7 +34,7 @@ export const N_WAL_SEG_SLOTS = 14
 /** Autovacuum worker slots (mirrors autovacuum_max_workers). */
 export const N_VAC_WORKERS = 3
 /** Replica's (smaller) buffer grid. */
-export const REPLICA_BUF_GRID = 12
+export const REPLICA_BUF_GRID = BUF_GRID
 
 /* ---------------------------------------------------------------------------
  * Tables & indexes — the "data" the whole city moves around.
@@ -111,6 +111,8 @@ export interface Knobs {
   replicaNetworkLag: number
   /** Standby applies WAL slower than it arrives. */
   replicaSlowApply: boolean
+  /** A long-running standby read reports xmin through hot_standby_feedback. */
+  standbyLongQuery: boolean
   /** Simulation speed multiplier. */
   timeScale: number
   paused: boolean
@@ -142,6 +144,7 @@ export const DEFAULT_KNOBS: Knobs = {
   replicaEnabled: true,
   replicaNetworkLag: 30,
   replicaSlowApply: false,
+  standbyLongQuery: false,
   timeScale: 1,
   paused: false,
 }
@@ -328,6 +331,8 @@ export interface AutovacState {
 export interface TableSim {
   def: TableDef
   pages: number
+  /** Live total across this table's index relation files, including bloat. */
+  indexPages: number
   liveTuples: number
   deadTuples: number
   /** deadTuples / (live+dead) */

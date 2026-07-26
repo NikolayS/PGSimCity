@@ -879,7 +879,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
   ]
   const deckDetailMesh = batch(gStandby, unitBox, matDeep, deckDetail)
 
-  /* --- replica.buffers: a 12×12 echo of shared_buffers ------------------ */
+  /* --- replica.buffers: the same 32×32 representative frame sample ------ */
 
   const gBuffers = new THREE.Group()
   gBuffers.name = 'replica.buffers'
@@ -887,7 +887,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
 
   const RG = REPLICA_BUF_GRID
   const N_RTILE = RG * RG
-  const RP = CITY.replica.bufPitch
+  const RP = (DECK_H * 2 - 4) / (RG - 1)
   const R_HALF = ((RG - 1) * RP) / 2
   const TILE = RP * 0.78
   const tiles = new THREE.InstancedMesh(unitBox, neonWhite, N_RTILE)
@@ -911,6 +911,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
 
   text.alloc(22, BX, 2.0, BZ - DECK_H - 0.9, 'north', 1.3, COLOR.replication, 'center', 0.9, 'STANDBY')
   text.alloc(34, BX, 0.9, BZ - DECK_H - 0.9, 'north', 0.7, COLOR.inkDim, 'center', 0.65, 'hot standby — read-only')
+  text.alloc(42, BX, 3.0, BZ + DECK_H + 1.2, 'south', 0.76, COLOR.storage, 'center', 0.72, 'restartpoints — standby checkpointer flushes this deck')
   const TX_LAG = text.alloc(30, BX, 8.6, BZ + DECK_H + 1.2, 'south', 1.7, COLOR.replication, 'center', 1.1, '')
   const TX_LAGB = text.alloc(34, BX, 6.6, BZ + DECK_H + 1.2, 'south', 1.0, COLOR.inkDim, 'center', 0.8, '')
 
@@ -1234,6 +1235,21 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
       if (!r.connected) return 'disconnected — falling further behind'
       return `${fmtBytes(r.lagBytes)} behind · ${r.lagSec.toFixed(1)} s`
     },
+  })
+
+  ctx.register({
+    id: 'lsn.ruler',
+    name: 'replication LSN ruler',
+    role: 'one scale for primary flush, sent, write, flush, and replay positions',
+    kind: 'concept',
+    district: 'replication',
+    object: gRuler,
+    tier: 1,
+    focus: { target: [RULER_X, RULER_Y - 1, RULER_MID], distance: 72, dir: [-0.94, 0.28, -0.08] },
+    labelAt: [RULER_X, RULER_Y + 5, RULER_MID],
+    color: COLOR.warn,
+    readout: (s: SimState) =>
+      `primary flush ${fmtLsn(s.wal.flushLsn)} · replay ${fmtLsn(s.replication.replayLsn)} · lag ${fmtBytes(s.replication.lagBytes)}`,
   })
 
   ctx.register({
@@ -1612,9 +1628,10 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
         text.moveTo(carLabel[i], RULER_X - 1.6, RULER_Y + 2.4, _carZ[i])
       }
     }
-    // The lag bar spans exactly the gap that matters: flushed vs replayed.
-    const lagLen = Math.max(0.2, zFlush - zReplay)
-    setTRS(carriages, CAR_LAG, RULER_X, RULER_Y - 2.0, (zFlush + zReplay) / 2, 0.9, 0.9, lagLen)
+    // The primary carriage and the caption both depict the same expression:
+    // primary flush minus standby replay.
+    const lagLen = Math.max(0.2, RULER_Z1 - zReplay)
+    setTRS(carriages, CAR_LAG, RULER_X, RULER_Y - 2.0, (RULER_Z1 + zReplay) / 2, 0.9, 0.9, lagLen)
     const lagBad = clamp01(rep.lagBytes / (8 * MB))
     _c.setHex(COLOR.warn).lerp(_c2.setHex(COLOR.replication), lagBad).multiplyScalar(0.4 + lagBad * 1.8)
     carriages.setColorAt(CAR_LAG, _c)
@@ -1623,9 +1640,9 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
 
     /* --- 5. replica client + hot_standby_feedback ------------------------ */
 
-    // No GUC for hot_standby_feedback in this model: the honest stand-in is a
-    // long-running snapshot, which is exactly what the feedback message pins.
-    const pinning = sim.knobs.longRunningXact && connected
+    // This has its own trigger. A primary-side long transaction and a standby
+    // snapshot may pin the same horizon, but they are not the same cause.
+    const pinning = sim.knobs.standbyLongQuery && connected
     feedback = damp(feedback, pinning ? 1 : 0, 3, dt)
 
     // The terminal itself: lit while there is something to read, dim when the
@@ -1702,7 +1719,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
         const behind = Math.max(0, ref - _lsn[i])
         text.set(TX_ROW[i], `${CAR_NAME[i].padEnd(7)}${fmtLsn(_lsn[i])}  -${fmtBytes(behind)}`)
       }
-      text.set(TX_LAGBAR, `replication lag = flush − replay = ${fmtBytes(rep.lagBytes)}`)
+      text.set(TX_LAGBAR, `replication lag = primary flush − replay = ${fmtBytes(rep.lagBytes)}`)
       text.set(
         TX_RCLIENT,
         connected ? `sees ${fmtLsn(rep.replayLsn)}` : 'stale — no replay',

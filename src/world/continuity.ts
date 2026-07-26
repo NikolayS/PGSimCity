@@ -279,7 +279,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   const retryCrate = lamp(COLOR.warn, 1.2, 4.5, 3.2, 3.2, AG[0] - 12, 5.6, AG[2] - 20, gGate)
   retryCrate.visible = false
 
-  plate('archive_command', AG[0] - 1.9, 19.4, AG[2], -Math.PI / 2, 3.0, COLOR.archive, 0.92, gGate)
+  plate('RETENTION / OWNERSHIP BOUNDARY', AG[0] - 1.9, 19.4, AG[2], -Math.PI / 2, 2.1, COLOR.archive, 0.92, gGate)
   plate(
     'exit code 0 means STORED — anything else and the archiver retries the same file, forever',
     AG[0] - 1.9, 11.6, AG[2], -Math.PI / 2, 1.4, COLOR.inkDim, 0.62,
@@ -430,6 +430,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
 
   plate('object storage', OS[0], 12.4, OS[2] - yardHalfZ - 6, Math.PI, 3.0, COLOR.archive, 0.9, gStore)
   plate('one silo = one 16 MiB segment · one row = one timeline', OS[0], 9.0, OS[2] - yardHalfZ - 6.4, Math.PI, 1.45, COLOR.inkDim, 0.66)
+  plate('latest 8 shown · retained archive never wraps', OS[0], 6.8, OS[2] - yardHalfZ - 6.4, Math.PI, 1.2, COLOR.inkDim, 0.6)
   plate('.history — small, and kept forever', OS[0] - 20, 5.6, OS[2] + 23, 0, 1.4, COLOR.inkDim, 0.66)
 
   /* ---------------------------------------------------------------------
@@ -795,6 +796,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   let leasePhase = 0
   let clock = 0
   let queueEma = 0
+  let prevArchived = -1
   let node3LagBytes = 0
   /**
    * Which node owns the service address. Always 0 today; the arrow, the lamps
@@ -820,8 +822,8 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
 
   ctx.register({
     id: 'archive.gate',
-    name: 'the archive gate',
-    role: 'archive_command — the last point the city owns a segment',
+    name: 'archive ownership boundary',
+    role: 'the point beyond which archive retention belongs to remote storage',
     kind: 'storage',
     district: 'wal',
     object: gGate,
@@ -1028,7 +1030,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
 
   /** Emission accumulators, one per route. Never reallocated. */
   const emit = {
-    ship: 0, take: 0, store: 0, haul: 0, unpack: 0,
+    take: 0, store: 0, haul: 0, unpack: 0,
     replay: 0, apply: 0, streamB: 0, applyB: 0, lease1: 0, lease2: 0, lease3: 0,
   }
 
@@ -1096,18 +1098,20 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     gateLamp[2].visible = failing
     retryCrate.visible = failing
 
-    const shipRate = clamp((sim.stats.walBytesPerSec / Math.max(1, sim.wal.segmentSize)) * 26, 0.3, 6)
-    emit.ship = pump(emit.ship, busy ? shipRate : shipRate * 0.55, dt, 'archive.ship')
+    if (prevArchived < 0) prevArchived = sim.wal.archived
+    let shipped = Math.max(0, sim.wal.archived - prevArchived)
+    prevArchived = sim.wal.archived
+    while (shipped-- > 0) ctx.flow({ route: 'archive.ship', count: 1, kind: 'archive', color: COLOR.archive, size: 1.3 })
 
     /* Row 0 is the live timeline and fills from the west; the branch rows only
      * light for timelines that exist, and hold less WAL the later they forked. */
-    const liveFill = (sim.wal.archived % S.cols) + 1
+    const liveFill = Math.min(sim.wal.archived, S.cols)
     for (let r = 0; r < S.rows; r++) {
       const exists = r === 0 || r <= branches
       const fill = r === 0 ? liveFill : S.cols - (r - 1) * 2
       for (let c = 0; c < S.cols; c++) {
         const lit = exists && c < fill
-        const newest = r === 0 && c === liveFill - 1
+        const newest = r === 0 && liveFill > 0 && c === liveFill - 1
         _c.setHex(!lit ? OFF : newest ? mixHex(COLOR.wal, 0xffffff, 0.45) : r === 0 ? COLOR.wal : COLOR.archive)
         if (lit) _c.multiplyScalar(1.25)
         siloCap.setColorAt(r * S.cols + c, _c)
@@ -1186,8 +1190,13 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     leaseMesh.instanceMatrix.needsUpdate = true
     if (leaseMesh.instanceColor) leaseMesh.instanceColor.needsUpdate = true
 
-    lockRing.visible = sim.replication.connected
-    lockBody.visible = sim.replication.connected
+    // The DCS and its leader lock exist independently of streaming health.
+    // Renewal visibly breathes the lock; replication only changes eligibility.
+    const leasePulse = 1 + 0.07 * (1 - leasePhase)
+    lockRing.visible = true
+    lockRing.scale.setScalar(leasePulse)
+    lockBody.visible = true
+    lockBody.scale.set(1, 0.82 + 0.18 * (1 - leasePhase), 1)
     emit.lease1 = pump(emit.lease1, 1.4, dt, 'ha.lease1')
     if (sim.replication.connected) {
       emit.lease2 = pump(emit.lease2, 1.4, dt, 'ha.lease2')

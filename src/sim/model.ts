@@ -306,6 +306,7 @@ export function createSim(bus: Bus): SimApi {
   const tables: TableSim[] = TABLES.map((def) => ({
     def,
     pages: def.pages,
+    indexPages: def.indexes.reduce((n, index) => n + index.pages, 0),
     liveTuples: def.pages * def.tuplesPerPage,
     deadTuples: 0,
     bloat: 0,
@@ -496,7 +497,6 @@ export function createSim(bus: Bus): SimApi {
   /** Index entries left behind by DELETE and non-HOT UPDATE until vacuum. */
   const deadIndexTuples: number[] = TABLES.map(() => 0)
   type RuntimeTable = TableSim & {
-    indexPages: number
     deadIndexTuples: number
     insSinceVacuum: number
     frozenPages: number
@@ -1020,7 +1020,13 @@ export function createSim(bus: Bus): SimApi {
     b.lastBuffer = v
     if (++sIoRead >= stride(stats.ioReadPerSec, 40)) {
       sIoRead = 0
-      flow(rid.ioRead(rel < N_TABLES ? rel : 0), 1, 'page_read', 1.2)
+      const table = rel < N_TABLES ? rel : 0
+      // A shared_buffers miss is not necessarily a device read. Decide the
+      // kernel-cache outcome at the source so motion and drive LEDs consume
+      // one fact rather than independently guessing.
+      const ioPressure = clamp01(stats.ioReadPerSec / 900)
+      const osCacheHit = rng() < 0.74 - ioPressure * 0.29
+      flow(osCacheHit ? rid.ioReadCache(table) : rid.ioRead(table), 1, 'page_read', 1.2)
     }
     if (forWrite) markDirty(v, slot)
     return false
@@ -3213,17 +3219,24 @@ export function createSim(bus: Bus): SimApi {
         ckpt.nextInSec = Math.min(ckpt.nextInSec, K.checkpointTimeout)
         break
       case 'longRunningXact':
-        if (K.longRunningXact) {
+      case 'standbyLongQuery':
+        if (K.longRunningXact || K.standbyLongQuery) {
           horizonFrozen = true
           horizonXid = state.xid
           horizonT = state.t
-          toast('BEGIN; SELECT … — an old snapshot is now pinning the xmin horizon', 'warn', 6000)
+          toast(
+            K.standbyLongQuery
+              ? 'hot_standby_feedback — a standby snapshot is now pinning the xmin horizon'
+              : 'BEGIN; SELECT … — an old snapshot is now pinning the xmin horizon',
+            'warn',
+            6000,
+          )
         } else {
           horizonFrozen = false
           horizonXid = state.xid
           // everything dead is suddenly removable again
           for (let i = 0; i < N_TABLES; i++) deadRemovable[i] = tables[i].deadTuples
-          toast('COMMIT — horizon released, vacuum can clean up now', 'good', 5000)
+          toast('xmin pin released — vacuum can clean up now', 'good', 5000)
         }
         break
       case 'lockContention':

@@ -3,7 +3,7 @@ import { COLOR } from '../core/theme'
 import { N_BACKEND_SLOTS } from '../core/types'
 import type { BackendState, SimState, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, damp, fmtBytes, fmtDuration, makeRng } from '../core/util'
-import { CITY, backendX, rid } from './layout'
+import { CITY, backendPid, backendX, rid } from './layout'
 
 /* ============================================================================
  * BACKENDS — sixteen towers, one per connection.
@@ -40,6 +40,9 @@ const MEM_D = 0.56
 const MEM_X_OFF = BW * 0.34
 const MEM_Z = BZ + BW / 2 + 0.38
 const SPILL_Z = BZ + 3
+const SPILL_RIM_Z = -102
+const TEMP_BAY_Z = -89
+const TEMP_BAY_Y = CITY.storage.y + 0.35
 const SPILL_AT = 0.62
 
 /* --- module-scope scratch: update() must never allocate ------------------- */
@@ -399,10 +402,10 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
 
   const memoryH = new Float32Array(N)
   const memoryLevel = new Float32Array(N)
+  const WORK_MEM_H = 6.4
   for (let i = 0; i < N; i++) {
     const x = XS[i] + MEM_X_OFF
-    const top = PLINTH_H + SH[i] - 0.55
-    const h = clamp(top - MEM_BASE_Y, 2.8, 8.2)
+    const h = WORK_MEM_H
     memoryH[i] = h
     memoryLevel[i] = 0.04
 
@@ -443,12 +446,14 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
   memoryFillMesh.instanceColor!.needsUpdate = true
   privateMemory.add(memoryBackMesh, memoryShellMesh, memoryTickMesh, memoryFillMesh)
 
-  // Once a reservoir is full, the overflow visibly runs down that tower and
-  // across its footing into a separate temp-file slab.
+  // Once a reservoir is full, the overflow runs down that tower, crosses the
+  // rim, and descends into the shared base/pgsql_tmp bay in $PGDATA.
   const spillPipeMesh = new THREE.InstancedMesh(unitBox, neonWhite, N)
   const spillRunMesh = new THREE.InstancedMesh(unitBox, neonWhite, N)
+  const spillDropMesh = new THREE.InstancedMesh(unitBox, neonWhite, N)
+  const spillFloorMesh = new THREE.InstancedMesh(unitBox, neonWhite, N)
   const tempFileMesh = new THREE.InstancedMesh(unitBox, matStruct, N)
-  for (const mesh of [spillPipeMesh, spillRunMesh, tempFileMesh]) {
+  for (const mesh of [spillPipeMesh, spillRunMesh, spillDropMesh, spillFloorMesh, tempFileMesh]) {
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
     mesh.frustumCulled = false
     mesh.raycast = () => {}
@@ -457,9 +462,13 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
   for (let i = 0; i < N; i++) {
     spillPipeMesh.setColorAt(i, _c)
     spillRunMesh.setColorAt(i, _c)
+    spillDropMesh.setColorAt(i, _c)
+    spillFloorMesh.setColorAt(i, _c)
   }
   spillPipeMesh.instanceColor!.setUsage(THREE.DynamicDrawUsage)
   spillRunMesh.instanceColor!.setUsage(THREE.DynamicDrawUsage)
+  spillDropMesh.instanceColor!.setUsage(THREE.DynamicDrawUsage)
+  spillFloorMesh.instanceColor!.setUsage(THREE.DynamicDrawUsage)
 
   const puddleGeo = own(new THREE.CircleGeometry(1, 24))
   const puddleMat = theme.neon(0xffffff, 1, { transparent: true, opacity: 0.55 })
@@ -470,12 +479,12 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
   _c.setRGB(0, 0, 0)
   for (let i = 0; i < N; i++) puddleMesh.setColorAt(i, _c)
   puddleMesh.instanceColor!.setUsage(THREE.DynamicDrawUsage)
-  privateMemory.add(spillPipeMesh, spillRunMesh, tempFileMesh, puddleMesh)
+  privateMemory.add(spillPipeMesh, spillRunMesh, spillDropMesh, spillFloorMesh, tempFileMesh, puddleMesh)
   group.add(privateMemory)
 
   /* --- pid plates (one texture atlas, one draw call) --------------------- */
   const PID = new Int32Array(N)
-  for (let i = 0; i < N; i++) PID[i] = 21519 + i * 7
+  for (let i = 0; i < N; i++) PID[i] = backendPid(i)
   const plateTex = own(buildPlateAtlas(PID))
   const plateGeo = own(new THREE.PlaneGeometry(6.6, 0.82))
   const aRow = new Float32Array(N)
@@ -507,27 +516,6 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
   }
   plateMesh.instanceMatrix.needsUpdate = true
   group.add(plateMesh)
-
-  /* --- lock chains ------------------------------------------------------- */
-  const chainPos = new Float32Array(N * 6)
-  const chainCol = new Float32Array(N * 6)
-  const chainGeo = own(new THREE.BufferGeometry())
-  chainGeo.setAttribute('position', new THREE.BufferAttribute(chainPos, 3))
-  chainGeo.setAttribute('color', new THREE.BufferAttribute(chainCol, 3))
-  const chainMat = own(
-    new THREE.LineBasicMaterial({
-      vertexColors: true,
-      transparent: true,
-      opacity: 0.95,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      toneMapped: false,
-    }),
-  )
-  const chains = new THREE.LineSegments(chainGeo, chainMat)
-  chains.frustumCulled = false
-  chains.raycast = () => {}
-  group.add(chains)
 
   /* --- pick proxies: invisible, but the thing the cursor actually hits ---- */
   const pickMat = own(
@@ -618,7 +606,6 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
   const tempFileBytes = new Float32Array(N)
   const ringPhase = new Float32Array(N)
   const ringLevel = new Float32Array(N)
-  const chainLevel = new Float32Array(N)
   let sorting = 0
   let tempBytes = 0
   let prevT = -1
@@ -897,15 +884,37 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
           i,
           x,
           0.18,
-          (MEM_Z + SPILL_Z) / 2,
+          (SPILL_Z + SPILL_RIM_Z) / 2,
           0.16,
           0.16,
-          Math.abs(MEM_Z - SPILL_Z),
+          Math.abs(SPILL_Z - SPILL_RIM_Z),
         )
-        setBoxAt(tempFileMesh, i, x, 0.11, SPILL_Z, 3.8 + pr * 1.4, 0.22, 2.6 + pr * 1.1)
+        setBoxAt(
+          spillDropMesh,
+          i,
+          x,
+          (0.18 + TEMP_BAY_Y) / 2,
+          SPILL_RIM_Z,
+          0.18,
+          Math.abs(0.18 - TEMP_BAY_Y),
+          0.18,
+        )
+        setBoxAt(
+          spillFloorMesh,
+          i,
+          x,
+          TEMP_BAY_Y,
+          (SPILL_RIM_Z + TEMP_BAY_Z) / 2,
+          0.18,
+          0.18,
+          Math.abs(SPILL_RIM_Z - TEMP_BAY_Z),
+        )
+        setBoxAt(tempFileMesh, i, x, TEMP_BAY_Y, TEMP_BAY_Z, 3.8 + pr * 1.4, 0.34, 2.6 + pr * 1.1)
         _c.setHex(COLOR.vacuum).multiplyScalar(0.35 + pr * 1.15)
         spillPipeMesh.setColorAt(i, _c)
         spillRunMesh.setColorAt(i, _c)
+        spillDropMesh.setColorAt(i, _c)
+        spillFloorMesh.setColorAt(i, _c)
 
         const r = 2.8 + pr * 4.8
         _p.set(x, 0.24, SPILL_Z)
@@ -922,43 +931,17 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
         _m.compose(_p, _q, _sc)
         spillPipeMesh.setMatrixAt(i, _m)
         spillRunMesh.setMatrixAt(i, _m)
+        spillDropMesh.setMatrixAt(i, _m)
+        spillFloorMesh.setMatrixAt(i, _m)
         tempFileMesh.setMatrixAt(i, _m)
         puddleMesh.setMatrixAt(i, _m)
         _c.setRGB(0, 0, 0)
         spillPipeMesh.setColorAt(i, _c)
         spillRunMesh.setColorAt(i, _c)
+        spillDropMesh.setColorAt(i, _c)
+        spillFloorMesh.setColorAt(i, _c)
       }
       puddleMesh.setColorAt(i, _c)
-
-      /* -- chains: who is waiting on whom -------------------------------- */
-      const o = i * 6
-      const blocked = st === 'blocked' && b !== null && b.waitOn >= 0 && b.waitOn < N
-      chainLevel[i] = damp(chainLevel[i], blocked ? 1 : 0, 8, dt)
-      if (chainLevel[i] > 0.01 && b) {
-        const j = blocked ? b.waitOn : i
-        const y0 = H[i] * 0.62
-        const y1 = H[j] * 0.62
-        chainPos[o] = XS[i]
-        chainPos[o + 1] = y0
-        chainPos[o + 2] = BZ + 1
-        chainPos[o + 3] = XS[j]
-        chainPos[o + 4] = y1
-        chainPos[o + 5] = BZ + 1
-        _c.setHex(COLOR.lock).multiplyScalar(chainLevel[i] * (0.7 + 0.5 * Math.sin(t * 6 + i)))
-        chainCol[o] = _c.r
-        chainCol[o + 1] = _c.g
-        chainCol[o + 2] = _c.b
-        _c.multiplyScalar(0.3)
-        chainCol[o + 3] = _c.r
-        chainCol[o + 4] = _c.g
-        chainCol[o + 5] = _c.b
-      } else {
-        chainPos[o] = chainPos[o + 3] = XS[i]
-        chainPos[o + 1] = chainPos[o + 4] = -1000
-        chainPos[o + 2] = chainPos[o + 5] = BZ
-        chainCol[o] = chainCol[o + 1] = chainCol[o + 2] = 0
-        chainCol[o + 3] = chainCol[o + 4] = chainCol[o + 5] = 0
-      }
 
       /* -- flows: only on transitions, never every frame ------------------ */
       if (b && st !== prevState[i]) {
@@ -1035,12 +1018,13 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
     spillPipeMesh.instanceColor!.needsUpdate = true
     spillRunMesh.instanceMatrix.needsUpdate = true
     spillRunMesh.instanceColor!.needsUpdate = true
+    spillDropMesh.instanceMatrix.needsUpdate = true
+    spillDropMesh.instanceColor!.needsUpdate = true
+    spillFloorMesh.instanceMatrix.needsUpdate = true
+    spillFloorMesh.instanceColor!.needsUpdate = true
     tempFileMesh.instanceMatrix.needsUpdate = true
     puddleMesh.instanceMatrix.needsUpdate = true
     puddleMesh.instanceColor!.needsUpdate = true
-    chainGeo.attributes.position.needsUpdate = true
-    chainGeo.attributes.color.needsUpdate = true
-
     sorting = sortCount
   }
 
