@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { COLOR } from '../core/theme'
+import { COLOR, themeMode } from '../core/theme'
 import { BUF_GRID, N_BACKEND_SLOTS, N_BUFFERS, PG_PAGE_BYTES } from '../core/types'
 import type { SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, fmtBytes, fmtLsn, fmtNum, fmtPct, makeRng } from '../core/util'
@@ -1713,8 +1713,9 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
 
       // Haze follows the amount of work happening in the plaza.
       const load = clamp01(sim.stats.activeBackends / 8) * 0.5 + clamp01(sim.buffers.dirtyCount / 260) * 0.5
-      mHaze.opacity = 0.16 + load * 0.26
-      plazaLight.intensity = 3400 + load * 2600
+      const day = themeMode() === 'day'
+      mHaze.opacity = day ? 0 : 0.16 + load * 0.26
+      plazaLight.intensity = day ? 0 : 3400 + load * 2600
     },
     setDetail(level: 0 | 1 | 2): void {
       detail = level

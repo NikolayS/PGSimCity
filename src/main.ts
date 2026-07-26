@@ -5,7 +5,7 @@ import './styles/ui.css'
 
 import { createBus } from './core/bus'
 import { Registry } from './core/registry'
-import { createTheme } from './core/theme'
+import { createTheme, setThemeMode, themeMode } from './core/theme'
 import { clamp } from './core/util'
 import type { ComponentDef, FlowRequest, QualitySettings, WorldContext, WorldModule } from './core/types'
 
@@ -412,7 +412,7 @@ async function boot(): Promise<void> {
 
   // Handy in the console. PGCITY is the pre-rename alias, kept because existing
   // notes and tooling still reach for it; both names are the same object.
-  const handle = { sim, registry, bus, rig, gfx, flows, walk, collision, audio }
+  const handle = { sim, registry, bus, rig, gfx, flows, walk, collision, audio, setThemeMode, themeMode }
   Object.assign(window as unknown as Record<string, unknown>, { PGSIMCITY: handle, PGCITY: handle })
 }
 

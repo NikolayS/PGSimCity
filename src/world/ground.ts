@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { COLOR, mixHex } from '../core/theme'
+import { COLOR, DAY_PALETTE, mixHex } from '../core/theme'
 import { clamp01, fmtBytes, fmtNum } from '../core/util'
 import { ANCHOR, CITY, DISTRICT_BOUNDS } from './layout'
 import {
@@ -192,17 +192,18 @@ interface PlinthSpec {
   district: DistrictId
   label: string
   color: number
+  dayColor: number
 }
 
 /** Everything that stands on the surface. 'storage' is underground, 'planner'
  *  is in the air, 'world' is the whole map — none of them get a platform. */
 const PLINTHS: readonly PlinthSpec[] = [
-  { district: 'clients', label: 'CLIENTS', color: COLOR.backend },
-  { district: 'backends', label: 'BACKENDS', color: COLOR.backend },
-  { district: 'shmem', label: 'SHARED MEMORY', color: COLOR.shmem },
-  { district: 'wal', label: 'pg_wal', color: COLOR.wal },
-  { district: 'maintenance', label: 'MAINTENANCE', color: COLOR.vacuum },
-  { district: 'replication', label: 'STANDBY', color: COLOR.replication },
+  { district: 'clients', label: 'CLIENTS', color: COLOR.client, dayColor: DAY_PALETTE.client },
+  { district: 'backends', label: 'BACKENDS', color: COLOR.backend, dayColor: DAY_PALETTE.backend },
+  { district: 'shmem', label: 'SHARED MEMORY', color: COLOR.shmem, dayColor: DAY_PALETTE.shmem },
+  { district: 'wal', label: 'pg_wal', color: COLOR.wal, dayColor: DAY_PALETTE.wal },
+  { district: 'maintenance', label: 'MAINTENANCE', color: COLOR.vacuum, dayColor: DAY_PALETTE.vacuum },
+  { district: 'replication', label: 'STANDBY', color: COLOR.replication, dayColor: DAY_PALETTE.replication },
 ]
 
 const PLINTH_H = 0.6
@@ -469,6 +470,31 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   plate.renderOrder = -5 // first of the transparent pass, so it can occlude properly
   plate.frustumCulled = false
   group.add(plate)
+
+  // The survey grid is deliberately a custom unlit shader, so it cannot receive
+  // Three's shadow chunks. A transparent ShadowMaterial over the exact same cut
+  // shape contributes only the sun shadow and leaves every grid line visible.
+  const dayShadowMat = new THREE.ShadowMaterial({
+    color: 0x28333d,
+    transparent: true,
+    opacity: 0.38,
+    fog: true,
+  })
+  dayShadowMat.name = 'ground.dayShadow'
+  dayShadowMat.userData.pgTheme = true
+  mats.push(dayShadowMat)
+  const dayShadow = new THREE.Mesh(plateGeo, dayShadowMat)
+  dayShadow.name = 'ground.dayShadow'
+  dayShadow.rotation.x = -Math.PI / 2
+  dayShadow.position.y = 0.035
+  dayShadow.renderOrder = -3
+  dayShadow.frustumCulled = false
+  dayShadow.raycast = () => {}
+  dayShadow.userData.pgDayOnly = true
+  dayShadow.userData.pgNoShadow = true
+  dayShadow.userData.pgShadowReceiver = true
+  dayShadow.visible = false
+  group.add(dayShadow)
 
   /* ---------------------------------------------------------------------
    * 1b. The rim: slab thickness, kerb, edge light, and a parapet a walker
@@ -753,6 +779,38 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   slabMat.name = 'ground.plinth'
   mats.push(slabMat)
 
+  function makeZoneMaterial(spec: PlinthSpec): THREE.MeshStandardMaterial {
+    const m = new THREE.MeshStandardMaterial({
+      color: spec.color,
+      roughness: 0.96,
+      metalness: 0,
+      flatShading: true,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
+    })
+    m.name = `ground.zone.${spec.district}`
+    // SimCity zoning is saturated but printed on the same warm stock as the
+    // rest of the model. Fourteen percent stone keeps it architectural without
+    // making neighboring quarters collapse into beige.
+    m.userData.pgDayColor = mixHex(spec.dayColor, DAY_PALETTE.ground, 0.14)
+    mats.push(m)
+    return m
+  }
+
+  function addDayZone(spec: PlinthSpec, cx: number, cy: number, cz: number, w: number, d: number): void {
+    const zone = new THREE.Mesh(unitPlane, makeZoneMaterial(spec))
+    zone.name = `ground.zone.${spec.district}`
+    zone.scale.set(w, d, 1)
+    zone.rotation.x = -Math.PI / 2
+    zone.position.set(cx, cy, cz)
+    zone.raycast = () => {}
+    zone.userData.pgDayOnly = true
+    zone.userData.pgNoShadow = true
+    zone.visible = false
+    group.add(zone)
+  }
+
   /** Flat wayfinding label. `along` 0 = text runs east–west, 1 = north–south. */
   function addDecal(text: string, color: number, cx: number, cy: number, cz: number, along: 0 | 1, avail: number) {
     // Monospace tracking done with real spaces: theme.textTexture() measures the
@@ -791,6 +849,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     if (!r) {
       // Shared memory has no ground under it — it is a deck floating over the
       // excavation. Lay its sign on the deck instead, clear of the buffer grid.
+      addDayZone(spec, 0, CITY.deck.top + 0.025, 0, CITY.deck.w - 2, CITY.deck.d - 2)
       addDecal(spec.label, spec.color, 0, CITY.deck.top + 0.08, 51, 0, CITY.deck.w)
       continue
     }
@@ -804,6 +863,8 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     slab.scale.set(w, PLINTH_H + PLINTH_DROP, d)
     slab.position.set(cx, (PLINTH_H - PLINTH_DROP) / 2, cz)
     group.add(slab)
+
+    addDayZone(spec, cx, PLINTH_H + 0.025, cz, w - 2, d - 2)
 
     // 1 m emissive kerb in the district colour — the only glowing thing at
     // street level, and the fastest way to tell districts apart from the air.

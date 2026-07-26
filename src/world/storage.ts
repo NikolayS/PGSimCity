@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { COLOR } from '../core/theme'
+import { COLOR, DAY_PALETTE, mixHex, themeMode } from '../core/theme'
 import { N_VAC_WORKERS } from '../core/types'
 import type { FlowRequest, SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, fmtBytes, fmtNum, fmtPct, makeRng } from '../core/util'
@@ -304,6 +304,35 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
   const floor = new THREE.Mesh(gFloor, mFloor)
   floor.position.set(floorCx, FLOOR_Y + 0.02, floorCz)
   dirGroup.add(floor)
+
+  // The printed plan is authored for night and must remain readable, so the
+  // daylight storage zone is a translucent coat over it rather than a
+  // replacement texture. From the rim the green floor identifies $PGDATA as a
+  // district; up close the paths and relation names still show through.
+  const mFloorZone = keep(
+    new THREE.MeshStandardMaterial({
+      color: COLOR.storage,
+      roughness: 0.98,
+      metalness: 0,
+      transparent: true,
+      opacity: 0.68,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
+    }),
+  )
+  mFloorZone.name = 'storage.dayZone'
+  mFloorZone.userData.pgDayColor = mixHex(DAY_PALETTE.storage, DAY_PALETTE.ground, 0.18)
+  const floorZone = new THREE.Mesh(gFloor, mFloorZone)
+  floorZone.name = 'storage.dayZone'
+  floorZone.position.set(floorCx, FLOOR_Y + 0.045, floorCz)
+  floorZone.renderOrder = 1
+  floorZone.raycast = () => {}
+  floorZone.userData.pgDayOnly = true
+  floorZone.userData.pgNoShadow = true
+  floorZone.visible = false
+  dirGroup.add(floorZone)
   // Slab under the printed plan, so the floor has thickness from the side.
   addBox(boxLo, floorCx, FLOOR_Y - 0.5, floorCz, floorW, 1.0, floorD)
 
@@ -2141,7 +2170,11 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     updateToast(d, sim, t)
     updateOsCache(d, sim, t)
 
-    pitLight.intensity = 2000 + clamp01(sim.stats.ioReadPerSec / 300) * 1800
+    const day = themeMode() === 'day'
+    pitLight.intensity = day ? 420 : 2000 + clamp01(sim.stats.ioReadPerSec / 300) * 1800
+    rackLight.intensity = day ? 120 : 900
+    pitFill.intensity = day ? 680 : 5200
+    pitFillW.intensity = day ? 440 : 3600
   }
 
   /**
