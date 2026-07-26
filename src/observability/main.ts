@@ -589,12 +589,20 @@ function renderInstrument(e: CatalogEntry): HTMLElement {
 
   const cols = el('div', { class: 'cols' })
   for (const c of e.columns) cols.append(el('code', { class: 'col', text: c }))
+  /* Functions carry signatures, not columns, and calling them "columns" would be
+   * the small kind of wrong that costs a reader their trust in the large kind. */
+  const isFn = e.kind === 'function'
   body.push(
     el(
       'section',
       { class: 'block' },
-      el('h3', { text: `Columns (${e.columns.length})` }),
-      el('p', { class: 'fine', text: 'The full list as of PostgreSQL 18, in catalog order. Names were checked against the manual one at a time.' }),
+      el('h3', { text: isFn ? `Signatures (${e.columns.length})` : `Columns (${e.columns.length})` }),
+      el('p', {
+        class: 'fine',
+        text: isFn
+          ? 'The real signatures, as the manual gives them. Checked one at a time.'
+          : 'The complete list as of PostgreSQL 18, in the order the manual gives it. Nothing is abridged: if a column is missing from this list, that is a bug worth reporting. Names were checked against the manual one at a time.',
+      }),
       cols,
     ),
   )

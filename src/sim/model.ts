@@ -107,10 +107,18 @@ const AV_NAPTIME = 12
 const LOCK_TIMEOUT_DEFAULT = 0
 /**
  * Guided scenarios that set lock_timeout for themselves, by scenario id. Stands
- * in for `knobs: { lockTimeout: 15 }` until the knob exists: `lock-pileup`
- * teaches "fail fast and retry", so its waiters must still abort at 15 s.
+ * in for `knobs: { lockTimeout: 15 }` until the knob exists.
+ *
+ * It is applied at a BEAT, not at scenario start, because `lock-pileup` narrates
+ * the cascade in order: the waiters queue (12 s), the queue poisons everything
+ * behind it (26 s), the pool runs out and unrelated queries start failing
+ * (42 s) — none of which can happen if every waiter aborts after 15 s — and
+ * only then, at 58 s, "lock_timeout saves you". `atSec` must stay in step with
+ * that beat in scenarios.ts.
  */
-const SCENARIO_LOCK_TIMEOUT: Readonly<Record<string, number>> = { 'lock-pileup': 15 }
+const SCENARIO_LOCK_TIMEOUT: Readonly<Record<string, { atSec: number; sec: number }>> = {
+  'lock-pileup': { atSec: 58, sec: 15 },
+}
 /**
  * Trips per second the sixteen backend slots complete when nothing is wrong.
  * This is a SCALE CONSTANT, not a control target: `batchSize` is derived from
@@ -2354,8 +2362,8 @@ export function createSim(bus: Bus): SimApi {
       const v = def.knobs[k]
       if (v !== undefined) setKnob(k, v as Knobs[typeof k])
     }
-    // Stands in for a `lockTimeout` knob the scenario would otherwise declare.
-    lockTimeout = SCENARIO_LOCK_TIMEOUT[def.id] ?? LOCK_TIMEOUT_DEFAULT
+    // Scenario lock_timeout, if any, arrives later at its beat (see the table).
+    lockTimeout = LOCK_TIMEOUT_DEFAULT
     state.scenario = def.id
     state.scenarioT = 0
     beatIdx = 0
@@ -2375,6 +2383,20 @@ export function createSim(bus: Bus): SimApi {
       return
     }
     state.scenarioT += dt
+    // Stands in for a `lockTimeout` knob this scenario would set at a beat.
+    const lt = SCENARIO_LOCK_TIMEOUT[def.id]
+    if (lt && lockTimeout !== lt.sec && state.scenarioT >= lt.atSec) {
+      lockTimeout = lt.sec
+      // Waiters already parked were given an open-ended ring; re-arm them
+      // against the deadline they would have had, counted from now.
+      for (let i = 0; i < N_BACKEND_SLOTS; i++) {
+        if (backends[i].state === 'blocked') {
+          backends[i].stateT = 0
+          backends[i].stateDur = lt.sec
+          lockWaitT[i] = 0
+        }
+      }
+    }
     const beats = def.beats
     if (beats) {
       while (beatIdx < beats.length && state.scenarioT >= beats[beatIdx][0]) {

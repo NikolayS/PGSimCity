@@ -116,6 +116,58 @@ export const ANCHOR = {
   replicaClient: [56, 34, 330],
   subscriber: [252, 0, 208],
 
+  /* --- the continuity quarter: backups, PITR, and failover ---------------
+   *
+   * Three works, deliberately OFF the primary's site, because that is what
+   * makes them worth anything. The archive estate is east, downstream of the
+   * archiver that already exists. The recovery ground is south-west, on its
+   * own iron, a long haul road away — restoring is not a local operation.
+   * The HA quarter is due south, between the two standbys.
+   * --------------------------------------------------------------------- */
+
+  // the archive estate (east, outside the server): WAL-G's object storage
+  /** Where the city hands a finished segment to something it does not own. */
+  archiveGate: [300, 0, -70],
+  /** The switchyard. One elevated deck per timeline; ramps are the forks. */
+  timelineYard: [344, 0, -44],
+  /** The bucket: WAL segment silos, grouped by timeline, plus the .history shelf. */
+  objectStore: [396, 0, -80],
+  /** Base backups land here: base.tar, pg_wal.tar, backup_label, backup_manifest. */
+  backupVault: [396, 0, 96],
+  /** Runs pg_basebackup against the STANDBY, so the primary never feels it. */
+  backupHost: [312, 0, 236],
+
+  // the recovery ground (south-west, a different machine on a different site)
+  recoveryGate: [-286, 0, 300],
+  /** The empty $PGDATA the base backup is unpacked onto. */
+  recoveryPad: [-320, 0, 246],
+  /** restore_command. One winch, one hook, one segment at a time. */
+  restoreWinch: [-262, 0, 214],
+  /** recovery_target_time — the dial the whole of PITR turns on. */
+  recoveryClock: [-320, 0, 178],
+  /** The startup process replaying, with a stop line painted across the belt. */
+  recoveryReplay: [-372, 0, 208],
+
+  // the HA quarter (south): three nodes, one lock, one service address
+  /**
+   * The endpoint clients actually dial. It stands on the arrivals avenue,
+   * OUTSIDE the server boundary, in the central corridor the conduits are
+   * forbidden to enter (|x| < CONDUIT.clearX) — a router in front of the
+   * database, which is the only place a router can honestly be. It is inside
+   * DISTRICT_BOUNDS.clients; the clients district must keep |x| <= 18,
+   * z = -284 .. -268 clear.
+   */
+  endpoint: [0, 0, -276],
+  /** The DCS. Holds the leader lock and the lease clock — and no user data. */
+  consensus: [0, 0, 250],
+  /** The three lease posts, one per node, on a triangle around the hall. */
+  leaseNode1: [0, 0, 224],
+  leaseNode2: [22, 0, 264],
+  leaseNode3: [-22, 0, 264],
+  /** Node 3: the second streaming standby. Mirrors the standby across x. */
+  standbyB: [-112, 0, 262],
+  standbyBDeck: [-112, 3, 288],
+
   // the query lab floats above the backend row
   planner: [0, 66, -130],
 } as const satisfies Record<string, readonly [number, number, number]>
