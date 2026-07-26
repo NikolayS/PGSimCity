@@ -745,12 +745,24 @@ body {
   .pane { padding: 14px; }
 }
 
-@media (max-width: 720px) {
-  .top { flex-wrap: wrap; min-height: 0; padding: 8px 12px; }
+/* Below this the brand, the six vitals and the transport controls stop fitting
+   on one line, and flexbox silently pushes the controls off the right edge
+   rather than wrapping. Wrap the vitals onto their own row instead — losing the
+   pause button off-screen is exactly the class of defect this rewrite exists to
+   stop shipping. */
+@media (max-width: 1080px) {
+  .top { flex-wrap: wrap; min-height: 0; padding: 8px 12px; row-gap: 4px; }
   .vitals { order: 3; width: 100%; flex: 1 0 100%; }
-  .vital { min-width: 116px; padding-left: 8px; }
+  .vital { min-width: 118px; padding-left: 8px; }
+  .vital:first-child { border-left: 0; padding-left: 0; }
+}
+
+@media (max-width: 720px) {
   .lede { font-size: var(--fs-md); }
   .evidence { grid-template-columns: repeat(auto-fit, minmax(136px, 1fr)); }
+  .card h1 { font-size: 20px; }
+  .intro h1 { font-size: 21px; }
+  .sqlblock__code { font-size: var(--fs-xs); }
 }
 
 @media (prefers-reduced-motion: reduce) {

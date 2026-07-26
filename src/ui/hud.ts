@@ -435,6 +435,21 @@ export function createHud(ctx: UiContext): UiModule {
   const paletteBtn = toolBtn('search', 'Command palette', '/', () => openPalette())
   const helpBtn = toolBtn('help', 'Keyboard & legend', '?', () => toggleHelp())
 
+  /* ---- ENTRY POINT: the Diagnose console (observability/) -----------------
+   * The only edit this feature makes outside observability/** and
+   * src/observability/**. A plain link, deliberately: the console is a separate
+   * page with its own simulation, so there is nothing to wire up here. */
+  const diagnoseLink = el(
+    'a',
+    {
+      class: 'pg-btn pg-btn--icon hud-tool',
+      href: 'observability/',
+      title: 'Diagnose — start from a symptom, end at the pg_stat_* column that proves it',
+      'aria-label': 'Diagnose',
+    },
+    icon('bolt', 15),
+  )
+
   const fpsEl = el('span', { class: 'hud-perf__fps', text: '—' })
   const partEl = el('span', { class: 'hud-perf__p', text: '0 particles' })
   const qualitySel = el('select', {
@@ -463,7 +478,7 @@ export function createHud(ctx: UiContext): UiModule {
     { class: 'pg-panel hud-bar' },
     brand,
     vitalsRow,
-    el('div', { class: 'hud-right' }, ckptBtn, el('span', { class: 'hud-sep' }), tourBtn, paletteBtn, helpBtn, perf),
+    el('div', { class: 'hud-right' }, ckptBtn, el('span', { class: 'hud-sep' }), tourBtn, diagnoseLink, paletteBtn, helpBtn, perf),
   )
   topEl.append(topBar)
 

@@ -802,7 +802,7 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
     district: 'clients',
     object: poolGroup,
     tier: 0,
-    focus: { target: [TX, 6, TZ - 4], distance: 210, dir: [0.18, 0.34, 1] },
+    focus: { target: [TX, 6, TZ - 6], distance: 132, dir: [0.12, 0.36, 1] },
     labelAt: [TX, 18, TZ + 6],
     color: COLOR.client,
     readout: (s) => `${fmtNum(s.stats.tps)} tps · ${s.stats.activeBackends} open sessions`,
@@ -816,7 +816,7 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
     district: 'clients',
     object: manifoldGroup,
     tier: 1,
-    focus: { target: [0, 8, -220], distance: 190, dir: [0.3, 0.3, 1] },
+    focus: { target: [0, 8, -228], distance: 168, dir: [0.52, 0.30, 0.80] },
     labelAt: [0, 16, -262],
     color: COLOR.client,
     readout: (s) => {

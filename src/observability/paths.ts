@@ -53,6 +53,16 @@ export interface Step {
   note?: string
   /** city component this step interrogates */
   city?: string
+  /**
+   * Optional: advance the model until this is true before drawing the step.
+   *
+   * Some views are empty most of the time on a real server too —
+   * pg_stat_progress_vacuum only has rows while a vacuum is actually running.
+   * That is a fact worth teaching, but a step whose entire point is "watch this
+   * worker achieve nothing" should not open on an empty table. The runner
+   * advances the clock a bounded amount to catch one.
+   */
+  settle?: (s: SimState) => boolean
 }
 
 export interface KnobSpec {
@@ -165,6 +175,20 @@ export function fpiShare(c: Collector): number {
 export function backendWriteShare(c: Collector): number {
   const t = c.total.backendWrites + c.total.ckptBuffers + c.total.bgwClean
   return t > 0 ? c.total.backendWrites / t : 0
+}
+
+/**
+ * The same ratio over the last couple of seconds rather than since the reset.
+ *
+ * This exists because of the lesson itself: a cumulative counter cannot show
+ * you a fix. Raise bgwriter_lru_maxpages and the *total* share barely moves,
+ * because it is dominated by everything that happened before you touched it.
+ * The rate moves immediately. That gap is the single most common misreading of
+ * pg_stat_*, so the verdict shows both numbers side by side.
+ */
+export function recentBackendWriteShare(c: Collector): number {
+  const t = c.rate.backendWrites + c.rate.ckptBuffers + c.rate.bgwClean
+  return t > 0.01 ? c.rate.backendWrites / t : 0
 }
 
 export function coldShare(s: SimState): number {
@@ -476,7 +500,7 @@ const STEPS: Step[] = [
     id: 'bloat.2',
     kind: 'step',
     title: 'Is something holding the xmin horizon back?',
-    why: 'Vacuum may only remove a row version that is invisible to *every* snapshot still open anywhere in the cluster. One session can therefore stop cleanup for the whole database while doing no work at all.',
+    why: 'Vacuum may only remove a row version that is invisible to **every** snapshot still open anywhere in the cluster. One session can therefore stop cleanup for the whole database while doing no work at all.',
     instrument: 'pg_stat_activity',
     projection: 'activity_xmin',
     city: 'proc.array',
@@ -486,7 +510,7 @@ const STEPS: Step[] = [
  WHERE backend_xmin IS NOT NULL
  ORDER BY age(backend_xmin) DESC;`,
     look:
-      'The oldest `backend_xmin` in this list *is* the horizon. Note that `backend_xid` can be null while `backend_xmin` is not: a read-only transaction never consumes a transaction id, but it still holds a snapshot — and the snapshot is what blocks cleanup. Sorting by xact_age finds the session; sorting by age(backend_xmin) finds the damage.',
+      'The oldest `backend_xmin` in this list **is** the horizon. Note that `backend_xid` can be null while `backend_xmin` is not: a read-only transaction never consumes a transaction id, but it still holds a snapshot — and the snapshot is what blocks cleanup. Sorting by xact_age finds the session; sorting by age(backend_xmin) finds the damage.',
     note:
       'Two other things pin the horizon and are not in this list: a replication slot with an old `xmin` (check pg_replication_slots) and a long query on a hot standby with hot_standby_feedback on. Same mechanism, same damage, different view.',
     branches: [
@@ -497,6 +521,7 @@ const STEPS: Step[] = [
   {
     id: 'bloat.3',
     kind: 'step',
+    settle: (s) => s.autovac.workers.some((w) => w.active && w.phase !== 'analyze'),
     title: 'Now watch what a vacuum pass actually achieves.',
     why: 'This is the part that fools monitoring. Autovacuum keeps running, keeps reading the whole heap, keeps burning the I/O — and reclaims nothing, because nothing it finds is removable yet.',
     instrument: 'pg_stat_progress_vacuum',
@@ -627,7 +652,7 @@ SELECT * FROM pg_buffercache_usage_counts();`,
    AND wait_event_type IN ('IO', 'IPC')
  GROUP BY 1, 2, 3;`,
     look:
-      '`IO / WALSync` is the local fsync — the backend is waiting for your own disk to confirm the WAL record is durable. `IPC / SyncRep` is a different animal entirely: the backend is waiting for a *standby* to confirm. One is a storage problem; the other is a configuration decision someone made on purpose.',
+      '`IO / WALSync` is the local fsync — the backend is waiting for your own disk to confirm the WAL record is durable. `IPC / SyncRep` is a different animal entirely: the backend is waiting for a **standby** to confirm. One is a storage problem; the other is a configuration decision someone made on purpose.',
     branches: [
       { label: 'They are waiting on `IPC / SyncRep`.', next: 'v.sync_remote', test: (s) => s.replication.mode === 'sync' && waits(s).commit > 0 },
       { label: 'They are waiting on `IO / WALSync`.', next: 'v.sync_local', test: (s) => s.replication.mode !== 'sync' && waits(s).commit > 0 },
@@ -869,16 +894,23 @@ const VERDICTS: Verdict[] = [
     because:
       'A large share of all page writes are charged to `client backend`. That happens in exactly one situation: a backend needed a free frame, the clock sweep handed it a dirty one, and the backend had to write that page out before it could start its own read.',
     mechanism:
-      'This is the symptom nobody recognises, because throughput barely moves — the same pages get written either way. What changes is *who waits*. A synchronous write in the middle of a user query is a latency spike, and it lands on random unlucky transactions rather than on a background process, which is why it shows up in your p99 and nowhere else.',
-    evidence: (s, c) => [
-      { label: 'client backend writes', value: Math.round(c.total.backendWrites).toLocaleString(), tone: 'crit' },
-      { label: 'share of all writes', value: `${(backendWriteShare(c) * 100).toFixed(0)}%`, tone: 'crit' },
-      { label: 'bgwriter buffers_clean', value: Math.round(c.total.bgwClean).toLocaleString(), tone: s.knobs.bgwriterEnabled ? 'warn' : 'crit' },
-      { label: 'dirty buffers', value: String(s.buffers.dirtyCount) },
-    ],
+      'This is the symptom nobody recognises, because throughput barely moves — the same pages get written either way. What changes is **who waits**. A synchronous write in the middle of a user query is a latency spike, and it lands on random unlucky transactions rather than on a background process, which is why it shows up in your p99 and nowhere else.',
+    evidence: (s, c) => {
+      const now = recentBackendWriteShare(c)
+      return [
+        { label: 'client backend writes', value: Math.round(c.total.backendWrites).toLocaleString(), tone: 'crit' as const },
+        { label: 'share since reset', value: `${(backendWriteShare(c) * 100).toFixed(0)}%`, tone: 'crit' as const },
+        {
+          label: 'share in the last 2 s',
+          value: `${(now * 100).toFixed(0)}%`,
+          tone: (now > 0.4 ? 'crit' : now > 0.2 ? 'warn' : 'ok') as 'ok' | 'warn' | 'crit',
+        },
+        { label: 'bgwriter buffers_clean/s', value: c.rate.bgwClean.toFixed(1), tone: (s.knobs.bgwriterEnabled ? 'warn' : 'crit') as 'warn' | 'crit' },
+      ]
+    },
     fix:
-      'Raise bgwriter_lru_maxpages and lower bgwriter_delay — it is nearly free, and it moves those writes onto a background process. If the pool is also too small, fix that first: the background writer only cleans a short window ahead of the clock hand, so it cannot rescue a pool that is being churned end to end.',
-    knobs: [KB.bgwriterEnabled, KB.bgwriterLruMaxpages, KB.sharedBuffers],
+      'Fix the pool first. The background writer only cleans a short window ahead of the clock hand, so it cannot rescue a pool that is being churned end to end — raise shared_buffers and the backend writes fall away on their own. Then raise bgwriter_lru_maxpages and lower bgwriter_delay, which is nearly free and moves the remaining writes onto a background process. Watch the two share figures above as you turn the dial: the cumulative one barely twitches and the two-second one moves at once, which is the whole reason nobody should ever alert on a raw pg_stat_* counter.',
+    knobs: [KB.sharedBuffers, KB.bgwriterLruMaxpages, KB.bgwriterEnabled],
     confirm: {
       projection: 'io',
       instrument: 'pg_stat_io',
@@ -940,7 +972,7 @@ const VERDICTS: Verdict[] = [
     because:
       'Every blocked backend points at the same pid, and that pid is not running a query — it is in `idle in transaction`. The statement that took the lock finished in a millisecond. The lock outlives it, because a lock is held until the transaction ends.',
     mechanism:
-      'Locks queue in order, and this is the detail that surprises people: a blocked ACCESS EXCLUSIVE request also blocks every *later* request, including harmless SELECTs that would never have conflicted with each other. One waiter poisons the whole queue behind it. Meanwhile every blocked session is still holding a connection, so once they exhaust the pool, traffic that never touches this table starts failing too. One lock becomes a total outage.',
+      'Locks queue in order, and this is the detail that surprises people: a blocked ACCESS EXCLUSIVE request also blocks every **later** request, including harmless SELECTs that would never have conflicted with each other. One waiter poisons the whole queue behind it. Meanwhile every blocked session is still holding a connection, so once they exhaust the pool, traffic that never touches this table starts failing too. One lock becomes a total outage.',
     evidence: (s) => [
       { label: 'waiters', value: String(s.locks.length), tone: 'crit' },
       { label: 'oldest wait', value: `${Math.max(0, ...s.locks.map((l) => l.ageSec)).toFixed(0)} s`, tone: 'crit' },
@@ -1092,7 +1124,7 @@ const VERDICTS: Verdict[] = [
       { label: 'insert − flush', value: fmtBytes(s.wal.insertLsn - s.wal.flushLsn) },
     ],
     fix:
-      'Decide per transaction, not per cluster. synchronous_commit is a session setting: money moves with remote_apply, telemetry commits with off, everything else stays on the default. Turning it off does not risk consistency — the database will never come up corrupt — it risks losing the last few hundred milliseconds of *committed* transactions in a crash.',
+      'Decide per transaction, not per cluster. synchronous_commit is a session setting: money moves with remote_apply, telemetry commits with off, everything else stays on the default. Turning it off does not risk consistency — the database will never come up corrupt — it risks losing the last few hundred milliseconds of **committed** transactions in a crash.',
     knobs: [KB.synchronousCommit, KB.fullPageWrites],
     confirm: {
       projection: 'wal_lsn',
@@ -1109,7 +1141,7 @@ const VERDICTS: Verdict[] = [
     because:
       'The wait is `IPC / SyncRep`, not `IO / WALSync`. These backends are not waiting for a disk — they are waiting for a network round trip, the standby\'s fsync, and at remote_apply the standby\'s replay as well.',
     mechanism:
-      'This is the one everybody gets wrong in the other direction: synchronous_commit = on guarantees a *local* flush only. If the primary\'s disk survives but the machine does not, the standby may never have seen that commit. Synchronous replication requires synchronous_standby_names, and once you have it, every commit costs a full round trip.',
+      'This is the one everybody gets wrong in the other direction: synchronous_commit = on guarantees a **local** flush only. If the primary\'s disk survives but the machine does not, the standby may never have seen that commit. Synchronous replication requires synchronous_standby_names, and once you have it, every commit costs a full round trip.',
     evidence: (s) => [
       { label: 'synchronous_commit', value: s.knobs.synchronousCommit, tone: 'warn' },
       { label: 'waiting to commit', value: String(waits(s).commit), tone: 'warn' },
@@ -1147,7 +1179,7 @@ const VERDICTS: Verdict[] = [
     because:
       'You have read the four views that between them describe a working PostgreSQL server: the workload, the sessions, the write path, and the copy of your data.',
     mechanism:
-      'None of these numbers mean anything in isolation. They mean something as a *change* — which is why every one of them is a counter since a reset, and why the single most useful monitoring you can build is two samples and a subtraction.',
+      'None of these numbers mean anything in isolation. They mean something as a **change** — which is why every one of them is a counter since a reset, and why the single most useful monitoring you can build is two samples and a subtraction.',
     evidence: (s, c) => [
       { label: 'tps', value: s.stats.tps.toFixed(0), tone: 'ok' },
       { label: 'cache hit', value: `${s.stats.cacheHitPct.toFixed(1)}%`, tone: 'ok' },

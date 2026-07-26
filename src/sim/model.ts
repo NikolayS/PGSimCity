@@ -20,10 +20,20 @@
  *  2. THE CITY IS A SCALE MODEL. 1024 buffers (8 MiB shared_buffers), 16 backend
  *     slots, 14 visible WAL segments. To let 16 towers represent thousands of
  *     transactions per second, one trip through the backend state machine
- *     carries `batch` transactions — the controller sizes `batch` from the
- *     measured trip rate so achieved tps tracks the offered tps. All work
- *     (pages touched, WAL bytes, dead tuples) is multiplied by that batch, so
- *     the pool and the WAL see the real pressure.
+ *     carries `batch` transactions, and all work (pages touched, WAL bytes,
+ *     dead tuples) is multiplied by that batch, so the pool and the WAL see the
+ *     real pressure.
+ *
+ *     `batch` is a fixed FUNCTION OF THE OFFERED RATE — `tps / NOMINAL_TRIPS` —
+ *     and nothing else. It is deliberately NOT a controller. Sizing it from the
+ *     measured trip rate closed a feedback loop that cancelled every bottleneck
+ *     in the model: slow trips produced proportionally bigger batches, so
+ *     achieved tps tracked the tps knob at 0.90–1.00 with shared_buffers at 32,
+ *     with 78% of backend-seconds parked in `blocked`, and at 50,000 offered
+ *     tps. PostgreSQL has no such compensator. Achieved throughput here is
+ *     `trips/s * batch` and is therefore an OUTPUT: it falls in exact
+ *     proportion to any slowdown in the trip loop, and it saturates when the
+ *     fleet is full.
  * ==========================================================================*/
 
 import {
@@ -77,7 +87,37 @@ const MAX_STEPS = 20
 const IDLE_REAP = 22
 /** autovacuum_naptime. Real default is 60s; compressed so the yard stays alive. */
 const AV_NAPTIME = 12
-const LOCK_TIMEOUT = 15
+/**
+ * lock_timeout, in seconds; 0 means **wait forever**, and that is PostgreSQL's
+ * default (`runtime-config-client.html`). It is also the whole reason one
+ * ACCESS EXCLUSIVE lock takes a database down: a blocked session keeps its
+ * max_connections slot for as long as it waits, so waiters accumulate until the
+ * pool is gone and queries that never touch the locked table start failing too.
+ *
+ * The city used to abort every waiter after 15 s unconditionally, which churned
+ * the pool instead of filling it — each freed slot immediately re-rolled and had
+ * only a ~26% chance of blocking again, so the slots never stayed exhausted and
+ * the connection-pool cascade could not happen at all.
+ *
+ * FOLLOW-UP (needs src/core/types.ts + src/ui/content.ts, both outside this
+ * workflow's file scope): promote this to a `lockTimeout` knob — KNOB_META
+ * group `chaos`, unit s, default 0 — and read `K.lockTimeout` in
+ * lockTimeoutSec() instead of the two constants here.
+ */
+const LOCK_TIMEOUT_DEFAULT = 0
+/**
+ * Guided scenarios that set lock_timeout for themselves, by scenario id. Stands
+ * in for `knobs: { lockTimeout: 15 }` until the knob exists: `lock-pileup`
+ * teaches "fail fast and retry", so its waiters must still abort at 15 s.
+ */
+const SCENARIO_LOCK_TIMEOUT: Readonly<Record<string, number>> = { 'lock-pileup': 15 }
+/**
+ * Trips per second the sixteen backend slots complete when nothing is wrong.
+ * This is a SCALE CONSTANT, not a control target: `batchSize` is derived from
+ * it so that one healthy fleet sustains roughly the offered rate, and any
+ * slowdown in the trip loop shows up one-for-one in achieved tps.
+ */
+const NOMINAL_TRIPS = 35
 /**
  * Ceiling on the pages one vacuum pass may hand back. Real truncation needs an
  * ACCESS EXCLUSIVE lock and gives it up the moment anyone else wants the table,
@@ -419,8 +459,11 @@ export function createSim(bus: Bus): SimApi {
 
   let pendingTx = 0
   let nextArrival = 0
-  let batchSize = 4
+  /** Transactions carried by one backend trip. See sizeBatch(). */
+  let batchSize = 1
   let visitRate = 4 // EMA of completed backend trips per second
+  /** Arrivals the queue could not hold — pg's "too many clients already". */
+  let refusedTx = 0
   let visitsAcc = 0
   let commitsAcc = 0
   let walAcc = 0
@@ -462,6 +505,9 @@ export function createSim(bus: Bus): SimApi {
   let lockHolder = -1
   let lockTable = 3 // sessions — small, hot, and the one everybody wants
   const lockWaitT: number[] = new Array(N_BACKEND_SLOTS).fill(0)
+  /** Effective lock_timeout in seconds; 0 = wait forever. See the constants. */
+  let lockTimeout = LOCK_TIMEOUT_DEFAULT
+  const lockTimeoutSec = (): number => (lockTimeout > 0 ? lockTimeout : Infinity)
 
   /* ---- flow emission budget ------------------------------------------- */
 
@@ -503,6 +549,22 @@ export function createSim(bus: Bus): SimApi {
   function stride(ratePerSec: number, targetPerSec: number): number {
     if (ratePerSec <= targetPerSec) return 1
     return Math.max(1, Math.ceil(ratePerSec / targetPerSec))
+  }
+
+  /**
+   * How many transactions one backend trip stands for. Purely a function of the
+   * OFFERED rate: a healthy fleet turns over NOMINAL_TRIPS trips per second, so
+   * `tps / NOMINAL_TRIPS` per trip is the scale factor that makes a healthy
+   * city serve roughly what the clients ask for.
+   *
+   * It must never depend on the *measured* trip rate. That was a feedback loop
+   * that cancelled every bottleneck in the model — see the file header.
+   */
+  function sizeBatch(): void {
+    // ceil, not round: a trip is indivisible, so rounding 1.4 down would leave
+    // the fleet structurally unable to serve the offered rate. Over-sizing is
+    // harmless — startVisit() only ever takes what is actually queued.
+    batchSize = Math.max(1, Math.ceil(K.tps / NOMINAL_TRIPS))
   }
 
   /* ======================================================================
@@ -1292,9 +1354,12 @@ export function createSim(bus: Bus): SimApi {
 
   function blockOn(slot: number, ti: number): void {
     const b = backends[slot]
+    const to = lockTimeoutSec()
     b.state = 'blocked'
     b.stateT = 0
-    b.stateDur = LOCK_TIMEOUT
+    // With lock_timeout disabled there is no deadline to draw a progress ring
+    // against; the wait is open-ended, exactly as it is on a real primary.
+    b.stateDur = Number.isFinite(to) ? to : 9999
     b.waitOn = lockHolder
     lockWaitT[slot] = 0
     if (state.locks.length < 12) {
@@ -1712,7 +1777,12 @@ export function createSim(bus: Bus): SimApi {
     x.execElapsed = 0
 
     const missFrac = clamp01(1 - buf.hitRatio)
-    const dur = clamp(0.06 + total * (0.00035 + missFrac * 0.0045), 0.1, 1.5)
+    // Keep the floor — a trivial statement still costs something — but there is
+    // no ceiling. Execution time has to stay proportional to the work, or a big
+    // batch is free, the fleet has no capacity, and no amount of offered load
+    // can ever saturate it. This is what makes achieved tps saturate instead of
+    // tracking the knob, and what makes a cold pool cost real wall time.
+    const dur = Math.max(0.1, 0.06 + total * (0.00035 + missFrac * 0.0045))
     x.execTotal = dur
 
     const ioShare = missFrac > 0.02 ? clamp(0.25 + missFrac * 0.6, 0.2, 0.85) : 0
@@ -1994,7 +2064,7 @@ export function createSim(bus: Bus): SimApi {
           if (lockHolder < 0) {
             unblock(slot)
             beginExec(slot)
-          } else if (lockWaitT[slot] > LOCK_TIMEOUT) {
+          } else if (lockWaitT[slot] > lockTimeoutSec()) {
             // ERROR: canceling statement due to lock timeout
             unblock(slot)
             stats.rollbacks += x.txCount
@@ -2156,13 +2226,23 @@ export function createSim(bus: Bus): SimApi {
       forkBackend()
       return
     }
-    // At max_connections the queue is the whole story: latency, not throughput.
-    const cap = state.maxConnections * batchSize * 2
+    // At max_connections the queue IS the story: latency, not throughput. The
+    // old cap was `maxConnections * batchSize * 2`, and batchSize was the
+    // controller's output — so the backlog grew the ceiling with it, the queue
+    // could never get deep, and the "too many clients" toast fired on a
+    // quantity that could not grow. Ten seconds of offered load is a real
+    // client-side queue; past that the clients are being refused.
+    const cap = Math.max(state.maxConnections * batchSize * 2, K.tps * 10)
     if (pendingTx > cap) {
+      refusedTx += pendingTx - cap
       pendingTx = cap
       if (state.t - refuseWarnT > 15) {
         refuseWarnT = state.t
-        toast('FATAL: sorry, too many clients already', 'warn', 5000)
+        toast(
+          `FATAL: sorry, too many clients already — ${Math.round(refusedTx).toLocaleString()} refused`,
+          'warn',
+          5000,
+        )
       }
     }
   }
@@ -2195,9 +2275,10 @@ export function createSim(bus: Bus): SimApi {
       stats.blksHit = buf.hits
       stats.blksRead = buf.misses
 
-      // batch controller: keep achieved tps on top of offered tps
-      const target = clamp(K.tps / Math.max(0.4, visitRate), 1, 6000)
-      batchSize = Math.max(1, Math.round(damp(batchSize, target, 2.5, iv)))
+      // The scale factor, re-derived in case the tps knob moved. NOT a
+      // controller: nothing measured feeds back into it. stats.tps above is a
+      // pure observation of what the fleet actually committed.
+      sizeBatch()
 
       commitsAcc = 0
       walAcc = 0
@@ -2247,6 +2328,7 @@ export function createSim(bus: Bus): SimApi {
       if (v !== undefined) setKnob(k, v as Knobs[typeof k])
     }
     savedKeys = []
+    lockTimeout = LOCK_TIMEOUT_DEFAULT
     state.scenario = null
     state.scenarioT = 0
     beatIdx = 0
@@ -2272,6 +2354,8 @@ export function createSim(bus: Bus): SimApi {
       const v = def.knobs[k]
       if (v !== undefined) setKnob(k, v as Knobs[typeof k])
     }
+    // Stands in for a `lockTimeout` knob the scenario would otherwise declare.
+    lockTimeout = SCENARIO_LOCK_TIMEOUT[def.id] ?? LOCK_TIMEOUT_DEFAULT
     state.scenario = def.id
     state.scenarioT = 0
     beatIdx = 0
@@ -2317,6 +2401,9 @@ export function createSim(bus: Bus): SimApi {
       case 'tps':
         K.tps = Math.max(0, K.tps)
         nextArrival = 0
+        // The batch scale follows the offered rate, so it moves with the slider
+        // rather than 250ms later.
+        sizeBatch()
         break
       case 'bgwriterEnabled':
         bgw.enabled = K.bgwriterEnabled
@@ -2625,13 +2712,15 @@ export function createSim(bus: Bus): SimApi {
 
     pendingTx = 0
     nextArrival = 0
-    batchSize = 4
+    refusedTx = 0
+    sizeBatch()
     visitRate = 4
     visitsAcc = commitsAcc = walAcc = fpiAcc = ioReadAcc = ioWriteAcc = 0
     winHits = winMisses = 0
     rateT = histT = 0
     cleanedAcc = 0
     lockHolder = -1
+    lockTimeout = LOCK_TIMEOUT_DEFAULT
     horizonFrozen = false
     horizonXid = state.xid
     horizonT = 0

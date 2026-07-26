@@ -426,7 +426,7 @@ const tables: ProjectionFn = (s) => ({
       }
     }),
   caption:
-    'n_tup_hot_upd next to n_tup_upd is the ratio worth watching: a HOT update rewrites no index entry and can be cleaned up without vacuum. A table where the two diverge is a table that will bloat. These counters are cumulative since the model booted — pg_stat_reset() would zero them on a real server, and does not zero them here.',
+    'dead % is not a column — it is n_dead_tup / (n_live_tup + n_dead_tup), and it is the number you actually alert on. n_tup_hot_upd next to n_tup_upd is the ratio worth watching: a HOT update rewrites no index entry and can be cleaned up without vacuum. A table where the two diverge is a table that will bloat. These counters are cumulative since the model booted — pg_stat_reset() would zero them on a real server, and does not zero them here.',
 })
 
 /* ---------------------------------------------------------------------------
@@ -519,7 +519,7 @@ const wal: ProjectionFn = (s, c, mode) => {
       },
     ],
     caption:
-      'wal_bytes is exact — it is the LSN advance. wal_records and wal_fpi are derived by the model, not measured: one record per tuple operation plus one per commit, and full-page images taken from the post-checkpoint burst the model simulates. The shape is right; do not quote the digits.',
+      'The last two columns are not columns — they are arithmetic on the first three. wal_bytes is exact, being the LSN advance. wal_records and wal_fpi are derived by the model, not measured: one record per tuple operation plus one per commit, and full-page images taken from the post-checkpoint burst the model simulates. The shape is right; do not quote the digits.',
   }
 }
 
@@ -813,7 +813,7 @@ const progressVacuum: ProjectionFn = (s) => {
     ],
     rows,
     empty: s.knobs.autovacuum
-      ? 'No vacuum is running this second. The launcher wakes on autovacuum_naptime; wait for it, or watch n_dead_tup climb in pg_stat_all_tables until a table crosses its threshold.'
+      ? 'No vacuum is running this second — which is the normal state of this view, and the reason people conclude autovacuum is not working when it is. The launcher wakes on autovacuum_naptime (a few seconds in this model, sixty on a stock server); leave the page open and a worker will appear. Meanwhile n_dead_tup in pg_stat_all_tables is the counter that never stops telling you the truth.'
       : 'autovacuum is off. Nothing will ever appear here, and n_dead_tup will climb without limit.',
     caption:
       'phase is the real enum: initializing, scanning heap, vacuuming indexes, vacuuming heap, cleaning up indexes, truncating heap, performing final cleanup. "removed" is not a column in this view — it is the model showing you what the pass actually reclaimed, which is the number pg_stat_progress_vacuum conspicuously does not give you.',
@@ -870,7 +870,7 @@ const locks: ProjectionFn = (s) => {
       { key: 'mode', label: 'mode' },
       { key: 'granted', label: 'granted' },
       { key: 'wait_age', label: 'now() − waitstart' },
-      { key: 'blocked_by', label: 'pg_blocking_pids' },
+      { key: 'blocked_by', label: 'blocked_by' },
     ],
     rows,
     empty:
@@ -958,7 +958,7 @@ const slots: ProjectionFn = (s) => {
       },
     ],
     caption:
-      'wal_status goes reserved → extended → unreserved → lost as a slot falls behind max_slot_wal_keep_size. The model always keeps its subscriber fed, so you will not see it decay here — that is the one failure this model will not show you.',
+      'WAL retained is not a column — it is pg_current_wal_lsn() minus confirmed_flush_lsn, which is what the slot is actually costing you. wal_status goes reserved → extended → unreserved → lost as a slot falls behind max_slot_wal_keep_size. The model always keeps its subscriber fed, so you will not see it decay here — that is the one failure this model will not show you.',
   }
 }
 

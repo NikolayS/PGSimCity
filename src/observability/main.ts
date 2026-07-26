@@ -229,9 +229,22 @@ function openSymptom(s: Symptom): void {
 
 function goto(nodeId: string): void {
   if (screen.kind !== 'console') return
+  const next = NODES.get(nodeId)
+  if (next && next.kind === 'step' && next.settle) settle(next.settle, 30)
   screen = { ...screen, nodeId, trail: [...screen.trail, screen.nodeId] }
   render()
   pane.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+/** Advance the model until `ready`, or until the budget of model seconds runs out. */
+function settle(ready: (s: typeof sim.state) => boolean, maxSeconds: number): void {
+  const dt = 1 / 30
+  const steps = Math.round(maxSeconds / dt)
+  for (let i = 0; i < steps && !ready(sim.state); i++) {
+    sim.update(dt)
+    if (i % 3 === 0) coll.sample()
+  }
+  coll.sample()
 }
 
 function back(): void {
@@ -388,7 +401,7 @@ function renderStep(sc: Extract<Screen, { kind: 'console' }>, step: Step): HTMLE
   const marks: { row: HTMLElement; test: () => boolean }[] = []
 
   for (const b of step.branches) {
-    const flag = el('span', { class: 'branch__flag', text: 'TRUE NOW' })
+    const flag = el('span', { class: 'branch__flag', text: 'TRUE NOW', hidden: step.branches.length === 1 })
     const row = el(
       'button',
       { class: 'branch', type: 'button' },
@@ -404,7 +417,14 @@ function renderStep(sc: Extract<Screen, { kind: 'console' }>, step: Step): HTMLE
     class: 'fine undecided',
     text: 'None of these is true of the model this second. That is a real answer too — leave it running, or take any branch to read on regardless.',
   })
+  /* A step with a single branch is a "next" link, not a question. Flagging it
+   * TRUE NOW would be technically accurate and completely meaningless. */
+  const linear = step.branches.length === 1
   const paintMarks = () => {
+    if (linear) {
+      undecided.hidden = true
+      return
+    }
     let any = false
     for (const m of marks) {
       const t = m.test()
@@ -414,7 +434,7 @@ function renderStep(sc: Extract<Screen, { kind: 'console' }>, step: Step): HTMLE
     undecided.hidden = any
   }
   paintMarks()
-  liveRefresh.push(paintMarks)
+  if (!linear) liveRefresh.push(paintMarks)
 
   const stepIndex = sc.trail.length + 1
 
@@ -441,8 +461,10 @@ function renderStep(sc: Extract<Screen, { kind: 'console' }>, step: Step): HTMLE
     el(
       'section',
       { class: 'block' },
-      el('h3', { text: 'Which is it?' }),
-      el('p', { class: 'fine', text: 'The tool is reading the same rows you are. Every branch that is true of the running model right now is marked — sometimes more than one is, and that is a finding too.' }),
+      el('h3', { text: step.branches.length > 1 ? 'Which is it?' : 'Next' }),
+      step.branches.length > 1
+        ? el('p', { class: 'fine', text: 'The tool is reading the same rows you are. Every branch that is true of the running model right now is marked — sometimes more than one is, and that is a finding too.' })
+        : null,
       branches,
       undecided,
     ),
@@ -502,6 +524,11 @@ function renderVerdict(sc: Extract<Screen, { kind: 'console' }>, v: Verdict): HT
           'section',
           { class: 'block' },
           el('h3', { text: 'Turn the dial, then confirm it' }),
+          el('p', {
+            class: 'fine',
+            text:
+              'One warning about the table below, and it is the most useful thing on this page: these are counters since the last reset, so a fix you just applied is buried under everything that happened before it. Switch to per second, or run pg_stat_reset(), and look again.',
+          }),
           el('div', { class: 'chiprow' }, instrumentChip(v.confirm.instrument), counterToggle(v.confirm.projection)),
           sqlBlock(v.confirm.sql),
           liveGrid(v.confirm.projection),
@@ -648,7 +675,7 @@ function stagedBanner(sc: Extract<Screen, { kind: 'console' }>): HTMLElement {
     'div',
     { class: 'staged' },
     el('span', { class: 'staged__k', text: 'STAGED' }),
-    el('span', { class: 'staged__t', text: def ? `${def.name} — the model has been put into a state that produces this symptom. Every knob is still yours.` : 'free running' }),
+    el('span', { class: 'staged__t', text: def ? `${def.name} — the model is running this configuration so you can read it live. Every knob on the page is still yours.` : 'free running' }),
     sc.trail.length ? backBtn : null,
     clear,
     home,
