@@ -1,23 +1,26 @@
 import * as THREE from 'three'
 import { COLOR, mixHex } from '../core/theme'
+import type { Atmosphere } from '../core/theme'
 import { makeRng } from '../core/util'
-import type { ThemeApi } from '../core/types'
+import type { QualityLevel, ThemeApi } from '../core/types'
 
 /* ============================================================================
- * SKY — the night PGSimCity runs under.
+ * SKY — one procedural atmosphere, with deliberately different day and night.
  *
- * Everything is procedural: a gradient dome plus one Points cloud. The dome is
- * pinned to the camera every frame (one vector copy) so the stars behave as if
- * they were at infinity and the sphere can never leave the far plane.
+ * Everything is procedural: a gradient dome, a sun drawn into that dome, one
+ * instanced cloud draw, and one Points starfield. The dome is pinned to the
+ * camera every frame so the atmosphere stays at infinity.
  *
  * Both shaders end with three's own tonemapping + colorspace chunks so they sit
- * in exactly the same colour pipeline as the PBR city; nothing here is allowed
- * to exceed the bloom threshold — the sky is a backdrop, not a light.
+ * in exactly the same colour pipeline as the city. The sun's soft rim is drawn
+ * into the sky rather than sent through the bloom pass; daylight therefore
+ * keeps bloom free for semantic night lighting.
  * ==========================================================================*/
 
 const SKY_RADIUS = 1800
 const STAR_RADIUS = 1720
 const N_STARS = 1400
+const CLOUD_RADIUS = 1500
 
 /* ---------------------------------------------------------------------------
  * SLONIK, the asterism.
@@ -88,25 +91,45 @@ const skyFrag = /* glsl */ `
 uniform vec3 uZenith;
 uniform vec3 uHorizon;
 uniform vec3 uGlow;
+uniform vec3 uSunDirection;
+uniform float uDaylight;
 varying vec3 vDir;
 
 void main() {
   vec3 d = normalize( vDir );
   float h = d.y;
 
-  // vertical gradient: near-black overhead, deep navy at the horizon
-  vec3 col = mix( uHorizon, uZenith, smoothstep( -0.04, 0.62, h ) );
+  vec3 col;
+  if ( uDaylight > 0.5 ) {
+    // The plate is finite and the establishing camera looks down, so its
+    // visible skyline lies below the mathematical horizon. Grade from that
+    // distant plate edge or the entire first-load band stays one flat color.
+    float skyHeight = pow( smoothstep( -0.30, 0.62, h ), 0.72 );
+    col = mix( uHorizon, uZenith, skyHeight );
 
-  // the horizon band itself
-  float band = exp( - abs( h ) * 8.5 );
-  col += uHorizon * band * 0.30;
+    // A trace of warm suspended haze stops the horizon reading as white fog.
+    float haze = exp( - abs( h + 0.28 ) * 12.0 );
+    col = mix( col, uGlow, haze * 0.055 );
 
-  // ...biased east, toward the WAL district: the city's one warm light source
-  float east = clamp( d.x, 0.0, 1.0 );
-  col += uGlow * band * pow( east, 2.4 );
+    // The directional light and this disc share one direction. A compact halo
+    // softens the edge without turning the sky into a lens flare.
+    float sunDot = dot( d, uSunDirection );
+    float halo = smoothstep( 0.99756, 0.99970, sunDot );
+    float disc = smoothstep( 0.99951, 0.99978, sunDot );
+    col += vec3( 1.0, 0.72, 0.34 ) * halo * 0.11;
+    col = mix( col, vec3( 1.0, 0.82, 0.48 ), disc * 0.94 );
 
-  // below the horizon there is nothing but the ground plane
-  col *= mix( 0.18, 1.0, smoothstep( -0.30, -0.01, h ) );
+    // Deep below the visual skyline only the ground plate should be visible.
+    col *= mix( 0.58, 1.0, smoothstep( -0.48, -0.28, h ) );
+  } else {
+    // The established night gradient and restrained eastern warmth.
+    col = mix( uHorizon, uZenith, smoothstep( -0.04, 0.62, h ) );
+    float band = exp( - abs( h ) * 8.5 );
+    col += uHorizon * band * 0.30;
+    float east = clamp( d.x, 0.0, 1.0 );
+    col += uGlow * band * pow( east, 2.4 );
+    col *= mix( 0.18, 1.0, smoothstep( -0.30, -0.01, h ) );
+  }
 
   gl_FragColor = vec4( col, 1.0 );
   #include <tonemapping_fragment>
@@ -149,15 +172,121 @@ void main() {
 }
 `
 
+const cloudVert = /* glsl */ `
+attribute vec3 aCenter;
+attribute vec2 aSize;
+attribute float aShape;
+attribute float aSpeed;
+uniform float uTime;
+varying vec2 vUv;
+varying float vShape;
+
+void main() {
+  float angle = uTime * aSpeed;
+  float ca = cos( angle );
+  float sa = sin( angle );
+  vec3 center = aCenter;
+  center.xz = mat2( ca, -sa, sa, ca ) * center.xz;
+
+  // Offset in view space: every instance is a camera-facing patch of sky.
+  vec4 mv = modelViewMatrix * vec4( center, 1.0 );
+  mv.xy += position.xy * aSize;
+  gl_Position = projectionMatrix * mv;
+  vUv = uv * 2.0 - 1.0;
+  vShape = aShape;
+}
+`
+
+const cloudFrag = /* glsl */ `
+uniform vec3 uCloudTop;
+uniform vec3 uCloudBottom;
+varying vec2 vUv;
+varying float vShape;
+
+float circle( vec2 p, vec2 center, float radius ) {
+  return length( p - center ) - radius;
+}
+
+void main() {
+  vec2 p = vUv;
+  float spread = ( vShape - 0.5 ) * 0.16;
+  float d = circle( p, vec2( -0.62 - spread, -0.06 ), 0.31 );
+  d = min( d, circle( p, vec2( -0.34, 0.10 + spread ), 0.38 ) );
+  d = min( d, circle( p, vec2( -0.03, 0.31 ), 0.44 ) );
+  d = min( d, circle( p, vec2( 0.34, 0.14 - spread ), 0.37 ) );
+  d = min( d, circle( p, vec2( 0.63 + spread, -0.07 ), 0.29 ) );
+
+  // The horizontal cut is what makes these read as cumulus, not smoke puffs.
+  float base = -0.31 + spread * 0.25;
+  d = max( d, base - p.y );
+  float alpha = ( 1.0 - smoothstep( -0.015, 0.105, d ) ) * 0.72;
+  if ( alpha < 0.006 ) discard;
+
+  float light = smoothstep( base, 0.62, p.y );
+  vec3 col = mix( uCloudBottom, uCloudTop, 0.32 + light * 0.68 );
+  gl_FragColor = vec4( col, alpha );
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
+}
+`
+
 /** Cool white, a few amber, a few pale blue — no green, nothing saturated. */
 const STAR_TINTS: readonly number[] = [
   0xdfe9ff, 0xdfe9ff, 0xdfe9ff, 0xdfe9ff, 0xc9d8ff, 0xffffff, 0xffd9a8, 0xa9c8ff,
 ]
 
+/** Azimuth°, elevation°, width, height, silhouette variant, radians/second. */
+const CLOUDS: readonly (readonly [number, number, number, number, number, number])[] = [
+  [-68, 17, 190, 76, 0.15, 0.00016],
+  [-39, 25, 235, 88, 0.72, 0.00012],
+  [-10, 14, 170, 66, 0.38, 0.00019],
+  [24, 29, 215, 82, 0.9, 0.00014],
+  [58, 19, 178, 68, 0.52, 0.00021],
+  // Home looks down toward azimuth 149°. This high, distant bank sits behind
+  // the finite plate even though that makes its sky-dome elevation negative.
+  [145, -12, 205, 88, 0.27, 0.00015],
+  [118, 24, 225, 84, 0.64, 0.00013],
+]
+
+/** Clouds cost one transparent draw, so the emergency tier leaves it out. */
+export function skyCloudsVisible(air: Atmosphere, quality: QualityLevel): boolean {
+  return air.clouds && quality !== 'low'
+}
+
 /**
- * Build the sky dome + starfield. Add the returned object straight to the scene;
- * it owns its own per-frame work (one uniform write and one vector copy) and
- * never needs to be ticked from outside.
+ * Repaint the procedural atmosphere through the renderer's live theme path.
+ * The light-to-target vector is the apparent direction toward the sun.
+ */
+export function applySkyAtmosphere(sky: THREE.Object3D, air: Atmosphere, quality: QualityLevel): void {
+  const dome = sky.getObjectByName('sky.dome') as THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial> | undefined
+  const uniforms = dome?.material.uniforms
+  if (uniforms) {
+    const zenith = uniforms.uZenith?.value as THREE.Color | undefined
+    const horizon = uniforms.uHorizon?.value as THREE.Color | undefined
+    const glow = uniforms.uGlow?.value as THREE.Color | undefined
+    zenith?.setHex(air.skyZenith)
+    horizon?.setHex(air.skyHorizon)
+    glow?.setHex(air.skyGlow)
+    const sun = uniforms.uSunDirection?.value as THREE.Vector3 | undefined
+    if (sun) {
+      const x = air.keyPos[0] - air.keyTarget[0]
+      const y = air.keyPos[1] - air.keyTarget[1]
+      const z = air.keyPos[2] - air.keyTarget[2]
+      const invLength = 1 / Math.hypot(x, y, z)
+      sun.set(x * invLength, y * invLength, z * invLength)
+    }
+    if (uniforms.uDaylight) uniforms.uDaylight.value = air.daylight ? 1 : 0
+  }
+
+  const stars = sky.getObjectByName('sky.stars')
+  if (stars) stars.visible = air.stars
+  const clouds = sky.getObjectByName('sky.clouds')
+  if (clouds) clouds.visible = skyCloudsVisible(air, quality)
+}
+
+/**
+ * Build the sky. Add the returned object straight to the scene; it owns its
+ * per-frame clock and camera pinning and never needs an external tick.
  */
 export function createSky(theme: ThemeApi): THREE.Object3D {
   const group = new THREE.Group()
@@ -177,6 +306,8 @@ export function createSky(theme: ThemeApi): THREE.Object3D {
       uZenith: { value: new THREE.Color(zenith) },
       uHorizon: { value: new THREE.Color(horizon) },
       uGlow: { value: new THREE.Color(glow) },
+      uSunDirection: { value: new THREE.Vector3(0, 1, 0) },
+      uDaylight: { value: 0 },
     },
     vertexShader: skyVert,
     fragmentShader: skyFrag,
@@ -191,6 +322,62 @@ export function createSky(theme: ThemeApi): THREE.Object3D {
   dome.renderOrder = -1000
   dome.raycast = () => {}
   group.add(dome)
+
+  /* ---- clouds: seven instances, one draw, no texture ------------------- */
+
+  const cloudGeo = new THREE.InstancedBufferGeometry()
+  cloudGeo.setIndex([0, 1, 2, 0, 2, 3])
+  cloudGeo.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute([-0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0], 3),
+  )
+  cloudGeo.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2))
+
+  const cloudCenters = new Float32Array(CLOUDS.length * 3)
+  const cloudSizes = new Float32Array(CLOUDS.length * 2)
+  const cloudShapes = new Float32Array(CLOUDS.length)
+  const cloudSpeeds = new Float32Array(CLOUDS.length)
+  for (let i = 0; i < CLOUDS.length; i++) {
+    const [azimuth, elevation, width, height, shape, speed] = CLOUDS[i]
+    const az = THREE.MathUtils.degToRad(azimuth)
+    const el = THREE.MathUtils.degToRad(elevation)
+    const horizontal = Math.cos(el) * CLOUD_RADIUS
+    cloudCenters[i * 3] = Math.sin(az) * horizontal
+    cloudCenters[i * 3 + 1] = Math.sin(el) * CLOUD_RADIUS
+    cloudCenters[i * 3 + 2] = -Math.cos(az) * horizontal
+    cloudSizes[i * 2] = width
+    cloudSizes[i * 2 + 1] = height
+    cloudShapes[i] = shape
+    cloudSpeeds[i] = speed
+  }
+  cloudGeo.setAttribute('aCenter', new THREE.InstancedBufferAttribute(cloudCenters, 3))
+  cloudGeo.setAttribute('aSize', new THREE.InstancedBufferAttribute(cloudSizes, 2))
+  cloudGeo.setAttribute('aShape', new THREE.InstancedBufferAttribute(cloudShapes, 1))
+  cloudGeo.setAttribute('aSpeed', new THREE.InstancedBufferAttribute(cloudSpeeds, 1))
+  cloudGeo.instanceCount = CLOUDS.length
+  cloudGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), CLOUD_RADIUS * 1.2)
+
+  const skyTime = { value: 0 }
+  const cloudMat = new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: skyTime,
+      uCloudTop: { value: new THREE.Color(0xfffdf6) },
+      uCloudBottom: { value: new THREE.Color(0xc5d3dd) },
+    },
+    vertexShader: cloudVert,
+    fragmentShader: cloudFrag,
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    fog: false,
+  })
+  const clouds = new THREE.Mesh(cloudGeo, cloudMat)
+  clouds.name = 'sky.clouds'
+  clouds.visible = false
+  clouds.frustumCulled = false
+  clouds.renderOrder = -997
+  clouds.raycast = () => {}
+  group.add(clouds)
 
   /* ---- stars ---- */
 
@@ -300,7 +487,7 @@ export function createSky(theme: ThemeApi): THREE.Object3D {
   starGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), STAR_RADIUS * 1.02)
 
   const starUniforms = {
-    uTime: { value: 0 },
+    uTime: skyTime,
     uScale: { value: STAR_RADIUS },
   }
   const starMat = new THREE.ShaderMaterial({
@@ -333,12 +520,14 @@ export function createSky(theme: ThemeApi): THREE.Object3D {
   dome.onBeforeRender = (_r, _s, camera) => {
     group.position.copy(camera.position)
     group.updateMatrixWorld(true)
-    starUniforms.uTime.value = performance.now() * 0.001
+    skyTime.value = performance.now() * 0.001
   }
 
   group.userData.dispose = () => {
     domeGeo.dispose()
     domeMat.dispose()
+    cloudGeo.dispose()
+    cloudMat.dispose()
     starGeo.dispose()
     starMat.dispose()
     linkGeo.dispose()

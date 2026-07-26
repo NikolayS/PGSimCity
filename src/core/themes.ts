@@ -200,7 +200,9 @@ export interface Atmosphere {
   skyZenith: number
   skyHorizon: number
   skyGlow: number
+  daylight: boolean
   stars: boolean
+  clouds: boolean
   /** Toon ramp on every MeshStandardMaterial. */
   toon: boolean
 }
@@ -238,7 +240,9 @@ export const ATMOSPHERE: Record<ThemeMode, Atmosphere> = {
     skyZenith: 0x030408,
     skyHorizon: 0x19273f,
     skyGlow: 0x573c14,
+    daylight: false,
     stars: true,
+    clouds: false,
     toon: false,
   },
   day: {
@@ -255,8 +259,8 @@ export const ATMOSPHERE: Record<ThemeMode, Atmosphere> = {
     exposure: 1.0,
     // Daylight sees a long way. The haze has to start well outside the city or
     // the districts read through a white curtain.
-    fogNearScale: 2.1,
-    fogFarScale: 2.5,
+    fogNearScale: 2,
+    fogFarScale: 2,
     hemiSky: 0xd7ecff,
     hemiGround: 0xd6c49b, // warm bounce off the stone
     // The budget is a Lambert one: reflectance is irradiance/PI, so a sunlit
@@ -306,9 +310,11 @@ export const ATMOSPHERE: Record<ThemeMode, Atmosphere> = {
     bloomRadius: 0.35,
     bloomThreshold: 1.2,
     skyZenith: 0x2f78c8,
-    skyHorizon: 0xd8e9f5,
-    skyGlow: 0x40300f,
+    skyHorizon: 0xbcdcf2,
+    skyGlow: 0xffdeb0,
+    daylight: true,
     stars: false,
+    clouds: true,
     toon: true,
   },
 }
