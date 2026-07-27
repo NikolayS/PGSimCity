@@ -5,6 +5,7 @@ import { SCENARIOS } from '../sim/scenarios'
 import { KNOB_META } from './content'
 import type { KnobMeta } from './content'
 import { emitLoose } from './hud'
+import { MODE_IDS } from './mode-exits'
 import { CHAPTERS } from './tour'
 import { el, icon, setClass, setText } from './uikit'
 import type { UiContext, UiModule } from './uikit'
@@ -395,6 +396,19 @@ export function createSearch(ctx: UiContext): UiModule {
   list.setAttribute('aria-label', 'Results')
 
   const countEl = el('span', { class: 'pal-foot__count', text: '' })
+  const closeBtn = el(
+    'button',
+    {
+      class: 'pg-btn pal-close',
+      type: 'button',
+      data: { modeExit: MODE_IDS.palette },
+      title: 'Close command palette  (Esc)',
+      'aria-label': 'Close command palette',
+      on: { click: () => setOpen(false) },
+    },
+    icon('close', 13),
+    el('span', { text: 'Close' }),
+  )
 
   const hint = (keys: string[], what: string): HTMLElement =>
     el(
@@ -417,7 +431,7 @@ export function createSearch(ctx: UiContext): UiModule {
       { class: 'pal-head' },
       el('span', { class: 'pal-head__icon' }, icon('search', 15)),
       input,
-      el('kbd', { class: 'pg-kbd pal-head__esc', text: 'esc' }),
+      closeBtn,
     ),
     list,
     el(

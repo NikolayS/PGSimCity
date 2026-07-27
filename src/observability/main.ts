@@ -31,6 +31,7 @@ import type { Node as PathNode, Step, Symptom, Verdict } from './paths'
 import { PROJECTIONS } from './views'
 import type { Mode } from './views'
 import { dataTable, knobRow, sqlBlock, vitalsStrip } from './ui'
+import { createCityExit, installCityEscape } from './shell'
 
 /* ---------------------------------------------------------------------------
  * Model
@@ -133,6 +134,7 @@ const top = el(
     el('i', { text: '/' }),
     el('strong', { text: 'DIAGNOSE' }),
   ),
+  createCityExit(),
   vitals.root,
   el('div', { class: 'clock' }, pauseBtn, ...speedBtns),
 )
@@ -785,12 +787,9 @@ function frame(now: number): void {
   requestAnimationFrame(frame)
 }
 
+installCityEscape()
+
 window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
-    screen = { kind: 'home' }
-    buildRail()
-    render()
-  }
   if (e.key === ' ' && !(e.target instanceof HTMLInputElement)) {
     e.preventDefault()
     pauseBtn.click()

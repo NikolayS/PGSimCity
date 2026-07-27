@@ -199,6 +199,18 @@ class TestElement extends TestNode {
   width = 0
   height = 0
 
+  get offsetWidth(): number {
+    return this.clientWidth
+  }
+
+  get offsetHeight(): number {
+    return this.clientHeight
+  }
+
+  get offsetParent(): TestElement | null {
+    return this.hidden ? null : this.parentElement
+  }
+
   constructor(readonly tagName: string) {
     super()
   }
@@ -259,6 +271,8 @@ class TestElement extends TestNode {
   click(): void {
     this.dispatchEvent(new Event('click'))
   }
+
+  scrollIntoView(): void {}
 }
 
 class TestDocument extends TestNode {
@@ -282,6 +296,10 @@ class TestDocument extends TestNode {
 
   createTextNode(value: string): TestText {
     return new TestText(value)
+  }
+
+  createDocumentFragment(): TestNode {
+    return new TestNode()
   }
 
   getElementById(id: string): TestElement | null {
@@ -315,8 +333,19 @@ class TestMediaQuery extends EventTarget {
 
 class TestWindow extends EventTarget {
   readonly localStorage = new TestStorage()
-  readonly location = { pathname: '/', search: '', hash: '' }
+  readonly location = {
+    pathname: '/',
+    search: '',
+    hash: '',
+    assign: (_href: string): void => {},
+  }
+  readonly history = {
+    pushState: (_state: unknown, _unused: string, _url?: string | URL | null): void => {},
+    replaceState: (_state: unknown, _unused: string, _url?: string | URL | null): void => {},
+  }
   readonly devicePixelRatio = 1
+  readonly innerWidth = 1280
+  readonly innerHeight = 760
 
   matchMedia(): TestMediaQuery {
     return new TestMediaQuery()
@@ -329,6 +358,13 @@ class TestWindow extends EventTarget {
   clearTimeout(timer: number): void {
     globalThis.clearTimeout(timer)
   }
+
+  requestAnimationFrame(fn: FrameRequestCallback): number {
+    fn(performance.now())
+    return 1
+  }
+
+  cancelAnimationFrame(_frame: number): void {}
 }
 
 export interface TestDom {
@@ -350,6 +386,8 @@ export function installTestDom(): TestDom {
     HTMLSelectElement: TestElement,
     SVGElement: TestElement,
     SVGSVGElement: TestElement,
+    requestAnimationFrame: window.requestAnimationFrame.bind(window),
+    cancelAnimationFrame: window.cancelAnimationFrame.bind(window),
   }
   for (const [key, value] of Object.entries(globals)) {
     Object.defineProperty(globalThis, key, { configurable: true, writable: true, value })

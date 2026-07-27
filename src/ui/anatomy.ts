@@ -2,6 +2,7 @@ import '../styles/anatomy.css'
 
 import type { TableSim } from '../core/types'
 import { clamp, fmtBytes, fmtNum, fmtPct } from '../core/util'
+import { MODE_IDS, modeTokens } from './mode-exits'
 import { el, icon, setText } from './uikit'
 import type { UiContext, UiModule } from './uikit'
 
@@ -1131,6 +1132,7 @@ export function createAnatomy(ctx: UiContext): UiModule {
   const close = el('button', {
     class: 'pg-btn pg-btn--icon an-overlay__close',
     type: 'button',
+    data: { modeExit: modeTokens(MODE_IDS.anatomyPage, MODE_IDS.anatomyDirectory) },
     ariaLabel: 'Close anatomy view',
   }, icon('close', 16))
 

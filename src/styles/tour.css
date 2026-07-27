@@ -394,9 +394,9 @@ body.pg-tour::after {
   display: inline-flex;
   color: var(--ink-faint);
 }
-.pal-head__esc {
+.pal-close {
   flex: 0 0 auto;
-  color: var(--ink-faint);
+  color: var(--ink-dim);
 }
 .pal-input {
   pointer-events: auto;
@@ -680,6 +680,7 @@ body.pg-tour::after {
     height: var(--tap);
   }
   .tour-btn--exit {
+    min-height: calc(var(--tap) + 1px);
     padding: 0 12px;
   }
 
@@ -721,6 +722,10 @@ body.pg-tour::after {
   }
   .pal-head {
     min-height: var(--tap);
+  }
+  .pal-close {
+    min-height: calc(var(--tap) + 1px);
+    padding-inline: 10px;
   }
   .pal-row {
     grid-template-columns: 54px minmax(0, 1fr) auto;

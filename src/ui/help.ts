@@ -3,6 +3,7 @@ import '../styles/hud.css'
 import { DESTINATIONS } from '../core/destinations'
 import { COLOR, onThemeMode } from '../core/theme'
 import type { Bus, ColorKey } from '../core/types'
+import { MODE_IDS } from './mode-exits'
 import { el, icon } from './uikit'
 import { emitLoose } from './hud'
 import type { UiContext, UiModule } from './uikit'
@@ -202,6 +203,7 @@ export function createHelp(ctx: UiContext): UiModule {
     {
       class: 'pg-btn pg-btn--icon help-close',
       type: 'button',
+      data: { modeExit: MODE_IDS.help },
       'aria-label': 'Close',
       title: 'Close  (Esc)',
       on: { click: () => setOpen(false) },
