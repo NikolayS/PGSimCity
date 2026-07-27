@@ -16,6 +16,7 @@ import {
 import type { Atmosphere, ThemeMode } from '../core/theme'
 import { clamp, damp } from '../core/util'
 import { ANCHOR, CITY } from '../world/layout'
+import { applyGroundAtmosphere } from '../world/plate-fog'
 import { applySkyAtmosphere } from '../world/sky'
 import type { Bus, QualityLevel, QualitySettings } from '../core/types'
 
@@ -198,8 +199,11 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
 
   const scene = new THREE.Scene()
   scene.background = new THREE.Color(COLOR.bg)
-  const fog = new THREE.Fog(COLOR.fog, CITY.fog.near * air.fogNearScale, CITY.fog.far * air.fogFarScale)
+  // Distance dissolves onto the sky's own below-horizon haze, not onto a third
+  // colour of its own; the ground plate then reads the same fog at air.plateFogScale.
+  const fog = new THREE.Fog(air.fogColor, CITY.fog.near * air.fogNearScale, CITY.fog.far * air.fogFarScale)
   scene.fog = fog
+  applyGroundAtmosphere(air)
 
   const camera = new THREE.PerspectiveCamera(52, measureAspect(), 0.5, 4000)
   // Establishing shot: high above the plaza, looking north up the city axis.
@@ -503,9 +507,10 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     renderer.setClearColor(COLOR.bg, 1)
     if (scene.background instanceof THREE.Color) scene.background.setHex(COLOR.bg)
 
-    fog.color.setHex(COLOR.fog)
+    fog.color.setHex(air.fogColor)
     fog.near = CITY.fog.near * air.fogNearScale
     fog.far = CITY.fog.far * air.fogFarScale
+    applyGroundAtmosphere(air)
 
     hemi.color.setHex(air.hemiSky)
     hemi.groundColor.setHex(air.hemiGround)
