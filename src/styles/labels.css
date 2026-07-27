@@ -27,7 +27,8 @@
    Variants:  .lbl--district  a whole district
               .lbl--city      the model's own name, from far out
               .has-more       carries a "+N" collapsed-count readout
-              .is-far         degraded to a bare name plate
+              .is-name-only   a bare name plate
+              .is-readout-only name plus live readout, without explanatory copy
               .is-nudged      moved off its home offset; leader emphasised
    ==========================================================================*/
 
@@ -224,31 +225,42 @@
   opacity: 1;
 }
 
-/* far away: the chip degrades to a name plate — the city stays readable when
-   forty of these are on screen at once. */
-.lbl.is-far .lbl__role,
-.lbl.is-far .lbl__read {
+/* Mid-range is deliberately one line. Roles are complete explanations, so
+   only a selected or hovered component is allowed to show one. */
+.lbl.is-name-only .lbl__role {
   display: none;
 }
 
-.lbl.is-far .lbl__chip {
+.lbl.is-name-only .lbl__read {
+  display: none;
+}
+
+.lbl.is-readout-only .lbl__role {
+  display: none;
+}
+
+.lbl.is-readout-only .lbl__read {
+  grid-row: 2 / 3;
+}
+
+.lbl.is-name-only .lbl__chip {
   padding: 3px 8px 3px 8px;
   background: rgba(8, 13, 24, 0.84);
 }
 
 /* collapse to the tracks that still carry something, otherwise the (now empty)
    readout column keeps its column-gap and the plate carries dead space */
-.lbl.is-far:not(.has-more) .lbl__chip {
+.lbl.is-name-only:not(.has-more) .lbl__chip {
   grid-template-columns: minmax(0, 1fr);
   column-gap: 0;
 }
 
-.lbl.is-far.has-more .lbl__chip {
+.lbl.is-name-only.has-more .lbl__chip {
   grid-template-columns: minmax(0, 1fr) auto;
   column-gap: 9px;
 }
 
-.lbl.is-far .lbl__name {
+.lbl.is-name-only .lbl__name {
   font-size: var(--fs-micro);
   color: var(--ink-dim);
 }

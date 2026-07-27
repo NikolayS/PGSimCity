@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { BUILD_LABEL } from '../src/core/build'
 import { createBus } from '../src/core/bus'
 import { DESTINATIONS } from '../src/core/destinations'
 import { setThemeMode, storedThemeMode, themeMode } from '../src/core/theme'
@@ -279,6 +280,7 @@ describe('theme toggle entry point', () => {
       ),
     ).toEqual(names)
     expect(document.querySelector('.help-districts')?.textContent).toContain(names.join(' · '))
+    expect(document.querySelector('.help-build')?.textContent).toBe(`PGSimCity ${BUILD_LABEL}`)
 
     for (const destination of DESTINATIONS) {
       ctx.bus.emit('select', { id: destination.id })

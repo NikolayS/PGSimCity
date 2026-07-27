@@ -1,5 +1,6 @@
 import '../styles/hud.css'
 
+import { BUILD_LABEL } from '../core/build'
 import { DESTINATIONS } from '../core/destinations'
 import { COLOR, onThemeMode } from '../core/theme'
 import type { Bus, ColorKey } from '../core/types'
@@ -263,6 +264,11 @@ export function createHelp(ctx: UiContext): UiModule {
         '<br><br>Found one? Corrections from people who know the engine are exactly what this needs — please ' +
         '<a href="https://github.com/NikolayS/PGSimCity/issues/new" target="_blank" rel="noopener">open an issue</a> or send a ' +
         '<a href="https://github.com/NikolayS/PGSimCity/pulls" target="_blank" rel="noopener">pull request</a>.',
+    }),
+    el('p', {
+      class: 'build-marker help-build',
+      text: `PGSimCity ${BUILD_LABEL}`,
+      'aria-label': `PGSimCity build ${BUILD_LABEL}`,
     }),
   )
 

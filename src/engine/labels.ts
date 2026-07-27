@@ -7,6 +7,12 @@ import { COLOR } from '../core/theme'
 import type { Registry } from '../core/registry'
 import type { Bus, ComponentDef, DistrictId, QualitySettings, SimState } from '../core/types'
 import type { CollisionWorld } from './collision'
+import {
+  EXPANDED_LABEL_CAP,
+  LabelDetail,
+  detailExpansionPriority,
+  requestedLabelDetail,
+} from './label-detail'
 
 /* ============================================================================
  * LABELS — map-grade annotation.
@@ -69,8 +75,6 @@ const DISTRICT_BAND = 90
 /** Per tier: gone beyond TIER_OUT, full below TIER_OUT - TIER_BAND. */
 const TIER_OUT = [400, 320, 150]
 const TIER_BAND = [80, 70, 35]
-/** Past this the chip drops its role line and readout. */
-const FAR_DIST = 250
 /** Below this much of its level's fade, a label is not worth the space. */
 const MIN_VIS = 0.12
 /** …and above 1/VIS_GAIN of it, it is drawn at full strength. A cross-fade you
@@ -200,11 +204,13 @@ interface Entry {
   /** district chips and proxies only */
   members: Entry[]
 
-  /* measured chip box, in both forms */
-  nearW: number
-  nearH: number
-  farW: number
-  farH: number
+  /* measured chip box at each content tier */
+  nameW: number
+  nameH: number
+  readoutW: number
+  readoutH: number
+  roleW: number
+  roleH: number
   needMeasure: boolean
   measuredRead: number
 
@@ -215,6 +221,9 @@ interface Entry {
   sy: number
   band: number
   prio: number
+  detailPrio: number
+  requestedDetail: LabelDetail
+  nextDetail: LabelDetail
   alpha: number
   place: boolean
   /** Cached camera-to-anchor visibility, refreshed round-robin. */
@@ -233,7 +242,7 @@ interface Entry {
   collapseOn: boolean
 
   /* DOM write cache */
-  far: boolean
+  detail: LabelDetail
   phase: LabelPhase
   fadeT: number
   lastRead: string
@@ -290,6 +299,7 @@ export function createLabels(
   const districts = new Map<DistrictId, Entry>()
   /** Reused between passes; never re-allocated. */
   const cand: Entry[] = []
+  const expandedCand: Entry[] = []
   const pendingMeasure: Entry[] = []
   let componentCount = 0
 
@@ -373,10 +383,12 @@ export function createLabels(
       obj,
       pos: new THREE.Vector3(),
       members: [],
-      nearW: 120,
-      nearH: 34,
-      farW: 90,
-      farH: 20,
+      nameW: 90,
+      nameH: 20,
+      readoutW: 120,
+      readoutH: 34,
+      roleW: 120,
+      roleH: 48,
       needMeasure: false,
       measuredRead: READ_FILLER.length,
       dist: 0,
@@ -385,6 +397,9 @@ export function createLabels(
       sy: 0,
       band: B_TIER[2],
       prio: 0,
+      detailPrio: 0,
+      requestedDetail: LabelDetail.Name,
+      nextDetail: LabelDetail.Name,
       alpha: 0,
       place: false,
       occluded: false,
@@ -396,7 +411,7 @@ export function createLabels(
       hidden: 0,
       zeroPasses: 99,
       collapseOn: false,
-      far: false,
+      detail: LabelDetail.Role,
       phase: 0,
       fadeT: 0,
       lastRead: '',
@@ -435,9 +450,8 @@ export function createLabels(
   }
 
   /**
-   * Size every new chip in both forms, off-screen, before it can be placed.
-   * Two layouts per batch — and none at all afterwards for anything whose text
-   * never changes width.
+   * Size every new chip at all three content tiers before it can be placed.
+   * The batch shares each layout, and static text is never measured again.
    */
   function measureBatch(): void {
     const n = pendingMeasure.length
@@ -445,18 +459,28 @@ export function createLabels(
     for (let i = 0; i < n; i++) measureHost.appendChild(pendingMeasure[i].el)
     for (let i = 0; i < n; i++) {
       const e = pendingMeasure[i]
-      e.nearW = e.chip.offsetWidth
-      e.nearH = e.chip.offsetHeight
+      e.roleW = e.chip.offsetWidth
+      e.roleH = e.chip.offsetHeight
     }
-    for (let i = 0; i < n; i++) pendingMeasure[i].el.classList.add('is-far')
+    for (let i = 0; i < n; i++) pendingMeasure[i].el.classList.add('is-readout-only')
     for (let i = 0; i < n; i++) {
       const e = pendingMeasure[i]
-      e.farW = e.chip.offsetWidth
-      e.farH = e.chip.offsetHeight
+      e.readoutW = e.chip.offsetWidth
+      e.readoutH = e.chip.offsetHeight
     }
     for (let i = 0; i < n; i++) {
       const e = pendingMeasure[i]
-      e.el.classList.remove('is-far')
+      e.el.classList.remove('is-readout-only')
+      e.el.classList.add('is-name-only')
+    }
+    for (let i = 0; i < n; i++) {
+      const e = pendingMeasure[i]
+      e.nameW = e.chip.offsetWidth
+      e.nameH = e.chip.offsetHeight
+    }
+    for (let i = 0; i < n; i++) {
+      const e = pendingMeasure[i]
+      e.detail = LabelDetail.Name
       if (e.read) e.read.textContent = ''
       measureHost.removeChild(e.el)
       group.add(e.obj)
@@ -830,13 +854,16 @@ export function createLabels(
       if (!e.needMeasure || e.phase === 0) continue
       const w = e.chip.offsetWidth
       if (w > 0) {
-        // whichever form it happens to be wearing right now
-        if (e.far) {
-          e.farW = w
-          e.farH = e.chip.offsetHeight
+        const h = e.chip.offsetHeight
+        if (e.detail === LabelDetail.Name) {
+          e.nameW = w
+          e.nameH = h
+        } else if (e.detail === LabelDetail.Readout) {
+          e.readoutW = w
+          e.readoutH = h
         } else {
-          e.nearW = w
-          e.nearH = e.chip.offsetHeight
+          e.roleW = w
+          e.roleH = h
         }
         e.needMeasure = false
       }
@@ -852,6 +879,7 @@ export function createLabels(
       const e = entries[i]
       e.place = false
       e.onScreen = false
+      e.nextDetail = LabelDetail.Name
       e.dist = camera.position.distanceTo(e.pos)
 
       if (e.rank === 3) {
@@ -936,6 +964,31 @@ export function createLabels(
 
     cand.sort(byPrio)
 
+    /* Expanded content has its own budget. Selection and hover are attention;
+       without either, screen-centre proximity decides which near labels earn a
+       readout. The placement budget still decides whether the chip is shown. */
+    expandedCand.length = 0
+    for (let i = 0; i < cand.length; i++) {
+      const e = cand[i]
+      if (e.rank < 0 || e.rank > 2) continue
+      const selected = e.id === selectedId
+      const hovered = e.id === hoveredId
+      const detail = requestedLabelDetail(e.dist, e.read !== null, selected, hovered)
+      if (detail === LabelDetail.Name) continue
+      const dx = e.sx - hw
+      const dy = e.sy - hh
+      e.requestedDetail = detail
+      e.detailPrio = detailExpansionPriority(selected, hovered, dx * dx + dy * dy)
+      expandedCand.push(e)
+    }
+    expandedCand.sort(byDetailPrio)
+    const expandedN =
+      expandedCand.length < EXPANDED_LABEL_CAP ? expandedCand.length : EXPANDED_LABEL_CAP
+    for (let i = 0; i < expandedN; i++) {
+      const e = expandedCand[i]
+      e.nextDetail = e.requestedDetail
+    }
+
     /* ---- place ---------------------------------------------------------- */
     ensureGrid()
     gridReset()
@@ -947,8 +1000,8 @@ export function createLabels(
 
     for (let i = 0; i < cand.length; i++) {
       const e = cand[i]
-      const w = e.far ? e.farW : e.nearW
-      const h = e.far ? e.farH : e.nearH
+      const w = detailWidth(e, e.nextDetail)
+      const h = detailHeight(e, e.nextDetail)
       // Selected and hovered are placed first and are never collided away;
       // anything inside its dwell is held down so nothing can blink.
       const age = now - e.sinceT
@@ -1025,20 +1078,19 @@ export function createLabels(
     for (let i = 0; i < entries.length; i++) {
       const e = entries[i]
 
-      const far = e.rank >= 0 && e.rank <= 2 && e.dist > FAR_DIST
-      if (far !== e.far) {
-        e.far = far
-        e.el.classList.toggle('is-far', far)
-        // the form we are switching into may have been sized before this chip
-        // grew a readout or a "+N", so take its box again next pass
+      if (e.nextDetail !== e.detail) {
+        e.detail = e.nextDetail
+        e.el.classList.toggle('is-name-only', e.detail === LabelDetail.Name)
+        e.el.classList.toggle('is-readout-only', e.detail === LabelDetail.Readout)
+        // This tier may have been sized before its live text or "+N" changed.
         e.needMeasure = true
       }
 
       if (e.place && (e.dx !== e.lastDx || e.dy !== e.lastDy)) {
         e.lastDx = e.dx
         e.lastDy = e.dy
-        const w = e.far ? e.farW : e.nearW
-        const h = e.far ? e.farH : e.nearH
+        const w = detailWidth(e, e.detail)
+        const h = detailHeight(e, e.detail)
         // The leader runs from the anchor to whichever chip corner is nearest it.
         const cx = e.dx > 0 ? e.dx : e.dx + w < 0 ? e.dx + w : 0
         const cy = e.dy > 0 ? e.dy : e.dy + h < 0 ? e.dy + h : 0
@@ -1134,7 +1186,7 @@ export function createLabels(
       readT = 0
       for (let i = 0; i < entries.length; i++) {
         const e = entries[i]
-        if (!e.read || e.far || !e.def?.readout) continue
+        if (!e.read || e.detail === LabelDetail.Name || !e.def?.readout) continue
         if (e.phase === 0 && !e.place) continue
         const text = e.def.readout(sim)
         if (text !== e.lastRead) {
@@ -1188,6 +1240,7 @@ export function createLabels(
     }
     entries.length = 0
     cand.length = 0
+    expandedCand.length = 0
     pendingMeasure.length = 0
     byId.clear()
     districts.clear()
@@ -1202,6 +1255,20 @@ export function createLabels(
 
 function byPrio(a: Entry, b: Entry): number {
   return a.prio - b.prio
+}
+
+function byDetailPrio(a: Entry, b: Entry): number {
+  return a.detailPrio - b.detailPrio
+}
+
+function detailWidth(e: Entry, detail: LabelDetail): number {
+  if (detail === LabelDetail.Name) return e.nameW
+  return detail === LabelDetail.Readout ? e.readoutW : e.roleW
+}
+
+function detailHeight(e: Entry, detail: LabelDetail): number {
+  if (detail === LabelDetail.Name) return e.nameH
+  return detail === LabelDetail.Readout ? e.readoutH : e.roleH
 }
 
 export function isLabelAnchorOccluded(

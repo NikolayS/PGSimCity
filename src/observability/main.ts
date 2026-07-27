@@ -15,6 +15,7 @@
 
 import './style.css'
 
+import { BUILD_LABEL } from '../core/build'
 import { createBus } from '../core/bus'
 import { createSim } from '../sim/model'
 import { SCENARIOS } from '../sim/scenarios'
@@ -733,6 +734,11 @@ function footer(): HTMLElement {
     stamp,
     el('p', {
       html: 'Inspired by <a href="https://pgstats.dev/" target="_blank" rel="noreferrer noopener">Alexey Lesovsky\'s PostgreSQL Observability map</a>. Names verified against the <a href="https://www.postgresql.org/docs/current/monitoring-stats.html" target="_blank" rel="noreferrer noopener">PostgreSQL 18 manual</a>. Apache-2.0.',
+    }),
+    el('p', {
+      class: 'build-marker',
+      text: `PGSimCity ${BUILD_LABEL}`,
+      'aria-label': `PGSimCity build ${BUILD_LABEL}`,
     }),
   )
 }

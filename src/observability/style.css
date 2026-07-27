@@ -768,6 +768,12 @@ body {
 .foot p { margin: 0; font-size: var(--fs-xs); color: var(--ink-faint); line-height: 1.6; }
 .foot a { color: var(--ink-dim); }
 .foot a:hover { color: var(--c-backend); }
+.foot .build-marker {
+  user-select: text;
+  font-family: var(--f-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.04em;
+}
 
 /* ------------------------------------------------------------ subsystem accents
    The one place colour is assigned, and it agrees with src/core/theme.ts. */
