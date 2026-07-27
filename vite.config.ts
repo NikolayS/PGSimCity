@@ -1,8 +1,24 @@
 import { defineConfig } from 'vite'
-import { existsSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 const entry = (rel: string) => fileURLToPath(new URL(rel, import.meta.url))
+const pkg = JSON.parse(readFileSync(entry('./package.json'), 'utf8')) as { version: string }
+
+function shortGitSha(): string {
+  const supplied = process.env.PGSIMCITY_GIT_SHA ?? process.env.GITHUB_SHA
+  if (supplied && /^[0-9a-f]{7,40}$/i.test(supplied)) return supplied.slice(0, 7).toLowerCase()
+  try {
+    return execFileSync('git', ['rev-parse', '--short=7', 'HEAD'], {
+      cwd: entry('.'),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+  } catch {
+    return 'unknown'
+  }
+}
 
 /**
  * Only build pages that actually exist on disk.
@@ -32,6 +48,10 @@ if (
 
 export default defineConfig({
   base: './',
+  define: {
+    __PGSIMCITY_VERSION__: JSON.stringify(pkg.version),
+    __PGSIMCITY_GIT_SHA__: JSON.stringify(shortGitSha()),
+  },
   server: { host: true, port: 5173, open: false },
   build: {
     target: 'es2022',

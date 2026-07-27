@@ -864,6 +864,19 @@ body.pg-labels-off #labels-root {
   color: var(--ink-faint);
 }
 
+.build-marker {
+  user-select: text;
+  font-family: var(--f-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.04em;
+  color: var(--ink-faint);
+}
+
+.help-build {
+  margin: 8px 0 0;
+  text-align: right;
+}
+
 /* ==========================================================================
    MOTION
    ========================================================================*/
