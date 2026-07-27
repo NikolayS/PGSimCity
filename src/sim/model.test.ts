@@ -37,6 +37,23 @@ function runBufferWorkload(sharedBuffers: number, seconds = 200): ReturnType<typ
 }
 
 describe('buffer cache', () => {
+  it('keeps a hot default cache while the cold tail evicts and the slider still matters', { timeout: 30_000 }, () => {
+    const minimum = createSim(createBus())
+    minimum.setKnob('sharedBuffers', SHARED_BUFFERS_MIN_MIB)
+    advanceTo(minimum, 10 * 60)
+
+    const defaultPool = createSim(createBus())
+    advanceTo(defaultPool, 10 * 60)
+
+    const fullSample = createSim(createBus())
+    fullSample.setKnob('sharedBuffers', SHARED_BUFFERS_FULL_SAMPLE_MIB)
+    advanceTo(fullSample, 10 * 60)
+
+    expect.soft(defaultPool.state.stats.cacheHitPct).toBeGreaterThanOrEqual(98)
+    expect.soft(defaultPool.state.buffers.evictions).toBeGreaterThan(0)
+    expect.soft(fullSample.state.stats.cacheHitPct - minimum.state.stats.cacheHitPct).toBeGreaterThan(5)
+  })
+
   it('reaches a production-like hit ratio once the full working set is warm', { timeout: 15_000 }, () => {
     const sim = createSim(createBus())
 

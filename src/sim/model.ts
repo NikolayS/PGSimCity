@@ -101,6 +101,8 @@ const STEP_MAX = 1 / 30
 export const MODEL_TIME_STRETCH = 100
 /** A pooled connection hand-off: long enough for Slow mode to render once. */
 const TRACE_CONNECT_DUR = 0.03
+/** A cache hit still passes through the trace's buffer-fetch stop. */
+const TRACE_FETCH_DUR = 0.05
 /** Most sub-steps one update() call may run, so a huge delta cannot stall the tab. */
 const MAX_STEPS = 20
 const IDLE_REAP = 22
@@ -187,14 +189,10 @@ const TRUNCATE_MAX_PAGES = 8
 const MAX_VISIT_PAGES = 2400
 const PAGE_OPS_PER_SEC = 60000
 /**
- * Where a relation's index blocks start in the buffer key space. It used to be
- * the relation's *declared* heap size, so the moment a table bloated past
- * `def.pages` its heap blocks started colliding with its own index blocks in
- * `bufMap` — one frame answering to both a heap page and a leaf page. bufKey is
- * `rel * 0x400000 + blk` and no relation here approaches 65536 pages, so putting
- * the index space above that makes the collision impossible rather than unlikely.
+ * Where a relation's index blocks start in the buffer key space. Keep this
+ * above every enlarged heap so heap growth cannot collide with index leaves.
  */
-const IDX_BASE = 1 << 16
+const IDX_BASE = 1 << 20
 const FLOW_BUDGET_PER_SEC = 420
 const WAL_WRITER_DELAY = 0.2
 const BGW_DELAY = 0.2
@@ -575,10 +573,24 @@ export function createSim(bus: Bus): SimApi {
 
   /** Average tuple width, derived from the declared tuples-per-page. */
   const avgTuple: number[] = TABLES.map((d) => Math.round((PAGE / d.tuplesPerPage) * 0.85))
-  /** Hot working set per relation: ~4% of the heap takes ~97% of the traffic. */
-  const hotPages: number[] = TABLES.map((d) => clamp(Math.round(d.pages * 0.04), 16, 180))
+  /**
+   * The frequently-touched heap pages fit in the default pool; the rest of
+   * each enlarged relation remains a cold tail that keeps replacement active.
+   */
+  const HOT_HEAP_PAGE_SHARE = 0.0001
+  const HOT_INDEX_PAGE_SHARE = 0.0005
+  const hotPages: number[] = TABLES.map((d) =>
+    clamp(Math.round(d.pages * HOT_HEAP_PAGE_SHARE), 8, 32),
+  )
+  const HEAP_HOT_READ_SHARE = 0.85
+  const HEAP_HOT_WRITE_SHARE = 0.93
+  const INDEX_HOT_SHARE = 0.85
   /** Total index pages per table, used to place index blocks past the heap. */
   const baseIdxPages: number[] = TABLES.map((d) => d.indexes.reduce((a, ix) => a + ix.pages, 0))
+  /** B-tree leaf traffic is skewed independently of the heap working set. */
+  const hotIdxPages: number[] = baseIdxPages.map((pages) =>
+    clamp(Math.round(pages * HOT_INDEX_PAGE_SHARE), 4, 24),
+  )
   /** Effective index pages, including leaf pages occupied by dead entries. */
   const idxPages = baseIdxPages.slice()
   /** Index entries left behind by DELETE and non-HOT UPDATE until vacuum. */
@@ -648,17 +660,29 @@ export function createSim(bus: Bus): SimApi {
   const naturalLive: number[] = TABLES.map((d) => d.pages * d.tuplesPerPage)
   /** 0 = tables at their natural size, 1 = draining hard. See tickTables(). */
   let liveDeficit = 0
-  const wSeq: number[] = TABLES.map((d) => d.weight * Math.pow(600 / d.pages, 1.5))
+  const wSeq: number[] = TABLES.map((d) => d.weight * Math.pow(600 / d.pages, 2))
   const wAgg: number[] = TABLES.map((d) => d.weight * Math.pow(d.pages / 600, 0.6))
+  const SMALL_SEQ_SCAN_SHARE = 0.99
 
   /* ---- buffer mapping table (the real shared hash table) --------------- */
 
   const bufMap = new Map<number, number>()
   const accessCounts = new Map<number, number>()
   const bufKey = (rel: number, blk: number) => rel * 0x400000 + blk
-  /** Sample page identity into the plaza's stable 1,024-bucket namespace so
-   * the clock sweep compares representative pages with representative frames. */
+  /**
+   * Preserve relation locality while sampling logical pages into the plaza.
+   * Hashing every block across all N_BUFFERS identities made a 274 MiB table
+   * occupy the entire 8 GiB sample, so it could not remain resident in a
+   * 2 GiB pool. Heap and index ranges stay separate as each 1,024-page bucket
+   * represents the same amount of the declared working set.
+   */
   const representativeBufKey = (rel: number, blk: number): number => {
+    if (rel < N_TABLES) {
+      const index = blk >= IDX_BASE
+      const page = index ? blk - IDX_BASE : blk
+      const bucket = Math.floor((page * N_BUFFERS) / FULL_SAMPLE_PAGES)
+      return rel * N_BUFFERS * 2 + (index ? N_BUFFERS : 0) + bucket
+    }
     let key = bufKey(rel, blk) | 0
     key = Math.imul(key ^ (key >>> 16), 0x7feb352d)
     key = Math.imul(key ^ (key >>> 15), 0x846ca68b)
@@ -2463,20 +2487,9 @@ export function createSim(bus: Bus): SimApi {
       return Math.max(0, t.pages - 1 - Math.floor(rng() * 2))
     }
     if (mode === 'scan' && x) return scanBlkOf(t, x.scanBlk++)
-    // The hot set takes almost everything, skewed hard within it; the rest is a
-    // cold tail spread over the whole relation. The tail is what sets the
-    // WORKING SET, and it used to be 2.5% uniform over 10,920 heap pages — so
-    // 90% of all accesses needed more distinct pages than the buffer pool can
-    // ever hold, the shared_buffers slider spanned only the steep part of the
-    // miss curve, and the lesson the slider exists to teach ("raise it until it
-    // stops helping") had no flat part to reach.
-    //
-    // Writes get a tighter tail than reads, and that asymmetry is physical: the
-    // pages a workload MODIFIES are a much smaller and much hotter set than the
-    // pages it reads. It is also what makes buffers_checkpoint comparable to
-    // buffers_clean in pg_stat_bgwriter — a dirty working set that survives to
-    // the checkpoint is the whole reason checkpoint_completion_target exists.
-    if (rng() < (forWrite ? 0.997 : 0.995)) {
+    // Reads mix a compact hot set with a relation-wide cold tail. Writes are
+    // tighter because workloads modify fewer pages than they read.
+    if (rng() < (forWrite ? HEAP_HOT_WRITE_SHARE : HEAP_HOT_READ_SHARE)) {
       const u = rng()
       return Math.floor(hotPages[ti] * u * u)
     }
@@ -2495,8 +2508,13 @@ export function createSim(bus: Bus): SimApi {
     const base = IDX_BASE
     if (level === 0) return base // root — always cached
     if (level === 1) return base + 1 + Math.floor(rng() * 4)
-    const u = rng()
-    return base + 8 + Math.floor(idxPages[ti] * 0.3 * u * u * u * u)
+    const roll = rng()
+    const hot = roll < INDEX_HOT_SHARE
+    const u = hot
+      ? roll / INDEX_HOT_SHARE
+      : (roll - INDEX_HOT_SHARE) / (1 - INDEX_HOT_SHARE)
+    const pages = hot ? hotIdxPages[ti] : idxPages[ti]
+    return base + 8 + Math.floor(pages * u * u)
   }
 
   function startVisit(slot: number): void {
@@ -2533,7 +2551,7 @@ export function createSim(bus: Bus): SimApi {
     } else if (rng() < K.seqScanRatio) {
       // Analytics against an OLTP database are rare and expensive; ordinary
       // seq scans are common and small.
-      if (rng() < 0.88) { kind = 'select_seq'; ti = weightedPick(wSeq, rng) }
+      if (rng() < SMALL_SEQ_SCAN_SHARE) { kind = 'select_seq'; ti = weightedPick(wSeq, rng) }
       else { kind = 'aggregate'; ti = weightedPick(wAgg, rng) }
     } else {
       kind = 'select_idx'
@@ -2695,9 +2713,10 @@ export function createSim(bus: Bus): SimApi {
     const dur = (ioDur + base * (1 - ioShare)) * cacheThrash
     x.execTotal = dur
 
-    if (ioShare > 0) {
+    const traced = traceRunning && state.trace.slot === slot
+    if (ioShare > 0 || traced) {
       b.state = 'exec_io'
-      b.stateDur = ioDur
+      b.stateDur = ioShare > 0 ? ioDur : Math.min(TRACE_FETCH_DUR, dur)
     } else {
       b.state = 'exec_cpu'
       b.stateDur = dur
