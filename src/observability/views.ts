@@ -13,11 +13,14 @@
  *     PostgreSQL 18. They were checked against the manual one at a time.
  * ==========================================================================*/
 
+import { PG_PAGE_BYTES } from '../core/types'
 import type { BackendSim, SimState, VacPhase } from '../core/types'
 import { N_TABLES } from '../world/layout'
 import { fmtBytes, fmtLsn, fmtNum } from '../core/util'
 import type { Collector } from './collector'
 import { PID } from './collector'
+
+const MIB = 1024 * 1024
 
 export type Tone = '' | 'ok' | 'warn' | 'crit' | 'accent' | 'dim'
 export type Mode = 'total' | 'rate'
@@ -728,7 +731,7 @@ const buffercache: ProjectionFn = (s) => {
       { key: 'bar', label: '' },
     ],
     rows,
-    caption: `pg_buffercache_usage_counts() over ${fmtNum(b.size)} frames (shared_buffers = ${fmtBytes(b.size * 8192)}), average usage_count ${used > 0 ? (usageSum / used).toFixed(2) : '0.00'}. These are the tiles the city draws in the plaza — the same array, the same bytes, resized live when you change shared_buffers. A pool where almost everything sits at usage_count 0 is a pool being churned faster than anything can earn its place.`,
+    caption: `pg_buffercache_usage_counts() over ${fmtNum(b.size)} sampled frames (shared_buffers = ${fmtBytes(s.knobs.sharedBuffers * MIB)}), average usage_count ${used > 0 ? (usageSum / used).toFixed(2) : '0.00'}. These are the representative frames the city draws in the plaza; their state is sampled from the logical pool and scaled as shared_buffers changes. A sample where almost everything sits at usage_count 0 represents a pool being churned faster than anything can earn its place.`,
   }
 }
 
@@ -940,7 +943,7 @@ const settings: ProjectionFn = (s) => {
       { key: 'context', label: 'context' },
     ],
     rows: [
-      row('shared_buffers', String(k.sharedBuffers), '8kB', 'postmaster'),
+      row('shared_buffers', String(k.sharedBuffers * (MIB / PG_PAGE_BYTES)), '8kB', 'postmaster'),
       row('wal_buffers', '32', '8kB', 'postmaster'),
       row('max_connections', String(s.maxConnections), '', 'postmaster'),
       row('checkpoint_timeout', String(Math.round(k.checkpointTimeout)), 's', 'sighup'),

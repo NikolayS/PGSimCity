@@ -971,11 +971,11 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     metrics: [
       { label: 'Phase', get: (s) => CKPT_PHASE[s.checkpoint.phase] },
       {
-        label: 'Progress',
+        label: 'Sample progress',
         get: (s) =>
           s.checkpoint.phase === 'idle'
             ? `next in ${fmtDuration(Math.max(0, s.checkpoint.nextInSec))}`
-            : `${fmtNum(s.checkpoint.buffersWritten)} / ${fmtNum(s.checkpoint.buffersToWrite)} buffers`,
+            : `${fmtNum(s.checkpoint.buffersWritten)} / ${fmtNum(s.checkpoint.buffersToWrite)} sampled frames`,
       },
       { label: 'Last duration', get: (s) => fmtDuration(s.checkpoint.lastDuration) },
       { label: 'Triggered by', get: (s) => s.checkpoint.reason, hint: 'time = healthy, wal = max_wal_size too small' },
@@ -1034,7 +1034,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         get: (s) => fmtNum(s.buffers.dirtyEvictions),
         hint: 'dirty buffers a query had to write itself — the number to keep low',
       },
-      { label: 'Dirty buffers', get: (s) => `${fmtNum(s.buffers.dirtyCount)} / ${fmtNum(s.buffers.size)}` },
+      { label: 'Dirty sample frames', get: (s) => `${fmtNum(s.buffers.dirtyCount)} / ${fmtNum(s.buffers.size)}` },
     ],
     knobs: ['bgwriterEnabled', 'bgwriterLruMaxpages', 'sharedBuffers', 'writeRatio'],
     see: ['checkpointer', 'os.cache', 'disk.array', 'storage.table'],

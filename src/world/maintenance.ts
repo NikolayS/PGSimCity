@@ -649,7 +649,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   }
 
   const SGN_CKPT = signs.plate('checkpointer', HALL_E + 0.5, 17.0, CZ + 3, 'east', 2.0, COLOR.checkpoint, 1.0)
-  signs.plate('buffers written', HALL_E + 0.5, 14.9, GAUGE_Z0 + GAUGE_LEN / 2, 'east', 0.85, COLOR.inkDim, 0.7)
+  signs.plate('sample frames written', HALL_E + 0.5, 14.9, GAUGE_Z0 + GAUGE_LEN / 2, 'east', 0.85, COLOR.inkDim, 0.7)
   signs.plate('full_page_writes', HALL_E + 0.5, 4.6, CZ + 0.5, 'east', 0.8, COLOR.wal, 0.55)
   signs.plate('fsync', CX + 14.5, 8.6, CZ + 11.6, 'south', 1.0, COLOR.crit, 0.5)
   signs.plate('checkpoint_timeout', DIAL_X + 0.4, DIAL_Y + 8.6, DIAL_Z, 'east', 0.95, COLOR.checkpoint, 0.6)
@@ -732,7 +732,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   ])
 
   const SGN_BGW = signs.plate('bgwriter', BX - 15, 11.6, BZ + 7.8, 'south', 1.6, COLOR.bgwriter, 1.0)
-  signs.plate('pool dirty', BX - 4, 21.2, BZ - 15.8, 'north', 0.85, COLOR.bufDirty, 0.6)
+  signs.plate('sample dirty', BX - 4, 21.2, BZ - 15.8, 'north', 0.85, COLOR.bufDirty, 0.6)
   signs.plate('backend writes', BX + 2, 21.2, BZ - 15.8, 'north', 0.85, COLOR.warn, 0.5)
   const SGN_BGOFF = signs.plate('OFF', BX - 15, 11.0, BZ + 7.9, 'south', 1.0, COLOR.crit, 0.06)
   signs.plate('one lap = one clock sweep', LOOP_X, PAINT_Y + 0.02, LOOP_Z, 'up', 1.4, COLOR.bgwriter, 0.3)
@@ -1251,7 +1251,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     readout: (s: SimState) => {
       const c = s.checkpoint
       if (c.phase !== 'idle') {
-        return `${c.phase} ${fmtPct(c.progress)} · ${fmtNum(c.buffersWritten)}/${fmtNum(c.buffersToWrite)} buffers · ${c.reason}-triggered`
+        return `${c.phase} ${fmtPct(c.progress)} · ${fmtNum(c.buffersWritten)}/${fmtNum(c.buffersToWrite)} sampled frames · ${c.reason}-triggered`
       }
       const wf = walFracOf(s)
       const tf = 1 - clamp01(c.nextInSec / Math.max(1, s.knobs.checkpointTimeout))
@@ -1274,9 +1274,9 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     readout: (s: SimState) => {
       const dirty = s.buffers.size > 0 ? s.buffers.dirtyCount / s.buffers.size : 0
       if (!s.bgwriter.enabled) {
-        return `parked — bgwriter off · ${fmtNum(s.buffers.dirtyCount)} dirty (${fmtPct(dirty)}) · backends writing their own`
+        return `parked — bgwriter off · ${fmtNum(s.buffers.dirtyCount)} sampled frames dirty (${fmtPct(dirty)}) · backends writing their own`
       }
-      return `${s.bgwriter.cleanedPerSec.toFixed(0)} pages/s cleaned · pool ${fmtPct(dirty)} dirty`
+      return `${s.bgwriter.cleanedPerSec.toFixed(0)} pages/s cleaned · sample ${fmtPct(dirty)} dirty`
     },
   })
 

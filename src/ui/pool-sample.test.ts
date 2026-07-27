@@ -1,0 +1,38 @@
+import { describe, expect, it } from 'vitest'
+import { createBus } from '../core/bus'
+import { createSim } from '../sim/model'
+import { DOCS } from './content'
+
+describe('buffer-pool metrics', () => {
+  it('derive every pool-labelled value from shared_buffers, never the visual sample', () => {
+    const state = createSim(createBus()).state
+    const originalSampleSize = state.buffers.size
+    const originalPoolSize = state.knobs.sharedBuffers
+    const violations: string[] = []
+    let inspected = 0
+
+    for (const doc of DOCS) {
+      for (const metric of doc.metrics ?? []) {
+        if (!/\bpool\b/i.test(metric.label) && !/^shared_buffers$/i.test(metric.label)) continue
+        inspected++
+
+        const original = metric.get(state)
+        state.buffers.size = 1
+        const withSmallerSample = metric.get(state)
+        state.buffers.size = originalSampleSize
+        state.knobs.sharedBuffers = originalPoolSize * 2
+        const withLargerPool = metric.get(state)
+        state.knobs.sharedBuffers = originalPoolSize
+
+        if (withSmallerSample !== original || withLargerPool === original) {
+          violations.push(
+            `${doc.id} — ${metric.label}: "${original}" (sample: "${withSmallerSample}", pool: "${withLargerPool}")`,
+          )
+        }
+      }
+    }
+
+    expect(inspected).toBeGreaterThan(0)
+    expect(violations).toEqual([])
+  })
+})

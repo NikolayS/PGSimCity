@@ -16,6 +16,7 @@
  * engineer who has simply never had to run a database at 3 a.m.
  * ==========================================================================*/
 
+import { SHARED_BUFFERS_FULL_SAMPLE_MIB, SHARED_BUFFERS_MIN_MIB } from '../core/types'
 import type { Knobs, SimState } from '../core/types'
 import { fmtBytes } from '../core/util'
 import type { Collector } from './collector'
@@ -277,11 +278,11 @@ const KB = {
     key: 'sharedBuffers',
     guc: 'shared_buffers',
     kind: 'range',
-    min: 64,
-    max: 1024,
-    step: 32,
+    min: SHARED_BUFFERS_MIN_MIB,
+    max: SHARED_BUFFERS_FULL_SAMPLE_MIB,
+    step: SHARED_BUFFERS_MIN_MIB,
     help: 'How much of the working set the server can hold. The curve is flat, then a cliff, then flat again.',
-    fmt: (v: number) => `${v} × 8kB = ${(v / 128).toFixed(1)} MiB`,
+    fmt: (v: number) => fmtBytes(v * MIB),
   },
   maxWalSize: {
     key: 'maxWalSize',
@@ -1059,7 +1060,7 @@ const VERDICTS: Verdict[] = [
     evidence: (s) => [
       { label: 'shared_buffers', value: fmtBytes(s.knobs.sharedBuffers * MIB), tone: 'warn' },
       { label: 'cache hit ratio', value: `${s.stats.cacheHitPct.toFixed(1)}%`, tone: s.stats.cacheHitPct < 90 ? 'crit' : 'warn' },
-      { label: 'buffers at usage_count 0', value: `${(coldShare(s) * 100).toFixed(0)}%`, tone: 'crit' },
+      { label: 'sampled frames at usage_count 0', value: `${(coldShare(s) * 100).toFixed(0)}%`, tone: 'crit' },
       { label: 'reads/sec', value: s.stats.ioReadPerSec.toFixed(0) },
     ],
     fix:
@@ -1072,7 +1073,7 @@ const VERDICTS: Verdict[] = [
     },
     resolved: (s) => ({
       ok: coldShare(s) <= 0.55 && s.stats.cacheHitPct >= 92,
-      reading: `shared_buffers ${fmtBytes(s.knobs.sharedBuffers * MIB)} · ${(coldShare(s) * 100).toFixed(0)}% of resident buffers still at usage_count 0 · hit ratio ${s.stats.cacheHitPct.toFixed(1)}%`,
+      reading: `shared_buffers ${fmtBytes(s.knobs.sharedBuffers * MIB)} · ${(coldShare(s) * 100).toFixed(0)}% of sampled frames still at usage_count 0 · hit ratio ${s.stats.cacheHitPct.toFixed(1)}%`,
     }),
     city: 'shared.buffers',
     reading: [DOC('runtime-config-resource.html', 'Resource Consumption settings')],
@@ -1086,7 +1087,7 @@ const VERDICTS: Verdict[] = [
       'A high hit ratio does not mean zero I/O — it means the I/O you are doing is necessary. Sequential scans of relations larger than a quarter of shared_buffers deliberately use a small 256 kB ring so they cannot evict everyone else\'s hot pages, so a big analytics query can drive real read volume without hurting the pool at all.',
     evidence: (s) => [
       { label: 'cache hit ratio', value: `${s.stats.cacheHitPct.toFixed(1)}%`, tone: 'ok' },
-      { label: 'buffers at usage_count 0', value: `${(coldShare(s) * 100).toFixed(0)}%`, tone: 'ok' },
+      { label: 'sampled frames at usage_count 0', value: `${(coldShare(s) * 100).toFixed(0)}%`, tone: 'ok' },
       { label: 'reads/sec', value: s.stats.ioReadPerSec.toFixed(0) },
     ],
     fix:
