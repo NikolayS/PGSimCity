@@ -15,7 +15,7 @@ audio, or game content.
 
 > 🍊 **#1 on [Hacker News](https://news.ycombinator.com/item?id=49063754)** — thanks to everyone who
 > visited, and especially to those who filed corrections. Bug reports about PostgreSQL behaviour are
-> the most valuable thing this project can receive; see the prototype note below.
+> the most valuable thing this project can receive; see how the claims have been checked below.
 
 ![A daylight view into PGSimCity's storage excavation: the shared buffers plaza spans the pit above teal storage machinery, with backend towers behind and the checkpointer and WAL districts on either side.](docs/screenshot.png)
 
@@ -33,16 +33,23 @@ is really charging them.
 
 ---
 
-> ### This is a prototype (v0.1)
+> ### How much to trust this
 >
-> It was built quickly, and it **almost certainly contains inaccuracies and mistakes** — in the
-> simulation as well as in the explanations. It is a *model* of PostgreSQL, not an emulator:
+> PGSimCity is still **0.x**: early and moving. It is a *model* of PostgreSQL, not an emulator:
 > no PostgreSQL source code runs here, and the numbers are scaled so a human can watch them.
 >
-> If you spot something wrong, especially a claim about how PostgreSQL actually behaves, please
-> [open an issue](https://github.com/NikolayS/PGSimCity/issues/new) or send a
-> [pull request](https://github.com/NikolayS/PGSimCity/pulls). Corrections from people who know
-> the engine are exactly what this needs.
+> Three specialist review rounds checked PostgreSQL correctness against `postgresql.org/docs`
+> and the source rather than memory; every finding was independently checked by a reviewer tasked
+> with refuting it. A separate audit treated buildings, adjacencies, and animations as claims.
+>
+> The suite has **210 tests**; CI fails the build on a red test. They pin the WAL trigger point as
+> `max_wal_size / (1 + checkpoint_completion_target)` at every call site, cache hit ratio as
+> `blks_hit / (blks_hit + blks_read)`, and the clock-sweep `usage_count` cap at 5.
+>
+> Mistakes have been found and fixed throughout; the commit history records them. Known limitation:
+> touch controls have been verified only in Chrome's mobile emulation. Corrections from people who
+> know the engine are exactly what this needs: [open an issue](https://github.com/NikolayS/PGSimCity/issues/new)
+> or send a [pull request](https://github.com/NikolayS/PGSimCity/pulls).
 
 ---
 

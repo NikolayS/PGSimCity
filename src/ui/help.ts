@@ -268,9 +268,12 @@ export function createHelp(ctx: UiContext): UiModule {
     el('p', {
       class: 'help-disclaimer',
       html:
-        '<strong>Early, unreviewed prototype.</strong> PGSimCity is a teaching model, not a real server: the mechanisms are modelled, ' +
-        'the numbers are simulated, and no PostgreSQL source code runs here. It was built quickly and ' +
-        '<strong>almost certainly contains inaccuracies and mistakes</strong>, in both the simulation and the explanations.' +
+        '<strong>How much to trust this.</strong> PGSimCity is still 0.x: early and moving. It is a model, not an emulator: ' +
+        'no PostgreSQL source code runs here, and the numbers are scaled so a human can watch them. Three specialist review rounds ' +
+        'with independent attempts to refute each finding, a separate geometry audit, and 210 tests provide evidence, not a guarantee. ' +
+        'Mistakes have been found and fixed throughout. ' +
+        "Touch controls have been verified only in Chrome's mobile emulation. " +
+        '<a href="https://github.com/NikolayS/PGSimCity#how-much-to-trust-this" target="_blank" rel="noopener">See exactly what was checked.</a>' +
         '<br><br>Found one? Corrections from people who know the engine are exactly what this needs — please ' +
         '<a href="https://github.com/NikolayS/PGSimCity/issues/new" target="_blank" rel="noopener">open an issue</a> or send a ' +
         '<a href="https://github.com/NikolayS/PGSimCity/pulls" target="_blank" rel="noopener">pull request</a>.',
