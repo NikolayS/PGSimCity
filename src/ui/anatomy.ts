@@ -1,6 +1,6 @@
 import '../styles/anatomy.css'
 
-import type { TableSim } from '../core/types'
+import type { MvccRowStory, MvccTupleVersion, TableSim } from '../core/types'
 import { clamp, fmtBytes, fmtNum, fmtPct } from '../core/util'
 import { MODE_IDS, modeTokens } from './mode-exits'
 import { el, icon, setText } from './uikit'
@@ -53,6 +53,9 @@ const DOC = {
   fsm: 'https://www.postgresql.org/docs/current/storage-fsm.html',
   vm: 'https://www.postgresql.org/docs/current/storage-vm.html',
   hot: 'https://www.postgresql.org/docs/current/storage-hot.html',
+  mvcc: 'https://www.postgresql.org/docs/current/mvcc-intro.html',
+  isolation: 'https://www.postgresql.org/docs/current/transaction-iso.html',
+  vacuum: 'https://www.postgresql.org/docs/current/routine-vacuuming.html',
 } as const
 
 const SRC = {
@@ -66,6 +69,8 @@ const SRC = {
   guc: 'https://github.com/postgres/postgres/blob/master/src/backend/utils/misc/guc.c',
   hba: 'https://github.com/postgres/postgres/blob/master/src/backend/libpq/hba.c',
   xlog: 'https://github.com/postgres/postgres/blob/master/src/include/access/xlog_internal.h',
+  visibility: 'https://github.com/postgres/postgres/blob/master/src/backend/access/heap/heapam_visibility.c',
+  procarray: 'https://github.com/postgres/postgres/blob/master/src/backend/storage/ipc/procarray.c',
 } as const
 
 const SUZUKI = {
@@ -109,6 +114,24 @@ const TUPLE_REFS: RefSet = {
   source: [{ label: 'htup_details.h · HeapTupleHeaderData', url: SRC.tuple }],
   suzuki: [{ label: 'Suzuki · Chapter 5 §5.2, “Tuple Structure”', url: SUZUKI.tuple }],
   rogov: ['Rogov, PostgreSQL 14 Internals · Part I · Chapter 3 §3.2, “Row Version Layout”'],
+}
+
+const MVCC_REFS: RefSet = {
+  docs: [
+    { label: 'PostgreSQL manual · MVCC introduction', url: DOC.mvcc },
+    { label: 'PostgreSQL manual · Transaction isolation', url: DOC.isolation },
+    { label: 'PostgreSQL manual · Routine vacuuming', url: DOC.vacuum },
+  ],
+  source: [
+    { label: 'heapam_visibility.c · HeapTupleSatisfiesMVCC', url: SRC.visibility },
+    { label: 'procarray.c · global visibility horizons', url: SRC.procarray },
+    { label: 'htup_details.h · t_xmin / t_xmax', url: SRC.tuple },
+  ],
+  suzuki: [{ label: 'Suzuki · Chapter 5 §5.2, “Tuple Structure”', url: SUZUKI.tuple }],
+  rogov: [
+    'Rogov, PostgreSQL 14 Internals · Part I · Chapter 4, “Snapshots”',
+    'Rogov, PostgreSQL 14 Internals · Part I · Chapter 6, “Vacuum and Autovacuum”',
+  ],
 }
 
 const FREE_REFS: RefSet = {
@@ -318,6 +341,33 @@ const PAGE_DETAILS: Record<string, Detail> = {
       'The first 23 bytes are fixed. An optional null bitmap starts at t_bits, padding advances to the MAXALIGN t_hoff boundary, and user attributes follow. The displayed values are an explicit HOT teaching example, not decoded application data.',
     ],
     refs: TUPLE_REFS,
+  },
+  mvcc: {
+    eyebrow: 'one logical row · several physical tuples',
+    title: 'UPDATE creates another row version',
+    body: [
+      'The model samples one row from committed UPDATE trips against this relation. The updater writes its XID into the old version’s t_xmax and creates a replacement whose t_xmin is that same XID. The old bytes remain beside the new version until cleanup is safe.',
+      'This bounded teaching row is separate from the relation-wide counters above: it does not claim that every sampled UPDATE targeted one real key. It exposes the mechanism that makes those full-workload dead-version and bloat totals grow.',
+    ],
+    refs: MVCC_REFS,
+  },
+  snapshots: {
+    eyebrow: 'two readers · one row identity',
+    title: 'A snapshot chooses a physical version',
+    body: [
+      'The older snapshot treats transactions at or above its xmax, plus XIDs in its in-progress set, as unfinished. It therefore follows the old row version even after the updater commits. A snapshot taken after that commit sees the replacement instead.',
+      'The representative path models committed creators and updaters. Aborts, subtransactions, command IDs, tuple locks, MultiXacts and 32-bit XID wraparound are outside this teaching sample.',
+    ],
+    refs: MVCC_REFS,
+  },
+  horizon: {
+    eyebrow: 'vacuum cutoff · strict inequality',
+    title: 'Dead does not yet mean collectable',
+    body: [
+      'A replaced version is dead after its t_xmax transaction commits, but this model marks it collectable only when that XID is strictly older than the xmin horizon. Equality is not enough.',
+      'Crossing the horizon only makes removal safe. Page pruning or VACUUM must still revisit the page to reclaim the bytes and line pointer.',
+    ],
+    refs: MVCC_REFS,
   },
   t_xmin: {
     eyebrow: 'HeapTupleFields · TransactionId · 4 bytes',
@@ -673,6 +723,48 @@ function stat(label: string): { root: HTMLElement; value: HTMLElement } {
   }
 }
 
+interface MvccSnapshotView {
+  root: HTMLButtonElement
+  status: HTMLElement
+  title: HTMLElement
+  bounds: HTMLElement
+  visible: HTMLElement
+}
+
+function mvccSnapshot(
+  modifier: 'older' | 'later',
+  label: string,
+  title: string,
+): MvccSnapshotView {
+  const status = el('span', { class: 'an-mvcc-snapshot__status pg-mono', text: '—' })
+  const snapshotTitle = el('span', { class: 'an-mvcc-snapshot__title', text: title })
+  const bounds = el('span', { class: 'an-mvcc-snapshot__bounds pg-mono', text: '—' })
+  const visible = el('strong', { class: 'an-mvcc-snapshot__visible pg-mono', text: 'sees —' })
+  return {
+    root: el(
+      'button',
+      {
+        class: `an-mvcc-snapshot an-mvcc-snapshot--${modifier}`,
+        type: 'button',
+        data: { explain: 'snapshots' },
+      },
+      el(
+        'span',
+        { class: 'an-mvcc-snapshot__head' },
+        el('span', { class: 'pg-eyebrow', text: label }),
+        status,
+      ),
+      snapshotTitle,
+      bounds,
+      visible,
+    ),
+    status,
+    title: snapshotTitle,
+    bounds,
+    visible,
+  }
+}
+
 function makePageView(): {
   root: HTMLElement
   detail: HTMLElement
@@ -691,6 +783,20 @@ function makePageView(): {
   pointerGrid: HTMLElement
   pointerSummary: HTMLElement
   tupleValues: Record<string, HTMLElement>
+  tupleOpened: HTMLElement
+  mvcc: {
+    headline: HTMLElement
+    update: HTMLElement
+    lane: HTMLElement
+    cutoff: HTMLElement
+    older: MvccSnapshotView
+    later: MvccSnapshotView
+  }
+  chain: {
+    index: HTMLElement
+    old: HTMLElement
+    newest: HTMLElement
+  }
 } {
   const detail = el('aside', { class: 'an-detail pg-scroll', ariaLive: 'polite' })
   const tableName = el('strong', { class: 'an-live__relation pg-mono', text: 'sessions' })
@@ -780,6 +886,21 @@ function makePageView(): {
     regionCard('lp_dead', 'LP_DEAD', '3 · cleanup', 'is-dead'),
   )
 
+  const olderSnapshot = mvccSnapshot('older', 'TX A · OLDER SNAPSHOT', 'read began before UPDATE')
+  const laterSnapshot = mvccSnapshot('later', 'TX B · LATER SNAPSHOT', 'read began after COMMIT')
+  const mvccHeadline = el('p', { class: 'an-mvcc-headline' })
+  const mvccUpdate = el('span', { class: 'an-mvcc-update pg-mono', text: 'UPDATE xid —' })
+  const mvccLane = el('div', {
+    class: 'an-mvcc-lane',
+    role: 'list',
+    ariaLabel: 'Physical versions of one representative row',
+  })
+  const mvccCutoff = el('button', {
+    class: 'an-mvcc-cutoff',
+    type: 'button',
+    data: { explain: 'horizon' },
+  })
+
   const tupleValues: Record<string, HTMLElement> = {}
   const tupleField = (key: string, label: string, bytes: string, initial: string) => {
     const value = el('span', { class: 'an-tuple-field__value pg-mono', text: initial })
@@ -810,6 +931,41 @@ function makePageView(): {
     tupleField('null_bitmap', 'null bitmap', '1 B example', '111110'),
     tupleField('user_data', 'user data', 'from t_hoff', 'id · status · payload…'),
   )
+  const tupleOpened = el('span', { class: 'pg-eyebrow', text: 'tuple opened · representative version' })
+  const chainIndex = el('span', { class: 'an-hot-chain__index pg-mono', text: 'index → TID' })
+  const chainOld = el('span', { class: 'an-hot-chain__old pg-mono', text: 'opened version · t_ctid' })
+  const chainNewest = el('span', { class: 'an-hot-chain__new pg-mono', text: 'replacement version' })
+  const mvccStory = el(
+    'section',
+    { class: 'an-mvcc-story', data: { explain: 'mvcc' } },
+    el(
+      'div',
+      { class: 'an-section-head' },
+      el(
+        'div',
+        {},
+        el('span', { class: 'pg-eyebrow', text: 'MVCC · live teaching sample' }),
+        el('h3', { text: '“The row” is a chain of physical versions' }),
+      ),
+      el('span', { class: 'an-scale-badge pg-mono', text: 'model-owned state' }),
+    ),
+    mvccHeadline,
+    el(
+      'div',
+      { class: 'an-mvcc-snapshots' },
+      olderSnapshot.root,
+      el(
+        'div',
+        { class: 'an-mvcc-transition', ariaHidden: 'true' },
+        el('span', { text: 'writer' }),
+        mvccUpdate,
+        el('span', { class: 'an-mvcc-transition__arrow', text: '→ COMMIT →' }),
+      ),
+      laterSnapshot.root,
+    ),
+    mvccLane,
+    mvccCutoff,
+  )
 
   const main = el(
     'main',
@@ -834,9 +990,10 @@ function makePageView(): {
         'p',
         {},
         el('strong', { text: 'Representative, not decoded.' }),
-        ' Relation counters drive density and deadness; a real resident block number is used when available. The simulation does not retain each block’s tuple bytes.',
+        ' Relation counters drive density and deadness; a real resident block number is used when available. The MVCC lane is a bounded model-owned sample driven by committed UPDATE trips, not tuple bytes decoded from that block.',
       ),
     ),
+    mvccStory,
     el(
       'section',
       { class: 'an-page-scale' },
@@ -906,7 +1063,7 @@ function makePageView(): {
         el(
           'div',
           {},
-          el('span', { class: 'pg-eyebrow', text: 'tuple opened · HOT teaching example' }),
+          tupleOpened,
           el('h3', { text: 'HeapTupleHeaderData → bitmap → user data' }),
         ),
         el('span', { class: 'an-component__size pg-mono', text: '23 B fixed' }),
@@ -915,11 +1072,11 @@ function makePageView(): {
       el(
         'div',
         { class: 'an-hot-chain' },
-        el('span', { class: 'an-hot-chain__index pg-mono', text: 'index → LP[1]' }),
+        chainIndex,
         el('span', { class: 'an-hot-chain__arrow', text: '→' }),
-        el('span', { class: 'an-hot-chain__old pg-mono', text: 'old tuple · t_ctid' }),
+        chainOld,
         el('span', { class: 'an-hot-chain__arrow', text: '→' }),
-        el('span', { class: 'an-hot-chain__new pg-mono', text: 'new tuple on same page' }),
+        chainNewest,
       ),
     ),
   )
@@ -942,6 +1099,20 @@ function makePageView(): {
     pointerGrid,
     pointerSummary,
     tupleValues,
+    tupleOpened,
+    mvcc: {
+      headline: mvccHeadline,
+      update: mvccUpdate,
+      lane: mvccLane,
+      cutoff: mvccCutoff,
+      older: olderSnapshot,
+      later: laterSnapshot,
+    },
+    chain: {
+      index: chainIndex,
+      old: chainOld,
+      newest: chainNewest,
+    },
   }
 }
 
@@ -1162,11 +1333,13 @@ export function createAnatomy(ctx: UiContext): UiModule {
   let view: AnatomyView = 'page'
   let open = false
   let tableIndex = Math.min(3, ctx.sim.state.tables.length - 1)
-  let pagePinned = 'overview'
+  let pagePinned = 'mvcc'
   let directoryPinned = 'datadir'
+  let selectedRevision = 0
   let lastActive: HTMLElement | null = null
   let lastUpdate = -Infinity
   let lastShape = ''
+  let lastMvccShape = ''
 
   const applyPageDetail = (key: string) => {
     const detail = PAGE_DETAILS[key] ?? PAGE_DETAILS.overview
@@ -1212,6 +1385,16 @@ export function createAnatomy(ctx: UiContext): UiModule {
   bindDisclosure(directory.root, 'directory')
   applyPageDetail(pagePinned)
   applyDirectoryDetail(directoryPinned)
+
+  const onMvccVersionClick = (event: Event) => {
+    const target = (event.target as Element | null)?.closest<HTMLElement>(
+      '[data-mvcc-revision]',
+    )
+    if (!target?.dataset.mvccRevision) return
+    selectedRevision = Number(target.dataset.mvccRevision)
+    updateLive(true)
+  }
+  page.root.addEventListener('click', onMvccVersionClick)
 
   function switchView(next: AnatomyView, updateUrl = true): void {
     view = next
@@ -1312,6 +1495,184 @@ export function createAnatomy(ctx: UiContext): UiModule {
     )
   }
 
+  function mvccVersionButton(
+    version: MvccTupleVersion,
+    row: MvccRowStory,
+  ): HTMLButtonElement {
+    const current = version.xmax === 0
+    const seenByOlder = row.earlierSnapshot.visibleRevision === version.revision
+    const seenByLater = row.laterSnapshot.visibleRevision === version.revision
+    const state = current
+      ? 'current'
+      : version.collectable
+        ? 'collectable'
+        : 'dead · retained'
+    const classes = [
+      'an-mvcc-version',
+      current ? 'is-current' : 'is-dead',
+      version.collectable ? 'is-collectable' : '',
+      seenByOlder ? 'is-seen-older' : '',
+      seenByLater ? 'is-seen-later' : '',
+      selectedRevision === version.revision ? 'is-opened' : '',
+    ].filter(Boolean).join(' ')
+
+    return el(
+      'button',
+      {
+        class: classes,
+        type: 'button',
+        role: 'listitem',
+        data: {
+          explain: 'mvcc',
+          mvccRevision: String(version.revision),
+        },
+        ariaLabel: `Open physical row version ${version.revision}`,
+      },
+      el(
+        'span',
+        { class: 'an-mvcc-version__head' },
+        el('strong', { class: 'pg-mono', text: `v${version.revision}` }),
+        el('span', { text: state }),
+      ),
+      el(
+        'span',
+        { class: 'an-mvcc-version__field' },
+        el('span', { text: 't_xmin' }),
+        el('strong', { class: 'pg-mono', text: version.xmin.toLocaleString() }),
+      ),
+      el(
+        'span',
+        { class: 'an-mvcc-version__field' },
+        el('span', { text: 't_xmax' }),
+        el('strong', {
+          class: 'pg-mono',
+          text: version.xmax > 0 ? version.xmax.toLocaleString() : '0 · invalid',
+        }),
+      ),
+      el(
+        'span',
+        { class: 'an-mvcc-version__tid pg-mono' },
+        `TID (${version.block},${version.offset})${version.hot ? ' · HOT' : ''}`,
+      ),
+      el(
+        'span',
+        { class: 'an-mvcc-version__readers' },
+        seenByOlder ? el('span', { class: 'is-older', text: 'TX A sees this' }) : null,
+        seenByLater ? el('span', { class: 'is-later', text: 'TX B sees this' }) : null,
+      ),
+    )
+  }
+
+  function rebuildMvcc(row: MvccRowStory, xminHorizon: number): void {
+    const versions = row.versions
+    const latest = versions[versions.length - 1]
+    const older = row.earlierSnapshot
+    const later = row.laterSnapshot
+
+    setText(
+      page.mvcc.headline,
+      latest && latest.revision > 1
+        ? `UPDATE xid ${latest.xmin.toLocaleString()} did not overwrite the row: it ended v${latest.revision - 1} and wrote v${latest.revision}. TX A kept reading its version without blocking the writer.`
+        : 'Waiting for this relation’s first sampled UPDATE; the current row has one physical version.',
+    )
+    setText(
+      page.mvcc.update,
+      latest && latest.revision > 1
+        ? `UPDATE xid ${latest.xmin.toLocaleString()}`
+        : 'UPDATE xid —',
+    )
+
+    setText(
+      page.mvcc.older.status,
+      older.active ? 'OPEN · PINS HORIZON' : 'EARLIER · FINISHED',
+    )
+    setText(
+      page.mvcc.older.bounds,
+      `xmin ${older.xmin.toLocaleString()} · xmax ${older.xmax.toLocaleString()}${older.inProgress.length ? ` · ${older.inProgress.length} XID in progress` : ''}`,
+    )
+    setText(
+      page.mvcc.older.visible,
+      older.visibleRevision > 0
+        ? `sees physical v${older.visibleRevision}`
+        : 'visible version already collected',
+    )
+    setText(page.mvcc.later.status, 'AFTER COMMIT')
+    setText(
+      page.mvcc.later.title,
+      older.active ? 'concurrent reader after COMMIT' : 'read began after COMMIT',
+    )
+    setText(
+      page.mvcc.later.bounds,
+      `xmin ${later.xmin.toLocaleString()} · xmax ${later.xmax.toLocaleString()}`,
+    )
+    setText(
+      page.mvcc.later.visible,
+      later.visibleRevision > 0
+        ? `sees physical v${later.visibleRevision}`
+        : 'sees no retained version',
+    )
+
+    let blocked = 0
+    let collectable = 0
+    for (let i = 0; i < versions.length; i++) {
+      if (versions[i].xmax === 0) continue
+      if (versions[i].collectable) collectable++
+      else blocked++
+    }
+    if (row.omittedVersions > 0) {
+      if (row.omittedThroughXmax < xminHorizon) {
+        collectable += row.omittedVersions
+      } else {
+        blocked += row.omittedVersions
+      }
+    }
+    setText(
+      page.mvcc.cutoff,
+      `xmin horizon ${xminHorizon.toLocaleString()} · VACUUM requires t_xmax < horizon · ${collectable} collectable · ${blocked} retained · ${row.collectedVersions} sampled collected${older.active ? ' · TX A holds the cutoff back' : ''}`,
+    )
+
+    const nodes: HTMLElement[] = []
+    const maxTail = 4
+    const tailStart = Math.max(0, versions.length - maxTail)
+    let shown = 0
+    const olderIndex = versions.findIndex(
+      (version) => version.revision === older.visibleRevision,
+    )
+    if (olderIndex >= 0 && olderIndex < tailStart) {
+      nodes.push(mvccVersionButton(versions[olderIndex], row))
+      shown++
+    }
+    const hidden = row.omittedVersions
+      + versions.length
+      - shown
+      - (versions.length - tailStart)
+    if (hidden > 0) {
+      nodes.push(el('span', {
+        class: 'an-mvcc-omitted pg-mono',
+        role: 'listitem',
+        text: `+ ${hidden} retained version${hidden === 1 ? '' : 's'}`,
+      }))
+    }
+    for (let i = tailStart; i < versions.length; i++) {
+      nodes.push(mvccVersionButton(versions[i], row))
+    }
+    page.mvcc.lane.replaceChildren(...nodes)
+  }
+
+  function selectedMvccVersion(row: MvccRowStory): MvccTupleVersion {
+    let index = row.versions.findIndex(
+      (version) => version.revision === selectedRevision,
+    )
+    if (index < 0) {
+      index = row.versions.findIndex(
+        (version) => version.revision === row.earlierSnapshot.visibleRevision,
+      )
+    }
+    if (index < 0) index = Math.max(0, row.versions.length - 1)
+    selectedRevision = row.versions[index].revision
+    return row.versions[index]
+  }
+
   function updateLive(force = false): void {
     const now = performance.now()
     if (!force && now - lastUpdate < 450) return
@@ -1320,6 +1681,7 @@ export function createAnatomy(ctx: UiContext): UiModule {
     const snapshot = computeSnapshot(ctx, tableIndex)
     tableIndex = snapshot.tableIndex
     const table = snapshot.table
+    const row = table.mvcc
     setText(page.tableName, table.def.name)
     setText(page.block, `block ${snapshot.block.toLocaleString()}`)
     setText(page.provenance, snapshot.resident ? 'latest resident block · occupancy from relation counters' : 'no resident block yet · representative block 0')
@@ -1344,15 +1706,71 @@ export function createAnatomy(ctx: UiContext): UiModule {
       rebuildPage(snapshot)
     }
 
-    const xid = state.xid
-    setText(page.tupleValues.t_xmin, `xid ${Math.max(3, xid - 8).toLocaleString()}`)
-    setText(page.tupleValues.t_xmax, `xid ${Math.max(3, xid - 2).toLocaleString()} · updated`)
+    const opened = selectedMvccVersion(row)
+    const mvccShape = [
+      snapshot.tableIndex,
+      state.xminHorizon,
+      row.earlierSnapshot.xmin,
+      row.earlierSnapshot.xmax,
+      row.earlierSnapshot.active ? 1 : 0,
+      row.earlierSnapshot.visibleRevision,
+      row.laterSnapshot.xmin,
+      row.laterSnapshot.xmax,
+      row.laterSnapshot.visibleRevision,
+      row.omittedVersions,
+      row.omittedThroughXmax,
+      row.collectedVersions,
+      selectedRevision,
+      ...row.versions.map((version) =>
+        `${version.revision}/${version.xmin}/${version.xmax}/${version.collectable ? 1 : 0}`,
+      ),
+    ].join(':')
+    if (force || mvccShape !== lastMvccShape) {
+      lastMvccShape = mvccShape
+      rebuildMvcc(row, state.xminHorizon)
+    }
+
+    const version = opened
+    setText(page.tupleOpened, `tuple opened · physical v${version.revision}`)
+    setText(page.tupleValues.t_xmin, `xid ${version.xmin.toLocaleString()} · committed`)
+    setText(
+      page.tupleValues.t_xmax,
+      version.xmax > 0
+        ? `xid ${version.xmax.toLocaleString()} · updated`
+        : '0 · invalid / no updater',
+    )
     setText(page.tupleValues.t_cid, 'cid 0 · shared word')
-    setText(page.tupleValues.t_ctid, `(${snapshot.block.toLocaleString()},2) → newer`)
-    setText(page.tupleValues.t_infomask2, 'natts 6 · HOT_UPDATED')
-    setText(page.tupleValues.t_infomask, 'HASNULL · XMIN_COMMITTED')
+    setText(
+      page.tupleValues.t_ctid,
+      version.nextRevision > 0
+        ? `(${version.ctidBlock.toLocaleString()},${version.ctidOffset}) → v${version.nextRevision}`
+        : `(${version.block.toLocaleString()},${version.offset}) · self`,
+    )
+    setText(
+      page.tupleValues.t_infomask2,
+      version.nextHot
+        ? 'natts 6 · HOT_UPDATED'
+        : version.hot
+          ? 'natts 6 · HEAP_ONLY_TUPLE'
+          : 'natts 6',
+    )
+    setText(
+      page.tupleValues.t_infomask,
+      version.xmax > 0
+        ? 'XMIN_COMMITTED · XMAX_COMMITTED'
+        : 'XMIN_COMMITTED · XMAX_INVALID',
+    )
     setText(page.tupleValues.t_hoff, '24 · MAXALIGN')
     setText(page.tupleValues.null_bitmap, '111110 · 6 attrs')
+    setText(page.tupleValues.user_data, `same row · revision ${version.revision}`)
+    setText(page.chain.index, `index → TID (${version.block},${version.offset})`)
+    setText(page.chain.old, `v${version.revision} · t_ctid`)
+    setText(
+      page.chain.newest,
+      version.nextRevision > 0
+        ? `v${version.nextRevision} · ${version.nextHot ? 'same page (HOT)' : 'replacement TID + index entry'}`
+        : `v${version.revision} · current version`,
+    )
 
     let totalPages = 0
     for (const relation of state.tables) totalPages += relation.pages
@@ -1372,7 +1790,9 @@ export function createAnatomy(ctx: UiContext): UiModule {
     }
     if (found < 0) return
     tableIndex = found
+    selectedRevision = 0
     lastShape = ''
+    lastMvccShape = ''
   }
 
   const offSelect = ctx.bus.on('select', ({ id, part, outlineOnly }) => {
@@ -1425,6 +1845,7 @@ export function createAnatomy(ctx: UiContext): UiModule {
       window.removeEventListener('hashchange', syncLocation)
       window.removeEventListener('popstate', syncLocation)
       document.body.classList.remove('pg-anatomy-open')
+      page.root.removeEventListener('click', onMvccVersionClick)
       overlay.remove()
     },
   }

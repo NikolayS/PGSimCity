@@ -85,6 +85,14 @@ import {
   weightedPick,
 } from '../core/util'
 import { SCENARIOS, SCENARIO_NARRATION_SECONDS } from './scenarios'
+import {
+  collectRepresentativeVersions,
+  createRepresentativeRow,
+  holdRepresentativeSnapshot,
+  recordRepresentativeUpdate,
+  refreshRepresentativeRow,
+  releaseRepresentativeSnapshot,
+} from './mvcc'
 
 /* --------------------------------------------------------------------------
  * Constants
@@ -103,6 +111,8 @@ export const MODEL_TIME_STRETCH = 100
 const TRACE_CONNECT_DUR = 0.03
 /** A cache hit still passes through the trace's buffer-fetch stop. */
 const TRACE_FETCH_DUR = 0.05
+/** One physical row stands in for a table-wide stream; keep its changes legible. */
+const MVCC_SAMPLE_SECONDS = 3
 /** Most sub-steps one update() call may run, so a huge delta cannot stall the tab. */
 const MAX_STEPS = 20
 const IDLE_REAP = 22
@@ -402,6 +412,7 @@ export function createSim(bus: Bus): SimApi {
     deletes: 0,
     heat: 0,
     vacuuming: false,
+    mvcc: createRepresentativeRow(99999, def.pages > 1 ? 1 : 0),
   }))
 
   const state: SimState = {
@@ -2064,6 +2075,9 @@ export function createSim(bus: Bus): SimApi {
           const take = Math.min(collect, deadRemovable[ti], t.deadTuples)
           t.deadTuples -= take
           deadRemovable[ti] -= take
+          if (take > 0) {
+            collectRepresentativeVersions(t.mvcc, state.xminHorizon)
+          }
           w.deadCollected += take
           av.landfill += take
           const modified = vacHeapModified[i]
@@ -2945,6 +2959,17 @@ export function createSim(bus: Bus): SimApi {
     stats.rollbacks += rb
     stats.commits += x.txCount - rb
     commitsAcc += x.txCount - rb
+    const table = tables[b.table]
+    if (
+      b.query === 'update'
+      && b.xid > 0
+      && x.txCount > rb
+      && (traced || state.t >= table.mvcc.nextSampleAt)
+      && recordRepresentativeUpdate(table.mvcc, b.xid - rb, state.t, x.hot)
+    ) {
+      table.mvcc.nextSampleAt = state.t + MVCC_SAMPLE_SECONDS
+      refreshRepresentativeRow(table.mvcc, state.xminHorizon)
+    }
     // The transaction is over: its xid is no longer live, so the backend stops
     // holding back the xmin horizon.
     b.xid = 0
@@ -3482,6 +3507,7 @@ export function createSim(bus: Bus): SimApi {
 
   function setKnob<Key extends keyof Knobs>(key: Key, value: Knobs[Key]): void {
     const previousCheckpointTimeout = K.checkpointTimeout
+    const previousHorizonPin = K.longRunningXact || K.standbyLongQuery
     K[key] = value
 
     switch (key) {
@@ -3510,10 +3536,28 @@ export function createSim(bus: Bus): SimApi {
         break
       case 'longRunningXact':
       case 'standbyLongQuery':
-        if (K.longRunningXact || K.standbyLongQuery) {
+        if (
+          (K.longRunningXact || K.standbyLongQuery)
+          && !previousHorizonPin
+        ) {
+          const inProgress: number[] = []
+          for (let i = 0; i < backends.length; i++) {
+            if (backends[i].xid > 0) inProgress.push(backends[i].xid)
+          }
           horizonFrozen = true
-          horizonXid = state.xid
+          horizonXid = state.xid + 1
+          for (let i = 0; i < inProgress.length; i++) {
+            horizonXid = Math.min(horizonXid, inProgress[i])
+          }
           horizonT = state.t
+          for (let i = 0; i < N_TABLES; i++) {
+            holdRepresentativeSnapshot(
+              tables[i].mvcc,
+              state.xid + 1,
+              state.t,
+              inProgress,
+            )
+          }
           toast(
             K.standbyLongQuery
               ? 'hot_standby_feedback — a standby snapshot is now pinning the xmin horizon'
@@ -3521,11 +3565,17 @@ export function createSim(bus: Bus): SimApi {
             'warn',
             6000,
           )
-        } else {
+        } else if (
+          !(K.longRunningXact || K.standbyLongQuery)
+          && previousHorizonPin
+        ) {
           horizonFrozen = false
-          horizonXid = state.xid
+          horizonXid = state.xid + 1
           // everything dead is suddenly removable again
-          for (let i = 0; i < N_TABLES; i++) deadRemovable[i] = tables[i].deadTuples
+          for (let i = 0; i < N_TABLES; i++) {
+            deadRemovable[i] = tables[i].deadTuples
+            releaseRepresentativeSnapshot(tables[i].mvcc)
+          }
           toast('xmin pin released — vacuum can clean up now', 'good', 5000)
         }
         break
@@ -3605,6 +3655,9 @@ export function createSim(bus: Bus): SimApi {
       state.xminHorizon = Math.max(horizonXid, state.xid - Math.max(1, stats.activeBackends * 2))
       horizonXid = state.xminHorizon
       state.oldestSnapshotAge = Math.min(2, 0.4 + stats.activeBackends * 0.02)
+    }
+    for (let i = 0; i < N_TABLES; i++) {
+      refreshRepresentativeRow(tables[i].mvcc, state.xminHorizon)
     }
 
     tickStats(dt)
@@ -3807,6 +3860,7 @@ export function createSim(bus: Bus): SimApi {
       t.deletes = 0
       t.heat = 0
       t.vacuuming = false
+      t.mvcc = createRepresentativeRow(state.xid - 1, i + 1)
     }
 
     rep.enabled = K.replicaEnabled
