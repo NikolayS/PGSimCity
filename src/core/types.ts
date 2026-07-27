@@ -576,6 +576,8 @@ export interface BusEvents {
   'camera:mode': { mode: CameraMode }
   /** named framing preset currently controlling the composition */
   'camera:preset': { preset: 'plan' | null }
+  /** first meaningful map gesture in the current pointer interaction */
+  'camera:gesture': { kind: 'pan' | 'rotate'; pointer: 'mouse' | 'touch' }
   'quality': { level: QualityLevel }
   'sim:reset': Record<string, never>
   /** something dramatic happened — shake / flash */

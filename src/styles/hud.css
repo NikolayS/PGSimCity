@@ -1058,6 +1058,21 @@ body.pg-labels-off #labels-root {
   }
 }
 
+/* The three-row tablet layout keeps every tool on one control row. Icon-only
+   audio and theme controls recover the exact width that otherwise pushes the
+   checkpoint and audio controls off the left edge at 768px. */
+@media (min-width: 701px) and (max-width: 860px) {
+  .hud-audio,
+  .hud-theme {
+    min-width: 30px;
+    padding-inline: 0;
+  }
+  .hud-audio__label,
+  .hud-theme__label {
+    display: none;
+  }
+}
+
 /* The prototype disclaimer carries the two links that invite corrections, so
    they must be visibly clickable rather than dissolving into the small print. */
 .help-disclaimer a {

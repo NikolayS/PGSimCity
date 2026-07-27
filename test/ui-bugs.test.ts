@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { BUILD_LABEL } from '../src/core/build'
 import { createBus } from '../src/core/bus'
@@ -289,6 +289,43 @@ describe('theme toggle entry point', () => {
 
     inspector.dispose()
     help.dispose()
+    hud.dispose()
+  })
+})
+
+describe('camera rotate discovery', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    const dom = installTestDom()
+    for (const id of ['hud-top', 'hud-bottom', 'toast-stack', 'compass']) dom.mount(id)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('shows a first-pan rotate hint and does not show it after dismissal', () => {
+    const ctx = context()
+    const hud = createHud(ctx)
+
+    ctx.bus.emit('camera:gesture', { kind: 'pan', pointer: 'mouse' })
+    const hint = document.querySelector<HTMLButtonElement>('.hud-rotate-hint')
+    expect(hint?.textContent).toContain('Shift')
+
+    hint!.click()
+    vi.advanceTimersByTime(241)
+    ctx.bus.emit('camera:gesture', { kind: 'pan', pointer: 'mouse' })
+    expect(document.querySelector('.hud-rotate-hint')).toBeNull()
+    hud.dispose()
+  })
+
+  it('explains the two-finger rotate gesture after a first touch pan', () => {
+    const ctx = context()
+    const hud = createHud(ctx)
+
+    ctx.bus.emit('camera:gesture', { kind: 'pan', pointer: 'touch' })
+    expect(document.querySelector('.hud-rotate-hint')?.textContent).toContain('two fingers')
+    expect(document.querySelector('.hud-rotate-hint')?.textContent).toContain('twist')
     hud.dispose()
   })
 })

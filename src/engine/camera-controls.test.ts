@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createBus } from '../core/bus'
 import type { Bus } from '../core/types'
 import { installTestDom } from '../../test/dom'
+import { CITY } from '../world/layout'
 import { createCameraRig, type CameraRig } from './camera'
 
 vi.mock('../world/slonik', () => ({
@@ -69,6 +70,17 @@ function drag(
   )
 }
 
+function wheel(dom: HTMLElement, deltaY: number): void {
+  const event = new Event('wheel', { cancelable: true })
+  Object.defineProperties(event, {
+    deltaY: { value: deltaY },
+    deltaMode: { value: 0 },
+    clientX: { value: 400 },
+    clientY: { value: 300 },
+  })
+  dom.dispatchEvent(event)
+}
+
 describe('map camera mouse controls', () => {
   let fixture: RigFixture
 
@@ -117,6 +129,45 @@ describe('map camera mouse controls', () => {
     expect(fixture.rig.pivot.distanceTo(pivotBefore)).toBeLessThan(1e-8)
   })
 
+  it('rotates with a two-finger touch twist', () => {
+    const rotationBefore = fixture.camera.quaternion.clone()
+    fixture.dom.dispatchEvent(
+      pointer('pointerdown', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 300,
+        clientY: 300,
+      }),
+    )
+    fixture.dom.dispatchEvent(
+      pointer('pointerdown', {
+        pointerId: 2,
+        pointerType: 'touch',
+        clientX: 400,
+        clientY: 300,
+      }),
+    )
+    fixture.dom.dispatchEvent(
+      pointer('pointermove', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 300,
+        clientY: 300,
+      }),
+    )
+    fixture.dom.dispatchEvent(
+      pointer('pointermove', {
+        pointerId: 2,
+        pointerType: 'touch',
+        clientX: 380,
+        clientY: 330,
+      }),
+    )
+    fixture.rig.update(1 / 60)
+
+    expect(fixture.camera.quaternion.angleTo(rotationBefore)).toBeGreaterThan(0.01)
+  })
+
   it('right-drag does not move the camera', () => {
     const pivotBefore = fixture.rig.pivot.clone()
     const positionBefore = fixture.camera.position.clone()
@@ -128,6 +179,17 @@ describe('map camera mouse controls', () => {
     expect(fixture.rig.pivot.distanceTo(pivotBefore)).toBeLessThan(1e-8)
     expect(fixture.camera.position.distanceTo(positionBefore)).toBeLessThan(1e-8)
     expect(fixture.camera.quaternion.angleTo(rotationBefore)).toBeLessThan(1e-8)
+  })
+
+  it('keeps a non-empty city frame throughout the full wheel zoom range', () => {
+    const plazaTop = CITY.buf.baseY + CITY.buf.maxRise
+    for (const deltaY of [10_000, -250, -250, -250, -250, -250, -250, -250, -250, -250, -10_000]) {
+      wheel(fixture.dom, deltaY)
+      for (let frame = 0; frame < 180; frame++) fixture.rig.update(1 / 60)
+
+      expect(fixture.camera.position.distanceTo(fixture.rig.pivot)).toBeGreaterThanOrEqual(24)
+      expect(fixture.camera.position.y).toBeGreaterThan(plazaTop)
+    }
   })
 
   it('announces fly controls on entry, not after returning to orbit', () => {

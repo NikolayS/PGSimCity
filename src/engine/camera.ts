@@ -43,6 +43,8 @@ interface LooseBus {
  * ------------------------------------------------------------------------*/
 
 const MIN_DIST = 8
+/** The central plaza loses all readable geometry below this manual dolly range. */
+const MIN_DOLLY_DIST = 24
 /** Far enough out to hold the whole plate — which is now ~1.3 km corner to corner. */
 const MAX_DIST = 1650
 /** Never flip over the poles; 3.05 rad lets you get well under the city to
@@ -270,6 +272,8 @@ export function createCameraRig(
   let dragOrbit = false
   let dragPan = false
   let dragLook = false
+  let panGestureAnnounced = false
+  let rotateGestureAnnounced = false
   let locked = false
   let disposed = false
   let activePreset: 'plan' | null = null
@@ -414,6 +418,10 @@ export function createCameraRig(
     if (e.pointerType !== 'touch' && e.button === 2) return
 
     interrupt()
+    if (ptrIds.length === 0) {
+      panGestureAnnounced = false
+      rotateGestureAnnounced = false
+    }
     ptrIds.push(e.pointerId)
     ptrX.set(e.pointerId, e.clientX)
     ptrY.set(e.pointerId, e.clientY)
@@ -507,7 +515,12 @@ export function createCameraRig(
         inRotX -= (dAng * viewH) / (Math.PI * 2)
 
         // both fingers moving together vertically -> tilt
-        inRotY += my - pinchMy
+        const dMidY = my - pinchMy
+        inRotY += dMidY
+        if (!rotateGestureAnnounced && (Math.abs(dAng) > 1e-4 || Math.abs(dMidY) > 0.1)) {
+          rotateGestureAnnounced = true
+          bus.emit('camera:gesture', { kind: 'rotate', pointer: 'touch' })
+        }
       }
       pinchDist = d
       pinchMx = mx
@@ -531,9 +544,17 @@ export function createCameraRig(
     if (dragOrbit) {
       inRotX += dx
       inRotY += dy
+      if (!rotateGestureAnnounced && (dx !== 0 || dy !== 0)) {
+        rotateGestureAnnounced = true
+        bus.emit('camera:gesture', { kind: 'rotate', pointer: e.pointerType === 'touch' ? 'touch' : 'mouse' })
+      }
     } else if (dragPan) {
       inPanX += dx
       inPanY += dy
+      if (!panGestureAnnounced && (dx !== 0 || dy !== 0)) {
+        panGestureAnnounced = true
+        bus.emit('camera:gesture', { kind: 'pan', pointer: e.pointerType === 'touch' ? 'touch' : 'mouse' })
+      }
     }
   }
 
@@ -678,7 +699,7 @@ export function createCameraRig(
   function applyZoom(): void {
     if (pendingZoom === 1) return
     const dOld = distT
-    const dNew = clamp(dOld * pendingZoom, MIN_DIST, MAX_DIST)
+    const dNew = clamp(dOld * pendingZoom, MIN_DOLLY_DIST, MAX_DIST)
     pendingZoom = 1
     if (dNew === dOld) return
 

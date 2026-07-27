@@ -160,6 +160,7 @@ const MAP_DISTRICTS: MapDistrict[] = [
 ]
 
 const QUALITY_LEVELS: QualityLevel[] = ['low', 'reduced', 'medium', 'high', 'ultra']
+const ROTATE_HINT_STORAGE_KEY = 'pgsimcity.rotate-hint.dismissed'
 
 /* ------------------------------ tiny helpers ----------------------------- */
 
@@ -947,6 +948,7 @@ export function createHud(ctx: UiContext): UiModule {
   interface Toast {
     node: HTMLElement
     timer: number
+    onDrop?: () => void
   }
   const toasts: Toast[] = []
 
@@ -955,6 +957,7 @@ export function createHud(ctx: UiContext): UiModule {
     if (i < 0) return
     toasts.splice(i, 1)
     window.clearTimeout(t.timer)
+    t.onDrop?.()
     t.node.classList.add('is-out')
     window.setTimeout(() => t.node.remove(), 240)
   }
@@ -964,11 +967,12 @@ export function createHud(ctx: UiContext): UiModule {
     kind: 'info' | 'warn' | 'good' = 'info',
     ms = 3600,
     action?: { label: string; quality: QualityLevel },
-  ): void {
+    opts?: { className?: string; onDrop?: () => void },
+  ): Toast {
     const node = el(
       'button',
       {
-        class: `hud-toast hud-toast--${kind} pg-enter`,
+        class: `hud-toast hud-toast--${kind} pg-enter${opts?.className ? ` ${opts.className}` : ''}`,
         type: 'button',
         'aria-label': action ? `${text} ${action.label}` : 'Dismiss',
       },
@@ -976,7 +980,11 @@ export function createHud(ctx: UiContext): UiModule {
       el('span', { class: 'hud-toast__txt', text }),
       ...(action ? [el('span', { class: 'hud-toast__action', text: action.label })] : []),
     )
-    const t: Toast = { node, timer: window.setTimeout(() => dropToast(t), Math.max(600, ms)) }
+    const t: Toast = {
+      node,
+      timer: window.setTimeout(() => dropToast(t), Math.max(600, ms)),
+      onDrop: opts?.onDrop,
+    }
     node.addEventListener('click', () => {
       if (action) bus.emit('quality', { level: action.quality })
       dropToast(t)
@@ -984,10 +992,53 @@ export function createHud(ctx: UiContext): UiModule {
     toasts.push(t)
     toastEl.prepend(node)
     while (toasts.length > 4) dropToast(toasts[0])
+    return t
   }
 
   cleanup.push(
     bus.on('toast', (p) => pushToast(p.text, p.kind ?? 'info', p.ms ?? 3600, p.action)),
+  )
+
+  function rotateHintDismissed(): boolean {
+    try {
+      return window.localStorage.getItem(ROTATE_HINT_STORAGE_KEY) === '1'
+    } catch {
+      return false
+    }
+  }
+
+  function rememberRotateHint(): void {
+    try {
+      window.localStorage.setItem(ROTATE_HINT_STORAGE_KEY, '1')
+    } catch {
+      /* Storage can be unavailable; the in-page guard still prevents repetition. */
+    }
+  }
+
+  let rotateHint: Toast | null = null
+  let rotateHintHandled = rotateHintDismissed()
+  cleanup.push(
+    bus.on('camera:gesture', ({ kind, pointer }) => {
+      if (kind === 'rotate') {
+        rotateHintHandled = true
+        rememberRotateHint()
+        if (rotateHint) dropToast(rotateHint)
+        return
+      }
+      if (rotateHintHandled || rotateHint) return
+      const text =
+        pointer === 'touch'
+          ? 'Use two fingers: twist to rotate, drag together to tilt'
+          : 'Hold Shift and drag to rotate or tilt'
+      rotateHint = pushToast(text, 'info', 6500, undefined, {
+        className: 'hud-rotate-hint',
+        onDrop: () => {
+          rotateHint = null
+          rotateHintHandled = true
+          rememberRotateHint()
+        },
+      })
+    }),
   )
 
   /* =======================================================================
