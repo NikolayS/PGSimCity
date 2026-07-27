@@ -169,9 +169,10 @@ const measureExpression = (theme) => `(() => {
     .filter(({ rect: box }) => box.width < 44 || box.height < 44)
   let covered = 0
   let samples = 0
-  if (innerWidth === 390 && ${JSON.stringify(theme)} === 'night') {
-    for (let y = 1; y < innerHeight; y += 2) {
-      for (let x = 1; x < innerWidth; x += 2) {
+  if (${JSON.stringify(theme)} === 'night') {
+    const sampleStep = innerWidth <= 700 ? 2 : 8
+    for (let y = 1; y < innerHeight; y += sampleStep) {
+      for (let x = 1; x < innerWidth; x += sampleStep) {
         samples++
         if (
           document
@@ -310,6 +311,9 @@ try {
   await send('Page.enable')
   await send('Page.navigate', { url: APP_URL })
   await waitForHud()
+  // Measure the settled first-run surface. The previous tour invitation waited
+  // 2.8 seconds, so sampling as soon as the vitals mounted missed real chrome.
+  await sleep(3200)
 
   for (const viewport of VIEWPORTS) {
     await send('Emulation.setDeviceMetricsOverride', {
@@ -395,6 +399,12 @@ try {
 }
 
 console.log(JSON.stringify({ measurements, failures }, null, 2))
+for (const measurement of measurements) {
+  if (measurement.chromeCoverage == null) continue
+  console.log(
+    `HUD chrome: ${measurement.viewport[0]}x${measurement.viewport[1]} ${measurement.theme} ${measurement.chromeCoverage}%`,
+  )
+}
 if (failures.length > 0) {
   console.error(`HUD layout verification failed with ${failures.length} regression(s).`)
   process.exitCode = 1

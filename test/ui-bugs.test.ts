@@ -10,10 +10,11 @@ import {
 } from '../src/core/types'
 import { createSim } from '../src/sim/model'
 import { knobMeta } from '../src/ui/content'
-import { createKnobControl } from '../src/ui/controls'
+import { createControls, createKnobControl } from '../src/ui/controls'
 import { createHud } from '../src/ui/hud'
 import { createHelp } from '../src/ui/help'
 import { createInspector } from '../src/ui/panel'
+import { createTour } from '../src/ui/tour'
 import type { UiContext } from '../src/ui/uikit'
 import { installTestDom } from './dom'
 
@@ -287,5 +288,92 @@ describe('theme toggle entry point', () => {
     inspector.dispose()
     help.dispose()
     hud.dispose()
+  })
+})
+
+describe('city-first panel state', () => {
+  beforeEach(() => {
+    const dom = installTestDom()
+    dom.mount('hud-left')
+    dom.mount('hud-right')
+  })
+
+  it('collapses both side panels on a first visit and restores explicit choices', () => {
+    const ctx = context()
+    let controls = createControls(ctx)
+    let inspector = createInspector(ctx)
+
+    const left = () => document.querySelector('.pgc-host--left') as HTMLElement
+    const right = () => document.querySelector('.pgc-host--right') as HTMLElement
+    expect(left().classList.contains('is-open')).toBe(false)
+    expect(right().classList.contains('is-open')).toBe(false)
+    expect(document.querySelector('.pgc-tab--left')?.textContent).toContain('Console')
+    expect(document.querySelector('.pgc-tab--right')?.textContent).toContain('Inspector')
+
+    ;(document.querySelector('.pgc-tab--left') as HTMLButtonElement).click()
+    ;(document.querySelector('.pgc-tab--right') as HTMLButtonElement).click()
+    expect(window.localStorage.getItem('pgsimcity.console.open')).toBe('1')
+    expect(window.localStorage.getItem('pgsimcity.inspector.open')).toBe('1')
+
+    controls.dispose()
+    inspector.dispose()
+    controls = createControls(ctx)
+    inspector = createInspector(ctx)
+    expect(left().classList.contains('is-open')).toBe(true)
+    expect(right().classList.contains('is-open')).toBe(true)
+
+    ;(document.querySelector('.pgc-rail__collapse') as HTMLButtonElement).click()
+    ;(document.querySelector('.pgc-insp__close') as HTMLButtonElement).click()
+    expect(window.localStorage.getItem('pgsimcity.console.open')).toBe('0')
+    expect(window.localStorage.getItem('pgsimcity.inspector.open')).toBe('0')
+
+    controls.dispose()
+    inspector.dispose()
+  })
+
+  it('opens the inspector for a selection and dismisses it with one empty instruction', () => {
+    const ctx = context()
+    const inspector = createInspector(ctx)
+    const host = document.querySelector('.pgc-host--right') as HTMLElement
+
+    expect(host.classList.contains('is-open')).toBe(false)
+    expect(document.querySelector('.pgc-empty__lead')).toBeNull()
+
+    ctx.bus.emit('select', { id: 'shared.buffers' })
+    expect(host.classList.contains('is-open')).toBe(true)
+
+    ctx.bus.emit('select', { id: null })
+    expect(host.classList.contains('is-open')).toBe(false)
+
+    ctx.bus.emit('select', { id: 'shared.buffers' })
+    ;(document.querySelector('.pgc-insp__close') as HTMLButtonElement).click()
+    expect(host.classList.contains('is-open')).toBe(false)
+    expect(document.querySelector('.pgc-insp__title')?.textContent).toBe('Nothing selected')
+    expect(document.querySelector('.pgc-insp__sub')?.textContent).toBe('Click a building to open it up')
+
+    inspector.dispose()
+  })
+})
+
+describe('first-visit tour entry point', () => {
+  beforeEach(() => {
+    const dom = installTestDom()
+    dom.mount('tour-layer')
+  })
+
+  it('shows one immediate, text-labelled invitation and does not repeat it', () => {
+    const ctx = context()
+    let tour = createTour(ctx)
+    const invitation = document.querySelector('.tour-first') as HTMLElement
+    const start = document.querySelector('.tour-first__go') as HTMLButtonElement
+
+    expect(invitation.classList.contains('is-live')).toBe(true)
+    expect(start.textContent).toContain('Start the tour')
+    expect(window.localStorage.getItem('pgsimcity.seen')).toBe('1')
+
+    tour.dispose()
+    tour = createTour(ctx)
+    expect((document.querySelector('.tour-first') as HTMLElement).classList.contains('is-live')).toBe(false)
+    tour.dispose()
   })
 })

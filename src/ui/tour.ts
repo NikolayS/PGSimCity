@@ -211,7 +211,6 @@ const TOTAL_SECONDS = STEPS.reduce((n, c) => n + c.duration, 0)
  * -------------------------------------------------------------------------*/
 
 const SEEN_KEY = 'pgsimcity.seen'
-const FIRST_RUN_DELAY_MS = 2800
 /** The invitation is an offer, not a fixture: it shows itself out. */
 const FIRST_RUN_LIFE_MS = 40000
 type KnobKey = keyof Knobs
@@ -249,7 +248,6 @@ export function createTour(ctx: UiContext): UiModule {
   const sim = ctx.sim
   const layer = document.getElementById('tour-layer') ?? el('div')
   const cleanup: (() => void)[] = []
-  const timers: number[] = []
 
   // setKnob is generic over one key; the chapters are generic over all of them.
   // Bound, so it keeps working if SimApi ever becomes a class.
@@ -428,7 +426,7 @@ export function createTour(ctx: UiContext): UiModule {
       el('span', { class: 'pg-eyebrow', text: 'First time here?' }),
       el('p', {
         class: 'tour-first__line',
-        text: `Take the guided tour — the whole city in ${STEPS.length} chapters, ${tourLength()}.`,
+        text: `Follow a query from connection to commit — ${STEPS.length} chapters, ${tourLength()}.`,
       }),
     ),
     el(
@@ -482,7 +480,7 @@ export function createTour(ctx: UiContext): UiModule {
 
   layer.append(firstRun, narrateCard, card)
 
-  if (!hasSeen()) timers.push(window.setTimeout(showFirstRun, FIRST_RUN_DELAY_MS))
+  showFirstRun()
 
   /* =======================================================================
    * KNOBS — apply on entry, restore on exit
@@ -715,8 +713,6 @@ export function createTour(ctx: UiContext): UiModule {
   function dispose(): void {
     for (const off of cleanup) off()
     cleanup.length = 0
-    for (const t of timers) window.clearTimeout(t)
-    timers.length = 0
     window.clearTimeout(narrateTimer)
     window.clearTimeout(firstTimer)
     if (running) {

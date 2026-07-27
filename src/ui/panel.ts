@@ -191,12 +191,12 @@ export function createInspector(ctx: UiContext): UiModule {
     {
       class: 'pg-btn pg-btn--icon pgc-insp__close',
       type: 'button',
-      title: 'Clear the selection',
-      'aria-label': 'Clear the selection',
+      title: 'Close the inspector',
+      'aria-label': 'Close the inspector',
       on: {
         click: () => {
           ctx.bus.emit('select', { id: null })
-          if (compact) setOpen(false)
+          setOpen(false)
         },
       },
     },
@@ -249,7 +249,7 @@ export function createInspector(ctx: UiContext): UiModule {
     type: 'button',
     on: { click: () => setOpen(!isOpen()) },
   })
-  tab.append(icon('layers', 15))
+  tab.append(icon('layers', 15), el('span', { class: 'pgc-tab__label', text: 'Inspector' }))
 
   host.append(tab, panel)
   mount.append(host)
@@ -258,32 +258,28 @@ export function createInspector(ctx: UiContext): UiModule {
 
   const narrow = window.matchMedia('(max-width: 1100px)')
   let compact = narrow.matches
-  let openWide = loadFlag(OPEN_KEY, true)
-  let openNarrow = false
+  let open = loadFlag(OPEN_KEY, false)
   let tall = false
   let planPreset = false
 
-  const isOpen = (): boolean => (compact ? openNarrow : openWide)
+  const isOpen = (): boolean => open
 
   function applyOpen(): void {
-    const open = isOpen()
+    const panelOpen = isOpen()
     setClass(host, 'is-plan-hidden', planPreset)
     setClass(host, 'is-compact', compact)
-    setClass(host, 'is-open', open)
-    tab.setAttribute('aria-expanded', String(open))
-    tab.title = open ? 'Hide the inspector' : 'Show the inspector'
+    setClass(host, 'is-open', panelOpen)
+    tab.setAttribute('aria-expanded', String(panelOpen))
+    tab.title = panelOpen ? 'Hide the inspector' : 'Show the inspector'
     tab.setAttribute('aria-label', tab.title)
-    panel.setAttribute('aria-hidden', String(!open))
-    panel.inert = !open && compact
+    panel.setAttribute('aria-hidden', String(!panelOpen))
+    panel.inert = !panelOpen
     syncSheetFlags()
   }
 
   function setOpen(next: boolean): void {
-    if (compact) openNarrow = next
-    else {
-      openWide = next
-      saveFlag(OPEN_KEY, next)
-    }
+    open = next
+    saveFlag(OPEN_KEY, next)
     applyOpen()
     if (next && compact) announceSheet('right')
     ctx.bus.emit('ui:layout', {})
@@ -361,7 +357,6 @@ export function createInspector(ctx: UiContext): UiModule {
   function renderEmpty(): HTMLElement {
     const wrap = el('div', { class: 'pgc-content pgc-empty pg-enter' })
     wrap.append(
-      el('p', { class: 'pgc-empty__lead', text: 'Click any building.' }),
       el('p', {
         class: 'pg-hint',
         text: 'Every structure in the city is one real mechanism inside Postgres. Open one and it explains itself, with its own live counters and the parameters that govern it.',
@@ -558,9 +553,10 @@ export function createInspector(ctx: UiContext): UiModule {
 
   function select(id: string | null): void {
     if (id === currentId) {
-      if (id && compact && !openNarrow) setOpen(true)
+      if (id && !open) setOpen(true)
       return
     }
+    const clearedSelection = id == null && currentId != null
     currentId = id
     teardown()
 
@@ -576,9 +572,10 @@ export function createInspector(ctx: UiContext): UiModule {
       setText(readout, '')
       readout.hidden = true
       flyBtn.disabled = true
-      closeBtn.disabled = true
+      closeBtn.disabled = false
       body.append(renderEmpty())
       body.scrollTop = 0
+      if (clearedSelection) setOpen(false)
       return
     }
 
@@ -601,7 +598,7 @@ export function createInspector(ctx: UiContext): UiModule {
     body.append(renderDoc(id, info))
     body.scrollTop = 0
     acc = TICK // paint the new metrics on the very next frame, not 160ms later
-    if (compact) setOpen(true)
+    setOpen(true)
   }
 
   /* --- wiring ------------------------------------------------------------ */
@@ -615,14 +612,13 @@ export function createInspector(ctx: UiContext): UiModule {
 
   const onNarrow = (): void => {
     compact = narrow.matches
-    if (compact) openNarrow = false
     applyOpen()
   }
   narrow.addEventListener('change', onNarrow)
 
   /* Two sheets, one place to stand. */
   const onSheet = (e: Event): void => {
-    if (sheetSideOf(e) !== 'right' && compact && openNarrow) setOpen(false)
+    if (sheetSideOf(e) !== 'right' && compact && open) setOpen(false)
   }
   window.addEventListener(SHEET_EVENT, onSheet)
 

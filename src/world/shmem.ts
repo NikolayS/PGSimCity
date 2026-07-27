@@ -282,6 +282,11 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
       emissive: 0x0b1224,
       emissiveMap: deckTex,
       emissiveIntensity: 0.9,
+      // The deck cap, plan, haze, and floor label are four overlapping coats.
+      // Each later coat receives a stronger bias instead of relying on 1–5 cm.
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
     }),
   )
   const gDeckPlan = keep(new THREE.PlaneGeometry(DECK_W - 0.6, DECK_D - 0.6))
@@ -472,6 +477,9 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       toneMapped: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -3,
+      polygonOffsetUnits: -3,
     }),
   )
   const gHaze = keep(new THREE.PlaneGeometry(DECK_W + 60, DECK_D + 60))

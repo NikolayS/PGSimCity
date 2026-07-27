@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { ColorKey, MatOpts, TextTexOpts, ThemeApi } from './types'
+import type { ColorKey, MatOpts, NeonOpts, TextTexOpts, ThemeApi } from './types'
 import {
   ATMOSPHERE,
   DEFAULT_MODE,
@@ -662,6 +662,9 @@ export function createTheme(): ThemeApi {
         opacity: opts.opacity ?? 1,
         flatShading: opts.flatShading ?? false,
         side: opts.side ?? THREE.FrontSide,
+        polygonOffset: opts.polygonOffset ?? false,
+        polygonOffsetFactor: opts.polygonOffsetFactor ?? 0,
+        polygonOffsetUnits: opts.polygonOffsetUnits ?? 0,
       })
       m.name = key
       userData(m).pgTheme = true
@@ -672,8 +675,16 @@ export function createTheme(): ThemeApi {
     return m
   }
 
-  function neon(color: number, intensity = 1.6, opts: { transparent?: boolean; opacity?: number } = {}) {
-    const key = `${color}|${intensity}|${opts.transparent ? 1 : 0}|${opts.opacity ?? 1}`
+  function neon(color: number, intensity = 1.6, opts: NeonOpts = {}) {
+    const key = [
+      color,
+      intensity,
+      opts.transparent ? 1 : 0,
+      opts.opacity ?? 1,
+      opts.polygonOffset ? 1 : 0,
+      opts.polygonOffsetFactor ?? 0,
+      opts.polygonOffsetUnits ?? 0,
+    ].join('|')
     let m = neons.get(key)
     if (!m) {
       m = new THREE.MeshBasicMaterial({
@@ -681,6 +692,9 @@ export function createTheme(): ThemeApi {
         transparent: opts.transparent ?? false,
         opacity: opts.opacity ?? 1,
         depthWrite: opts.transparent ? false : true,
+        polygonOffset: opts.polygonOffset ?? false,
+        polygonOffsetFactor: opts.polygonOffsetFactor ?? 0,
+        polygonOffsetUnits: opts.polygonOffsetUnits ?? 0,
       })
       m.name = `neon:${key}`
       userData(m).pgTheme = true
