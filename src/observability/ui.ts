@@ -176,7 +176,7 @@ export function knobRow(sim: SimApi, spec: KnobSpec): { root: HTMLElement; sync(
 
 /* ------------------------------ vitals strip ----------------------------- */
 
-interface Vital {
+export interface Vital {
   key: string
   label: string
   color: string
@@ -186,7 +186,7 @@ interface Vital {
   max?: number
 }
 
-const VITALS: Vital[] = [
+export const VITALS: Vital[] = [
   {
     key: 'tps',
     label: 'tps',

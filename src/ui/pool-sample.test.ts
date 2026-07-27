@@ -6,7 +6,7 @@ import { DOCS } from './content'
 describe('buffer-pool metrics', () => {
   it('derive every pool-labelled value from shared_buffers, never the visual sample', () => {
     const state = createSim(createBus()).state
-    const originalSampleSize = state.buffers.size
+    const originalSampleSize = state.buffers.sampleFrames
     const originalPoolSize = state.knobs.sharedBuffers
     const violations: string[] = []
     let inspected = 0
@@ -17,9 +17,9 @@ describe('buffer-pool metrics', () => {
         inspected++
 
         const original = metric.get(state)
-        state.buffers.size = 1
+        state.buffers.sampleFrames = 1 as typeof state.buffers.sampleFrames
         const withSmallerSample = metric.get(state)
-        state.buffers.size = originalSampleSize
+        state.buffers.sampleFrames = originalSampleSize
         state.knobs.sharedBuffers = originalPoolSize * 2
         const withLargerPool = metric.get(state)
         state.knobs.sharedBuffers = originalPoolSize

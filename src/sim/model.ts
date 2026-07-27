@@ -55,12 +55,14 @@ import {
 } from '../core/types'
 import type {
   BackendSim,
+  BackendState,
   Bus,
   FlowKind,
   FlowRequest,
   Knobs,
   PlanNode,
   QueryKind,
+  SampleFrames,
   SimApi,
   SimState,
   TableSim,
@@ -110,10 +112,22 @@ const FULL_SAMPLE_PAGES = Math.min(
  * Scale capacity and page identities against the same working set; otherwise
  * the 1,024-frame sample acts like the whole pool and evicts pages that fit.
  */
-function sampledBufferFrames(logicalMib: number): number {
+function asSampleFrames(value: number): SampleFrames {
+  return value as SampleFrames
+}
+
+function sampledBufferFrames(logicalMib: number): SampleFrames {
   const logicalPages = Math.floor((logicalMib * MIB) / PAGE)
   const scaled = Math.round((logicalPages / FULL_SAMPLE_PAGES) * N_BUFFERS)
-  return clamp(scaled, 32, N_BUFFERS)
+  return asSampleFrames(clamp(scaled, 32, N_BUFFERS))
+}
+
+function isRunningState(state: BackendState): boolean {
+  return state !== 'free'
+    && state !== 'starting'
+    && state !== 'idle'
+    && state !== 'idle_in_xact'
+    && state !== 'ending'
 }
 
 /** autovacuum_naptime. Real default is 60s; compressed so the yard stays alive. */
@@ -347,7 +361,7 @@ export function createSim(bus: Bus): SimApi {
     maxConnections: N_BACKEND_SLOTS,
     backends,
     buffers: {
-      size: sampledBufferFrames(DEFAULT_KNOBS.sharedBuffers),
+      sampleFrames: sampledBufferFrames(DEFAULT_KNOBS.sharedBuffers),
       valid: new Uint8Array(N_BUFFERS),
       dirty: new Uint8Array(N_BUFFERS),
       pinned: new Uint8Array(N_BUFFERS),
@@ -358,12 +372,12 @@ export function createSim(bus: Bus): SimApi {
       clockHand: 0,
       hits: 0,
       misses: 0,
-      evictions: 0,
+      evictions: asSampleFrames(0),
       dirtyEvictions: 0,
       hitRatio: 0.98,
-      dirtyCount: 0,
-      pinnedCount: 0,
-      usedCount: 0,
+      dirtyCount: asSampleFrames(0),
+      pinnedCount: asSampleFrames(0),
+      usedCount: asSampleFrames(0),
     },
     wal: {
       insertLsn: 0x1a000000,
@@ -383,18 +397,19 @@ export function createSim(bus: Bus): SimApi {
       phase: 'idle',
       progress: 0,
       buffersToWrite: 0,
-      buffersWritten: 0,
+      buffersWritten: asSampleFrames(0),
       nextInSec: DEFAULT_KNOBS.checkpointTimeout,
       elapsed: 0,
       lastDuration: 0,
       reason: 'time',
       count: 0,
       redoLsn: 0x1a000000,
+      completedRedoLsn: 0x1a000000,
     },
     bgwriter: {
       enabled: true,
       scanPos: 0,
-      cleanedTotal: 0,
+      cleanedTotal: asSampleFrames(0),
       cleanedPerSec: 0,
       activity: 0,
     },
@@ -436,9 +451,11 @@ export function createSim(bus: Bus): SimApi {
       tupDeleted: 0,
       walBytesPerSec: 0,
       ioReadPerSec: 0,
-      ioWritePerSec: 0,
+      ioWritePerSec: asSampleFrames(0),
+      ioWriteLoad: 0,
       cacheHitPct: 98,
       activeBackends: 0,
+      runningBackends: 0,
       history: { tps: [], hit: [], wal: [], dirty: [], lag: [] },
     },
     scenario: null,
@@ -450,32 +467,11 @@ export function createSim(bus: Bus): SimApi {
   const buf = state.buffers
   const wal = state.wal
   const ckpt = state.checkpoint
-  /**
-   * REDO of the last COMPLETED checkpoint — pg_control's `checkPointCopy.redo`.
-   * Recovery starts here, and WAL below it is what gets recycled. Deliberately
-   * distinct from `ckpt.redoLsn`, which is RedoRecPtr: the RUNNING checkpoint's
-   * full-page-image boundary, advanced the instant the checkpoint begins.
-   *
-   * CreateCheckPoint() sets RedoRecPtr at the start but keeps
-   * PriorRedoPtr = ControlFile->checkPointCopy.redo, and only calls
-   * KeepLogSeg()/RemoveOldXlogFiles() *after* the checkpoint record is written
-   * and pg_control is updated. Recycling at the start instead made pg_wal
-   * collapse tens of seconds before the checkpoint that justified it had
-   * finished — backwards: real PostgreSQL holds its maximum until completion.
-   *
-   * FOLLOW-UP (needs src/core/types.ts + src/ui/docs-storage.ts, outside this
-   * workflow's file scope): promote this to `CheckpointState.completedRedoLsn`
-   * so docs-storage.ts's "Crash recovery from" / "Redo point — recovery would
-   * start here" read it instead of `redoLsn`. Those two readouts are correct
-   * between checkpoints and one checkpoint ahead of themselves while one runs.
-   */
   type RuntimeCheckpoint = typeof ckpt & {
-    completedRedoLsn: number
     numTimed: number
     numRequested: number
   }
   const runtimeCkpt = ckpt as RuntimeCheckpoint
-  runtimeCkpt.completedRedoLsn = ckpt.redoLsn
   runtimeCkpt.numTimed = 0
   runtimeCkpt.numRequested = 0
   const bgw = state.bgwriter
@@ -627,7 +623,7 @@ export function createSim(bus: Bus): SimApi {
    * possible pins against a pool whose slider minimum is 32 frames was enough to
    * pin the whole pool, which is how a pinned frame came to be stolen at all.
    */
-  const pinsFor = (): number => Math.max(1, Math.min(PINS, Math.floor(buf.size / (2 * N_BACKEND_SLOTS))))
+  const pinsFor = (): number => Math.max(1, Math.min(PINS, Math.floor(buf.sampleFrames / (2 * N_BACKEND_SLOTS))))
 
   function pinBuffer(slot: number, b: number): void {
     const base = slot * PINS
@@ -934,7 +930,7 @@ export function createSim(bus: Bus): SimApi {
    * frame that is pinned.
    */
   function clockVictim(): number {
-    const size = buf.size
+    const size = buf.sampleFrames
     let trycounter = size
     for (;;) {
       const b = buf.clockHand
@@ -961,7 +957,7 @@ export function createSim(bus: Bus): SimApi {
     const base = slot * RING
     const b = ringBuf[base + x.ringPos]
     x.ringPos = (x.ringPos + 1) % RING
-    if (b >= 0 && b < buf.size && !buf.pinned[b] && buf.usage[b] <= 1) return b
+    if (b >= 0 && b < buf.sampleFrames && !buf.pinned[b] && buf.usage[b] <= 1) return b
     const v = clockVictim()
     if (v >= 0) ringBuf[base + ((x.ringPos + RING - 1) % RING)] = v
     return v
@@ -979,7 +975,7 @@ export function createSim(bus: Bus): SimApi {
     const b = backends[slot]
     const x = extras[slot]
 
-    if (found !== undefined && found < buf.size && buf.valid[found]) {
+    if (found !== undefined && found < buf.sampleFrames && buf.valid[found]) {
       // PinBuffer(): a strategy access caps usage_count at 1 (`if (usage == 0)
       // usage = 1`), an ordinary one increments up to BM_MAX_USAGE_COUNT. That cap
       // is the whole point of a ring — a sequential scan must not be able to
@@ -1107,13 +1103,13 @@ export function createSim(bus: Bus): SimApi {
     // precedes one writes every dirty buffer out. Dropping the frames without
     // writing them was a silent loss of modified pages — and the one remaining
     // way a page dirty at a checkpoint's redo point could escape being written.
-    if (size < buf.size) {
-      for (let b = size; b < buf.size; b++) {
+    if (size < buf.sampleFrames) {
+      for (let b = size; b < buf.sampleFrames; b++) {
         writeOut(b, false)
         invalidate(b)
       }
     }
-    buf.size = size
+    buf.sampleFrames = size
     if (buf.clockHand >= size) buf.clockHand = 0
     if (bgw.scanPos >= size) bgw.scanPos = 0
     for (let i = 0; i < ringBuf.length; i++) if (ringBuf[i] >= size) ringBuf[i] = -1
@@ -1124,7 +1120,7 @@ export function createSim(bus: Bus): SimApi {
       for (let i = 0; i < PINS; i++) {
         const b = pinRing[s * PINS + i]
         if (b >= 0 && (i >= n || b >= size)) {
-          if (b < buf.size) buf.pinned[b] = 0
+          if (b < buf.sampleFrames) buf.pinned[b] = 0
           pinRing[s * PINS + i] = -1
         }
       }
@@ -1138,15 +1134,15 @@ export function createSim(bus: Bus): SimApi {
     let pinN = 0
     let usedN = 0
     const now = state.t
-    for (let b = 0; b < buf.size; b++) {
+    for (let b = 0; b < buf.sampleFrames; b++) {
       if (buf.pinned[b] && now - pinT[b] > 0.12) buf.pinned[b] = 0
       if (buf.valid[b]) usedN++
       if (buf.dirty[b]) dirtyN++
       if (buf.pinned[b]) pinN++
     }
-    buf.dirtyCount = dirtyN
-    buf.pinnedCount = pinN
-    buf.usedCount = usedN
+    buf.dirtyCount = asSampleFrames(dirtyN)
+    buf.pinnedCount = asSampleFrames(pinN)
+    buf.usedCount = asSampleFrames(usedN)
   }
 
   /* ======================================================================
@@ -1349,7 +1345,7 @@ export function createSim(bus: Bus): SimApi {
     // RemoveOldXlogFiles() after the checkpoint record is written and pg_control
     // updated, never at the start. This is why pg_wal holds its maximum right
     // through the write phase and steps down exactly once, at the end.
-    const sinceRedo = Math.max(0, wal.insertLsn - runtimeCkpt.completedRedoLsn)
+    const sinceRedo = Math.max(0, wal.insertLsn - ckpt.completedRedoLsn)
     let slotHold = 0
     if (rep.enabled) {
       const restart = rep.logicalEnabled ? Math.min(rep.flushLsn, rep.logicalSlotLsn) : rep.flushLsn
@@ -1371,7 +1367,7 @@ export function createSim(bus: Bus): SimApi {
     ckpt.reason = reason
     ckpt.elapsed = 0
     ckpt.progress = 0
-    ckpt.buffersWritten = 0
+    ckpt.buffersWritten = asSampleFrames(0)
     ckpt.nextInSec = K.checkpointTimeout
     ckptRecordTicket = 0
     if (reason === 'time') runtimeCkpt.numTimed++
@@ -1383,13 +1379,13 @@ export function createSim(bus: Bus): SimApi {
     // BufferSync(): tag the dirty set as it stands at the redo point. This IS
     // the checkpoint's obligation; nothing dirtied after this line belongs to it.
     let n = 0
-    for (let b = 0; b < buf.size; b++) {
+    for (let b = 0; b < buf.sampleFrames; b++) {
       if (buf.dirty[b]) {
         ckptNeeded[b] = 1
         n++
       } else ckptNeeded[b] = 0
     }
-    for (let b = buf.size; b < N_BUFFERS; b++) ckptNeeded[b] = 0
+    for (let b = buf.sampleFrames; b < N_BUFFERS; b++) ckptNeeded[b] = 0
     ckpt.buffersToWrite = n
     // Every page now owes a full-page image on its next modification.
     fpiGeneration++
@@ -1471,7 +1467,7 @@ export function createSim(bus: Bus): SimApi {
         // snapshot survived the checkpoint unwritten, which is precisely the
         // durability contract redoLsn depends on.
         let found = -1
-        while (ckptScan < buf.size) {
+        while (ckptScan < buf.sampleFrames) {
           const b = ckptScan++
           if (ckptNeeded[b]) {
             ckptNeeded[b] = 0
@@ -1482,7 +1478,7 @@ export function createSim(bus: Bus): SimApi {
         if (found < 0) {
           // Lap complete: every tagged buffer has been visited. (Only reachable
           // if the pool shrank underneath us.)
-          ckpt.buffersWritten = ckpt.buffersToWrite
+          ckpt.buffersWritten = asSampleFrames(ckpt.buffersToWrite)
           break
         }
         // BufferSync()'s num_processed. A tagged buffer someone else already
@@ -1537,7 +1533,7 @@ export function createSim(bus: Bus): SimApi {
       // everything since then — including every byte the checkpoint itself
       // produced while it ran. Assigning insertLsn here would zero retention at
       // completion instead of at start: right phase, wrong magnitude.
-      runtimeCkpt.completedRedoLsn = ckpt.redoLsn
+      ckpt.completedRedoLsn = ckpt.redoLsn
       ckpt.lastDuration = ckpt.elapsed
       ckpt.count++
       ckpt.phase = 'idle'
@@ -1571,7 +1567,7 @@ export function createSim(bus: Bus): SimApi {
     let scanned = 0
     bgw.scanPos = buf.clockHand
     while (scanned < lookahead && cleaned < K.bgwriterLruMaxpages) {
-      const b = (bgw.scanPos + scanned) % buf.size
+      const b = (bgw.scanPos + scanned) % buf.sampleFrames
       scanned++
       // only frames that are about to be handed out: usage 0, unpinned
       if (buf.dirty[b] && buf.usage[b] === 0 && !buf.pinned[b]) {
@@ -1584,7 +1580,7 @@ export function createSim(bus: Bus): SimApi {
         }
       }
     }
-    bgw.cleanedTotal += cleaned
+    bgw.cleanedTotal = asSampleFrames(bgw.cleanedTotal + cleaned)
     cleanedAcc += cleaned
     bgw.activity = damp(bgw.activity, clamp01(cleaned / Math.max(1, K.bgwriterLruMaxpages)), 6, BGW_DELAY)
   }
@@ -2770,6 +2766,7 @@ export function createSim(bus: Bus): SimApi {
 
   function tickBackends(dt: number): void {
     let activeN = 0
+    let runningN = 0
     for (let slot = 0; slot < N_BACKEND_SLOTS; slot++) {
       const b = backends[slot]
       const x = extras[slot]
@@ -2982,8 +2979,10 @@ export function createSim(bus: Bus): SimApi {
         case 'free':
           break
       }
+      if (b.active && isRunningState(b.state)) runningN++
     }
     stats.activeBackends = activeN
+    stats.runningBackends = runningN
   }
 
   function commitWaitEstimate(): number {
@@ -3060,13 +3059,14 @@ export function createSim(bus: Bus): SimApi {
       wal.bytesPerSec = damp(wal.bytesPerSec, walAcc / iv, 3, iv)
       stats.walBytesPerSec = wal.bytesPerSec
       stats.ioReadPerSec = damp(stats.ioReadPerSec, ioReadAcc / iv, 3, iv)
-      stats.ioWritePerSec = damp(stats.ioWritePerSec, ioWriteAcc / iv, 3, iv)
+      stats.ioWritePerSec = asSampleFrames(damp(stats.ioWritePerSec, ioWriteAcc / iv, 3, iv))
+      stats.ioWriteLoad = clamp01(stats.ioWritePerSec / DEVICE_PAGES_PER_SEC)
       // Writeback pressure. Quadratic, because a device does not degrade
       // linearly: it is fine until it is not. Reads are deliberately NOT in the
       // numerator — a read miss is already priced into exec duration through
       // missFrac, and counting it twice would let the buffer-pool lesson bleed
       // into the checkpoint one.
-      ioLoad = 1 + 2.5 * clamp01(stats.ioWritePerSec / DEVICE_PAGES_PER_SEC) ** 2
+      ioLoad = 1 + 2.5 * stats.ioWriteLoad ** 2
       bgw.cleanedPerSec = damp(bgw.cleanedPerSec, cleanedAcc / iv, 3, iv)
       // fpwBurst decays as the working set pays off its full-page images
       const fpiRatio = walAcc > 0 ? clamp01(fpiAcc / walAcc) : 0
@@ -3434,7 +3434,7 @@ export function createSim(bus: Bus): SimApi {
 
     bufMap.clear()
     accessCounts.clear()
-    buf.size = sampledBufferFrames(K.sharedBuffers)
+    buf.sampleFrames = sampledBufferFrames(K.sharedBuffers)
     buf.valid.fill(0)
     buf.dirty.fill(0)
     buf.pinned.fill(0)
@@ -3448,13 +3448,13 @@ export function createSim(bus: Bus): SimApi {
     buf.clockHand = 0
     buf.hits = 0
     buf.misses = 0
-    buf.evictions = 0
+    buf.evictions = asSampleFrames(0)
     buf.dirtyEvictions = 0
     buf.hitRatio = 0.9
     emaHits = emaSeen = 0
-    buf.dirtyCount = 0
-    buf.pinnedCount = 0
-    buf.usedCount = 0
+    buf.dirtyCount = asSampleFrames(0)
+    buf.pinnedCount = asSampleFrames(0)
+    buf.usedCount = asSampleFrames(0)
 
     const lsn0 = 0x1a000000
     wal.insertLsn = wal.writeLsn = wal.flushLsn = lsn0
@@ -3486,15 +3486,15 @@ export function createSim(bus: Bus): SimApi {
     ckpt.phase = 'idle'
     ckpt.progress = 0
     ckpt.buffersToWrite = 0
-    ckpt.buffersWritten = 0
+    ckpt.buffersWritten = asSampleFrames(0)
     ckpt.nextInSec = K.checkpointTimeout * 0.62
     ckpt.elapsed = 0
     ckpt.lastDuration = 0
     ckpt.reason = 'time'
     ckpt.count = 0
     ckpt.redoLsn = lsn0
+    ckpt.completedRedoLsn = lsn0
     // Both pointers, or the first tick reports a 26-billion-byte pg_wal.
-    runtimeCkpt.completedRedoLsn = lsn0
     runtimeCkpt.numTimed = 0
     runtimeCkpt.numRequested = 0
     ckptNeeded.fill(0)
@@ -3506,7 +3506,7 @@ export function createSim(bus: Bus): SimApi {
 
     bgw.enabled = K.bgwriterEnabled
     bgw.scanPos = 0
-    bgw.cleanedTotal = 0
+    bgw.cleanedTotal = asSampleFrames(0)
     bgw.cleanedPerSec = 0
     bgw.activity = 0
 
@@ -3604,9 +3604,11 @@ export function createSim(bus: Bus): SimApi {
     stats.tupDeleted = 0
     stats.walBytesPerSec = 0
     stats.ioReadPerSec = 0
-    stats.ioWritePerSec = 0
+    stats.ioWritePerSec = asSampleFrames(0)
+    stats.ioWriteLoad = 0
     stats.cacheHitPct = 90
     stats.activeBackends = 0
+    stats.runningBackends = 0
     runtimeStats.queueDepth = 0
     runtimeStats.queueSec = 0
     runtimeStats.refused = 0

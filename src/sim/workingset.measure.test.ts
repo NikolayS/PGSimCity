@@ -23,7 +23,7 @@ it('measures working-set behavior', { timeout: 120_000 }, () => {
     steps(sim, 6000)
     return {
       sharedBuffers,
-      frames: sim.state.buffers.size,
+      frames: sim.state.buffers.sampleFrames,
       hitPct: Number(sim.state.stats.cacheHitPct.toFixed(3)),
       evictions: sim.state.buffers.evictions,
       backendWrites: sim.state.buffers.dirtyEvictions,

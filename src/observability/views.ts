@@ -13,14 +13,12 @@
  *     PostgreSQL 18. They were checked against the manual one at a time.
  * ==========================================================================*/
 
-import { PG_PAGE_BYTES } from '../core/types'
+import { PG_PAGE_BYTES, poolBytes, poolPages } from '../core/types'
 import type { BackendSim, SimState, VacPhase } from '../core/types'
 import { N_TABLES } from '../world/layout'
 import { fmtBytes, fmtLsn, fmtNum } from '../core/util'
 import type { Collector } from './collector'
 import { PID } from './collector'
-
-const MIB = 1024 * 1024
 
 export type Tone = '' | 'ok' | 'warn' | 'crit' | 'accent' | 'dim'
 export type Mode = 'total' | 'rate'
@@ -476,15 +474,15 @@ const bgwriter: ProjectionFn = (s, c, mode) => ({
     {
       key: 'bgw',
       cells: {
-        buffers_clean: ctr(c.total.bgwClean, c.rate.bgwClean, mode),
+        buffers_clean: NULLC,
         buffers_alloc: ctr(c.total.buffersAlloc, c.rate.buffersAlloc, mode),
         stats_reset: { v: c.resetStamp, tone: 'dim' },
       },
     },
   ],
   caption: s.knobs.bgwriterEnabled
-    ? 'buffers_clean only ever counts pages the background writer cleaned a little way ahead of the clock hand. It is not supposed to be large; it is supposed to be non-zero.'
-    : 'bgwriter_lru_maxpages is effectively zero right now, so buffers_clean has stopped moving. Those writes did not go away — look at pg_stat_io.',
+    ? 'buffers_alloc is a full-stream page count. buffers_clean is blank because the city counts cleaning only inside its representative frame sample; presenting that sample counter as a PostgreSQL page count would mix scales in one row.'
+    : 'bgwriter_lru_maxpages is effectively zero. buffers_clean remains blank because the city has a representative-sample counter, not the full-stream PostgreSQL page count.',
 })
 
 const checkpointer: ProjectionFn = (s, c, mode) => {
@@ -509,7 +507,7 @@ const checkpointer: ProjectionFn = (s, c, mode) => {
           num_timed: ctr(t.ckptTimed, c.rate.ckptTimed, mode),
           num_requested: { v: mode === 'rate' ? `${c.rate.ckptRequested.toFixed(2)}/s` : fmtNum(t.ckptRequested), tone },
           forced: ratio(t.ckptRequested, done, (x) => (x > 0.5 ? 'crit' : x > 0.2 ? 'warn' : 'ok')),
-          buffers_written: ctr(t.ckptBuffers, c.rate.ckptBuffers, mode),
+          buffers_written: NULLC,
           write_time: n(t.ckptWriteMs),
           phase: {
             v: s.checkpoint.phase === 'idle' ? `idle · next in ${s.checkpoint.nextInSec.toFixed(0)}s` : s.checkpoint.phase,
@@ -521,7 +519,7 @@ const checkpointer: ProjectionFn = (s, c, mode) => {
     caption:
       done === 0
         ? `No checkpoint has completed since the counters were reset ${fmtNum(c.total.elapsed)} s ago, so forced % has nothing to divide and reads "—". That is not the page failing to load: on a healthy server with room in max_wal_size, an empty row here after a minute is exactly what you want to see, because it means the next checkpoint is still waiting for the timer. The phase column on the right is the one still moving.`
-        : 'forced % is num_requested / (num_timed + num_requested), computed by hand. Above roughly a fifth, max_wal_size is setting your checkpoint schedule and checkpoint_timeout is a decoration. The last column is not a column in any release — it is the model showing you what the checkpointer is doing this second.',
+        : 'forced % is num_requested / (num_timed + num_requested), computed by hand. buffers_written is blank because checkpoint writes are counted only inside the representative frame sample. Above roughly a fifth, max_wal_size is setting your checkpoint schedule and checkpoint_timeout is a decoration. The last column is model-only.',
   }
 }
 
@@ -642,10 +640,10 @@ const io: ProjectionFn = (s, c, mode) => {
           backend_type: { v: 'client backend', tone: tone || 'accent' },
           object: 'relation',
           context: 'normal',
-          reads: ctr(t.blksRead, c.rate.blksRead, mode),
+          reads: mode === 'rate' ? { v: `${fmtNum(s.stats.ioReadPerSec)}/s`, tone: 'dim' } : n(t.blksRead),
           hits: ctr(t.blksHit, c.rate.blksHit, mode),
-          writes: { v: mode === 'rate' ? `${fmtNum(c.rate.backendWrites, 1)}/s` : fmtNum(t.backendWrites), tone },
-          evictions: ctr(t.evictions, c.rate.evictions, mode),
+          writes: NULLC,
+          evictions: NULLC,
         },
       },
       {
@@ -656,7 +654,7 @@ const io: ProjectionFn = (s, c, mode) => {
           context: 'normal',
           reads: { v: '0', tone: 'dim' },
           hits: { v: '0', tone: 'dim' },
-          writes: ctr(t.ckptBuffers, c.rate.ckptBuffers, mode),
+          writes: NULLC,
           evictions: { v: '0', tone: 'dim' },
         },
       },
@@ -668,15 +666,15 @@ const io: ProjectionFn = (s, c, mode) => {
           context: 'normal',
           reads: { v: '0', tone: 'dim' },
           hits: { v: '0', tone: 'dim' },
-          writes: ctr(t.bgwClean, c.rate.bgwClean, mode),
+          writes: NULLC,
           evictions: { v: '0', tone: 'dim' },
         },
       },
     ],
     caption:
       totalWrites > 0
-        ? `client backend writes are ${(backendShare * 100).toFixed(0)}% of all writes. A user query only writes a page when the frame it wanted was dirty and it had to clean it first — that write is charged to somebody's latency. The model does not simulate autovacuum's own I/O, so there is no 'autovacuum worker' row here; on a real server there would be.`
-        : `Nothing has been written by anybody since the counters were reset, so there is no share to compute yet. The row that matters is the first one: when writes start appearing against 'client backend' rather than against the checkpointer, they are being paid for out of somebody's query latency. The model does not simulate autovacuum's own I/O, so there is no 'autovacuum worker' row here; on a real server there would be.`,
+        ? `Reads and hits are full-stream page counts. Writes and evictions are blank because the model records them only in its representative sample; that sample attributes ${(backendShare * 100).toFixed(0)}% of writes to client backends, but the ratio is not a pg_stat_io counter.`
+        : 'Reads and hits are full-stream page counts. Writes and evictions are blank because the model records them only in its representative sample, which cannot truthfully populate PostgreSQL page-count columns.',
   }
 }
 
@@ -691,7 +689,7 @@ const buffercache: ProjectionFn = (s) => {
   const pinned = [0, 0, 0, 0, 0, 0]
   let used = 0
   let usageSum = 0
-  for (let i = 0; i < b.size; i++) {
+  for (let i = 0; i < b.sampleFrames; i++) {
     if (!b.valid[i]) continue
     used++
     const u = Math.min(5, b.usage[i])
@@ -708,7 +706,7 @@ const buffercache: ProjectionFn = (s) => {
       buffers: n(cnt),
       dirty: { v: fmtNum(dirty[u]), tone: dirty[u] > 0 ? 'crit' : 'dim' },
       pinned: { v: fmtNum(pinned[u]), tone: 'dim' },
-      bar: { v: bar(cnt, b.size), tone: 'accent' },
+      bar: { v: bar(cnt, b.sampleFrames), tone: 'accent' },
     },
   }))
   rows.push({
@@ -716,10 +714,10 @@ const buffercache: ProjectionFn = (s) => {
     tone: 'dim',
     cells: {
       usage_count: { v: 'unused', tone: 'dim' },
-      buffers: { v: fmtNum(b.size - used), tone: 'dim' },
+      buffers: { v: fmtNum(b.sampleFrames - used), tone: 'dim' },
       dirty: { v: '0', tone: 'dim' },
       pinned: { v: '0', tone: 'dim' },
-      bar: { v: bar(b.size - used, b.size), tone: 'dim' },
+      bar: { v: bar(b.sampleFrames - used, b.sampleFrames), tone: 'dim' },
     },
   })
   return {
@@ -731,7 +729,7 @@ const buffercache: ProjectionFn = (s) => {
       { key: 'bar', label: '' },
     ],
     rows,
-    caption: `pg_buffercache_usage_counts() over ${fmtNum(b.size)} sampled frames (shared_buffers = ${fmtBytes(s.knobs.sharedBuffers * MIB)}), average usage_count ${used > 0 ? (usageSum / used).toFixed(2) : '0.00'}. These are the representative frames the city draws in the plaza; their state is sampled from the logical pool and scaled as shared_buffers changes. A sample where almost everything sits at usage_count 0 represents a pool being churned faster than anything can earn its place.`,
+    caption: `Representative pg_buffercache_usage_counts() sample over ${fmtNum(b.sampleFrames)} sampled frames (shared_buffers = ${fmtBytes(poolBytes(s.knobs))}; ${fmtNum(poolPages(s.knobs))} real 8 KiB buffers), average usage_count ${used > 0 ? (usageSum / used).toFixed(2) : '0.00'}. These rows describe only the plaza sample, not the complete shared_buffers array. A sample where almost everything sits at usage_count 0 is being churned faster than anything can earn its place.`,
   }
 }
 
@@ -943,8 +941,8 @@ const settings: ProjectionFn = (s) => {
       { key: 'context', label: 'context' },
     ],
     rows: [
-      row('shared_buffers', String(k.sharedBuffers * (MIB / PG_PAGE_BYTES)), '8kB', 'postmaster'),
-      row('wal_buffers', '32', '8kB', 'postmaster'),
+      row('shared_buffers', String(poolPages(k)), '8kB', 'postmaster'),
+      row('wal_buffers', String(s.wal.bufferCapacity / PG_PAGE_BYTES), '8kB', 'postmaster'),
       row('max_connections', String(s.maxConnections), '', 'postmaster'),
       row('checkpoint_timeout', String(Math.round(k.checkpointTimeout)), 's', 'sighup'),
       row('checkpoint_completion_target', k.checkpointCompletionTarget.toFixed(2), '', 'sighup'),
@@ -973,7 +971,7 @@ const slots: ProjectionFn = (s) => {
         'No slots. Set wal_level = logical to create one — and then remember that a slot nobody consumes retains WAL forever, which is the most reliable way to fill a production disk.',
     }
   }
-  const behind = s.wal.flushLsn - s.replication.logicalSlotLsn
+  const behind = s.wal.insertLsn - s.replication.logicalSlotLsn
   return {
     cols: [
       { key: 'slot_name', label: 'slot_name' },

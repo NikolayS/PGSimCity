@@ -452,14 +452,14 @@ export function createWalkController(opts: WalkOptions): WalkController {
     else if (row >= CITY.buf.grid) row = CITY.buf.grid - 1
     const tile = row * CITY.buf.grid + col
     const b = sim.buffers
-    const active = tile < b.size
+    const active = tile < b.sampleFrames
     const valid = active && b.valid[tile] !== 0
     const state = !active ? 'inactive' : !valid ? 'free' : b.dirty[tile] !== 0 ? 'dirty' : 'clean'
     const pinned = active && b.pinned[tile] !== 0
     const usage = active ? b.usage[tile] : 0
     const rel = valid && b.rel[tile] < sim.tables.length ? sim.tables[b.rel[tile]].def.name : 'no relation'
     const block = valid ? b.blk[tile] : 0
-    const size = Math.max(1, b.size)
+    const size = Math.max(1, b.sampleFrames)
     const clockDistance = active ? (tile - b.clockHand + size) % size : 0
     const key = `${state}|${pinned ? 1 : 0}|${usage}|${rel}|${block}|${clockDistance}`
     if (tile !== lastPoolTile) {

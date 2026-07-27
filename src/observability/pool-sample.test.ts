@@ -17,14 +17,14 @@ describe('observability buffer-pool readouts', () => {
   it('separates the pg_buffercache sample from shared_buffers', () => {
     const sim = createSim(createBus())
     const collector = createCollector(sim)
-    const originalSampleSize = sim.state.buffers.size
+    const originalSampleSize = sim.state.buffers.sampleFrames
     const originalPoolSize = sim.state.knobs.sharedBuffers
 
     const caption = PROJECTIONS.buffercache(sim.state, collector, 'total').caption
     expect(caption).toContain(`${originalSampleSize.toLocaleString()} sampled frames`)
     expect(caption).toContain(`shared_buffers = ${fmtBytes(originalPoolSize * MIB)}`)
 
-    sim.state.buffers.size = 1
+    sim.state.buffers.sampleFrames = 1 as typeof sim.state.buffers.sampleFrames
     const withSmallerSample = PROJECTIONS.buffercache(sim.state, collector, 'total').caption
     expect(withSmallerSample).toContain('1 sampled frames')
     expect(withSmallerSample).toContain(`shared_buffers = ${fmtBytes(originalPoolSize * MIB)}`)

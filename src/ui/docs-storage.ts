@@ -1,3 +1,4 @@
+import { poolBytes } from '../core/types'
 import type { BookRef, CheckpointPhase, ComponentDoc, DocRef, SimState, TableSim, VacPhase, WalSegment } from '../core/types'
 import { clamp, fmtBytes, fmtDuration, fmtLsn, fmtNum, fmtPct } from '../core/util'
 
@@ -12,8 +13,6 @@ import { clamp, fmtBytes, fmtDuration, fmtLsn, fmtNum, fmtPct } from '../core/ut
 /* ------------------------------ tiny helpers ----------------------------- */
 
 const PAGE = 8192
-const MIB = 1024 * 1024
-
 /** Sum a per-table quantity across the whole model, NaN-safe. */
 function sumTables(s: SimState, pick: (t: TableSim) => number): number {
   let n = 0
@@ -862,9 +861,9 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     ],
     metrics: [
       { label: 'shared_buffers hit ratio', get: (s) => fmtPct(s.buffers.hitRatio, 1), hint: 'misses may still be RAM hits in the OS cache' },
-      { label: 'shared_buffers', get: (s) => fmtBytes(s.knobs.sharedBuffers * MIB) },
+      { label: 'shared_buffers', get: (s) => fmtBytes(poolBytes(s.knobs)) },
       { label: 'Misses', get: (s) => fmtNum(s.buffers.misses), hint: 'reads that left shared_buffers — not necessarily disk' },
-      { label: 'Evictions', get: (s) => fmtNum(s.buffers.evictions) },
+      { label: 'Sample evictions', get: (s) => fmtNum(s.buffers.evictions) },
     ],
     knobs: ['sharedBuffers', 'seqScanRatio', 'tps'],
     see: ['disk.array', 'storage.table', 'bgwriter', 'storage.datadir'],
@@ -914,7 +913,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       { label: 'WAL fsynced to', get: (s) => fmtLsn(s.wal.flushLsn) },
       { label: 'WAL rate', get: (s) => `${fmtBytes(s.wal.bytesPerSec)}/s` },
       {
-        label: 'Dirty evictions',
+        label: 'Dirty sample evictions',
         get: (s) => fmtNum(s.buffers.dirtyEvictions),
         hint: 'a backend had to write a page before it could reuse the buffer',
       },
@@ -979,7 +978,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       { label: 'Last duration', get: (s) => fmtDuration(s.checkpoint.lastDuration) },
       { label: 'Triggered by', get: (s) => s.checkpoint.reason, hint: 'time = healthy, wal = max_wal_size too small' },
-      { label: 'Redo point', get: (s) => fmtLsn(s.checkpoint.redoLsn), hint: 'recovery would start here' },
+      { label: 'Redo point', get: (s) => fmtLsn(s.checkpoint.completedRedoLsn), hint: 'recovery would start here' },
     ],
     knobs: ['checkpointTimeout', 'maxWalSize', 'checkpointCompletionTarget', 'fullPageWrites', 'sharedBuffers'],
     see: ['bgwriter', 'wal.vault', 'disk.array', 'startup.proc'],
@@ -1027,14 +1026,14 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     ],
     metrics: [
       { label: 'State', get: (s) => (s.bgwriter.enabled ? `cleaning (${fmtPct(s.bgwriter.activity, 0)} busy)` : 'disabled') },
-      { label: 'Cleaned / s', get: (s) => fmtNum(s.bgwriter.cleanedPerSec) },
-      { label: 'Cleaned total', get: (s) => fmtNum(s.bgwriter.cleanedTotal) },
+      { label: 'Sample cleaned / s', get: (s) => fmtNum(s.bgwriter.cleanedPerSec) },
+      { label: 'Sample cleaned total', get: (s) => fmtNum(s.bgwriter.cleanedTotal) },
       {
-        label: 'Backend writes',
+        label: 'Sample backend writes',
         get: (s) => fmtNum(s.buffers.dirtyEvictions),
         hint: 'dirty buffers a query had to write itself — the number to keep low',
       },
-      { label: 'Dirty sample frames', get: (s) => `${fmtNum(s.buffers.dirtyCount)} / ${fmtNum(s.buffers.size)}` },
+      { label: 'Dirty sample frames', get: (s) => `${fmtNum(s.buffers.dirtyCount)} / ${fmtNum(s.buffers.sampleFrames)}` },
     ],
     knobs: ['bgwriterEnabled', 'bgwriterLruMaxpages', 'sharedBuffers', 'writeRatio'],
     see: ['checkpointer', 'os.cache', 'disk.array', 'storage.table'],
@@ -1327,7 +1326,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         get: (s) => fmtPct(ratio(s.stats.blksHit, s.stats.blksHit + s.stats.blksRead), 1),
         hint: 'shared_buffers hits over hits plus reads',
       },
-      { label: 'Active backends', get: (s) => `${fmtNum(s.stats.activeBackends)} / ${fmtNum(s.maxConnections)}` },
+      { label: 'Active backends', get: (s) => `${fmtNum(s.stats.runningBackends)} running` },
       { label: 'Tuples returned', get: (s) => fmtNum(s.stats.tupReturned) },
     ],
     knobs: ['tps', 'writeRatio', 'seqScanRatio'],
@@ -1490,7 +1489,8 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       { label: 'Replay activity', get: (s) => fmtPct(s.replication.applyActivity, 0) },
       {
         label: 'Crash recovery from',
-        get: (s) => `${fmtLsn(s.checkpoint.redoLsn)} (${fmtBytes(Math.max(0, s.wal.insertLsn - s.checkpoint.redoLsn))} of WAL)`,
+        get: (s) =>
+          `${fmtLsn(s.checkpoint.completedRedoLsn)} (${fmtBytes(Math.max(0, s.wal.flushLsn - s.checkpoint.completedRedoLsn))} of WAL)`,
         hint: 'how much the primary would have to replay right now',
       },
     ],

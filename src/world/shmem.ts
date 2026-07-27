@@ -1,11 +1,25 @@
 import * as THREE from 'three'
 import { COLOR, themeMode } from '../core/theme'
-import { BUF_GRID, N_BACKEND_SLOTS, N_BUFFERS, PG_PAGE_BYTES } from '../core/types'
+import { BUF_GRID, N_BACKEND_SLOTS, N_BUFFERS, poolBytes } from '../core/types'
 import type { SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, fmtBytes, fmtLsn, fmtNum, fmtPct, makeRng } from '../core/util'
 import { DECK_GATES } from './access'
 import type { DeckGate } from './access'
 import { ANCHOR, CITY, TABLES, bufferTilePos } from './layout'
+
+export function shmemDeckReadout(s: SimState): string {
+  return `${fmtBytes(poolBytes(s.knobs))} pool · ${fmtNum(s.buffers.sampleFrames)} sampled frames · ${s.stats.activeBackends}/${s.maxConnections} attached`
+}
+
+export function sharedBuffersReadout(s: SimState): string {
+  return `hit ${fmtPct(s.buffers.hitRatio, 1)} · ${fmtNum(s.buffers.sampleFrames)}-frame sample · ${fmtBytes(
+    poolBytes(s.knobs),
+  )} pool · ${fmtNum(s.buffers.usedCount)}/${fmtNum(s.buffers.sampleFrames)} sample frames used`
+}
+
+export function procArrayReadout(s: SimState): string {
+  return `${s.stats.runningBackends} active · xid ${fmtNum(s.xid)}`
+}
 
 /* ============================================================================
  * THE SHARED MEMORY PLAZA
@@ -46,7 +60,6 @@ const DECK_BOT = CITY.deck.top - CITY.deck.thickness
 const MOUNT_Y = DECK_TOP + 0.7
 
 const TAU = Math.PI * 2
-const MIB_BYTES = 1024 * 1024
 /** How many tiles behind the clock hand still show its trail. */
 const SWEEP_TRAIL = 26
 
@@ -990,8 +1003,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     color: COLOR.shmem,
     focus: { target: [0, DECK_TOP, 0], distance: 215, dir: [0.34, 0.6, 0.72] },
     labelAt: [0, DECK_TOP + 2, -DECK_D / 2 + 6],
-    readout: (s) =>
-      `${fmtBytes(s.knobs.sharedBuffers * MIB_BYTES)} pool · ${fmtNum(N_BUFFERS)} sampled frames · ${s.stats.activeBackends}/${s.maxConnections} attached`,
+    readout: shmemDeckReadout,
   })
 
   ctx.register({
@@ -999,7 +1011,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     // "Buffer pool" is the structure; shared_buffers is the parameter that
     // sizes it. Naming it only by the GUC conflates the two.
     name: 'Buffer pool (shared_buffers)',
-    role: 'a 1,024-frame sample of the page cache every backend reads through',
+    role: 'a representative sample of the page cache every backend reads through',
     kind: 'memory',
     district: 'shmem',
     object: bufGroup,
@@ -1007,10 +1019,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     color: COLOR.bufClean,
     focus: { target: [0, BASE_Y + 2, 0], distance: 104, dir: [0.12, 0.66, 0.74] },
     labelAt: [0, 12, 0],
-    readout: (s) =>
-      `hit ${fmtPct(s.buffers.hitRatio, 1)} · ${fmtNum(N_BUFFERS)}-frame sample · ${fmtBytes(
-        s.knobs.sharedBuffers * MIB_BYTES,
-      )} pool · ${fmtNum(s.buffers.usedCount)}/${fmtNum(s.buffers.size)} sample frames used`,
+    readout: sharedBuffersReadout,
   })
 
   ctx.register({
@@ -1037,7 +1046,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     tier: 1,
     color: COLOR.backend,
     focus: { target: [ANCHOR.procArray[0], MOUNT_Y + 5, ANCHOR.procArray[2]], distance: 40, dir: [-0.6, 0.52, -0.6] },
-    readout: (s) => `${s.stats.activeBackends} active · xid ${fmtNum(s.xid)}`,
+    readout: procArrayReadout,
   })
 
   ctx.register({
@@ -1104,7 +1113,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     tier: 1,
     color: COLOR.shmem,
     focus: { target: [ANCHOR.bufMapping[0], MOUNT_Y + 4, ANCHOR.bufMapping[2]], distance: 30, dir: [-0.78, 0.44, 0.44] },
-    readout: (s) => `${fmtNum(s.buffers.hits + s.buffers.misses)} lookups · ${fmtNum(s.buffers.evictions)} evictions`,
+    readout: (s) => `${fmtNum(s.buffers.hits + s.buffers.misses)} lookups · ${fmtNum(s.buffers.evictions)} sample evictions`,
   })
 
   /* =============================================================== UPDATE */
@@ -1123,7 +1132,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     const touch = b.lastTouch
     const blk = b.blk
     const n = Math.min(N, valid.length)
-    const size = clamp(b.size | 0, 0, n)
+    const size = clamp(b.sampleFrames | 0, 0, n)
     const hand = ((b.clockHand | 0) % Math.max(1, size) + Math.max(1, size)) % Math.max(1, size)
 
     const kH = 1 - Math.exp(-9 * dt)
@@ -1668,12 +1677,12 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     g2.textAlign = 'left'
     g2.font = '600 46px ui-monospace, SFMono-Regular, Menlo, monospace'
     g2.fillStyle = '#dbe7ff'
-    const poolBytes = sim.knobs.sharedBuffers * MIB_BYTES
-    g2.fillText(`shared_buffers  ${fmtBytes(poolBytes)} pool`, 34, 42)
+    const logicalPoolBytes = poolBytes(sim.knobs)
+    g2.fillText(`shared_buffers  ${fmtBytes(logicalPoolBytes)} pool`, 34, 42)
 
     g2.font = '600 32px ui-monospace, SFMono-Regular, Menlo, monospace'
     g2.fillStyle = '#a997ff'
-    g2.fillText(`REPRESENTATIVE SAMPLE  ·  ${fmtNum(N_BUFFERS)} frames shown`, 34, 94)
+    g2.fillText(`REPRESENTATIVE SAMPLE  ·  ${fmtNum(b.sampleFrames)} frames shown`, 34, 94)
 
     g2.font = '500 36px ui-monospace, SFMono-Regular, Menlo, monospace'
     g2.fillStyle = '#8fa5c4'
@@ -1681,7 +1690,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     g2.fillText(hit, 34, 148)
     const w1 = g2.measureText(hit).width
     g2.fillStyle = '#3fa7ff'
-    const used = `  sample used ${fmtNum(b.usedCount)}/${fmtNum(b.size)}`
+    const used = `  sample used ${fmtNum(b.usedCount)}/${fmtNum(b.sampleFrames)}`
     g2.fillText(used, 34 + w1, 148)
     const w2 = g2.measureText(used).width
     g2.fillStyle = '#ff4d6d'
@@ -1690,7 +1699,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     g2.fillStyle = '#8fa5c4'
     g2.font = '500 29px ui-monospace, SFMono-Regular, Menlo, monospace'
     g2.fillText(
-      `${fmtNum(poolBytes / PG_PAGE_BYTES)} buffers in pool  ·  sample evictions ${fmtNum(b.evictions)}  ·  sample pinned ${fmtNum(b.pinnedCount)}`,
+      `sample evictions ${fmtNum(b.evictions)}  ·  pinned sample frames ${fmtNum(b.pinnedCount)}`,
       34,
       210,
     )

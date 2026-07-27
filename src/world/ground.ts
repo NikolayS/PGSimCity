@@ -16,6 +16,14 @@ import {
 import type { PlanBounds } from './slonik'
 import type { DistrictId, SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
 
+export function worldGroundReadout(s: SimState): string {
+  return `${fmtNum(s.stats.tps, 0)} tps · ${s.stats.cacheHitPct.toFixed(1)}% cache hit · ${s.stats.runningBackends} active`
+}
+
+export function worldPitReadout(s: SimState): string {
+  return `${fmtNum(s.stats.ioReadPerSec)} read pages/s · ${fmtNum(s.stats.ioWritePerSec)} sampled write frames/s`
+}
+
 /* ============================================================================
  * GROUND — the plate PGSimCity is bolted to, and the hole cut through it.
  *
@@ -1000,8 +1008,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     tier: 0,
     focus: { target: [0, 0, 10], distance: 760, dir: [0.42, 0.5, 0.86] },
     labelAt: [0, 26, 0],
-    readout: (s: SimState) =>
-      `${fmtNum(s.stats.tps, 0)} tps · ${s.stats.cacheHitPct.toFixed(1)}% cache hit · ${s.stats.activeBackends} active`,
+    readout: worldGroundReadout,
   })
 
   ctx.register({
@@ -1019,8 +1026,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     focus: { target: [0, -40, -10], distance: 200, dir: [0.26, 0.2, 0.94] },
     labelAt: [0, -6, -CITY.pit.z],
     color: COLOR.storage,
-    readout: (s: SimState) =>
-      `${fmtBytes(s.stats.ioReadPerSec)}/s read · ${fmtBytes(s.stats.ioWritePerSec)}/s write`,
+    readout: worldPitReadout,
   })
 
   /* ---------------------------------------------------------------------

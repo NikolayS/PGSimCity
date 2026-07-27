@@ -1300,11 +1300,11 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     labelAt: [BX - 15, 16, BZ],
     color: COLOR.bgwriter,
     readout: (s: SimState) => {
-      const dirty = s.buffers.size > 0 ? s.buffers.dirtyCount / s.buffers.size : 0
+      const dirty = s.buffers.sampleFrames > 0 ? s.buffers.dirtyCount / s.buffers.sampleFrames : 0
       if (!s.bgwriter.enabled) {
         return `parked — bgwriter off · ${fmtNum(s.buffers.dirtyCount)} sampled frames dirty (${fmtPct(dirty)}) · backends writing their own`
       }
-      return `${s.bgwriter.cleanedPerSec.toFixed(0)} pages/s cleaned · sample ${fmtPct(dirty)} dirty`
+      return `${s.bgwriter.cleanedPerSec.toFixed(0)} sample frames/s cleaned · sample ${fmtPct(dirty)} dirty`
     },
   })
 
@@ -1719,7 +1719,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     _c.setHex(COLOR.bgwriter).multiplyScalar(bgOn ? 0.35 + bgAct * 0.9 : 0.04)
     for (let i = 0; i < BG_SHED_N; i++) bgwNeonMesh.setColorAt(IX_BG_SHED + i, _c)
 
-    const dirtyFrac = buf.size > 0 ? clamp01(buf.dirtyCount / buf.size) : 0
+    const dirtyFrac = buf.sampleFrames > 0 ? clamp01(buf.dirtyCount / buf.sampleFrames) : 0
     const dirtyLit = Math.round(dirtyFrac * TOTEM_N)
     for (let i = 0; i < TOTEM_N; i++) {
       const hot = i / TOTEM_N > 0.55

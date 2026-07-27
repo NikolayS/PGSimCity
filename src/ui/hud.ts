@@ -230,7 +230,7 @@ function health(s: SimState): Health {
   if (s.locks.length >= 3) return 'crit'
   if (s.stats.cacheHitPct < 50) return 'warn'
   if (s.replication.enabled && (s.replication.lagSec > 5 || lagClimbing(s.stats.history.lag))) return 'warn'
-  if (s.buffers.size > 0 && s.buffers.dirtyCount / s.buffers.size > 0.7) return 'warn'
+  if (s.buffers.sampleFrames > 0 && s.buffers.dirtyCount / s.buffers.sampleFrames > 0.7) return 'warn'
   return 'ok'
 }
 
@@ -245,7 +245,7 @@ function healthReason(s: SimState, h: Health): string {
   return 'Nothing dramatic is happening'
 }
 
-function vitalValue(key: VitalKey, s: SimState): { text: string; state: State } {
+export function vitalValue(key: VitalKey, s: SimState): { text: string; state: State } {
   switch (key) {
     case 'tps': {
       const offered = Math.max(1, s.knobs.tps)
@@ -269,7 +269,7 @@ function vitalValue(key: VitalKey, s: SimState): { text: string; state: State } 
     }
     case 'dirty': {
       const d = s.buffers.dirtyCount
-      const r = s.buffers.size > 0 ? d / s.buffers.size : 0
+      const r = s.buffers.sampleFrames > 0 ? d / s.buffers.sampleFrames : 0
       return { text: fmtNum(d), state: r > 0.75 ? 'crit' : r > 0.5 ? 'warn' : '' }
     }
     case 'lag': {

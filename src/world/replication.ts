@@ -5,6 +5,19 @@ import type { SimState, WorldContext, WorldFactory, WorldModule } from '../core/
 import { clamp, clamp01, damp, fmtBytes, fmtLsn, lerp, makeRng } from '../core/util'
 import { ANCHOR, CITY, TABLES, routeLength, routePoint, routeTangent } from './layout'
 
+export function standbyReadout(s: SimState): string {
+  const r = s.replication
+  if (!r.enabled) return 'offline'
+  if (!r.connected) return 'disconnected — falling further behind'
+  return `${fmtBytes(r.lagBytes)} behind · ${r.lagSec.toFixed(1)} s`
+}
+
+export function lsnRulerReadout(s: SimState): string {
+  return `primary flush ${fmtLsn(s.wal.flushLsn)} · replay ${fmtLsn(s.replication.replayLsn)} · lag ${fmtBytes(
+    s.replication.lagBytes,
+  )}`
+}
+
 /* ============================================================================
  * REPLICATION — a second cluster, and the wire that keeps it alive.
  *
@@ -1229,12 +1242,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     focus: { target: [98, 10, 288], distance: 150, dir: [-0.58, 0.42, 0.7] },
     labelAt: [BX, 20, BZ],
     color: COLOR.replication,
-    readout: (s: SimState) => {
-      const r = s.replication
-      if (!r.enabled) return 'offline'
-      if (!r.connected) return 'disconnected — falling further behind'
-      return `${fmtBytes(r.lagBytes)} behind · ${r.lagSec.toFixed(1)} s`
-    },
+    readout: standbyReadout,
   })
 
   ctx.register({
@@ -1248,8 +1256,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     focus: { target: [RULER_X, RULER_Y - 1, RULER_MID], distance: 72, dir: [-0.94, 0.28, -0.08] },
     labelAt: [RULER_X, RULER_Y + 5, RULER_MID],
     color: COLOR.warn,
-    readout: (s: SimState) =>
-      `primary flush ${fmtLsn(s.wal.flushLsn)} · replay ${fmtLsn(s.replication.replayLsn)} · lag ${fmtBytes(s.replication.lagBytes)}`,
+    readout: lsnRulerReadout,
   })
 
   ctx.register({

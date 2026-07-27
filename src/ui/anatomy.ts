@@ -1070,7 +1070,7 @@ function computeSnapshot(ctx: UiContext, tableIndex: number): PageSnapshot {
   let resident = false
   let newest = -Infinity
 
-  for (let i = 0; i < buffers.size; i++) {
+  for (let i = 0; i < buffers.sampleFrames; i++) {
     if (!buffers.valid[i] || buffers.rel[i] !== safeIndex) continue
     if (buffers.lastTouch[i] >= newest) {
       newest = buffers.lastTouch[i]

@@ -16,7 +16,7 @@
  * engineer who has simply never had to run a database at 3 a.m.
  * ==========================================================================*/
 
-import { SHARED_BUFFERS_FULL_SAMPLE_MIB, SHARED_BUFFERS_MIN_MIB } from '../core/types'
+import { poolBytes, SHARED_BUFFERS_FULL_SAMPLE_MIB, SHARED_BUFFERS_MIN_MIB } from '../core/types'
 import type { Knobs, SimState } from '../core/types'
 import { fmtBytes } from '../core/util'
 import type { Collector } from './collector'
@@ -261,7 +261,7 @@ export function coldShare(s: SimState): number {
   const b = s.buffers
   let used = 0
   let cold = 0
-  for (let i = 0; i < b.size; i++) {
+  for (let i = 0; i < b.sampleFrames; i++) {
     if (!b.valid[i]) continue
     used++
     if (b.usage[i] === 0) cold++
@@ -1008,14 +1008,14 @@ const VERDICTS: Verdict[] = [
     evidence: (s, c) => {
       const now = recentBackendWriteShare(c)
       return [
-        { label: 'client backend writes', value: Math.round(c.total.backendWrites).toLocaleString(), tone: 'crit' as const },
-        { label: 'share since reset', value: `${(backendWriteShare(c) * 100).toFixed(0)}%`, tone: 'crit' as const },
+        { label: 'sample client-backend writes', value: Math.round(c.total.backendWrites).toLocaleString(), tone: 'crit' as const },
+        { label: 'sample share since reset', value: `${(backendWriteShare(c) * 100).toFixed(0)}%`, tone: 'crit' as const },
         {
-          label: 'share in the last 2 s',
+          label: 'sample share in the last 2 s',
           value: `${(now * 100).toFixed(0)}%`,
           tone: (now > 0.4 ? 'crit' : now > 0.2 ? 'warn' : 'ok') as 'ok' | 'warn' | 'crit',
         },
-        { label: 'bgwriter buffers_clean/s', value: c.rate.bgwClean.toFixed(1), tone: (s.knobs.bgwriterEnabled ? 'warn' : 'crit') as 'warn' | 'crit' },
+        { label: 'sample bgwriter cleans/s', value: c.rate.bgwClean.toFixed(1), tone: (s.knobs.bgwriterEnabled ? 'warn' : 'crit') as 'warn' | 'crit' },
       ]
     },
     fix:
@@ -1058,7 +1058,7 @@ const VERDICTS: Verdict[] = [
     mechanism:
       'Postgres has no LRU list. The sweep walks the pool decrementing usage counts and takes the first frame at zero. That is cheap and needs no global lock, and it works beautifully — right up until there is nothing in the pool worth keeping, at which point the sweep degenerates into an expensive way of evicting pages you are about to need again.',
     evidence: (s) => [
-      { label: 'shared_buffers', value: fmtBytes(s.knobs.sharedBuffers * MIB), tone: 'warn' },
+      { label: 'shared_buffers', value: fmtBytes(poolBytes(s.knobs)), tone: 'warn' },
       { label: 'cache hit ratio', value: `${s.stats.cacheHitPct.toFixed(1)}%`, tone: s.stats.cacheHitPct < 90 ? 'crit' : 'warn' },
       { label: 'sampled frames at usage_count 0', value: `${(coldShare(s) * 100).toFixed(0)}%`, tone: 'crit' },
       { label: 'reads/sec', value: s.stats.ioReadPerSec.toFixed(0) },
@@ -1073,7 +1073,7 @@ const VERDICTS: Verdict[] = [
     },
     resolved: (s) => ({
       ok: coldShare(s) <= 0.55 && s.stats.cacheHitPct >= 92,
-      reading: `shared_buffers ${fmtBytes(s.knobs.sharedBuffers * MIB)} · ${(coldShare(s) * 100).toFixed(0)}% of sampled frames still at usage_count 0 · hit ratio ${s.stats.cacheHitPct.toFixed(1)}%`,
+      reading: `shared_buffers ${fmtBytes(poolBytes(s.knobs))} · ${(coldShare(s) * 100).toFixed(0)}% of sampled frames still at usage_count 0 · hit ratio ${s.stats.cacheHitPct.toFixed(1)}%`,
     }),
     city: 'shared.buffers',
     reading: [DOC('runtime-config-resource.html', 'Resource Consumption settings')],
@@ -1145,7 +1145,7 @@ const VERDICTS: Verdict[] = [
       'Lock waits are one of the few Postgres problems with a clean, unambiguous signal: wait_event_type = \'Lock\'. If nobody is showing it, no amount of lock tuning will help, and the queue you think you are seeing is a queue somewhere else.',
     evidence: (s) => [
       { label: 'lock waiters', value: '0', tone: 'ok' },
-      { label: 'active backends', value: String(s.stats.activeBackends) },
+      { label: 'active backends', value: String(s.stats.runningBackends) },
     ],
     fix: 'Go back to pg_stat_activity and read the wait buckets again — whatever they are queuing on, it is not the lock manager.',
     knobs: [KB.lockContention],
@@ -1278,7 +1278,7 @@ const VERDICTS: Verdict[] = [
     mechanism:
       'This is a genuinely common outcome, and it is worth stating plainly because it is the one nobody wants to report. An idle database under a "the site is slow" incident usually means the bottleneck is in the application, the pooler, or the network between them.',
     evidence: (s) => [
-      { label: 'active backends', value: String(s.stats.activeBackends), tone: 'ok' },
+      { label: 'active backends', value: String(s.stats.runningBackends), tone: 'ok' },
       { label: 'tps', value: s.stats.tps.toFixed(0) },
       { label: 'cache hit', value: `${s.stats.cacheHitPct.toFixed(1)}%`, tone: 'ok' },
     ],

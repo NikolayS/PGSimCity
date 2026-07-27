@@ -38,6 +38,17 @@ const _axisY = new THREE.Vector3(0, 1, 0)
 const TAU = Math.PI * 2
 const MB = 1024 * 1024
 
+export function walsenderReadout(s: SimState): string {
+  const r = s.replication
+  const consumers = (r.enabled ? 1 : 0) + (r.logicalEnabled ? 1 : 0)
+  if (!r.connected) {
+    return `${consumers} consumer bay${consumers === 1 ? '' : 's'} · disconnected · physical slot holding ${fmtBytes(
+      Math.max(0, s.wal.insertLsn - r.flushLsn),
+    )}`
+  }
+  return `${consumers} consumer bay${consumers === 1 ? '' : 's'} · sent ${fmtLsn(r.sentLsn)} · lag ${fmtBytes(r.lagBytes)}`
+}
+
 /** cx, cy, cz, w, h, d — for cylinders w/d are diameters. */
 type BoxSpec = [number, number, number, number, number, number]
 
@@ -1282,14 +1293,7 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
     focus: { target: [WS[0] + 4, 8, WS[2] + 6], distance: 74, dir: [-0.66, 0.38, 0.66] },
     labelAt: [WS[0], 20, WS[2]],
     color: COLOR.replication,
-    readout: (s: SimState) => {
-      const r = s.replication
-      const consumers = (r.enabled ? 1 : 0) + (r.logicalEnabled ? 1 : 0)
-      if (!r.connected) {
-        return `${consumers} consumer bay${consumers === 1 ? '' : 's'} · disconnected · slot holding ${fmtBytes(r.lagBytes)}`
-      }
-      return `${consumers} consumer bay${consumers === 1 ? '' : 's'} · sent ${fmtLsn(r.sentLsn)} · lag ${fmtBytes(r.lagBytes)}`
-    },
+    readout: walsenderReadout,
   })
 
   ctx.register({

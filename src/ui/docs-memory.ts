@@ -1,3 +1,4 @@
+import { poolBytes, poolPages } from '../core/types'
 import type { BackendSim, BackendState, BookRef, ComponentDoc, DocRef, PlanNode, SimState, TableSim } from '../core/types'
 import { fmtBytes, fmtDuration, fmtLsn, fmtNum, fmtPct } from '../core/util'
 
@@ -10,16 +11,12 @@ import { fmtBytes, fmtDuration, fmtLsn, fmtNum, fmtPct } from '../core/util'
 
 /* ------------------------------ helpers ------------------------------ */
 
-/** One model page = one real Postgres page. */
-const PAGE = 8192
-const MIB = 1024 * 1024
-
 const nz = (v: number | undefined | null): number =>
   typeof v === 'number' && isFinite(v) ? v : 0
 
 const ratio = (a: number, b: number): number => (b > 0 ? nz(a) / b : 0)
 
-const poolSize = (s: SimState): string => fmtBytes(nz(s.knobs?.sharedBuffers) * MIB)
+const poolSize = (s: SimState): string => fmtBytes(poolBytes(s.knobs))
 
 /** Count active backends sitting in any of the given states. */
 function nIn(s: SimState, ...states: BackendState[]): number {
@@ -69,7 +66,7 @@ function countPlanNodes(n: PlanNode | null | undefined, depth = 0): number {
 }
 
 /** States that mean "this backend is doing work right now". */
-const BUSY: BackendState[] = ['parse', 'plan', 'exec_cpu', 'exec_io', 'sort', 'wal_insert', 'commit_wait', 'sending']
+const BUSY: BackendState[] = ['parse', 'plan', 'exec_cpu', 'exec_io', 'sort', 'wal_insert', 'commit_wait', 'blocked', 'sending']
 
 /* ---------------------------- reference helpers ---------------------------
  * The reading list under each component. Every entry here was checked against
@@ -204,10 +201,14 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       { label: 'Buffer pool', get: poolSize, hint: 'shared_buffers; the plaza is a representative frame sample' },
       { label: 'Hit ratio', get: (s) => fmtPct(nz(s.buffers?.hitRatio)) },
       { label: 'Reads', get: (s) => `${fmtNum(nz(s.stats?.ioReadPerSec))} pages/s`, hint: 'pages pulled up from storage' },
-      { label: 'Writes', get: (s) => `${fmtNum(nz(s.stats?.ioWritePerSec))} pages/s`, hint: 'pages pushed down to storage' },
+      {
+        label: 'Writes (sample)',
+        get: (s) => `${fmtNum(nz(s.stats?.ioWritePerSec))} frames/s`,
+        hint: 'write activity inside the representative sample, not a full-stream page rate',
+      },
       {
         label: 'Dirty sample',
-        get: (s) => `${fmtNum(nz(s.buffers?.dirtyCount))} (${fmtPct(ratio(nz(s.buffers?.dirtyCount), nz(s.buffers?.size)))})`,
+        get: (s) => `${fmtNum(nz(s.buffers?.dirtyCount))} (${fmtPct(ratio(nz(s.buffers?.dirtyCount), nz(s.buffers?.sampleFrames)))})`,
         hint: 'sampled frames modified in memory, not yet written',
       },
     ],
@@ -614,15 +615,12 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     metrics: [
       {
         label: 'Pool size',
-        get: (s) => {
-          const bytes = nz(s.knobs?.sharedBuffers) * 1024 * 1024
-          return `${fmtBytes(bytes)} (${(bytes / PAGE).toLocaleString()} pages)`
-        },
+        get: (s) => `${fmtBytes(poolBytes(s.knobs))} (${poolPages(s.knobs).toLocaleString()} pages)`,
       },
-      { label: 'Sample in use', get: (s) => fmtPct(ratio(nz(s.buffers?.usedCount), nz(s.buffers?.size))) },
+      { label: 'Sample in use', get: (s) => fmtPct(ratio(nz(s.buffers?.usedCount), nz(s.buffers?.sampleFrames))) },
       {
         label: 'Dirty sample',
-        get: (s) => `${fmtNum(nz(s.buffers?.dirtyCount))} (${fmtPct(ratio(nz(s.buffers?.dirtyCount), nz(s.buffers?.size)))})`,
+        get: (s) => `${fmtNum(nz(s.buffers?.dirtyCount))} (${fmtPct(ratio(nz(s.buffers?.dirtyCount), nz(s.buffers?.sampleFrames)))})`,
       },
       { label: 'Hit ratio', get: (s) => fmtPct(nz(s.buffers?.hitRatio)) },
       {
@@ -679,8 +677,8 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       { label: 'Lookups', get: (s) => fmtNum(nz(s.buffers?.hits) + nz(s.buffers?.misses)), hint: 'cumulative probes: hits plus misses' },
       { label: 'Misses', get: (s) => fmtNum(nz(s.buffers?.misses)) },
       { label: 'Hit ratio', get: (s) => fmtPct(nz(s.buffers?.hitRatio)) },
-      { label: 'Evictions', get: (s) => fmtNum(nz(s.buffers?.evictions)), hint: 'frames recycled by the clock sweep' },
-      { label: 'Sample clock hand', get: (s) => `${fmtNum(nz(s.buffers?.clockHand))} / ${fmtNum(nz(s.buffers?.size))}` },
+      { label: 'Sample evictions', get: (s) => fmtNum(nz(s.buffers?.evictions)), hint: 'sample frames recycled by the clock sweep' },
+      { label: 'Sample clock hand', get: (s) => `${fmtNum(nz(s.buffers?.clockHand))} / ${fmtNum(nz(s.buffers?.sampleFrames))}` },
     ],
     knobs: ['sharedBuffers', 'tps', 'seqScanRatio'],
     see: ['shared.buffers', 'lock.manager', 'world.pit'],

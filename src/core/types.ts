@@ -15,6 +15,7 @@ import type * as THREE from 'three'
 /** Shared-buffer visual sample is BUF_GRID x BUF_GRID frame tiles. */
 export const BUF_GRID = 32
 export const N_BUFFERS = BUF_GRID * BUF_GRID
+export type SampleFrames = number & { readonly __sampleFrames: unique symbol }
 /** PostgreSQL's standard block size. */
 export const PG_PAGE_BYTES = 8 * 1024
 /** Real shared_buffers range exposed by the control rail, in binary MiB. */
@@ -115,6 +116,14 @@ export interface Knobs {
   /** Simulation speed multiplier. */
   timeScale: number
   paused: boolean
+}
+
+export function poolPages(knobs: Pick<Knobs, 'sharedBuffers'>): number {
+  return knobs.sharedBuffers * 128
+}
+
+export function poolBytes(knobs: Pick<Knobs, 'sharedBuffers'>): number {
+  return knobs.sharedBuffers * 1024 * 1024
 }
 
 export const DEFAULT_KNOBS: Knobs = {
@@ -220,8 +229,8 @@ export interface BackendSim {
 }
 
 export interface BufferPool {
-  /** Active frames in the 1,024-frame sample. Entries >= size are dark. */
-  size: number
+  /** Active frames in the representative sample. Later entries are dark. */
+  sampleFrames: SampleFrames
   valid: Uint8Array
   dirty: Uint8Array
   pinned: Uint8Array
@@ -234,15 +243,19 @@ export interface BufferPool {
   /** page number inside the relation (cosmetic) */
   blk: Uint32Array
   clockHand: number
+  /**
+   * hits and misses count the full logical request stream. evictions,
+   * dirtyEvictions, dirtyCount, pinnedCount and usedCount are sample-only.
+   */
   hits: number
   misses: number
-  evictions: number
+  evictions: SampleFrames
   dirtyEvictions: number
   /** smoothed 0..1 */
   hitRatio: number
-  dirtyCount: number
-  pinnedCount: number
-  usedCount: number
+  dirtyCount: SampleFrames
+  pinnedCount: SampleFrames
+  usedCount: SampleFrames
 }
 
 export type WalSegState = 'current' | 'full' | 'archiving' | 'archived' | 'recycled' | 'streamed'
@@ -283,7 +296,7 @@ export interface CheckpointState {
   /** 0..1 through the write phase */
   progress: number
   buffersToWrite: number
-  buffersWritten: number
+  buffersWritten: SampleFrames
   nextInSec: number
   elapsed: number
   lastDuration: number
@@ -291,13 +304,15 @@ export interface CheckpointState {
   count: number
   /** LSN at REDO point of the running/last checkpoint */
   redoLsn: number
+  /** REDO point recorded by the last completed checkpoint in pg_control. */
+  completedRedoLsn: number
 }
 
 export interface BgwriterState {
   enabled: boolean
   /** clock position 0..N_BUFFERS */
   scanPos: number
-  cleanedTotal: number
+  cleanedTotal: SampleFrames
   cleanedPerSec: number
   /** 0..1 how busy it looks */
   activity: number
@@ -390,10 +405,17 @@ export interface SimStats {
   tupUpdated: number
   tupDeleted: number
   walBytesPerSec: number
+  /** Full logical page stream; unlike ioWritePerSec, this is not sampled. */
   ioReadPerSec: number
-  ioWritePerSec: number
+  /** Representative-sample write rate; do not present it as full-pool I/O. */
+  ioWritePerSec: SampleFrames
+  /** Normalized representative-sample write pressure for presentation. */
+  ioWriteLoad: number
   cacheHitPct: number
+  /** Occupied connection slots, including idle sessions. */
   activeBackends: number
+  /** Backends whose pg_stat_activity state is active. */
+  runningBackends: number
   /** rolling window for sparklines: newest last */
   history: {
     tps: number[]

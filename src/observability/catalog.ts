@@ -134,7 +134,7 @@ export const CATALOG: CatalogEntry[] = [
     docs: `${M}#MONITORING-PG-STAT-BGWRITER-VIEW`,
     coverage: 'partial',
     coverageNote:
-      'buffers_clean and buffers_alloc are model output. maxwritten_clean would need the bgwriter to hit bgwriter_lru_maxpages and stop early, which the model does not track separately.',
+      'buffers_alloc is a full-stream model page count. buffers_clean is left blank because cleaning is counted only in the representative buffer sample; maxwritten_clean is not tracked separately.',
     version:
       'This view used to carry the checkpoint counters too. PostgreSQL 17 moved checkpoints_timed, checkpoints_req, checkpoint_write_time, checkpoint_sync_time and buffers_checkpoint into pg_stat_checkpointer, and moved buffers_backend and buffers_backend_fsync into pg_stat_io. Most tuning advice online still points at the old columns.',
     projection: 'bgwriter',
@@ -154,7 +154,7 @@ export const CATALOG: CatalogEntry[] = [
     docs: `${M}#MONITORING-PG-STAT-CHECKPOINTER-VIEW`,
     coverage: 'partial',
     coverageNote:
-      'num_timed, num_requested, buffers_written and write_time come straight from the model checkpointer. The model has no standby restartpoints and does not separate sync_time from write_time.',
+      'num_timed, num_requested and write_time come from the model checkpointer. buffers_written is blank because checkpoint writes are sample-scale. The model has no standby restartpoints and does not separate sync_time from write_time.',
     version:
       'New in 17, split out of pg_stat_bgwriter. On 16 and older use checkpoints_timed and checkpoints_req in pg_stat_bgwriter — the same two numbers under different names. num_done and slru_written arrived in 18.',
     projection: 'checkpointer',
@@ -191,7 +191,7 @@ export const CATALOG: CatalogEntry[] = [
     docs: `${M}#MONITORING-PG-STAT-IO-VIEW`,
     coverage: 'partial',
     coverageNote:
-      'The model genuinely distinguishes who moved each page — client backend, checkpointer or background writer — so reads, writes, hits and evictions are real. The timing columns need track_io_timing and the model has no clock on individual I/Os.',
+      'Reads and hits are full-stream model page counts. Write attribution exists only inside the representative buffer sample, so writes and evictions are deliberately blank rather than mixed with the full-stream columns. Timing columns need track_io_timing and the model has no clock on individual I/Os.',
     version:
       'New in 16, and the single biggest improvement to Postgres observability in years. Before 16, the closest signal is buffers_backend in pg_stat_bgwriter, which tells you backends wrote pages but not which relation, context or operation. PostgreSQL 18 replaced op_bytes with the per-operation read_bytes, write_bytes and extend_bytes.',
     projection: 'io',

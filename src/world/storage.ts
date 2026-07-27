@@ -5,6 +5,12 @@ import type { FlowRequest, SimState, WorldContext, WorldFactory, WorldModule } f
 import { clamp, clamp01, fmtBytes, fmtNum, fmtPct, makeRng } from '../core/util'
 import { ANCHOR, CITY, N_TABLES, TABLES, indexPos, rid, routeCurve, tableX } from './layout'
 
+export function diskArrayReadout(s: SimState): string {
+  return `${fmtNum(s.stats.ioReadPerSec)} read pages/s · ${fmtNum(s.stats.ioWritePerSec)} sampled write frames/s · fsync ${
+    s.checkpoint.phase === 'syncing' ? 'ACTIVE' : 'idle'
+  }`
+}
+
 /**
  * Opacity is semantic, never atmosphere. Physical matter is solid; `volume`
  * is only for non-physical regions, `glass` only for real enclosures whose
@@ -1368,10 +1374,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     // 96 units is inside the rack volume — frame the platters, do not enter them.
     focus: { target: [0, RACK_TOP - 4, RACK_Z + 10], distance: 205, dir: [0.2, 0.6, 0.78] },
     labelAt: [0, RACK_TOP + 5, RACK_Z],
-    readout: (s) =>
-      `${fmtNum(s.stats.ioReadPerSec)} read / ${fmtNum(s.stats.ioWritePerSec)} write pages/s · fsync ${
-        s.checkpoint.phase === 'syncing' ? 'ACTIVE' : 'idle'
-      }`,
+    readout: diskArrayReadout,
   })
 
   /* ================================================================ HEAP */
@@ -2021,7 +2024,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
 
   function updateOsCache(dt: number, sim: SimState, t: number): void {
     // Kernel eviction: residency fades under memory pressure, faster when busy.
-    const pressure = 0.05 + clamp01((sim.stats.ioReadPerSec + sim.stats.ioWritePerSec) / 900) * 0.28
+    const pressure = 0.05 + clamp01(sim.stats.ioReadPerSec / 900) * 0.14 + sim.stats.ioWriteLoad * 0.14
     const dec = Math.exp(-pressure * dt)
     const flashDec = dt * 2.4
 
@@ -2147,7 +2150,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
 
     const fg = fsyncGlow * (0.7 + 0.3 * Math.sin(t * 14))
     mFsync.color.setRGB(0.08 + fg * 1.9, 0.03 + fg * 0.55, 0.06 + fg * 1.2)
-    rackLight.intensity = 500 + fsyncGlow * 2200 + clamp01(sim.stats.ioWritePerSec / 400) * 700
+    rackLight.intensity = 500 + fsyncGlow * 2200 + sim.stats.ioWriteLoad * 700
   }
 
   /** Spread traffic over the neighbourhood of a crossing point, not one tile. */
