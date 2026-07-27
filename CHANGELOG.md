@@ -9,6 +9,44 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.6.0] — 2026-07-27
+
+Hacker News arrived, said the panels were in the way, and was right.
+
+### Fixed
+
+- **The city gets the screen back.** Four commenters said the same thing
+  independently — "eighty percent of the visual space is popups that completely
+  block it", "remove ~50% of the UI blocking the view", "on mobile especially".
+  Measured, they were right: at 1280 px the two side panels took 743 px and left
+  a ~540 px strip that the minimap covered further. They now start collapsed,
+  and the choice is remembered.
+- **The guided tour is findable.** Two people asked for a narrated walkthrough
+  that already existed and a third had to tell them so. That is a
+  discoverability failure, not a missing feature. It is now an obvious first
+  action rather than a keyboard shortcut behind a caution triangle.
+- **The flicker was z-fighting**, correctly diagnosed by a commenter — coplanar
+  ground surfaces, now separated with documented offsets.
+- **Swimming involves water.** The swim volume began at deck level, so anywhere
+  inside the tile field the walker was flagged as swimming while standing on
+  solid floor: feet planted, never sinking, never crossing a surface. The entry
+  splash fired once and then nothing ever happened again.
+- **The sample stops calling itself the pool.** The plaza's 1,024 tiles are a
+  sample of `shared_buffers`; several readouts multiplied that frame count by
+  8 KiB and called the result the pool, so one panel could say "2.0 GiB pool"
+  and "BUFFER POOL 8.0 MiB of 8.0 MiB" in consecutive lines.
+
+### Known issues
+
+- The declared working set is ~98 MiB while the `shared_buffers` slider starts
+  at 128 MiB, so every reachable setting saturates the sampled pool. The clock
+  sweep therefore never evicts and no backend ever writes a victim page. Being
+  fixed by enlarging the relations.
+- Buildings are not yet solid to a walker in first person.
+- Touch controls have been verified only in Chrome's mobile emulation.
+
+---
+
 ## [0.5.0] — 2026-07-26
 
 Daylight arrives, and the city stops going dark on ordinary hardware.
