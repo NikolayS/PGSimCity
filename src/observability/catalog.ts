@@ -287,7 +287,7 @@ export const CATALOG: CatalogEntry[] = [
     docs: 'https://www.postgresql.org/docs/current/pgbuffercache.html',
     coverage: 'live',
     coverageNote:
-      'The city\'s 1,024 buffer tiles are the model\'s buffer pool, frame for frame. isdirty and usagecount here are the same bytes the plaza is drawing.',
+      'The city\'s 1,024 buffer tiles are a representative sample of the model\'s logical pool. isdirty and usagecount come from those sampled frames, not from a claim that the whole pool is only 1,024 pages.',
     version:
       'pg_buffercache_summary() and pg_buffercache_usage_counts() arrived in 16 and are far cheaper than scanning the view — the view takes a lock on every buffer header. Do not run it in a loop on a large pool.',
     projection: 'buffercache',

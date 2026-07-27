@@ -216,7 +216,7 @@ const VITALS: Vital[] = [
   },
   {
     key: 'dirty',
-    label: 'dirty buffers',
+    label: 'dirty sample',
     color: 'var(--c-buffer-dirty)',
     read: (sim) => ({ v: String(sim.state.buffers.dirtyCount), tone: '' }),
     history: (sim) => sim.state.stats.history.dirty,

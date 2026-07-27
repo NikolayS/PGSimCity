@@ -18,7 +18,7 @@ import { ANCHOR, CITY, TABLES, bufferTilePos } from './layout'
  * every page you see on the deck came up one of those columns.
  *
  * Contents (all coordinates from layout.ts, never re-derived):
- *   shared.buffers  1024 page frames, one InstancedMesh, true state per frame
+ *   shared.buffers  1024 sampled page frames, one InstancedMesh, true state per frame
  *   wal.buffers     the circular WAL insert ring
  *   proc.array      PGPROC slots + the xmin horizon blade
  *   lock.manager    16 lock partitions and their wait-for edges
@@ -1677,12 +1677,12 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     g2.fillText(used, 34 + w1, 148)
     const w2 = g2.measureText(used).width
     g2.fillStyle = '#ff4d6d'
-    g2.fillText(`  dirty ${fmtNum(b.dirtyCount)}`, 34 + w1 + w2, 148)
+    g2.fillText(`  sample dirty ${fmtNum(b.dirtyCount)}`, 34 + w1 + w2, 148)
 
     g2.fillStyle = '#8fa5c4'
     g2.font = '500 29px ui-monospace, SFMono-Regular, Menlo, monospace'
     g2.fillText(
-      `${fmtNum(poolBytes / PG_PAGE_BYTES)} buffers in pool  ·  evictions ${fmtNum(b.evictions)}  ·  pinned ${fmtNum(b.pinnedCount)}`,
+      `${fmtNum(poolBytes / PG_PAGE_BYTES)} buffers in pool  ·  sample evictions ${fmtNum(b.evictions)}  ·  sample pinned ${fmtNum(b.pinnedCount)}`,
       34,
       210,
     )
@@ -2017,7 +2017,7 @@ function makeDeckTexture(rng: () => number): THREE.CanvasTexture {
     g.fillText(text, X(wx), Y(wz))
   }
 
-  label('SHARED_BUFFERS · 1024 × 8 KiB PAGE FRAMES', 0, b0 + 3.4, 2.4, 'center', 'rgba(63,167,255,0.7)')
+  label('SHARED_BUFFERS · REPRESENTATIVE SAMPLE · 1,024 FRAMES', 0, b0 + 3.4, 2.4, 'center', 'rgba(63,167,255,0.7)')
   label('CLOCK SWEEP →', -HALF_GRID + 10, -b0 - 5.2, 1.9, 'center', 'rgba(255,204,85,0.65)')
   label('wal_buffers', ANCHOR.walBuffers[0], ANCHOR.walBuffers[2] + 13.6, 2.3, 'center', 'rgba(255,176,58,0.8)')
   label('circular · insert → write → flush', ANCHOR.walBuffers[0], ANCHOR.walBuffers[2] + 16.4, 1.5)

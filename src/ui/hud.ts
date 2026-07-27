@@ -104,10 +104,10 @@ const VITALS: VitalDef[] = [
   },
   {
     key: 'dirty',
-    label: 'Dirty pages',
+    label: 'Dirty sample',
     focus: 'shared.buffers',
     color: cssColor('bufDirty'),
-    hint: 'Buffers modified in memory and not yet written to disk. Somebody has to pay for these eventually.',
+    hint: 'Sampled frames modified in memory and not yet written to disk. Somebody has to pay for these eventually.',
   },
   {
     key: 'lag',
@@ -240,7 +240,7 @@ function healthReason(s: SimState, h: Health): string {
   if (s.stats.cacheHitPct < 50) return `Cache hit ratio ${s.stats.cacheHitPct.toFixed(1)}% — most reads are going to storage`
   if (s.replication.enabled && s.replication.lagSec > 5) return `Standby is ${s.replication.lagSec.toFixed(1)}s behind`
   if (s.replication.enabled && lagClimbing(s.stats.history.lag)) return 'Replication lag is climbing'
-  if (h === 'warn') return 'Most of the buffer pool is dirty'
+  if (h === 'warn') return 'Most sampled buffer frames are dirty'
   return 'Nothing dramatic is happening'
 }
 
@@ -253,7 +253,7 @@ function vitalValue(key: VitalKey, s: SimState): { text: string; state: State } 
     }
     case 'hit': {
       // Banded against what THIS city can actually reach. Its workload runs
-      // sequential scans over relations far larger than a 768-frame pool, so it
+      // sequential scans over relations far larger than a 768-frame sample, so it
       // lives in the 60-90% range and only approaches 99% once the seq-scan
       // dial is turned down. Bands tuned to a real server's 99% would leave
       // this vital stuck on a warning for every visitor, which teaches nothing.

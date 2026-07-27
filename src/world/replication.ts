@@ -1255,7 +1255,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
   ctx.register({
     id: 'replica.buffers',
     name: 'standby shared_buffers',
-    role: 'a cache filled by the primary’s write set',
+    role: 'a representative sample of the cache filled by the primary’s write set',
     kind: 'memory',
     district: 'replication',
     object: gBuffers,
@@ -1263,7 +1263,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     focus: { target: [BX, 5, BZ], distance: 66, dir: [-0.32, 0.66, 0.68] },
     labelAt: [BX, 14, BZ],
     color: COLOR.bufClean,
-    readout: (s: SimState) => `${N_RTILE} frames · replay activity ${(s.replication.applyActivity * 100).toFixed(0)}%`,
+    readout: (s: SimState) => `${N_RTILE} sampled frames · replay activity ${(s.replication.applyActivity * 100).toFixed(0)}%`,
   })
 
   ctx.register({

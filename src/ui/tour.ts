@@ -82,7 +82,7 @@ const STEPS: TourStep[] = [
     id: 'buffers',
     title: 'Reading a page: the cache',
     body:
-      'Postgres never reads a single row off disk. It reads the whole 8 KiB page that contains it into shared_buffers — the lit plaza in the middle of the city — and every backend then reads that one copy. Blue tiles match what is on disk; the sweeping hand is the clock algorithm looking for a frame nobody wants any more. Watch the cache hit figure in the top bar. A tuned OLTP server sits above 99% because nearly every read lands on a tile that is already here; this city reaches the same range once its default working set is warm. Shrink shared_buffers below that working set, or make sequential scans sweep relations larger than a quarter of the pool, and the number falls as the clock starts evicting pages.',
+      'Postgres never reads a single row off disk. It reads the whole 8 KiB page that contains it into shared_buffers, represented by the sampled frames in the lit plaza, and every backend then reads that one cached copy. Blue tiles match what is on disk; the sweeping hand is the clock algorithm looking for a frame nobody wants any more. Watch the cache hit figure in the top bar. A tuned OLTP server sits above 99% because nearly every read lands on a page that is already cached; this city reaches the same range once its default working set is warm. Shrink shared_buffers below that working set, or make sequential scans sweep relations larger than a quarter of the pool, and the number falls as the clock starts evicting pages.',
     focus: 'shared.buffers',
     duration: 18,
     knobs: { seqScanRatio: 0.12 },
