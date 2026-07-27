@@ -1,7 +1,7 @@
 {
   "name": "pgsimcity",
   "private": true,
-  "version": "0.7.2",
+  "version": "0.8.0",
   "type": "module",
   "license": "Apache-2.0",
   "description": "An independent, non-commercial educational visualization of PostgreSQL internals. Not affiliated with Electronic Arts.",

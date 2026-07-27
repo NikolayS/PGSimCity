@@ -9,6 +9,37 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.8.0] — 2026-07-27
+
+### Added
+
+- **The trademark notice.** PGSimCity is an independent, non-commercial
+  educational visualization of PostgreSQL internals, not affiliated with,
+  sponsored, endorsed or approved by Electronic Arts Inc., and SimCity is a
+  trademark of Electronic Arts Inc. The notice appears on the loading screen,
+  near the top of the README, in the help surface, and in a footer reachable
+  from every screen including the observability page. The claim that this
+  project contains no SimCity code, assets, artwork, logos, characters, audio or
+  game content was added only after auditing for it — the favicon and boot mark
+  are hand-authored SVG, the audio engine synthesises everything and ships no
+  files, and the only traced artwork here is the PostgreSQL logo, a different
+  trademark already disclaimed in `NOTICE`.
+- **Row versions.** MVCC is what most reliably surprises someone arriving from
+  another database, and it was modelled without being shown at the level where
+  it teaches: dead tuples accumulated and vacuum removed them, but nothing said
+  why. You can now see an UPDATE write a second copy of a row, two transactions
+  looking at the same row and seeing different versions of it, and the old
+  version becoming collectable only once the horizon passes it.
+
+### Changed
+
+- **The tour waits for you.** Chapters advanced on a clock, whether or not you
+  had finished reading — and at 60 to 110 words each, anyone who stopped to look
+  at the thing being described lost their place. They now advance when you do,
+  auto-play is opt-in, and the card says which chapter of fourteen you are on.
+
+---
+
 ## [0.7.2] — 2026-07-27
 
 ### Fixed
