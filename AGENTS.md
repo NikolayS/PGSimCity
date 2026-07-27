@@ -28,22 +28,33 @@ An alternate source file may be passed as the first argument. This prints the
 silhouette, bounding box, segment count, and trunk proportion without a browser
 or GPU.
 
-Use the persistent headless verification driver at:
-
-```text
-/tmp/claude-1000/-home-tars/bf57591f-d077-4c2a-80f3-46cf3b053fba/scratchpad/cdp-keep.mjs
-```
-
-Its invocation is:
+For anything visible, use the headless driver in this repository:
 
 ```bash
-CDP_PORT=9501 node /tmp/claude-1000/-home-tars/bf57591f-d077-4c2a-80f3-46cf3b053fba/scratchpad/cdp-keep.mjs \
+CDP_PORT=9501 node tools/shoot.mjs \
   http://localhost:5173/ /tmp/pgsimcity.png 45000 1280 760
 ```
 
 Choose a unique `CDP_PORT` from 9500–9900 for every concurrent driver. Software
 WebGL runs at roughly 1–3 fps, so allow 45–70 seconds for the scene to settle.
 The optional final argument is JavaScript evaluated before the screenshot.
+
+### At most three browsers at once
+
+`tools/shoot.mjs` takes a slot from a directory semaphore at
+`/tmp/claude-1000/cdp-gate` before it launches, and waits if all slots are
+taken. The cap is three, overridable with `CDP_MAX`.
+
+**Do not raise it, and do not launch Chrome around the driver to avoid it.**
+Each browser rasterises WebGL through SwiftShader on the CPU and spikes to
+1–2 GiB while a frame is in flight. Ten agents screenshotting at once put this
+machine into swap and then into the OOM killer — twice in one session, losing
+in-flight work from every agent running at the time. Queuing is slower per
+screenshot and it finishes; colliding is faster and it does not.
+
+If a run is killed, its slot is reaped after ten minutes, so a dead agent
+cannot deadlock the gate. `tools/reap.sh` clears them immediately along with
+browsers older than fifteen minutes.
 
 `window.PGSIMCITY` exposes `bus`, `sim`, `rig`, `registry`, `gfx`, and `flows`.
 Use `sim.setKnob()`, `sim.runScenario()`, or `bus.emit('focus', { id: '...' })`

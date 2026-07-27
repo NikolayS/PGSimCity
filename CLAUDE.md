@@ -163,6 +163,14 @@ unseeded randomness, a browser, or a GPU when the underlying claim is pure.
   including once when an untracked dependency was invisible to an explicit
   add list.
 
+### Do not launch more than three browsers
+
+Visual verification goes through `tools/shoot.mjs`, which takes a slot from a
+three-way semaphore before launching. Each browser rasterises WebGL in software
+and spikes to 1-2 GiB per frame; ten at once exhausted this machine's memory
+twice in one session and killed every agent's in-flight work. Queue, do not
+collide. `AGENTS.md` has the details.
+
 ### Isolate cross-cutting work
 
 Anything touching `src/engine/renderer.ts`, `src/main.ts`,
