@@ -9,6 +9,30 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.7.1] — 2026-07-27
+
+Two things a stranger hit within minutes of arriving.
+
+### Fixed
+
+- **The screen no longer goes blank when you zoom in.** Reported from Hacker
+  News: "the site is going blank sometimes if I zoom in a bit too much."
+  Reproduced by sweeping the camera through its dolly range and reading every
+  frame — from 16 units inward the readable city disappears, and at 12 and 8
+  units the canvas is a near-flat ground or roof surface. The camera was being
+  allowed to dolly inside the buildings it was looking at, so every surface in
+  frame was back-faced and there was nothing to see, with no indication of what
+  had happened or how to get back out.
+- **The rotate gesture is discoverable.** Someone asked "How to rotate camera?"
+  — the controls follow the Google Maps convention, where left-drag pans and
+  shift with left-drag rotates, which is a good scheme that nobody could find.
+  That was the sixth time in this project that something has been built, wired
+  and left invisible, so the hint now appears where the gesture is being
+  attempted rather than in the help overlay where the previous five already
+  were.
+
+---
+
 ## [0.7.0] — 2026-07-27
 
 You can walk into the buildings, the clock sweep finally evicts, and one query
