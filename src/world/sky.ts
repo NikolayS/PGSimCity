@@ -23,6 +23,85 @@ const N_STARS = 1400
 const CLOUD_RADIUS = 1500
 
 /* ---------------------------------------------------------------------------
+ * THE BAND THAT DECIDES THE DAY SKY.
+ *
+ * engine/camera.ts puts the establishing shot at a 29.46° downward pitch
+ * against a 26° vertical half-FOV, so the top of the frame is already 3.46°
+ * BELOW the mathematical horizon. Two more things then eat into that:
+ *
+ *   - the HUD. Its opaque bar covers the top of the canvas — 118 px of 760 on
+ *     the desktop, 60 px of 844 on the phone — and that is the part of the
+ *     frame nearest the horizon;
+ *   - the plate. It is finite and Slonik-shaped, so the skyline it cuts is not
+ *     at one elevation; measured column by column it runs -12.4° to -16.1°.
+ *
+ * Measured off rendered frames, not derived: the visitor's sky is -11.5° to
+ * -16.1° on the desktop and -7.2° to -18.7° on the phone. NOTHING above the
+ * horizon is ever on screen until they orbit.
+ *
+ * So the whole gradient has to live below h = 0, and it has to run the right
+ * way. Darkening downward is the night idiom — correct when below the horizon
+ * really is ground — and applying it to daylight is what made this read as a
+ * flat grey plate. In daylight, below the horizon is DISTANCE: paler, warmer,
+ * lower in contrast, never darker.
+ * -------------------------------------------------------------------------*/
+export const ESTABLISHING_BAND = {
+  /** Phone, 390x844: between the HUD bar and the widest gap to the plate edge. */
+  topDeg: -7.2,
+  bottomDeg: -18.7,
+  /** Desktop, 1280x760: the tighter slice, and the one clouds must land in. */
+  desktopTopDeg: -11.5,
+  desktopBottomDeg: -16.1,
+} as const
+
+/* ---------------------------------------------------------------------------
+ * Day gradient shape. These numbers are shared: `skyFrag` is built from them by
+ * interpolation and `daySkyRamp` / `dayHazeMix` read the same object, so the
+ * testable model and the GLSL cannot drift apart.
+ * -------------------------------------------------------------------------*/
+const DAY = {
+  /** Fast rise off the horizon: real saturation inside the first ~17°. */
+  riseFrom: -0.02,
+  riseTo: 0.3,
+  /** Share of the ramp the fast rise owns; the rest is a linear tail. */
+  riseWeight: 0.62,
+  /** Where the linear tail starts. Linear, so the zenith never plateaus. */
+  deepFrom: 0.26,
+  /**
+   * Haze blend across and below the horizon. Note hazeTo < hazeFrom: it runs
+   * DOWNWARD, and it is fitted to ESTABLISHING_BAND — 0.50 of the way at the
+   * top of the desktop slice, 0.77 at the bottom of it, 0.91 by the phone's.
+   */
+  hazeFrom: 0.0,
+  hazeTo: -0.4,
+  /**
+   * Low sun-side warmth, centred in the visible band. Cubed in azimuth, so the
+   * frame is warm-grey on the sun's side and stays blue away from it. Vertical
+   * range is only a few degrees on the desktop, so this LATERAL shift is half
+   * of what stops the band reading as one flat wash.
+   */
+  glowCentre: -0.24,
+  glowFalloff: 4.5,
+  glowWeight: 0.46,
+} as const
+
+const g = (v: number): string => v.toFixed(4)
+
+/** Horizon→zenith mix for a dome height. Mirrors the ramp in `skyFrag`. */
+export function daySkyRamp(h: number): number {
+  const t = Math.max(0, Math.min(1, (h - DAY.riseFrom) / (DAY.riseTo - DAY.riseFrom)))
+  const rise = t * t * (3 - 2 * t)
+  const deep = Math.max(0, Math.min(1, (h - DAY.deepFrom) / (1 - DAY.deepFrom)))
+  return rise * DAY.riseWeight + deep * (1 - DAY.riseWeight)
+}
+
+/** How much below-horizon haze is blended over the ramp. Mirrors `skyFrag`. */
+export function dayHazeMix(h: number): number {
+  const t = Math.max(0, Math.min(1, (h - DAY.hazeFrom) / (DAY.hazeTo - DAY.hazeFrom)))
+  return t * t * (3 - 2 * t)
+}
+
+/* ---------------------------------------------------------------------------
  * SLONIK, the asterism.
  *
  * Fourteen stars in the eastern sky, above the WAL district — which is where a
@@ -90,8 +169,10 @@ void main() {
 const skyFrag = /* glsl */ `
 uniform vec3 uZenith;
 uniform vec3 uHorizon;
+uniform vec3 uHaze;
 uniform vec3 uGlow;
 uniform vec3 uSunDirection;
+uniform vec2 uSunFlat;
 uniform float uDaylight;
 varying vec3 vDir;
 
@@ -101,15 +182,28 @@ void main() {
 
   vec3 col;
   if ( uDaylight > 0.5 ) {
-    // The plate is finite and the establishing camera looks down, so its
-    // visible skyline lies below the mathematical horizon. Grade from that
-    // distant plate edge or the entire first-load band stays one flat color.
-    float skyHeight = pow( smoothstep( -0.30, 0.62, h ), 0.72 );
-    col = mix( uHorizon, uZenith, skyHeight );
+    // Two overlapping ramps. The smoothstep spends most of the gradient inside
+    // the first ~17°, where a visitor who tilts up at all is looking; the
+    // linear tail keeps deepening to the zenith, so looking straight up is sky
+    // and not a painted ceiling.
+    float rise = smoothstep( ${g(DAY.riseFrom)}, ${g(DAY.riseTo)}, h );
+    float deep = clamp( ( h - ${g(DAY.deepFrom)} ) / ${g(1 - DAY.deepFrom)}, 0.0, 1.0 );
+    col = mix( uHorizon, uZenith, rise * ${g(DAY.riseWeight)} + deep * ${g(1 - DAY.riseWeight)} );
 
-    // A trace of warm suspended haze stops the horizon reading as white fog.
-    float haze = exp( - abs( h + 0.28 ) * 12.0 );
-    col = mix( col, uGlow, haze * 0.055 );
+    // BELOW the horizon is the only sky the establishing shot has (see
+    // ESTABLISHING_BAND). In daylight that band is distance, not ground: it
+    // goes paler and warmer downward. Night keeps its multiply-down, below.
+    col = mix( col, uHaze, smoothstep( ${g(DAY.hazeFrom)}, ${g(DAY.hazeTo)}, h ) );
+
+    // Horizon haze is brightest under the sun, and the sun's azimuth is 21°
+    // off the home camera's — so this is the one sun cue the default framing
+    // can carry. The disc itself is 49° up and out of frame until you orbit.
+    vec2 fxz = vec2( d.x, d.z );
+    float toward = max( 0.0, dot( fxz / max( length( fxz ), 1e-4 ), uSunFlat ) );
+    float low = exp( - abs( h - ${g(DAY.glowCentre)} ) * ${g(DAY.glowFalloff)} );
+    // Cubed by multiplication, not pow(): this runs on every sky pixel and the
+    // dome is most of the frame in a renderer that is already fill-bound.
+    col = mix( col, uGlow, low * toward * toward * toward * ${g(DAY.glowWeight)} );
 
     // The directional light and this disc share one direction. A compact halo
     // softens the edge without turning the sky into a lens flare.
@@ -118,9 +212,6 @@ void main() {
     float disc = smoothstep( 0.99951, 0.99978, sunDot );
     col += vec3( 1.0, 0.72, 0.34 ) * halo * 0.11;
     col = mix( col, vec3( 1.0, 0.82, 0.48 ), disc * 0.94 );
-
-    // Deep below the visual skyline only the ground plate should be visible.
-    col *= mix( 0.58, 1.0, smoothstep( -0.48, -0.28, h ) );
   } else {
     // The established night gradient and restrained eastern warmth.
     col = mix( uHorizon, uZenith, smoothstep( -0.04, 0.62, h ) );
@@ -180,6 +271,7 @@ attribute float aSpeed;
 uniform float uTime;
 varying vec2 vUv;
 varying float vShape;
+varying float vHaze;
 
 void main() {
   float angle = uTime * aSpeed;
@@ -187,6 +279,10 @@ void main() {
   float sa = sin( angle );
   vec3 center = aCenter;
   center.xz = mat2( ca, -sa, sa, ca ) * center.xz;
+
+  // The low bank sits in the horizon haze and must not read as cut-out white
+  // against it; the high bank stays crisp. One instanced draw, both reads.
+  vHaze = 1.0 - smoothstep( -0.10, 0.24, normalize( aCenter ).y );
 
   // Offset in view space: every instance is a camera-facing patch of sky.
   vec4 mv = modelViewMatrix * vec4( center, 1.0 );
@@ -200,8 +296,10 @@ void main() {
 const cloudFrag = /* glsl */ `
 uniform vec3 uCloudTop;
 uniform vec3 uCloudBottom;
+uniform vec3 uCloudHaze;
 varying vec2 vUv;
 varying float vShape;
+varying float vHaze;
 
 float circle( vec2 p, vec2 center, float radius ) {
   return length( p - center ) - radius;
@@ -210,20 +308,30 @@ float circle( vec2 p, vec2 center, float radius ) {
 void main() {
   vec2 p = vUv;
   float spread = ( vShape - 0.5 ) * 0.16;
+
+  // The horizontal cut is what makes these read as cumulus, not smoke puffs.
+  float base = -0.31 + spread * 0.25;
+  // Reject the empty margin of the quad BEFORE the five length() calls. Around
+  // a third of the quad carries no silhouette, and this is a transparent draw
+  // over the largest thing in frame on a software rasteriser.
+  if ( p.y < base - 0.13 || p.y > 0.84 ) discard;
+
   float d = circle( p, vec2( -0.62 - spread, -0.06 ), 0.31 );
   d = min( d, circle( p, vec2( -0.34, 0.10 + spread ), 0.38 ) );
   d = min( d, circle( p, vec2( -0.03, 0.31 ), 0.44 ) );
   d = min( d, circle( p, vec2( 0.34, 0.14 - spread ), 0.37 ) );
   d = min( d, circle( p, vec2( 0.63 + spread, -0.07 ), 0.29 ) );
-
-  // The horizontal cut is what makes these read as cumulus, not smoke puffs.
-  float base = -0.31 + spread * 0.25;
   d = max( d, base - p.y );
-  float alpha = ( 1.0 - smoothstep( -0.015, 0.105, d ) ) * 0.72;
+  // The low bank is farther through more air: softer edge, hazier, and lower
+  // in contrast — but not invisible. Against the band it sits in it has to
+  // clear roughly 20 levels, or the sky is a flat wash again.
+  float edge = mix( 0.105, 0.185, vHaze );
+  float alpha = ( 1.0 - smoothstep( -0.015, edge, d ) ) * mix( 0.72, 0.62, vHaze );
   if ( alpha < 0.006 ) discard;
 
   float light = smoothstep( base, 0.62, p.y );
   vec3 col = mix( uCloudBottom, uCloudTop, 0.32 + light * 0.68 );
+  col = mix( col, uCloudHaze, vHaze * 0.44 );
   gl_FragColor = vec4( col, alpha );
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
@@ -242,15 +350,41 @@ const CLOUDS: readonly (readonly [number, number, number, number, number, number
   [-10, 14, 170, 66, 0.38, 0.00019],
   [24, 29, 215, 82, 0.9, 0.00014],
   [58, 19, 178, 68, 0.52, 0.00021],
-  // Home looks down toward azimuth 149°. This high, distant bank sits behind
-  // the finite plate even though that makes its sky-dome elevation negative.
-  [145, -12, 205, 88, 0.27, 0.00015],
   [118, 24, 225, 84, 0.64, 0.00013],
+  /* The low bank. Home looks down toward azimuth 149° with a 39° horizontal
+   * half-angle, so 110°–188° is what is on screen, and ESTABLISHING_BAND is
+   * the only elevation strip that is sky rather than plate or HUD. A cloud
+   * outside those two windows is a cloud nobody sees until they orbit — which
+   * is what the whole table above was. These sit BEYOND the plate edge, so the
+   * plate correctly draws over them as the viewer descends toward it. */
+  [113, -13.1, 215, 66, 0.44, 0.00009],
+  [149, -13.9, 240, 72, 0.81, 0.00007],
+  [180, -12.9, 195, 60, 0.22, 0.00011],
 ]
 
-/** Clouds cost one transparent draw, so the emergency tier leaves it out. */
+/** Elevation of every cloud instance, in degrees. */
+export function cloudElevations(): number[] {
+  return CLOUDS.map((c) => c[1])
+}
+
+/**
+ * Clouds are one instanced draw but they are TRANSPARENT FILL over the largest
+ * thing in frame, and this renderer is fill-bound. Measured by alternating the
+ * layer on and off in software WebGL: 0.398 fps with, 0.569 without — 30% of
+ * the frame — at the sizes the low bank was first authored at.
+ *
+ * The low bank was then halved in area and each quad rejects its empty margin
+ * before the SDF runs, which must help; how much was NOT re-measured, because
+ * this machine could no longer hold a stable frame rate long enough to A/B it.
+ * 30% is therefore the only number anyone should quote, and it is far outside
+ * the ~5% that would justify shipping this to people already short of frames.
+ *
+ * So the two tiers that exist because the machine could not keep up do without
+ * them. The dome's own gradient is what carries the establishing shot, and it
+ * costs nothing extra — clouds are the bonus, not the fix.
+ */
 export function skyCloudsVisible(air: Atmosphere, quality: QualityLevel): boolean {
-  return air.clouds && quality !== 'low'
+  return air.clouds && quality !== 'low' && quality !== 'reduced'
 }
 
 /**
@@ -263,25 +397,41 @@ export function applySkyAtmosphere(sky: THREE.Object3D, air: Atmosphere, quality
   if (uniforms) {
     const zenith = uniforms.uZenith?.value as THREE.Color | undefined
     const horizon = uniforms.uHorizon?.value as THREE.Color | undefined
+    const haze = uniforms.uHaze?.value as THREE.Color | undefined
     const glow = uniforms.uGlow?.value as THREE.Color | undefined
     zenith?.setHex(air.skyZenith)
     horizon?.setHex(air.skyHorizon)
+    haze?.setHex(air.skyHaze)
     glow?.setHex(air.skyGlow)
     const sun = uniforms.uSunDirection?.value as THREE.Vector3 | undefined
+    const x = air.keyPos[0] - air.keyTarget[0]
+    const y = air.keyPos[1] - air.keyTarget[1]
+    const z = air.keyPos[2] - air.keyTarget[2]
     if (sun) {
-      const x = air.keyPos[0] - air.keyTarget[0]
-      const y = air.keyPos[1] - air.keyTarget[1]
-      const z = air.keyPos[2] - air.keyTarget[2]
       const invLength = 1 / Math.hypot(x, y, z)
       sun.set(x * invLength, y * invLength, z * invLength)
+    }
+    const sunFlat = uniforms.uSunFlat?.value as THREE.Vector2 | undefined
+    if (sunFlat) {
+      // Flattened once here rather than per fragment; the sun's azimuth is what
+      // the low horizon glow needs and it only changes when the theme does.
+      const invFlat = 1 / Math.max(1e-6, Math.hypot(x, z))
+      sunFlat.set(x * invFlat, z * invFlat)
     }
     if (uniforms.uDaylight) uniforms.uDaylight.value = air.daylight ? 1 : 0
   }
 
+  const clouds = sky.getObjectByName('sky.clouds') as
+    | THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>
+    | undefined
+  if (clouds) {
+    clouds.visible = skyCloudsVisible(air, quality)
+    const cloudHaze = clouds.material.uniforms.uCloudHaze?.value as THREE.Color | undefined
+    cloudHaze?.setHex(air.skyHaze)
+  }
+
   const stars = sky.getObjectByName('sky.stars')
   if (stars) stars.visible = air.stars
-  const clouds = sky.getObjectByName('sky.clouds')
-  if (clouds) clouds.visible = skyCloudsVisible(air, quality)
 }
 
 /**
@@ -305,8 +455,10 @@ export function createSky(theme: ThemeApi): THREE.Object3D {
     uniforms: {
       uZenith: { value: new THREE.Color(zenith) },
       uHorizon: { value: new THREE.Color(horizon) },
+      uHaze: { value: new THREE.Color(horizon) },
       uGlow: { value: new THREE.Color(glow) },
       uSunDirection: { value: new THREE.Vector3(0, 1, 0) },
+      uSunFlat: { value: new THREE.Vector2(0, -1) },
       uDaylight: { value: 0 },
     },
     vertexShader: skyVert,
@@ -362,7 +514,8 @@ export function createSky(theme: ThemeApi): THREE.Object3D {
     uniforms: {
       uTime: skyTime,
       uCloudTop: { value: new THREE.Color(0xfffdf6) },
-      uCloudBottom: { value: new THREE.Color(0xc5d3dd) },
+      uCloudBottom: { value: new THREE.Color(0xaebfcd) },
+      uCloudHaze: { value: new THREE.Color(0xd0dce8) },
     },
     vertexShader: cloudVert,
     fragmentShader: cloudFrag,

@@ -3,6 +3,7 @@ import { destinationForDistrict } from '../core/destinations'
 import { COLOR, DAY_PALETTE, mixHex } from '../core/theme'
 import { clamp01, fmtBytes, fmtNum } from '../core/util'
 import { ANCHOR, CITY, DISTRICT_BOUNDS } from './layout'
+import { plateFogK } from './plate-fog'
 import {
   clearance,
   contains,
@@ -294,23 +295,26 @@ const cssHex = (c: number) => '#' + (c >>> 0).toString(16).padStart(6, '0')
 
 /** Cool architectural white for the kerb light. Structure, not a Postgres fact. */
 const RIM_LIGHT = mixHex(COLOR.gridBright, COLOR.ink, 0.58)
-/** How short the plate and its rim read the scene fog. See groundVert. */
-const FOG_K = 0.32
 
 /* ---------------------------------------------------------------------------
  * Rim construction.
  * -------------------------------------------------------------------------*/
 
 /**
- * Make the material read the scene fog at `FOG_K` of its true depth, so the rim
- * survives the same distances the slab does. Patched rather than switched off:
- * an edge light that ignores the fog entirely floats.
+ * Make the material read the scene fog at `plateFogK` of its true depth, so the
+ * rim survives the same distances the slab does. Patched rather than switched
+ * off: an edge light that ignores the fog entirely floats.
  */
 function dampFog<T extends THREE.Material>(m: T): T {
   m.onBeforeCompile = (shader) => {
+    shader.uniforms.uFogK = plateFogK
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <fog_pars_vertex>',
+      '#include <fog_pars_vertex>\nuniform float uFogK;',
+    )
     shader.vertexShader = shader.vertexShader.replace(
       '#include <fog_vertex>',
-      `#include <fog_vertex>\n#ifdef USE_FOG\n\tvFogDepth *= ${FOG_K.toFixed(3)};\n#endif`,
+      '#include <fog_vertex>\n#ifdef USE_FOG\n\tvFogDepth *= uFogK;\n#endif',
     )
   }
   m.customProgramCacheKey = () => 'pgc-rim-fog'
@@ -441,7 +445,6 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
       uRim: { value: new THREE.Color(mixHex(0x000000, RIM_LIGHT, 0.72)) },
       uTime: { value: 0 },
       uSweepR: { value: 900 },
-      uFogK: { value: FOG_K },
       uEdgeMax: { value: EDGE_MAX },
       uEdgeMap: {
         value: new THREE.Vector4(bounds.x0, bounds.z0, 1 / (bounds.x1 - bounds.x0), 1 / (bounds.z1 - bounds.z0)),
@@ -449,8 +452,11 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
       uEdge: { value: edgeTex },
     },
   ])
-  // UniformsUtils.merge clones values; the texture must be handed over after.
+  // UniformsUtils.merge clones values, so both of these are handed over after:
+  // the texture by reference, and the fog damping so the slab shares the one
+  // live object the rim materials were patched with.
   ;(gridUniforms.uEdge as { value: THREE.Texture | null }).value = edgeTex
+  gridUniforms.uFogK = plateFogK
   const uTime = gridUniforms.uTime as { value: number }
 
   const plateMat = new THREE.ShaderMaterial({

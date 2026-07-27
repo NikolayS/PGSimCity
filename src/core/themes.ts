@@ -108,7 +108,7 @@ export const NIGHT_PALETTE: Record<ColorKey, number> = {
 export const DAY_PALETTE: Record<ColorKey, number> = {
   /* --- surfaces: warm stone under a blue sky --- */
   bg: 0xbcdcf2, // clear colour behind the sky dome
-  fog: 0xc3d8ea, // distance haze — pale, but still a colour
+  fog: 0xd0dce8, // distance haze — and the sky's own below-horizon band
   grid: 0xa79f8c, // 10 m survey line, drawn ON the stone
   gridBright: 0x827a68, // 50 m block line, one step darker again
   ground: 0xcbc4b1, // the pavement itself
@@ -166,6 +166,20 @@ export interface Atmosphere {
   /** Multipliers on the city plan's fog distances. */
   fogNearScale: number
   fogFarScale: number
+  /**
+   * What distance dissolves INTO. Pinned to the sky's below-horizon haze so a
+   * fading building lands on the backdrop that is actually behind it; three
+   * separate values for fog, horizon and clear colour is what produced the
+   * hard seam where the ground plate met the sky.
+   */
+  fogColor: number
+  /**
+   * How short the ground plate reads the scene fog (world/ground.ts). Night
+   * damps it hard — 0.32 — so the Slonik plate silhouette survives the
+   * overview shot from 1.3 km up. Daylight needs real aerial perspective on
+   * the largest surface in frame, so it reads much longer.
+   */
+  plateFogScale: number
   hemiSky: number
   hemiGround: number
   hemiIntensity: number
@@ -199,6 +213,8 @@ export interface Atmosphere {
   /** Sky dome uniforms — see world/sky.ts. */
   skyZenith: number
   skyHorizon: number
+  /** The band BELOW the horizon, which is the only sky the home shot shows. */
+  skyHaze: number
   skyGlow: number
   daylight: boolean
   stars: boolean
@@ -213,6 +229,10 @@ export const ATMOSPHERE: Record<ThemeMode, Atmosphere> = {
     exposure: 1.06,
     fogNearScale: 1,
     fogFarScale: 1,
+    fogColor: NIGHT_PALETTE.fog,
+    // Do not move this. The Slonik plate silhouette in the overview shot rots
+    // silently when it changes, and no test caught it across four commits.
+    plateFogScale: 0.32,
     hemiSky: 0x2a4a7a,
     hemiGround: 0x05070c,
     hemiIntensity: 0.55,
@@ -239,6 +259,9 @@ export const ATMOSPHERE: Record<ThemeMode, Atmosphere> = {
     bloomThreshold: 0.85,
     skyZenith: 0x030408,
     skyHorizon: 0x19273f,
+    // Unused at night: the else branch of the dome shader multiplies the
+    // below-horizon band down instead, because at night it really is ground.
+    skyHaze: NIGHT_PALETTE.fog,
     skyGlow: 0x573c14,
     daylight: false,
     stars: true,
@@ -257,10 +280,29 @@ export const ATMOSPHERE: Record<ThemeMode, Atmosphere> = {
     // on the establishing shot: hemisphere 0.62 + key 1.35 gives 0.90–1.30
     // irradiance, and 0.92 exposure brings the top of that back under the knee.
     exposure: 1.0,
-    // Daylight sees a long way. The haze has to start well outside the city or
-    // the districts read through a white curtain.
-    fogNearScale: 2,
-    fogFarScale: 2,
+    /*
+     * Daylight sees a long way, but "a long way" is not "no haze at all". At
+     * 2.0/2.0 the curve did not start until 440, so the near half of the city
+     * received none of it at all and depth was flat.
+     *
+     * It cannot simply be tightened. The city is framed from two very different
+     * distances — the desktop home camera is 450 units from the city centre and
+     * the phone's is 1071 — so fog authored for the desktop's depth is measured
+     * at 0.54 on the phone, and every district loses the saturated hue that
+     * carries its meaning. Tried and photographed; the phone read as grey mush.
+     *
+     * So: pull the START in (341, from 440) and push the END out to match, which
+     * grades the near and middle distances while leaving the far end exactly
+     * where it already was. Measured fog fraction: 0.00 at 340, 0.24 at the far
+     * side of the city, 0.35 at the phone's city centre — within a point of
+     * today's — and 0.47 at the standby cluster, which is identical to today.
+     * The seam at the horizon is closed by plateFogScale instead, because that
+     * is a property of the one surface that has the problem.
+     */
+    fogNearScale: 1.55,
+    fogFarScale: 2.1,
+    fogColor: DAY_PALETTE.fog,
+    plateFogScale: 0.72,
     hemiSky: 0xd7ecff,
     hemiGround: 0xd6c49b, // warm bounce off the stone
     // The budget is a Lambert one: reflectance is irradiance/PI, so a sunlit
@@ -309,9 +351,21 @@ export const ATMOSPHERE: Record<ThemeMode, Atmosphere> = {
     bloomStrength: 0.1,
     bloomRadius: 0.35,
     bloomThreshold: 1.2,
-    skyZenith: 0x2f78c8,
-    skyHorizon: 0xbcdcf2,
-    skyGlow: 0xffdeb0,
+    /*
+     * Authored against the tone curve, not by eye: every value here passes
+     * through NeutralToneMapping at exposure 1.0, which flattens anything
+     * picked in hex. Measured output of the shipped ramp — 0° #97badb,
+     * 10° #6298cf, 25° #4480c7, 45° #276ec1, 90° #0461be — is a sky that keeps
+     * deepening instead of stopping at a painted ceiling around 38°.
+     */
+    skyZenith: 0x1f66c0,
+    skyHorizon: 0x7fb6e4,
+    skyHaze: DAY_PALETTE.fog,
+    // Warm WHITE, not amber. The horizon glow is mixed into a pale blue band,
+    // and an orange glow there subtracts the blue and lands on neutral grey —
+    // measured (211,206,203) at the sun's azimuth. This reads as brightness
+    // instead: (211,215,219), warm but still a sky.
+    skyGlow: 0xfff0d8,
     daylight: true,
     stars: false,
     clouds: true,

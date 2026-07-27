@@ -9,6 +9,53 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **The daylight sky is no longer an empty band above the city.** The defect
+  was not a missing day gradient — day colours existed and the renderer applied
+  them. It was that nobody could see them. The establishing camera sits at a
+  29.5° downward pitch against a 26° half-FOV, so the *top* of the frame is
+  already 3.5° **below** the horizon; the HUD bar then covers the part of the
+  canvas nearest it, and the finite ground plate cuts off the rest. Measured
+  off rendered frames, a visitor's entire sky is -11.5° to -16.1° on the
+  desktop and -7.2° to -18.7° on a phone, and the shader graded all of it as
+  if it were underground. In daylight, below the apparent horizon there is
+  distance, and distance is paler, warmer and lower in contrast, never darker.
+  That band now fades into the haze the scene fog is painted with, the blue
+  ramp is compressed so real saturation arrives within the first 17° rather
+  than the first 45°, and it keeps deepening to the zenith instead of stopping
+  at a painted ceiling around 38°. Because the visible slice is only a few
+  degrees tall, the horizon also brightens toward the sun's azimuth, which is
+  21° off the camera's and therefore in frame — the sun disc itself is 49° up
+  and still only pays off on orbit. Measured on the establishing shot, the sky
+  band went from 3 levels of variation across the frame to 38.
+- **A low bank of cloud, in the part of the sky that is on screen.** The seven
+  clouds already in the scene sat 14° to 29° up, which is nowhere a visitor
+  looks until they orbit. Three now sit around 13° below the horizon, beyond
+  the plate's edge, where the establishing shot can see them. They are one
+  instanced draw and no texture, as before. They are also transparent fill over
+  the largest thing in frame: measured by alternating the layer on and off in
+  software WebGL, 30% of the frame. They are therefore drawn at `medium` and
+  above only — the two tiers that exist to rescue a struggling machine now go
+  without them, and the dome's own gradient, which costs nothing extra, is what
+  carries the shot on that hardware.
+- **Distance now dissolves onto the sky instead of stopping at a seam.** Day
+  fog ran 440 to 2300 over a city 840 units deep, so the near half received
+  none of it, and the ground plate — the largest surface in frame — read the
+  fog at 0.32 of true depth and therefore received none anywhere. Its colour is
+  now pinned to the sky's own below-horizon haze, it starts at 341 rather than
+  440, and the plate reads it at 0.72 in daylight. It could not simply be
+  tightened further: the phone frames the city from 1071 units out against the
+  desktop's 450, and fog authored for the desktop's depth measures over half
+  strength there and turns the districts grey, which costs more than it buys.
+  Night keeps 0.32 and its own fog exactly: the Slonik plate silhouette in the
+  overview shot depends on both, and night is otherwise unchanged, pixel for
+  pixel, at matched quality.
+
+---
+
 ## [0.5.0] — 2026-07-26
 
 Daylight arrives, and the city stops going dark on ordinary hardware.
