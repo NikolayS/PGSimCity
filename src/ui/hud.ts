@@ -3,7 +3,7 @@ import '../styles/hud.css'
 import { DESTINATIONS, destinationForDistrict } from '../core/destinations'
 import { COLOR, cssColor, onThemeMode, themeMode, toggleThemeMode } from '../core/theme'
 import { clamp, fmtBytes, fmtDuration, fmtNum } from '../core/util'
-import type { Bus, CameraMode, QualityLevel, SimApi, SimState } from '../core/types'
+import type { Bus, CameraMode, QualityLevel, SimApi, SimState, TraceStop } from '../core/types'
 import { SCENARIOS } from '../sim/scenarios'
 import { DISTRICT_BOUNDS } from '../world/layout'
 import { MODE_IDS, modeTokens } from './mode-exits'
@@ -70,6 +70,16 @@ export function emitLoose(bus: Bus, type: string, payload: unknown): void {
 /* --------------------------------- config -------------------------------- */
 
 const SPEEDS = [0.1, 0.25, 0.5, 1, 2, 3, 5]
+const TRACE_RAIL: readonly TraceStop[] = [
+  'connect',
+  'parse_plan',
+  'fetch',
+  'work',
+  'wal',
+  'commit',
+  'send',
+  'done',
+]
 
 type VitalKey = 'tps' | 'hit' | 'wal' | 'dirty' | 'lag'
 
@@ -292,6 +302,7 @@ function vitalHistory(key: VitalKey, s: SimState): number[] {
 
 export function createHud(ctx: UiContext): UiModule {
   const bus = ctx.bus
+  const looseBus = bus as unknown as LooseBus
   const sim = ctx.sim
   const cleanup: (() => void)[] = []
 
@@ -447,6 +458,18 @@ export function createHud(ctx: UiContext): UiModule {
     icon('tour', 15),
     el('span', { text: 'Tour' }),
   )
+  const traceBtn = el(
+    'button',
+    {
+      class: 'pg-btn hud-tool hud-trace-open',
+      type: 'button',
+      title: 'Trace one fixed query through PostgreSQL  (Enter)',
+      'aria-label': 'Run a query',
+      on: { click: () => bus.emit('trace:open', {}) },
+    },
+    el('span', { 'aria-hidden': 'true', text: '▷' }),
+    el('span', { text: 'Run a query' }),
+  )
   const paletteBtn = toolBtn('search', 'Command palette', '/', () => openPalette())
   const helpBtn = toolBtn('help', 'Keyboard & legend', '?', () => toggleHelp())
   const audioLabel = el('span', { class: 'hud-audio__label', text: 'Sound off' })
@@ -583,6 +606,7 @@ export function createHud(ctx: UiContext): UiModule {
     sourceLink,
     viewBtn,
     tourBtn,
+    traceBtn,
     diagnoseLink,
     walkBtn,
     paletteBtn,
@@ -853,8 +877,21 @@ export function createHud(ctx: UiContext): UiModule {
     chipRow,
   )
 
-  /* Where the tool cluster lands on a phone. Empty, and zero-sized, otherwise. */
-  const dockSlot = el('div', { class: 'hud-transport__dock' })
+  const traceChips = TRACE_RAIL.map((stop) =>
+    el('span', {
+      class: 'hud-trace__stop',
+      text: stop === 'parse_plan' ? 'parse + plan' : stop,
+      data: { traceStop: stop },
+    }),
+  )
+  const traceRail = el(
+    'div',
+    { class: 'hud-trace', role: 'list', 'aria-label': 'Query trace stops' },
+    ...traceChips,
+  )
+
+  /* Where the trace rail lives, and where the tool cluster joins it on a phone. */
+  const dockSlot = el('div', { class: 'hud-transport__dock' }, traceRail)
 
   const transport = el(
     'div',
@@ -1298,6 +1335,11 @@ export function createHud(ctx: UiContext): UiModule {
       case 'Escape':
         escape()
         return
+      case 'Enter':
+        if (e.repeat) return
+        e.preventDefault()
+        bus.emit('trace:open', {})
+        return
       default:
         break
     }
@@ -1346,6 +1388,8 @@ export function createHud(ctx: UiContext): UiModule {
     // already toasts the "triggered by max_wal_size" case, so we stay quiet.
     bus.on('checkpoint:start', () => paintCheckpoint(sim.state)),
     bus.on('checkpoint:end', () => paintCheckpoint(sim.state)),
+    looseBus.on('ui:theme-toggle', () => toggleTheme()),
+    looseBus.on('ui:labels-toggle', () => toggleLabels()),
   )
 
   /* =======================================================================
@@ -1420,6 +1464,24 @@ export function createHud(ctx: UiContext): UiModule {
     }
     setClass(playBtn, 'is-active', paused)
     setText(speedEl, fmtSpeed(s.knobs.timeScale))
+  }
+
+  function paintTraceRail(s: SimState): void {
+    const trace = s.trace
+    const live = trace.sql.length > 0
+    setClass(traceRail, 'is-live', live)
+    setClass(traceBtn, 'is-active', live)
+    if (!live) return
+    const writes = trace.query === 'insert' || trace.query === 'update' || trace.query === 'delete'
+    for (let i = 0; i < TRACE_RAIL.length; i++) {
+      const stop = TRACE_RAIL[i]
+      const chip = traceChips[i]
+      const applicable = writes || (stop !== 'wal' && stop !== 'commit')
+      const visited = (trace.visited & (1 << i)) !== 0
+      setClass(chip, 'is-skipped', !applicable)
+      setClass(chip, 'is-visited', visited)
+      setClass(chip, 'is-now', trace.stop === stop)
+    }
   }
 
   function paintAudio(): void {
@@ -1532,6 +1594,9 @@ export function createHud(ctx: UiContext): UiModule {
 
   function update(dt: number, wallDt = dt): void {
     const s = sim.state
+    // Trace visits can be shorter than a rendered frame; the model's bitfield
+    // is the source, and the rail paints that record on every frame.
+    paintTraceRail(s)
     tFast += wallDt
     if (tFast >= 0.125) {
       tFast = 0
@@ -1559,6 +1624,7 @@ export function createHud(ctx: UiContext): UiModule {
   paintSparks(sim.state)
   paintCheckpoint(sim.state)
   paintTransport(sim.state)
+  paintTraceRail(sim.state)
   paintAudio()
   paintTheme()
   paintScenario()

@@ -185,6 +185,51 @@ export type QueryKind =
   | 'update'
   | 'delete'
 
+export type TraceStop =
+  | 'connect'
+  | 'parse_plan'
+  | 'fetch'
+  | 'work'
+  | 'wal'
+  | 'commit'
+  | 'send'
+  | 'done'
+  | 'blocked'
+
+export interface TraceRecord {
+  /** backend slot carrying the requested statement; -1 while connecting */
+  slot: number
+  query: QueryKind
+  /** index into SimState.tables */
+  table: number
+  sql: string
+  stop: TraceStop
+  /** simulated seconds from the start of this trip to the current stop */
+  stopT: number
+  /** one bit per TraceStop, set by the model when that stop is entered */
+  visited: number
+  /** transactions represented by the completed backend trip */
+  trips: number
+  lastXid: number
+  lastPlanLabel: string
+  lastPlanRows: number
+  lastPlanCost: number
+  rowsSent: number
+  buffersHit: number
+  buffersRead: number
+  walBytes: number
+  walFpiBytes: number
+  deadMade: number
+  lastTripSec: number
+}
+
+export interface TraceRequestOptions {
+  /** Override the model's HOT choice for a teaching example. */
+  hot?: boolean
+}
+
+export type TracePlayback = 'step' | 'slow' | 'live'
+
 export interface PlanNode {
   id: number
   label: string
@@ -219,6 +264,10 @@ export interface BackendSim {
   buffersHit: number
   buffersRead: number
   walBytes: number
+  /** full-page-image portion of walBytes */
+  walFpiBytes: number
+  /** dead row versions created by this trip */
+  deadMade: number
   /** last shared-buffer index this backend touched (for flow targeting) */
   lastBuffer: number
   /** total lifetime in seconds (connections are recycled) */
@@ -452,6 +501,8 @@ export interface SimState {
   scenarioT: number
   /** postmaster fork animation pulses */
   forkPulse: number
+  /** model-owned record of the requested statement trip */
+  trace: TraceRecord
 }
 
 export interface SimApi {
@@ -460,6 +511,9 @@ export interface SimApi {
   update(dt: number): void
   setKnob<K extends keyof Knobs>(key: K, value: Knobs[K]): void
   runScenario(id: string | null): void
+  request(kind: QueryKind, table: number, opts?: TraceRequestOptions): void
+  setTraceMode(mode: TracePlayback): void
+  endTrace(): void
   reset(): void
 }
 
@@ -502,7 +556,7 @@ export interface BusEvents {
   /** camera should frame a component */
   focus: { id: string | null; instant?: boolean }
   /** inspector panel target changed; `part` names a directly-picked substructure */
-  select: { id: string | null; part?: 'page' }
+  select: { id: string | null; part?: 'page'; outlineOnly?: boolean }
   hover: { id: string | null }
   knob: { key: keyof Knobs; value: unknown }
   scenario: { id: string | null }
@@ -516,6 +570,7 @@ export interface BusEvents {
   'tour:start': { chapter?: number }
   'tour:stop': Record<string, never>
   'tour:chapter': { index: number; total: number; title: string }
+  'trace:open': Record<string, never>
   /** open one of the physical anatomy instruments, optionally for a component */
   'anatomy:open': { view: 'page' | 'directory'; id?: string }
   'camera:mode': { mode: CameraMode }
@@ -883,8 +938,6 @@ export interface TourChapter {
   knobs?: Partial<Knobs>
   /** scenario to trigger on entry */
   scenario?: string | null
-  /** highlight these component ids (others dim) */
-  spotlight?: string[]
 }
 
 export interface ScenarioDef {
