@@ -9,6 +9,65 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.7.0] — 2026-07-27
+
+You can walk into the buildings, the clock sweep finally evicts, and one query
+can be followed across the whole city.
+
+### Fixed
+
+- **Buildings are solid.** Nine of the city's landmarks could be walked straight
+  through. The collision builder classifies an oversized mesh as needing a split
+  and then recurses into its children — and a district that merges its whole
+  structure into one geometry has no children, so the loop was empty and nothing
+  was ever added. Thirty-three oversized meshes were being silently discarded,
+  including the standby, the recovery ground, the backup vault, the WAL vault
+  and the disk array. A collision query along the line the walker took agreed
+  with him: there was no building there. Merged meshes are now split by their
+  own triangles. Collider count went from 765 to 989.
+- **Slopes work.** There were no surface normals anywhere in the collision code
+  and no maximum-slope rule, only a fixed tolerance — which made the climb limit
+  a function of speed: about 52 degrees at a run and 74 at a walk, and nothing
+  ever slid.
+- **The buffer pool now behaves like a cache.** The five demo relations totalled
+  98 MiB while the `shared_buffers` slider starts at 128 MiB, so the smallest
+  pool a user could pick was already bigger than the whole database. Every
+  slider position gave an identical sample, the clock sweep never evicted
+  anything, no backend ever wrote a victim page, and the `no-bgwriter` scenario
+  produced nothing at all. The working set is now larger, and the access skew is
+  tuned so the hot set still fits: **98.9% hit ratio with 7,602 evictions**,
+  which is what a real server looks like.
+- **The labels stopped covering the city.** Roles were told to stop truncating,
+  which was right on its own, but in aggregate every label then rendered name,
+  role and readout at every zoom — fifteen at once obscured more than the side
+  panels ever had. Detail follows attention now.
+- **Every mode has a visible way out.** The observability page's only exit was a
+  tooltip on the wordmark, which does not exist on touch. A test now enumerates
+  the modes and asserts each has a reachable exit control, not merely a key
+  binding.
+
+### Added
+
+- **Trace a query.** Pick a statement and follow it from the client terminal
+  through parse, plan, buffer reads, WAL and commit, narrated by the
+  transaction's own state machine rather than a script. Three people asked for
+  this independently, and a fourth said "even at 0.1x it is too quick — I should
+  be able to fire individual transactions and watch them flow", which is why it
+  has a step mode.
+- **The version and build hash** are on screen, so a bug report can say which
+  build it came from.
+
+### Changed
+
+- **The sample-versus-pool mistake is now unwritable.** A reviewer found
+  thirteen readouts whose label made a claim their computation did not satisfy —
+  a pool figure computed from the visualisation sample — after four had already
+  been fixed one at a time. The sample-scale counters now carry a nominal type
+  and the compiler rejects the mistake, with contract tests that assert a
+  readout named for the pool actually moves when the pool moves.
+
+---
+
 ## [0.6.0] — 2026-07-27
 
 Hacker News arrived, said the panels were in the way, and was right.
