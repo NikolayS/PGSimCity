@@ -9,6 +9,25 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.7.2] — 2026-07-27
+
+### Fixed
+
+- **At full zoom the city now tells you what you are looking at.** v0.7.1 stopped
+  the camera dollying inside the buildings, and that held. But what replaced the
+  blank frame was a wall of buffer-pool tiles with nothing naming them —
+  legible only to someone who already knew that was `shared_buffers` at page
+  scale. The literal blank was gone and the disorientation was not, which is
+  plausibly what the original reporter experienced. Close range now identifies
+  what fills the view and registers itself as a mode with a documented way back.
+- **One camera distance floor instead of two.** `MIN_DOLLY_DIST` guarded the
+  wheel at 24 while `MIN_DIST` let six other paths reach 8, and the measured
+  blank range starts near 16 — so the shipped fix held only because nothing
+  happened to point the camera that close. A test guarded it from the outside;
+  now a single constant means the mistake cannot be written.
+
+---
+
 ## [0.7.1] — 2026-07-27
 
 Two things a stranger hit within minutes of arriving.
