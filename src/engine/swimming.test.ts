@@ -9,6 +9,9 @@ import { createCollisionWorld } from './collision'
 import { createBufferWater } from './water'
 import { createWalkController } from './walk'
 
+const POOL_HALF = ((CITY.buf.grid - 1) * CITY.buf.pitch + CITY.buf.tile) / 2
+const POOL_SURFACE = CITY.buf.baseY + CITY.buf.maxRise + 0.4
+
 function fakeAudio(): AudioApi {
   return {
     enable: vi.fn(async () => {}),
@@ -24,27 +27,173 @@ function fakeAudio(): AudioApi {
   }
 }
 
-describe('buffer-pool swimming', () => {
-  it('makes crossing the surface an audio and visual event and keeps water movement dense', () => {
-    const bus = createBus()
-    const audio = fakeAudio()
-    const visualSplash = vi.fn()
-    const collision = createCollisionWorld()
-    const camera = new THREE.PerspectiveCamera()
-    camera.position.set(0, 30, 40)
-    const dom = new EventTarget() as HTMLElement
-    const walk = createWalkController({
-      camera,
-      dom,
-      collision,
-      audio,
-      sim: createSim(bus).state as SimState,
-      bus,
-      water: { splash: visualSplash },
-    })
+interface WalkHarness {
+  audio: AudioApi
+  collision: ReturnType<typeof createCollisionWorld>
+  deck: THREE.Mesh
+  visualSplash: ReturnType<typeof vi.fn>
+  walk: ReturnType<typeof createWalkController>
+  dispose(): void
+}
 
-    void walk.enter()
-    for (let i = 0; i < 12; i++) walk.update(0.1)
+function createWalkHarness(
+  tuning?: Parameters<typeof createWalkController>[0]['tuning'],
+): WalkHarness {
+  const bus = createBus()
+  const audio = fakeAudio()
+  const visualSplash = vi.fn()
+  const collision = createCollisionWorld()
+  const deck = new THREE.Mesh(
+    new THREE.PlaneGeometry(CITY.deck.w, CITY.deck.d),
+    new THREE.MeshBasicMaterial(),
+  )
+  deck.rotation.x = -Math.PI / 2
+  deck.position.y = CITY.deck.top
+  deck.updateMatrixWorld(true)
+  collision.addWalkable(deck, 'deck')
+
+  const camera = new THREE.PerspectiveCamera()
+  camera.position.set(0, 30, 40)
+  const dom = new EventTarget() as HTMLElement
+  const walk = createWalkController({
+    camera,
+    dom,
+    collision,
+    audio,
+    sim: createSim(bus).state as SimState,
+    bus,
+    water: { splash: visualSplash },
+    tuning,
+  })
+  void walk.enter(new THREE.Vector3(0, CITY.deck.top + 3.2, 48))
+  for (let i = 0; i < 4; i++) walk.update(0.1)
+
+  return {
+    audio,
+    collision,
+    deck,
+    visualSplash,
+    walk,
+    dispose(): void {
+      walk.dispose()
+      collision.dispose()
+      deck.geometry.dispose()
+      ;(deck.material as THREE.Material).dispose()
+    },
+  }
+}
+
+describe('buffer-pool swimming', () => {
+  it('keeps a walker on the deck grounded while crossing the buffer tile field', () => {
+    const harness = createWalkHarness()
+    const { audio, walk } = harness
+    walk.position.set(0, CITY.deck.top, POOL_HALF + 0.12)
+    walk.update(0.02)
+    expect(walk.grounded).toBe(true)
+    expect(walk.surface).toBe('deck')
+
+    walk.setTouchMove(0, 1)
+    for (let i = 0; i < 8; i++) walk.update(0.02)
+
+    expect(walk.position.z).toBeLessThan(POOL_HALF)
+    expect(walk.grounded).toBe(true)
+    expect(walk.gait).not.toBe('swim')
+    expect(walk.surface).toBe('deck')
+    expect(audio.splash).not.toHaveBeenCalled()
+    harness.dispose()
+  })
+
+  it('swims in the water column without treating the deck as ground', () => {
+    const harness = createWalkHarness()
+    const { walk } = harness
+    walk.position.set(0, CITY.deck.top + 1, 0)
+    walk.update(0.02)
+
+    expect(walk.gait).toBe('swim')
+    expect(walk.grounded).toBe(false)
+    expect(walk.surface).toBe('water')
+    expect(walk.verticalSpeed).toBeLessThan(0)
+    harness.dispose()
+  })
+
+  it('lands on the pool bottom without treating bottom contact as an exit splash', () => {
+    const harness = createWalkHarness()
+    const splash = vi.mocked(harness.audio.splash)
+    harness.walk.position.set(0, CITY.deck.top + 1, 0)
+    harness.walk.update(0.02)
+
+    for (let i = 0; i < 500 && !harness.walk.grounded; i++) {
+      harness.walk.update(0.02)
+    }
+
+    expect(harness.walk.position.y).toBeCloseTo(CITY.deck.top, 4)
+    expect(harness.walk.grounded).toBe(true)
+    expect(harness.walk.gait).not.toBe('swim')
+    expect(harness.walk.verticalSpeed).toBe(0)
+    expect(splash).toHaveBeenCalledTimes(1)
+    harness.dispose()
+  })
+
+  it('keeps downward entry at the surface instead of teleporting to float depth', () => {
+    const harness = createWalkHarness({ gravity: 10 })
+    const splash = vi.mocked(harness.audio.splash)
+    harness.walk.position.set(0, POOL_SURFACE + 0.2, 0)
+
+    for (let i = 0; i < 80 && splash.mock.calls.length === 0; i++) {
+      harness.walk.update(0.02)
+    }
+
+    expect(splash).toHaveBeenCalledTimes(1)
+    expect(harness.walk.position.y).toBeGreaterThan(POOL_SURFACE - 0.5)
+    expect(harness.walk.verticalSpeed).toBeLessThan(0)
+    harness.dispose()
+  })
+
+  it('fires exactly one entry splash with intensity proportional to impact speed', () => {
+    function drop(height: number): number {
+      const harness = createWalkHarness({ gravity: 10 })
+      const splash = vi.mocked(harness.audio.splash)
+      harness.walk.position.set(0, POOL_SURFACE + height, 0)
+      for (let i = 0; i < 80 && splash.mock.calls.length === 0; i++) {
+        harness.walk.update(0.02)
+      }
+      for (let i = 0; i < 8; i++) harness.walk.update(0.02)
+      expect(splash).toHaveBeenCalledTimes(1)
+      expect(harness.visualSplash).toHaveBeenCalledTimes(1)
+      const intensity = splash.mock.calls[0][0]
+      harness.dispose()
+      return intensity
+    }
+
+    const slow = drop(0.2)
+    const fast = drop(0.8)
+    expect(slow).toBeGreaterThan(0.18)
+    expect((fast - 0.18) / (slow - 0.18)).toBeCloseTo(2, 1)
+  })
+
+  it('limits horizontal speed in water below the same input in air', () => {
+    const waterHarness = createWalkHarness()
+    waterHarness.walk.position.set(0, CITY.deck.top + 1, 0)
+    waterHarness.walk.setTouchMove(0, 1)
+
+    const airHarness = createWalkHarness()
+    airHarness.walk.position.set(POOL_HALF + 4, POOL_SURFACE + 2, 0)
+    airHarness.walk.setTouchMove(0, 1)
+
+    for (let i = 0; i < 25; i++) {
+      waterHarness.walk.update(0.02)
+      airHarness.walk.update(0.02)
+    }
+
+    expect(waterHarness.walk.speed).toBeLessThan(airHarness.walk.speed)
+    expect(waterHarness.walk.speed).toBeLessThan(2)
+    waterHarness.dispose()
+    airHarness.dispose()
+  })
+
+  it('makes crossing the surface an audio and visual event and keeps water movement dense', () => {
+    const harness = createWalkHarness()
+    const { audio, visualSplash, walk } = harness
 
     walk.position.set(0, CITY.deck.top + 1, 0)
     walk.setTouchMove(0, 1)
@@ -65,8 +214,7 @@ describe('buffer-pool swimming', () => {
     expect(audio.splash).toHaveBeenCalledTimes(2)
     expect(visualSplash).toHaveBeenCalledTimes(2)
 
-    walk.dispose()
-    collision.dispose()
+    harness.dispose()
   })
 
   it('renders a readable top boundary and replaces long-range air clarity underwater', () => {
@@ -74,9 +222,11 @@ describe('buffer-pool swimming', () => {
     scene.fog = new THREE.Fog(0x101820, 220, 1150)
     const water = createBufferWater(scene)
     const surface = water.group.getObjectByName('buffer.water.surface') as THREE.Mesh
+    const volume = water.group.getObjectByName('buffer.water.volume') as THREE.Mesh
 
     expect(surface).toBeInstanceOf(THREE.Mesh)
     expect((surface.material as THREE.MeshBasicMaterial).side).toBe(THREE.DoubleSide)
+    expect(new THREE.Box3().setFromObject(volume).min.y).toBeCloseTo(CITY.buf.baseY, 5)
 
     water.update(0.5, true)
     expect((scene.fog as THREE.Fog).far).toBeLessThan(90)

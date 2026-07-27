@@ -86,6 +86,8 @@ export interface WalkController {
   readonly surface: Surface
   /** Horizontal speed, m/s. */
   readonly speed: number
+  /** Vertical feet velocity, m/s. Exposed on PGSIMCITY for controller traces. */
+  readonly verticalSpeed: number
   /** Cumulative horizontal body travel, in metres. */
   readonly distance: number
   /** Live feet position. Do not mutate. */
@@ -175,8 +177,8 @@ const DEG_TO_RAD = Math.PI / 180
 
 /** The shared-buffer grid's exact outside edge. */
 const POOL_HALF = ((CITY.buf.grid - 1) * CITY.buf.pitch + CITY.buf.tile) / 2
-/** The deck is a real lower boundary; buffer instances remain deliberately non-solid. */
-const POOL_BOTTOM = CITY.deck.top
+/** The water starts above the walkable deck, where the buffer columns begin. */
+const POOL_BOTTOM = CITY.buf.baseY
 /** Top of the conceptual water volume: the tallest ordinary usage_count column. */
 const POOL_SURFACE = CITY.buf.baseY + CITY.buf.maxRise + 0.4
 /** Swimming is slower to start and stop than walking. */
@@ -873,8 +875,9 @@ export function createWalkController(opts: WalkOptions): WalkController {
    * once per frame, in update(), and read from here.
    */
   function step(d: number): void {
+    const poolXZ = inPoolXZ(pos.x, pos.z)
     const nextSwimming =
-      inPoolXZ(pos.x, pos.z) && pos.y >= POOL_BOTTOM - 0.05 && pos.y <= POOL_SURFACE
+      poolXZ && pos.y > POOL_BOTTOM && pos.y <= POOL_SURFACE
     if (nextSwimming !== swimming) {
       swimming = nextSwimming
       if (swimming) {
@@ -884,7 +887,10 @@ export function createWalkController(opts: WalkOptions): WalkController {
         lostGroundT = 0
         surface = 'water'
       } else {
-        splash(0.2 + Math.abs(vy) / 12 + Math.hypot(vel.x, vel.z) * 0.08)
+        // Reaching the solid bottom is a landing, not a surface crossing.
+        if (!poolXZ || pos.y > POOL_SURFACE) {
+          splash(0.2 + Math.abs(vy) / 12 + Math.hypot(vel.x, vel.z) * 0.08)
+        }
         submerged = false
       }
     }
@@ -985,9 +991,9 @@ export function createWalkController(opts: WalkOptions): WalkController {
       if (pos.y < POOL_BOTTOM) {
         pos.y = POOL_BOTTOM
         if (vy < 0) vy = 0
-      } else if (pos.y > poolSurfaceFeet) {
+      } else if (pos.y > poolSurfaceFeet && vy > 0) {
         pos.y = poolSurfaceFeet
-        if (vy > 0) vy = 0
+        vy = 0
       }
       const nextSubmerged = pos.y + eyeNow < POOL_SURFACE
       if (submerged && !nextSubmerged) {
@@ -1191,6 +1197,9 @@ export function createWalkController(opts: WalkOptions): WalkController {
     },
     get speed(): number {
       return Math.hypot(vel.x, vel.z)
+    },
+    get verticalSpeed(): number {
+      return vy
     },
     get distance(): number {
       return distanceTravelled
