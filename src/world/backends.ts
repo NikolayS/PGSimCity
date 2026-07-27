@@ -392,6 +392,7 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
     transparent: true,
     opacity: 0.16,
     side: THREE.DoubleSide,
+    surface: false,
   })
   const memoryBackMesh = new THREE.InstancedMesh(unitBox, matTrim, N)
   const memoryShellMesh = new THREE.InstancedMesh(unitBox, memoryGlass, N)

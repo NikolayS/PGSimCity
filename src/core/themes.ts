@@ -277,10 +277,17 @@ export const ATMOSPHERE: Record<ThemeMode, Atmosphere> = {
     hemiIntensity: 1.35,
     keyColor: 0xfff0c8, // the sun
     keyIntensity: 1.95,
-    // South-east and high: the establishing shot looks north up the city axis,
-    // so this lights the faces turned toward the camera and throws the shadows
-    // away from it — the SimCity read.
-    keyPos: [300, 430, 210],
+    /* East-south-east and high. The exact azimuth is load-bearing, not taste:
+     * the toon ramp has two thresholds (0.16 and 0.52 on N·L), and this
+     * direction is chosen so a box's three visible faces land in three
+     * different bands. Normalised it is (0.635, 0.718, 0.284), so +X → 1.00,
+     * +Y → 1.00 plus the up-face lift, +Z → 0.55, and everything else → 0.
+     * That is the SimCity three-tone: roof, sun wall, half-lit wall, shade.
+     *
+     * The previous (0.524, 0.751, 0.402) put +X and +Y in the same band and
+     * left +Z at 0.402 — eighteen thousandths under the old single threshold —
+     * so a building read as a silhouette rather than as facets. */
+    keyPos: [380, 430, 150],
     keyTarget: [0, 0, -20],
     shadowBias: -0.0004,
     shadowNormalBias: 0.45,
@@ -438,34 +445,119 @@ export function exactDay(hex: number): number {
   return hit === undefined ? -1 : hit
 }
 
+/* ---------------------------------------------------------------------------
+ * DAYLIGHT STONE, PER DISTRICT.
+ *
+ * Every structural colour in the city is authored as a near-black blue-grey, so
+ * one generic navy→sandstone transform gives all thirteen districts the same
+ * beige: measured over the 28 authored structural colours it produced hue
+ * 27–33°, saturation 14–17%, lightness 54–69%. A city whose quarters cannot be
+ * told apart at 200 m is not a day theme, it is a lit night one.
+ *
+ * So the stone is hand-picked per district, the way DAY_PALETTE hand-picked the
+ * accents. Each entry fixes a HUE and a SATURATION for the quarter and a
+ * LIGHTNESS BAND; the authored night lightness — which is what carries the
+ * modelling, a pylon darker than a wall darker than a rim — is remapped
+ * monotonically into that band. Ordering survives, identity is gained.
+ *
+ * Saturation stays between 6% and 20%. That is the whole discipline: structure
+ * varies in hue and value, meaning (DAY_PALETTE, 42–95% saturation) stays the
+ * only saturated thing on screen. Widening this band is how the city loses the
+ * rule.
+ * -------------------------------------------------------------------------*/
+
+interface Stone {
+  /** Hue in degrees and saturation 0..1 for the whole quarter. */
+  h: number
+  s: number
+  /** Lightness band the authored night lightness is remapped into. */
+  lo: number
+  hi: number
+}
+
+/* Exact material keys win over the district prefix they start with. */
+const STONE: Record<string, Stone> = {
+  /* --- the excavation is earth, not a building ------------------------- */
+  'ground.pitWall': { h: 26, s: 0.16, lo: 0.2, hi: 0.42 },
+  'ground.pitFloor': { h: 26, s: 0.16, lo: 0.18, hi: 0.36 },
+
+  /* --- districts, by mat() key prefix ----------------------------------
+   * The hues are spaced at least 20 degrees apart all the way round the
+   * wheel. Below about 10% saturation a hex value only resolves the hue to
+   * within a few degrees, so a nominally 10-degree gap can measure as three
+   * and two quarters collapse into each other again. */
+  // outside the server: pale sand, the softest quarter.
+  clients: { h: 20, s: 0.1, lo: 0.44, hi: 0.68 },
+  // pg_wal: ochre sandstone. The one properly warm quarter, and the amber
+  // district — the only place where stone and meaning share a family.
+  wal: { h: 42, s: 0.2, lo: 0.4, hi: 0.68 },
+  // backend towers: pale straw plaster, so the window bands sit on something.
+  backends: { h: 64, s: 0.09, lo: 0.44, hi: 0.7 },
+  // the maintenance yard: painted works grey-green, an industrial finish.
+  maint: { h: 106, s: 0.1, lo: 0.33, hi: 0.58 },
+  // the data directory: cool poured concrete with the faintest green in it.
+  storage: { h: 150, s: 0.08, lo: 0.36, hi: 0.62 },
+  // replication: cool slate — this quarter reads as machinery.
+  rep: { h: 196, s: 0.1, lo: 0.35, hi: 0.62 },
+  // shared memory: cool white precast. The brightest structure in the city.
+  shmem: { h: 226, s: 0.06, lo: 0.46, hi: 0.7 },
+  // the planner: the least coloured stone anywhere, a bare trace of lilac.
+  planner: { h: 268, s: 0.07, lo: 0.38, hi: 0.64 },
+  // continuity: old limestone gone grey-mauve with iron. The oldest-looking
+  // quarter, which suits the district that keeps the archive.
+  continuity: { h: 316, s: 0.09, lo: 0.4, hi: 0.66 },
+  // access paths and index halls: dusty brick.
+  access: { h: 352, s: 0.11, lo: 0.34, hi: 0.6 },
+  // the plate itself, its kerb and its masts: light structural concrete, and
+  // deliberately the pavement's own hue — this is ground, not a quarter.
+  ground: { h: 36, s: 0.08, lo: 0.4, hi: 0.66 },
+}
+
+function stoneFor(key: string | undefined): Stone | undefined {
+  if (key === undefined) return undefined
+  const exactKey = STONE[key]
+  if (exactKey !== undefined) return exactKey
+  const dot = key.indexOf('.')
+  return dot < 0 ? undefined : STONE[key.slice(0, dot)]
+}
+
+/** Night lightness 0..0.34 → 0..1 across the district's band. */
+function stoneT(l: number): number {
+  return Math.min(l, 0.34) / 0.34
+}
+
 /**
  * Structure — anything painted with `mat()`.
  *
- * Night structure is a near-black navy whose *lightness* carries the modelling:
- * a pylon is darker than a wall is darker than a rim. Daylight has to keep that
- * ordering while moving the whole range into warm stone, so lightness maps
- * monotonically and the original hue survives as a 32% tint. Anything already
- * light at night was an accent surface, not structure, and is deepened instead.
+ * `key` is the mat() cache key, which is already namespaced by district. Pass it
+ * and the surface gets its quarter's stone; omit it (or use a key no district
+ * claims) and it falls back to the generic warm sandstone, which is only a
+ * sensible answer for one-off props. Anything already light at night was an
+ * accent surface, not structure, and is deepened instead.
  */
-export function daySurface(hex: number): number {
+export function daySurface(hex: number, key?: string): number {
   if (isNeutralExtreme(hex)) return hex
   const hit = exact.get(hex)
   if (hit !== undefined) return hit
   const [h, s, l] = hslOf(hex)
   if (l < 0.34) {
-    // 0.48–0.74, not 0.7–0.95: a sunlit surface still has a light term on top of
-    // this, and stone that starts near white has nowhere left to go — it clips,
-    // and a clipped face cannot show either the toon terminator or its own ink.
-    const lit = 0.48 + Math.min(l, 0.4) * 0.65
-    // Warm sandstone, and committed to it. Every structural colour in the city
-    // is a blue-grey navy, so a translation that keeps much of the source hue
-    // produces a uniformly cold grey model — technically a day theme, visually
-    // a lit night one. The hue therefore comes from the stone and only a
-    // quarter of the original survives, as the tint that keeps a pylon distinct
-    // from the wall beside it.
-    const stone = hexOfHsl(34, 0.32, lit)
+    const stone = stoneFor(key)
+    if (stone !== undefined) {
+      /* No tint from the source hue. The authored navies differ from each other
+       * by two or three units of blue; mixing that back in only pulls every
+       * quarter toward the same cold grey again, which is the failure this
+       * table exists to undo. Modelling comes from the lightness band. */
+      return hexOfHsl(stone.h, stone.s, stone.lo + stoneT(l) * (stone.hi - stone.lo))
+    }
+    // 0.42–0.67, not 0.7–0.95: a sunlit surface still has a light term on top
+    // of this, and stone that starts near white has nowhere left to go — it
+    // clips, and a clipped face cannot show either the toon terminator or its
+    // own ink. The band also sits below the 0.74 pavement so a building
+    // separates from the ground it stands on.
+    const lit = 0.42 + Math.min(l, 0.4) * 0.62
+    const base = hexOfHsl(34, 0.32, lit)
     const tint = hexOfHsl(h, Math.min(s, 0.55) * 0.85, lit)
-    return mix(stone, tint, 0.26)
+    return mix(base, tint, 0.26)
   }
   return hexOfHsl(h, Math.max(0.25, Math.min(0.8, s * 0.85)), Math.max(0.34, Math.min(0.62, 0.26 + l * 0.4)))
 }

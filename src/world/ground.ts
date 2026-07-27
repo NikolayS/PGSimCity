@@ -803,6 +803,8 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     // rest of the model. Fourteen percent stone keeps it architectural without
     // making neighboring quarters collapse into beige.
     m.userData.pgDayColor = mixHex(spec.dayColor, DAY_PALETTE.ground, 0.14)
+    // Zoning is meaning painted on the ground; masonry joints do not belong on it.
+    m.userData.pgNoSurface = true
     mats.push(m)
     return m
   }

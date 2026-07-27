@@ -47,3 +47,151 @@ describe('daylight rendering contract', () => {
     expect(dayInkOpacity(0.8)).toBe(1)
   })
 })
+
+/*
+ * The authored structural colours, by the mat() key that owns them. This is a
+ * transcription of src/world, and its job is to hold the day translation to the
+ * property the eye actually checks: can you tell one quarter from another?
+ */
+const STRUCTURE: ReadonlyArray<readonly [string, number]> = [
+  ['wal.struct', 0x2a3752],
+  ['wal.deep', 0x161f33],
+  ['wal.heavy', 0x202b42],
+  ['storage.struct', 0x1a2333],
+  ['storage.structLo', 0x101827],
+  ['storage.structHi', 0x27334c],
+  ['maint.struct', 0x2b3550],
+  ['maint.deep', 0x18202f],
+  ['maint.heavy', 0x232d44],
+  ['maint.vehicle', 0x39406b],
+  ['shmem.struct', 0x1b2435],
+  ['shmem.structLo', 0x121a29],
+  ['shmem.structHi', 0x27334a],
+  ['shmem.pylon', 0x0f1522],
+  ['rep.struct', 0x27334c],
+  ['rep.deep', 0x141c2e],
+  ['rep.heavy', 0x1f2a41],
+  ['rep.cool', 0x1c2740],
+  ['backends.struct', 0x2a3852],
+  ['backends.trim', 0x18223a],
+  ['access.deck', 0x1b2434],
+  ['access.struct', 0x121a29],
+  ['access.steel', 0x27334a],
+  ['access.tread', 0x33415c],
+  ['continuity.silo', 0x1d2438],
+  ['continuity.jib', 0x223049],
+  ['planner.shell', 0x1a2438],
+  ['ground.plinth', 0x0c1322],
+  ['ground.rim', 0x111b2d],
+  ['ground.mast', 0x18233a],
+  ['ground.pitWall', 0x0b1220],
+]
+
+const district = (key: string): string => key.slice(0, key.indexOf('.'))
+
+/** Shortest distance around the hue wheel, in degrees. */
+function hueGap(a: number, b: number): number {
+  const d = Math.abs(a - b) % 360
+  return d > 180 ? 360 - d : d
+}
+
+describe('daySurface — per-district stone', () => {
+  it('gives every district a hue no other district uses', () => {
+    const byDistrict = new Map<string, number>()
+    for (const [key, night] of STRUCTURE) {
+      const d = district(key)
+      if (byDistrict.has(d)) continue
+      byDistrict.set(d, hslOf(daySurface(night, key))[0])
+    }
+    // The plate, its kerb and its masts are not a quarter of the city: they are
+    // the ground everything stands on, and they share the pavement's hue on
+    // purpose. Every actual district has to stand alone.
+    byDistrict.delete('ground')
+
+    const entries = [...byDistrict.entries()]
+    expect(entries.length).toBeGreaterThanOrEqual(8)
+    for (let i = 0; i < entries.length; i++) {
+      for (let j = i + 1; j < entries.length; j++) {
+        const gap = hueGap(entries[i][1], entries[j][1])
+        expect(
+          gap,
+          `${entries[i][0]} (${entries[i][1].toFixed(0)}°) vs ${entries[j][0]} (${entries[j][1].toFixed(0)}°)`,
+        ).toBeGreaterThan(8)
+      }
+    }
+  })
+
+  it('keeps structure desaturated, well under every semantic colour', () => {
+    let loudestStructure = 0
+    for (const [key, night] of STRUCTURE) {
+      loudestStructure = Math.max(loudestStructure, hslOf(daySurface(night, key))[1])
+    }
+    expect(loudestStructure).toBeLessThanOrEqual(0.22)
+
+    // Meaning is the only saturated thing on screen, and the gap has to be wide
+    // enough that the rule survives a phone screen.
+    const semantic = ['wal', 'storage', 'vacuum', 'checkpoint', 'bufDirty', 'lock', 'backend', 'shmem'] as const
+    let quietestMeaning = 1
+    for (const key of semantic) quietestMeaning = Math.min(quietestMeaning, hslOf(DAY_PALETTE[key])[1])
+    expect(quietestMeaning).toBeGreaterThan(loudestStructure * 2)
+  })
+
+  it('preserves the lightness ordering the night values encode', () => {
+    // Night lightness is what carries the modelling: a pylon is darker than a
+    // wall is darker than a rim. Daylight may move the band; it may not
+    // reshuffle it, or every building loses its own relief.
+    for (const [keyA, nightA] of STRUCTURE) {
+      for (const [keyB, nightB] of STRUCTURE) {
+        if (district(keyA) !== district(keyB)) continue
+        const nA = hslOf(nightA)[2]
+        const nB = hslOf(nightB)[2]
+        if (Math.abs(nA - nB) < 0.01) continue
+        const dA = hslOf(daySurface(nightA, keyA))[2]
+        const dB = hslOf(daySurface(nightB, keyB))[2]
+        expect(Math.sign(dA - dB), `${keyA} vs ${keyB}`).toBe(Math.sign(nA - nB))
+      }
+    }
+  })
+
+  it('keeps buildings darker than the pavement they stand on', () => {
+    const ground = hslOf(DAY_PALETTE.ground)[2]
+    for (const [key, night] of STRUCTURE) {
+      expect(hslOf(daySurface(night, key))[2], key).toBeLessThan(ground - 0.06)
+    }
+  })
+
+  it('leaves exact palette translations alone whatever key asks', () => {
+    // A structural call site that happens to hold a semantic colour still gets
+    // that meaning's hand-picked day value.
+    expect(daySurface(NIGHT_PALETTE.wal, 'wal.struct')).toBe(DAY_PALETTE.wal)
+    expect(daySurface(0xffffff, 'wal.struct')).toBe(0xffffff)
+    expect(daySurface(0x000000, 'shmem.struct')).toBe(0x000000)
+  })
+})
+
+describe('the day sun', () => {
+  /* The toon ramp in core/theme.ts has thresholds at 0.16 and 0.52 on N·L, and
+   * it only produces three tones if the sun direction puts a box's three
+   * visible faces in three different bands. Those two numbers and these three
+   * are one design, so they are asserted together. */
+  it('lands the three visible faces of a box in three different bands', () => {
+    const { keyPos, keyTarget } = ATMOSPHERE.day
+    const dx = keyPos[0] - keyTarget[0]
+    const dy = keyPos[1] - keyTarget[1]
+    const dz = keyPos[2] - keyTarget[2]
+    const len = Math.hypot(dx, dy, dz)
+    const nx = dx / len
+    const ny = dy / len
+    const nz = dz / len
+
+    const LOW = 0.16
+    const HIGH = 0.52
+    const MARGIN = 0.05
+
+    expect(nx).toBeGreaterThan(HIGH + MARGIN) // +X wall: fully sunlit
+    expect(ny).toBeGreaterThan(HIGH + MARGIN) // roof: fully sunlit, plus the up lift
+    expect(nz).toBeGreaterThan(LOW + MARGIN) // +Z wall: the half band
+    expect(nz).toBeLessThan(HIGH - MARGIN)
+    expect(ny).toBeGreaterThan(nx) // still a high sun, not a raking one
+  })
+})

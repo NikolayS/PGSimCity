@@ -653,6 +653,12 @@ export interface MatOpts {
   polygonOffset?: boolean
   polygonOffsetFactor?: number
   polygonOffsetUnits?: number
+  /**
+   * Whether the shared masonry term is compiled into this material. Default
+   * true — structure is masonry. Turn it off for glazing, for rubber, for
+   * polished metal: coursed joints on a window claim the wrong material.
+   */
+  surface?: boolean
 }
 
 export interface NeonOpts {
