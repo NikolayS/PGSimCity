@@ -4,6 +4,12 @@
 
 **Live: <https://nikolays.github.io/PGSimCity/>**
 
+[![Hacker News](https://img.shields.io/badge/Hacker_News-%231-FF6600?logo=ycombinator&logoColor=white)](https://news.ycombinator.com/item?id=49063754)
+
+> 🍊 **#1 on [Hacker News](https://news.ycombinator.com/item?id=49063754)** — thanks to everyone who
+> visited, and especially to those who filed corrections. Bug reports about PostgreSQL behaviour are
+> the most valuable thing this project can receive; see the prototype note below.
+
 ![A daylight view into PGSimCity's storage excavation: the shared buffers plaza spans the pit above teal storage machinery, with backend towers behind and the checkpointer and WAL districts on either side.](docs/screenshot.png)
 
 Every building is a real mechanism. The plaza in the centre is `shared_buffers` —
