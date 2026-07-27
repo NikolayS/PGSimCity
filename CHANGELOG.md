@@ -9,6 +9,34 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **Buildings you could walk through are solid.** Nine landmark districts —
+  the second standby, the recovery ground, the archive vault, the timeline
+  yard, the write-ahead log vault, the planner lab, the disk array — merge
+  their whole structure into a single childless mesh. The collision builder
+  splits an oversized object by recursing into its children, and a leaf has
+  none, so those buildings were silently dropped and had no collider at all.
+  An oversized leaf is now subdivided instead: its triangles are binned into a
+  16 m grid, each occupied cell is tightened to the geometry inside it, and
+  every cell is re-checked against the same rules, so a painted apron still
+  fails the thickness test rather than becoming a kerb.
+- **Slopes are judged by their angle, not by your speed.** The ground query now
+  reports a surface normal, and anything steeper than 50° is a wall: you do not
+  stand on it, and you slide off it instead of hanging there. The tolerance that
+  lets a ramp rise into your feet is derived from the distance covered in that
+  physics step, so the climb limit is 50° at a sprint and 50° at a crawl. It
+  used to be 52.6° running and 74.2° walking.
+- **Step-up reaches kerbs that are not boxes, and stops lifting you into
+  ceilings.** When a move is blocked, the 0.45 m allowance now also consults the
+  walkable surfaces, and any lift that would put the capsule's head band inside
+  a collider is refused.
+- Components that move after boot (the vacuum trucks) and `net.wire` are
+  excluded by name rather than being boxed where they happened to be standing,
+  and a component contained in one already boxed is no longer boxed twice.
+
 ## [0.5.0] — 2026-07-26
 
 Daylight arrives, and the city stops going dark on ordinary hardware.

@@ -132,12 +132,26 @@ const GROUND_SNAP = 0.55
 /** …and how close a falling walker must be to a surface to land on it. */
 const AIR_SNAP = 0.08
 /**
- * How far ABOVE the feet a grounded walker still accepts a surface. A ramp
- * rises into you as you walk up it, so without this you walk *at* the slope
- * instead of onto it — and the faster you run the sooner it stops you. It stays
- * well under stepHeight, or it becomes a way to climb walls.
+ * The steepest thing a person may stand on. 50° clears the 1:14 causeways, the
+ * kerb ramps, the 25° descent stair and a 45° pipe, and refuses every building
+ * face. A box lid is flat by construction, so this only ever judges a walkable
+ * mesh — which is exactly where the city's slopes live.
  */
-const SLOPE_TOL = 0.12
+const MAX_SLOPE_DEG = 50
+/** cos(MAX_SLOPE): the smallest upward normal component that is still floor. */
+const MIN_GROUND_NY = Math.cos((MAX_SLOPE_DEG * Math.PI) / 180)
+/**
+ * How far ABOVE the feet a grounded walker still accepts a surface, PER METRE
+ * TRAVELLED. A ramp rises into you as you walk up it, so without this you walk
+ * *at* the slope instead of onto it. Deriving it from the step's own horizontal
+ * travel is what makes the climb limit MAX_SLOPE_DEG at every speed; the old
+ * fixed 0.12 m made it 52.6° at a run and 74.2° at a crawl.
+ */
+const SLOPE_RISE_PER_M = Math.tan((MAX_SLOPE_DEG * Math.PI) / 180)
+/** Push off a too-steep face at this rate, so nobody sticks to a wall. */
+const SLIDE_ACCEL = 12
+/** While in contact with a too-steep face, the fall is a slide, not a plunge. */
+const SLIDE_FALL_MAX = 6
 /**
  * Longest physics step. The most important number in this file.
  *
@@ -965,7 +979,8 @@ export function createWalkController(opts: WalkOptions): WalkController {
     // along it at full speed and the bob never settles.
     if (mv.hitX) vel.x = 0
     if (mv.hitZ) vel.z = 0
-    frameTravel += Math.hypot(mv.position.x - pos.x, mv.position.z - pos.z)
+    const stepTravel = Math.hypot(mv.position.x - pos.x, mv.position.z - pos.z)
+    frameTravel += stepTravel
     pos.x = mv.position.x
     pos.z = mv.position.z
     // Step-up is for someone walking up a kerb, not for someone falling past
@@ -1024,17 +1039,39 @@ export function createWalkController(opts: WalkOptions): WalkController {
      */
     const fell = yBefore - pos.y
     const snap = wasGrounded ? GROUND_SNAP : AIR_SNAP
-    const slopeTol = wasGrounded ? SLOPE_TOL : 0
+    // A slope may only rise into the feet as fast as MAX_SLOPE_DEG allows over
+    // the ground actually covered this step. Capped at the step allowance so it
+    // can never become a second, sneakier way to climb a wall.
+    const slopeTol = wasGrounded ? Math.min(stepTravel * SLOPE_RISE_PER_M, T.stepHeight) : 0
     _probe.set(pos.x, yBefore + slopeTol, pos.z)
     const g = collision.groundAt(_probe, (fell > 0 ? fell : 0) + snap + slopeTol)
     if (g !== null && vy <= 0) {
-      if (!wasGrounded && vy < -6) landDip = clamp01(-vy / 14) * 0.11
-      surface = collision.groundSurface
-      if (!wasGrounded) audio.land(-vy)
-      pos.y = g
-      vy = 0
-      grounded = true
-      lostGroundT = 0
+      const ny = collision.groundNormal.y
+      if (ny >= MIN_GROUND_NY) {
+        if (!wasGrounded && vy < -6) landDip = clamp01(-vy / 14) * 0.11
+        surface = collision.groundSurface
+        if (!wasGrounded) audio.land(-vy)
+        pos.y = g
+        vy = 0
+        grounded = true
+        lostGroundT = 0
+      } else {
+        /* Too steep to be a floor. Stay in contact with it — sinking through a
+         * surface is worse than any slide — but do not ground: no jump, no bob,
+         * and a push down the fall line so nobody hangs on a wall. */
+        pos.y = g
+        if (vy < -SLIDE_FALL_MAX) vy = -SLIDE_FALL_MAX
+        const nx = collision.groundNormal.x
+        const nz = collision.groundNormal.z
+        const nl = Math.hypot(nx, nz)
+        if (nl > 1e-5) {
+          const push = (SLIDE_ACCEL * d) / nl
+          vel.x += nx * push
+          vel.z += nz * push
+        }
+        grounded = false
+        lostGroundT = 0
+      }
     } else {
       grounded = false
       lostGroundT += d
