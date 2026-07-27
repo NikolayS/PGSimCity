@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { N_VAC_WORKERS } from '../core/types'
 import type { ComponentDef, DistrictId } from '../core/types'
 import type { Surface } from './audio'
 
@@ -37,6 +38,16 @@ import type { Surface } from './audio'
  * SPLIT: we recurse into the object's children and box those instead. Sixteen
  * backend towers, one box each. Recursion stops at `maxDepth` (default 4) or as
  * soon as a level yields boxes of sane size.
+ *
+ * …AND OVERSIZED *LEAVES*. Nine districts merge their whole structure into one
+ * childless mesh (`standby.b.struct`, `recovery.ground.struct`, the WAL vault,
+ * the planner lab…). Recursing into a leaf finds nothing, so those buildings
+ * used to end up with no collider at all and you walked straight through them.
+ * A leaf that is too big is therefore VOXELISED instead: one pass over its
+ * triangles bins them into a coarse XZ grid, each occupied cell is tightened to
+ * the geometry actually inside it, and every cell is re-run through classify()
+ * so a painted apron still fails minThickness rather than becoming a kerb.
+ * Cell-tight, so a low wing does not inherit the tower's roof.
  *
  * Nothing in groundAt() or move() allocates. The single exception is three's
  * own per-intersection record inside Raycaster.intersectObjects — the results
@@ -138,6 +149,13 @@ export interface CollisionWorld {
   /** Surface selected by the most recent successful groundAt() query. */
   readonly groundSurface: Surface
   /**
+   * Upward normal of that same surface: (0,1,0) for a box top, the face normal
+   * for a walkable ray hit. This is what tells a ramp from a wall. Owned by the
+   * collision world and overwritten by every successful query — read it, do not
+   * keep it.
+   */
+  readonly groundNormal: THREE.Vector3
+  /**
    * Is there any structure a pedestrian could meet within `radius` of this XZ?
    *
    * Only what a person can actually walk up to counts: the buried storage layer
@@ -183,15 +201,18 @@ export interface CollisionWorld {
  *   conn.gate        the connection gate, hanging at y = 14 over open air
  *   shared.buffers   1024 live-height tiles, see the header
  *   shmem            (module id, harmless if it ever becomes a component)
+ *   net.wire         the replication cable bundle: 98 x 10 x 139 m of scenery
+ *                    slung over the approach to the standby. Solid, it is a
+ *                    wall across the only way in.
+ *   autovac.worker.N the vacuum trucks DRIVE. build() is a boot snapshot, so a
+ *                    box for one of these is a ghost wall parked wherever the
+ *                    truck happened to be at t = 0.
  */
-export const DEFAULT_EXCLUDE_IDS: readonly string[] = [
-  'world.ground',
-  'world.pit',
-  'client.pool',
-  'conn.gate',
-  'shared.buffers',
-  'shmem',
-]
+export const DEFAULT_EXCLUDE_IDS: readonly string[] = (() => {
+  const ids = ['world.ground', 'world.pit', 'client.pool', 'conn.gate', 'shared.buffers', 'shmem', 'net.wire']
+  for (let i = 0; i < N_VAC_WORKERS; i++) ids.push(`autovac.worker.${i}`)
+  return ids
+})()
 
 /* --------------------------------------------------------------------------
  * Tuning that is not worth an option.
@@ -203,6 +224,8 @@ const RAY_UP = 2.0
 const GROUND_TOL = 0.05
 /** Below this the two floats are the same number. */
 const EPS = 1e-4
+/** Slack on the headroom test: the floor being stepped onto is not a ceiling. */
+const STEP_EPS = 1e-3
 /** solidNear(): a box whose top is below this is buried and does not count. */
 const NEAR_FLOOR = -1
 /** …and one whose underside is above this hangs in the sky and does not either. */
@@ -227,14 +250,41 @@ const DEFAULTS = {
  * ------------------------------------------------------------------------*/
 
 const _box = new THREE.Box3()
+const _leaf = new THREE.Box3()
 const _origin = new THREE.Vector3()
+const _step = new THREE.Vector3()
 const DOWN = new THREE.Vector3(0, -1, 0)
 const _ray = new THREE.Raycaster()
 _ray.layers.enableAll()
 const _hits: THREE.Intersection[] = []
+const _normalMat = new THREE.Matrix3()
+const _normal = new THREE.Vector3()
+const _sub = new THREE.Box3()
+const _va = new THREE.Vector3()
+const _vb = new THREE.Vector3()
+const _vc = new THREE.Vector3()
+const _mat = new THREE.Matrix4()
 
 /** Set by solveAxis(); read immediately after. */
 let _axisHit = false
+
+/* ---- leaf voxeliser scratch (build time only, but still hoisted) ----------*/
+
+/** Cells per horizontal axis when an oversized leaf mesh is subdivided. */
+const SPLIT_MAX = 16
+/** Target cell size, in metres. Matches the default spatial-hash cell. */
+const SPLIT_TARGET = 16
+/** Past this many indices a mesh is boxed whole rather than triangle-binned. */
+const SPLIT_INDEX_CAP = 600_000
+/** …and past this many instances an InstancedMesh is too. */
+const SPLIT_INSTANCE_CAP = 4096
+const CELLS = SPLIT_MAX * SPLIT_MAX
+const _cMinX = new Float32Array(CELLS)
+const _cMinY = new Float32Array(CELLS)
+const _cMinZ = new Float32Array(CELLS)
+const _cMaxX = new Float32Array(CELLS)
+const _cMaxY = new Float32Array(CELLS)
+const _cMaxZ = new Float32Array(CELLS)
 
 /* ==========================================================================*/
 
@@ -266,6 +316,10 @@ export function createCollisionWorld(): CollisionWorld {
   let debug: THREE.LineSegments | null = null
   let debugStale = true
   let groundSurface: Surface = 'ground'
+  const groundNormal = new THREE.Vector3(0, 1, 0)
+  /** Saved around the step-up probe so move() cannot corrupt a walker's read. */
+  let savedSurface: Surface = 'ground'
+  const savedNormal = new THREE.Vector3(0, 1, 0)
 
   let stepHeight = 0.45
 
@@ -333,6 +387,158 @@ export function createCollisionWorld(): CollisionWorld {
     return 2
   }
 
+  /* ---- oversized leaves --------------------------------------------------*/
+
+  /* The grid splitLeaf() is currently binning into. Shared with sgVisit so the
+   * traversal callback is built once, not once per mesh. */
+  let sgX0 = 0
+  let sgZ0 = 0
+  let sgSizeX = 1
+  let sgSizeZ = 1
+  let sgNX = 1
+  let sgNZ = 1
+  let sgFloor = -Infinity
+  let sgCeiling = Infinity
+
+  /**
+   * Bin one solid world-space AABB into the leaf grid: X and Z clipped to each
+   * cell it covers, Y taken whole. Geometry outside the pedestrian band is
+   * dropped here, which is what keeps instances parked at y = -9000 from
+   * dragging a cell a kilometre down.
+   */
+  function splatSolid(
+    minX: number,
+    minY: number,
+    minZ: number,
+    maxX: number,
+    maxY: number,
+    maxZ: number,
+  ): void {
+    if (!(maxY > sgFloor) || minY >= sgCeiling) return
+    const y0 = minY < sgFloor ? sgFloor : minY
+    let ix0 = Math.floor((minX - sgX0) / sgSizeX)
+    let ix1 = Math.floor((maxX - sgX0) / sgSizeX)
+    let iz0 = Math.floor((minZ - sgZ0) / sgSizeZ)
+    let iz1 = Math.floor((maxZ - sgZ0) / sgSizeZ)
+    if (ix1 < 0 || iz1 < 0 || ix0 > sgNX - 1 || iz0 > sgNZ - 1) return
+    if (ix0 < 0) ix0 = 0
+    if (iz0 < 0) iz0 = 0
+    if (ix1 > sgNX - 1) ix1 = sgNX - 1
+    if (iz1 > sgNZ - 1) iz1 = sgNZ - 1
+    for (let iz = iz0; iz <= iz1; iz++) {
+      const lz0 = sgZ0 + iz * sgSizeZ
+      const lz1 = lz0 + sgSizeZ
+      const z0 = minZ > lz0 ? minZ : lz0
+      const z1 = maxZ < lz1 ? maxZ : lz1
+      for (let ix = ix0; ix <= ix1; ix++) {
+        const lx0 = sgX0 + ix * sgSizeX
+        const lx1 = lx0 + sgSizeX
+        const x0 = minX > lx0 ? minX : lx0
+        const x1 = maxX < lx1 ? maxX : lx1
+        const c = iz * SPLIT_MAX + ix
+        if (x0 < _cMinX[c]) _cMinX[c] = x0
+        if (x1 > _cMaxX[c]) _cMaxX[c] = x1
+        if (y0 < _cMinY[c]) _cMinY[c] = y0
+        if (maxY > _cMaxY[c]) _cMaxY[c] = maxY
+        if (z0 < _cMinZ[c]) _cMinZ[c] = z0
+        if (z1 > _cMaxZ[c]) _cMaxZ[c] = z1
+      }
+    }
+  }
+
+  /** One mesh of the leaf being split, triangle by triangle. */
+  const sgVisit = (child: THREE.Object3D): void => {
+    const mesh = child as THREE.Mesh
+    if (!mesh.isMesh) return
+    const geo = mesh.geometry
+    if (!geo) return
+    const inst = child as THREE.InstancedMesh
+    if (inst.isInstancedMesh) {
+      if (!geo.boundingBox) geo.computeBoundingBox()
+      const bb = geo.boundingBox
+      if (!bb || bb.isEmpty()) return
+      const count = inst.count < SPLIT_INSTANCE_CAP ? inst.count : SPLIT_INSTANCE_CAP
+      for (let i = 0; i < count; i++) {
+        inst.getMatrixAt(i, _mat)
+        _mat.premultiply(inst.matrixWorld)
+        _sub.copy(bb).applyMatrix4(_mat)
+        splatSolid(_sub.min.x, _sub.min.y, _sub.min.z, _sub.max.x, _sub.max.y, _sub.max.z)
+      }
+      return
+    }
+    const pos = geo.getAttribute('position')
+    const index = geo.index
+    const count = index ? index.count : pos ? pos.count : 0
+    if (!pos || count < 3 || count > SPLIT_INDEX_CAP) {
+      // No triangles to read, or too many to be worth reading: bin the mesh's
+      // own box. Still cell-clipped, so it is never one district-wide wall.
+      _sub.setFromObject(mesh)
+      if (!_sub.isEmpty()) {
+        splatSolid(_sub.min.x, _sub.min.y, _sub.min.z, _sub.max.x, _sub.max.y, _sub.max.z)
+      }
+      return
+    }
+    const m = mesh.matrixWorld
+    for (let i = 0; i + 2 < count; i += 3) {
+      const a = index ? index.getX(i) : i
+      const b = index ? index.getX(i + 1) : i + 1
+      const c = index ? index.getX(i + 2) : i + 2
+      _va.fromBufferAttribute(pos, a).applyMatrix4(m)
+      _vb.fromBufferAttribute(pos, b).applyMatrix4(m)
+      _vc.fromBufferAttribute(pos, c).applyMatrix4(m)
+      splatSolid(
+        Math.min(_va.x, _vb.x, _vc.x),
+        Math.min(_va.y, _vb.y, _vc.y),
+        Math.min(_va.z, _vb.z, _vc.z),
+        Math.max(_va.x, _vb.x, _vc.x),
+        Math.max(_va.y, _vb.y, _vc.y),
+        Math.max(_va.z, _vb.z, _vc.z),
+      )
+    }
+  }
+
+  /**
+   * Subdivide an oversized object that recursion cannot help with — a merged
+   * district mesh, or a container whose children all failed. Every cell is
+   * re-classified, so an apron slab still fails minThickness.
+   */
+  function splitLeaf(obj: THREE.Object3D, o: Required<CollisionBuildOptions>, surface: Surface): void {
+    _leaf.setFromObject(obj)
+    if (_leaf.isEmpty()) return
+    const sx = _leaf.max.x - _leaf.min.x
+    const sz = _leaf.max.z - _leaf.min.z
+    if (!isFinite(sx) || !isFinite(sz) || sx <= EPS || sz <= EPS) return
+    sgNX = Math.min(SPLIT_MAX, Math.max(1, Math.ceil(sx / SPLIT_TARGET)))
+    sgNZ = Math.min(SPLIT_MAX, Math.max(1, Math.ceil(sz / SPLIT_TARGET)))
+    sgX0 = _leaf.min.x
+    sgZ0 = _leaf.min.z
+    sgSizeX = sx / sgNX
+    sgSizeZ = sz / sgNZ
+    sgFloor = o.floor
+    sgCeiling = o.ceiling
+    for (let iz = 0; iz < sgNZ; iz++) {
+      for (let ix = 0; ix < sgNX; ix++) {
+        const c = iz * SPLIT_MAX + ix
+        _cMinX[c] = Infinity
+        _cMinY[c] = Infinity
+        _cMinZ[c] = Infinity
+        _cMaxX[c] = -Infinity
+        _cMaxY[c] = -Infinity
+        _cMaxZ[c] = -Infinity
+      }
+    }
+    obj.traverse(sgVisit)
+    for (let iz = 0; iz < sgNZ; iz++) {
+      for (let ix = 0; ix < sgNX; ix++) {
+        const c = iz * SPLIT_MAX + ix
+        if (_cMinX[c] > _cMaxX[c]) continue
+        _box.min.set(_cMinX[c], _cMinY[c], _cMinZ[c])
+        _box.max.set(_cMaxX[c], _cMaxY[c], _cMaxZ[c])
+        if (classify(_box, o) === 1) pushBox(_box, o.pad, surface)
+      }
+    }
+  }
+
   function addObject(
     obj: THREE.Object3D,
     depth: number,
@@ -346,10 +552,17 @@ export function createCollisionWorld(): CollisionWorld {
       pushBox(_box, o.pad, surface)
       return
     }
-    if (verdict === 2 && depth < o.maxDepth) {
+    if (verdict !== 2) return
+    if (depth < o.maxDepth && obj.children.length > 0) {
+      const before = n
       const kids = obj.children
       for (let i = 0; i < kids.length; i++) addObject(kids[i], depth + 1, o, surface)
+      if (n > before) return
     }
+    // Nothing underneath to look at — a merged mesh, a container of decals, or
+    // the depth limit. Dropping it here is what let the owner walk through nine
+    // landmark districts.
+    splitLeaf(obj, o, surface)
   }
 
   function build(source: ComponentSource, opts: CollisionBuildOptions = {}): void {
@@ -374,12 +587,31 @@ export function createCollisionWorld(): CollisionWorld {
     const skipDistrict = new Set<DistrictId>(o.excludeDistricts)
 
     const all = source.all()
+    // A component that lives inside one already boxed is the same mass twice:
+    // the 16 backend towers arrive once as `backend.row`'s children and again
+    // as `backend.N`. Duplicates cost candidate work in the busiest cells.
+    const boxed = new Set<THREE.Object3D>()
     for (let i = 0; i < all.length; i++) {
       const def = all[i]
       if (skipId.has(def.id)) continue
       if (skipDistrict.has(def.district)) continue
+      let ancestor: THREE.Object3D | null = def.object
+      let duplicate = false
+      while (ancestor) {
+        if (boxed.has(ancestor)) {
+          duplicate = true
+          break
+        }
+        ancestor = ancestor.parent
+      }
+      if (duplicate) continue
       def.object.updateWorldMatrix(true, false)
+      const before = n
       addObject(def.object, 0, o, def.id === 'shmem.deck' ? 'deck' : 'metal')
+      // Only a component that actually produced colliders may shadow its
+      // descendants; one that was dropped entirely must not silently take
+      // theirs with it.
+      if (n > before) boxed.add(def.object)
     }
     rebuildGrid()
   }
@@ -513,6 +745,10 @@ export function createCollisionWorld(): CollisionWorld {
     const hi = p.y + GROUND_TOL
     let best = -Infinity
     let bestSurface: Surface = 'ground'
+    // Normal of `best`, kept as three scalars so nothing has to be copied.
+    let bnx = 0
+    let bny = 1
+    let bnz = 0
 
     // (a) tops of the static boxes directly under the point
     if (n > 0) {
@@ -525,6 +761,10 @@ export function createCollisionWorld(): CollisionWorld {
         if (top >= lo && top <= hi && top > best) {
           best = top
           bestSurface = SURFACES[boxSurface[cand[i]]]
+          // An AABB lid is flat by construction. Always walkable.
+          bnx = 0
+          bny = 1
+          bnz = 0
         }
       }
     }
@@ -545,7 +785,8 @@ export function createCollisionWorld(): CollisionWorld {
         if (y < lo) break
         if (y > best) {
           best = y
-          let hit = _hits[i].object as THREE.Object3D | null
+          const obj = _hits[i].object
+          let hit = obj as THREE.Object3D | null
           while (hit) {
             const walkable = walkables.indexOf(hit)
             if (walkable >= 0) {
@@ -554,13 +795,33 @@ export function createCollisionWorld(): CollisionWorld {
             }
             hit = hit.parent
           }
+          // Face normal into world space. A slope is only a slope if someone
+          // measures it; without this the walker climbs vertical faces.
+          const face = _hits[i].face
+          if (face) {
+            _normalMat.getNormalMatrix(obj.matrixWorld)
+            _normal.copy(face.normal).applyNormalMatrix(_normalMat).normalize()
+            // A plane hit from above reports whichever winding it has; the
+            // upward-facing version of the same plane is what we want.
+            const s = _normal.y < 0 ? -1 : 1
+            bnx = _normal.x * s
+            bny = _normal.y * s
+            bnz = _normal.z * s
+          } else {
+            bnx = 0
+            bny = 1
+            bnz = 0
+          }
         }
         break
       }
       _hits.length = 0
     }
 
-    if (best !== -Infinity) groundSurface = bestSurface
+    if (best !== -Infinity) {
+      groundSurface = bestSurface
+      groundNormal.set(bnx, bny, bnz)
+    }
     return best === -Infinity ? null : best
   }
 
@@ -736,9 +997,45 @@ export function createCollisionWorld(): CollisionWorld {
       const rise = data[o + 4] - feet
       if (rise > EPS && rise <= stepHeight && rise > lift) lift = rise
     }
+
+    /* A kerb that lives on a walkable MESH rather than a box has no top face in
+     * the set above, so ask the ground query for one — but only when something
+     * actually stopped us, because that is a raycast and this runs five times a
+     * frame. Open-field walking pays nothing. */
+    if (out.blocked && walkables.length > 0) {
+      savedSurface = groundSurface
+      savedNormal.copy(groundNormal)
+      _step.set(x, feet + stepHeight, z)
+      const g = groundAt(_step, stepHeight)
+      groundSurface = savedSurface
+      groundNormal.copy(savedNormal)
+      if (g !== null) {
+        const rise = g - feet
+        if (rise > EPS && rise <= stepHeight && rise > lift) lift = rise
+      }
+    }
+
+    // …and never lift someone into a ceiling. The old code raised the feet
+    // unconditionally, which is how you stand up inside a slab.
+    if (lift > 0 && !headroom(x, z, feet + lift, radius, height)) lift = 0
+
     out.stepped = lift
     out.position.set(x, to.y + lift, z)
     return out
+  }
+
+  /** Is the capsule band [footY, footY + height] clear of boxes at this XZ? */
+  function headroom(x: number, z: number, footY: number, radius: number, height: number): boolean {
+    queryRect(x - radius, z - radius, x + radius, z + radius)
+    const top = footY + height
+    for (let i = 0; i < candN; i++) {
+      const o = cand[i] * 6
+      if (x + radius <= data[o] || x - radius >= data[o + 3]) continue
+      if (z + radius <= data[o + 2] || z - radius >= data[o + 5]) continue
+      // The box being stepped ONTO ends exactly at footY; it is the floor.
+      if (data[o + 4] > footY + STEP_EPS && data[o + 1] < top - STEP_EPS) return false
+    }
+    return true
   }
 
   /* ---- walkables ---------------------------------------------------------*/
@@ -821,6 +1118,7 @@ export function createCollisionWorld(): CollisionWorld {
     gw = 0
     gh = 0
     groundSurface = 'ground'
+    groundNormal.set(0, 1, 0)
     debugStale = true
   }
 
@@ -846,6 +1144,7 @@ export function createCollisionWorld(): CollisionWorld {
     get groundSurface(): Surface {
       return groundSurface
     },
+    groundNormal,
     solidNear,
     occluded,
     move,
