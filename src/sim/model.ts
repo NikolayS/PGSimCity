@@ -1192,9 +1192,11 @@ export function createSim(bus: Bus): SimApi {
     if (maintenanceWalPending > 0) {
       const gap = Math.max(0, wal.insertLsn - wal.writeLsn)
       const available = Math.max(0, wal.bufferCapacity - gap)
+      // Maintenance inserts first, but may consume only half a refill; a large
+      // vacuum must not keep every client backend parked on WALWriteLock.
       const chunk = Math.min(
         maintenanceWalPending,
-        available,
+        Math.min(available, wal.bufferCapacity * 0.5),
         Math.max(4096, 24 * 1024 * 1024 * dt),
       )
       if (chunk > 0) {
@@ -1768,7 +1770,7 @@ export function createSim(bus: Bus): SimApi {
             // scan cost is proportional to the heap — the visibility map lets
             // vacuum skip all-visible pages, so append-only tables are cheap.
             const skip = t.def.id === 'events' ? 0.15 : 1
-            vacNext(w, 'scan_heap', clamp((t.pages / 900) * skip, 1.2, 9))
+            vacNext(w, 'scan_heap', Math.max((t.pages / 900) * skip, 1.2))
           }
           break
         }
@@ -1819,7 +1821,7 @@ export function createSim(bus: Bus): SimApi {
             } else {
               deadIndexTuples[ti] = Math.max(0, deadIndexTuples[ti] - vacIndexTarget[i])
               refreshIndexPages(ti)
-              vacNext(w, 'vacuum_heap', clamp(t.pages / 1600, 0.8, 5))
+              vacNext(w, 'vacuum_heap', Math.max(t.pages / 1600, 0.8))
             }
           }
           break
@@ -3205,6 +3207,9 @@ export function createSim(bus: Bus): SimApi {
     if (def.id === 'bloat-and-vacuum' && previousScenarioT < 70 && state.scenarioT >= 70) {
       setKnob('autovacuum', true)
     }
+    if (def.id === 'no-bgwriter' && previousScenarioT < 64 && state.scenarioT >= 64) {
+      setKnob('bgwriterEnabled', true)
+    }
     // Stands in for a `lockTimeout` knob this scenario would set at a beat.
     const lt = SCENARIO_LOCK_TIMEOUT[def.id]
     if (lt && lockTimeout !== lt.sec && state.scenarioT >= lt.atSec) {
@@ -3538,7 +3543,7 @@ export function createSim(bus: Bus): SimApi {
       // starts just under its threshold: autovacuum has a bay to open in the
       // first half minute at any transaction rate, which is the only way the
       // yard introduces itself before a visitor has stopped looking at it.
-      const seed = d.id === 'events' ? 0 : Math.round((50 + K.autovacuumScaleFactor * t.liveTuples) * (d.id === 'sessions' ? 0.94 : 0.45))
+      const seed = d.id === 'events' ? 0 : Math.round((50 + K.autovacuumScaleFactor * t.liveTuples) * (d.id === 'sessions' ? 0.995 : 0.45))
       t.deadTuples = seed
       deadRemovable[i] = seed
       insSinceVacuum[i] = 0

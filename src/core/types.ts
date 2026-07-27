@@ -21,10 +21,9 @@ export const PG_PAGE_BYTES = 8 * 1024
 export const SHARED_BUFFERS_MIN_MIB = 128
 export const SHARED_BUFFERS_MAX_MIB = 64 * 1024
 /**
- * Logical pool size at which all N_BUFFERS representative frames are active.
- * The model scales capacity against this reference, then leaves the geometry
- * capped: larger pools are beyond the sampled working set, where the miss
- * curve should already be flat.
+ * The declared demo relations total 8 GiB, so this logical pool activates all
+ * N_BUFFERS representative frames. Larger settings stay capped because the
+ * sampled working set fits and the miss curve is already flat.
  */
 export const SHARED_BUFFERS_FULL_SAMPLE_MIB = 8 * 1024
 /** How many backend slots exist in the Backend District. */
