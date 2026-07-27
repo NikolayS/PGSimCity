@@ -480,6 +480,11 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     transparent: true,
     opacity: 0.38,
     fog: true,
+    // This repeats the plate silhouette exactly. Depth bias, not another tiny
+    // Y nudge, keeps the two surfaces ordered at every camera distance.
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
   })
   dayShadowMat.name = 'ground.dayShadow'
   dayShadowMat.userData.pgTheme = true
@@ -699,6 +704,9 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
       depthWrite: false,
       side: THREE.DoubleSide,
       forceSinglePass: true,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
     }),
   )
   mats.push(bandMat)
@@ -824,7 +832,16 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     const h = w / aspect
 
     const m = dampFog(
-      new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.3, depthWrite: false }),
+      new THREE.MeshBasicMaterial({
+        map: tex,
+        transparent: true,
+        opacity: 0.3,
+        depthWrite: false,
+        // Labels are the top coat over slab, zone paint, and kerb.
+        polygonOffset: true,
+        polygonOffsetFactor: -4,
+        polygonOffsetUnits: -4,
+      }),
     )
     mats.push(m)
     const mesh = new THREE.Mesh(unitPlane, m)
@@ -884,7 +901,14 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     kerb.holes.push(inner)
     const kerbGeo = new THREE.ShapeGeometry(kerb)
     geos.push(kerbGeo)
-    const kerbMat = damped(theme.neon(spec.color, 1.15))
+    const kerbMat = damped(
+      theme.neon(spec.color, 1.15, {
+        // The kerb overlaps the daylight zone around the slab perimeter.
+        polygonOffset: true,
+        polygonOffsetFactor: -3,
+        polygonOffsetUnits: -3,
+      }),
+    )
     mats.push(kerbMat)
     const kerbMesh = new THREE.Mesh(kerbGeo, kerbMat)
     kerbMesh.rotation.x = -Math.PI / 2

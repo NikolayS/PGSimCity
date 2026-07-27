@@ -618,9 +618,7 @@ body.pg-tour::after {
     font-size: var(--fs-xs);
   }
   .tour-first {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 10px;
+    gap: 8px;
   }
   .pal-overlay {
     grid-template-rows: 6vh auto 1fr;
@@ -689,15 +687,27 @@ body.pg-tour::after {
     width: 100%;
     padding: 10px 12px;
     gap: 8px;
+    flex-direction: row;
+    align-items: center;
+  }
+  .tour-first__text {
+    display: none;
   }
   .tour-first__btns {
     width: 100%;
     gap: 8px;
+    flex: 0 0 auto;
   }
   .tour-first__btns .pg-btn {
-    flex: 1 1 auto;
+    flex: 0 0 auto;
     min-height: var(--tap);
     justify-content: center;
+  }
+  .tour-first__btns .tour-first__go {
+    flex: 1 1 auto;
+  }
+  .tour-first__line {
+    line-height: 1.35;
   }
 
   .tour-narrate {

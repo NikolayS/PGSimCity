@@ -41,6 +41,25 @@
   flex-direction: row-reverse;
 }
 
+/* Wide layouts reserve only the slim handle column. The panels themselves are
+   positioned over the world, so opening an explanation never narrows the city
+   or the tour deck. */
+.pgc-host:not(.is-compact) {
+  position: relative;
+  width: var(--pgc-tab);
+}
+.pgc-host--left:not(.is-compact) .pgc-panel,
+.pgc-host--right:not(.is-compact) .pgc-panel {
+  position: absolute;
+  inset-block: 0;
+}
+.pgc-host--left:not(.is-compact) .pgc-panel {
+  left: 0;
+}
+.pgc-host--right:not(.is-compact) .pgc-panel {
+  right: 0;
+}
+
 .pgc-panel {
   max-height: 100%;
   min-height: 0;
@@ -75,11 +94,19 @@
    -------------------------------------------------------------------------*/
 
 .pgc-tab {
-  width: var(--pgc-tab);
+  width: auto;
+  min-width: var(--pgc-tab);
   height: var(--pgc-tab);
+  padding-inline: 10px;
+  gap: 6px;
   flex: 0 0 auto;
   background: var(--bg-panel);
   display: none;
+}
+.pgc-tab__label {
+  font-size: var(--fs-xs);
+  font-weight: 650;
+  letter-spacing: 0.02em;
 }
 .pgc-host:not(.is-open) .pgc-tab,
 .pgc-host.is-compact .pgc-tab {
@@ -673,9 +700,12 @@
   /* Clear of the sheet's top edge, and thumb-sized. */
   .pgc-host.is-compact .pgc-tab {
     top: 38%;
-    width: var(--tap);
+    width: auto;
     height: var(--tap);
     transition: opacity var(--dur) var(--ease);
+  }
+  .pgc-tab__label {
+    display: inline;
   }
   /* A tall sheet reaches past them, and a tab floating over the panel it opened
      clips the first control underneath it. The sheet's own header is the way

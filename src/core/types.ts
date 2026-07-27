@@ -627,7 +627,7 @@ export interface ThemeApi {
   /** cached MeshStandardMaterial */
   mat(key: string, opts?: MatOpts): THREE.MeshStandardMaterial
   /** cached emissive/neon material (unlit, bloom-friendly) */
-  neon(color: number, intensity?: number, opts?: { transparent?: boolean; opacity?: number }): THREE.MeshBasicMaterial
+  neon(color: number, intensity?: number, opts?: NeonOpts): THREE.MeshBasicMaterial
   /** cached line material for blueprint edges */
   line(color: number, opacity?: number): THREE.LineBasicMaterial
   /** wireframe edge overlay for a mesh geometry */
@@ -650,6 +650,17 @@ export interface MatOpts {
   opacity?: number
   flatShading?: boolean
   side?: THREE.Side
+  polygonOffset?: boolean
+  polygonOffsetFactor?: number
+  polygonOffsetUnits?: number
+}
+
+export interface NeonOpts {
+  transparent?: boolean
+  opacity?: number
+  polygonOffset?: boolean
+  polygonOffsetFactor?: number
+  polygonOffsetUnits?: number
 }
 
 export interface TextTexOpts {

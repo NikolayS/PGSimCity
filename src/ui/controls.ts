@@ -417,33 +417,29 @@ export function createControls(ctx: UiContext): UiModule {
 
   const narrow = window.matchMedia('(max-width: 1100px)')
   let compact = narrow.matches
-  let openWide = loadFlag(OPEN_KEY, true)
-  let openNarrow = false
+  let open = loadFlag(OPEN_KEY, false)
   let tall = false
   let planPreset = false
 
-  const isOpen = (): boolean => (compact ? openNarrow : openWide)
+  const isOpen = (): boolean => open
 
   function applyOpen(): void {
-    const open = isOpen()
+    const panelOpen = isOpen()
     setClass(host, 'is-plan-hidden', planPreset)
     setClass(host, 'is-compact', compact)
-    setClass(host, 'is-open', open)
-    tab.setAttribute('aria-expanded', String(open))
-    tab.title = open ? 'Hide the console' : 'Show the console'
+    setClass(host, 'is-open', panelOpen)
+    tab.setAttribute('aria-expanded', String(panelOpen))
+    tab.title = panelOpen ? 'Hide the console' : 'Show the console'
     tab.setAttribute('aria-label', tab.title)
-    panel.setAttribute('aria-hidden', String(!open))
+    panel.setAttribute('aria-hidden', String(!panelOpen))
     // Nothing inside a hidden panel should be reachable by keyboard.
-    panel.inert = !open && compact
+    panel.inert = !panelOpen
     syncSheetFlags()
   }
 
   function setOpen(next: boolean): void {
-    if (compact) openNarrow = next
-    else {
-      openWide = next
-      saveFlag(OPEN_KEY, next)
-    }
+    open = next
+    saveFlag(OPEN_KEY, next)
     applyOpen()
     if (next) {
       // restart the entrance animation so re-opening feels like arriving
@@ -469,7 +465,7 @@ export function createControls(ctx: UiContext): UiModule {
     type: 'button',
     on: { click: () => setOpen(!isOpen()) },
   })
-  tab.append(icon('gear', 15))
+  tab.append(icon('gear', 15), el('span', { class: 'pgc-tab__label', text: 'Console' }))
 
   /* --- header ------------------------------------------------------------ */
 
@@ -595,14 +591,13 @@ export function createControls(ctx: UiContext): UiModule {
 
   const onNarrow = (): void => {
     compact = narrow.matches
-    if (compact) openNarrow = false
     applyOpen()
   }
   narrow.addEventListener('change', onNarrow)
 
   /* Two sheets, one place to stand. */
   const onSheet = (e: Event): void => {
-    if (sheetSideOf(e) !== 'left' && compact && openNarrow) setOpen(false)
+    if (sheetSideOf(e) !== 'left' && compact && open) setOpen(false)
   }
   window.addEventListener(SHEET_EVENT, onSheet)
 

@@ -1225,6 +1225,11 @@ export const createAccess: AccessFactory = (ctx: WorldContext): AccessModule => 
       depthWrite: false,
       toneMapped: false,
       blending: THREE.AdditiveBlending,
+      // These routes are literal paint over ground, plinth, and forecourt
+      // surfaces. Bias keeps them above every host surface in the far view.
+      polygonOffset: true,
+      polygonOffsetFactor: -4,
+      polygonOffsetUnits: -4,
     }))
     const mesh = new THREE.Mesh(g, m)
     mesh.name = 'access.routes'

@@ -936,6 +936,14 @@ body.pg-labels-off #labels-root {
   .hud-ckpt {
     padding: 4px;
   }
+  .hud-tour span {
+    display: none;
+  }
+  .hud-tour {
+    width: 30px;
+    padding-inline: 0;
+    justify-content: center;
+  }
   .hud-scn__label {
     display: none;
   }
@@ -1068,6 +1076,9 @@ body.pg-labels-off #labels-root {
   .hud-tools .pg-btn--icon {
     width: var(--tap);
     height: var(--tap);
+  }
+  .hud-tools .hud-tour {
+    width: var(--tap);
   }
   .hud-tools .hud-walk {
     min-width: var(--tap);

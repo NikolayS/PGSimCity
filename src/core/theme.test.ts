@@ -52,3 +52,30 @@ describe('bloom-off neon fallback', () => {
     theme.dispose()
   })
 })
+
+describe('layered surface materials', () => {
+  it('preserves an explicit polygon offset in cached matte and neon materials', () => {
+    const theme = createTheme()
+    const matte = theme.mat('test.layered-matte', {
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -3,
+    })
+    const neon = theme.neon(NIGHT_PALETTE.wal, 1.1, {
+      polygonOffset: true,
+      polygonOffsetFactor: -4,
+      polygonOffsetUnits: -5,
+    })
+    const unbiasedNeon = theme.neon(NIGHT_PALETTE.wal, 1.1)
+
+    expect(matte.polygonOffset).toBe(true)
+    expect(matte.polygonOffsetFactor).toBe(-2)
+    expect(matte.polygonOffsetUnits).toBe(-3)
+    expect(neon.polygonOffset).toBe(true)
+    expect(neon.polygonOffsetFactor).toBe(-4)
+    expect(neon.polygonOffsetUnits).toBe(-5)
+    expect(unbiasedNeon).not.toBe(neon)
+
+    theme.dispose()
+  })
+})

@@ -433,7 +433,18 @@ export function createHud(ctx: UiContext): UiModule {
       icon(name, 15),
     )
 
-  const tourBtn = toolBtn('tour', 'Guided tour', 'T', () => toggleTour())
+  const tourBtn = el(
+    'button',
+    {
+      class: 'pg-btn hud-tool hud-tour',
+      type: 'button',
+      title: 'Guided tour  (T)',
+      'aria-label': 'Guided tour',
+      on: { click: () => toggleTour() },
+    },
+    icon('tour', 15),
+    el('span', { text: 'Tour' }),
+  )
   const paletteBtn = toolBtn('search', 'Command palette', '/', () => openPalette())
   const helpBtn = toolBtn('help', 'Keyboard & legend', '?', () => toggleHelp())
   const audioLabel = el('span', { class: 'hud-audio__label', text: 'Sound off' })

@@ -336,6 +336,11 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
     metalness: 0.02,
     emissive: 0x020408,
     opacity: OPACITY_TIER.solid,
+    // The forecourt is a large paint layer over the city plate. Six physical
+    // centimetres alone are not enough depth separation in the far view.
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
   })
   const apron = new THREE.Mesh(apronGeo, apronMat)
   apron.name = 'client.forecourt'
