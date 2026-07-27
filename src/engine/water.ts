@@ -13,7 +13,8 @@ export interface BufferWaterApi {
 
 const SPAN = (CITY.buf.grid - 1) * CITY.buf.pitch + CITY.buf.tile
 const SURFACE_Y = CITY.buf.baseY + CITY.buf.maxRise + 0.4
-const DEPTH = SURFACE_Y - CITY.deck.top
+const BOTTOM_Y = CITY.buf.baseY
+const DEPTH = SURFACE_Y - BOTTOM_Y
 const RIPPLE_COUNT = 6
 const RIPPLE_SECONDS = 1.15
 const WATER_COLOR = 0x5aa9e8
@@ -65,7 +66,7 @@ export function createBufferWater(scene: THREE.Scene): BufferWaterApi {
   })
   const volume = new THREE.Mesh(volumeGeometry, volumeMaterial)
   volume.name = 'buffer.water.volume'
-  volume.position.y = CITY.deck.top + DEPTH * 0.5
+  volume.position.y = BOTTOM_Y + DEPTH * 0.5
   volume.renderOrder = 2
   volume.raycast = () => {}
   group.add(volume)

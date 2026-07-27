@@ -151,6 +151,39 @@ describe('movement audio', () => {
     audio.dispose()
   })
 
+  it('creates one source per splash and per distance-triggered swim stroke', async () => {
+    installAudioWindow()
+    vi.resetModules()
+    const { createAudio } = await import('./audio')
+    const audio = createAudio(createBus())
+
+    await audio.enable()
+    const context = FakeContext.latest!
+    audio.splash(0.6)
+    expect(context.sourceCount).toBe(1)
+
+    const stroke = (distance: number, submerged: boolean) =>
+      audio.step(0.1, {
+        distance,
+        speed: 1.4,
+        gait: 'swim',
+        grounded: false,
+        surface: 'water',
+        submerged,
+      })
+    stroke(0, false)
+    stroke(1.19, true)
+    expect(context.sourceCount).toBe(1)
+    stroke(1.21, true)
+    expect(context.sourceCount).toBe(2)
+    stroke(3.61, true)
+    expect(context.sourceCount).toBe(4)
+
+    const masterFilter = context.nodes[0] as FakeFilter
+    expect(masterFilter.frequency.value).toBe(620)
+    audio.dispose()
+  })
+
   it('keeps a labelled, stateful sound control in the always-visible HUD', () => {
     expect(hudSource).toContain("class: 'pg-btn hud-tool hud-audio'")
     expect(hudSource).toContain("text: 'Sound off'")
