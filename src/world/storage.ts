@@ -45,8 +45,10 @@ const FLOOR_Y = CITY.storage.y // -52, the data-directory floor
 const ROOF_Y = CITY.storage.warehouseTop // -30, where the page tiles live
 const PIT_FLOOR_Y = FLOOR_Y - 8 // ground.ts digs 8 m deeper than the floor
 
-/** One roof tile is a run of PAGES_PER_TILE heap pages. */
-const PAGES_PER_TILE = 12
+/** One roof tile is an 8 MiB run of heap pages. */
+const PAGES_PER_TILE = 1024
+/** Index trees sample page counts at the same scale as the enlarged relations. */
+const INDEX_PAGES_PER_VISUAL_PAGE = 84
 const COLS = 12
 const PITCH = 1.4
 const TILE_W = 1.15
@@ -742,7 +744,11 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
         addBox(boxHi, it.x, LEAF_Y + 1.2, it.z, 20, 1.0, 7)
         continue
       }
-      const baseLeaves = clamp(Math.round(5 + Math.sqrt(it.pages) / 3), 6, 10)
+      const baseLeaves = clamp(
+        Math.round(5 + Math.sqrt(it.pages / INDEX_PAGES_PER_VISUAL_PAGE) / 3),
+        6,
+        10,
+      )
       baseLeafCount[s] = baseLeaves
       liveLeafCount[s] = baseLeaves
       treeOf[s] = tree

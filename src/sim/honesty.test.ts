@@ -15,6 +15,16 @@ describe('honest state readouts', () => {
 
     expect(sim.state.stats.cacheHitPct).toBeLessThan(99.95)
   })
+
+  it('continues client throughput while vacuum scans the enlarged relations', () => {
+    const sim = createSim(createBus())
+    sim.runScenario('steady-state')
+
+    advanceBy(sim, 60)
+
+    expect(sim.state.autovac.workers.some((worker) => worker.active)).toBe(true)
+    expect(sim.state.stats.tps).toBeGreaterThan(10)
+  })
 })
 
 describe('bloat-and-vacuum scenario', () => {
@@ -44,6 +54,7 @@ describe('bloat-and-vacuum scenario', () => {
     const sim = createSim(createBus())
     sim.runScenario('bloat-and-vacuum')
     const runsBefore = sim.state.autovac.totalRuns
+    const sessions = sim.state.tables.findIndex((table) => table.def.id === 'sessions')
 
     advanceBy(sim, 70)
 
@@ -54,5 +65,29 @@ describe('bloat-and-vacuum scenario', () => {
 
     advanceBy(sim, 18)
     expect(sim.state.autovac.totalRuns).toBeGreaterThan(runsBefore)
+    expect(sim.state.autovac.workers.some((worker) => worker.active && worker.table === sessions)).toBe(true)
+  })
+})
+
+describe('no-bgwriter scenario', () => {
+  it('keeps backend dirty-victim writes moving until the bgwriter returns', () => {
+    const sim = createSim(createBus())
+    sim.runScenario('no-bgwriter')
+    advanceBy(sim, 30)
+    const writesAtThirty = sim.state.buffers.dirtyEvictions
+
+    advanceBy(sim, 25)
+
+    expect(sim.state.buffers.dirtyEvictions).toBeGreaterThan(writesAtThirty)
+  })
+
+  it('turns the bgwriter back on at the narrated beat', () => {
+    const sim = createSim(createBus())
+    sim.runScenario('no-bgwriter')
+
+    advanceBy(sim, 64)
+
+    expect(sim.state.knobs.bgwriterEnabled).toBe(true)
+    expect(sim.state.bgwriter.enabled).toBe(true)
   })
 })
