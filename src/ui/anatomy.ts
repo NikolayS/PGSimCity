@@ -1373,7 +1373,8 @@ export function createAnatomy(ctx: UiContext): UiModule {
     lastShape = ''
   }
 
-  const offSelect = ctx.bus.on('select', ({ id, part }) => {
+  const offSelect = ctx.bus.on('select', ({ id, part, outlineOnly }) => {
+    if (outlineOnly) return
     if (!id) return
     useRelation(id)
     if (part === 'page') show('page')

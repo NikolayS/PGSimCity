@@ -334,6 +334,11 @@
   justify-content: center;
 }
 
+.hud-trace-open {
+  gap: 6px;
+  white-space: nowrap;
+}
+
 .hud-walk__label {
   display: none;
 }
@@ -540,6 +545,56 @@
 /* Where the tool cluster docks on a phone. It has no business taking a gap
    while it is empty. */
 .hud-transport__dock:empty {
+  display: none;
+}
+
+.hud-transport__dock {
+  min-width: 0;
+}
+
+.hud-trace {
+  display: none;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.hud-trace.is-live {
+  display: flex;
+}
+
+.hud-trace__stop {
+  flex: 0 0 auto;
+  padding: 5px 7px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  color: var(--ink-faint);
+  font-family: var(--f-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.035em;
+  white-space: nowrap;
+}
+
+.hud-trace__stop.is-visited {
+  color: var(--c-backend);
+  border-color: color-mix(in srgb, var(--c-backend) 42%, transparent);
+}
+
+.hud-trace__stop.is-now {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--c-backend) 16%, transparent);
+  border-color: var(--c-backend);
+}
+
+.hud-trace__stop.is-skipped {
+  color: var(--ink-faint);
+  opacity: 0.55;
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+body.pg-trace .hud-transport__scn,
+body.pg-trace .hud-transport > .hud-sep {
   display: none;
 }
 
@@ -1049,6 +1104,20 @@ body.pg-labels-off #labels-root {
   .hud-transport__dock {
     display: flex;
     align-items: center;
+  }
+  body.pg-trace .hud-transport__dock .hud-tools,
+  body.pg-trace .hud-scn__toggle {
+    display: none;
+  }
+  body.pg-trace .hud-trace {
+    width: 100%;
+    justify-content: space-between;
+    gap: 2px;
+  }
+  body.pg-trace .hud-trace__stop {
+    padding: 4px 3px;
+    font-size: 8px;
+    letter-spacing: 0;
   }
   .hud-tools {
     gap: 6px;

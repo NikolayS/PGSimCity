@@ -1,8 +1,12 @@
 import '../styles/tour.css'
 
-import type { Knobs, TourChapter } from '../core/types'
+import type { Knobs, QueryKind, TracePlayback, TraceStop, TourChapter } from '../core/types'
 import { clamp } from '../core/util'
+import { MODEL_TIME_STRETCH, sqlFor } from '../sim/model'
 import { SCENARIO_NARRATION_SECONDS } from '../sim/scenarios'
+import { TABLES } from '../world/layout'
+import { TRACE_COPY } from './trace-copy'
+import { createTraceDwell } from './trace-dwell'
 import { el, icon, setClass, setText } from './uikit'
 import type { UiContext, UiModule } from './uikit'
 
@@ -47,6 +51,36 @@ interface TourStep extends TourChapter {
   look?: [number, string][]
 }
 
+interface TraceChoice {
+  kind: QueryKind
+  table: number
+  label: string
+  hot?: boolean
+}
+
+const tableIndex = (id: string): number => TABLES.findIndex((table) => table.id === id)
+
+const TRACE_CHOICES: readonly TraceChoice[] = [
+  { kind: 'select_idx', table: tableIndex('accounts'), label: 'Point SELECT' },
+  { kind: 'select_seq', table: tableIndex('sessions'), label: 'Sequential scan' },
+  { kind: 'aggregate', table: tableIndex('orders'), label: 'Aggregate' },
+  { kind: 'insert', table: tableIndex('orders'), label: 'INSERT' },
+  { kind: 'update', table: tableIndex('sessions'), label: 'Non-HOT UPDATE', hot: false },
+  { kind: 'delete', table: tableIndex('sessions'), label: 'DELETE' },
+]
+
+const TRACE_FOCUS: Record<TraceStop, string> = {
+  connect: 'postmaster',
+  parse_plan: 'planner.planner',
+  fetch: 'shared.buffers',
+  work: 'backend.row',
+  wal: 'wal.buffers',
+  commit: 'wal.vault',
+  send: 'client.pool',
+  done: 'backend.row',
+  blocked: 'lock.manager',
+}
+
 const STEPS: TourStep[] = [
   {
     id: 'connect',
@@ -56,7 +90,6 @@ const STEPS: TourStep[] = [
     focus: 'client.pool',
     duration: 16,
     knobs: { tps: 140, writeRatio: 0.3, updateRatio: 0.6, seqScanRatio: 0.15, timeScale: 1, paused: false },
-    spotlight: ['client.pool', 'postmaster', 'conn.gate'],
     look: [[8, 'postmaster']],
   },
   {
@@ -66,7 +99,6 @@ const STEPS: TourStep[] = [
       'That fork is a whole operating-system process, and it is yours alone until you disconnect. It gets private memory for sorting and hashing, plus a window onto the shared memory every other backend can see. This is why an idle connection is never free, and why every large deployment eventually puts a pooler in front of the database. Watch the colour of each block — it tells you what that process is waiting for, and most of the time it is waiting.',
     focus: 'backend.row',
     duration: 16,
-    spotlight: ['backend.row', 'proc.array'],
   },
   {
     id: 'plan',
@@ -75,7 +107,6 @@ const STEPS: TourStep[] = [
       'Your SQL says what you want, never how to fetch it. The text is parsed into a tree, views and rules are expanded, and then the planner prices every strategy it can think of — this index, that join order, a full sweep of the table — using statistics about the data rather than the data itself. Watch the plan tree assemble above the lab: the shape it settles on is the difference between reading four pages and reading four thousand.',
     focus: 'planner.planner',
     duration: 16,
-    spotlight: ['planner.lab', 'planner.planner', 'planner.plantree'],
     look: [[10, 'planner.plantree']],
   },
   {
@@ -86,7 +117,6 @@ const STEPS: TourStep[] = [
     focus: 'shared.buffers',
     duration: 18,
     knobs: { seqScanRatio: 0.12 },
-    spotlight: ['shared.buffers', 'buf.mapping'],
   },
   {
     id: 'page',
@@ -95,7 +125,6 @@ const STEPS: TourStep[] = [
       'Underneath the city is the data directory: ordinary files on an ordinary filesystem, cut into 8 KiB pages. A page holds a small header, a list of pointers at the front, and rows packed in from the back — which is how a row can move inside its page without a single index noticing. Watch one page ride the green road up into the plaza. That climb is precisely what a cache miss costs you.',
     focus: 'storage.table.accounts',
     duration: 16,
-    spotlight: ['storage.datadir', 'storage.table.accounts', 'os.cache'],
   },
   {
     id: 'wal',
@@ -105,7 +134,6 @@ const STEPS: TourStep[] = [
     focus: 'wal.buffers',
     duration: 18,
     knobs: { writeRatio: 0.55, updateRatio: 0.6 },
-    spotlight: ['wal.buffers', 'walwriter', 'wal.vault'],
     look: [
       [9, 'walwriter'],
       [14, 'wal.vault'],
@@ -119,7 +147,6 @@ const STEPS: TourStep[] = [
     focus: 'walwriter',
     duration: 20,
     knobs: { synchronousCommit: 'off', tps: 600, writeRatio: 0.7 },
-    spotlight: ['walwriter', 'wal.vault', 'backend.row'],
   },
   {
     id: 'checkpoint',
@@ -130,7 +157,6 @@ const STEPS: TourStep[] = [
     duration: 22,
     scenario: 'checkpoint-storm',
     knobs: { synchronousCommit: 'on' },
-    spotlight: ['checkpointer', 'shared.buffers', 'wal.vault', 'disk.array'],
     look: [[13, 'wal.vault']],
   },
   {
@@ -141,7 +167,6 @@ const STEPS: TourStep[] = [
     focus: 'storage.table.sessions',
     duration: 18,
     scenario: 'bloat-and-vacuum',
-    spotlight: ['storage.table.sessions', 'storage.table.accounts'],
   },
   {
     id: 'vacuum',
@@ -151,7 +176,6 @@ const STEPS: TourStep[] = [
     focus: 'autovac.worker.0',
     duration: 18,
     knobs: { autovacuum: true, autovacuumScaleFactor: 0.08 },
-    spotlight: ['autovac.launcher', 'autovac.worker.0', 'landfill'],
   },
   {
     id: 'horizon',
@@ -162,7 +186,6 @@ const STEPS: TourStep[] = [
     duration: 22,
     knobs: { longRunningXact: true },
     at: [[12, { longRunningXact: false }]],
-    spotlight: ['xmin.horizon', 'proc.array', 'autovac.worker.0'],
   },
   {
     id: 'stream',
@@ -172,7 +195,6 @@ const STEPS: TourStep[] = [
     focus: 'walsender',
     duration: 20,
     knobs: { replicaEnabled: true, walLevel: 'replica', replicaSlowApply: false, replicaNetworkLag: 30 },
-    spotlight: ['walsender', 'net.wire', 'walreceiver', 'startup.proc'],
     look: [
       [8, 'net.wire'],
       [14, 'startup.proc'],
@@ -186,7 +208,6 @@ const STEPS: TourStep[] = [
     focus: 'replica.standby',
     duration: 20,
     scenario: 'replication-lag',
-    spotlight: ['replica.standby', 'startup.proc', 'replica.buffers'],
   },
   {
     id: 'city',
@@ -197,7 +218,6 @@ const STEPS: TourStep[] = [
     duration: 18,
     scenario: null,
     knobs: { tps: 240, writeRatio: 0.3, updateRatio: 0.55, seqScanRatio: 0.12, synchronousCommit: 'on', autovacuum: true },
-    spotlight: ['world.ground'],
   },
 ]
 
@@ -216,6 +236,9 @@ const FIRST_RUN_DELAY_MS = 2800
 const FIRST_RUN_LIFE_MS = 40000
 type KnobKey = keyof Knobs
 type LooseSet = (key: KnobKey, value: Knobs[KnobKey]) => void
+interface LooseBus {
+  on(type: string, fn: (payload: unknown) => void): () => void
+}
 
 function hasSeen(): boolean {
   try {
@@ -363,18 +386,263 @@ export function createTour(ctx: UiContext): UiModule {
    * THE NARRATION CARD — scenario beats, when the tour is not running
    * =====================================================================*/
 
+  const narrateEyebrow = el('span', { class: 'pg-eyebrow tour-narrate__eyebrow', text: 'Scenario' })
   const narrateTitle = el('h3', { class: 'tour-narrate__title', text: '' })
   const narrateBody = el('p', { class: 'pg-body tour-narrate__body', text: '' })
+  const traceSql = el('code', { class: 'tour-narrate__sql' })
+  const traceHint = el('p', { class: 'tour-narrate__hint' })
+  const stretchText = el('span', { class: 'tour-narrate__stretch' })
+
+  const traceModeButton = (mode: TracePlayback, label: string): HTMLButtonElement =>
+    el('button', {
+      class: `pg-btn tour-narrate__mode is-${mode}`,
+      type: 'button',
+      text: label,
+      on: { click: () => setTracePlayback(mode) },
+    })
+
+  const stepTraceBtn = traceModeButton('step', 'Step')
+  const slowTraceBtn = traceModeButton('slow', 'Slow')
+  const liveTraceBtn = traceModeButton('live', 'Live')
+  const traceAgainBtn = el('button', {
+    class: 'pg-btn tour-narrate__again',
+    type: 'button',
+    text: 'Change one thing and run it again',
+    on: { click: () => openTracePicker() },
+  })
+  const closeTraceBtn = el(
+    'button',
+    {
+      class: 'pg-btn pg-btn--icon tour-narrate__close',
+      type: 'button',
+      title: 'End query trace',
+      'aria-label': 'End query trace',
+      on: { click: () => closeTrace() },
+    },
+    icon('close', 13),
+  )
+  const traceStrip = el(
+    'div',
+    { class: 'tour-narrate__strip' },
+    el('div', { class: 'tour-narrate__modes', role: 'group', 'aria-label': 'Trace playback' },
+      stepTraceBtn,
+      slowTraceBtn,
+      liveTraceBtn,
+    ),
+    stretchText,
+    closeTraceBtn,
+  )
   const narrateCard = el(
     'aside',
     { class: 'tour-narrate pg-panel', role: 'status', 'aria-live': 'polite' },
-    el('span', { class: 'pg-eyebrow tour-narrate__eyebrow', text: 'Scenario' }),
+    narrateEyebrow,
     narrateTitle,
     narrateBody,
+    traceSql,
+    traceHint,
+    traceStrip,
+    traceAgainBtn,
   )
 
   let narrateTimer = 0
   let narrateUntil = 0
+  let traceActive = false
+  let traceAwaiting = false
+  let traceMode: TracePlayback = 'slow'
+  let paintedTraceStop: TraceStop | null = null
+  let selectedTraceStop: TraceStop | null = null
+  let traceBaseline: Knobs | null = null
+  const traceTouched = new Set<KnobKey>()
+  const traceDwell = createTraceDwell(sim.state.trace)
+
+  const traceChoiceButtons = TRACE_CHOICES.map((choice) =>
+    el(
+      'button',
+      {
+        class: 'trace-picker__choice',
+        type: 'button',
+        on: { click: () => runTrace(choice) },
+      },
+      el(
+        'span',
+        { class: 'trace-picker__meta' },
+        el('strong', { text: choice.label }),
+        el('span', { text: TABLES[choice.table].name }),
+      ),
+      el('code', { text: sqlFor(choice.kind, choice.table) }),
+    ),
+  )
+  const tracePicker = el(
+    'div',
+    {
+      class: 'trace-picker',
+      role: 'presentation',
+      on: {
+        pointerdown: (event: Event) => {
+          if (event.target === tracePicker) dismissTracePicker()
+        },
+      },
+    },
+    el(
+      'section',
+      {
+        class: 'trace-picker__dialog pg-panel',
+        role: 'dialog',
+        'aria-modal': 'true',
+        'aria-label': 'Choose a statement to trace',
+      },
+      el(
+        'header',
+        { class: 'trace-picker__head' },
+        el(
+          'div',
+          {},
+          el('span', { class: 'pg-eyebrow', text: 'Trace a query' }),
+          el('h2', { text: 'Choose one honest model statement' }),
+        ),
+        el(
+          'button',
+          {
+            class: 'pg-btn pg-btn--icon',
+            type: 'button',
+            title: 'Close statement picker',
+            'aria-label': 'Close statement picker',
+            on: { click: () => dismissTracePicker() },
+          },
+          icon('close', 14),
+        ),
+      ),
+      el('p', {
+        class: 'trace-picker__intro',
+        text: 'These six statements are the complete v1 grammar. Free-text SQL would imply behavior the model does not have.',
+      }),
+      el('div', { class: 'trace-picker__grid' }, ...traceChoiceButtons),
+    ),
+  )
+  tracePicker.hidden = true
+  document.body.append(tracePicker)
+
+  function traceSetKnob<Key extends KnobKey>(key: Key, value: Knobs[Key]): void {
+    traceTouched.add(key)
+    setKnob(key, value)
+  }
+
+  function restoreTraceKnobs(): void {
+    if (traceBaseline) {
+      for (const key of traceTouched) setKnob(key, traceBaseline[key])
+    }
+    traceTouched.clear()
+    traceBaseline = null
+  }
+
+  function paintTracePlayback(): void {
+    setClass(stepTraceBtn, 'is-active', traceMode === 'step')
+    setClass(slowTraceBtn, 'is-active', traceMode === 'slow')
+    setClass(liveTraceBtn, 'is-active', traceMode === 'live')
+    const stretch = Math.round((1 / Math.max(0.001, sim.state.knobs.timeScale)) * MODEL_TIME_STRETCH)
+    setText(
+      stretchText,
+      traceMode === 'step'
+        ? `${stretch.toLocaleString()}× model stretch · paused between stops`
+        : `${stretch.toLocaleString()}× model stretch`,
+    )
+  }
+
+  function setTracePlayback(mode: TracePlayback): void {
+    if (!traceActive) return
+    traceMode = mode
+    if (mode === 'slow') {
+      traceSetKnob('timeScale', 0.05)
+      traceSetKnob('paused', false)
+    } else if (mode === 'live') {
+      traceSetKnob('timeScale', 1)
+      traceSetKnob('paused', false)
+    }
+    sim.setTraceMode(mode)
+    paintTracePlayback()
+  }
+
+  function dismissTracePicker(): void {
+    tracePicker.hidden = true
+  }
+
+  function openTracePicker(): void {
+    if (running) bus.emit('tour:stop', {})
+    hideFirstRun()
+    tracePicker.hidden = false
+    traceChoiceButtons[0]?.focus()
+  }
+
+  function runTrace(choice: TraceChoice): void {
+    if (!traceBaseline) traceBaseline = { ...sim.state.knobs }
+    if (traceActive) sim.endTrace()
+    traceSetKnob('tps', 18)
+    traceSetKnob('timeScale', 0.05)
+    traceSetKnob('paused', false)
+    traceMode = 'slow'
+    sim.setTraceMode('slow')
+    sim.request(choice.kind, choice.table, { hot: choice.hot })
+
+    traceActive = true
+    traceAwaiting = true
+    paintedTraceStop = null
+    selectedTraceStop = null
+    narrateUntil = 0
+    dismissTracePicker()
+    hideNarrate(true)
+    setClass(narrateCard, 'is-trace', true)
+    setText(narrateEyebrow, 'Trace a query')
+    setText(traceSql, sqlFor(choice.kind, choice.table))
+    traceAgainBtn.hidden = true
+    document.body.classList.add('pg-trace')
+    bus.emit('focus', { id: 'world.ground' })
+    paintTracePlayback()
+  }
+
+  function closeTrace(): void {
+    dismissTracePicker()
+    if (!traceActive) return
+    traceActive = false
+    traceAwaiting = false
+    sim.endTrace()
+    restoreTraceKnobs()
+    setClass(narrateCard, 'is-trace', false)
+    hideNarrate(true)
+    document.body.classList.remove('pg-trace')
+    bus.emit('select', { id: null, outlineOnly: true })
+  }
+
+  function showTraceCard(): void {
+    setClass(narrateCard, 'is-out', false)
+    setClass(narrateCard, 'is-live', true)
+  }
+
+  function paintTraceCard(stop: TraceStop): void {
+    const copy = TRACE_COPY[stop]
+    setText(narrateTitle, copy.title)
+    setText(narrateBody, copy.line(sim.state.trace))
+    setText(traceHint, copy.hint)
+    traceAgainBtn.hidden = stop !== 'done'
+    paintedTraceStop = stop
+  }
+
+  function updateTrace(dt: number, wallDt: number): void {
+    if (!traceActive) return
+    const trace = sim.state.trace
+    if (trace.visited === 0) return
+    if (traceAwaiting) {
+      traceAwaiting = false
+      traceDwell.reset(trace)
+      showTraceCard()
+    } else {
+      traceDwell.update(trace, dt, wallDt)
+    }
+    if (paintedTraceStop !== traceDwell.stop) paintTraceCard(traceDwell.stop)
+    if (selectedTraceStop !== trace.stop) {
+      selectedTraceStop = trace.stop
+      bus.emit('select', { id: TRACE_FOCUS[trace.stop], outlineOnly: true })
+    }
+  }
 
   function hideNarrate(instant = false): void {
     window.clearTimeout(narrateTimer)
@@ -394,12 +662,15 @@ export function createTour(ctx: UiContext): UiModule {
   }
 
   function showNarrate(title: string, body: string, seconds: number): void {
+    if (traceActive) return
     // Never two cards in the same corner. A scenario beat only happens because
     // somebody started a scenario, and starting one answers the invitation's
     // question — so the invitation stands down rather than stacking on top of
     // the narration that the viewer actually asked for.
     if (firstLive) hideFirstRun()
     window.clearTimeout(narrateTimer)
+    setClass(narrateCard, 'is-trace', false)
+    setText(narrateEyebrow, 'Scenario')
     setText(narrateTitle, title)
     setText(narrateBody, body)
     setClass(narrateCard, 'is-out', false)
@@ -568,6 +839,8 @@ export function createTour(ctx: UiContext): UiModule {
   }
 
   function start(chapter: number): void {
+    if (traceActive) closeTrace()
+    dismissTracePicker()
     const target = clamp(Math.round(chapter), 0, STEPS.length - 1)
     if (running) {
       goTo(target)
@@ -631,9 +904,11 @@ export function createTour(ctx: UiContext): UiModule {
    * WIRING
    * =====================================================================*/
 
+  const looseBus = bus as unknown as LooseBus
   cleanup.push(
     bus.on('tour:start', (p) => start(p && typeof p.chapter === 'number' ? p.chapter : 0)),
     bus.on('tour:stop', () => stop()),
+    bus.on('trace:open', () => openTracePicker()),
     bus.on('narrate', (p) => {
       // While the tour is speaking, scenario beats stay quiet.
       if (running) return
@@ -645,6 +920,12 @@ export function createTour(ctx: UiContext): UiModule {
     }),
     bus.on('camera:mode', () => {
       if (running) userControl = true
+    }),
+    looseBus.on('ui:escape', (payload) => {
+      if (tracePicker.hidden) return
+      dismissTracePicker()
+      const claim = payload as { handled?: boolean } | undefined
+      if (claim) claim.handled = true
     }),
   )
 
@@ -679,6 +960,7 @@ export function createTour(ctx: UiContext): UiModule {
    * =====================================================================*/
 
   function update(dt: number, wallDt = dt): void {
+    updateTrace(dt, wallDt)
     if (narrateUntil > 0 && sim.state.scenarioT >= narrateUntil) hideNarrate()
     if (!running) return
     if (held) return
@@ -719,15 +1001,22 @@ export function createTour(ctx: UiContext): UiModule {
     timers.length = 0
     window.clearTimeout(narrateTimer)
     window.clearTimeout(firstTimer)
+    if (traceActive) {
+      traceActive = false
+      sim.endTrace()
+      restoreTraceKnobs()
+    }
     if (running) {
       running = false
       restoreKnobs()
     }
     document.body.classList.remove('pg-tour')
     document.body.classList.remove('pg-invite')
+    document.body.classList.remove('pg-trace')
     card.remove()
     narrateCard.remove()
     firstRun.remove()
+    tracePicker.remove()
   }
 
   paintChapter()

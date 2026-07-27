@@ -64,6 +64,9 @@ import type {
   SimApi,
   SimState,
   TableSim,
+  TracePlayback,
+  TraceRequestOptions,
+  TraceStop,
   VacPhase,
   VacWorker,
   WalSegment,
@@ -92,6 +95,10 @@ const WAL_BUF_CAP = 256 * 1024
 /** BAS_BULKREAD: a big seq scan gets a 256 KiB ring so it cannot evict the pool. */
 const RING = 32
 const STEP_MAX = 1 / 30
+/** Keep UI disclosures tied to the first distortion documented in this file header. */
+export const MODEL_TIME_STRETCH = 100
+/** A pooled connection hand-off: long enough for Slow mode to render once. */
+const TRACE_CONNECT_DUR = 0.03
 /** Most sub-steps one update() call may run, so a huge delta cannot stall the tab. */
 const MAX_STEPS = 20
 const IDLE_REAP = 22
@@ -178,6 +185,44 @@ const FLOW_BUDGET_PER_SEC = 420
 const WAL_WRITER_DELAY = 0.2
 const BGW_DELAY = 0.2
 const NET_STRETCH = 6 // ms of configured network lag → sim seconds (see header)
+
+export function traceStopBit(stop: TraceStop): number {
+  switch (stop) {
+    case 'connect': return 1 << 0
+    case 'parse_plan': return 1 << 1
+    case 'fetch': return 1 << 2
+    case 'work': return 1 << 3
+    case 'wal': return 1 << 4
+    case 'commit': return 1 << 5
+    case 'send': return 1 << 6
+    case 'done': return 1 << 7
+    case 'blocked': return 1 << 8
+  }
+}
+
+export function sqlFor(kind: QueryKind, ti: number): string {
+  const n = TABLES[ti].name
+  switch (kind) {
+    case 'select_idx':
+      return `SELECT * FROM ${n} WHERE id = $1`
+    case 'select_seq':
+      return n === 'events'
+        ? `SELECT * FROM events WHERE payload @> $1 ORDER BY created_at DESC LIMIT 50`
+        : `SELECT * FROM ${n} WHERE updated_at > $1`
+    case 'aggregate':
+      return `SELECT status, count(*), sum(amount) FROM ${n} GROUP BY 1`
+    case 'insert':
+      return n === 'events'
+        ? `INSERT INTO events (created_at, kind, payload) VALUES ($1, $2, $3)`
+        : `INSERT INTO ${n} (…) VALUES ($1, $2, $3) RETURNING id`
+    case 'update':
+      return n === 'accounts'
+        ? `UPDATE accounts SET balance = balance + $1 WHERE id = $2`
+        : `UPDATE ${n} SET updated_at = now(), status = $1 WHERE id = ANY ($2)`
+    case 'delete':
+      return `DELETE FROM ${n} WHERE expires_at < now()`
+  }
+}
 /**
  * Pages per second the modelled storage device sustains before writes start
  * queueing behind each other. Calibrated so a healthy OLTP city sits at
@@ -231,6 +276,14 @@ interface Extra {
   walPending: number
   walPendingFpi: number
   walPrepared: boolean
+}
+
+interface TraceRequest {
+  kind: QueryKind
+  table: number
+  hot: boolean | undefined
+  announced: boolean
+  readyT: number
 }
 
 function makeExtra(): Extra {
@@ -290,6 +343,8 @@ export function createSim(bus: Bus): SimApi {
       buffersHit: 0,
       buffersRead: 0,
       walBytes: 0,
+      walFpiBytes: 0,
+      deadMade: 0,
       lastBuffer: 0,
       age: 0,
       plan: null,
@@ -444,6 +499,27 @@ export function createSim(bus: Bus): SimApi {
     scenario: null,
     scenarioT: 0,
     forkPulse: 0,
+    trace: {
+      slot: -1,
+      query: 'select_idx',
+      table: 0,
+      sql: '',
+      stop: 'done',
+      stopT: 0,
+      visited: 0,
+      trips: 0,
+      lastXid: 0,
+      lastPlanLabel: '',
+      lastPlanRows: 0,
+      lastPlanCost: 0,
+      rowsSent: 0,
+      buffersHit: 0,
+      buffersRead: 0,
+      walBytes: 0,
+      walFpiBytes: 0,
+      deadMade: 0,
+      lastTripSec: 0,
+    },
   }
 
   const K = state.knobs
@@ -741,6 +817,10 @@ export function createSim(bus: Bus): SimApi {
   let nextArrival = 0
   /** Transactions carried by one backend trip. See sizeBatch(). */
   let batchSize = 1
+  const traceQueue: TraceRequest[] = []
+  let traceRunning = false
+  let tracePlayback: TracePlayback = 'slow'
+  let traceStepArmed = false
   /** Arrivals the queue could not hold — pg's "too many clients already". */
   let refusedTx = 0
   let commitsAcc = 0
@@ -844,6 +924,137 @@ export function createSim(bus: Bus): SimApi {
   let sBufReq = 0
   let sClog = 0
   let sRepIo = 0
+
+  function resetTraceRecord(): void {
+    const trace = state.trace
+    trace.slot = -1
+    trace.query = 'select_idx'
+    trace.table = 0
+    trace.sql = ''
+    trace.stop = 'done'
+    trace.stopT = 0
+    trace.visited = 0
+    trace.trips = 0
+    trace.lastXid = 0
+    trace.lastPlanLabel = ''
+    trace.lastPlanRows = 0
+    trace.lastPlanCost = 0
+    trace.rowsSent = 0
+    trace.buffersHit = 0
+    trace.buffersRead = 0
+    trace.walBytes = 0
+    trace.walFpiBytes = 0
+    trace.deadMade = 0
+    trace.lastTripSec = 0
+  }
+
+  function request(kind: QueryKind, table: number, opts: TraceRequestOptions = {}): void {
+    if (!Number.isInteger(table) || table < 0 || table >= N_TABLES || traceQueue.length >= 8) return
+    traceQueue.push({
+      kind,
+      table,
+      hot: opts.hot,
+      announced: false,
+      readyT: 0,
+    })
+    pendingTx++
+  }
+
+  function announceTraceRequest(): void {
+    if (traceRunning || traceQueue.length === 0) return
+    const request = traceQueue[0]
+    if (request.announced) return
+    resetTraceRecord()
+    const trace = state.trace
+    trace.query = request.kind
+    trace.table = request.table
+    trace.sql = sqlFor(request.kind, request.table)
+    trace.stop = 'connect'
+    trace.stopT = 0
+    trace.visited = traceStopBit('connect')
+    request.announced = true
+    request.readyT = state.t + TRACE_CONNECT_DUR
+    traceRunning = true
+  }
+
+  function setTraceMode(mode: TracePlayback): void {
+    if (mode === 'step') {
+      if (tracePlayback === 'step') {
+        traceStepArmed = true
+        K.paused = false
+      } else {
+        tracePlayback = 'step'
+        traceStepArmed = false
+        K.paused = true
+      }
+      return
+    }
+    tracePlayback = mode
+    traceStepArmed = false
+    K.paused = false
+  }
+
+  function endTrace(): void {
+    if (traceQueue.length > 0) pendingTx = Math.max(0, pendingTx - traceQueue.length)
+    traceQueue.length = 0
+    traceRunning = false
+    traceStepArmed = false
+    tracePlayback = 'slow'
+    K.paused = false
+    resetTraceRecord()
+  }
+
+  function traceStopFor(stateName: BackendSim['state']): TraceStop | null {
+    switch (stateName) {
+      case 'starting': return 'connect'
+      case 'parse':
+      case 'plan': return 'parse_plan'
+      case 'exec_io': return 'fetch'
+      case 'exec_cpu':
+      case 'sort': return 'work'
+      case 'wal_insert': return 'wal'
+      case 'commit_wait': return 'commit'
+      case 'sending': return 'send'
+      case 'blocked': return 'blocked'
+      case 'idle': return 'done'
+      default: return null
+    }
+  }
+
+  function enterTraceStop(stop: TraceStop, elapsed: number): void {
+    const trace = state.trace
+    if (trace.stop === stop) return
+    trace.stop = stop
+    trace.stopT = elapsed
+    trace.visited |= traceStopBit(stop)
+    if (tracePlayback === 'step' && traceStepArmed) {
+      traceStepArmed = false
+      K.paused = true
+    }
+  }
+
+  function syncTraceBackend(slot: number): void {
+    if (!traceRunning || state.trace.slot !== slot) return
+    const b = backends[slot]
+    const x = extras[slot]
+    const trace = state.trace
+    b.walFpiBytes = x.fpiBytes
+    trace.rowsSent = b.rowsSent
+    trace.buffersHit = b.buffersHit
+    trace.buffersRead = b.buffersRead
+    trace.walBytes = b.walBytes
+    trace.walFpiBytes = b.walFpiBytes
+    trace.deadMade = b.deadMade
+    trace.lastTripSec = x.visitT
+    if (b.xid > 0) trace.lastXid = b.xid
+    if (b.plan) {
+      trace.lastPlanLabel = b.plan.label
+      trace.lastPlanRows = b.plan.rows
+      trace.lastPlanCost = b.plan.cost
+    }
+    const stop = traceStopFor(b.state)
+    if (stop) enterTraceStop(stop, x.visitT)
+  }
 
   function flow(
     route: string,
@@ -1073,6 +1284,7 @@ export function createSim(bus: Bus): SimApi {
     fpiGenerationByPage.set(key, fpiGeneration)
     const bytes = PAGE * rr(0.6, 1.0) // the hole between pd_lower/pd_upper is skipped
     extras[slot].fpiBytes += bytes
+    backends[slot].walFpiBytes = extras[slot].fpiBytes
   }
 
   /**
@@ -2245,30 +2457,6 @@ export function createSim(bus: Bus): SimApi {
    * BACKENDS
    * ====================================================================*/
 
-  function sqlFor(kind: QueryKind, ti: number): string {
-    const n = TABLES[ti].name
-    switch (kind) {
-      case 'select_idx':
-        return `SELECT * FROM ${n} WHERE id = $1`
-      case 'select_seq':
-        return n === 'events'
-          ? `SELECT * FROM events WHERE payload @> $1 ORDER BY created_at DESC LIMIT 50`
-          : `SELECT * FROM ${n} WHERE updated_at > $1`
-      case 'aggregate':
-        return `SELECT status, count(*), sum(amount) FROM ${n} GROUP BY 1`
-      case 'insert':
-        return n === 'events'
-          ? `INSERT INTO events (created_at, kind, payload) VALUES ($1, $2, $3)`
-          : `INSERT INTO ${n} (…) VALUES ($1, $2, $3) RETURNING id`
-      case 'update':
-        return n === 'accounts'
-          ? `UPDATE accounts SET balance = balance + $1 WHERE id = $2`
-          : `UPDATE ${n} SET updated_at = now(), status = $1 WHERE id = ANY ($2)`
-      case 'delete':
-        return `DELETE FROM ${n} WHERE expires_at < now()`
-    }
-  }
-
   function pickBlk(ti: number, mode: 'hot' | 'append' | 'scan', x?: Extra, forWrite = false): number {
     const t = tables[ti]
     if (mode === 'append') {
@@ -2316,15 +2504,24 @@ export function createSim(bus: Bus): SimApi {
   function startVisit(slot: number): void {
     const b = backends[slot]
     const x = extras[slot]
-    const take = Math.max(1, Math.min(pendingTx, batchSize))
+    const requested = traceQueue.length > 0
+      && traceQueue[0].announced
+      && traceQueue[0].readyT < state.t
+      ? traceQueue.shift()
+      : undefined
+    const randomPending = Math.max(0, pendingTx - traceQueue.length)
+    const take = requested ? 1 : Math.max(1, Math.min(randomPending, batchSize))
     pendingTx -= take
     x.txCount = take
 
     // pick the statement
-    const isWrite = rng() < K.writeRatio
     let kind: QueryKind
     let ti: number
-    if (isWrite) {
+    if (requested) {
+      kind = requested.kind
+      ti = requested.table
+      state.trace.slot = slot
+    } else if (rng() < K.writeRatio) {
       // Steady state: rows that leave have to be replaced. The workload tilts
       // towards inserts exactly as far as the tables are short of their natural
       // size, and not at all when they are not. See tickTables().
@@ -2356,6 +2553,8 @@ export function createSim(bus: Bus): SimApi {
     b.buffersHit = 0
     b.buffersRead = 0
     b.walBytes = 0
+    b.walFpiBytes = 0
+    b.deadMade = 0
     b.waitOn = -1
     b.plan = null
     x.fpiBytes = 0
@@ -2367,7 +2566,8 @@ export function createSim(bus: Bus): SimApi {
     x.writes = kind === 'insert' || kind === 'update' || kind === 'delete'
     x.seqScan = kind === 'select_seq' || kind === 'aggregate'
     x.needsSort = kind === 'aggregate' || (kind === 'select_seq' && rng() < 0.45)
-    x.hot = kind === 'update' && rng() < TABLES[ti].hotFriendly && tables[ti].bloat < 0.55
+    x.hot = kind === 'update'
+      && (requested?.hot ?? (rng() < TABLES[ti].hotFriendly && tables[ti].bloat < 0.55))
     x.rowsPerStmt =
       kind === 'insert' ? 1 + Math.floor(rng() * 4)
       : kind === 'update' ? 2 + Math.floor(rng() * 10)
@@ -2391,6 +2591,7 @@ export function createSim(bus: Bus): SimApi {
       flow(rid.query(slot), 1, 'query', 1.2)
     }
     flow('procarray.in', 1, 'stat', 0.8)
+    syncTraceBackend(slot)
   }
 
   /** Work out how many pages this trip has to move and how long that takes. */
@@ -2649,9 +2850,11 @@ export function createSim(bus: Bus): SimApi {
           // xmin horizon allows it.
           const pruned = horizonFrozen ? 0 : Math.floor(rows2 * 0.85)
           addDead(ti, rows2 - pruned)
+          b.deadMade += rows2 - pruned
           bytes += rows2 * (88 + updBody)
         } else {
           addDead(ti, rows2)
+          b.deadMade += rows2
           deadIndexTuples[ti] += rows2 * nIdx
           refreshIndexPages(ti)
           bytes += rows2 * (108 + tup + nIdx * 78)
@@ -2665,6 +2868,7 @@ export function createSim(bus: Bus): SimApi {
         stats.tupDeleted += del
         t.liveTuples -= del
         addDead(ti, del)
+        b.deadMade += del
         deadIndexTuples[ti] += del * nIdx
         refreshIndexPages(ti)
         // DELETE writes a tiny WAL record — the index entries are cleaned up
@@ -2712,6 +2916,14 @@ export function createSim(bus: Bus): SimApi {
   function endVisit(slot: number): void {
     const b = backends[slot]
     const x = extras[slot]
+    const traced = traceRunning && state.trace.slot === slot
+    if (traced) {
+      syncTraceBackend(slot)
+      state.trace.trips = x.txCount
+      state.trace.lastTripSec = x.visitT
+      enterTraceStop('done', x.visitT)
+      traceRunning = false
+    }
     const rb = Math.min(x.txCount, Math.round(x.txCount * 0.003 + (rng() < 0.02 ? 1 : 0)))
     stats.rollbacks += rb
     stats.commits += x.txCount - rb
@@ -2767,6 +2979,7 @@ export function createSim(bus: Bus): SimApi {
   }
 
   function tickBackends(dt: number): void {
+    announceTraceRequest()
     let activeN = 0
     for (let slot = 0; slot < N_BACKEND_SLOTS; slot++) {
       const b = backends[slot]
@@ -2790,7 +3003,11 @@ export function createSim(bus: Bus): SimApi {
 
         case 'idle': {
           x.idleT += dt
-          if (pendingTx > 0) startVisit(slot)
+          const traceReady = traceQueue.length > 0
+            && traceQueue[0].announced
+            && traceQueue[0].readyT < state.t
+          const randomPending = pendingTx - traceQueue.length
+          if (traceReady || randomPending > 0) startVisit(slot)
           else if (x.idleT > IDLE_REAP && activeN > 2) {
             b.state = 'ending'
             b.stateT = 0
@@ -2980,6 +3197,7 @@ export function createSim(bus: Bus): SimApi {
         case 'free':
           break
       }
+      syncTraceBackend(slot)
     }
     stats.activeBackends = activeN
   }
@@ -3416,6 +3634,8 @@ export function createSim(bus: Bus): SimApi {
       b.buffersHit = 0
       b.buffersRead = 0
       b.walBytes = 0
+      b.walFpiBytes = 0
+      b.deadMade = 0
       b.lastBuffer = 0
       b.age = 0
       b.plan = null
@@ -3615,6 +3835,11 @@ export function createSim(bus: Bus): SimApi {
 
     pendingTx = 0
     nextArrival = 0
+    traceQueue.length = 0
+    traceRunning = false
+    tracePlayback = 'slow'
+    traceStepArmed = false
+    resetTraceRecord()
     refusedTx = 0
     sizeBatch()
     commitsAcc = walAcc = fpiAcc = ioReadAcc = ioWriteAcc = 0
@@ -3664,5 +3889,5 @@ export function createSim(bus: Bus): SimApi {
 
   reset()
 
-  return { state, update, setKnob, runScenario, reset }
+  return { state, update, setKnob, runScenario, request, setTraceMode, endTrace, reset }
 }

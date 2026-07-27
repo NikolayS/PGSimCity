@@ -296,6 +296,192 @@ body.pg-tour::after {
   max-width: 68ch;
 }
 
+.tour-narrate__sql,
+.tour-narrate__hint,
+.tour-narrate__strip,
+.tour-narrate__again {
+  display: none;
+}
+
+.tour-narrate.is-trace {
+  width: min(720px, 100%);
+  padding: 12px 14px;
+}
+
+.tour-narrate.is-trace .tour-narrate__eyebrow {
+  color: var(--c-backend);
+}
+
+.tour-narrate.is-trace .tour-narrate__sql {
+  display: block;
+  margin-top: 8px;
+  padding: 7px 9px;
+  overflow-x: auto;
+  color: var(--c-backend);
+  background: var(--bg-sunken);
+  border: 1px solid var(--line-hair);
+  font-family: var(--f-mono);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.tour-narrate.is-trace .tour-narrate__hint {
+  display: block;
+  margin: 7px 0 0;
+  color: var(--ink-dim);
+  font-size: var(--fs-xs);
+}
+
+.tour-narrate.is-trace .tour-narrate__strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--line-hair);
+}
+
+.tour-narrate__modes {
+  display: flex;
+  gap: 6px;
+}
+
+.tour-narrate__mode {
+  min-width: 58px;
+  min-height: 44px;
+  justify-content: center;
+}
+
+.tour-narrate__mode.is-active {
+  color: var(--c-backend);
+  border-color: var(--c-backend);
+  background: color-mix(in srgb, var(--c-backend) 12%, transparent);
+}
+
+.tour-narrate__stretch {
+  flex: 1 1 auto;
+  color: var(--ink-faint);
+  font-family: var(--f-mono);
+  font-size: var(--fs-micro);
+  text-align: right;
+}
+
+.tour-narrate__close {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+}
+
+.tour-narrate.is-trace .tour-narrate__again:not([hidden]) {
+  display: inline-flex;
+  min-height: 44px;
+  margin-top: 10px;
+  color: var(--c-backend);
+}
+
+/* ==========================================================================
+   TRACE PICKER — six statements the model genuinely understands
+   ========================================================================*/
+
+.trace-picker {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  grid-template-rows: minmax(5vh, 10vh) auto 1fr;
+  justify-items: center;
+  padding: 0 16px;
+  pointer-events: auto;
+  background: var(--bg-overlay);
+  animation: pal-fade var(--dur-fast) var(--ease) both;
+}
+
+.trace-picker[hidden] {
+  display: none;
+}
+
+.trace-picker__dialog {
+  grid-row: 2;
+  display: block;
+  width: min(900px, 100%);
+  max-height: min(82vh, 720px);
+  overflow-y: auto;
+  padding: 16px;
+  animation: tour-rise var(--dur) var(--ease-out-expo) both;
+}
+
+.trace-picker__head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.trace-picker__head h2 {
+  margin: 4px 0 0;
+  font-size: var(--fs-xl);
+  font-weight: 560;
+}
+
+.trace-picker__intro {
+  max-width: 76ch;
+  margin: 8px 0 14px;
+  color: var(--ink-dim);
+}
+
+.trace-picker__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.trace-picker__choice {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  min-height: 104px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  color: var(--ink);
+  background: var(--bg-sunken);
+  text-align: left;
+  cursor: pointer;
+}
+
+.trace-picker__choice:hover,
+.trace-picker__choice:focus-visible {
+  border-color: var(--c-backend);
+  outline: none;
+}
+
+.trace-picker__meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.trace-picker__meta strong {
+  color: var(--c-backend);
+  font-size: var(--fs-md);
+}
+
+.trace-picker__meta span {
+  color: var(--ink-faint);
+  font-family: var(--f-mono);
+  font-size: var(--fs-micro);
+}
+
+.trace-picker__choice code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink-dim);
+  font-family: var(--f-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
 /* ==========================================================================
    FIRST-RUN PROMPT
    ========================================================================*/
@@ -708,6 +894,39 @@ body.pg-tour::after {
     max-height: 22svh;
     overflow-y: auto;
     overscroll-behavior: contain;
+  }
+
+  .tour-narrate.is-trace .tour-narrate__strip {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+  .tour-narrate__modes {
+    flex: 1 1 calc(100% - 52px);
+  }
+  .tour-narrate__mode {
+    flex: 1 1 0;
+  }
+  .tour-narrate__stretch {
+    order: 3;
+    flex: 1 1 100%;
+    text-align: left;
+  }
+  .tour-narrate__close {
+    order: 2;
+  }
+  .trace-picker {
+    grid-template-rows: 2vh auto 1fr;
+    padding: var(--safe-t) 8px var(--safe-b);
+  }
+  .trace-picker__dialog {
+    max-height: min(91svh, 91vh);
+    padding: 12px;
+  }
+  .trace-picker__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .trace-picker__choice {
+    min-height: 88px;
   }
 
   /* --- command palette -------------------------------------------------- */

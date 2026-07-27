@@ -606,7 +606,9 @@ export function createInspector(ctx: UiContext): UiModule {
 
   /* --- wiring ------------------------------------------------------------ */
 
-  const offSelect = ctx.bus.on('select', ({ id }) => select(id))
+  const offSelect = ctx.bus.on('select', ({ id, outlineOnly }) => {
+    if (!outlineOnly) select(id)
+  })
   const offCameraPreset = ctx.bus.on('camera:preset', ({ preset }) => {
     planPreset = preset === 'plan'
     applyOpen()

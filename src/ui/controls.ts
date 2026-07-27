@@ -410,6 +410,9 @@ export function createControls(ctx: UiContext): UiModule {
   }
 
   const host = el('div', { class: 'pgc-host pgc-host--left' })
+  const looseBus = ctx.bus as unknown as {
+    on(type: string, fn: (payload: unknown) => void): () => void
+  }
   const controls: KnobControl[] = []
   const groupBadges: { metas: KnobMeta[]; node: HTMLElement }[] = []
 
@@ -616,6 +619,7 @@ export function createControls(ctx: UiContext): UiModule {
     applyOpen()
     ctx.bus.emit('ui:layout', {})
   })
+  const offConsole = looseBus.on('ui:console', () => setOpen(true))
 
   applyOpen()
   refresh()
@@ -635,6 +639,7 @@ export function createControls(ctx: UiContext): UiModule {
       offScenario()
       offReset()
       offCameraPreset()
+      offConsole()
       for (const c of controls) c.dispose()
       host.remove()
       syncSheetFlags()
