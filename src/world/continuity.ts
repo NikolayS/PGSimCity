@@ -543,7 +543,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   const jib = new THREE.Group()
   jib.position.set(RW[0], 15.2, RW[2])
   gWinch.add(jib)
-  const jibArm = new THREE.Mesh(unitBox, theme.mat('continuity.jib', { color: 0x223049, roughness: 0.7, metalness: 0.4 }))
+  const jibArm = new THREE.Mesh(unitBox, theme.mat('continuity.jib', { color: 0x223049, roughness: 0.7, metalness: 0.4, surface: false }))
   jibArm.scale.set(1.1, 1.1, 18)
   jibArm.position.set(0, 0, 8)
   jib.add(jibArm)
@@ -567,6 +567,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     roughness: 0.9,
     metalness: 0.1,
     emissive: 0x0a1420,
+    surface: false,
   }))
   dial.position.set(RC[0], 16.2, RC[2])
   gClock.add(dial)

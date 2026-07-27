@@ -237,14 +237,48 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   const shadowLo = new THREE.Vector3(-330, -78, -390)
   const shadowHi = new THREE.Vector3(330, 118, 370)
 
-  function fitShadowCamera(): void {
+  /* ---------------------------------------------------------------------
+   * ONE ADAPTIVE CASCADE.
+   *
+   * Fitted to the whole city, a 1024² map is 1.02 m per texel: a gantry beam,
+   * a cornice, a parapet and a walkway rail all cast nothing at all, and the
+   * only shadows on a wall are soft grey blobs with no relationship to any
+   * object. Fitting it to what the CAMERA can see instead costs the same 171
+   * caster draws and gets to about 12 cm per texel at street range, which is
+   * where a beam finally casts a beam-shaped shadow.
+   *
+   * Three things keep that from costing frames. The whole mechanism is inert
+   * unless key.castShadow is on, which is high and ultra only. The centre is
+   * snapped to the shadow map's own texel grid, without which the shadows
+   * crawl over every static surface as the camera moves. And the refit — and
+   * with it the extra shadow pass — only happens when that snapped centre
+   * actually changes, so a camera standing still pays nothing.
+   * -------------------------------------------------------------------*/
+
+  /** Half-width, in metres, of the box the near cascade covers. */
+  const NEAR_SPAN_MIN = 90
+  const NEAR_SPAN_MAX = 300
+  /** Above this eye height the city box is already dense enough; stop paying. */
+  const NEAR_SPAN_CEILING = 340
+
+  const shadowFwd = new THREE.Vector3()
+  const shadowFocus = new THREE.Vector3()
+  const shadowSnapped = new THREE.Vector3(Infinity, Infinity, Infinity)
+  let shadowSpan = 0
+
+  function fitShadowCamera(cx = 0, cz = 0, span = 0): void {
     // Mirror DirectionalLightShadow.updateMatrices() so the fit is expressed in
-    // the shadow camera's own axes. The box covers every district, including
-    // the excavation floor, while excluding the decorative empty plate lobes.
+    // the shadow camera's own axes. With no span the box covers every district,
+    // including the excavation floor, and excludes the empty plate lobes.
     sc.position.copy(key.position)
     sc.lookAt(key.target.position)
     sc.updateMatrixWorld(true)
     sc.matrixWorldInverse.copy(sc.matrixWorld).invert()
+
+    const lox = span > 0 ? cx - span : shadowLo.x
+    const hix = span > 0 ? cx + span : shadowHi.x
+    const loz = span > 0 ? cz - span : shadowLo.z
+    const hiz = span > 0 ? cz + span : shadowHi.z
 
     let minX = Infinity
     let maxX = -Infinity
@@ -256,7 +290,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
       for (let iy = 0; iy < 2; iy++) {
         for (let iz = 0; iz < 2; iz++) {
           shadowPoint
-            .set(ix ? shadowHi.x : shadowLo.x, iy ? shadowHi.y : shadowLo.y, iz ? shadowHi.z : shadowLo.z)
+            .set(ix ? hix : lox, iy ? shadowHi.y : shadowLo.y, iz ? hiz : loz)
             .applyMatrix4(sc.matrixWorldInverse)
           minX = Math.min(minX, shadowPoint.x)
           maxX = Math.max(maxX, shadowPoint.x)
@@ -272,9 +306,54 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     sc.right = maxX + 18
     sc.bottom = minY - 24
     sc.top = maxY + 24
-    sc.near = Math.max(1, minD - 70)
+    // The near plane still has to start behind the tallest caster outside the
+    // box, or a tower just off screen stops shadowing the street inside it.
+    sc.near = Math.max(1, minD - 260)
     sc.far = maxD + 70
     sc.updateProjectionMatrix()
+  }
+
+  /** Re-aim the cascade at what the camera is looking at. Cheap when still. */
+  function updateShadowFit(): void {
+    if (!key.castShadow) return
+
+    const eye = Math.max(2, camera.position.y)
+    if (eye > NEAR_SPAN_CEILING) {
+      if (shadowSpan === 0) return
+      shadowSpan = 0
+      shadowSnapped.set(Infinity, Infinity, Infinity)
+      key.shadow.normalBias = air.shadowNormalBias
+      fitShadowCamera()
+      renderer.shadowMap.needsUpdate = true
+      return
+    }
+
+    camera.getWorldDirection(shadowFwd)
+    // Where the eye is actually pointed: the ground hit when it looks down,
+    // and a fixed reach ahead when it does not.
+    const reach = shadowFwd.y < -0.02 ? Math.min(eye / -shadowFwd.y, 420) : 220
+    shadowFocus.copy(camera.position).addScaledVector(shadowFwd, reach * 0.6)
+
+    /* Quantised. An un-stepped span changes on every frame the camera moves at
+     * all, and each change is a full extra shadow pass. */
+    const wanted = clamp(Math.max(eye * 1.6, reach * 0.75), NEAR_SPAN_MIN, NEAR_SPAN_MAX)
+    const span = Math.min(NEAR_SPAN_MAX, Math.ceil(wanted / 30) * 30)
+    // Snap to the texel the map will actually sample, or every static shadow
+    // in the scene crawls as the camera walks.
+    const texel = (span * 2) / key.shadow.mapSize.x
+    const sx = Math.round(shadowFocus.x / texel) * texel
+    const sz = Math.round(shadowFocus.z / texel) * texel
+
+    if (sx === shadowSnapped.x && sz === shadowSnapped.z && span === shadowSpan) return
+    shadowSnapped.set(sx, 0, sz)
+    shadowSpan = span
+    /* Normal bias is measured in world units and is only ever there to push a
+     * sample off its own surface by about a texel. The authored 0.45 is right
+     * for the whole-city fit; leave it there under a cascade eight times
+     * denser and every shadow detaches from the object casting it. */
+    key.shadow.normalBias = Math.max(0.06, Math.min(air.shadowNormalBias, texel * 0.6))
+    fitShadowCamera(sx, sz, span)
+    renderer.shadowMap.needsUpdate = true
   }
 
   fitShadowCamera()
@@ -435,6 +514,9 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     key.position.set(air.keyPos[0], air.keyPos[1], air.keyPos[2])
     key.target.position.set(air.keyTarget[0], air.keyTarget[1], air.keyTarget[2])
     key.target.updateMatrixWorld()
+    // The sun moves between modes, so the cascade's cached aim is stale.
+    shadowSpan = 0
+    shadowSnapped.set(Infinity, Infinity, Infinity)
     fitShadowCamera()
     key.shadow.bias = air.shadowBias
     key.shadow.normalBias = air.shadowNormalBias
@@ -697,6 +779,8 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     // the estimate with a multi-second gap.
     const real = clamp(rawDt ?? dt, 1 / 1000, 4)
     fps = damp(fps, 1 / real, 2.5, Math.min(real, 0.5))
+
+    updateShadowFit()
 
     if (useComposer() && composer) composer.render(d)
     else renderer.render(scene, camera)

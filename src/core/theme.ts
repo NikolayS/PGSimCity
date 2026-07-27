@@ -219,18 +219,36 @@ void RE_Direct_Toon( const in IncidentLight directLight, const in vec3 geometryP
 
 	float dotNL = saturate( dot( geometryNormal, directLight.direction ) );
 
-	// One hard SimCity split: a face is either in the sun or on the shaded side
-	// of the model. The edge width follows the screen-space gradient of dotNL so
-	// the terminator stays about one pixel wide instead of aliasing at distance.
-	float w = fwidth( dotNL ) * 0.9 + 0.01;
-	float sun = smoothstep( 0.42 - w, 0.42 + w, dotNL );
-	vec3 irradiance = ( 0.34 + 0.66 * sun ) * directLight.color;
+	// TWO thresholds, not one. A single split gives a box exactly two tones, so
+	// its roof and its sunlit wall come out identical and the whole model reads
+	// as a silhouette. With the sun where themes.ts puts it these thresholds put
+	// +X on 1.0, +Z on 0.55 and everything facing away on 0.0.
+	//
+	// The edge width follows the screen-space gradient of dotNL so each
+	// terminator stays about one pixel wide instead of aliasing at distance.
+	float w = fwidth( dotNL ) * 0.9 + 0.012;
+	float sun = 0.55 * smoothstep( 0.16 - w, 0.16 + w, dotNL )
+	          + 0.45 * smoothstep( 0.52 - w, 0.52 + w, dotNL );
+
+	// The third tone a drawn city needs is the roof, and no N·L threshold can
+	// find it — a roof and a wall can share a dot product. This lifts faces that
+	// point at the sky, in WORLD space: the fragment prefix declares viewMatrix,
+	// and multiplying a vector from the left by a matrix is multiplying by its
+	// transpose, which for the orthonormal rotation of a view matrix is its
+	// inverse. So this is the world normal for one mat4 multiply.
+	vec3 worldN = normalize( ( vec4( geometryNormal, 0.0 ) * viewMatrix ).xyz );
+	float up = smoothstep( 0.55, 0.85, worldN.y );
+
+	vec3 irradiance = ( 0.34 + 0.50 * sun + 0.16 * sun * up ) * directLight.color;
 
 	// One clipped highlight instead of a smooth lobe: glass and metal still read
-	// as glass and metal, but as a cartoon would draw them.
+	// as glass and metal, but as a cartoon would draw them. Gated on roughness,
+	// because without the gate matte stone gets a blown-white rim that reads as
+	// neon — it was the highest-contrast feature on every wall in the city.
 	vec3 spec = irradiance * BRDF_GGX_Multiscatter( directLight.direction, geometryViewDir, geometryNormal, material );
 	float specLum = dot( spec, vec3( 0.2126, 0.7152, 0.0722 ) );
-	reflectedLight.directSpecular += spec * smoothstep( 0.035, 0.09, specLum );
+	float gloss = 1.0 - smoothstep( 0.35, 0.75, material.roughness );
+	reflectedLight.directSpecular += spec * smoothstep( 0.035, 0.09, specLum ) * gloss;
 
 	reflectedLight.directDiffuse += irradiance * BRDF_Lambert( material.diffuseContribution );
 }
@@ -240,6 +258,126 @@ void RE_Direct_Toon( const in IncidentLight directLight, const in vec3 geometryP
 
 const TOON_ANCHOR = '#include <lights_physical_pars_fragment>'
 const VCOLOR_ANCHOR = '#include <color_fragment>'
+
+/* ============================================================================
+ * THE SURFACE TERM — masonry, in both modes, for zero draw calls and zero bytes.
+ *
+ * From five metres a thirty-metre wall was one unbroken field of a single RGB
+ * value: no course, no joint, no gradient, no noise, and therefore no way for a
+ * viewer to know it was thirty metres and not three. This is what fixes that,
+ * and it lives here rather than in the districts because this hook already owns
+ * onBeforeCompile for every mat() material in the city.
+ *
+ * WHAT IT MAY DO. It multiplies `diffuseColor` and nothing else. It never
+ * writes emissive, never adds a bright seam, and its total contrast is capped
+ * at roughly eight percent of albedo. That ceiling is the whole reason it reads
+ * as a building rather than as a sci-fi panel: the pitches are architectural
+ * (1.15 m course, 2.6 m stone, 3.7 m paving slab), the pattern is a running
+ * bond so no two rows of joints line up into a grid, and nothing about it
+ * glows. Structure gets texture; it does not get meaning.
+ *
+ * WHERE IT MAY GO. Injection is guarded on <roughnessmap_fragment>, an anchor
+ * that exists only in the standard/physical fragment shader — which is exactly
+ * the set of materials mat() paints. Every neon() (MeshBasicMaterial), every
+ * line(), the plaza's per-instance deck, the ground plate, the sky dome and the
+ * backend window bands are ShaderMaterials or basic materials and are excluded
+ * by construction, not by a list somebody has to maintain.
+ *
+ * PROJECTION. World-space triplanar, never UV: theme.box(1,1,1) is shared and
+ * instances are scaled from 0.12 x 0.6 x 9 up to 38 x 0.2 x 42, a 300:1 stretch
+ * that no UV scheme survives. The world face normal is recovered from the
+ * screen-space derivatives of the world position, which is exact for the
+ * faceted boxes this city is built from and saves carrying a second varying.
+ *
+ * BOTH MODES. Night gets it too. The term is multiplicative, so seven percent
+ * of a near-black navy is seven percent — a whisper that only appears where a
+ * district mood lamp grazes a wall, which is correct: night's job is silhouette
+ * and neon.
+ * ==========================================================================*/
+
+const SURFACE_ANCHOR = '#include <roughnessmap_fragment>'
+const SURFACE_VERT_ANCHOR = '#include <worldpos_vertex>'
+
+const SURFACE_VARYINGS = /* glsl */ `
+varying vec3 pgWorld;
+varying vec2 pgSeed;
+`
+
+const SURFACE_VERT = /* glsl */ `
+{
+	vec4 pgP = vec4( transformed, 1.0 );
+	vec3 pgO;
+	#ifdef USE_INSTANCING
+		pgP = instanceMatrix * pgP;
+		pgO = ( modelMatrix * vec4( instanceMatrix[ 3 ].xyz, 1.0 ) ).xyz;
+	#else
+		pgO = modelMatrix[ 3 ].xyz;
+	#endif
+	pgWorld = ( modelMatrix * pgP ).xyz;
+	/* The object's own world origin, hashed. instanceMatrix[3] is already in
+	 * every instanced draw, so all 11,570 instances in the city get their own
+	 * tone and their own joint phase for no attribute, no buffer and no CPU
+	 * work at all. Quantising first keeps the hash stable under float drift. */
+	float pgA = fract( sin( dot( floor( pgO * 2.0 ) + 0.5, vec3( 12.9898, 78.233, 37.719 ) ) ) * 43758.5453 );
+	pgSeed = vec2( pgA, fract( pgA * 733.17 + 0.371 ) );
+}
+`
+
+const SURFACE_FRAG = /* glsl */ `
+{
+	vec3 pgDX = dFdx( pgWorld );
+	vec3 pgDY = dFdy( pgWorld );
+	vec3 pgFN = abs( normalize( cross( pgDX, pgDY ) ) );
+	// World metres covered by one pixel, used to retire the pattern before it
+	// can alias instead of letting it turn into a flat grey wash at distance.
+	float pgPx = max( dot( abs( pgDX ), vec3( 1.0 ) ), dot( abs( pgDY ), vec3( 1.0 ) ) );
+
+	float pgFlat = smoothstep( 0.55, 0.82, pgFN.y );
+	// Dominant-axis select, one mix rather than three planar evaluations: a wall
+	// whose normal runs along X is coursed along Z, and the other way round. The
+	// select flips only at a 45 degree corner, where it is a silhouette edge.
+	float pgU = mix( pgWorld.x, pgWorld.z, step( pgFN.z, pgFN.x ) );
+
+	// Courses first, joints second, and the alternate row offset half a stone.
+	// Running bond is what stops this reading as a panel grid.
+	float pgCourse = pgWorld.y / 1.15 + pgSeed.y * 0.7;
+	float pgHead = pgU / 2.6 + fract( floor( pgCourse ) * 0.5 ) + pgSeed.x * 0.9;
+	float pgBed = 1.0 - smoothstep( 0.0, fwidth( pgCourse ) * 1.5 + 0.03, 0.5 - abs( fract( pgCourse ) - 0.5 ) );
+	float pgPerp = 1.0 - smoothstep( 0.0, fwidth( pgHead ) * 1.5 + 0.03, 0.5 - abs( fract( pgHead ) - 0.5 ) );
+	float pgJoint = pgBed * 0.050 + pgPerp * 0.025;
+
+	// A roof or a deck is paved, not coursed: bigger slabs, both directions,
+	// and weaker, because a roof is mostly seen from above and far away.
+	float pgSu = pgWorld.x / 3.7 + pgSeed.x * 0.5;
+	float pgSv = pgWorld.z / 3.7 + pgSeed.y * 0.5;
+	float pgSlab = ( 1.0 - smoothstep( 0.0, fwidth( pgSu ) * 1.5 + 0.03, 0.5 - abs( fract( pgSu ) - 0.5 ) ) )
+	             + ( 1.0 - smoothstep( 0.0, fwidth( pgSv ) * 1.5 + 0.03, 0.5 - abs( fract( pgSv ) - 0.5 ) ) );
+	pgJoint = mix( pgJoint, pgSlab * 0.032, pgFlat ) * ( 1.0 - smoothstep( 0.2, 0.55, pgPx ) );
+
+	// Weathering. Three incommensurate waves with one warped argument, so it
+	// never settles into a repeat, at four percent — below the joints, which is
+	// the order a real wall reads in.
+	float pgMu = mix( pgU, pgWorld.x, pgFlat );
+	float pgMv = mix( pgWorld.y, pgWorld.z, pgFlat );
+	float pgN = sin( pgMu * 0.61 + pgMv * 0.29 + sin( pgMv * 0.19 ) * 2.2 )
+	          + 0.55 * sin( pgMu * 1.37 - pgMv * 0.91 )
+	          + 0.30 * sin( pgMu * 2.9 + pgMv * 2.2 );
+	pgN *= 0.54 * ( 1.0 - smoothstep( 1.2, 4.5, pgPx ) );
+
+	// Grade and rain: dirt collects in the first two metres above the pavement,
+	// and the top of a tall building is washed cleaner than its middle.
+	float pgGrade = 1.0 - 0.055 * ( 1.0 - smoothstep( 0.0, 1.8, pgWorld.y ) );
+	float pgRain = 1.0 + 0.030 * smoothstep( 4.0, 34.0, pgWorld.y );
+
+	// Per-object tone and a trace of temperature. Without this every backend
+	// tower, every WAL silo and every lease post is a clone of its neighbour.
+	float pgTone = 1.0 + ( pgSeed.x - 0.5 ) * 0.07;
+	float pgWarm = ( pgSeed.y - 0.5 ) * 0.05;
+
+	diffuseColor.rgb *= ( 1.0 - pgJoint ) * pgGrade * pgRain * pgTone * ( 1.0 + pgN * 0.038 );
+	diffuseColor.rgb *= vec3( 1.0 + pgWarm, 1.0, 1.0 - pgWarm );
+}
+`
 
 /*
  * Written inline rather than as a function called from the chunk. A helper
@@ -265,7 +403,12 @@ const VCOLOR_BODY = /* glsl */ `
 		// while throwing away the magnitude, which is the part being re-decided
 		// — but only for colours that had a magnitude to begin with. A
 		// near-black navy means "this frame is empty", not "this frame is blue".
-		vec3 pgOut = mix( vec3( pgV ), ( pgC / pgM ) * pgV, clamp( pgM * 6.0, 0.25, 1.0 ) );
+		//
+		// The blend has to reach zero. With a floor under it, an instance set
+		// to pure black — which is how a district says "this lamp is off" —
+		// came out a flat mid-dark slab instead of an inert pale grey, and a
+		// dark slab on a sunlit roof reads as something rather than nothing.
+		vec3 pgOut = mix( vec3( pgV ), ( pgC / pgM ) * pgV, clamp( ( pgM - 0.02 ) * 6.0, 0.0, 1.0 ) );
 		#if defined( USE_COLOR_ALPHA )
 			diffuseColor *= vec4( pgOut, vColor.a );
 		#else
@@ -275,22 +418,58 @@ const VCOLOR_BODY = /* glsl */ `
 #endif
 `
 
+export interface ThemeShaderSource {
+  vertexShader: string
+  fragmentShader: string
+}
+
 /**
- * The one onBeforeCompile hook, shared by every material the theme touches.
- * A stable function reference matters: three compares it when deciding whether
- * a program can be reused.
+ * Patch one material's source for the current mode.
+ *
+ * The toon ramp and the per-instance colour remap are daylight devices and are
+ * skipped at night. The surface term is not: it is multiplicative, so it is
+ * correct in both modes, and night is the only mode that has no other way to
+ * tell a wall from a slab once the neon is off.
  */
-function themeHook(shader: { fragmentShader: string }): void {
-  if (!ATMOSPHERE[mode].toon) return
+function patchThemeShader(shader: ThemeShaderSource, surface: boolean): void {
   let f = shader.fragmentShader
-  if (f.indexOf(TOON_ANCHOR) >= 0) f = f.replace(TOON_ANCHOR, TOON_ANCHOR + '\n' + TOON_GLSL)
-  // The replacement is inert unless the material declares vertex colours: the
-  // body it substitutes carries the same #if guards as the chunk it replaces.
-  if (f.indexOf(VCOLOR_ANCHOR) >= 0) f = f.replace(VCOLOR_ANCHOR, VCOLOR_BODY)
+  if (ATMOSPHERE[mode].toon) {
+    if (f.indexOf(TOON_ANCHOR) >= 0) f = f.replace(TOON_ANCHOR, TOON_ANCHOR + '\n' + TOON_GLSL)
+    // The replacement is inert unless the material declares vertex colours: the
+    // body it substitutes carries the same #if guards as the chunk it replaces.
+    if (f.indexOf(VCOLOR_ANCHOR) >= 0) f = f.replace(VCOLOR_ANCHOR, VCOLOR_BODY)
+  }
+  // The anchor IS the guard. It exists only in the standard/physical fragment
+  // shader, so meaning — every basic, line and ShaderMaterial in the city —
+  // cannot receive this even by accident.
+  if (surface && f.indexOf(SURFACE_ANCHOR) >= 0) {
+    f = SURFACE_VARYINGS + f.replace(SURFACE_ANCHOR, SURFACE_ANCHOR + '\n' + SURFACE_FRAG)
+    shader.vertexShader =
+      SURFACE_VARYINGS +
+      shader.vertexShader.replace(SURFACE_VERT_ANCHOR, SURFACE_VERT_ANCHOR + '\n' + SURFACE_VERT)
+  }
   shader.fragmentShader = f
 }
 
+/*
+ * Two stable hook references, not one closure per material: three compares the
+ * function by identity when deciding whether a compiled program can be reused,
+ * and customProgramCacheKey has to separate the two variants or a plain
+ * material would be handed a surfaced material's program.
+ */
+function themeHook(shader: ThemeShaderSource): void {
+  patchThemeShader(shader, true)
+}
+
+function themeHookPlain(shader: ThemeShaderSource): void {
+  patchThemeShader(shader, false)
+}
+
 function themeCacheKey(): string {
+  return ATMOSPHERE[mode].toon ? 'pg-day-s' : 'pg-night-s'
+}
+
+function themeCacheKeyPlain(): string {
   return ATMOSPHERE[mode].toon ? 'pg-day' : 'pg-night'
 }
 
@@ -307,17 +486,21 @@ function isStandard(m: THREE.Material): m is THREE.MeshStandardMaterial {
  * ShaderMaterials are skipped — they carry no three chunks to replace, and
  * their colours are handled through their uniforms instead.
  */
-function installThemeShader(m: THREE.Material, target: ThemeMode): void {
+function installThemeShader(m: THREE.Material, target: ThemeMode, surface: boolean): void {
   if ((m as THREE.ShaderMaterial).isShaderMaterial === true) return
   const ud = m.userData as ThemeUserData
-  if (m.onBeforeCompile !== themeHook) {
-    m.onBeforeCompile = themeHook
-    m.customProgramCacheKey = themeCacheKey
-    ud.pgToon = undefined
+  const hook = surface ? themeHook : themeHookPlain
+  if (m.onBeforeCompile !== hook) {
+    m.onBeforeCompile = hook
+    m.customProgramCacheKey = surface ? themeCacheKey : themeCacheKeyPlain
+    ud.pgProgram = undefined
   }
-  const want = ATMOSPHERE[target].toon
-  if (ud.pgToon === want) return
-  ud.pgToon = want
+  /* The compiled variant is (mode, surface), so the gate has to track both. A
+   * gate that watched the toon flag alone would leave a material that changed
+   * variant running its previous program until the next mode toggle. */
+  const want = (ATMOSPHERE[target].toon ? 2 : 0) + (surface ? 1 : 0)
+  if (ud.pgProgram === want) return
+  ud.pgProgram = want
   m.needsUpdate = true
 }
 
@@ -375,16 +558,19 @@ function dayCssColor(css: string): string {
  * ==========================================================================*/
 
 interface MatSpec {
+  /** The mat() cache key. Namespaced by district, and that is how it picks a stone. */
+  key: string
   color: number
   roughness: number
   metalness: number
   emissive: number
   emissiveIntensity: number
+  surface: boolean
 }
 
 function paintMat(m: THREE.MeshStandardMaterial, s: MatSpec, target: ThemeMode): void {
   if (target === 'day') {
-    m.color.setHex(daySurface(s.color))
+    m.color.setHex(daySurface(s.color, s.key))
     // A cel-shaded surface is matte by definition; what little variation is left
     // drives the size of the single highlight, so roughness is compressed rather
     // than flattened. Metal has no place in a cartoon and is nearly removed.
@@ -398,7 +584,7 @@ function paintMat(m: THREE.MeshStandardMaterial, s: MatSpec, target: ThemeMode):
     m.emissive.setHex(s.emissive)
   }
   m.emissiveIntensity = s.emissiveIntensity
-  installThemeShader(m, target)
+  installThemeShader(m, target, s.surface)
 }
 
 interface NeonSpec {
@@ -440,7 +626,7 @@ function paintNeon(m: THREE.MeshBasicMaterial, s: NeonSpec, target: ThemeMode): 
   } else {
     paintNightNeonColor(m.color, s.color, s.intensity)
   }
-  installThemeShader(m, target)
+  installThemeShader(m, target, false)
 }
 
 interface LineSpec {
@@ -458,7 +644,7 @@ function paintLine(m: THREE.LineBasicMaterial, s: LineSpec, target: ThemeMode): 
     m.transparent = wantsTransparent
     m.needsUpdate = true
   }
-  installThemeShader(m, target)
+  installThemeShader(m, target, false)
 }
 
 /* ---------------------------------------------------------------------------
@@ -486,11 +672,17 @@ interface CapturedNight {
 interface ThemeUserData {
   /** Set on materials the theme cache owns: the generic pass must skip them. */
   pgTheme?: boolean
-  /** Whether the toon ramp is currently compiled into this material. */
-  pgToon?: boolean
+  /** Which (mode, surface) program variant is currently compiled in. */
+  pgProgram?: number
   pgNight?: CapturedNight
   /** Exact daylight albedo for semantic zone surfaces. */
   pgDayColor?: number
+  /**
+   * Opt a scene material out of the masonry term. Set it on anything whose
+   * albedo is carrying meaning rather than describing a material — the day
+   * zoning plates are the case that exists today.
+   */
+  pgNoSurface?: boolean
 }
 
 function userData(m: THREE.Material): ThemeUserData {
@@ -550,7 +742,7 @@ export function paintSceneMaterial(m: THREE.Material, target: ThemeMode): void {
   }
 
   if (line.isLineBasicMaterial === true) {
-    installThemeShader(line, target)
+    installThemeShader(line, target, false)
     // A white line material is either a per-vertex multiplier (the shared-memory
     // beams, which the shader remap handles instead) or a chrome marker the
     // picker recolours on every selection. Either way its colour is not ours to
@@ -582,9 +774,11 @@ export function paintSceneMaterial(m: THREE.Material, target: ThemeMode): void {
     }
   }
 
-  installThemeShader(m, target)
-
   const lit = isStandard(m)
+  // Only lit structure is masonry. An unlit basic material is either meaning or
+  // a decal, and a module can opt out of the term explicitly.
+  installThemeShader(m, target, lit && ud.pgNoSurface !== true && basic.vertexColors !== true)
+
   const hasColor = (basic.color as THREE.Color | undefined) !== undefined
   // vertexColors means `color` is a per-instance multiplier; leave it white.
   const paintable = hasColor && basic.vertexColors !== true
@@ -598,7 +792,7 @@ export function paintSceneMaterial(m: THREE.Material, target: ThemeMode): void {
        * surface/accent. Night routes unlit basic materials through the neon
        * repaint so meaning survives when bloom is unavailable. */
       if (target === 'day') {
-        basic.color.setHex(ud.pgDayColor ?? (lit ? daySurface(src) : dayAccent(src)))
+        basic.color.setHex(ud.pgDayColor ?? (lit ? daySurface(src, m.name) : dayAccent(src)))
       } else if (basic.isMeshBasicMaterial === true && basic.toneMapped === false) {
         paintNightNeonColor(basic.color, src, 1)
       } else {
@@ -650,12 +844,19 @@ export function createTheme(): ThemeApi {
   function mat(key: string, opts: MatOpts = {}): THREE.MeshStandardMaterial {
     let m = mats.get(key)
     if (!m) {
+      const metalness = opts.metalness ?? 0.28
       const spec: MatSpec = {
+        key,
         color: opts.color ?? 0x223049,
         roughness: opts.roughness ?? 0.62,
-        metalness: opts.metalness ?? 0.28,
+        metalness,
         emissive: opts.emissive ?? 0x000000,
         emissiveIntensity: opts.emissiveIntensity ?? 1,
+        /* Structure is masonry by default, machinery is not. Metalness is
+         * already how this city says "this is a steel thing": a flywheel, a
+         * vault door, a pressure vessel. Coursed joints on any of them claim
+         * the wrong material, so the default follows the metal. */
+        surface: opts.surface ?? metalness < 0.45,
       }
       m = new THREE.MeshStandardMaterial({
         transparent: opts.transparent ?? false,

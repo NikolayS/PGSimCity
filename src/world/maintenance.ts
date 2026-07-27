@@ -70,6 +70,11 @@ const LF = ANCHOR.landfill //       [-234, 0,  76]
 const LG = ANCHOR.logger //         [-140, 0, 100]
 const SC = ANCHOR.statsCollector // [-196, 0,  76]
 
+const CX = CP[0] // -140
+const CZ = CP[2] //  -40
+const HALL_X = CX - 1
+const HALL_E = HALL_X + 13 // east face, the city side. Pit rim is at x = -118.
+
 /** Top of the district plinth, laid by ground.ts. */
 const YARD = 0.6
 /** Apron slabs sit just above it; paint goes above those. */
@@ -81,6 +86,47 @@ const ROAD_Y = YARD + 0.14
 const SODIUM = mixHex(COLOR.vacuum, 0xffc07a, 0.34)
 /** autovacuum_naptime, as compressed by the simulation. */
 const NAPTIME = 12
+
+/**
+ * The checkpointer's engine hall, as a massing table.
+ *
+ * A 26 x 30 m box with a 0.8 m cornice and nothing else reads as a crate at
+ * any distance: shading can describe a surface, but only geometry can break a
+ * silhouette. So the crown is two stages deep, the roofline carries a parapet,
+ * the base sits on a projecting plinth, and the two long faces are articulated
+ * by pilasters on a 5.5 m bay.
+ *
+ * Exported because a building is a factual claim about a silhouette, and this
+ * one is checked in maintenance.test.ts rather than through a software render.
+ */
+export const CKPT_MASS: BoxSpec[] = [
+  [CX, APRON_Y, CZ, 38, 0.2, 42], // apron
+  [HALL_X, 1.5, CZ, 27.4, 1.2, 31.4], // plinth course at grade
+  [HALL_X, 9.4, CZ, 26, 17, 30], // engine hall
+  [HALL_X, 17.6, CZ, 28.2, 0.5, 32.2], // drip course, stage one of the crown
+  [HALL_X, 18.5, CZ, 29.2, 1.2, 33.2], // cornice, stage two
+  // parapet: the roofline stops being a clean rectangle
+  [HALL_X, 19.95, CZ - 16.3, 29.2, 1.3, 0.6],
+  [HALL_X, 19.95, CZ + 16.3, 29.2, 1.3, 0.6],
+  [HALL_X - 14.3, 19.95, CZ, 0.6, 1.3, 33.2],
+  [HALL_X + 14.3, 19.95, CZ, 0.6, 1.3, 33.2],
+  [HALL_X - 1, 21.4, CZ - 1, 15, 5, 16], // machine room
+  [HALL_X - 1, 24.2, CZ - 1, 16, 0.6, 17], // roof cap
+  // roof plant: a stair head, a duct run and a header tank
+  [HALL_X - 5, 26.2, CZ - 5, 4.0, 3.4, 4.0],
+  [HALL_X + 3, 25.6, CZ - 3, 2.6, 2.2, 7.0],
+  [HALL_X + 3, 25.9, CZ + 4, 3.0, 2.8, 3.0],
+  [CX - 17, 3.4, CZ, 9, 5.6, 28], // vessel house
+  [CX + 14.5, 2.2, CZ, 7, 3.2, 22], // east gantry base
+  [CX - 9, 21.0, CZ - 18, 6, 5, 6], // stack base
+  [CX + 16, 11.5, CZ + 14, 2.2, 21, 2.2], // dial mast
+]
+// Pilasters on the north and south faces. The east face carries the gauge
+// board and the discharge main; the west is against the vessel house.
+for (let k = -2; k <= 2; k++) {
+  CKPT_MASS.push([HALL_X + k * 5.5, 9.6, CZ - 15.3, 1.8, 16.4, 0.7])
+  CKPT_MASS.push([HALL_X + k * 5.5, 9.6, CZ + 15.3, 1.8, 16.4, 0.7])
+}
 
 /* --------------------------------------------------------------------------
  * Small helpers. Everything here is allocation-free at runtime.
@@ -429,8 +475,8 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   const matStruct = theme.mat('maint.struct', { color: 0x2b3550, roughness: 0.74, metalness: 0.26, emissive: 0x070b14 })
   const matDeep = theme.mat('maint.deep', { color: 0x18202f, roughness: 0.9, metalness: 0.12, emissive: 0x04070e })
   const matHeavy = theme.mat('maint.heavy', { color: 0x232d44, roughness: 0.5, metalness: 0.52, emissive: 0x080c16 })
-  const matVehicle = theme.mat('maint.vehicle', { color: 0x39406b, roughness: 0.56, metalness: 0.36, emissive: 0x090c1a })
-  const matTyre = theme.mat('maint.tyre', { color: 0x11141f, roughness: 0.98, metalness: 0.02 })
+  const matVehicle = theme.mat('maint.vehicle', { color: 0x39406b, roughness: 0.56, metalness: 0.36, emissive: 0x090c1a, surface: false })
+  const matTyre = theme.mat('maint.tyre', { color: 0x11141f, roughness: 0.98, metalness: 0.02, surface: false })
   const neonWhite = theme.neon(0xffffff, 1)
   const lineInk = theme.line(COLOR.inkDim, 0.17)
 
@@ -483,23 +529,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   gCkpt.name = 'checkpointer'
   group.add(gCkpt)
 
-  const CX = CP[0] // -140
-  const CZ = CP[2] //  -40
-  const HALL_X = CX - 1
-  const HALL_E = HALL_X + 13 // east face, the city side. Pit rim is at x = -118.
-
-  const ckptMass: BoxSpec[] = [
-    [CX, APRON_Y, CZ, 38, 0.2, 42], // apron
-    [HALL_X, 9.4, CZ, 26, 17, 30], // engine hall
-    [HALL_X, 18.4, CZ, 27.6, 1.0, 31.6], // cornice
-    [HALL_X - 1, 21.4, CZ - 1, 15, 5, 16], // machine room
-    [HALL_X - 1, 24.2, CZ - 1, 16, 0.6, 17], // roof cap
-    [CX - 17, 3.4, CZ, 9, 5.6, 28], // vessel house
-    [CX + 14.5, 2.2, CZ, 7, 3.2, 22], // east gantry base
-    [CX - 9, 21.0, CZ - 18, 6, 5, 6], // stack base
-    [CX + 16, 11.5, CZ + 14, 2.2, 21, 2.2], // dial mast
-  ]
-  const ckptStruct = batch(gCkpt, unitBox, matStruct, ckptMass, true)
+  const ckptStruct = batch(gCkpt, unitBox, matStruct, CKPT_MASS, true)
 
   const ckptRound: BoxSpec[] = [
     [CX - 17, 12.5, CZ - 11, 7, 15, 7], // pressure vessels: the head the
@@ -531,16 +561,14 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   ])
 
   const ckptDetail: BoxSpec[] = [
-    // service walkway and rail around the cornice
-    [HALL_X, 19.0, CZ - 15.4, 27.6, 0.24, 1.6],
-    [HALL_X, 19.0, CZ + 15.4, 27.6, 0.24, 1.6],
-    [HALL_X - 13.4, 19.0, CZ, 1.6, 0.24, 31.6],
-    [HALL_X + 13.4, 19.0, CZ, 1.6, 0.24, 31.6],
-    [HALL_X, 19.9, CZ - 16.0, 27.6, 0.1, 0.1],
-    [HALL_X, 19.9, CZ + 16.0, 27.6, 0.1, 0.1],
-    // recessed bands: one storey inside, three from outside
-    [HALL_X, 5.4, CZ, 26.4, 0.55, 30.4],
-    [HALL_X, 11.4, CZ, 26.4, 0.55, 30.4],
+    // service walkway, laid on the cornice inside the parapet
+    [HALL_X, 19.25, CZ - 15.6, 28.2, 0.24, 1.6],
+    [HALL_X, 19.25, CZ + 15.6, 28.2, 0.24, 1.6],
+    [HALL_X - 13.6, 19.25, CZ, 1.6, 0.24, 32.2],
+    [HALL_X + 13.6, 19.25, CZ, 1.6, 0.24, 32.2],
+    // string courses: at 0.5 m they throw a shadow line the whole way round
+    [HALL_X, 5.4, CZ, 27.0, 0.7, 31.0],
+    [HALL_X, 11.4, CZ, 27.0, 0.7, 31.0],
     // north-face vents
     [HALL_X - 7, 14.4, CZ - 15.1, 2.6, 3.4, 0.5],
     [HALL_X - 1, 14.4, CZ - 15.1, 2.6, 3.4, 0.5],

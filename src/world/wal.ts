@@ -314,12 +314,14 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
   const matStruct = theme.mat('wal.struct', { color: 0x2a3752, roughness: 0.72, metalness: 0.3, emissive: 0x070c16 })
   const matDeep = theme.mat('wal.deep', { color: 0x161f33, roughness: 0.88, metalness: 0.14, emissive: 0x050912 })
   const matHeavy = theme.mat('wal.heavy', { color: 0x202b42, roughness: 0.55, metalness: 0.48, emissive: 0x080d18 })
+  // Glazing, so no masonry: coursed joints on a window claim the wrong material.
   const matGlass = theme.mat('wal.glass', {
     color: 0x9fd8ff,
     roughness: 0.06,
     metalness: 0.1,
     transparent: true,
     opacity: 0.22,
+    surface: false,
   })
   const neonWhite = theme.neon(0xffffff, 1)
   const lineInk = theme.line(COLOR.inkDim, 0.19)
@@ -605,6 +607,12 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
     [VX + 10.5, 1.3, 0, 6, 1.6, VAULT_Z * 2 + 2], // stylobate, east
     [VX - 10.5, 15.6, 0, 3.4, 1.8, VAULT_Z * 2 + 2], // architrave, west
     [VX + 10.5, 15.6, 0, 3.4, 1.8, VAULT_Z * 2 + 2], // architrave, east
+    // A stoa is crowned, not cut off: cornice over the architrave, then the
+    // parapet that hides the roof beams from the street.
+    [VX - 10.9, 17.9, 0, 4.6, 1.0, VAULT_Z * 2 + 4], // cornice, west
+    [VX + 10.9, 17.9, 0, 4.6, 1.0, VAULT_Z * 2 + 4], // cornice, east
+    [VX - 11.4, 19.1, 0, 1.2, 1.4, VAULT_Z * 2 + 4], // parapet, west
+    [VX + 11.4, 19.1, 0, 1.2, 1.4, VAULT_Z * 2 + 4], // parapet, east
     // north gable: a portal with the vault door in it
     [VX - 8.5, 7.5, -VAULT_Z - 1, 10, 15, 2],
     [VX + 8.5, 7.5, -VAULT_Z - 1, 10, 15, 2],
