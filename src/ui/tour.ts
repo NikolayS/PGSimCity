@@ -182,7 +182,7 @@ const STEPS: TourStep[] = [
     id: 'horizon',
     title: 'When vacuum cannot: the horizon',
     body:
-      'Now the expensive mistake. Somebody typed BEGIN, took a snapshot of the database, and went to lunch. Vacuum may not remove any row version that snapshot could still need, so the horizon — the oldest transaction anyone can still see — stops moving, and every table taking writes grows with no brake on it. The workers still run. They collect nothing. Halfway through this chapter we let that transaction go: watch the horizon jump forward and the entire backlog become collectable at once.',
+      'Now the expensive mistake. Somebody typed BEGIN, took a snapshot of the database, and went to lunch. Vacuum may not remove any row version that snapshot could still need, so the horizon — the oldest transaction anyone can still see — stops moving, and every table taking writes grows with no brake on it. The workers still run. They collect nothing. After a short look we let that transaction go: watch the horizon jump forward and the entire backlog become collectable at once.',
     focus: 'xmin.horizon',
     duration: 22,
     knobs: { longRunningXact: true },
@@ -225,8 +225,6 @@ const STEPS: TourStep[] = [
 /** The guided tour, in order. */
 export const CHAPTERS: TourChapter[] = STEPS
 
-const TOTAL_SECONDS = STEPS.reduce((n, c) => n + c.duration, 0)
-
 /* ---------------------------------------------------------------------------
  * Small local helpers.
  * -------------------------------------------------------------------------*/
@@ -257,12 +255,6 @@ function markSeen(): void {
   }
 }
 
-/** "about 4 minutes" — derived from the chapters so the copy can never drift. */
-function tourLength(): string {
-  const mins = TOTAL_SECONDS / 60
-  return mins < 1.5 ? `about ${Math.round(TOTAL_SECONDS / 10) * 10} seconds` : `about ${Math.round(mins)} minutes`
-}
-
 /* ==========================================================================
  * FACTORY
  * ========================================================================*/
@@ -280,9 +272,10 @@ export function createTour(ctx: UiContext): UiModule {
   /* ------------------------------ live state ----------------------------- */
 
   let running = false
-  let held = false // tour-local pause: holds the chapter, nothing else
+  let playing = false
   let index = 0
-  let elapsed = 0
+  let stageElapsed = 0
+  let playElapsed = 0
   let atIdx = 0
   let lookIdx = 0
   let paintAcc = 0
@@ -291,6 +284,8 @@ export function createTour(ctx: UiContext): UiModule {
   let baseline: Knobs | null = null
   const touched = new Set<KnobKey>()
   let ranScenario = false
+  const stageSnapshots: ({ knobs: Knobs; scenario: string | null } | undefined)[] =
+    new Array(STEPS.length)
 
   /** True once the viewer grabs the camera; cleared when the next chapter starts. */
   let userControl = false
@@ -299,18 +294,18 @@ export function createTour(ctx: UiContext): UiModule {
    * THE CAPTION CARD
    * =====================================================================*/
 
-  const numEl = el('span', { class: 'tour-card__n', text: '01' })
-  const ofEl = el('span', { class: 'tour-card__of', text: `/ ${STEPS.length}` })
+  const numEl = el('span', { class: 'tour-card__n', text: '1' })
+  const ofEl = el('span', { class: 'tour-card__of', text: `of ${STEPS.length}` })
   const eyebrow = el('span', { class: 'pg-eyebrow tour-card__eyebrow', text: 'Guided tour' })
   const titleEl = el('h2', { class: 'tour-card__title', text: STEPS[0].title })
   const bodyEl = el('p', { class: 'pg-body tour-card__body', text: STEPS[0].body })
-  const clockEl = el('span', { class: 'tour-card__clock', text: '0s' })
+  const clockEl = el('span', { class: 'tour-card__clock', text: 'Your pace' })
 
-  const deckBtn = (name: string, label: string, onClick: () => void): HTMLButtonElement =>
+  const deckBtn = (name: string, className: string, label: string, onClick: () => void): HTMLButtonElement =>
     el(
       'button',
       {
-        class: 'pg-btn pg-btn--icon tour-btn',
+        class: `pg-btn pg-btn--icon tour-btn ${className}`,
         type: 'button',
         title: label,
         'aria-label': label,
@@ -319,20 +314,35 @@ export function createTour(ctx: UiContext): UiModule {
       icon(name, 14),
     )
 
-  const prevBtn = deckBtn('prev', 'Previous chapter', () => goTo(index - 1))
-  const holdIcon = el('span', { class: 'tour-btn__icon' }, icon('pause', 14))
-  const holdBtn = el(
+  const prevBtn = deckBtn('prev', 'tour-prev', 'Previous chapter', () => goTo(index - 1))
+  const playIcon = el('span', { class: 'tour-btn__icon' }, icon('play', 14))
+  const playLabel = el('span', { text: 'Play' })
+  const playBtn = el(
     'button',
     {
-      class: 'pg-btn pg-btn--icon tour-btn',
+      class: 'pg-btn tour-btn tour-btn--play',
       type: 'button',
-      title: 'Hold this chapter',
-      'aria-label': 'Hold this chapter',
-      on: { click: () => setHeld(!held) },
+      title: 'Play tour automatically',
+      'aria-label': 'Play tour automatically',
+      'aria-pressed': 'false',
+      on: { click: () => setPlaying(!playing) },
     },
-    holdIcon,
+    playIcon,
+    playLabel,
   )
-  const nextBtn = deckBtn('next', 'Next chapter', () => goTo(index + 1))
+  const nextLabel = el('span', { text: 'Next' })
+  const nextBtn = el(
+    'button',
+    {
+      class: 'pg-btn tour-btn tour-btn--next tour-next',
+      type: 'button',
+      title: 'Next chapter',
+      'aria-label': 'Next chapter',
+      on: { click: () => goTo(index + 1) },
+    },
+    nextLabel,
+    icon('next', 14),
+  )
   const exitBtn = el(
     'button',
     {
@@ -375,7 +385,7 @@ export function createTour(ctx: UiContext): UiModule {
         'div',
         { class: 'tour-card__deck' },
         clockEl,
-        el('div', { class: 'tour-card__btns' }, prevBtn, holdBtn, nextBtn, exitBtn),
+        el('div', { class: 'tour-card__btns' }, prevBtn, playBtn, nextBtn, exitBtn),
       ),
     ),
     stepStrip,
@@ -699,7 +709,7 @@ export function createTour(ctx: UiContext): UiModule {
       el('span', { class: 'pg-eyebrow', text: 'First time here?' }),
       el('p', {
         class: 'tour-first__line',
-        text: `Follow a query from connection to commit — ${STEPS.length} chapters, ${tourLength()}.`,
+        text: `Follow a query from connection to commit — ${STEPS.length} chapters, at your pace.`,
       }),
     ),
     el(
@@ -785,13 +795,24 @@ export function createTour(ctx: UiContext): UiModule {
    * CHAPTER TRANSPORT
    * =====================================================================*/
 
-  function enter(i: number): void {
+  function present(i: number): void {
     index = clamp(Math.round(i), 0, STEPS.length - 1)
-    elapsed = 0
+    stageElapsed = 0
+    playElapsed = 0
     atIdx = 0
     lookIdx = 0
     userControl = false
 
+    const step = STEPS[index]
+    if (step.focus) bus.emit('focus', { id: step.focus })
+
+    paintChapter()
+    paintTransport()
+    bus.emit('tour:chapter', { index, total: STEPS.length, title: step.title })
+  }
+
+  function enter(i: number): void {
+    index = clamp(Math.round(i), 0, STEPS.length - 1)
     const step = STEPS[index]
 
     // 1. scenario first — runScenario aims the camera at its own focus, and we
@@ -809,12 +830,25 @@ export function createTour(ctx: UiContext): UiModule {
     // 2. chapter knobs override anything the scenario just set
     applyKnobs(step.knobs)
 
-    // 3. camera
-    if (step.focus) bus.emit('focus', { id: step.focus })
+    stageSnapshots[index] = {
+      knobs: { ...sim.state.knobs },
+      scenario: sim.state.scenario,
+    }
+    present(index)
+  }
 
-    paintChapter()
-    paintClock()
-    bus.emit('tour:chapter', { index, total: STEPS.length, title: step.title })
+  function restoreStage(i: number, snapshot: { knobs: Knobs; scenario: string | null }): void {
+    // A scenario owns a private knob baseline. Restarting it before restoring
+    // the snapshot keeps that ownership coherent when a reader walks backward
+    // across a scenario boundary.
+    if (ranScenario && sim.state.scenario) sim.runScenario(null)
+    ranScenario = false
+    if (snapshot.scenario) {
+      sim.runScenario(snapshot.scenario)
+      ranScenario = true
+    }
+    applyKnobs(snapshot.knobs)
+    present(i)
   }
 
   function goTo(i: number): void {
@@ -823,19 +857,23 @@ export function createTour(ctx: UiContext): UiModule {
       bus.emit('tour:stop', {})
       return
     }
-    setHeld(false)
-    // rewinding past the first chapter simply replays it
-    enter(i < 0 ? 0 : i)
+    // Rewinding past the first chapter simply replays it.
+    const target = clamp(Math.round(i), 0, STEPS.length - 1)
+    const snapshot = stageSnapshots[target]
+    if (snapshot) restoreStage(target, snapshot)
+    else enter(target)
   }
 
-  function setHeld(next: boolean): void {
-    held = next
-    holdIcon.replaceChildren(icon(held ? 'play' : 'pause', 14))
-    holdBtn.title = held ? 'Resume the tour' : 'Hold this chapter'
-    holdBtn.setAttribute('aria-label', holdBtn.title)
-    setClass(holdBtn, 'is-active', held)
-    setClass(card, 'is-held', held)
-    paintClock()
+  function setPlaying(next: boolean): void {
+    playing = next
+    playIcon.replaceChildren(icon(playing ? 'pause' : 'play', 14))
+    setText(playLabel, playing ? 'Pause' : 'Play')
+    playBtn.title = playing ? 'Pause automatic play' : 'Play tour automatically'
+    playBtn.setAttribute('aria-label', playBtn.title)
+    playBtn.setAttribute('aria-pressed', String(playing))
+    setClass(playBtn, 'is-active', playing)
+    setClass(card, 'is-playing', playing)
+    paintTransport()
   }
 
   function start(chapter: number): void {
@@ -850,8 +888,9 @@ export function createTour(ctx: UiContext): UiModule {
     baseline = { ...sim.state.knobs }
     touched.clear()
     ranScenario = false
-    held = false
-    setHeld(false)
+    stageSnapshots.fill(undefined)
+    playing = false
+    setPlaying(false)
     markSeen()
     hideFirstRun()
     hideNarrate(true)
@@ -866,7 +905,7 @@ export function createTour(ctx: UiContext): UiModule {
   function stop(): void {
     if (!running) return
     running = false
-    setHeld(false)
+    setPlaying(false)
     setClass(card, 'is-live', false)
     document.body.classList.remove('pg-tour')
     restoreKnobs()
@@ -879,12 +918,17 @@ export function createTour(ctx: UiContext): UiModule {
 
   function paintChapter(): void {
     const step = STEPS[index]
-    setText(numEl, String(index + 1).padStart(2, '0'))
-    setText(ofEl, `/ ${STEPS.length}`)
+    setText(numEl, String(index + 1))
+    setText(ofEl, `of ${STEPS.length}`)
     setText(titleEl, step.title)
     setText(bodyEl, step.body)
     setText(eyebrow, step.scenario ? 'Guided tour · scenario running' : 'Guided tour')
     prevBtn.disabled = index === 0
+    const finishing = index === STEPS.length - 1
+    setText(nextLabel, finishing ? 'Finish' : 'Next')
+    nextBtn.title = finishing ? 'Finish tour' : 'Next chapter'
+    nextBtn.setAttribute('aria-label', nextBtn.title)
+    barFill.style.width = `${((index + 1) / STEPS.length) * 100}%`
     for (let i = 0; i < steps.length; i++) {
       setClass(steps[i], 'is-done', i < index)
       setClass(steps[i], 'is-now', i === index)
@@ -893,11 +937,10 @@ export function createTour(ctx: UiContext): UiModule {
     }
   }
 
-  function paintClock(): void {
+  function paintTransport(): void {
     const step = STEPS[index]
-    const left = Math.max(0, step.duration - elapsed)
-    setText(clockEl, held ? 'hold' : `${Math.ceil(left)}s`)
-    barFill.style.width = `${clamp(elapsed / step.duration, 0, 1) * 100}%`
+    const left = Math.max(0, step.duration - playElapsed)
+    setText(clockEl, playing ? `${Math.ceil(left)}s` : 'Your pace')
   }
 
   /* =======================================================================
@@ -963,32 +1006,33 @@ export function createTour(ctx: UiContext): UiModule {
     updateTrace(dt, wallDt)
     if (narrateUntil > 0 && sim.state.scenarioT >= narrateUntil) hideNarrate()
     if (!running) return
-    if (held) return
 
-    elapsed += wallDt
     const step = STEPS[index]
+    stageElapsed = Math.min(step.duration, stageElapsed + wallDt)
 
     // mid-chapter knob beats
     const at = step.at
-    while (at && atIdx < at.length && elapsed >= at[atIdx][0]) {
+    while (at && atIdx < at.length && stageElapsed >= at[atIdx][0]) {
       applyKnobs(at[atIdx][1])
       atIdx += 1
     }
 
     // mid-chapter camera moves, unless the viewer has taken the camera
     const look = step.look
-    while (look && lookIdx < look.length && elapsed >= look[lookIdx][0]) {
+    while (look && lookIdx < look.length && stageElapsed >= look[lookIdx][0]) {
       if (!userControl) bus.emit('focus', { id: look[lookIdx][1] })
       lookIdx += 1
     }
 
+    if (!playing) return
+    playElapsed += wallDt
     paintAcc += wallDt
     if (paintAcc >= 0.1) {
       paintAcc = 0
-      paintClock()
+      paintTransport()
     }
 
-    if (elapsed >= step.duration) {
+    if (playElapsed >= step.duration) {
       if (index + 1 >= STEPS.length) bus.emit('tour:stop', {})
       else enter(index + 1)
     }
@@ -1018,7 +1062,7 @@ export function createTour(ctx: UiContext): UiModule {
   }
 
   paintChapter()
-  paintClock()
+  paintTransport()
 
   return { update, dispose }
 }

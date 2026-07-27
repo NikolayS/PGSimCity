@@ -41,7 +41,7 @@ describe('user-facing timebase', () => {
     vi.useRealTimers()
   })
 
-  it('advances tour chapters by elapsed wall time at two frames per second', () => {
+  it('waits for reader action even after the chapter duration elapses', () => {
     const ctx = context()
     const chapters: number[] = []
     ctx.bus.on('tour:chapter', ({ index }) => chapters.push(index))
@@ -50,7 +50,67 @@ describe('user-facing timebase', () => {
     ctx.bus.emit('tour:start', {})
     for (let frame = 0; frame < 32; frame++) tour.update(0.1, 0.5)
 
+    expect(chapters).toEqual([0])
+    expect(document.querySelector('.tour-card__n')?.textContent).toBe('1')
+    expect(document.querySelector('.tour-card__of')?.textContent).toBe('of 14')
+    tour.dispose()
+  })
+
+  it('advances by elapsed wall time after the reader opts into play mode', () => {
+    const ctx = context()
+    const chapters: number[] = []
+    ctx.bus.on('tour:chapter', ({ index }) => chapters.push(index))
+    const tour = createTour(ctx)
+
+    ctx.bus.emit('tour:start', {})
+    document.querySelector<HTMLButtonElement>('.tour-btn--play')!.click()
+    for (let frame = 0; frame < 32; frame++) tour.update(0.1, 0.5)
+
     expect(chapters).toEqual([0, 1])
+    tour.dispose()
+  })
+
+  it('restores the previous chapter scenario and staged view', () => {
+    const ctx = context()
+    const focuses: (string | null)[] = []
+    ctx.bus.on('focus', ({ id }) => focuses.push(id))
+    const tour = createTour(ctx)
+
+    ctx.bus.emit('tour:start', { chapter: 6 })
+    document.querySelector<HTMLButtonElement>('.tour-next')!.click()
+    expect(ctx.sim.state.scenario).toBe('checkpoint-storm')
+
+    document.querySelector<HTMLButtonElement>('.tour-prev')!.click()
+
+    expect(document.querySelector('.tour-card__n')?.textContent).toBe('7')
+    expect(document.querySelector('.tour-card__of')?.textContent).toBe('of 14')
+    expect(ctx.sim.state.scenario).toBeNull()
+    expect(ctx.sim.state.knobs.synchronousCommit).toBe('off')
+    expect(focuses.at(-1)).toBe('walwriter')
+    tour.dispose()
+  })
+
+  it('preserves the knob baseline across forward and backward clicks', () => {
+    const ctx = context()
+    ctx.sim.setKnob('tps', 321)
+    ctx.sim.setKnob('writeRatio', 0.21)
+    ctx.sim.setKnob('sharedBuffers', 1536)
+    ctx.sim.setKnob('maxWalSize', 384)
+    ctx.sim.setKnob('synchronousCommit', 'local')
+    const baseline = { ...ctx.sim.state.knobs }
+    const tour = createTour(ctx)
+
+    ctx.bus.emit('tour:start', { chapter: 6 })
+    const next = document.querySelector<HTMLButtonElement>('.tour-next')!
+    const previous = document.querySelector<HTMLButtonElement>('.tour-prev')!
+    next.click()
+    next.click()
+    previous.click()
+    previous.click()
+    next.click()
+    document.querySelector<HTMLButtonElement>('[data-mode-exit="guided-tour"]')!.click()
+
+    expect(ctx.sim.state.knobs).toEqual(baseline)
     tour.dispose()
   })
 

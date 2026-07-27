@@ -184,8 +184,8 @@ body.pg-tour::after {
   letter-spacing: 0.08em;
   color: var(--ink-faint);
 }
-.tour-card.is-held .tour-card__clock {
-  color: var(--c-warn);
+.tour-card.is-playing .tour-card__clock {
+  color: var(--c-backend);
 }
 .tour-card__btns {
   display: flex;
@@ -197,6 +197,21 @@ body.pg-tour::after {
 }
 .tour-btn__icon {
   display: inline-flex;
+}
+.tour-btn--play {
+  min-width: 66px;
+  justify-content: center;
+}
+.tour-btn--next {
+  min-width: 72px;
+  justify-content: center;
+  color: var(--c-backend);
+  background: color-mix(in srgb, var(--c-backend) 14%, transparent);
+  font-weight: 700;
+}
+.tour-btn--next:hover {
+  color: var(--c-backend);
+  background: color-mix(in srgb, var(--c-backend) 22%, transparent);
 }
 .tour-btn--exit {
   padding: 6px 10px;
@@ -253,10 +268,7 @@ body.pg-tour::after {
   height: 100%;
   width: 0%;
   background: var(--c-backend);
-  transition: width 140ms linear;
-}
-.tour-card.is-held .tour-bar__fill {
-  background: var(--c-warn);
+  transition: width var(--dur) var(--ease);
 }
 
 /* ==========================================================================
