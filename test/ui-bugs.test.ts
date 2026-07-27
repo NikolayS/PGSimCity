@@ -9,7 +9,8 @@ import {
   SHARED_BUFFERS_MAX_MIB,
   SHARED_BUFFERS_MIN_MIB,
 } from '../src/core/types'
-import { createSim } from '../src/sim/model'
+import { createSim, traceStopBit } from '../src/sim/model'
+import { createAnatomy } from '../src/ui/anatomy'
 import { knobMeta } from '../src/ui/content'
 import { createControls, createKnobControl } from '../src/ui/controls'
 import { createHud } from '../src/ui/hud'
@@ -129,6 +130,53 @@ describe('storage anatomy entry points', () => {
     expect(button).not.toBeNull()
     button!.click()
     expect(opened).toHaveBeenCalledWith({ view: 'page', id })
+  })
+})
+
+describe('page anatomy MVCC story', () => {
+  beforeEach(() => {
+    installTestDom()
+  })
+
+  it('shows two snapshots selecting different physical versions after UPDATE', () => {
+    const ctx = context()
+    const sessions = ctx.sim.state.tables.findIndex(
+      (table) => table.def.id === 'sessions',
+    )
+    ctx.sim.setKnob('longRunningXact', true)
+    ctx.sim.request('update', sessions, { hot: false })
+    for (let tick = 0; tick < 900; tick++) {
+      ctx.sim.update(1 / 30)
+      if (
+        ctx.sim.state.trace.stop === 'done'
+        && (ctx.sim.state.trace.visited & traceStopBit('done')) !== 0
+      ) {
+        break
+      }
+    }
+
+    const anatomy = createAnatomy(ctx)
+    ctx.bus.emit('anatomy:open', {
+      view: 'page',
+      id: 'storage.table.sessions',
+    })
+
+    const versions = document.querySelectorAll('.an-mvcc-version')
+    const older = document.querySelector('.an-mvcc-snapshot--older')
+    const later = document.querySelector('.an-mvcc-snapshot--later')
+    const cutoff = document.querySelector('.an-mvcc-cutoff')
+    expect(versions.length).toBeGreaterThanOrEqual(2)
+    expect(older?.textContent).toContain(
+      `v${ctx.sim.state.tables[sessions].mvcc.earlierSnapshot.visibleRevision}`,
+    )
+    expect(later?.textContent).toContain(
+      `v${ctx.sim.state.tables[sessions].mvcc.laterSnapshot.visibleRevision}`,
+    )
+    expect(older?.textContent).not.toBe(later?.textContent)
+    expect(cutoff?.textContent).toContain(
+      ctx.sim.state.xminHorizon.toLocaleString(),
+    )
+    anatomy.dispose()
   })
 })
 

@@ -391,6 +391,59 @@ export interface AutovacState {
   landfill: number
 }
 
+export interface MvccSnapshot {
+  /** XIDs below xmin completed before this snapshot. */
+  xmin: number
+  /** XIDs at or above xmax had not started when this snapshot was taken. */
+  xmax: number
+  /** XIDs between xmin and xmax that were still in progress. */
+  inProgress: number[]
+  takenAt: number
+  /** Only the deliberately held older snapshot can pin the global horizon. */
+  active: boolean
+  /** Model-computed revision visible through this snapshot. */
+  visibleRevision: number
+}
+
+export interface MvccTupleVersion {
+  revision: number
+  /** Transaction that inserted this physical row version. */
+  xmin: number
+  /** Transaction that replaced it; zero means this is the current version. */
+  xmax: number
+  createdAt: number
+  /** This version was created by a HOT update. */
+  hot: boolean
+  /** This version was replaced through a same-page HOT link. */
+  nextHot: boolean
+  /** Representative TID, not bytes decoded from a real block. */
+  block: number
+  offset: number
+  /** Model-owned t_ctid target; self for the current version. */
+  ctidBlock: number
+  ctidOffset: number
+  /** Revision at t_ctid, or zero while t_ctid points to self. */
+  nextRevision: number
+  /** Model-computed vacuum eligibility at the current xmin horizon. */
+  collectable: boolean
+}
+
+/**
+ * A sampled single-row history. Aggregate tuple counts remain relation-wide;
+ * this bounded story exists to expose the MVCC rule those counts result from.
+ */
+export interface MvccRowStory {
+  versions: MvccTupleVersion[]
+  earlierSnapshot: MvccSnapshot
+  laterSnapshot: MvccSnapshot
+  nextSampleAt: number
+  collectedVersions: number
+  /** Bounded-history count whose individual headers are no longer retained. */
+  omittedVersions: number
+  /** Greatest xmax among omitted versions; all are removable after this XID. */
+  omittedThroughXmax: number
+}
+
 export interface TableSim {
   def: TableDef
   pages: number
@@ -413,6 +466,8 @@ export interface TableSim {
   heat: number
   /** currently being vacuumed */
   vacuuming: boolean
+  /** Model-owned representative row used by page anatomy. */
+  mvcc: MvccRowStory
 }
 
 export interface ReplicationState {
@@ -482,7 +537,7 @@ export interface SimState {
   realT: number
   knobs: Knobs
   xid: number
-  /** oldest xid still visible to someone — vacuum can't remove newer dead rows */
+  /** Global visibility cutoff; a replacing xmax must precede it to be removable. */
   xminHorizon: number
   oldestSnapshotAge: number
   maxConnections: number
