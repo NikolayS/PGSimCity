@@ -184,7 +184,7 @@ Daylight arrives, and the city stops going dark on ordinary hardware.
 
 - **A daylight theme for the city, not just the panels.** Day mode used to stop
   at the edge of the UI: paper panels over a city still lit for night. It is now
-  a sunlit model in the spirit of SimCity — flat saturated colour with a hard
+  a sunlit architectural model — flat saturated colour with a hard
   split between the lit and shaded faces of every mass, a warm directional sun
   casting real shadows from 172 architectural casters (about 4% of frame time,
   with the buffer field excluded because its heights change every frame), light

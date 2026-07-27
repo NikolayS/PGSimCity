@@ -1012,6 +1012,19 @@ body.pg-labels-off #labels-root {
   .hud-now {
     width: 132px;
   }
+  .hud-tools {
+    gap: 4px;
+  }
+  .hud-legal {
+    width: 30px;
+    min-width: 30px;
+    padding-inline: 0;
+    font-size: 0;
+  }
+  .hud-legal::before {
+    content: '§';
+    font-size: var(--fs-sm);
+  }
 }
 
 /* If it still does not fit, the overflow must at least be discoverable. */
@@ -1063,13 +1076,26 @@ body.pg-labels-off #labels-root {
    checkpoint and audio controls off the left edge at 768px. */
 @media (min-width: 701px) and (max-width: 860px) {
   .hud-audio,
-  .hud-theme {
+  .hud-theme,
+  .hud-source,
+  .hud-tour,
+  .hud-trace-open {
     min-width: 30px;
+    width: 30px;
     padding-inline: 0;
   }
   .hud-audio__label,
-  .hud-theme__label {
+  .hud-theme__label,
+  .hud-tour span,
+  .hud-trace-open span:last-child {
     display: none;
+  }
+  .hud-source {
+    font-size: 0;
+  }
+  .hud-source::before {
+    content: '↗';
+    font-size: var(--fs-sm);
   }
 }
 
@@ -1083,6 +1109,19 @@ body.pg-labels-off #labels-root {
 }
 .help-disclaimer a:hover {
   text-decoration-color: var(--c-backend);
+}
+
+.help-legal {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-hair);
+}
+.help-legal__notice,
+.help-legal__content {
+  margin: 8px 0 0;
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  color: var(--ink-dim);
 }
 
 /* ==========================================================================
@@ -1211,6 +1250,10 @@ body.pg-labels-off #labels-root {
   .hud-tools .hud-walk {
     min-width: var(--tap);
     padding-inline: 0;
+  }
+  .hud-tools .hud-legal {
+    width: var(--tap);
+    min-width: var(--tap);
   }
   .hud-theme {
     min-width: 88px;

@@ -3,7 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <meta name="description" content="PGSimCity — an explorable 3D city that shows how PostgreSQL actually works." />
+    <meta
+      name="description"
+      content="An independent, non-commercial educational visualization of PostgreSQL internals. Not affiliated with Electronic Arts."
+    />
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#cfe0ee" />
     <script>
@@ -36,7 +39,7 @@
     <meta property="og:title" content="PGSimCity · How PostgreSQL Works, in 3D" />
     <meta
       property="og:description"
-      content="An explorable 3D city that shows how PostgreSQL actually works — backends, shared buffers, WAL, checkpoints, autovacuum and replication, all running live in your browser."
+      content="An independent, non-commercial educational visualization of PostgreSQL internals. Not affiliated with Electronic Arts."
     />
     <meta property="og:url" content="https://nikolays.github.io/PGSimCity/" />
     <meta property="og:image" content="https://nikolays.github.io/PGSimCity/og.png" />
@@ -52,7 +55,7 @@
     <meta name="twitter:title" content="PGSimCity · How PostgreSQL Works, in 3D" />
     <meta
       name="twitter:description"
-      content="An explorable 3D city that shows how PostgreSQL actually works — backends, shared buffers, WAL, checkpoints, autovacuum and replication, all running live in your browser."
+      content="An independent, non-commercial educational visualization of PostgreSQL internals. Not affiliated with Electronic Arts."
     />
     <meta name="twitter:image" content="https://nikolays.github.io/PGSimCity/og.png" />
     <meta
@@ -98,7 +101,7 @@
               stroke="url(#bg1)"
               stroke-width="2.4"
             />
-            <!-- the elephant: same mark as public/favicon.svg, 64-unit box -->
+            <!-- the original hand-authored elephant mark, in a 64-unit box -->
             <g transform="translate(18 18) scale(1)">
               <path
                 fill="url(#bg1)"
@@ -113,6 +116,11 @@
           </svg>
         </div>
         <h1 class="boot-title">PG<span>SimCity</span></h1>
+        <p class="boot-legal">
+          PGSimCity is an independent, non-commercial educational visualization of PostgreSQL internals. It is not
+          affiliated with, sponsored, endorsed, or approved by Electronic Arts Inc. SimCity is a trademark of
+          Electronic Arts Inc.
+        </p>
         <p class="boot-sub">A working model of the PostgreSQL engine</p>
         <div class="boot-bar"><i id="boot-fill" style="width: 2%"></i></div>
         <p class="boot-status" id="boot-status">loading the city code…</p>

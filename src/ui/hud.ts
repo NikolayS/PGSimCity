@@ -356,7 +356,7 @@ export function createHud(ctx: UiContext): UiModule {
     'div',
     { class: 'hud-brand', title: 'PGSimCity — a working model of the PostgreSQL engine' },
     statusDot,
-    el('span', { class: 'hud-brand__mark' }, el('b', { text: 'PG' }), 'SIMCITY'),
+    el('span', { class: 'hud-brand__mark' }, el('b', { text: 'PG' }), 'PGSimCity'.slice(2)),
     el('span', { class: 'hud-brand__rule' }),
     clockEl,
   )
@@ -511,6 +511,17 @@ export function createHud(ctx: UiContext): UiModule {
     },
     'Source',
   )
+  const legalBtn = el(
+    'button',
+    {
+      class: 'pg-btn hud-tool hud-legal',
+      type: 'button',
+      title: 'Electronic Arts trademark and independence notice',
+      'aria-label': 'Legal notice',
+      on: { click: () => emitLoose(bus, 'ui:help', { open: true, section: 'legal' }) },
+    },
+    'Legal',
+  )
   const viewLabel = el('span', { text: 'View' })
   const viewBtn = el(
     'button',
@@ -605,6 +616,7 @@ export function createHud(ctx: UiContext): UiModule {
     audioBtn,
     themeBtn,
     sourceLink,
+    legalBtn,
     viewBtn,
     tourBtn,
     traceBtn,

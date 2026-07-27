@@ -813,8 +813,8 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
       polygonOffsetUnits: -1,
     })
     m.name = `ground.zone.${spec.district}`
-    // SimCity zoning is saturated but printed on the same warm stock as the
-    // rest of the model. Fourteen percent stone keeps it architectural without
+    // City-planning zone colours are saturated but printed on the same warm
+    // stock. Fourteen percent stone keeps it architectural without
     // making neighboring quarters collapse into beige.
     m.userData.pgDayColor = mixHex(spec.dayColor, DAY_PALETTE.ground, 0.14)
     // Zoning is meaning painted on the ground; masonry joints do not belong on it.

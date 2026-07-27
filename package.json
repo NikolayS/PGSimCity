@@ -4,7 +4,7 @@
   "version": "0.7.2",
   "type": "module",
   "license": "Apache-2.0",
-  "description": "PGSimCity — an explorable 3D city that shows how PostgreSQL actually works",
+  "description": "An independent, non-commercial educational visualization of PostgreSQL internals. Not affiliated with Electronic Arts.",
   "author": "Nikolay Samokhvalov",
   "homepage": "https://nikolays.github.io/PGSimCity/",
   "repository": {

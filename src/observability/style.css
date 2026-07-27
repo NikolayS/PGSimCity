@@ -787,6 +787,7 @@ body {
   gap: 5px;
 }
 .foot p { margin: 0; font-size: var(--fs-xs); color: var(--ink-faint); line-height: 1.6; }
+.foot .foot__legal { color: var(--ink-dim); }
 .foot a { color: var(--ink-dim); }
 .foot a:hover { color: var(--c-backend); }
 .foot .build-marker {

@@ -324,7 +324,7 @@ export const ATMOSPHERE: Record<ThemeMode, Atmosphere> = {
      * direction is chosen so a box's three visible faces land in three
      * different bands. Normalised it is (0.635, 0.718, 0.284), so +X → 1.00,
      * +Y → 1.00 plus the up-face lift, +Z → 0.55, and everything else → 0.
-     * That is the SimCity three-tone: roof, sun wall, half-lit wall, shade.
+     * The three-tone facet split is roof, sun wall, half-lit wall, shade.
      *
      * The previous (0.524, 0.751, 0.402) put +X and +Y in the same band and
      * left +Z at 0.402 — eighteen thousandths under the old single threshold —

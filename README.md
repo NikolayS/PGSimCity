@@ -4,6 +4,13 @@
 
 **Live: <https://nikolays.github.io/PGSimCity/>**
 
+PGSimCity is an independent, non-commercial educational visualization of
+PostgreSQL internals. It is not affiliated with, sponsored, endorsed, or
+approved by Electronic Arts Inc. SimCity is a trademark of Electronic Arts Inc.
+
+This project contains no SimCity code, assets, artwork, logos, characters,
+audio, or game content.
+
 [![Hacker News](https://img.shields.io/badge/Hacker_News-%231-FF6600?logo=ycombinator&logoColor=white)](https://news.ycombinator.com/item?id=49063754)
 
 > 🍊 **#1 on [Hacker News](https://news.ycombinator.com/item?id=49063754)** — thanks to everyone who

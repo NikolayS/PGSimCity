@@ -21,6 +21,7 @@ import { createSim } from '../sim/model'
 import { SCENARIOS } from '../sim/scenarios'
 import { DEFAULT_KNOBS } from '../core/types'
 import type { Knobs } from '../core/types'
+import { NO_EA_CONTENT, TRADEMARK_NOTICE } from '../ui/legal'
 import { el, setText } from '../ui/uikit'
 import { fmtNum } from '../core/util'
 
@@ -131,7 +132,7 @@ const top = el(
     'a',
     { class: 'brand', href: '../', title: 'Back to the city' },
     el('span', { text: 'PG' }),
-    el('b', { text: 'SIMCITY' }),
+    el('b', { text: 'PGSimCity'.slice(2) }),
     el('i', { text: '/' }),
     el('strong', { text: 'DIAGNOSE' }),
   ),
@@ -737,6 +738,8 @@ function footer(): HTMLElement {
     el('p', {
       html: 'Inspired by <a href="https://pgstats.dev/" target="_blank" rel="noreferrer noopener">Alexey Lesovsky\'s PostgreSQL Observability map</a>. Names verified against the <a href="https://www.postgresql.org/docs/current/monitoring-stats.html" target="_blank" rel="noreferrer noopener">PostgreSQL 18 manual</a>. Apache-2.0.',
     }),
+    el('p', { class: 'foot__legal', text: TRADEMARK_NOTICE }),
+    el('p', { class: 'foot__legal', text: NO_EA_CONTENT }),
     el('p', {
       class: 'build-marker',
       text: `PGSimCity ${BUILD_LABEL}`,

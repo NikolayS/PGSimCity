@@ -5,6 +5,7 @@ import { DESTINATIONS } from '../core/destinations'
 import { COLOR, onThemeMode } from '../core/theme'
 import type { Bus, ColorKey } from '../core/types'
 import { MODE_IDS } from './mode-exits'
+import { NO_EA_CONTENT, TRADEMARK_NOTICE } from './legal'
 import { el, icon } from './uikit'
 import { emitLoose } from './hud'
 import type { UiContext, UiModule } from './uikit'
@@ -228,6 +229,13 @@ export function createHelp(ctx: UiContext): UiModule {
     text: 'How to read the city',
     'data-help-section': 'reading',
   })
+  const legalSection = el(
+    'section',
+    { class: 'help-legal', 'data-help-section': 'legal' },
+    el('h3', { class: 'pg-eyebrow help-h', text: 'Independence & trademarks' }),
+    el('p', { class: 'help-legal__notice', text: TRADEMARK_NOTICE }),
+    el('p', { class: 'help-legal__content', text: NO_EA_CONTENT }),
+  )
   const helpBody = el(
     'div',
     { class: 'pg-panel__body help-body pg-scroll' },
@@ -267,6 +275,7 @@ export function createHelp(ctx: UiContext): UiModule {
         '<a href="https://github.com/NikolayS/PGSimCity/issues/new" target="_blank" rel="noopener">open an issue</a> or send a ' +
         '<a href="https://github.com/NikolayS/PGSimCity/pulls" target="_blank" rel="noopener">pull request</a>.',
     }),
+    legalSection,
     el('p', {
       class: 'build-marker help-build',
       text: `PGSimCity ${BUILD_LABEL}`,
@@ -274,7 +283,11 @@ export function createHelp(ctx: UiContext): UiModule {
     }),
   )
 
-  const jumpButton = (label: string, target: 'controls' | 'legend' | 'reading', section: HTMLElement) =>
+  const jumpButton = (
+    label: string,
+    target: 'controls' | 'legend' | 'reading' | 'legal',
+    section: HTMLElement,
+  ) =>
     el(
       'button',
       {
@@ -291,6 +304,7 @@ export function createHelp(ctx: UiContext): UiModule {
     jumpButton('Controls', 'controls', controlsSection),
     jumpButton('Colours', 'legend', legendHeading),
     jumpButton('Reading', 'reading', readingHeading),
+    jumpButton('Legal', 'legal', legalSection),
   )
 
   const dialog = el(
@@ -373,8 +387,17 @@ export function createHelp(ctx: UiContext): UiModule {
   const loose = bus as unknown as LooseBus
   cleanup.push(
     loose.on('ui:help', (p) => {
-      const req = p as { open?: boolean } | undefined
+      const req = p as { open?: boolean; section?: 'controls' | 'legend' | 'reading' | 'legal' } | undefined
       setOpen(req && typeof req.open === 'boolean' ? req.open : !open)
+      if (req?.section) {
+        const section = {
+          controls: controlsSection,
+          legend: legendHeading,
+          reading: readingHeading,
+          legal: legalSection,
+        }[req.section]
+        requestAnimationFrame(() => section.scrollIntoView({ block: 'start' }))
+      }
     }),
     loose.on('ui:escape', (p) => {
       if (!open) return

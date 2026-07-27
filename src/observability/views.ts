@@ -394,9 +394,9 @@ const database: ProjectionFn = (s, c, mode) => {
     ],
     rows: [
       {
-        key: 'simcity',
+        key: 'pgsimcity',
         cells: {
-          datname: 'simcity',
+          datname: 'pgsimcity',
           numbackends: String(s.stats.activeBackends),
           xact_commit: ctr(t.xactCommit, r.xactCommit, mode),
           xact_rollback: ctr(t.xactRollback, r.xactRollback, mode),
@@ -985,7 +985,7 @@ const slots: ProjectionFn = (s) => {
       {
         key: 'sub',
         cells: {
-          slot_name: 'simcity_sub',
+          slot_name: 'pgsimcity_sub',
           slot_type: 'logical',
           active: { v: 't', tone: 'ok' },
           confirmed_flush_lsn: { v: fmtLsn(s.replication.logicalSlotLsn), tone: 'accent' },

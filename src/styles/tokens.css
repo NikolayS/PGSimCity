@@ -372,6 +372,13 @@ body {
   color: var(--c-backend);
   font-weight: 600;
 }
+.boot-legal {
+  width: min(560px, calc(100vw - 40px));
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
 .boot-sub {
   margin: 0;
   color: var(--ink-faint);
