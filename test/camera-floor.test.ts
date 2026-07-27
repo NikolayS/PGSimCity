@@ -4,12 +4,9 @@ import { fileURLToPath } from 'node:url'
 
 /* A Hacker News visitor reported the screen going blank when they zoomed in.
  * The camera was dollying inside the buildings it was looking at, so every
- * surface in frame was back-faced. The manual dolly is now clamped at
- * MIN_DOLLY_DIST, but six other paths -- focus, presets, tweens, the plan
- * framing -- clamp at MIN_DIST, which is well inside the range the city stops
- * rendering in. No authored spec is currently that close. This keeps it that
- * way, because the failure is silent and total: you do not get a glitch, you
- * get nothing, with no clue how to get back. */
+ * surface in frame was back-faced. One floor now governs manual dolly, focus,
+ * presets, tweens and plan framing. This keeps every authored framing outside
+ * the measured blank range. */
 
 const read = (rel: string): string =>
   readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
@@ -22,11 +19,12 @@ function constant(src: string, name: string): number {
 
 describe('camera never reaches the blank range', () => {
   const camera = read('../src/engine/camera.ts')
-  const floor = constant(camera, 'MIN_DOLLY_DIST')
+  const floor = constant(camera, 'MIN_DIST')
 
-  it('keeps a readable floor on the manual dolly', () => {
+  it('uses one readable floor for every orbit framing path', () => {
     // Measured: the readable city disappears from about 16 units inward.
     expect(floor).toBeGreaterThanOrEqual(16)
+    expect(camera).not.toContain('MIN_DOLLY_DIST')
   })
 
   it('has no authored focus spec closer than that floor', () => {

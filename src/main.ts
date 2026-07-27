@@ -50,6 +50,7 @@ import { createInspector } from './ui/panel'
 import { createTour } from './ui/tour'
 import { createSearch } from './ui/search'
 import { createTouchpad } from './ui/touchpad'
+import { createZoomContext } from './ui/zoom-context'
 import { BOOT_STEPS, failBoot, finishBoot, presentBootStep } from './ui/boot'
 import type { UiContext, UiModule } from './ui/uikit'
 
@@ -222,6 +223,7 @@ async function boot(): Promise<void> {
     /* Right-click. The camera gave up that button when rotation moved to
      * shift-drag, which is what made a contextual menu possible at all. */
     createContextMenu({ dom: renderer.domElement, picker, registry, bus, rig }),
+    createZoomContext({ dom: renderer.domElement, picker, registry, rig }),
   ]
   void import('./ui/anatomy').then(({ createAnatomy }) => ui.push(createAnatomy(uiCtx))) // PAGE + DATA-DIRECTORY ANATOMY WIRING
 

@@ -192,6 +192,15 @@ describe('map camera mouse controls', () => {
     }
   })
 
+  it('keeps scripted component focus outside the same readable floor', () => {
+    fixture.rig.focusOn(
+      { target: [0, 0, 0], distance: 8, dir: [0, 1, 0] },
+      { instant: true },
+    )
+
+    expect(fixture.camera.position.distanceTo(fixture.rig.pivot)).toBeCloseTo(24, 8)
+  })
+
   it('announces fly controls on entry, not after returning to orbit', () => {
     const messages: string[] = []
     fixture.bus.on('toast', ({ text }) => messages.push(text))

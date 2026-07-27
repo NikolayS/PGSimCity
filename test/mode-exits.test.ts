@@ -13,6 +13,7 @@ import { ENTERABLE_MODE_IDS } from '../src/ui/mode-exits'
 import { createSearch } from '../src/ui/search'
 import { createTour } from '../src/ui/tour'
 import { createTouchpad } from '../src/ui/touchpad'
+import { createZoomContext } from '../src/ui/zoom-context'
 import type { UiContext, UiModule } from '../src/ui/uikit'
 import type { WalkController } from '../src/engine/walk'
 import { installTestDom } from './dom'
@@ -74,6 +75,17 @@ describe('enterable mode exits', () => {
           home: () => {},
           plan: () => {},
         } as unknown as Parameters<typeof createContextMenu>[0]['rig'],
+      }),
+      createZoomContext({
+        dom: canvas as unknown as HTMLElement,
+        picker: { pick: () => null },
+        registry: ctx.registry,
+        rig: {
+          camera,
+          mode: 'orbit',
+          pivot: { x: 0, y: 0, z: 0 },
+          home: () => {},
+        } as unknown as Parameters<typeof createZoomContext>[0]['rig'],
       }),
     ]
     document.body.append(createCityExit())

@@ -1,0 +1,131 @@
+/*
+ * Close-view orientation is a caption, not a panel: no enclosing surface,
+ * no rail, and no city-sized click target. Text shadows keep the three quiet
+ * lines legible over both daylight masonry and night geometry.
+ */
+.zoom-context {
+  --zoom-context-accent: var(--c-backend);
+  position: fixed;
+  z-index: 8;
+  left: 50%;
+  bottom: calc(70px + var(--safe-b));
+  width: min(680px, calc(100vw - 2 * var(--hud-gap) - var(--safe-l) - var(--safe-r)));
+  transform: translateX(-50%);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 18px;
+  pointer-events: none;
+  color: var(--ink);
+}
+
+.zoom-context[hidden] {
+  display: none;
+}
+
+.zoom-context[data-district='clients'] { --zoom-context-accent: var(--c-client); }
+.zoom-context[data-district='backends'] { --zoom-context-accent: var(--c-backend); }
+.zoom-context[data-district='shmem'] { --zoom-context-accent: var(--c-shmem); }
+.zoom-context[data-district='wal'] { --zoom-context-accent: var(--c-wal); }
+.zoom-context[data-district='storage'] { --zoom-context-accent: var(--c-storage); }
+.zoom-context[data-district='maintenance'] { --zoom-context-accent: var(--c-vacuum); }
+.zoom-context[data-district='replication'] { --zoom-context-accent: var(--c-replication); }
+.zoom-context[data-district='planner'] { --zoom-context-accent: var(--c-storage); }
+
+.zoom-context__copy {
+  min-width: 0;
+  padding-left: 12px;
+  border-left: 2px solid var(--zoom-context-accent);
+  display: grid;
+  gap: 2px;
+  text-shadow:
+    0 1px 2px var(--bg-panel-solid),
+    0 0 12px var(--bg-panel-solid),
+    0 0 20px var(--bg-panel-solid);
+}
+
+.zoom-context__eyebrow {
+  color: var(--zoom-context-accent);
+  font: 650 var(--fs-micro) / 1.2 var(--f-mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.zoom-context__name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: var(--fs-xl);
+  font-weight: 650;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zoom-context__role {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-dim);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zoom-context__exit {
+  min-width: var(--tap);
+  min-height: var(--tap);
+  padding: 0 12px;
+  border: 1px solid var(--line-soft);
+  color: var(--ink);
+  background: var(--bg-panel);
+  font: 600 var(--fs-xs) / 1 var(--f-ui);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.zoom-context__exit:hover,
+.zoom-context__exit:focus-visible {
+  border-color: var(--zoom-context-accent);
+  outline: 0;
+}
+
+.zoom-context__exit kbd {
+  margin-left: 2px;
+  color: var(--ink-faint);
+  font: 600 var(--fs-micro) / 1 var(--f-mono);
+}
+
+@media (max-width: 700px) {
+  .zoom-context {
+    bottom: calc(116px + var(--safe-b));
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .zoom-context__name,
+  .zoom-context__role {
+    white-space: normal;
+  }
+
+  .zoom-context__name {
+    font-size: var(--fs-lg);
+  }
+
+  .zoom-context__role {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .zoom-context__exit {
+    justify-self: start;
+  }
+
+  .zoom-context__exit kbd {
+    display: none;
+  }
+}

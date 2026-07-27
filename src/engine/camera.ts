@@ -42,9 +42,8 @@ interface LooseBus {
  * Tuning. Every number here is a feel decision.
  * ------------------------------------------------------------------------*/
 
-const MIN_DIST = 8
-/** The central plaza loses all readable geometry below this manual dolly range. */
-const MIN_DOLLY_DIST = 24
+/** The central plaza loses all readable geometry below this orbit range. */
+const MIN_DIST = 24
 /** Far enough out to hold the whole plate — which is now ~1.3 km corner to corner. */
 const MAX_DIST = 1650
 /** Never flip over the poles; 3.05 rad lets you get well under the city to
@@ -699,7 +698,7 @@ export function createCameraRig(
   function applyZoom(): void {
     if (pendingZoom === 1) return
     const dOld = distT
-    const dNew = clamp(dOld * pendingZoom, MIN_DOLLY_DIST, MAX_DIST)
+    const dNew = clamp(dOld * pendingZoom, MIN_DIST, MAX_DIST)
     pendingZoom = 1
     if (dNew === dOld) return
 

@@ -16,6 +16,7 @@ export const MODE_IDS = {
   help: 'help',
   palette: 'command-palette',
   contextMenu: 'context-menu',
+  closeZoom: 'close-zoom',
 } as const
 
 export type ModeId = (typeof MODE_IDS)[keyof typeof MODE_IDS]
