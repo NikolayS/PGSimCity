@@ -337,6 +337,13 @@
 .hud-walk__label {
   display: none;
 }
+.hud-walk.is-active {
+  width: auto;
+  padding-inline: 10px;
+}
+.hud-walk.is-active .hud-walk__label {
+  display: inline;
+}
 
 /* --- view and destinations ------------------------------------------------ */
 
@@ -576,10 +583,25 @@
 }
 
 .hud-now {
+  pointer-events: auto;
+  appearance: none;
   flex: 0 0 auto;
   width: 178px;
   display: grid;
   gap: 5px;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+}
+.hud-now.is-live {
+  cursor: pointer;
+}
+.hud-now:focus-visible {
+  outline: 2px solid var(--c-backend);
+  outline-offset: 3px;
 }
 .hud-now__row {
   display: flex;
@@ -617,6 +639,15 @@
 }
 .hud-now.is-live .hud-now__name {
   color: var(--c-backend);
+}
+.hud-now__stop {
+  color: var(--c-backend);
+  font-family: var(--f-mono);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-align: right;
+  text-transform: uppercase;
 }
 
 /* ==========================================================================
@@ -1130,6 +1161,9 @@ body.pg-labels-off #labels-root {
     display: inline-flex;
     flex: 0 0 auto;
     padding: 0 12px;
+  }
+  .hud-scn__toggle[data-mode-exit='scenario'] {
+    min-height: var(--tap);
   }
   /* The rail is a third row, and only when it is asked for. Thirteen chips are
      worth more than a third of the screen only while you are choosing one. */

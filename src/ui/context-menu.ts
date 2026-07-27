@@ -4,6 +4,7 @@ import type { Registry } from '../core/registry'
 import type { Bus } from '../core/types'
 import type { CameraRig } from '../engine/camera'
 import type { PickerApi, PickHit } from '../engine/picker'
+import { MODE_IDS } from './mode-exits'
 import { el } from './uikit'
 import type { UiModule } from './uikit'
 
@@ -223,8 +224,23 @@ export function createContextMenu(opts: ContextMenuOptions): UiModule {
     currentHit = picked?.id === 'world.ground' ? null : picked
     const actions = contextActionIds(currentHit)
     const title = currentHit ? registry.get(currentHit.id)?.name ?? currentHit.id : 'View'
-    const heading = el('div', { class: 'pg-context__head', role: 'presentation', text: title })
-    buttons = actions.map((action) =>
+    const closeButton = el('button', {
+      class: 'pg-context__close',
+      type: 'button',
+      data: { modeExit: MODE_IDS.contextMenu },
+      text: 'Close',
+      role: 'menuitem',
+      tabindex: '-1',
+      'aria-label': 'Close context menu',
+      on: { click: () => close() },
+    })
+    const heading = el(
+      'div',
+      { class: 'pg-context__head', role: 'presentation' },
+      el('span', { class: 'pg-context__title', text: title }),
+      closeButton,
+    )
+    const actionButtons = actions.map((action) =>
       el('button', {
         class: 'pg-context__item',
         type: 'button',
@@ -235,7 +251,8 @@ export function createContextMenu(opts: ContextMenuOptions): UiModule {
         on: { click: () => run(action) },
       }),
     )
-    root.replaceChildren(heading, ...buttons)
+    buttons = [...actionButtons, closeButton]
+    root.replaceChildren(heading, ...actionButtons)
     lastFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
     root.hidden = false
     open = true

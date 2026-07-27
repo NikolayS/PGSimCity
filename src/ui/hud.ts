@@ -6,6 +6,7 @@ import { clamp, fmtBytes, fmtDuration, fmtNum } from '../core/util'
 import type { Bus, CameraMode, QualityLevel, SimApi, SimState } from '../core/types'
 import { SCENARIOS } from '../sim/scenarios'
 import { DISTRICT_BOUNDS } from '../world/layout'
+import { MODE_IDS, modeTokens } from './mode-exits'
 import { el, icon, setClass, setText, sparkline } from './uikit'
 import type { UiContext, UiModule } from './uikit'
 
@@ -328,6 +329,7 @@ export function createHud(ctx: UiContext): UiModule {
   /* ------------------------------ live state ----------------------------- */
 
   let cameraMode: CameraMode = 'orbit'
+  let cameraPreset: 'plan' | null = null
   let tourRunning = false
   let labelsOn = true
   let viewOpen = false
@@ -485,19 +487,33 @@ export function createHud(ctx: UiContext): UiModule {
     },
     'Source',
   )
+  const viewLabel = el('span', { text: 'View' })
   const viewBtn = el(
     'button',
     {
       class: 'pg-btn hud-tool hud-view-toggle',
       type: 'button',
+      data: { modeExit: modeTokens(MODE_IDS.fly, MODE_IDS.plan) },
       title: 'View, display, and destinations',
       'aria-label': 'Open view and destination controls',
       'aria-expanded': 'false',
       'aria-controls': 'hud-view-panel',
-      on: { click: () => setViewOpen(!viewOpen) },
+      on: {
+        click: () => {
+          if (cameraMode === 'fly') {
+            bus.emit('camera:mode', { mode: 'orbit' })
+            return
+          }
+          if (cameraPreset === 'plan') {
+            bus.emit('focus', { id: 'world.ground' })
+            return
+          }
+          setViewOpen(!viewOpen)
+        },
+      },
     },
     icon('eye', 15),
-    el('span', { text: 'View' }),
+    viewLabel,
   )
   const walkLabel = el('span', { class: 'hud-walk__label', text: 'Walk' })
   const walkBtn = el(
@@ -505,6 +521,7 @@ export function createHud(ctx: UiContext): UiModule {
     {
       class: 'pg-btn hud-tool hud-walk',
       type: 'button',
+      data: { modeExit: modeTokens(MODE_IDS.walk, MODE_IDS.swim) },
       title: 'Walk the city  (G)',
       'aria-label': 'Walk the city',
       'aria-pressed': 'false',
@@ -600,7 +617,7 @@ export function createHud(ctx: UiContext): UiModule {
     {
       class: 'pg-btn hud-view__action',
       type: 'button',
-      data: { viewAction: 'home' },
+      data: { viewAction: 'home', modeExit: MODE_IDS.plan },
       title: 'Establishing shot  (H)',
       on: {
         click: () => {
@@ -788,11 +805,19 @@ export function createHud(ctx: UiContext): UiModule {
   const nowName = el('span', { class: 'hud-now__name', text: 'No scenario' })
   const nowTime = el('span', { class: 'hud-now__time', text: 'free running' })
   const nowFill = el('i', { class: 'hud-now__fill' })
+  const nowStop = el('span', { class: 'hud-now__stop', text: '' })
   const nowBox = el(
-    'div',
-    { class: 'hud-now' },
+    'button',
+    {
+      class: 'hud-now',
+      type: 'button',
+      disabled: true,
+      data: { modeExit: MODE_IDS.scenario },
+      on: { click: () => stopScenario() },
+    },
     el('div', { class: 'hud-now__row' }, nowName, nowTime),
     el('div', { class: 'hud-now__bar' }, nowFill),
+    nowStop,
   )
 
   /* Phone only: the scenario rail is thirteen chips long and there is no width
@@ -804,13 +829,19 @@ export function createHud(ctx: UiContext): UiModule {
     {
       class: 'pg-btn hud-scn__toggle',
       type: 'button',
+      data: { modeExit: MODE_IDS.scenario },
       'aria-expanded': 'false',
       'aria-controls': 'hud-scenarios',
       title: 'Show or hide the scenario list',
-      on: { click: () => setScenariosOpen(!scenariosOpen) },
+      on: {
+        click: () => {
+          if (sim.state.scenario) stopScenario()
+          else setScenariosOpen(!scenariosOpen)
+        },
+      },
     },
     el('span', { class: 'hud-scn__toggle-icon', text: '◈' }),
-    el('span', { text: 'Scenarios' }),
+    el('span', { class: 'hud-scn__toggle-label', text: 'Scenarios' }),
   )
 
   const scnWrap = el(
@@ -847,10 +878,10 @@ export function createHud(ctx: UiContext): UiModule {
   function setViewOpen(next: boolean): void {
     viewOpen = next
     viewPanel.hidden = !next
-    setClass(viewBtn, 'is-active', next)
     setClass(transport, 'is-view-open', next)
     viewBtn.setAttribute('aria-expanded', String(next))
     if (next && scenariosOpen) setScenariosOpen(false)
+    paintViewButton()
   }
 
   /* ---- phone layout: instruments on top, every control in the dock -------- */
@@ -1098,6 +1129,12 @@ export function createHud(ctx: UiContext): UiModule {
     sim.runScenario(sim.state.scenario === id ? null : id)
   }
 
+  function stopScenario(): void {
+    if (!sim.state.scenario) return
+    sim.runScenario(null)
+    setScenariosOpen(false)
+  }
+
   function toggleTour(): void {
     if (tourRunning) bus.emit('tour:stop', {})
     else bus.emit('tour:start', {})
@@ -1287,6 +1324,11 @@ export function createHud(ctx: UiContext): UiModule {
       walkBtn.setAttribute('aria-label', walking ? 'Exit walk mode' : 'Walk the city')
       walkBtn.title = walking ? 'Exit walk mode  (G)' : 'Walk the city  (G)'
       setText(walkLabel, walking ? 'Exit' : 'Walk')
+      paintViewButton()
+    }),
+    bus.on('camera:preset', ({ preset }) => {
+      cameraPreset = preset
+      paintViewButton()
     }),
     bus.on('tour:start', () => {
       tourRunning = true
@@ -1412,6 +1454,28 @@ export function createHud(ctx: UiContext): UiModule {
 
   let lastScenario: string | null | undefined
 
+  function paintViewButton(): void {
+    const label =
+      cameraMode === 'fly' ? 'Exit fly' : cameraPreset === 'plan' ? 'Exit overview' : 'View'
+    const exiting = label !== 'View'
+    setText(viewLabel, label)
+    setClass(viewBtn, 'is-active', viewOpen || exiting)
+    viewBtn.setAttribute(
+      'aria-label',
+      cameraMode === 'fly'
+        ? 'Exit fly mode'
+        : cameraPreset === 'plan'
+          ? 'Exit overhead view'
+          : 'Open view and destination controls',
+    )
+    viewBtn.title =
+      cameraMode === 'fly'
+        ? 'Exit fly mode'
+        : cameraPreset === 'plan'
+          ? 'Return to the city view'
+          : 'View, display, and destinations'
+  }
+
   function paintScenario(): void {
     const s = sim.state
     if (s.scenario !== lastScenario) {
@@ -1426,12 +1490,20 @@ export function createHud(ctx: UiContext): UiModule {
     if (!def) {
       setText(nowName, 'No scenario')
       setText(nowTime, 'free running')
+      setText(nowStop, '')
       nowFill.style.width = '0%'
       setClass(nowBox, 'is-live', false)
+      nowBox.disabled = true
+      setText(scnBtn.querySelector<HTMLElement>('.hud-scn__toggle-label')!, 'Scenarios')
+      scnBtn.title = 'Show or hide the scenario list'
       return
     }
     setClass(nowBox, 'is-live', true)
+    nowBox.disabled = false
     setText(nowName, def.name)
+    setText(nowStop, 'Stop')
+    setText(scnBtn.querySelector<HTMLElement>('.hud-scn__toggle-label')!, 'Stop scenario')
+    scnBtn.title = 'Stop the running scenario and restore the previous settings'
     if (def.duration > 0) {
       setText(nowTime, `${fmtClock(s.scenarioT)} / ${fmtClock(def.duration)}`)
       nowFill.style.width = `${clamp(s.scenarioT / def.duration, 0, 1) * 100}%`

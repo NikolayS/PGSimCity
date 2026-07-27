@@ -128,6 +128,19 @@ describe('context menu interaction', () => {
     expect(focused).toHaveBeenCalledWith({ id: 'storage.table.accounts' })
   })
 
+  it('closes from the visible header control', () => {
+    canvas.dispatchEvent(event('contextmenu', { clientX: 200, clientY: 180 }))
+    const root = document.querySelector<HTMLElement>('.pg-context')!
+    const close = root.querySelector<HTMLButtonElement>('[data-mode-exit="context-menu"]')!
+
+    expect(root.hidden).toBe(false)
+    expect(close.textContent).toBe('Close')
+    root.dispatchEvent(event('keydown', { key: 'End', shiftKey: false }))
+    expect(document.activeElement).toBe(close)
+    close.click()
+    expect(root.hidden).toBe(true)
+  })
+
   it('opens on a stationary long-press but cancels as soon as one-finger pan begins', () => {
     vi.useFakeTimers()
     canvas.dispatchEvent(

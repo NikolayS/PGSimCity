@@ -19,16 +19,44 @@
 
 .pg-context__head {
   max-width: 278px;
-  padding: 6px 13px 8px;
-  overflow: hidden;
+  min-height: 32px;
+  padding: 0 5px 0 13px;
   color: var(--ink-faint);
   font-family: var(--f-mono);
   font-size: var(--fs-micro);
   font-weight: 600;
   letter-spacing: 0.12em;
-  text-overflow: ellipsis;
   text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pg-context__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.pg-context__close {
+  appearance: none;
+  min-height: 32px;
+  margin-left: auto;
+  padding: 0 8px;
+  border: 0;
+  color: var(--ink-faint);
+  background: transparent;
+  font: 600 var(--fs-micro) var(--f-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.pg-context__close:hover,
+.pg-context__close:focus-visible {
+  color: var(--ink);
+  outline: 0;
 }
 
 .pg-context__item {
@@ -61,8 +89,21 @@
 }
 
 @media (pointer: coarse) {
+  .pg-context__head,
+  .pg-context__close {
+    min-height: var(--tap);
+  }
+
   .pg-context__item {
     min-height: var(--tap);
     padding-block: 11px;
+  }
+}
+
+@media (max-width: 700px) {
+  .pg-context__head,
+  .pg-context__close,
+  .pg-context__item {
+    min-height: var(--tap);
   }
 }

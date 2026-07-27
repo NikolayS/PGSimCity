@@ -70,6 +70,27 @@ body {
 .brand strong { color: var(--ink); font-weight: 600; }
 .brand:hover { color: var(--c-backend); }
 
+.city-exit {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line-soft);
+  color: var(--ink);
+  background: var(--bg-raise);
+  font-family: var(--f-mono);
+  font-size: var(--fs-xs);
+  font-weight: 650;
+  text-decoration: none;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.city-exit:hover { color: var(--c-backend); border-color: var(--c-backend); }
+.city-exit:focus-visible { outline: 2px solid var(--c-backend); outline-offset: 2px; }
+.city-exit__arrow { color: var(--c-backend); font-size: var(--fs-md); }
+.city-exit__short { display: none; }
+
 .clock { display: flex; gap: 6px; margin-left: auto; flex: 0 0 auto; }
 
 /* ------------------------------------------------------------ vitals */
@@ -815,6 +836,10 @@ body {
 }
 
 @media (max-width: 720px) {
+  .top { column-gap: 8px; }
+  .city-exit { padding-inline: 9px; }
+  .city-exit__wide { display: none; }
+  .city-exit__short { display: inline; }
   .lede { font-size: var(--fs-md); }
   .evidence { grid-template-columns: repeat(auto-fit, minmax(136px, 1fr)); }
   .card h1 { font-size: 20px; }

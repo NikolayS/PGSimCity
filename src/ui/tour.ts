@@ -3,6 +3,7 @@ import '../styles/tour.css'
 import type { Knobs, TourChapter } from '../core/types'
 import { clamp } from '../core/util'
 import { SCENARIO_NARRATION_SECONDS } from '../sim/scenarios'
+import { MODE_IDS } from './mode-exits'
 import { el, icon, setClass, setText } from './uikit'
 import type { UiContext, UiModule } from './uikit'
 
@@ -314,6 +315,7 @@ export function createTour(ctx: UiContext): UiModule {
     {
       class: 'pg-btn tour-btn tour-btn--exit',
       type: 'button',
+      data: { modeExit: MODE_IDS.tour },
       title: 'End the tour and restore every setting  (Esc)',
       on: { click: () => bus.emit('tour:stop', {}) },
     },

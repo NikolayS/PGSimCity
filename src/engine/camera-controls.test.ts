@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createBus } from '../core/bus'
+import type { Bus } from '../core/types'
 import { installTestDom } from '../../test/dom'
 import { createCameraRig, type CameraRig } from './camera'
 
@@ -13,6 +14,7 @@ vi.mock('../world/slonik', () => ({
 interface RigFixture {
   camera: THREE.PerspectiveCamera
   dom: HTMLElement
+  bus: Bus
   rig: CameraRig
 }
 
@@ -84,8 +86,9 @@ describe('map camera mouse controls', () => {
       hasPointerCapture: { value: () => false },
     })
     const camera = new THREE.PerspectiveCamera(50, 4 / 3, 0.1, 3000)
-    const rig = createCameraRig(camera, dom, createBus())
-    fixture = { camera, dom, rig }
+    const bus = createBus()
+    const rig = createCameraRig(camera, dom, bus)
+    fixture = { camera, dom, bus, rig }
   })
 
   afterEach(() => {
@@ -125,5 +128,17 @@ describe('map camera mouse controls', () => {
     expect(fixture.rig.pivot.distanceTo(pivotBefore)).toBeLessThan(1e-8)
     expect(fixture.camera.position.distanceTo(positionBefore)).toBeLessThan(1e-8)
     expect(fixture.camera.quaternion.angleTo(rotationBefore)).toBeLessThan(1e-8)
+  })
+
+  it('announces fly controls on entry, not after returning to orbit', () => {
+    const messages: string[] = []
+    fixture.bus.on('toast', ({ text }) => messages.push(text))
+
+    fixture.rig.setMode('fly')
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toContain('Fly mode')
+
+    fixture.rig.setMode('orbit')
+    expect(messages).toHaveLength(1)
   })
 })

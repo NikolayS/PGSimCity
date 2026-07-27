@@ -2,6 +2,7 @@ import '../styles/touchpad.css'
 
 import type { Bus } from '../core/types'
 import type { WalkController } from '../engine/walk'
+import { MODE_IDS, modeTokens } from './mode-exits'
 import { el, setClass, setText } from './uikit'
 import type { UiModule } from './uikit'
 
@@ -73,6 +74,7 @@ export function createTouchpad(opts: TouchpadOptions): UiModule {
     {
       class: 'touchpad__exit',
       type: 'button',
+      data: { modeExit: modeTokens(MODE_IDS.walk, MODE_IDS.swim) },
       'aria-label': 'Exit walk mode',
       on: {
         click: () => bus.emit('camera:mode', { mode: 'orbit' }),

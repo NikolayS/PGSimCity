@@ -1107,6 +1107,11 @@
     display: none;
   }
 
+  .an-overlay__close {
+    width: var(--tap);
+    height: var(--tap);
+  }
+
   .an-tabs {
     order: 3;
     width: 100%;
