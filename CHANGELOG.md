@@ -9,7 +9,7 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
-## [1.0.0] — 2026-07-28
+## [0.10.0] — 2026-07-28
 
 Real PostgreSQL behind the query surface, and a 2D view that draws the
 architecture rather than a row of boxes.
