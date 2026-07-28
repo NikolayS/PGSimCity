@@ -972,27 +972,37 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     group.add(crown)
   }
 
-  if (quality.level !== 'low') {
-    for (const [cx, cz, cr, ch, col] of CONES) {
-      const g = new THREE.ConeGeometry(cr, ch, 18, 1, true)
-      geos.push(g)
-      const m = new THREE.MeshBasicMaterial({
-        color: col,
-        transparent: true,
-        opacity: 0.05,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-        forceSinglePass: true,
-      })
-      mats.push(m)
-      const cone = new THREE.Mesh(g, m)
-      cone.position.set(cx, ch / 2, cz)
-      cone.renderOrder = 2
-      cone.raycast = () => {}
-      group.add(cone)
-    }
+  const coneLayer = new THREE.Group()
+  coneLayer.name = 'ground.lightCones'
+  for (const [cx, cz, cr, ch, col] of CONES) {
+    const g = new THREE.ConeGeometry(cr, ch, 18, 1, true)
+    geos.push(g)
+    const m = new THREE.MeshBasicMaterial({
+      color: col,
+      transparent: true,
+      opacity: 0.05,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      forceSinglePass: true,
+    })
+    mats.push(m)
+    const cone = new THREE.Mesh(g, m)
+    cone.position.set(cx, ch / 2, cz)
+    cone.renderOrder = 2
+    cone.raycast = () => {}
+    coneLayer.add(cone)
   }
+
+  let coneLayerAttached = false
+  function syncConeLayer(): void {
+    const next = quality.level !== 'low' && quality.level !== 'reduced'
+    if (next === coneLayerAttached) return
+    coneLayerAttached = next
+    if (next) group.add(coneLayer)
+    else group.remove(coneLayer)
+  }
+  syncConeLayer()
 
   /* ---------------------------------------------------------------------
    * 5. Registration.
@@ -1036,6 +1046,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   let clock = 0
 
   function update(dt: number, _sim: SimState, _t: number): void {
+    syncConeLayer()
     // Ambient, not simulated: the survey sweep keeps running while the
     // simulation is paused so the model never looks dead. The mast lights do
     // not move at all — they are lit windows, and lit windows hold still.
@@ -1048,6 +1059,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     for (const m of mats) m.dispose()
     // The edge field is ours alone — the theme cache never saw it.
     edgeTex.dispose()
+    coneLayer.clear()
     group.clear()
   }
 

@@ -196,9 +196,6 @@
 :root[data-theme="day"] .tour-narrate {
   background: var(--bg-panel);
 }
-:root[data-theme="day"] body.pg-tour::after {
-  background: rgba(24, 34, 46, 0.18);
-}
 :root[data-theme="day"] .tour-step::after {
   background: rgba(24, 34, 46, 0.2);
 }
