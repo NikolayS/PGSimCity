@@ -218,6 +218,11 @@ affecting the application.
 
 ---
 
+## Roadmap
+
+What is being worked on, what is known to be wrong, and what is deliberately not
+being done: [ROADMAP.md](ROADMAP.md).
+
 ## Licence
 
 [Apache-2.0](LICENSE). Copyright 2026 Nikolay Samokhvalov. See [NOTICE](NOTICE).
