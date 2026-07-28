@@ -60,26 +60,6 @@ body.pg-tour #hud-bottom:focus-within {
   opacity: 1;
 }
 
-/* A flat scrim keeps the narration readable without adding an effect layer. */
-body.pg-tour::after {
-  content: '';
-  position: fixed;
-  inset: 0;
-  z-index: 3;
-  pointer-events: none;
-  background: rgba(2, 4, 9, 0.38);
-  animation: tour-vignette var(--dur-slow) var(--ease) both;
-}
-
-@keyframes tour-vignette {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
 /* ==========================================================================
    THE CAPTION CARD
    ========================================================================*/
