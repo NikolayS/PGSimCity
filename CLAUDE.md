@@ -4,8 +4,10 @@
 
 PGSimCity is an explorable 3D city that teaches how PostgreSQL works. The
 buildings and motion represent real mechanisms; the numbers are deliberately
-scaled so people can see those mechanisms operate. It is a model, not an
-emulator, and no PostgreSQL source code runs in the browser.
+scaled so people can see those mechanisms operate. The city is a model, not an
+emulator, and no PostgreSQL source code runs in the 3D application. The separate
+2D surface at `observability/` may run opt-in PostgreSQL WebAssembly under the
+dependency and loading rules below.
 
 Use **PGSimCity** in prose and headings and `pgsimcity` for package-style names.
 Repository: `NikolayS/PGSimCity`.
@@ -50,16 +52,21 @@ event bus, registry, camera rig, renderer state, and flow controller.
 - Node.js 20 or newer for local development
 - WebGL2 in the browser
 
-three.js is the only bundled runtime dependency. Plausible's cookie-free
-analytics script is the sole allowed external runtime resource; do not add
-another runtime dependency, framework, CDN resource, remote font, binary asset,
-telemetry service, or analytics provider. No cookies, no consent banner, no
-fingerprinting, no personal data, no session recording, no third-party ad or
-tracking network. Aggregate, privacy-preserving page and interaction counts
-only. The shipped application remains a static bundle with no application
-server or database. Its only runtime network calls are Plausible pageview,
-engagement, and explicitly documented interaction events; analytics failure or
-blocking must never affect the application.
+three.js is the only bundled runtime dependency of the 3D application.
+PGlite is permitted only for the separate 2D surface at `observability/`. It
+must be split out of the city bundle, loaded only after explicit reader action,
+and never enter the city or Diagnose critical path. No other runtime dependency,
+framework, CDN resource, remote font, binary asset, telemetry service, or
+analytics provider may be added.
+
+Plausible's cookie-free analytics script is the sole allowed external runtime
+resource. No cookies, consent banner, fingerprinting, personal data, session
+recording, third-party ad, or tracking network. Aggregate, privacy-preserving
+page and interaction counts only. The shipped application remains a static
+site with no application server. The city and Diagnose surface make no
+application network calls beyond Plausible; the query surface may fetch its
+same-origin PGlite JavaScript, data, and WebAssembly assets after opt-in.
+Analytics or PGlite failure and blocking must never break the model path.
 
 ## Style Rules
 
@@ -225,8 +232,10 @@ silently replace another worktree's version of a file.
 7. **Geometry must be reviewed as content.** Buildings can teach a falsehood
    more persuasively than nearby text teaches the truth.
 8. **The dependency boundary stays small.** three.js remains the only bundled
-   runtime dependency. Plausible is the only external runtime service, and the
-   application remains a static site that works when analytics is unavailable.
+   runtime dependency of the 3D application. PGlite is allowed only as a lazy,
+   opt-in dependency of `observability/`; it must not grow the city bundle.
+   Plausible is the only external runtime service, and the application remains
+   a static site that works when analytics or PGlite is unavailable.
 
 ## Copyright
 

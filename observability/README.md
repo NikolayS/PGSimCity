@@ -93,6 +93,26 @@ These are hard constraints in the code, not aspirations.
    them. That absence is instructive: `pg_stat_statements` is not installed by
    default on a real server either.
 
+## Real PostgreSQL in Query flow
+
+Query flow keeps the six deterministic model statements as its zero-download
+path. A reader may explicitly load PGlite and type arbitrary SQL at a psql-like
+prompt. That in-memory PostgreSQL owns parsing and validation, catalogs, results,
+errors, and `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`. Its plan is converted to
+plain data and selects the closest route through the finite model grammar.
+
+The source distinction is repeated in labels, borders and texture. Solid green
+panels are measured by PostgreSQL; dashed cyan panels are scaled by the model.
+The real plan's shared hit/read counters remain beside the model trace's
+buffer-hit/read values so disagreement stays visible.
+
+Plans and buffer counts come from a rolled-back `EXPLAIN ANALYZE` preflight; the
+statement then runs for its result. PGlite has one connection. It cannot
+demonstrate concurrency, lock contention, replication, or a standby, so those
+remain modelled in the city. If its code, data, or WebAssembly asset is blocked,
+the page states that model mode is active and leaves the six-statement path
+working.
+
 ## Colour
 
 The palette comes from `src/styles/tokens.css` via a single `@import`, and the
@@ -100,8 +120,9 @@ subsystem accents agree with `src/core/theme.ts`: WAL amber, checkpointer pink,
 background writer teal, replication orange, vacuum violet, locks red. A reader
 who has learned the city's colour language must not be misinformed by this page.
 There is no remote font or CDN. The only runtime network calls are the aggregate,
-cookie-free Plausible analytics documented in the top-level README, and the page
-works unchanged when they are blocked.
+cookie-free Plausible analytics documented in the top-level README plus the
+same-origin PGlite assets fetched after explicit opt-in. Diagnose and the model
+path work when either is blocked.
 
 ## Files
 
@@ -114,6 +135,9 @@ works unchanged when they are blocked.
 | `src/observability/views.ts` | `SimState` → live `pg_stat_*` row projections |
 | `src/observability/paths.ts` | the symptoms, the decision tree, the verdicts |
 | `src/observability/ui.ts` | result grid, SQL block, knobs, vitals |
+| `src/observability/real-postgres.ts` | layout-free real plan, counter, result and error data |
+| `src/observability/real-postgres-runtime.ts` | lazy PGlite startup, schema seed and query execution |
+| `src/observability/real-postgres-ui.ts` | opt-in prompt and real/model provenance display |
 | `src/observability/style.css` | page styles, on the city's tokens |
 
 ## Run
@@ -142,6 +166,9 @@ the mechanism, via `../#/c/<component-id>`.
 
 ## Known limits
 
+* PGlite is a single-connection PostgreSQL. It cannot teach concurrency, lock
+  contention, replication, or standby behaviour; the Query flow says so beside
+  the opt-in control.
 * The model has one global xmin horizon rather than a per-session
   `backend_xmin`, so on the bloat path the abandoned session is that held
   snapshot drawn as the session holding it. Its age and its xmin are real; the

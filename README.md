@@ -55,7 +55,13 @@ is really charging them.
 
 ## A possible future
 
-Today the city uses a hand-written simulation of PostgreSQL’s mechanisms, which is what makes internals such as the clock sweep’s frame-by-frame victim choice observable. A real PostgreSQL compiled to WebAssembly — PGlite and similar projects embed the actual engine — would make query results and plans authoritative, but could expose only what PostgreSQL exposes through catalogs, `pg_stat_*` views, and `EXPLAIN`, not those internal steps. They answer different questions; a future hybrid could let real execution and plans drive the modelled interior, but that is a direction rather than a promise.
+The city uses a hand-written simulation of PostgreSQL’s mechanisms, which is
+what makes internals such as the clock sweep’s frame-by-frame victim choice
+observable. The separate Query flow offers an opt-in PGlite mode: real
+PostgreSQL supplies parsing, plans, catalogs, buffer counters, errors and
+results, while its plan drives the closest modelled interior path. The page
+labels the two sources separately because PostgreSQL exposes the former and not
+the latter.
 
 ---
 
@@ -74,9 +80,11 @@ npm run preview
 npm run typecheck
 ```
 
-No application server and no database. It is a static bundle; at runtime it
-makes only the analytics requests described below, and the whole application
-continues to work when those requests are blocked.
+There is no application server. It is a static bundle. The 3D city and Diagnose
+surface make only the analytics requests described below. Query flow may, after
+an explicit click, load the same-origin PGlite JavaScript, data and WebAssembly
+assets and run an in-memory PostgreSQL in the browser. The six-statement model
+continues to work when analytics or PGlite is blocked.
 
 ### Analytics and privacy
 
@@ -234,9 +242,10 @@ Three rules hold it together:
 3. **Structure is matte, meaning is neon.** Only emissive materials cross the
    bloom threshold, so anything that glows is carrying information.
 
-Stack: [three.js](https://threejs.org) r185, TypeScript, Vite. One bundled
-runtime dependency, no framework, and one external service: the cookie-free
-Plausible analytics described above.
+Stack: [three.js](https://threejs.org) r185, TypeScript, Vite. three.js is the
+3D application's only bundled runtime dependency. The separate 2D Query flow
+may lazy-load PGlite after reader opt-in. There is no framework, and Plausible
+analytics is the sole external service.
 
 `window.PGSIMCITY` in the browser console hands you
 `{ sim, registry, bus, rig, gfx, flows }`, if you would rather drive the city

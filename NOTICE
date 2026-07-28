@@ -20,3 +20,8 @@ refer to PostgreSQL itself.
 This product bundles third-party software distributed under its own license
 terms; see the dependency manifests (package.json, package-lock.json) and the
 license files shipped inside each dependency for details.
+
+The optional query surface bundles PGlite, copyright Electric DB Limited,
+licensed under the Apache License, Version 2.0. PGlite contains PostgreSQL code
+compiled to WebAssembly; PostgreSQL and modifications to it are distributed
+under the PostgreSQL License.
