@@ -111,24 +111,6 @@ cross-site identifier, and performs no session recording. Blocking
 `plausible.io` disables measurement without a consent flow, console exception,
 or loss of functionality.
 
-Plausible was chosen over GoatCounter because this task requires bounce rate and
-visit duration as first-class metrics as well as unique visitors, referrers, and
-event reporting. The selected Plausible script is about 3.0 kB uncompressed
-(about 1.5 kB transferred). Plausible Cloud requires a paid account after its
-trial; the AGPL-licensed Community Edition is free to self-host without a
-Plausible subscription. GoatCounter offers a free hosted tier for modest
-non-commercial use and a smaller tracker, but its standard aggregate reports do
-not provide both required engagement metrics.
-
-Plausible account setup is part of making the received events visible. Add
-`nikolays.github.io` as the site, then create custom-event goals whose names
-exactly match the eight names in the table above. After one event has arrived,
-add these recorded custom properties in **Settings → Custom Properties**:
-`entrypoint`, `source`, `paused`, `speed`, `panel`, `item`, `building`,
-`statement`, `table`, `playback`, `destination`, and `url`. Plausible receives
-events before those dashboard definitions exist, but does not display them or
-backfill goal counts until the matching goals and properties are configured.
-
 ---
 
 ## Controls
