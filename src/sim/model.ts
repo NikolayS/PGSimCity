@@ -1428,28 +1428,37 @@ export function createSim(bus: Bus): SimApi {
 
   function requestFlush(target: number): void {
     if (target > flushTarget) flushTarget = target
-    if (!flushing) startFlush()
+    if (!flushing) {
+      startFlush()
+      return
+    }
+    /* Fsync is visually stretched, but insertion rates are not. Release the
+     * requested write now; bytes above flushCovered ride the next fsync. */
+    wal.writeLsn = Math.max(wal.writeLsn, Math.min(target, wal.insertLsn))
+    wal.bufferBytes = Math.min(wal.bufferCapacity, wal.insertLsn - wal.writeLsn)
   }
 
   function drainMaintenanceWal(dt: number): void {
-    if (maintenanceWalPending > 0) {
+    let budget = Math.max(4096, 24 * 1024 * 1024 * dt)
+    while (maintenanceWalPending > 0 && budget > 0) {
       const gap = Math.max(0, wal.insertLsn - wal.writeLsn)
       const available = Math.max(0, wal.bufferCapacity - gap)
       // Maintenance inserts first, but may consume only half a refill; a large
-      // vacuum must not keep every client backend parked on WALWriteLock.
+      // vacuum must not keep every client backend parked on WALWriteLock. It may
+      // use more than one refill per tick when the writer keeps releasing pages.
       const chunk = Math.min(
         maintenanceWalPending,
         Math.min(available, wal.bufferCapacity * 0.5),
-        Math.max(4096, 24 * 1024 * 1024 * dt),
+        budget,
       )
-      if (chunk > 0) {
-        walInsert(chunk)
-        maintenanceWalPending -= chunk
-        maintenanceWalDrained += chunk
-        const fpiChunk = Math.min(maintenanceFpiPending, chunk)
-        maintenanceFpiPending -= fpiChunk
-        fpiAcc += fpiChunk
-      }
+      if (chunk <= 0) break
+      walInsert(chunk)
+      maintenanceWalPending -= chunk
+      maintenanceWalDrained += chunk
+      budget -= chunk
+      const fpiChunk = Math.min(maintenanceFpiPending, chunk)
+      maintenanceFpiPending -= fpiChunk
+      fpiAcc += fpiChunk
       if (maintenanceWalPending > 0) requestFlush(wal.insertLsn)
     }
   }

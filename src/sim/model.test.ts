@@ -96,3 +96,51 @@ describe('buffer cache', () => {
     expect(sim.state.buffers.dirtyEvictions).toBeGreaterThan(0)
   })
 })
+
+describe('WAL workload response', () => {
+  function measuredWalRate(tps: number): number {
+    const sim = createSim(createBus())
+    sim.setKnob('tps', tps)
+    sim.setKnob('writeRatio', 0.06)
+    advanceTo(sim, sim.state.t + 300)
+    const startLsn = sim.state.wal.insertLsn
+
+    advanceTo(sim, sim.state.t + 60)
+
+    return (sim.state.wal.insertLsn - startLsn) / 60
+  }
+
+  it('scales WAL bytes per second approximately with transaction rate', { timeout: 15_000 }, () => {
+    const lowRate = measuredWalRate(10)
+    const highRate = measuredWalRate(100)
+    const ratio = highRate / lowRate
+
+    expect(ratio, `10 TPS: ${lowRate}; 100 TPS: ${highRate}`).toBeGreaterThan(4)
+    expect(ratio).toBeLessThan(15)
+  })
+
+  it('drains wal_buffers after a sustained write load drops to 1 tps', () => {
+    const sim = createSim(createBus())
+    sim.setKnob('tps', 1000)
+    sim.setKnob('writeRatio', 0.06)
+
+    const highLoadStartLsn = sim.state.wal.insertLsn
+    advanceTo(sim, sim.state.t + 120)
+    expect(sim.state.wal.insertLsn - highLoadStartLsn).toBeGreaterThan(
+      sim.state.wal.bufferCapacity,
+    )
+
+    sim.setKnob('tps', 1)
+    advanceTo(sim, sim.state.t + 10)
+    let maxBufferBytes = 0
+    const deadline = sim.state.t + 50
+    while (sim.state.t < deadline) {
+      sim.update(1 / 30)
+      maxBufferBytes = Math.max(maxBufferBytes, sim.state.wal.bufferBytes)
+    }
+
+    expect(maxBufferBytes).toBeLessThan(
+      sim.state.wal.bufferCapacity * 0.1,
+    )
+  })
+})
