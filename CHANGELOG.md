@@ -9,6 +9,25 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.10.1] — 2026-07-28
+
+### Fixed
+
+- **The README was duplicated by a bad merge.** A restructuring branch was
+  merged into a main that had moved, and git produced both orderings rather than
+  one — `Controls`, `Camera`, `A possible future` and `Run it` each appeared
+  twice, and the file grew from 267 lines to 334. That was the README of a
+  tagged release. Deduplicated to 227 lines, keeping whichever copy held current
+  facts: the camera table now says shift-left-drag orbits and right-click opens
+  the context menu, which has been true since v0.6.0 and was still documented
+  wrongly in one of the surviving copies.
+- **The reordering that was asked for is applied.** What you are looking at and
+  what to try now come before build instructions and the analytics disclosure,
+  because almost nobody arriving from a link runs it locally. The
+  model-not-emulator point is made once rather than three times.
+
+---
+
 ## [0.10.0] — 2026-07-28
 
 Real PostgreSQL behind the query surface, and a 2D view that draws the
