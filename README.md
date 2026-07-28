@@ -2,7 +2,14 @@
 
 **An explorable 3D city that shows how PostgreSQL actually works.**
 
-**Live: <https://nikolays.github.io/PGSimCity/>**
+PGSimCity turns a PostgreSQL cluster into a city you can inspect, walk through,
+and break. It is for engineers who are good at their job and have never had to
+operate a database — the people who need to understand why a checkpoint spikes
+latency, why one forgotten transaction bloats a table forever, and what
+`synchronous_commit` is really charging them.
+
+**[Explore the live city](https://nikolays.github.io/PGSimCity/)** — no install
+required.
 
 PGSimCity is an independent, non-commercial educational visualization of
 PostgreSQL internals. It is not affiliated with, sponsored, endorsed, or
@@ -11,25 +18,7 @@ approved by Electronic Arts Inc. SimCity is a trademark of Electronic Arts Inc.
 This project contains no SimCity code, assets, artwork, logos, characters,
 audio, or game content.
 
-[![Hacker News](https://img.shields.io/badge/Hacker_News-%231-FF6600?logo=ycombinator&logoColor=white)](https://news.ycombinator.com/item?id=49063754)
-
-> 🍊 **#1 on [Hacker News](https://news.ycombinator.com/item?id=49063754)** — thanks to everyone who
-> visited, and especially to those who filed corrections. Bug reports about PostgreSQL behaviour are
-> the most valuable thing this project can receive; see how the claims have been checked below.
-
 ![A daylight view into PGSimCity's storage excavation: the shared buffers plaza spans the pit above teal storage machinery, with backend towers behind and the checkpointer and WAL districts on either side.](docs/screenshot.png)
-
-Every building is a real mechanism. The plaza in the centre is `shared_buffers` —
-1024 page frames whose height is their clock-sweep usage count and whose colour is
-their true state. The amber district to the east is the write-ahead log. The pit
-under the plaza is the data directory, and the heap files down there grow when you bloat
-them. To the south, a standby replays what the primary sends it, always a little
-behind.
-
-It is built for engineers who are good at their job and have never had to operate
-a database — the people who need to understand why a checkpoint spikes latency,
-why one forgotten transaction bloats a table forever, and what `synchronous_commit`
-is really charging them.
 
 ---
 
@@ -53,121 +42,6 @@ is really charging them.
 
 ---
 
-## A possible future
-
-Today the city uses a hand-written simulation of PostgreSQL’s mechanisms, which is what makes internals such as the clock sweep’s frame-by-frame victim choice observable. A real PostgreSQL compiled to WebAssembly — PGlite and similar projects embed the actual engine — would make query results and plans authoritative, but could expose only what PostgreSQL exposes through catalogs, `pg_stat_*` views, and `EXPLAIN`, not those internal steps. They answer different questions; a future hybrid could let real execution and plans drive the modelled interior, but that is a direction rather than a promise.
-
----
-
-## Run it
-
-Node.js 20 or newer, and a browser with WebGL2.
-
-```bash
-npm install
-npm run dev      # http://localhost:5173
-```
-
-```bash
-npm run build    # static bundle in dist/
-npm run preview
-npm run typecheck
-```
-
-No application server and no database. It is a static bundle; at runtime it
-makes only the analytics requests described below, and the whole application
-continues to work when those requests are blocked.
-
-### Analytics and privacy
-
-PGSimCity uses [Plausible](https://plausible.io/) for aggregate, cookie-free
-analytics on both the city and the observability page. It records pageviews,
-unique visitors, referring sites, bounce rate, visit duration, and these
-interactions:
-
-| Event | Properties in addition to `entrypoint` |
-|---|---|
-| `Tour Started` | `source` (`button` or `keyboard`) |
-| `Pause Changed` | `paused` |
-| `Speed Changed` | `speed` |
-| `Panel Opened` | `panel`, optional `item` |
-| `Building Clicked` | `building` |
-| `Run a Query Opened` | `source` (`button`, `keyboard`, or `other`) |
-| `Statement Traced` | `statement`, `table`, `playback` |
-| `Outbound Link: Click` | `panel`, `destination`, attributed `url` |
-
-Every external link is routed through one central helper. It adds
-`?ref=pgsimcity-<panel>` (or appends `ref` to an existing query string) before
-the click is reported, so both the Plausible dashboard and the destination can
-attribute the visit to the mechanism panel that sent it.
-
-Plausible receives the IP address and user agent already present in the request
-and combines them with the site domain and a daily salt to count a visitor for
-one day. It does not store the raw values or a persistent identifier. PGSimCity
-sends an event payload containing no names, email addresses, free-form input,
-browser fingerprint, or personal data supplied by the application. It uses no
-analytics cookies or analytics local storage, creates no advertising or
-cross-site identifier, and performs no session recording. Blocking
-`plausible.io` disables measurement without a consent flow, console exception,
-or loss of functionality.
-
-Plausible was chosen over GoatCounter because this task requires bounce rate and
-visit duration as first-class metrics as well as unique visitors, referrers, and
-event reporting. The selected Plausible script is about 3.0 kB uncompressed
-(about 1.5 kB transferred). Plausible Cloud requires a paid account after its
-trial; the AGPL-licensed Community Edition is free to self-host without a
-Plausible subscription. GoatCounter offers a free hosted tier for modest
-non-commercial use and a smaller tracker, but its standard aggregate reports do
-not provide both required engagement metrics.
-
-Plausible account setup is part of making the received events visible. Add
-`nikolays.github.io` as the site, then create custom-event goals whose names
-exactly match the eight names in the table above. After one event has arrived,
-add these recorded custom properties in **Settings → Custom Properties**:
-`entrypoint`, `source`, `paused`, `speed`, `panel`, `item`, `building`,
-`statement`, `table`, `playback`, `destination`, and `url`. Plausible receives
-events before those dashboard definitions exist, but does not display them or
-backfill goal counts until the matching goals and properties are configured.
-
----
-
-## Controls
-
-### Camera
-
-| | |
-|---|---|
-| Left-drag | Pan — grab the ground and move it, the way a map does |
-| Right-drag | Orbit around the city |
-| Middle-drag / `Ctrl`-left-drag | Pan / orbit, if you have model-viewer habits |
-| Wheel | Zoom — the dolly follows the cursor, not the pivot |
-| Touch | 1 finger pans · 2 fingers pinch to zoom, twist to turn, drag up/down to tilt |
-| Click | Select a building. In fly mode, capture the mouse |
-| `W` `A` `S` `D` or the arrow keys | Move |
-| `Space` or `E` · `C` or `Q` | Rise · descend (fly mode) |
-| `PageUp` / `PageDown` | Change altitude (any mode) |
-| `Shift` · `Alt` | Boost · precision |
-| `Esc` | Leave pointer lock |
-
-### Keys
-
-| | |
-|---|---|
-| `F` | Toggle fly / orbit camera |
-| `G` | Get down and walk the city on foot, 1.7 m tall |
-| `H` | Back to the establishing shot |
-| `T` | Guided tour — the whole city in 14 chapters |
-| `/` or `Ctrl-K` | Command palette — search every component, setting and scenario |
-| `?` | Keyboard map and colour legend |
-| `L` | Toggle the floating labels |
-| `K` or `P` | Pause / resume |
-| `,` `.` | Slower / faster (0.1× – 5×) |
-| `R` | Reset to the default settings |
-| `Esc` | Close the topmost overlay |
-| `1` – `8` | Jump to a district: clients, backends, shared buffers, WAL, storage, checkpointer, autovacuum, standby |
-
----
-
 ## What you are looking at
 
 | District | What it is |
@@ -175,53 +49,102 @@ backfill goal counts until the matching goals and properties are configured.
 | **Client sky** (north, above) | Connections arriving from the application tier |
 | **Postmaster** | The supervisor. Forks one backend per connection and never touches your data |
 | **Backend row** | 16 backend processes. Their lighting *is* their state — including `idle in transaction` |
-| **Shared memory plaza** | `shared_buffers`, `wal_buffers`, the ProcArray, the lock table, CLOG, the buffer mapping table |
-| **The excavation** | Where memory ends and disk begins |
-| **Storage** (below) | Heap files as fields of 8 KiB pages, B-trees as actual trees, TOAST, the FSM and visibility map, the OS page cache, the disks |
+| **Buffer pool (`shared_buffers`)** | A representative sample of 1,024 frames, beside `wal_buffers`, the ProcArray, lock table, CLOG and buffer mapping table |
+| **The excavation** | The data directory: where memory ends and storage begins |
+| **Storage** (below) | Heap files as fields of 8 KiB pages, B-trees as actual trees, TOAST, the FSM and visibility map, the OS page cache and the disks |
 | **WAL district** (east) | walwriter → `pg_wal` segments → archiver → walsender |
-| **Maintenance yard** (west) | checkpointer, background writer, autovacuum launcher and its workers |
+| **Maintenance yard** (west) | Checkpointer, background writer, autovacuum launcher and its workers |
 | **Standby** (south) | walreceiver, the startup process replaying WAL, and the lag between them |
+| **Continuity quarter** (outer east and south) | WAL archive, base backups, point-in-time recovery, a second delayed standby, leader lease and rejoin machinery |
 | **Query lab** (above the backends) | Select a backend and its statement unfolds: parse → rewrite → plan → execute |
 
-Colour is semantic everywhere and never decorative: **WAL is amber**, **dirty pages
-are red**, **clean pages are blue**, **vacuum is violet**, **checkpoints are pink**,
-**the background writer is teal**, **replication is orange**, **storage is green**,
-**indexes are aqua**, **locks are red**.
+Colour is semantic everywhere and never decorative: **WAL is amber**, **dirty
+pages are red**, **clean pages are blue**, **vacuum is violet**, **checkpoints
+are pink**, **the background writer is teal**, **replication is orange**,
+**storage is green**, **indexes are aqua**, **locks are red**.
 
 ---
 
 ## Things worth trying
 
-- Drag **`shared_buffers`** down to 64 pages and watch the plaza thrash: usage
-  counts collapse, the clock hand races, and backends start writing out their own
-  dirty pages because nothing clean is left to evict.
-- Turn on **Long-running transaction**. The xmin horizon blade in the ProcArray
-  sinks and goes red, the autovacuum trucks keep driving their whole route, and
-  their scoops come up empty every single time. The `sessions` table bloats and
-  never recovers. This is the most expensive lesson in the app.
-- Run the **Checkpoint storm** scenario. Watch the checkpointer's flywheel spin
-  up, the fsync phase shudder, and then a wall of full-page writes flood the WAL
-  district immediately afterwards.
-- Set **`synchronous_commit`** to `off` and watch every backend stop waiting in
+- Press **`T`** for the 14-chapter guided tour. It follows one connection from
+  the client through planning, caching, WAL, checkpoints, vacuum and replication.
+- Press **`Enter`** to trace one statement. Pick **Non-HOT UPDATE** and slow
+  playback exposes where it enters the buffer pool, creates WAL and waits to
+  commit.
+- Run **Cache thrash** from the Scenarios menu. It sets `shared_buffers` to
+  16 MiB — below the manual control's 128 MiB minimum — so the clock sweep races
+  and backends write their own dirty victims before they can read another page.
+- Turn on **Long-running transaction**. The xmin horizon blade sinks and goes
+  red; autovacuum still travels to the tables, but reports zero removable rows
+  while the `sessions` table keeps bloating. Release the transaction and cleanup
+  can begin again.
+- Run **Checkpoint storm**. Watch the checkpointer's flywheel spin up, the fsync
+  phase shudder, and a wall of full-page writes flood the WAL district after
+  each checkpoint begins.
+- Set **`synchronous_commit`** to `off` and watch backends stop waiting in
   `commit_wait`. Then read what you just traded away.
-- Turn on **Slow replay** and watch the four LSNs on the standby's ruler — sent,
-  written, flushed, applied — pull apart. That gap is `pg_stat_replication`.
-- Press **`G`** and walk in at eye level. A buffer you have been looking down on
-  from 400 units up is a different object when it is three times your height.
+- Turn on **Slow replay** and watch `sent_lsn`, `write_lsn`, `flush_lsn` and
+  `replay_lsn` pull apart on the standby.
+- Press **`G`** and walk through the city at eye level. A buffer frame that read
+  as one tile from the establishing shot becomes a structure above your head.
+
+---
+
+## Controls
+
+Press **`?`** in the city for the complete input map and colour legend.
+
+### Camera
+
+| Input | Action |
+|---|---|
+| Left-drag | Pan — grab the ground and move it |
+| `Shift` / `Ctrl` / `Cmd` + left-drag | Orbit around the city |
+| Middle-drag | Pan with model-viewer controls |
+| Right-click / touch long-press | Open contextual actions |
+| Wheel | Zoom toward the cursor |
+| Touch | One finger pans; two fingers pinch to zoom, twist to turn and drag vertically to tilt |
+| Click | Select a building; in fly mode, capture the mouse |
+| `W` `A` `S` `D` or arrow keys | Move |
+| `Space` or `E` · `C` or `Q` | Rise · descend in fly mode |
+| `PageUp` / `PageDown` | Change altitude in fly or orbit mode |
+| `Shift` · `Alt` | Boost · precision |
+| `Esc` | Leave pointer lock |
+
+In walk mode, `W` `A` `S` `D` or the arrows walk, `Shift` runs, `Space` jumps
+and `C` crouches. On touch devices, the Walk button adds separate move and look
+thumb controls plus jump and crouch.
+
+### Application
+
+| Key | Action |
+|---|---|
+| `T` | Start the 14-chapter guided tour |
+| `Enter` | Trace one query through PostgreSQL |
+| `H` · `O` | Establishing shot · top-down overview |
+| `F` · `G` | Toggle fly mode · walk the city at 1.7 m eye height |
+| `/` or `Ctrl-K` / `Cmd-K` | Search every component, setting, scenario and tour chapter |
+| `?` | Open the input map and colour legend |
+| `L` · `N` · `M` | Toggle labels · daylight/night · sound |
+| `K` or `P` | Pause or resume |
+| `,` · `.` | Slower · faster (0.1×–5×) |
+| `R` | Reset to the default settings |
+| `1`–`8` | Jump to clients, backends, buffer pool, WAL, storage, query lab, maintenance or standby |
+| `Esc` | Close the topmost overlay |
 
 ---
 
 ## How it is built
 
-```
+```text
 src/
-  core/      contracts — types, the event bus, the palette, the component registry
-  engine/    renderer + post-processing, camera rig, particle flows, labels,
-             picking, and the collision world the walk mode stands on
-  sim/       the PostgreSQL model. No three.js in here, ever.
-  world/     layout.ts is the city plan; one module per district
-  ui/        HUD, control rail, inspector, guided tour, command palette, and the
-             written explanations for every component
+  core/           shared contracts, event bus, registry, themes and utilities
+  sim/            the PostgreSQL simulation
+  world/          the city geometry, one module per district
+  engine/         renderer, camera, flows, labels, picking, collision and audio
+  ui/             controls, inspector, tour, search and written explanations
+  observability/  a separate diagnostic interface over the same simulation
 ```
 
 Three rules hold it together:
@@ -231,30 +154,60 @@ Three rules hold it together:
    coordinate another district needs.
 2. **The simulation never imports three.js, and the world never mutates the
    simulation.** They meet at `SimState`.
-3. **Structure is matte, meaning is neon.** Only emissive materials cross the
-   bloom threshold, so anything that glows is carrying information.
+3. **Rendering carries meaning differently by theme.** At night structure is
+   matte and meaning is neon; in daylight hue and value carry meaning without
+   relying on bloom.
 
-Stack: [three.js](https://threejs.org) r185, TypeScript, Vite. One bundled
-runtime dependency, no framework, and one external service: the cookie-free
-Plausible analytics described above.
+Stack: [three.js](https://threejs.org) r185, TypeScript and Vite. three.js is
+the only bundled runtime dependency; the only external runtime service is the
+cookie-free analytics described below.
 
-`window.PGSIMCITY` in the browser console hands you
-`{ sim, registry, bus, rig, gfx, flows }`, if you would rather drive the city
-from the outside.
+`window.PGSIMCITY` in the browser console includes `sim`, `registry`, `bus`,
+`rig`, `gfx` and `flows` if you would rather drive the city from the outside.
+For the accuracy boundary and review status, see
+[How much to trust this](#how-much-to-trust-this) above. Each inspector names
+material simplifications at the point where they matter.
+
+### A possible future
+
+The [accuracy boundary described above](#how-much-to-trust-this) also creates a
+useful trade-off: the city can expose internal steps such as the clock sweep's
+frame-by-frame victim choice. A PostgreSQL build compiled to WebAssembly could
+supply authoritative query results and plans; without extra instrumentation,
+the city could observe only catalogs, `pg_stat_*` views and `EXPLAIN`, not those
+internal steps. A future hybrid could let execution and plans drive the visible
+interior; that is a direction, not a promise.
 
 ---
 
-## Honesty
+## Run it locally
 
-This is a *model*, not an emulator. The algorithms are real — clock-sweep
-replacement, WAL insert/write/flush positions, checkpoint pacing against
-`checkpoint_completion_target`, autovacuum thresholds, the xmin horizon blocking
-cleanup, HOT updates skipping index maintenance — but the numbers are scaled so a
-human can watch them. 1024 buffers stand in for a million; one particle stands in
-for thousands of tuples. Nothing here parses SQL, and no byte of PostgreSQL source
-code runs in your browser.
+You need Node.js 20 or newer and a browser with WebGL2.
 
-Where it simplifies, the inspector says so.
+```bash
+npm install
+npm run dev      # http://localhost:5173
+```
+
+```bash
+npm test
+npm run typecheck
+npm run build    # static bundle in dist/
+npm run preview  # http://localhost:4173
+```
+
+There is no application server or database. The result is a static bundle.
+
+**Analytics and privacy.** PGSimCity uses
+[Plausible](https://plausible.io/) for aggregate, cookie-free analytics on the
+city and observability pages. It records pageviews, unique visitors, referring
+sites, bounce rate, visit duration and interactions such as starting the tour,
+changing playback, opening a panel, tracing a statement, selecting a building
+or following an outbound link. PGSimCity sends no names, email addresses,
+free-form input, browser fingerprint or application-supplied personal data, and
+creates no analytics cookies, analytics local storage, advertising identifier
+or session recording. Blocking `plausible.io` stops measurement without
+affecting the application.
 
 ---
 
