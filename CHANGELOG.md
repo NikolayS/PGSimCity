@@ -9,6 +9,47 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.9.0] — 2026-07-28
+
+The city reached the top of Hacker News. This is what the thread asked for.
+
+### Added
+
+- **A 2D query lifecycle view**, at `observability/`. The city answers what
+  PostgreSQL is made of and the 3D trace answers what happens when you run
+  something — but a camera can only point at one place at a time. This shows the
+  whole journey at once, from client to commit, with your position marked and
+  the stops a statement skips struck through rather than hidden. The plan tree is
+  finally drawn as a tree: `BackendSim.plan` has carried per-node rows, cost and
+  timing since the beginning with nothing rendering it. SVG rather than canvas,
+  so a keyboard and a screen reader can follow it.
+- **Measurement.** The largest traffic event in this project's history was
+  invisible. Cookieless, no consent banner, no fingerprinting, no personal data —
+  aggregate counts plus outbound clicks tagged by the panel they came from.
+
+### Fixed
+
+- **WAL responds to the workload again.** Watching the city at one transaction
+  per second showed the `wal_buffers` ring racing. Two defects: the buffer filled
+  under load and never drained once demand stopped, and ten times the transaction
+  rate produced only 1.4 times the WAL. That second one broke the causal chain
+  the city exists to teach, since write volume is what drives checkpoint
+  frequency. Three rounds of expert review missed both, because both are visible
+  only when something *changes*.
+- **The tour stops burying the city.** Three people said so independently.
+  Measuring showed the narration card was not the problem — a scrim draining
+  contrast from the whole scene was, along with spotlight cones rendering as flat
+  diagonal slabs at the quality tier most visitors get. Attention is directed
+  additively now: the target is marked and everything else is left alone.
+
+### Changed
+
+- The dependency rule said "no telemetry, no analytics". It was written against
+  surveillance rather than measurement, so it now states what is actually true
+  instead of a blanket denial the software no longer honours.
+
+---
+
 ## [0.8.0] — 2026-07-27
 
 ### Added
