@@ -42,119 +42,6 @@ audio, or game content.
 
 ---
 
-## A possible future
-
-The city uses a hand-written simulation of PostgreSQL’s mechanisms, which is
-what makes internals such as the clock sweep’s frame-by-frame victim choice
-observable. The separate Query flow offers an opt-in PGlite mode: real
-PostgreSQL supplies parsing, plans, catalogs, buffer counters, errors and
-results, while its plan drives the closest modelled interior path. The page
-labels the two sources separately because PostgreSQL exposes the former and not
-the latter.
-
----
-
-## Run it
-
-Node.js 20 or newer, and a browser with WebGL2.
-
-```bash
-npm install
-npm run dev      # http://localhost:5173
-```
-
-```bash
-npm run build    # static bundle in dist/
-npm run preview
-npm run typecheck
-```
-
-There is no application server. It is a static bundle. The 3D city and Diagnose
-surface make only the analytics requests described below. Query flow may, after
-an explicit click, load the same-origin PGlite JavaScript, data and WebAssembly
-assets and run an in-memory PostgreSQL in the browser. The six-statement model
-continues to work when analytics or PGlite is blocked.
-
-### Analytics and privacy
-
-PGSimCity uses [Plausible](https://plausible.io/) for aggregate, cookie-free
-analytics on both the city and the observability page. It records pageviews,
-unique visitors, referring sites, bounce rate, visit duration, and these
-interactions:
-
-| Event | Properties in addition to `entrypoint` |
-|---|---|
-| `Tour Started` | `source` (`button` or `keyboard`) |
-| `Pause Changed` | `paused` |
-| `Speed Changed` | `speed` |
-| `Panel Opened` | `panel`, optional `item` |
-| `Building Clicked` | `building` |
-| `Run a Query Opened` | `source` (`button`, `keyboard`, or `other`) |
-| `Statement Traced` | `statement`, `table`, `playback` |
-| `Outbound Link: Click` | `panel`, `destination`, attributed `url` |
-
-Every external link is routed through one central helper. It adds
-`?ref=pgsimcity-<panel>` (or appends `ref` to an existing query string) before
-the click is reported, so both the Plausible dashboard and the destination can
-attribute the visit to the mechanism panel that sent it.
-
-Plausible receives the IP address and user agent already present in the request
-and combines them with the site domain and a daily salt to count a visitor for
-one day. It does not store the raw values or a persistent identifier. PGSimCity
-sends an event payload containing no names, email addresses, free-form input,
-browser fingerprint, or personal data supplied by the application. It uses no
-analytics cookies or analytics local storage, creates no advertising or
-cross-site identifier, and performs no session recording. Blocking
-`plausible.io` disables measurement without a consent flow, console exception,
-or loss of functionality.
-
----
-
-## Controls
-
-### Camera
-
-| Input | Action |
-|---|---|
-| Left-drag | Pan in orbit mode — grab the ground and move it, the way a map does |
-| `Shift`-left-drag or `Ctrl`/`Cmd`-left-drag | Orbit around the city |
-| Middle-drag | Pan in orbit mode |
-| Right-click or touch long-press | Open the context menu |
-| Wheel | Zoom towards the cursor in orbit mode · adjust movement speed in fly mode |
-| 1 finger | Pan in orbit mode |
-| 2 fingers | Pinch to zoom · twist to orbit · drag both up/down to tilt |
-| First-person touch | Left thumb moves · right thumb looks · buttons jump and crouch (rise and dive while swimming) |
-| Click | Select a building · in fly or walk mode, capture the mouse for looking |
-| `W` `A` `S` `D` or the arrow keys | Move |
-| `Space` or `E` · `C` or `Q` | Rise · descend in fly mode; `Space` jumps and `C` crouches in walk mode |
-| `PageUp` / `PageDown` | Change altitude in orbit or fly mode |
-| `Shift` · `Alt` | Boost · precision in orbit or fly mode; `Shift` runs in walk mode |
-| `Esc` | Leave pointer lock |
-
-### Keys
-
-| Key | Action |
-|---|---|
-| `F` | Toggle fly / orbit camera |
-| `G` | Get down and walk the city on foot, 1.7 m tall |
-| `H` | Back to the establishing shot |
-| `Home` | Back to the default establishing shot |
-| `O` | Straight-down overview of the whole plate |
-| `T` | Guided tour — the whole city in 14 chapters |
-| `Enter` | Open Run a Query |
-| `/` or `Ctrl`/`Cmd`-`K` | Command palette — search every component, setting and scenario |
-| `?` | Keyboard map and colour legend |
-| `L` | Toggle the floating labels |
-| `N` | Toggle daylight / night |
-| `M` | Toggle sound |
-| `K` or `P` | Pause / resume |
-| `,` `.` | Slower / faster (0.1× – 5×) |
-| `R` | Reset to the default settings |
-| `Esc` | Close the topmost overlay |
-| `1` – `8` | Jump to a district: clients, backends, buffer pool, WAL, storage, query lab, maintenance, standby |
-
----
-
 ## What you are looking at
 
 | District | What it is |
@@ -212,39 +99,42 @@ Press **`?`** in the city for the complete input map and colour legend.
 
 | Input | Action |
 |---|---|
-| Left-drag | Pan — grab the ground and move it |
-| `Shift` / `Ctrl` / `Cmd` + left-drag | Orbit around the city |
-| Middle-drag | Pan with model-viewer controls |
-| Right-click / touch long-press | Open contextual actions |
-| Wheel | Zoom toward the cursor |
-| Touch | One finger pans; two fingers pinch to zoom, twist to turn and drag vertically to tilt |
-| Click | Select a building; in fly mode, capture the mouse |
-| `W` `A` `S` `D` or arrow keys | Move |
-| `Space` or `E` · `C` or `Q` | Rise · descend in fly mode |
-| `PageUp` / `PageDown` | Change altitude in fly or orbit mode |
-| `Shift` · `Alt` | Boost · precision |
+| Left-drag | Pan in orbit mode — grab the ground and move it, the way a map does |
+| `Shift`-left-drag or `Ctrl`/`Cmd`-left-drag | Orbit around the city |
+| Middle-drag | Pan in orbit mode |
+| Right-click or touch long-press | Open the context menu |
+| Wheel | Zoom towards the cursor in orbit mode · adjust movement speed in fly mode |
+| 1 finger | Pan in orbit mode |
+| 2 fingers | Pinch to zoom · twist to orbit · drag both up/down to tilt |
+| First-person touch | Left thumb moves · right thumb looks · buttons jump and crouch (rise and dive while swimming) |
+| Click | Select a building · in fly or walk mode, capture the mouse for looking |
+| `W` `A` `S` `D` or the arrow keys | Move |
+| `Space` or `E` · `C` or `Q` | Rise · descend in fly mode; `Space` jumps and `C` crouches in walk mode |
+| `PageUp` / `PageDown` | Change altitude in orbit or fly mode |
+| `Shift` · `Alt` | Boost · precision in orbit or fly mode; `Shift` runs in walk mode |
 | `Esc` | Leave pointer lock |
 
-In walk mode, `W` `A` `S` `D` or the arrows walk, `Shift` runs, `Space` jumps
-and `C` crouches. On touch devices, the Walk button adds separate move and look
-thumb controls plus jump and crouch.
-
-### Application
+### Keys
 
 | Key | Action |
 |---|---|
-| `T` | Start the 14-chapter guided tour |
-| `Enter` | Trace one query through PostgreSQL |
-| `H` · `O` | Establishing shot · top-down overview |
-| `F` · `G` | Toggle fly mode · walk the city at 1.7 m eye height |
-| `/` or `Ctrl-K` / `Cmd-K` | Search every component, setting, scenario and tour chapter |
-| `?` | Open the input map and colour legend |
-| `L` · `N` · `M` | Toggle labels · daylight/night · sound |
-| `K` or `P` | Pause or resume |
-| `,` · `.` | Slower · faster (0.1×–5×) |
+| `F` | Toggle fly / orbit camera |
+| `G` | Get down and walk the city on foot, 1.7 m tall |
+| `H` | Back to the establishing shot |
+| `Home` | Back to the default establishing shot |
+| `O` | Straight-down overview of the whole plate |
+| `T` | Guided tour — the whole city in 14 chapters |
+| `Enter` | Open Run a Query |
+| `/` or `Ctrl`/`Cmd`-`K` | Command palette — search every component, setting and scenario |
+| `?` | Keyboard map and colour legend |
+| `L` | Toggle the floating labels |
+| `N` | Toggle daylight / night |
+| `M` | Toggle sound |
+| `K` or `P` | Pause / resume |
+| `,` `.` | Slower / faster (0.1× – 5×) |
 | `R` | Reset to the default settings |
-| `1`–`8` | Jump to clients, backends, buffer pool, WAL, storage, query lab, maintenance or standby |
 | `Esc` | Close the topmost overlay |
+| `1` – `8` | Jump to a district: clients, backends, buffer pool, WAL, storage, query lab, maintenance, standby |
 
 ---
 
@@ -284,13 +174,12 @@ material simplifications at the point where they matter.
 
 ### A possible future
 
-The [accuracy boundary described above](#how-much-to-trust-this) also creates a
-useful trade-off: the city can expose internal steps such as the clock sweep's
-frame-by-frame victim choice. A PostgreSQL build compiled to WebAssembly could
-supply authoritative query results and plans; without extra instrumentation,
-the city could observe only catalogs, `pg_stat_*` views and `EXPLAIN`, not those
-internal steps. A future hybrid could let execution and plans drive the visible
-interior; that is a direction, not a promise.
+The [accuracy boundary described above](#how-much-to-trust-this) makes internals
+such as the clock sweep's frame-by-frame victim choice observable. The separate
+Query flow offers an opt-in PGlite mode: real PostgreSQL supplies parsing, plans,
+catalogs, buffer counters, errors and results, while its plan drives the closest
+modelled interior path. The page labels the two sources separately because
+PostgreSQL exposes the former and not the latter.
 
 ---
 
@@ -310,7 +199,11 @@ npm run build    # static bundle in dist/
 npm run preview  # http://localhost:4173
 ```
 
-There is no application server or database. The result is a static bundle.
+There is no application server. The result is a static bundle. The 3D city and
+Diagnose surface make only the analytics requests described below. Query flow
+may, after an explicit click, load the same-origin PGlite JavaScript, data and
+WebAssembly assets and run an in-memory PostgreSQL in the browser. The modelled
+query flow continues to work when analytics or PGlite is blocked.
 
 **Analytics and privacy.** PGSimCity uses
 [Plausible](https://plausible.io/) for aggregate, cookie-free analytics on the
