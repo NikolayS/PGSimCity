@@ -9,6 +9,55 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [1.0.0] — 2026-07-28
+
+Real PostgreSQL behind the query surface, and a 2D view that draws the
+architecture rather than a row of boxes.
+
+### Added
+
+- **Real PostgreSQL, opt-in.** A running server exposes catalogs, `pg_stat_*`
+  counters, `EXPLAIN` and log output — and nothing else. Not the clock sweep
+  choosing a victim frame, not a page landing in a specific buffer, not the
+  checkpointer's write phase. Those are exactly what this project draws, so
+  neither source alone is enough. PGlite now supplies what only it can: real
+  parsing, so a typo produces a genuine PostgreSQL error; the **real plan**,
+  with true node types, costs, estimates against actuals and real buffer
+  counters; real catalogs; real results. The model keeps supplying the interior.
+  They meet at the plan — the real one drives the animation. It is lazy and
+  opt-in, so the city's bundle is unchanged, and which numbers are real and
+  which are modelled is visible at a glance, because that distinction is the
+  entire reason for adding it.
+- **The 2D view draws architecture now.** The first version was a pipeline: a
+  line of stops with the current one lit, which communicates order and nothing
+  else. Following the conventions of Momjian's internals diagrams and Lesovsky's
+  observability map, it now has containment — one shared segment visibly holding
+  the buffer pool, wal_buffers, the ProcArray and the lock table, with private
+  backend memory visibly outside it — connections with direction, layers where
+  the axis means something, and the query path animating across the structure
+  rather than replacing it.
+
+### Fixed
+
+- **Analytics were never being received.** The deployed integration was
+  Plausible's older form while the account issues the current one, where the site
+  identity is embedded in the script filename. The script was serving correctly
+  and the account was looking for something else.
+- **The controls table had been wrong for three releases.** It said right-drag
+  orbits; right-drag was freed for the context menu in v0.6.0 and rotation is
+  shift with left-drag. Someone asked how to rotate the camera on Hacker News,
+  and this table is what they would have found.
+- **Overlays no longer print on top of the inspector on a phone.** Two elements
+  shared a z-index with the drawer, so paint order was decided by document order
+  rather than intent. z-index is a named scale now.
+
+### Removed
+
+- Plausible dashboard setup steps from the README. That is a one-time task for
+  one person's account, not documentation, and it is GitHub issue #3 now.
+
+---
+
 ## [0.9.0] — 2026-07-28
 
 The city reached the top of Hacker News. This is what the thread asked for.
