@@ -1,6 +1,7 @@
 :root {
   color-scheme: dark;
-  background: #17120f;
+  background: #100c0a;
+  color: #d8c29a;
   font-family: Georgia, "Times New Roman", serif;
 }
 
@@ -10,214 +11,383 @@
 
 html,
 body,
-main {
+.workbench {
   width: 100%;
   height: 100%;
+  min-width: 0;
   margin: 0;
   overflow: hidden;
 }
 
 body {
-  background:
-    radial-gradient(circle at 50% 42%, #3b2b20 0, #1d1612 58%, #0d0a09 100%);
+  background: #100c0a;
 }
 
-main {
-  position: relative;
+button,
+textarea {
+  font: inherit;
+}
+
+.workbench {
   display: grid;
-  place-items: center;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 
-canvas {
-  display: block;
-  width: 100%;
-  height: 100%;
-  outline: none;
-  cursor: pointer;
+.console-pane,
+.architecture-pane {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
 }
 
-.readout {
-  position: fixed;
-  top: 18px;
-  right: 22px;
-  display: flex;
+.console-pane {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   gap: 12px;
+  padding: 22px 22px 16px;
+  border-right: 1px solid #8b6940;
+  background:
+    linear-gradient(115deg, rgb(255 255 255 / 2%), transparent 42%),
+    repeating-linear-gradient(135deg, rgb(200 146 62 / 3%) 0 1px, transparent 1px 22px),
+    radial-gradient(circle at 45% 15%, #34271f 0, #1d1612 56%, #110d0b 100%);
+  box-shadow:
+    inset -12px 0 22px rgb(0 0 0 / 38%),
+    inset 0 0 0 1px rgb(241 202 116 / 4%);
+}
+
+.console-header {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 18px;
+  min-height: 86px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgb(200 146 62 / 34%);
+}
+
+.eyebrow,
+.deck,
+.measurement-rack p {
+  margin: 0;
+  color: #9b845f;
+  font: 650 9px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.console-header h1 {
+  margin: 4px 0 2px;
+  color: #f1dfba;
+  font-size: clamp(22px, 2.2vw, 31px);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.source-key {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 7px;
+  padding-bottom: 3px;
+  color: #bda57b;
+  font: 700 8px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.source-key span {
+  display: flex;
+  gap: 7px;
   align-items: center;
-  color: #ead5a6;
-  font: 600 11px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  letter-spacing: 0.08em;
-  pointer-events: none;
-  text-transform: uppercase;
-  text-shadow: 0 1px 2px #000;
 }
 
-.readout span {
-  padding: 6px 9px;
-  border: 1px solid rgb(220 172 93 / 38%);
-  border-radius: 3px;
-  background: rgb(28 20 16 / 80%);
-  box-shadow: inset 0 0 0 1px rgb(255 225 166 / 5%);
+.source-medallion {
+  display: inline-grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border: 1px solid;
+  border-radius: 50%;
+  color: #f1dfba;
+  font-size: 10px;
+  box-shadow: inset 0 0 0 2px rgb(0 0 0 / 20%);
 }
 
-.postgres-toggle {
-  position: fixed;
-  top: 54px;
-  right: 22px;
-  z-index: 3;
-  padding: 7px 10px;
-  border: 1px solid rgb(98 169 178 / 58%);
+.postgres-source {
+  border-color: #9fcfd0;
+  background: #31575a;
+}
+
+.model-source {
+  border-color: #9b845f;
+  background:
+    repeating-linear-gradient(135deg, #3d3027 0 4px, #6a503b 4px 5px);
+}
+
+.control-rack {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid #6e5336;
+  border-radius: 4px;
+  background:
+    linear-gradient(rgb(255 255 255 / 3%), rgb(0 0 0 / 12%)),
+    #28201b;
+  box-shadow:
+    0 7px 16px rgb(0 0 0 / 28%),
+    inset 0 0 0 1px rgb(255 225 166 / 4%);
+}
+
+.postgres-control {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.postgres-control span {
+  overflow: hidden;
+  color: #8c795c;
+  font: 650 7px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.06em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.clock-control {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  align-items: center;
+}
+
+button,
+.clock-control output {
+  min-height: 29px;
+  padding: 7px 9px;
+  border: 1px solid #70583e;
   border-radius: 3px;
-  color: #d7eeee;
-  background: rgb(28 32 31 / 88%);
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 5%);
-  font: 700 10px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  letter-spacing: 0.08em;
+  color: #d8c29a;
+  background:
+    linear-gradient(rgb(255 255 255 / 4%), rgb(0 0 0 / 8%)),
+    #2b231e;
+  font: 750 8px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
+}
+
+button {
   cursor: pointer;
 }
 
-.postgres-toggle:hover,
-.postgres-toggle:focus-visible,
-.postgres-panel button:hover,
-.postgres-panel button:focus-visible {
-  border-color: #b7e2df;
+button:hover,
+button:focus-visible {
+  border-color: #c8923e;
+  color: #f1dfba;
   outline: none;
 }
 
-.postgres-toggle[data-state="ready"] {
+#postgres-toggle {
+  justify-self: start;
+  color: #d7eeee;
+  border-color: #5d8e91;
+  background: #263938;
+}
+
+#postgres-toggle[data-state="ready"] {
   color: #d8edcb;
-  border-color: rgb(126 166 95 / 72%);
+  border-color: #72935a;
+  background: #2d3928;
 }
 
-.postgres-toggle[data-state="error"] {
+#postgres-toggle[data-state="error"] {
   color: #ffd2c8;
-  border-color: rgb(217 93 73 / 80%);
+  border-color: #b85c4b;
+  background: #452922;
 }
 
-.postgres-panel {
-  position: fixed;
-  top: 91px;
-  right: 22px;
-  z-index: 4;
-  width: min(440px, calc(100vw - 44px));
-  max-height: calc(100vh - 113px);
-  padding: 14px;
-  overflow: auto;
-  border: 1px solid #8b6940;
+.terminal {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid #71573b;
   border-radius: 5px;
-  color: #ead5a6;
-  background:
-    linear-gradient(rgb(255 255 255 / 2%), rgb(0 0 0 / 8%)),
-    rgb(31 24 20 / 96%);
+  background: #0d0c0b;
   box-shadow:
-    0 18px 38px rgb(0 0 0 / 55%),
-    inset 0 0 0 1px rgb(255 225 166 / 5%);
-  font: 600 10px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    0 16px 32px rgb(0 0 0 / 48%),
+    inset 0 0 35px rgb(29 74 67 / 10%);
 }
 
-.postgres-panel[hidden] {
-  display: none;
+.terminal-header {
+  display: grid;
+  grid-template-columns: 80px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 37px;
+  padding: 0 11px;
+  border-bottom: 1px solid #4a3a2c;
+  color: #8ba9a3;
+  background:
+    linear-gradient(rgb(255 255 255 / 3%), transparent),
+    #201b18;
+  font: 700 8px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.08em;
 }
 
-.postgres-panel header,
-.postgres-actions,
+.terminal-header strong {
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-header > span:last-child {
+  color: #796a53;
+}
+
+.terminal-lamps {
+  display: flex;
+  gap: 7px;
+}
+
+.terminal-lamps i {
+  display: block;
+  width: 8px;
+  height: 8px;
+  border: 1px solid #181310;
+  border-radius: 50%;
+  background: #5f4935;
+  box-shadow: inset 0 1px 1px rgb(255 255 255 / 12%);
+}
+
+.terminal-lamps i:nth-child(1) {
+  background: #8a4538;
+}
+
+.terminal-lamps i:nth-child(2) {
+  background: #9a7135;
+}
+
+.terminal-lamps i:nth-child(3) {
+  background: #476e5e;
+}
+
+.terminal-transcript {
+  min-width: 0;
+  min-height: 0;
+  padding: 14px 15px 18px;
+  overflow: auto;
+  color: #d5c5a3;
+  scrollbar-color: #5a4631 #15120f;
+  scrollbar-width: thin;
+  font: 500 11px/1.48 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.terminal-banner {
+  margin: 0 0 14px;
+  color: #76978f;
+  font: inherit;
+  white-space: pre-wrap;
+}
+
+.terminal-command {
+  margin: 0 0 15px;
+}
+
+.terminal-command-line {
+  display: flex;
+  align-items: start;
+  color: #f1dfba;
+}
+
+.terminal-command-line b {
+  flex: 0 0 auto;
+  margin-right: 8px;
+  color: #78aaa6;
+  font-weight: 700;
+}
+
+.terminal-command-line pre,
+.terminal-output {
+  margin: 0;
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.terminal-output {
+  margin-top: 5px;
+  color: #cbb996;
+}
+
+.terminal-output.error {
+  color: #f0a08c;
+}
+
+.terminal-output.system {
+  color: #799b93;
+}
+
+.terminal-entry {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  min-height: 47px;
+  padding: 11px 14px;
+  border-top: 1px solid #4a3a2c;
+  background: #12110f;
+  color: #d7eeee;
+  font: 550 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.terminal-entry label {
+  padding-top: 1px;
+  color: #78aaa6;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.terminal-entry textarea {
+  width: 100%;
+  max-height: 112px;
+  min-height: 18px;
+  margin: 0;
+  padding: 1px 0 1px 8px;
+  resize: none;
+  overflow-y: auto;
+  border: 0;
+  outline: 0;
+  color: #f1dfba;
+  background: transparent;
+  font: inherit;
+  caret-color: #ed9760;
+}
+
+.terminal-entry textarea::placeholder {
+  color: #554b3d;
+}
+
+.measurement-rack {
+  display: grid;
+  gap: 7px;
+}
+
 .postgres-measurement {
   display: flex;
+  min-height: 38px;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-}
-
-.postgres-panel header {
-  margin-bottom: 12px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid rgb(220 172 93 / 24%);
-}
-
-.postgres-panel header div {
-  display: grid;
-  gap: 3px;
-}
-
-.postgres-panel header strong {
-  color: #d7eeee;
-  font-size: 11px;
-  letter-spacing: 0.08em;
-}
-
-.postgres-panel header span,
-.postgres-panel label,
-.postgres-actions span {
-  color: #9b845f;
-  font-size: 8px;
-  letter-spacing: 0.06em;
-}
-
-.postgres-panel button {
-  padding: 6px 9px;
-  border: 1px solid #6f8f88;
+  padding: 9px 11px;
+  border: 1px solid rgb(98 169 178 / 38%);
   border-radius: 3px;
-  color: #d7eeee;
-  background: #293532;
-  font: inherit;
-  font-weight: 750;
-  letter-spacing: 0.06em;
-  cursor: pointer;
-}
-
-.postgres-panel button:disabled {
-  opacity: 0.45;
-  cursor: wait;
-}
-
-.postgres-panel header button {
-  align-self: start;
-  min-width: 27px;
-  padding: 2px 7px 4px;
-  color: #d8c29a;
-  border-color: #70583e;
-  background: #27201c;
-  font: 700 18px/1 Georgia, "Times New Roman", serif;
-}
-
-.postgres-panel label {
-  display: block;
-  margin-bottom: 5px;
-}
-
-.postgres-panel textarea {
-  display: block;
-  width: 100%;
-  min-height: 95px;
-  resize: vertical;
-  padding: 9px 10px;
-  border: 1px solid #66513c;
-  border-radius: 3px;
-  outline: none;
-  color: #f1dfba;
-  background: #15110f;
-  font: 500 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-}
-
-.postgres-panel textarea:focus {
-  border-color: #79aeb0;
-}
-
-.postgres-actions {
-  margin-top: 8px;
-}
-
-.postgres-measurement {
-  margin-top: 11px;
-  padding: 8px 9px;
-  border: 1px solid rgb(98 169 178 / 35%);
-  border-radius: 3px;
-  background: rgb(34 49 48 / 62%);
-}
-
-.postgres-measurement span {
   color: #9fc8c6;
-  font-size: 8px;
+  background: rgb(34 49 48 / 62%);
+  font: 700 8px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.06em;
 }
 
 .postgres-measurement strong {
@@ -226,7 +396,8 @@ canvas {
 }
 
 .postgres-measurement[data-reach="read"] {
-  border-color: rgb(217 93 73 / 55%);
+  color: #ed9760;
+  border-color: rgb(217 93 73 / 58%);
   background: rgb(74 39 31 / 66%);
 }
 
@@ -234,42 +405,110 @@ canvas {
   color: #ffb19e;
 }
 
-.postgres-panel pre {
-  min-height: 108px;
-  max-height: 240px;
-  margin: 10px 0 0;
-  padding: 9px 10px;
-  overflow: auto;
-  border: 1px solid rgb(112 88 62 / 60%);
+.architecture-pane {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 48% 38%, #3b2b20 0, #1d1612 58%, #0d0a09 100%);
+}
+
+#machine {
+  display: block;
+  width: 100%;
+  height: 100%;
+  outline: none;
+  cursor: pointer;
+}
+
+.architecture-readout {
+  position: absolute;
+  top: 16px;
+  right: 18px;
+  display: flex;
+  gap: 7px;
+  pointer-events: none;
+}
+
+.architecture-readout span {
+  padding: 5px 7px;
+  border: 1px solid rgb(220 172 93 / 30%);
   border-radius: 3px;
-  color: #c8b18b;
-  background: rgb(14 11 9 / 72%);
-  font: 500 9px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  white-space: pre-wrap;
+  color: #bda57b;
+  background: rgb(24 18 14 / 78%);
+  font: 700 7px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.07em;
 }
 
 .fallback {
   display: none;
 }
 
-@media (max-width: 720px) {
-  .readout {
-    top: 8px;
-    right: 8px;
-    gap: 5px;
-    font-size: 8px;
+@media (max-width: 1100px) {
+  .workbench {
+    grid-template-columns: minmax(0, 46%) minmax(0, 54%);
   }
 
-  .postgres-toggle {
-    top: 43px;
-    right: 8px;
-    font-size: 8px;
+  .console-pane {
+    gap: 8px;
+    padding: 14px 12px 10px;
   }
 
-  .postgres-panel {
-    top: 77px;
-    right: 8px;
-    width: calc(100vw - 16px);
-    max-height: calc(100vh - 85px);
+  .console-header {
+    min-height: 70px;
+  }
+
+  .source-key {
+    display: none;
+  }
+
+  .clock-control button {
+    padding-inline: 6px;
+  }
+}
+
+@media (max-width: 760px) {
+  .workbench {
+    grid-template-columns: minmax(270px, 44%) minmax(0, 56%);
+  }
+
+  .console-pane {
+    padding-inline: 8px;
+  }
+
+  .deck,
+  .measurement-rack p,
+  #machine-reset {
+    display: none;
+  }
+
+  .console-header h1 {
+    font-size: 18px;
+  }
+
+  .control-rack {
+    display: grid;
+  }
+
+  .clock-control {
+    justify-content: space-between;
+  }
+
+  .terminal-header {
+    grid-template-columns: 1fr auto;
+  }
+
+  .terminal-lamps {
+    display: none;
+  }
+
+  .terminal-header strong {
+    text-align: left;
+  }
+
+  .postgres-measurement {
+    align-items: start;
+    flex-direction: column;
+    gap: 4px;
   }
 }

@@ -5,59 +5,87 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="A standalone mixed-source shop-floor view of PostgreSQL query and background activity."
+      content="A one-screen psql workbench and layered PostgreSQL architecture machine."
     />
-    <title>PGSimCity — Transaction Machine Spike</title>
+    <title>PGSimCity — PostgreSQL Architecture Workbench</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="./magnum.css" />
   </head>
   <body>
-    <main>
-      <canvas
-        id="machine"
-        width="1440"
-        height="900"
-        aria-label="A mixed-source PostgreSQL machine with a PostgreSQL-measured query arm and modelled concurrent background activity."
-      ></canvas>
-      <div class="readout" aria-live="polite">
-        <span id="clock">00.0 / 36s</span>
-        <span id="run-state">RUNNING · SPACE TO PAUSE</span>
-      </div>
-      <button
-        id="postgres-toggle"
-        class="postgres-toggle"
-        type="button"
-        aria-controls="postgres-panel"
-        aria-expanded="false"
-      >
-        LOAD POSTGRESQL (P)
-      </button>
-      <section id="postgres-panel" class="postgres-panel" hidden>
-        <header>
+    <main class="workbench">
+      <section class="console-pane" aria-label="PostgreSQL controls and psql terminal">
+        <header class="console-header">
           <div>
-            <strong>POSTGRESQL MEASUREMENT (P)</strong>
-            <span id="postgres-status">NOT LOADED · BOARD REMAINS MODELLED</span>
+            <p class="eyebrow">PGSIMCITY / MACHINE ROOM 01</p>
+            <h1>THE UPDATE WORKS</h1>
+            <p class="deck">REAL SQL ON THE LEFT. PROCESS, MEMORY, AND STORAGE ON THE RIGHT.</p>
           </div>
-          <button id="postgres-close" type="button" aria-label="Close PostgreSQL panel">×</button>
+          <div class="source-key" aria-label="Data source key">
+            <span><b class="source-medallion postgres-source">P</b> POSTGRESQL REPORT</span>
+            <span><b class="source-medallion model-source">M</b> MODELLED RHYTHM</span>
+          </div>
         </header>
-        <label for="postgres-sql">SQL · PARSED AND RUN BY PGLITE</label>
-        <textarea id="postgres-sql" rows="5" spellcheck="false">UPDATE accounts
-SET balance = balance + 1, updated_at = now()
-WHERE id = 1
-RETURNING id, balance;</textarea>
-        <div class="postgres-actions">
-          <button id="postgres-run" type="button" disabled>RUN + EXPLAIN</button>
-          <span>CTRL / ⌘ + ENTER</span>
-        </div>
-        <div id="postgres-measurement" class="postgres-measurement">
-          <span>QUERY ARM</span>
-          <strong>MODELLED UNTIL POSTGRESQL LOADS</strong>
-        </div>
-        <pre id="postgres-output" aria-live="polite">PGlite loads only after reader action. The machine itself is already running.</pre>
+
+        <section class="control-rack" aria-label="Machine controls">
+          <div class="postgres-control">
+            <button id="postgres-toggle" type="button">START POSTGRESQL (P)</button>
+            <span id="postgres-status">NOT LOADED · FIRST QUERY MAY START IT</span>
+          </div>
+          <div class="clock-control">
+            <button id="machine-toggle" type="button">PAUSE</button>
+            <button id="machine-reset" type="button">RESET</button>
+            <output id="clock">00.0 / 36s</output>
+          </div>
+        </section>
+
+        <section class="terminal" aria-label="psql terminal">
+          <header class="terminal-header">
+            <span class="terminal-lamps" aria-hidden="true"><i></i><i></i><i></i></span>
+            <strong>PSQL / PGLITE · SINGLE CONNECTION</strong>
+            <span id="terminal-state">OFFLINE</span>
+          </header>
+          <div id="terminal-transcript" class="terminal-transcript" aria-live="polite">
+            <pre class="terminal-banner">psql workbench
+Type SQL directly. Up/Down recalls history.
+Available: \d  \dt  \d+ table  \timing</pre>
+          </div>
+          <form id="terminal-form" class="terminal-entry">
+            <label id="terminal-prompt" for="terminal-input">pgsimcity=#</label>
+            <textarea
+              id="terminal-input"
+              rows="1"
+              spellcheck="false"
+              autocomplete="off"
+              aria-label="psql command"
+              placeholder="SELECT id, balance FROM accounts WHERE id = 42;"
+            ></textarea>
+          </form>
+        </section>
+
+        <footer class="measurement-rack">
+          <div id="postgres-measurement" class="postgres-measurement">
+            <span>QUERY ARM REACH</span>
+            <strong>MODELLED UNTIL POSTGRESQL REPORTS BUFFERS</strong>
+          </div>
+          <p>ENTER RUNS · SHIFT+ENTER ADDS A LINE · SPACE ON THE BOARD PAUSES</p>
+        </footer>
       </section>
-      <p class="fallback">
-        This prototype needs a browser with Canvas 2D support.
-      </p>
+
+      <section class="architecture-pane" aria-label="PostgreSQL architecture">
+        <canvas
+          id="machine"
+          width="720"
+          height="900"
+          tabindex="0"
+          aria-label="A layered PostgreSQL architecture: client and processes above one shared memory segment, backend private memory outside it, then the kernel page cache and durable disk."
+        ></canvas>
+        <div class="architecture-readout">
+          <span id="run-state">RUNNING</span>
+          <span>CLICK BOARD TO PAUSE</span>
+        </div>
+      </section>
+
+      <p class="fallback">This prototype needs a browser with Canvas 2D support.</p>
     </main>
     <script type="module" src="./magnum.js"></script>
   </body>

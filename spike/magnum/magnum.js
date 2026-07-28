@@ -1,37 +1,50 @@
+import { ARCHITECTURE_LAYOUT as layout } from './architecture.js'
+import {
+  formatError,
+  formatReport,
+  formatResult,
+  parseMetaCommand,
+} from './psql.js'
+
 const canvas = document.querySelector('#machine')
+const architecturePane = document.querySelector('.architecture-pane')
 const clock = document.querySelector('#clock')
 const runState = document.querySelector('#run-state')
+const machineToggle = document.querySelector('#machine-toggle')
+const machineReset = document.querySelector('#machine-reset')
 const postgresToggle = document.querySelector('#postgres-toggle')
-const postgresPanel = document.querySelector('#postgres-panel')
-const postgresClose = document.querySelector('#postgres-close')
 const postgresStatus = document.querySelector('#postgres-status')
-const postgresSql = document.querySelector('#postgres-sql')
-const postgresRun = document.querySelector('#postgres-run')
 const postgresMeasurement = document.querySelector('#postgres-measurement')
-const postgresOutput = document.querySelector('#postgres-output')
+const terminalState = document.querySelector('#terminal-state')
+const terminalTranscript = document.querySelector('#terminal-transcript')
+const terminalForm = document.querySelector('#terminal-form')
+const terminalInput = document.querySelector('#terminal-input')
 const ctx = canvas?.getContext('2d')
 
 if (
-  !canvas ||
-  !ctx ||
-  !clock ||
-  !runState ||
-  !postgresToggle ||
-  !postgresPanel ||
-  !postgresClose ||
-  !postgresStatus ||
-  !postgresSql ||
-  !postgresRun ||
-  !postgresMeasurement ||
-  !postgresOutput
+  !canvas
+  || !architecturePane
+  || !ctx
+  || !clock
+  || !runState
+  || !machineToggle
+  || !machineReset
+  || !postgresToggle
+  || !postgresStatus
+  || !postgresMeasurement
+  || !terminalState
+  || !terminalTranscript
+  || !terminalForm
+  || !terminalInput
 ) {
-  throw new Error('The Magnum spike is missing a required browser element')
+  throw new Error('The Magnum workbench is missing a required browser element')
 }
 
-const VIEW_W = 1440
+const VIEW_W = 720
 const VIEW_H = 900
 const MASTER_PERIOD = 36
 const TAU = Math.PI * 2
+const PROMPT = 'pgsimcity=#'
 
 const periods = Object.freeze({
   walwriter: 3,
@@ -42,7 +55,7 @@ const periods = Object.freeze({
   checkpointer: 36,
 })
 
-const ink = {
+const ink = Object.freeze({
   void: '#15100d',
   paper: '#d8c29a',
   paperDim: '#9b845f',
@@ -60,7 +73,70 @@ const ink = {
   red: '#d95d49',
   orange: '#de8d3e',
   ivory: '#f1dfba',
-}
+})
+
+const timelineRows = Object.freeze([
+  Object.freeze(['WALWRITER', periods.walwriter, ink.copperHi]),
+  Object.freeze(['BACKENDS', periods.backends, ink.brassHi]),
+  Object.freeze(['WALSENDER', periods.walsender, ink.blue]),
+  Object.freeze(['BGWRITER', periods.bgwriter, ink.teal]),
+  Object.freeze(['AUTOVAC ×3', periods.autovacuum, ink.green]),
+  Object.freeze(['CHECKPOINT', periods.checkpointer, ink.red]),
+])
+
+const backendSpecs = Object.freeze([
+  Object.freeze({
+    name: 'B1',
+    offset: 0,
+    pivotX: 132,
+    pivotY: 235,
+    fetchX: 144,
+    fetchY: 390,
+    hitFetchX: 144,
+    hitFetchY: 390,
+    workX: 164,
+    workY: 263,
+    walX: 472,
+    walY: 373,
+    commitX: 588,
+    commitY: 443,
+    miss: false,
+  }),
+  Object.freeze({
+    name: 'B2 QUERY',
+    offset: 2,
+    pivotX: 277,
+    pivotY: 225,
+    fetchX: 280,
+    fetchY: 704,
+    hitFetchX: 280,
+    hitFetchY: 420,
+    workX: 466,
+    workY: 222,
+    walX: 526,
+    walY: 373,
+    commitX: 588,
+    commitY: 443,
+    miss: true,
+  }),
+  Object.freeze({
+    name: 'B3',
+    offset: 4,
+    pivotX: 382,
+    pivotY: 235,
+    fetchX: 370,
+    fetchY: 405,
+    hitFetchX: 370,
+    hitFetchY: 405,
+    workX: 382,
+    workY: 263,
+    walX: 580,
+    walY: 373,
+    commitX: 602,
+    commitY: 443,
+    miss: false,
+  }),
+])
 
 const postgres = {
   status: 'idle',
@@ -69,60 +145,15 @@ const postgres = {
   plan: null,
   initError: null,
   loadPromise: null,
+  timing: false,
 }
-
-const QUERY_ARM_INDEX = 1
-
-const backendSpecs = [
-  {
-    name: 'B1',
-    offset: 0,
-    pivot: [310, 244],
-    fetch: [410, 327],
-    work: [454, 383],
-    wal: [653, 259],
-    commit: [698, 291],
-    miss: false,
-  },
-  {
-    name: 'B2 QUERY',
-    offset: 2,
-    pivot: [520, 188],
-    fetch: [524, 548],
-    hitFetch: [524, 382],
-    work: [545, 350],
-    wal: [722, 254],
-    commit: [752, 291],
-    miss: true,
-  },
-  {
-    name: 'B3',
-    offset: 4,
-    pivot: [715, 222],
-    fetch: [662, 334],
-    work: [655, 401],
-    wal: [822, 277],
-    commit: [842, 321],
-    miss: false,
-  },
-]
-
-const timelineRows = [
-  ['WALWRITER', periods.walwriter, ink.copperHi],
-  ['BACKENDS', periods.backends, ink.brassHi],
-  ['WALSENDER', periods.walsender, ink.blue],
-  ['BGWRITER', periods.bgwriter, ink.teal],
-  ['AUTOVACUUM ×3', periods.autovacuum, ink.green],
-  ['CHECKPOINTER', periods.checkpointer, ink.red],
-]
 
 const params = new URLSearchParams(window.location.search)
 const suppliedTimeParam = params.get('t')
 const suppliedTime = suppliedTimeParam === null ? Number.NaN : Number(suppliedTimeParam)
 let manualTime = Number.isFinite(suppliedTime) ? wrap(suppliedTime, MASTER_PERIOD) : 0
-let paused =
-  Number.isFinite(suppliedTime) ||
-  params.get('paused') === '1'
+let paused = Number.isFinite(suppliedTime) || params.get('paused') === '1'
+let labelsVisible = params.get('labels') !== '0'
 let startAt = performance.now() / 1000 - manualTime
 let lastFrame = performance.now()
 let cssWidth = 0
@@ -130,6 +161,10 @@ let cssHeight = 0
 let viewScale = 1
 let viewX = 0
 let viewY = 0
+let queryBusy = false
+let historyIndex = 0
+let historyDraft = ''
+const history = []
 
 function clamp(value, low = 0, high = 1) {
   return Math.max(low, Math.min(high, value))
@@ -164,14 +199,11 @@ function lerp(a, b, amount) {
   return a + (b - a) * amount
 }
 
-function mixPoint(a, b, amount) {
-  return [lerp(a[0], b[0], amount), lerp(a[1], b[1], amount)]
-}
-
 function resize() {
   const ratio = Math.min(window.devicePixelRatio || 1, 2)
-  cssWidth = window.innerWidth
-  cssHeight = window.innerHeight
+  const bounds = architecturePane.getBoundingClientRect()
+  cssWidth = Math.max(1, bounds.width)
+  cssHeight = Math.max(1, bounds.height)
   canvas.width = Math.max(1, Math.floor(cssWidth * ratio))
   canvas.height = Math.max(1, Math.floor(cssHeight * ratio))
   canvas.style.width = `${cssWidth}px`
@@ -216,7 +248,27 @@ function line(x1, y1, x2, y2, color, width = 1, dash = []) {
   ctx.setLineDash([])
 }
 
+function arrow(x1, y1, x2, y2, color, width = 2) {
+  line(x1, y1, x2, y2, color, width)
+  const angle = Math.atan2(y2 - y1, x2 - x1)
+  const size = 7
+  ctx.beginPath()
+  ctx.moveTo(x2, y2)
+  ctx.lineTo(
+    x2 - Math.cos(angle - 0.55) * size,
+    y2 - Math.sin(angle - 0.55) * size,
+  )
+  ctx.lineTo(
+    x2 - Math.cos(angle + 0.55) * size,
+    y2 - Math.sin(angle + 0.55) * size,
+  )
+  ctx.closePath()
+  ctx.fillStyle = color
+  ctx.fill()
+}
+
 function text(value, x, y, size, color, align = 'left', weight = 600) {
+  if (!labelsVisible) return
   ctx.fillStyle = color
   ctx.font = `${weight} ${size}px Georgia, "Times New Roman", serif`
   ctx.textAlign = align
@@ -225,6 +277,7 @@ function text(value, x, y, size, color, align = 'left', weight = 600) {
 }
 
 function mono(value, x, y, size, color, align = 'left', weight = 600) {
+  if (!labelsVisible) return
   ctx.fillStyle = color
   ctx.font = `${weight} ${size}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`
   ctx.textAlign = align
@@ -232,14 +285,14 @@ function mono(value, x, y, size, color, align = 'left', weight = 600) {
   ctx.fillText(value, x, y)
 }
 
-function drawIsoPlate(x, y, width, height, depth, fill, edge = ink.brassDark) {
+function drawIsoPlate(x, y, width, height, depth, fill, edge = ink.brassDark, radius = 8) {
   ctx.beginPath()
   ctx.moveTo(x, y + height)
   ctx.lineTo(x + width, y + height)
   ctx.lineTo(x + width + depth, y + height - depth)
   ctx.lineTo(x + depth, y + height - depth)
   ctx.closePath()
-  fillStroke(ink.brassDark, '#241610', 2)
+  fillStroke(ink.brassDark, '#241610', 1.5)
 
   ctx.beginPath()
   ctx.moveTo(x + width, y)
@@ -247,20 +300,20 @@ function drawIsoPlate(x, y, width, height, depth, fill, edge = ink.brassDark) {
   ctx.lineTo(x + width + depth, y + height - depth)
   ctx.lineTo(x + width, y + height)
   ctx.closePath()
-  fillStroke('#4a2c1b', '#241610', 2)
+  fillStroke('#4a2c1b', '#241610', 1.5)
 
-  pathRoundRect(x, y, width, height, 12)
-  fillStroke(fill, edge, 3)
+  pathRoundRect(x, y, width, height, radius)
+  fillStroke(fill, edge, 2)
 }
 
-function drawScrew(x, y, radius = 5) {
+function drawScrew(x, y, radius = 4) {
   ctx.beginPath()
   ctx.arc(x, y, radius, 0, TAU)
-  fillStroke(ink.ironHi, '#171312', 1.5)
-  line(x - radius * 0.55, y, x + radius * 0.55, y, '#171312', 1.5)
+  fillStroke(ink.ironHi, '#171312', 1)
+  line(x - radius * 0.55, y, x + radius * 0.55, y, '#171312', 1)
 }
 
-function drawSourceMedallion(x, y, source, radius = 12) {
+function drawSourceMedallion(x, y, source, radius = 8) {
   ctx.save()
   ctx.beginPath()
   ctx.arc(x, y, radius, 0, TAU)
@@ -268,37 +321,25 @@ function drawSourceMedallion(x, y, source, radius = 12) {
   ctx.fillStyle = source === 'postgres' ? '#31575a' : '#3d3027'
   ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2)
   if (source === 'model') {
-    for (let d = -radius * 2; d <= radius * 2; d += 5) {
-      line(x - radius + d, y + radius, x + radius + d, y - radius, '#7a5d42', 1)
+    for (let d = -radius * 2; d <= radius * 2; d += 4) {
+      line(x - radius + d, y + radius, x + radius + d, y - radius, '#7a5d42', 0.8)
     }
   }
   ctx.restore()
   ctx.beginPath()
   ctx.arc(x, y, radius, 0, TAU)
   ctx.strokeStyle = source === 'postgres' ? '#9fcfd0' : ink.paperDim
-  ctx.lineWidth = 1.5
+  ctx.lineWidth = 1
   ctx.stroke()
   mono(source === 'postgres' ? 'P' : 'M', x, y + 0.5, radius, ink.ivory, 'center', 800)
 }
 
-function drawModelMedallion(x, y, radius = 12) {
-  drawSourceMedallion(x, y, 'model', radius)
-}
-
-function drawPlaque(label, period, x, y, width = 154, source = 'model') {
-  pathRoundRect(x, y, width, 29, 4)
-  fillStroke('#27201c', '#8b6940', 1.5)
-  drawSourceMedallion(x + 15, y + 14.5, source, 9)
-  mono(label, x + 30, y + 11, 10, ink.ivory, 'left', 750)
-  mono(
-    source === 'postgres' ? `${period}s M` : `${period}s`,
-    x + width - 9,
-    y + 20,
-    8,
-    ink.paperDim,
-    'right',
-    650,
-  )
+function drawPlaque(label, period, x, y, width, source = 'model') {
+  pathRoundRect(x, y, width, 24, 4)
+  fillStroke('#27201c', '#8b6940', 1)
+  drawSourceMedallion(x + 12, y + 12, source, 7)
+  mono(label, x + 23, y + 9, 7.5, ink.ivory, 'left', 750)
+  mono(`${period}s`, x + width - 7, y + 17, 6.5, ink.paperDim, 'right', 650)
 }
 
 function drawGear(x, y, radius, teeth, angle, fill = ink.brass) {
@@ -306,170 +347,240 @@ function drawGear(x, y, radius, teeth, angle, fill = ink.brass) {
   ctx.translate(x, y)
   ctx.rotate(angle)
   ctx.beginPath()
-  for (let i = 0; i < teeth * 2; i += 1) {
-    const a = (i / (teeth * 2)) * TAU
-    const r = i % 2 === 0 ? radius : radius * 0.84
+  for (let index = 0; index < teeth * 2; index += 1) {
+    const a = (index / (teeth * 2)) * TAU
+    const r = index % 2 === 0 ? radius : radius * 0.83
     const px = Math.cos(a) * r
     const py = Math.sin(a) * r
-    if (i === 0) ctx.moveTo(px, py)
+    if (index === 0) ctx.moveTo(px, py)
     else ctx.lineTo(px, py)
   }
   ctx.closePath()
-  fillStroke(fill, ink.brassDark, 2)
+  fillStroke(fill, ink.brassDark, 1.5)
   ctx.beginPath()
-  ctx.arc(0, 0, radius * 0.45, 0, TAU)
-  fillStroke(ink.iron, ink.brassHi, 2)
-  drawScrew(0, 0, Math.max(3, radius * 0.12))
+  ctx.arc(0, 0, radius * 0.43, 0, TAU)
+  fillStroke(ink.iron, ink.brassHi, 1.5)
+  drawScrew(0, 0, Math.max(2.5, radius * 0.12))
   ctx.restore()
 }
 
-function drawTrack(points, color = '#66513c', width = 8) {
+function drawTrack(points, color = '#66513c', width = 6) {
   ctx.beginPath()
   ctx.moveTo(points[0][0], points[0][1])
-  for (let i = 1; i < points.length; i += 1) {
-    ctx.lineTo(points[i][0], points[i][1])
+  for (let index = 1; index < points.length; index += 1) {
+    ctx.lineTo(points[index][0], points[index][1])
   }
-  ctx.strokeStyle = '#211916'
-  ctx.lineWidth = width + 5
   ctx.lineJoin = 'round'
+  ctx.strokeStyle = ink.groove
+  ctx.lineWidth = width + 4
   ctx.stroke()
   ctx.strokeStyle = color
   ctx.lineWidth = width
   ctx.stroke()
   ctx.strokeStyle = '#b7925a'
-  ctx.lineWidth = 1
-  ctx.setLineDash([3, 10])
+  ctx.lineWidth = 0.8
+  ctx.setLineDash([3, 8])
   ctx.stroke()
   ctx.setLineDash([])
 }
 
-function pointOnPolyline(points, progress) {
+function pointOnRoute(points, progress) {
   let total = 0
-  const lengths = []
-  for (let i = 1; i < points.length; i += 1) {
-    const length = Math.hypot(
-      points[i][0] - points[i - 1][0],
-      points[i][1] - points[i - 1][1],
+  for (let index = 1; index < points.length; index += 1) {
+    total += Math.hypot(
+      points[index][0] - points[index - 1][0],
+      points[index][1] - points[index - 1][1],
     )
-    lengths.push(length)
-    total += length
   }
   let remaining = clamp(progress) * total
-  for (let i = 0; i < lengths.length; i += 1) {
-    if (remaining <= lengths[i]) {
-      const p = remaining / lengths[i]
-      return mixPoint(points[i], points[i + 1], p)
+  for (let index = 1; index < points.length; index += 1) {
+    const x1 = points[index - 1][0]
+    const y1 = points[index - 1][1]
+    const x2 = points[index][0]
+    const y2 = points[index][1]
+    const length = Math.hypot(x2 - x1, y2 - y1)
+    if (remaining <= length) {
+      const amount = remaining / length
+      return { x: lerp(x1, x2, amount), y: lerp(y1, y2, amount) }
     }
-    remaining -= lengths[i]
+    remaining -= length
   }
-  return points.at(-1)
+  const last = points.at(-1)
+  return { x: last[0], y: last[1] }
 }
 
 function drawBackdrop() {
   ctx.fillStyle = ink.void
   ctx.fillRect(0, 0, VIEW_W, VIEW_H)
-
-  const gradient = ctx.createRadialGradient(710, 390, 90, 710, 390, 810)
+  const gradient = ctx.createRadialGradient(350, 370, 70, 350, 370, 640)
   gradient.addColorStop(0, '#443226')
   gradient.addColorStop(0.55, '#241b16')
   gradient.addColorStop(1, '#0e0b09')
   ctx.fillStyle = gradient
   ctx.fillRect(0, 0, VIEW_W, VIEW_H)
 
-  ctx.globalAlpha = 0.12
-  for (let x = -VIEW_H; x < VIEW_W; x += 24) {
-    line(x, VIEW_H, x + VIEW_H, 0, '#b58c58', 1)
+  ctx.globalAlpha = 0.1
+  for (let x = -VIEW_H; x < VIEW_W; x += 22) {
+    line(x, VIEW_H, x + VIEW_H, 0, '#b58c58', 0.8)
   }
   ctx.globalAlpha = 1
 
-  text('THE UPDATE WORKS', 54, 39, 24, ink.ivory, 'left', 700)
+  text('POSTGRESQL ARCHITECTURE', 24, 28, 20, ink.ivory, 'left', 700)
   mono(
-    'ONE COMPRESSED 36s SHOP-FLOOR CYCLE · MIXED-SOURCE SEMI-SIMULATOR',
-    54,
-    67,
-    11,
+    'CLIENT → PROCESSES → SHARED MEMORY → KERNEL → DISK',
+    24,
+    51,
+    8,
     ink.paperDim,
     'left',
     650,
   )
-
-  drawSourceMedallion(733, 54, 'postgres', 13)
-  mono('POSTGRESQL REPORT', 755, 54, 10, ink.paper, 'left', 650)
-  drawSourceMedallion(906, 54, 'model', 13)
-  mono('MODELLED RHYTHM', 928, 54, 10, ink.paper, 'left', 650)
+  drawSourceMedallion(493, 49, 'postgres', 9)
+  mono('REPORT', 507, 49, 7, ink.paper, 'left', 700)
+  drawSourceMedallion(574, 49, 'model', 9)
+  mono('RHYTHM', 588, 49, 7, ink.paper, 'left', 700)
 }
 
-function drawBoard(shake) {
+function drawLayerConnections() {
+  arrow(200, 128, 230, 128, ink.blue, 3)
+  mono('CONNECTION', 215, 115, 6.5, ink.blue, 'center', 700)
+
+  line(306, 164, 306, 188, '#967247', 3)
+  line(132, 188, 382, 188, '#967247', 2)
+  arrow(132, 188, 132, 210, ink.brassHi, 2)
+  arrow(277, 188, 277, 202, ink.brassHi, 2)
+  arrow(382, 188, 382, 210, ink.brassHi, 2)
+  mono('FORK', 321, 180, 6.5, ink.brassHi, 'left', 700)
+
+  line(245, 536, 245, 596, '#516c60', 8)
+  line(245, 654, 245, 674, '#516c60', 8)
+  line(506, 542, 506, 596, '#7e5139', 7)
+  line(506, 654, 506, 674, '#7e5139', 7)
+  line(586, 542, 586, 596, '#705c46', 5)
+  line(586, 654, 586, 674, '#705c46', 5)
+}
+
+function drawClientAndPostmaster() {
+  const client = layout.client
+  const postmaster = layout.postmaster
+
+  drawIsoPlate(client.x, client.y, client.width, client.height, 5, '#2b3433', '#5a8d8e')
+  pathRoundRect(client.x + 14, client.y + 14, 80, 40, 3)
+  fillStroke('#0d1413', '#79aeb0', 1.2)
+  mono('pgsimcity=#', client.x + 22, client.y + 28, 7, '#a5d2cf', 'left', 700)
+  line(client.x + 22, client.y + 40, client.x + 73, client.y + 40, '#547b78', 1)
+  drawGear(client.x + 121, client.y + 36, 20, 10, manualTime * 0.3, '#4c7e84')
+  mono('CLIENT / PSQL', client.x + 12, client.y + 62, 7, ink.paper, 'left', 750)
+
+  drawIsoPlate(
+    postmaster.x,
+    postmaster.y,
+    postmaster.width,
+    postmaster.height,
+    5,
+    '#3a3028',
+    '#a3723a',
+  )
+  drawGear(postmaster.x + 43, postmaster.y + 35, 23, 12, -manualTime * 0.22, ink.brass)
+  for (let port = 0; port < 3; port += 1) {
+    ctx.beginPath()
+    ctx.arc(postmaster.x + 92 + port * 18, postmaster.y + 33, 6, 0, TAU)
+    fillStroke('#25201d', port === 1 ? ink.copperHi : ink.brassHi, 1.5)
+  }
+  mono('POSTMASTER', postmaster.x + 83, postmaster.y + 58, 8, ink.ivory, 'center', 750)
+}
+
+function drawPrivateMemory() {
+  const box = layout.privateMemory
   ctx.save()
-  ctx.translate(shake, -Math.abs(shake) * 0.35)
   ctx.shadowColor = '#000'
-  ctx.shadowBlur = 28
-  ctx.shadowOffsetY = 18
-  drawIsoPlate(45, 105, 1040, 540, 15, '#4a382b', '#9e7440')
+  ctx.shadowBlur = 12
+  ctx.shadowOffsetY = 7
+  drawIsoPlate(box.x, box.y, box.width, box.height, 6, '#312a26', '#8b6940')
+  ctx.restore()
+  pathRoundRect(box.x + 12, box.y + 31, 108, 46, 4)
+  fillStroke('#41362f', '#a77c46', 1.2)
+  pathRoundRect(box.x + 133, box.y + 31, 102, 46, 4)
+  fillStroke('#282a2a', '#68746f', 1.2)
+  for (let slot = 0; slot < 4; slot += 1) {
+    line(
+      box.x + 23,
+      box.y + 44 + slot * 7,
+      box.x + 99 - slot * 5,
+      box.y + 44 + slot * 7,
+      slot === 2 ? ink.copperHi : ink.paperDim,
+      2,
+    )
+  }
+  for (let file = 0; file < 3; file += 1) {
+    pathRoundRect(box.x + 146 + file * 26, box.y + 43, 18, 25, 2)
+    fillStroke('#1a1d1d', '#6c817c', 1)
+  }
+  mono('BACKEND PRIVATE MEMORY · OUTSIDE SHARED SEGMENT', box.x + 12, box.y + 16, 7, ink.ivory, 'left', 750)
+  mono('work_mem', box.x + 65, box.y + 84, 7, ink.brassHi, 'center', 700)
+  mono('TEMP FILES', box.x + 184, box.y + 84, 7, ink.paperDim, 'center', 700)
+  line(392, 236, box.x, 236, '#8b6940', 2, [4, 4])
+}
+
+function drawSharedMemoryContainer(shake) {
+  const box = layout.sharedMemory
+  ctx.save()
+  ctx.translate(shake, -Math.abs(shake) * 0.2)
+  ctx.shadowColor = '#000'
+  ctx.shadowBlur = 20
+  ctx.shadowOffsetY = 11
+  drawIsoPlate(box.x, box.y, box.width, box.height, 8, '#332a24', '#c8923e', 10)
   ctx.shadowColor = 'transparent'
 
-  ctx.strokeStyle = '#6c543e'
-  ctx.lineWidth = 1
-  for (let x = 75; x < 1060; x += 40) line(x, 124, x, 625, '#5a4434', 0.7)
-  for (let y = 125; y < 625; y += 40) line(65, y, 1065, y, '#5a4434', 0.7)
-
-  drawScrew(68, 128, 7)
-  drawScrew(1060, 128, 7)
-  drawScrew(68, 621, 7)
-  drawScrew(1060, 621, 7)
-
-  drawSignalConduits()
-  drawVacuumArea()
-  drawStorage()
-  drawBufferTray()
-  drawBgwriter()
-  drawWalStation()
-  drawCheckpointer()
-  drawBackends()
+  pathRoundRect(box.x + 10, box.y + 10, box.width - 20, box.height - 20, 7)
+  fillStroke('rgb(26 23 21 / 45%)', '#8a6438', 1.2)
+  line(box.x + 18, box.y + 31, box.x + box.width - 18, box.y + 31, '#805e38', 1)
+  drawScrew(box.x + 13, box.y + 13, 4)
+  drawScrew(box.x + box.width - 13, box.y + 13, 4)
+  drawScrew(box.x + 13, box.y + box.height - 13, 4)
+  drawScrew(box.x + box.width - 13, box.y + box.height - 13, 4)
+  mono('ONE SHARED MEMORY SEGMENT', box.x + 26, box.y + 17, 9, ink.brassHi, 'left', 800)
+  mono('VISIBLE CONTAINMENT · ALL BACKENDS ATTACH', box.x + box.width - 26, box.y + 17, 6.5, ink.paperDim, 'right', 650)
   ctx.restore()
 }
 
-function drawSignalConduits() {
-  drawTrack(
-    [
-      [632, 258],
-      [720, 258],
-      [790, 277],
-      [850, 277],
-    ],
-    '#6f4b36',
-    9,
-  )
-  for (let x = 655; x <= 835; x += 30) {
-    ctx.beginPath()
-    ctx.arc(x, 269 - Math.sin((x - 650) / 40) * 7, 3, 0, TAU)
-    ctx.fillStyle = ink.copperHi
-    ctx.fill()
+function drawBufferPool(shake) {
+  const box = layout.bufferPool
+  ctx.save()
+  ctx.translate(shake, -Math.abs(shake) * 0.2)
+  pathRoundRect(box.x, box.y, box.width, box.height, 6)
+  fillStroke('#42372f', '#aa7e43', 2)
+  mono('BUFFER POOL (shared_buffers)', box.x + 12, box.y + 16, 8, ink.paper, 'left', 750)
+  if (postgres.plan) {
+    const buffers = postgres.plan.buffers
+    mono(
+      `P HIT ${buffers.sharedHits} / READ ${buffers.sharedReads}`,
+      box.x + box.width - 12,
+      box.y + 16,
+      6.5,
+      buffers.sharedReads > 0 ? ink.copperHi : '#9fcfd0',
+      'right',
+      750,
+    )
+  } else {
+    mono('M VISIBLE PAGES', box.x + box.width - 12, box.y + 16, 6.5, ink.paperDim, 'right', 650)
   }
-}
 
-function drawBufferTray() {
-  ctx.shadowColor = '#17100d'
-  ctx.shadowBlur = 10
-  ctx.shadowOffsetY = 5
-  drawIsoPlate(370, 298, 355, 205, 10, '#493d34', '#aa7e43')
-  ctx.shadowColor = 'transparent'
-
-  const dirtyPattern = [false, true, false, true, true, false, false, true, false, false, true, false]
   let slot = 0
   for (let row = 0; row < 3; row += 1) {
     for (let col = 0; col < 4; col += 1) {
-      const x = 390 + col * 80
-      const y = 323 + row * 53
-      pathRoundRect(x, y, 65, 38, 4)
-      fillStroke('#251e1a', '#70583e', 1.5)
-      pathRoundRect(x + 5, y + 5, 55, 27, 3)
-      fillStroke(dirtyPattern[slot] ? '#8c4e2e' : '#53665a', null)
-      line(x + 13, y + 13, x + 50, y + 13, dirtyPattern[slot] ? '#d4804e' : '#81a98d', 2)
-      line(x + 13, y + 22, x + 41, y + 22, '#bda277', 1.5)
-      if (dirtyPattern[slot]) {
+      const x = box.x + 14 + col * 78
+      const y = box.y + 31 + row * 44
+      const dirty = [false, true, false, true, true, false, false, true, false, false, true, false][slot]
+      pathRoundRect(x, y, 65, 34, 3)
+      fillStroke('#251e1a', '#70583e', 1)
+      pathRoundRect(x + 4, y + 4, 57, 25, 2)
+      fillStroke(dirty ? '#8c4e2e' : '#53665a', null)
+      line(x + 11, y + 12, x + 51, y + 12, dirty ? '#d4804e' : '#81a98d', 1.5)
+      line(x + 11, y + 21, x + 40, y + 21, '#bda277', 1)
+      if (dirty) {
         ctx.beginPath()
-        ctx.arc(x + 55, y + 9, 3.5, 0, TAU)
+        ctx.arc(x + 56, y + 8, 2.5, 0, TAU)
         ctx.fillStyle = ink.orange
         ctx.fill()
       }
@@ -477,210 +588,245 @@ function drawBufferTray() {
     }
   }
 
-  mono('BUFFER POOL', 386, 487, 10, ink.paper, 'left', 750)
-  if (postgres.plan) {
-    const buffers = postgres.plan.buffers
-    const reach = buffers.sharedReads > 0 ? 'LONG' : 'SHORT'
-    mono(
-      `P  HIT ${buffers.sharedHits} · READ ${buffers.sharedReads} · ${reach}`,
-      710,
-      487,
-      8,
-      buffers.sharedReads > 0 ? ink.copperHi : '#9fcfd0',
-      'right',
-      700,
-    )
-  } else {
-    mono('M  SHORT / LONG REACH', 710, 487, 8, ink.paperDim, 'right', 600)
+  const p = phase(manualTime, periods.bgwriter)
+  const sweep = p < 0.5 ? easeInOut(p * 2) : 1 - easeInOut((p - 0.5) * 2)
+  const cartX = lerp(box.x + 34, box.x + box.width - 38, sweep)
+  line(box.x + 18, box.y + 174, box.x + box.width - 18, box.y + 174, ink.groove, 7)
+  line(box.x + 18, box.y + 174, box.x + box.width - 18, box.y + 174, ink.teal, 1.5)
+  pathRoundRect(cartX - 18, box.y + 161, 36, 23, 4)
+  fillStroke('#386554', '#9bb589', 1.5)
+  if (p > 0.1 && p < 0.58) {
+    pathRoundRect(cartX - 10, box.y + 155, 20, 9, 2)
+    fillStroke(ink.orange, ink.ivory, 0.8)
   }
+  drawSourceMedallion(cartX, box.y + 173, 'model', 6)
+  ctx.restore()
+}
+
+function commitStrength(time) {
+  let strength = 0
+  for (let index = 0; index < backendSpecs.length; index += 1) {
+    const spec = backendSpecs[index]
+    const profile = backendProfile(spec, index)
+    if (!profile.active) continue
+    strength = Math.max(
+      strength,
+      pulse(phase(time, periods.backends, spec.offset), 0.775, 0.115),
+    )
+  }
+  return smooth(strength)
+}
+
+function drawWalAndSharedTables(shake) {
+  const wal = layout.walBuffers
+  const proc = layout.procArray
+  const locks = layout.lockTable
+  const xact = layout.pgXact
+  const writerP = phase(manualTime, periods.walwriter)
+  const lock = commitStrength(manualTime)
+
+  ctx.save()
+  ctx.translate(shake, -Math.abs(shake) * 0.2)
+
+  pathRoundRect(wal.x, wal.y, wal.width, wal.height, 5)
+  fillStroke('#3c2d28', '#ad6942', 2)
+  mono('WAL BUFFERS', wal.x + 10, wal.y + 13, 8, ink.copperHi, 'left', 800)
+  drawGear(wal.x + 73, wal.y + 42, 24, 12, writerP * TAU, ink.copper)
+  drawGear(wal.x + 118, wal.y + 43, 14, 9, -writerP * TAU * 1.6, ink.brass)
+  for (let index = 0; index < 4; index += 1) {
+    line(
+      wal.x + 144,
+      wal.y + 29 + index * 8,
+      wal.x + 209,
+      wal.y + 29 + index * 8,
+      index % 2 ? ink.red : ink.copperHi,
+      3,
+    )
+  }
+
+  pathRoundRect(proc.x, proc.y, proc.width, proc.height, 4)
+  fillStroke('#2d3432', '#6f9b8d', 1.5)
+  mono('PROCARRAY', proc.x + 8, proc.y + 11, 7, '#9cc4b4', 'left', 750)
+  for (let index = 0; index < 5; index += 1) {
+    pathRoundRect(proc.x + 8 + index * 18, proc.y + 24, 13, 16, 2)
+    fillStroke(index < 3 ? '#597761' : '#272c29', '#86a08d', 0.8)
+  }
+
+  pathRoundRect(locks.x, locks.y, locks.width, locks.height, 4)
+  fillStroke('#382b28', '#a2614b', 1.5)
+  mono('LOCK TABLE', locks.x + 8, locks.y + 11, 7, '#e39a84', 'left', 750)
+  const pressY = lerp(locks.y + 22, locks.y + 36, lock)
+  line(locks.x + 18, locks.y + 20, locks.x + 18, pressY, ink.iron, 5)
+  line(locks.x + 87, locks.y + 20, locks.x + 87, pressY, ink.iron, 5)
+  pathRoundRect(locks.x + 13, pressY, 79, 9, 2)
+  fillStroke(lock > 0.5 ? ink.red : ink.ironHi, ink.brassHi, 1)
+
+  pathRoundRect(xact.x, xact.y, xact.width, xact.height, 4)
+  fillStroke('#33302b', '#83724e', 1.5)
+  mono('pg_xact · SLRU BUFFERS', xact.x + 9, xact.y + 12, 7, ink.paper, 'left', 750)
+  for (let index = 0; index < 8; index += 1) {
+    const x = xact.x + 11 + index * 25
+    ctx.beginPath()
+    ctx.ellipse(x + 8, xact.y + 36, 8, 12, 0, 0, TAU)
+    fillStroke(index < 5 ? '#66583d' : '#292825', '#a68d5d', 0.8)
+    line(x + 3, xact.y + 36, x + 13, xact.y + 36, index % 2 ? ink.green : ink.paperDim, 1)
+  }
+  ctx.restore()
+}
+
+function drawBackgroundProcesses() {
+  drawPlaque('CHECKPOINTER', periods.checkpointer, 52, 268, 110)
+  drawPlaque('BGWRITER', periods.bgwriter, 168, 268, 96)
+  drawPlaque('AUTOVAC ×3', periods.autovacuum, 270, 268, 107)
 }
 
 function backendProfile(spec, index) {
-  if (index !== QUERY_ARM_INDEX || postgres.report === null) {
+  if (index !== 1 || postgres.report === null) {
     return {
       active: true,
       miss: spec.miss,
-      fetch: spec.fetch,
+      fetchX: spec.fetchX,
+      fetchY: spec.fetchY,
       source: 'model',
     }
   }
-
   if (!postgres.plan) {
     return {
       active: false,
       miss: false,
-      fetch: spec.hitFetch ?? spec.fetch,
+      fetchX: spec.hitFetchX,
+      fetchY: spec.hitFetchY,
       source: 'postgres',
     }
   }
-
   const miss = postgres.plan.buffers.sharedReads > 0
   return {
     active: true,
     miss,
-    fetch: miss ? spec.fetch : (spec.hitFetch ?? spec.fetch),
+    fetchX: miss ? spec.fetchX : spec.hitFetchX,
+    fetchY: miss ? spec.fetchY : spec.hitFetchY,
     source: 'postgres',
   }
 }
 
-function drawStorage() {
-  drawTrack(
-    [
-      [522, 485],
-      [522, 540],
-      [560, 581],
-    ],
-    '#3f3832',
-    18,
-  )
-
-  ctx.save()
-  ctx.globalAlpha = 0.9
-  drawIsoPlate(460, 523, 208, 88, 8, '#2a2827', '#6f5c46')
-  for (let i = 0; i < 4; i += 1) {
-    pathRoundRect(478 + i * 44, 544, 34, 38, 3)
-    fillStroke('#151515', '#635b50', 1)
-    line(485 + i * 44, 553, 503 + i * 44, 553, ink.blue, 2)
-  }
-  mono('STORAGE · LONG REACH', 476, 598, 9, ink.paperDim, 'left', 650)
-  ctx.restore()
-
-  const querySpec = backendSpecs[QUERY_ARM_INDEX]
-  const queryProfile = backendProfile(querySpec, QUERY_ARM_INDEX)
-  if (queryProfile.active && queryProfile.miss) {
-    const missPhase = phase(currentTime(), periods.backends, querySpec.offset)
-    const lift = missPhase < 0.25 ? smooth(range(missPhase, 0.02, 0.25)) : 0
-    const pageY = lerp(562, 522, lift)
-    pathRoundRect(514, pageY, 20, 13, 2)
-    fillStroke(ink.blue, ink.ivory, 1)
-  }
-}
-
-function drawBgwriter() {
-  const p = phase(currentTime(), periods.bgwriter)
-  const sweep = p < 0.5 ? easeInOut(p * 2) : 1 - easeInOut((p - 0.5) * 2)
-  const x = lerp(390, 718, sweep)
-  const carryingDirtyPage = p > 0.12 && p < 0.56
-
-  line(386, 514, 727, 514, '#161311', 9)
-  line(386, 514, 727, 514, ink.teal, 2)
-  for (let tx = 397; tx < 720; tx += 35) line(tx, 508, tx, 520, '#8f7b5f', 2)
-  drawTrack(
-    [
-      [722, 514],
-      [746, 532],
-      [746, 551],
-    ],
-    '#486b5c',
-    6,
-  )
-
-  ctx.save()
-  ctx.translate(x, 514)
-  pathRoundRect(-24, -17, 48, 29, 5)
-  fillStroke('#386554', '#9bb589', 2)
-  if (carryingDirtyPage) {
-    pathRoundRect(-13, -22, 26, 12, 2)
-    fillStroke(ink.orange, ink.ivory, 1)
-  }
-  for (let i = -14; i <= 14; i += 14) {
-    line(i, 12, i - 5, 26, ink.teal, 3)
-  }
-  drawScrew(0, -3, 5)
-  ctx.restore()
-
-  drawPlaque('BGWRITER', periods.bgwriter, 734, 478, 138)
-}
-
 function backendTarget(spec, p, profile) {
-  const home = [spec.pivot[0], spec.pivot[1] + 24]
-  if (!profile.active) return home
-  const fetchReached = profile.miss ? 0.12 : 0.055
-  const fetchDone = profile.miss ? 0.3 : 0.14
-  const workReached = profile.miss ? 0.42 : 0.25
+  const homeX = spec.pivotX
+  const homeY = spec.pivotY + 18
+  if (!profile.active) return { x: homeX, y: homeY }
+  const fetchReached = profile.miss ? 0.14 : 0.07
+  const fetchDone = profile.miss ? 0.3 : 0.15
+  const workReached = profile.miss ? 0.42 : 0.27
   if (p < fetchReached) {
-    return mixPoint(home, profile.fetch, smooth(range(p, 0, fetchReached)))
+    const amount = smooth(range(p, 0, fetchReached))
+    return {
+      x: lerp(homeX, profile.fetchX, amount),
+      y: lerp(homeY, profile.fetchY, amount),
+    }
   }
-  if (p < fetchDone) return profile.fetch
+  if (p < fetchDone) return { x: profile.fetchX, y: profile.fetchY }
   if (p < workReached) {
-    return mixPoint(profile.fetch, spec.work, easeInOut(range(p, fetchDone, workReached)))
+    const amount = easeInOut(range(p, fetchDone, workReached))
+    return {
+      x: lerp(profile.fetchX, spec.workX, amount),
+      y: lerp(profile.fetchY, spec.workY, amount),
+    }
   }
-  if (p < 0.44) return spec.work
-  if (p < 0.56) return mixPoint(spec.work, spec.wal, easeInOut(range(p, 0.44, 0.56)))
-  if (p < 0.62) return spec.wal
-  if (p < 0.65) return mixPoint(spec.wal, spec.commit, easeInOut(range(p, 0.62, 0.65)))
-  if (p < 0.9) return spec.commit
-  return mixPoint(spec.commit, home, easeInOut(range(p, 0.9, 1)))
+  if (p < 0.44) return { x: spec.workX, y: spec.workY }
+  if (p < 0.56) {
+    const amount = easeInOut(range(p, 0.44, 0.56))
+    return {
+      x: lerp(spec.workX, spec.walX, amount),
+      y: lerp(spec.workY, spec.walY, amount),
+    }
+  }
+  if (p < 0.62) return { x: spec.walX, y: spec.walY }
+  if (p < 0.67) {
+    const amount = easeInOut(range(p, 0.62, 0.67))
+    return {
+      x: lerp(spec.walX, spec.commitX, amount),
+      y: lerp(spec.walY, spec.commitY, amount),
+    }
+  }
+  if (p < 0.9) return { x: spec.commitX, y: spec.commitY }
+  const amount = easeInOut(range(p, 0.9, 1))
+  return {
+    x: lerp(spec.commitX, homeX, amount),
+    y: lerp(spec.commitY, homeY, amount),
+  }
 }
 
 function drawArm(spec, index) {
   const profile = backendProfile(spec, index)
-  const p = profile.active ? phase(currentTime(), periods.backends, spec.offset) : 0
+  const p = profile.active ? phase(manualTime, periods.backends, spec.offset) : 0
   const target = backendTarget(spec, p, profile)
-  const pivot = spec.pivot
-  const dx = target[0] - pivot[0]
-  const dy = target[1] - pivot[1]
+  const dx = target.x - spec.pivotX
+  const dy = target.y - spec.pivotY
   const distance = Math.hypot(dx, dy)
   const nx = distance > 0 ? -dy / distance : 0
   const ny = distance > 0 ? dx / distance : 0
-  const bend = (index % 2 === 0 ? 1 : -1) * Math.min(54, distance * 0.28)
-  const elbow = [
-    lerp(pivot[0], target[0], 0.48) + nx * bend,
-    lerp(pivot[1], target[1], 0.48) + ny * bend,
-  ]
-  const isCommit = profile.active && p >= 0.62 && p < 0.9
-  const isFetching = profile.active && p < (profile.miss ? 0.3 : 0.14)
+  const bend = (index % 2 === 0 ? 1 : -1) * Math.min(38, distance * 0.2)
+  const elbowX = lerp(spec.pivotX, target.x, 0.48) + nx * bend
+  const elbowY = lerp(spec.pivotY, target.y, 0.48) + ny * bend
+  const isCommit = profile.active && p >= 0.67 && p < 0.9
+  const isFetching = profile.active && p < (profile.miss ? 0.3 : 0.15)
   const isWorking =
-    profile.active && p >= (profile.miss ? 0.3 : 0.14) && p < 0.44
-  const extension = clamp((distance - 205) / 175)
+    profile.active && p >= (profile.miss ? 0.3 : 0.15) && p < 0.44
+  const extension = clamp((distance - 190) / 260)
 
   ctx.save()
   ctx.lineCap = 'round'
-  line(pivot[0], pivot[1], elbow[0], elbow[1], '#211814', 19)
-  line(pivot[0], pivot[1], elbow[0], elbow[1], ink.brass, 13)
-  line(elbow[0], elbow[1], target[0], target[1], '#211814', 17)
-  line(elbow[0], elbow[1], target[0], target[1], extension > 0 ? ink.copper : ink.brassHi, 10)
+  line(spec.pivotX, spec.pivotY, elbowX, elbowY, '#211814', 15)
+  line(spec.pivotX, spec.pivotY, elbowX, elbowY, ink.brass, 10)
+  line(elbowX, elbowY, target.x, target.y, '#211814', 13)
+  line(elbowX, elbowY, target.x, target.y, extension > 0 ? ink.copper : ink.brassHi, 7)
 
   if (extension > 0) {
-    const sleeveA = mixPoint(elbow, target, 0.42)
-    const sleeveB = mixPoint(elbow, target, 0.66)
-    line(sleeveA[0], sleeveA[1], sleeveB[0], sleeveB[1], ink.ironHi, 15)
-    line(sleeveA[0], sleeveA[1], sleeveB[0], sleeveB[1], ink.copperHi, 5)
+    const sleeveAX = lerp(elbowX, target.x, 0.38)
+    const sleeveAY = lerp(elbowY, target.y, 0.38)
+    const sleeveBX = lerp(elbowX, target.x, 0.65)
+    const sleeveBY = lerp(elbowY, target.y, 0.65)
+    line(sleeveAX, sleeveAY, sleeveBX, sleeveBY, ink.ironHi, 11)
+    line(sleeveAX, sleeveAY, sleeveBX, sleeveBY, ink.copperHi, 3.5)
   }
 
-  drawGear(pivot[0], pivot[1], 31, 14, -p * TAU, index === 1 ? ink.copper : ink.brass)
-  drawScrew(elbow[0], elbow[1], 9)
+  drawGear(
+    spec.pivotX,
+    spec.pivotY,
+    24,
+    12,
+    -p * TAU,
+    index === 1 ? ink.copper : ink.brass,
+  )
+  drawScrew(elbowX, elbowY, 7)
 
   ctx.save()
-  ctx.translate(target[0], target[1])
+  ctx.translate(target.x, target.y)
   ctx.rotate(Math.atan2(dy, dx) + Math.PI / 2)
-  line(-10, 0, -3, 0, ink.iron, 7)
-  line(-4, 0, 8, -10, isCommit ? ink.red : ink.brassHi, 5)
-  line(-4, 0, 8, 10, isCommit ? ink.red : ink.brassHi, 5)
+  line(-8, 0, -2, 0, ink.iron, 5)
+  line(-3, 0, 7, -8, isCommit ? ink.red : ink.brassHi, 4)
+  line(-3, 0, 7, 8, isCommit ? ink.red : ink.brassHi, 4)
   ctx.restore()
 
   if (isFetching || isWorking) {
-    pathRoundRect(target[0] - 12, target[1] - 8, 24, 16, 2)
-    fillStroke(profile.miss ? ink.blue : ink.green, ink.ivory, 1.2)
+    pathRoundRect(target.x - 9, target.y - 6, 18, 12, 2)
+    fillStroke(profile.miss ? ink.blue : ink.green, ink.ivory, 1)
   }
-
   if (isCommit) {
-    const heat = pulse(p, 0.775, 0.14)
+    const heat = pulse(p, 0.78, 0.13)
     ctx.beginPath()
-    ctx.arc(target[0], target[1], 17 + heat * 8, 0, TAU)
+    ctx.arc(target.x, target.y, 13 + heat * 6, 0, TAU)
     ctx.strokeStyle = `rgba(217, 93, 73, ${0.35 + heat * 0.55})`
-    ctx.lineWidth = 2 + heat * 2
+    ctx.lineWidth = 1.5 + heat * 1.5
     ctx.stroke()
   }
   ctx.restore()
 
-  const plaqueWidth = index === QUERY_ARM_INDEX ? 126 : 96
   drawPlaque(
     spec.name,
     periods.backends,
-    pivot[0] - plaqueWidth / 2,
-    pivot[1] - 66,
-    plaqueWidth,
+    spec.pivotX - (index === 1 ? 46 : 34),
+    spec.pivotY - 45,
+    index === 1 ? 92 : 68,
     profile.source,
   )
 }
@@ -689,518 +835,233 @@ function drawBackends() {
   backendSpecs.forEach(drawArm)
 }
 
-function commitStrength(time) {
-  let strength = 0
-  for (let index = 0; index < backendSpecs.length; index += 1) {
-    const backend = backendSpecs[index]
-    if (!backendProfile(backend, index).active) continue
-    const p = phase(time, periods.backends, backend.offset)
-    strength = Math.max(strength, pulse(p, 0.775, 0.115))
-  }
-  return smooth(strength)
-}
-
-function drawWalStation() {
-  const time = currentTime()
-  const writerP = phase(time, periods.walwriter)
-  const lock = commitStrength(time)
-  const spoolX = 913
-  const spoolY = 264
-
-  drawIsoPlate(838, 172, 195, 226, 9, '#3a302b', '#a3723a')
-  drawGear(spoolX, spoolY, 60, 18, writerP * TAU, ink.copper)
-  drawGear(995, 215, 25, 12, -writerP * TAU * 2, ink.brass)
-
+function drawKernelAndDisk(shake) {
+  const kernel = layout.kernelCache
+  const disk = layout.disk
   ctx.save()
-  ctx.translate(spoolX, spoolY)
-  ctx.rotate(writerP * TAU)
-  for (let i = -3; i <= 3; i += 1) {
-    line(-39, i * 8, 39, i * 8, i % 2 === 0 ? ink.copperHi : ink.red, 3)
+  ctx.translate(shake * 0.4, 0)
+  drawIsoPlate(kernel.x, kernel.y, kernel.width, kernel.height, 6, '#2c302f', '#637b73')
+  mono('KERNEL PAGE CACHE · OPERATING SYSTEM CONTROL', kernel.x + 14, kernel.y + 13, 8, '#9bb8ae', 'left', 750)
+  for (let index = 0; index < 10; index += 1) {
+    const x = kernel.x + 16 + index * 59
+    pathRoundRect(x, kernel.y + 25, 47, 21, 2)
+    fillStroke(index % 3 === 1 ? '#66442e' : '#3b4a45', '#6e827b', 0.8)
+    line(x + 7, kernel.y + 32, x + 38, kernel.y + 32, index % 3 === 1 ? ink.orange : ink.teal, 1.3)
+    line(x + 7, kernel.y + 39, x + 29, kernel.y + 39, '#9d8b6c', 1)
+  }
+
+  drawIsoPlate(disk.x, disk.y, disk.width, disk.height, 7, '#252627', '#6f604c')
+  const dataEnd = disk.x + 314
+  const walEnd = disk.x + 480
+  line(dataEnd, disk.y + 7, dataEnd, disk.y + disk.height - 7, '#705b43', 1.5)
+  line(walEnd, disk.y + 7, walEnd, disk.y + disk.height - 7, '#705b43', 1.5)
+  mono('DATA FILES', disk.x + 18, disk.y + 14, 8, ink.paper, 'left', 750)
+  mono('WAL', dataEnd + 18, disk.y + 14, 8, ink.copperHi, 'left', 750)
+  mono('pg_xact FILES', walEnd + 15, disk.y + 14, 7, ink.paperDim, 'left', 750)
+  for (let index = 0; index < 6; index += 1) {
+    pathRoundRect(disk.x + 18 + index * 43, disk.y + 27, 33, 22, 2)
+    fillStroke('#151515', '#635b50', 0.8)
+    line(disk.x + 24 + index * 43, disk.y + 34, disk.x + 43 + index * 43, disk.y + 34, ink.blue, 1.4)
+  }
+  for (let index = 0; index < 3; index += 1) {
+    pathRoundRect(dataEnd + 19 + index * 43, disk.y + 27, 33, 22, 2)
+    fillStroke('#341c18', '#8c4d38', 0.8)
+    line(dataEnd + 25 + index * 43, disk.y + 34, dataEnd + 48 + index * 43, disk.y + 34, ink.red, 1.5)
+  }
+  for (let index = 0; index < 3; index += 1) {
+    ctx.beginPath()
+    ctx.ellipse(walEnd + 20 + index * 36, disk.y + 37, 10, 15, 0, 0, TAU)
+    fillStroke('#403b30', '#8d7b59', 0.8)
   }
   ctx.restore()
-
-  const pressY = lerp(175, 235, lock)
-  pathRoundRect(864, pressY, 98, 22, 5)
-  fillStroke(lock > 0.5 ? ink.red : ink.ironHi, ink.brassHi, 2)
-  line(875, 168, 875, pressY, ink.iron, 10)
-  line(951, 168, 951, pressY, ink.iron, 10)
-
-  if (lock > 0.25) {
-    for (let i = 0; i < 8; i += 1) {
-      const a = (i / 8) * TAU + time
-      const r = 69 + (i % 2) * 8
-      line(
-        spoolX + Math.cos(a) * 58,
-        spoolY + Math.sin(a) * 58,
-        spoolX + Math.cos(a) * r,
-        spoolY + Math.sin(a) * r,
-        i % 2 ? ink.red : ink.brassHi,
-        2,
-      )
-    }
-  }
-
-  drawPlaque('COMMIT / FSYNC', periods.backends, 854, 337, 166)
-  mono('WAL BUFFERS', 871, 383, 10, ink.paper, 'left', 750)
-  drawPlaque('WALWRITER', periods.walwriter, 886, 408, 147)
 }
 
-function drawCheckpointer() {
-  const p = phase(currentTime(), periods.checkpointer)
+function drawCheckpointHammer() {
+  const p = phase(manualTime, periods.checkpointer)
   const wind = smooth(range(p, 0.72, 0.84))
   const strike = smooth(range(p, 0.84, 0.89)) * (1 - smooth(range(p, 0.91, 0.97)))
-  const angle = p * TAU
-
-  drawIsoPlate(82, 354, 220, 174, 7, '#39312c', '#8a6235')
-  drawGear(153, 427, 60, 20, angle, '#a56536')
-  drawGear(242, 408, 33, 12, -angle * 1.5, ink.brass)
-
-  const hammerTop = lerp(366, 408, wind)
-  const hammerY = lerp(hammerTop, 474, strike)
-  line(238, 370, 238, hammerY, ink.iron, 15)
-  pathRoundRect(203, hammerY - 10, 70, 29, 5)
-  fillStroke(strike > 0.45 ? ink.red : ink.brassDark, ink.brassHi, 2)
-  line(196, 493, 283, 493, ink.iron, 14)
+  const hammerTop = lerp(566, 612, wind)
+  const hammerY = lerp(hammerTop, 673, strike)
+  line(184, 558, 184, hammerY, ink.iron, 10)
+  pathRoundRect(157, hammerY - 7, 54, 20, 4)
+  fillStroke(strike > 0.45 ? ink.red : ink.brassDark, ink.brassHi, 1.5)
   if (strike > 0.25) {
-    ctx.globalAlpha = strike * 0.7
-    for (let r = 20; r <= 92; r += 18) {
+    ctx.globalAlpha = strike * 0.65
+    for (let radius = 18; radius <= 65; radius += 16) {
       ctx.beginPath()
-      ctx.ellipse(238, 491, r, r * 0.2, 0, 0, TAU)
+      ctx.ellipse(184, 675, radius, radius * 0.16, 0, 0, TAU)
       ctx.strokeStyle = ink.red
-      ctx.lineWidth = 3
+      ctx.lineWidth = 2
       ctx.stroke()
     }
     ctx.globalAlpha = 1
   }
-
-  drawPlaque('CHECKPOINTER', periods.checkpointer, 103, 536, 170)
 }
 
-function drawVacuumArea() {
-  const starts = [
-    [92, 574],
-    [92, 607],
-    [92, 638],
-  ]
-  const tables = [
-    [298, 562],
-    [470, 590],
-    [674, 566],
-  ]
-
-  for (let i = 0; i < 3; i += 1) {
-    const start = starts[i]
-    const table = tables[i]
-    drawTrack(
-      [
-        start,
-        [start[0] + 72, start[1]],
-        [table[0] - 35, table[1]],
-      ],
-      '#4f6552',
-      6,
-    )
-    ctx.beginPath()
-    ctx.ellipse(table[0], table[1], 35, 17, -0.1, 0, TAU)
-    fillStroke('#292722', '#8ca370', 2)
-    ctx.beginPath()
-    ctx.ellipse(table[0], table[1] - 7, 29, 12, -0.1, 0, TAU)
-    fillStroke('#60513a', '#b6a47a', 1)
-  }
-
-  const offsets = [0, 6, 12]
-  for (let i = 0; i < 3; i += 1) {
-    const p = phase(currentTime(), periods.autovacuum, offsets[i])
-    const travelOut = easeInOut(range(p, 0.02, 0.27))
-    const travelBack = easeInOut(range(p, 0.72, 0.98))
+function drawVacuumCarts() {
+  const starts = [82, 162, 242]
+  const finishes = [142, 242, 330]
+  for (let index = 0; index < 3; index += 1) {
+    const p = phase(manualTime, periods.autovacuum, index * 6)
+    const travelOut = easeInOut(range(p, 0.05, 0.32))
+    const travelBack = easeInOut(range(p, 0.72, 0.97))
     const position = p < 0.72 ? travelOut : 1 - travelBack
-    const atTable = p >= 0.27 && p < 0.72
-    const start = starts[i]
-    const table = tables[i]
-    const x = lerp(start[0], table[0] - 35, position)
-    const y = lerp(start[1], table[1], position)
-    drawVacuumCart(x, y, i, p, atTable)
+    const x = lerp(starts[index], finishes[index], position)
+    const y = 664 + index * 3
+    line(starts[index], y, finishes[index], y, '#4f6552', 3)
+    pathRoundRect(x - 12, y - 8, 24, 15, 3)
+    fillStroke(index === 1 ? '#55724c' : '#6b814f', '#b5c378', 1)
+    ctx.beginPath()
+    ctx.arc(x, y - 9, 5, 0, TAU)
+    fillStroke(ink.iron, ink.green, 1)
+    drawSourceMedallion(x, y, 'model', 4)
   }
-
-  drawPlaque('AUTOVACUUM ×3', periods.autovacuum, 817, 573, 190)
 }
 
-function drawVacuumCart(x, y, index, p, atTable) {
-  ctx.save()
-  ctx.translate(x, y)
-  if (atTable) ctx.rotate(Math.sin(p * TAU * 18) * 0.025)
-  pathRoundRect(-23, -14, 46, 25, 6)
-  fillStroke(index === 1 ? '#55724c' : '#6b814f', '#b5c378', 2)
-  ctx.beginPath()
-  ctx.arc(0, -17, 10, 0, TAU)
-  fillStroke(ink.iron, ink.green, 2)
-  line(0, -17, Math.cos(p * TAU * 12) * 8, -17 + Math.sin(p * TAU * 12) * 8, ink.ivory, 2)
-  for (const wheelX of [-15, 15]) {
-    ctx.beginPath()
-    ctx.arc(wheelX, 13, 6, 0, TAU)
-    fillStroke(ink.iron, ink.paperDim, 1)
+const standbyRoute = Object.freeze([
+  Object.freeze([574, 372]),
+  Object.freeze([685, 372]),
+  Object.freeze([685, 127]),
+  Object.freeze([662, 127]),
+])
+
+function drawWalSenderAndStandby() {
+  const p = phase(manualTime, periods.walsender)
+  drawTrack(standbyRoute, '#467c85', 5)
+  for (let index = 0; index < 3; index += 1) {
+    const packet = pointOnRoute(standbyRoute, wrap(p + index / 3, 1))
+    pathRoundRect(packet.x - 7, packet.y - 4, 14, 8, 2)
+    fillStroke(ink.blue, ink.ivory, 0.8)
   }
-  drawModelMedallion(0, 0, 7)
-  ctx.restore()
+
+  drawIsoPlate(570, 88, 100, 76, 5, '#303638', '#567d82')
+  drawGear(603, 123, 23, 12, p * TAU, '#4c7e84')
+  pathRoundRect(630, 105, 27, 37, 3)
+  fillStroke('#273739', '#78aeb1', 1)
+  line(635, 115, 652, 115, ink.blue, 1.5)
+  line(635, 124, 648, 124, ink.blue, 1.2)
+  mono('STANDBY', 620, 153, 7, ink.ivory, 'center', 750)
+  drawPlaque('WALSENDER', periods.walsender, 574, 168, 94)
 }
 
 function checkpointShake(time) {
   const p = phase(time, periods.checkpointer)
   const strike = smooth(range(p, 0.84, 0.89)) * (1 - smooth(range(p, 0.91, 0.97)))
-  return Math.sin(time * 47) * strike * 4
+  return Math.sin(time * 47) * strike * 3
 }
 
-function drawSenderAndStandby() {
-  const p = phase(currentTime(), periods.walsender)
-  const route = [
-    [1005, 250],
-    [1105, 250],
-    [1143, 280],
-    [1190, 280],
-  ]
+function drawRhythmStrip(time) {
+  const box = layout.rhythm
+  const labelWidth = 93
+  const periodWidth = 55
+  const gridX = box.x + labelWidth
+  const gridWidth = box.width - labelWidth - periodWidth - 13
+  const top = box.y + 35
+  const rowHeight = 13
 
-  ctx.save()
-  ctx.shadowColor = '#000'
-  ctx.shadowBlur = 22
-  ctx.shadowOffsetY = 14
-  drawIsoPlate(1168, 190, 220, 355, 12, '#353638', '#567d82')
-  ctx.shadowColor = 'transparent'
-  drawTrack(route, '#467c85', 11)
+  drawIsoPlate(box.x, box.y, box.width, box.height, 5, '#28211d', '#8b6439', 6)
+  mono('RHYTHM STRIP · ONE SHARED 36s CLOCK', box.x + 12, box.y + 13, 8.5, ink.ivory, 'left', 750)
+  mono('TOP FAST / BOTTOM RARE', box.x + box.width - 12, box.y + 13, 6.5, ink.paperDim, 'right', 650)
 
-  for (let i = 0; i < 3; i += 1) {
-    const packetP = wrap(p + i / 3, 1)
-    const packet = pointOnPolyline(route, packetP)
-    ctx.save()
-    ctx.translate(packet[0], packet[1])
-    ctx.rotate(0.18)
-    pathRoundRect(-12, -7, 24, 14, 3)
-    fillStroke(ink.blue, ink.ivory, 1.5)
-    line(-6, -2, 7, -2, '#d3f0ed', 1.5)
-    line(-6, 3, 3, 3, '#d3f0ed', 1)
-    ctx.restore()
-  }
-
-  drawGear(1268, 325, 56, 18, p * TAU, '#4c7e84')
-  drawGear(1329, 386, 31, 12, -p * TAU * 1.5, ink.brass)
-  line(1268, 325, 1268, 456, '#17191a', 18)
-  line(1268, 325, 1268, 456, ink.blue, 7)
-  pathRoundRect(1212, 444, 112, 48, 7)
-  fillStroke('#273739', '#78aeb1', 2)
-  mono('REPLAY', 1268, 468, 10, ink.ivory, 'center', 750)
-
-  drawPlaque('WALSENDER', periods.walsender, 1062, 301, 150)
-  drawPlaque('STANDBY', periods.walsender, 1208, 508, 146)
-  mono('SMALLER MACHINE', 1279, 219, 10, ink.paperDim, 'center', 650)
-  ctx.restore()
-}
-
-function drawTimeline(time) {
-  const x = 54
-  const y = 684
-  const width = 1332
-  const height = 186
-  const labelWidth = 176
-  const periodWidth = 70
-  const gridX = x + labelWidth
-  const gridWidth = width - labelWidth - periodWidth - 18
-  const rowHeight = 22
-
-  drawIsoPlate(x, y, width, height, 7, '#28211d', '#8b6439')
-  mono('INSTRUCTION RHYTHMS · ONE SHARED 36s CLOCK', x + 20, y + 20, 11, ink.ivory, 'left', 750)
-  mono(
-    'TOP = FAST / CONTINUOUS · BOTTOM = RARE / HEAVY',
-    gridX + gridWidth,
-    y + 20,
-    8,
-    ink.paperDim,
-    'right',
-    650,
-  )
-
-  const top = y + 38
-  for (let second = 0; second <= MASTER_PERIOD; second += 3) {
-    const gx = gridX + (second / MASTER_PERIOD) * gridWidth
-    line(
-      gx,
-      top,
-      gx,
-      top + timelineRows.length * rowHeight,
-      second % 6 === 0 ? '#6a5743' : '#45382d',
-      second % 6 === 0 ? 1.2 : 0.7,
-    )
-    if (second % 6 === 0) mono(String(second), gx, top - 8, 7, ink.paperDim, 'center', 550)
+  for (let second = 0; second <= MASTER_PERIOD; second += 6) {
+    const x = gridX + (second / MASTER_PERIOD) * gridWidth
+    line(x, top - 5, x, top + timelineRows.length * rowHeight, '#584837', second % 12 === 0 ? 1 : 0.6)
+    mono(String(second), x, top - 11, 5.5, ink.paperDim, 'center', 550)
   }
 
   timelineRows.forEach(([label, period, color], row) => {
-    const rowY = top + row * rowHeight
-    mono(label, x + 20, rowY + 10, 9, ink.paper, 'left', 650)
-    line(gridX, rowY + rowHeight, gridX + gridWidth, rowY + rowHeight, '#44372d', 1)
-
+    const y = top + row * rowHeight
+    mono(label, box.x + 10, y + 5, 6.5, ink.paper, 'left', 650)
+    line(gridX, y + rowHeight, gridX + gridWidth, y + rowHeight, '#44372d', 0.7)
     const repeats = MASTER_PERIOD / period
-    for (let i = 0; i < repeats; i += 1) {
-      const bx = gridX + (i * period * gridWidth) / MASTER_PERIOD + 2
-      const bw = (period * gridWidth) / MASTER_PERIOD - 4
-      pathRoundRect(bx, rowY + 5, bw, 10, 3)
+    for (let index = 0; index < repeats; index += 1) {
+      const x = gridX + (index * period * gridWidth) / MASTER_PERIOD + 1.5
+      const width = (period * gridWidth) / MASTER_PERIOD - 3
+      pathRoundRect(x, y + 2, width, 7, 2)
       ctx.fillStyle = `${color}99`
       ctx.fill()
       ctx.strokeStyle = color
-      ctx.lineWidth = 1
+      ctx.lineWidth = 0.7
       ctx.stroke()
-
       if (label === 'BACKENDS') {
-        ctx.fillStyle = `${ink.red}aa`
-        ctx.fillRect(bx + bw * 0.65, rowY + 5, bw * 0.25, 10)
-        for (let arm = 0; arm < 3; arm += 1) {
-          ctx.beginPath()
-          ctx.arc(bx + 5 + arm * 7, rowY + 10, 2, 0, TAU)
-          ctx.fillStyle = arm === 1 ? ink.copperHi : ink.brassHi
-          ctx.fill()
-        }
-      } else if (label === 'CHECKPOINTER') {
+        ctx.fillStyle = `${ink.red}bb`
+        ctx.fillRect(x + width * 0.66, y + 2, width * 0.22, 7)
+      } else if (label === 'CHECKPOINT') {
         ctx.fillStyle = ink.red
-        ctx.fillRect(bx + bw * 0.84, rowY + 4, bw * 0.1, 12)
+        ctx.fillRect(x + width * 0.84, y + 1, width * 0.1, 9)
       }
     }
     mono(
-      `${period}s M  ×${String(repeats).padStart(2, '0')}`,
-      x + width - 20,
-      rowY + 10,
-      9,
+      `${period}s ×${String(repeats).padStart(2, '0')} M`,
+      box.x + box.width - 9,
+      y + 5,
+      6,
       color,
       'right',
-      700,
+      750,
     )
   })
 
   const playX = gridX + (wrap(time, MASTER_PERIOD) / MASTER_PERIOD) * gridWidth
-  line(playX, top - 3, playX, top + timelineRows.length * rowHeight + 1, ink.ivory, 2)
+  line(playX, top - 6, playX, top + timelineRows.length * rowHeight, ink.ivory, 1.3)
   ctx.beginPath()
-  ctx.moveTo(playX - 5, top - 4)
-  ctx.lineTo(playX + 5, top - 4)
-  ctx.lineTo(playX, top + 4)
+  ctx.moveTo(playX - 4, top - 7)
+  ctx.lineTo(playX + 4, top - 7)
+  ctx.lineTo(playX, top - 1)
   ctx.closePath()
   ctx.fillStyle = ink.ivory
   ctx.fill()
 }
 
-function formatMetric(value) {
-  if (!Number.isFinite(value)) return '0'
-  if (Math.abs(value) >= 100) return String(Math.round(value))
-  return Number(value).toFixed(2).replace(/\.?0+$/, '')
+function drawArchitecture() {
+  drawBackdrop()
+  const shake = checkpointShake(manualTime)
+  drawLayerConnections()
+  drawClientAndPostmaster()
+  drawWalSenderAndStandby()
+  drawPrivateMemory()
+  drawBackgroundProcesses()
+  drawSharedMemoryContainer(shake)
+  drawBufferPool(shake)
+  drawWalAndSharedTables(shake)
+  drawKernelAndDisk(shake)
+  drawCheckpointHammer()
+  drawVacuumCarts()
+  drawBackends()
+  drawRhythmStrip(manualTime)
 }
 
-function appendPlanLines(node, depth, lines) {
-  const operation = node.operation ? `${node.operation} ` : ''
-  const relation = node.relationName ? ` on ${node.relationName}` : ''
-  const index = node.indexName ? ` using ${node.indexName}` : ''
-  const indent = '  '.repeat(depth)
-  lines.push(
-    `${indent}${depth > 0 ? '↳ ' : ''}${operation}${node.nodeType}${relation}${index}`,
+function updateReadout() {
+  clock.textContent = `${manualTime.toFixed(1).padStart(4, '0')} / 36s`
+  runState.textContent = paused ? 'PAUSED' : 'RUNNING'
+  machineToggle.textContent = paused ? 'RUN' : 'PAUSE'
+}
+
+function draw() {
+  ctx.save()
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  const ratio = Math.min(window.devicePixelRatio || 1, 2)
+  ctx.setTransform(
+    ratio * viewScale,
+    0,
+    0,
+    ratio * viewScale,
+    ratio * viewX,
+    ratio * viewY,
   )
-  lines.push(
-    `${indent}  cost ${formatMetric(node.startupCost)}..${formatMetric(node.totalCost)}`
-      + ` · rows est ${formatMetric(node.planRows)} / actual ${formatMetric(node.actualRows)}`
-      + ` × ${formatMetric(node.actualLoops)}`
-      + ` · ${formatMetric(node.actualTotalTimeMs)} ms`
-      + ` · hit ${node.sharedHits} read ${node.sharedReads}`,
-  )
-  for (const child of node.children) appendPlanLines(child, depth + 1, lines)
+  drawArchitecture()
+  ctx.restore()
+  updateReadout()
 }
 
-function jsonLine(value) {
-  try {
-    return JSON.stringify(value, (_key, item) =>
-      typeof item === 'bigint' ? item.toString() : item)
-  } catch {
-    return String(value)
-  }
-}
-
-function reportText(report) {
-  if (report.error) {
-    const error = report.error
-    const lines = [
-      `P ${error.severity} ${error.code}`,
-      error.message,
-    ]
-    if (error.detail) lines.push(`DETAIL: ${error.detail}`)
-    if (error.hint) lines.push(`HINT: ${error.hint}`)
-    if (error.position) lines.push(`POSITION: ${error.position}`)
-    return lines.join('\n')
-  }
-
-  const lines = [`P PostgreSQL ${report.serverVersion}`]
-  if (report.plan) {
-    lines.push(
-      `P BUFFERS · shared hit=${report.plan.buffers.sharedHits}`
-        + ` read=${report.plan.buffers.sharedReads}`,
-    )
-    lines.push(
-      `P TIME · planning ${formatMetric(report.plan.planningTimeMs)} ms`
-        + ` · execution ${formatMetric(report.plan.executionTimeMs)} ms`,
-    )
-    appendPlanLines(report.plan.root, 0, lines)
-  } else {
-    lines.push('P PLAN · not applicable to this command')
-  }
-
-  report.results.forEach((result, index) => {
-    const names = result.fields.map((field) => field.name).join(', ')
-    const affected =
-      result.affectedRows === null ? '' : ` · ${result.affectedRows} affected`
-    lines.push(`P RESULT ${index + 1} · ${result.rows.length} row(s)${affected}`)
-    if (names) lines.push(`  fields: ${names}`)
-    for (const row of result.rows.slice(0, 8)) lines.push(`  ${jsonLine(row)}`)
-    if (result.rows.length > 8) lines.push(`  … ${result.rows.length - 8} more row(s)`)
-  })
-  return lines.join('\n')
-}
-
-function updatePostgresUi() {
-  postgresRun.disabled =
-    postgres.source === null ||
-    postgres.status === 'loading' ||
-    postgres.status === 'querying'
-  postgresToggle.dataset.state =
-    postgres.status === 'failed'
-      ? 'error'
-      : postgres.source
-        ? 'ready'
-        : 'idle'
-
-  if (postgres.status === 'loading') {
-    postgresToggle.textContent = 'LOADING POSTGRESQL (P)…'
-    postgresStatus.textContent = 'FETCHING SAME-ORIGIN PGLITE ASSETS'
-    postgresOutput.textContent =
-      'Starting a real, single-connection PostgreSQL in this browser…'
-  } else if (postgres.status === 'querying') {
-    postgresToggle.textContent = 'POSTGRESQL (P) · RUNNING'
-    postgresStatus.textContent = 'EXPLAIN ANALYZE + REAL QUERY'
-    postgresOutput.textContent = 'PostgreSQL is parsing, planning, and executing…'
-  } else if (postgres.status === 'failed') {
-    postgresToggle.textContent = 'POSTGRESQL (P) · RETRY'
-    postgresStatus.textContent = 'PGLITE UNAVAILABLE · MODEL STILL RUNNING'
-    postgresOutput.textContent = postgres.initError ?? 'PostgreSQL could not start.'
-  } else if (postgres.source) {
-    postgresToggle.textContent = 'POSTGRESQL (P) · READY'
-    postgresStatus.textContent = postgres.report?.error
-      ? 'GENUINE POSTGRESQL ERROR · SOURCE READY'
-      : `SERVER ${postgres.source.serverVersion} · SINGLE CONNECTION`
-    postgresOutput.textContent = postgres.report
-      ? reportText(postgres.report)
-      : 'PostgreSQL is ready.'
-  } else {
-    postgresToggle.textContent = 'LOAD POSTGRESQL (P)'
-    postgresStatus.textContent = 'NOT LOADED · BOARD REMAINS MODELLED'
-  }
-
-  delete postgresMeasurement.dataset.reach
-  const measurementLabel = postgresMeasurement.querySelector('strong')
-  if (!measurementLabel) return
-
-  if (postgres.plan) {
-    const buffers = postgres.plan.buffers
-    const hasRead = buffers.sharedReads > 0
-    postgresMeasurement.dataset.reach = hasRead ? 'read' : 'hit'
-    measurementLabel.textContent =
-      `P HIT ${buffers.sharedHits} · READ ${buffers.sharedReads}`
-      + ` · ${hasRead ? 'LONG REACH' : 'SHORT REACH'}`
-  } else if (postgres.report) {
-    postgresMeasurement.dataset.reach = 'none'
-    measurementLabel.textContent = postgres.report.error
-      ? 'P ERROR · QUERY ARM IDLE'
-      : 'P RESULT · NO PLAN / NO REACH'
-  } else {
-    measurementLabel.textContent = 'MODELLED UNTIL POSTGRESQL LOADS'
-  }
-}
-
-function showPostgresPanel() {
-  postgresPanel.hidden = false
-  postgresToggle.setAttribute('aria-expanded', 'true')
-}
-
-function hidePostgresPanel() {
-  postgresPanel.hidden = true
-  postgresToggle.setAttribute('aria-expanded', 'false')
-}
-
-async function executePostgresQuery(sql = postgresSql.value) {
-  if (!postgres.source) throw new Error('PostgreSQL has not loaded')
-  const statement = sql.trim()
-  if (!statement) {
-    postgresOutput.textContent = 'Enter SQL for PostgreSQL to parse and execute.'
-    return null
-  }
-
-  postgresSql.value = statement
-  postgres.status = 'querying'
-  postgres.initError = null
-  updatePostgresUi()
-  try {
-    const report = await postgres.source.query(statement)
-    postgres.report = report
-    postgres.plan = report.plan
-    postgres.status = 'ready'
-    updatePostgresUi()
-    return report
-  } catch (error) {
-    postgres.report = null
-    postgres.plan = null
-    postgres.status = 'failed'
-    postgres.initError =
-      error instanceof Error ? error.message : 'PostgreSQL query execution failed'
-    updatePostgresUi()
-    return null
-  }
-}
-
-async function loadPostgres(runInitialQuery = true) {
-  showPostgresPanel()
-  if (postgres.source) {
-    if (runInitialQuery && postgres.report === null) {
-      await executePostgresQuery()
-    }
-    return postgres.source
-  }
-  if (postgres.loadPromise) return postgres.loadPromise
-
-  postgres.status = 'loading'
-  postgres.initError = null
-  updatePostgresUi()
-  postgres.loadPromise = (async () => {
-    try {
-      const runtime = await import('../../src/observability/real-postgres.ts')
-      postgres.source = await runtime.loadRealPostgres()
-      postgres.status = 'ready'
-      updatePostgresUi()
-      if (runInitialQuery) await executePostgresQuery()
-      return postgres.source
-    } catch (error) {
-      postgres.status = 'failed'
-      postgres.initError =
-        error instanceof Error ? error.message : 'PGlite could not start'
-      updatePostgresUi()
-      return null
-    } finally {
-      postgres.loadPromise = null
-    }
-  })()
-  return postgres.loadPromise
-}
-
-async function runPostgresQuery(sql) {
-  showPostgresPanel()
-  if (typeof sql === 'string') postgresSql.value = sql
-  if (!postgres.source) {
-    const source = await loadPostgres(false)
-    if (!source) return null
-  }
-  return executePostgresQuery()
-}
-
-function currentTime() {
-  return manualTime
+function frame(now) {
+  const elapsed = Math.min(0.1, (now - lastFrame) / 1000)
+  lastFrame = now
+  if (!paused) manualTime = wrap(now / 1000 - startAt, MASTER_PERIOD)
+  else void elapsed
+  draw()
+  requestAnimationFrame(frame)
 }
 
 function setTime(seconds) {
@@ -1219,71 +1080,448 @@ function togglePaused() {
   setPaused(!paused)
 }
 
-function updateReadout() {
-  clock.textContent = `${manualTime.toFixed(1).padStart(4, '0')} / 36s`
-  runState.textContent = paused ? 'PAUSED · SPACE TO RUN' : 'RUNNING · SPACE TO PAUSE'
+function terminalWidth() {
+  return clamp(Math.floor((terminalTranscript.clientWidth - 30) / 7.05), 28, 94)
 }
 
-function draw() {
-  ctx.save()
-  ctx.setTransform(1, 0, 0, 1, 0, 0)
-  ctx.clearRect(0, 0, canvas.width, canvas.height)
-  const ratio = Math.min(window.devicePixelRatio || 1, 2)
-  ctx.setTransform(
-    ratio * viewScale,
-    0,
-    0,
-    ratio * viewScale,
-    ratio * viewX,
-    ratio * viewY,
-  )
-  drawBackdrop()
-  const shake = checkpointShake(manualTime)
-  drawBoard(shake)
-  drawSenderAndStandby()
-  drawTimeline(manualTime)
-  ctx.restore()
-  updateReadout()
+function scrollTranscript() {
+  requestAnimationFrame(() => {
+    terminalTranscript.scrollTop = terminalTranscript.scrollHeight
+  })
 }
 
-function frame(now) {
-  const elapsed = Math.min(0.1, (now - lastFrame) / 1000)
-  lastFrame = now
-  if (!paused) {
-    manualTime = wrap(now / 1000 - startAt, MASTER_PERIOD)
+function appendSystemOutput(output, type = 'system') {
+  const pre = document.createElement('pre')
+  pre.className = `terminal-output ${type}`
+  pre.textContent = output
+  terminalTranscript.append(pre)
+  scrollTranscript()
+  return pre
+}
+
+function appendCommand(command) {
+  const block = document.createElement('div')
+  block.className = 'terminal-command'
+  const commandLine = document.createElement('div')
+  commandLine.className = 'terminal-command-line'
+  const prompt = document.createElement('b')
+  prompt.textContent = PROMPT
+  const input = document.createElement('pre')
+  input.textContent = command
+  commandLine.append(prompt, input)
+  const output = document.createElement('pre')
+  output.className = 'terminal-output system'
+  output.textContent = '…'
+  block.append(commandLine, output)
+  terminalTranscript.append(block)
+  scrollTranscript()
+  return output
+}
+
+function resizeTerminalInput() {
+  terminalInput.style.height = 'auto'
+  terminalInput.style.height = `${Math.min(112, terminalInput.scrollHeight)}px`
+}
+
+function updatePostgresUi() {
+  postgresToggle.dataset.state =
+    postgres.status === 'failed'
+      ? 'error'
+      : postgres.source
+        ? 'ready'
+        : 'idle'
+
+  if (postgres.status === 'loading') {
+    postgresToggle.textContent = 'LOADING POSTGRESQL (P)…'
+    postgresStatus.textContent = 'FETCHING SAME-ORIGIN PGLITE ASSETS'
+    terminalState.textContent = 'BOOTING'
+  } else if (postgres.status === 'querying') {
+    postgresToggle.textContent = 'POSTGRESQL (P) · BUSY'
+    postgresStatus.textContent = 'REAL QUERY + EXPLAIN (ANALYZE, BUFFERS)'
+    terminalState.textContent = 'BUSY'
+  } else if (postgres.status === 'failed') {
+    postgresToggle.textContent = 'POSTGRESQL (P) · RETRY'
+    postgresStatus.textContent = 'PGLITE UNAVAILABLE · MACHINE RHYTHM CONTINUES'
+    terminalState.textContent = 'ERROR'
+  } else if (postgres.source) {
+    postgresToggle.textContent = 'POSTGRESQL (P) · READY'
+    postgresStatus.textContent = `SERVER ${postgres.source.serverVersion} · SINGLE CONNECTION`
+    terminalState.textContent = postgres.timing ? 'READY · TIMING' : 'READY'
   } else {
-    void elapsed
+    postgresToggle.textContent = 'START POSTGRESQL (P)'
+    postgresStatus.textContent = 'NOT LOADED · FIRST QUERY MAY START IT'
+    terminalState.textContent = 'OFFLINE'
   }
-  draw()
-  requestAnimationFrame(frame)
+
+  delete postgresMeasurement.dataset.reach
+  const measurementLabel = postgresMeasurement.querySelector('strong')
+  if (!measurementLabel) return
+  if (postgres.plan) {
+    const buffers = postgres.plan.buffers
+    const hasRead = buffers.sharedReads > 0
+    postgresMeasurement.dataset.reach = hasRead ? 'read' : 'hit'
+    measurementLabel.textContent =
+      `P HIT ${buffers.sharedHits} · READ ${buffers.sharedReads}`
+      + ` · ${hasRead ? 'LONG REACH TO DISK' : 'SHORT REACH TO POOL'}`
+  } else if (postgres.report) {
+    measurementLabel.textContent = postgres.report.error
+      ? 'P ERROR · QUERY ARM IDLE'
+      : 'P COMMAND · NO BUFFER PLAN'
+  } else {
+    measurementLabel.textContent = 'MODELLED UNTIL POSTGRESQL REPORTS BUFFERS'
+  }
+}
+
+async function loadPostgres(announce = true) {
+  if (postgres.source) return postgres.source
+  if (postgres.loadPromise) return postgres.loadPromise
+  postgres.status = 'loading'
+  postgres.initError = null
+  updatePostgresUi()
+  if (announce) {
+    appendSystemOutput('Starting a real, single-connection PostgreSQL in this browser…')
+  }
+  postgres.loadPromise = (async () => {
+    try {
+      const runtime = await import('../../src/observability/real-postgres.ts')
+      postgres.source = await runtime.loadRealPostgres()
+      postgres.status = 'ready'
+      updatePostgresUi()
+      if (announce) {
+        appendSystemOutput(
+          `psql (PostgreSQL ${postgres.source.serverVersion}, PGlite)\nType "\\d" for relations.`,
+        )
+      }
+      return postgres.source
+    } catch (error) {
+      postgres.status = 'failed'
+      postgres.initError = error instanceof Error ? error.message : 'PGlite could not start'
+      updatePostgresUi()
+      if (announce) appendSystemOutput(postgres.initError, 'error')
+      return null
+    } finally {
+      postgres.loadPromise = null
+    }
+  })()
+  return postgres.loadPromise
+}
+
+function setCurrentReport(report) {
+  postgres.report = report
+  postgres.plan = report.plan
+  postgres.status = 'ready'
+  updatePostgresUi()
+}
+
+function quoteLiteral(value) {
+  return `'${String(value).replaceAll("'", "''")}'`
+}
+
+function patternToLike(value) {
+  return value
+    .replaceAll('\\', '\\\\')
+    .replaceAll('%', '\\%')
+    .replaceAll('_', '\\_')
+    .replaceAll('*', '%')
+    .replaceAll('?', '_')
+}
+
+function relationListSql(pattern = '', tablesOnly = false) {
+  let condition = ''
+  if (pattern) {
+    const [schemaPattern, relationPattern] = pattern.includes('.')
+      ? pattern.split('.', 2)
+      : ['', pattern]
+    const relationLike = quoteLiteral(patternToLike(relationPattern))
+    condition += ` AND c.relname LIKE ${relationLike} ESCAPE '\\'`
+    if (schemaPattern) {
+      condition += ` AND n.nspname LIKE ${quoteLiteral(patternToLike(schemaPattern))} ESCAPE '\\'`
+    }
+  }
+  const kinds = tablesOnly ? "'r', 'p'" : "'r', 'p', 'v', 'm', 'S', 'f'"
+  return `
+    SELECT
+      n.nspname AS "Schema",
+      c.relname AS "Name",
+      CASE c.relkind
+        WHEN 'r' THEN 'table'
+        WHEN 'p' THEN 'partitioned table'
+        WHEN 'v' THEN 'view'
+        WHEN 'm' THEN 'materialized view'
+        WHEN 'S' THEN 'sequence'
+        WHEN 'f' THEN 'foreign table'
+      END AS "Type",
+      pg_catalog.pg_get_userbyid(c.relowner) AS "Owner"
+    FROM pg_catalog.pg_class AS c
+    JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+    WHERE c.relkind IN (${kinds})
+      AND n.nspname !~ '^pg_'
+      AND n.nspname <> 'information_schema'
+      ${condition}
+    ORDER BY 1, 2`
+}
+
+async function queryCatalog(sql) {
+  const report = await postgres.source.query(sql)
+  setCurrentReport(report)
+  return report
+}
+
+async function listRelations(command, argument) {
+  const report = await queryCatalog(relationListSql(argument, command === 'dt'))
+  if (report.error) return formatError(report.error, report.sql)
+  const result = report.results.at(-1)
+  const title = command === 'dt' ? 'List of relations' : 'List of relations'
+  return `${title}\n${formatResult(result.fields, result.rows, { maxWidth: terminalWidth() })}`
+}
+
+function describeColumnsSql(regclass, extended) {
+  const extra = extended
+    ? `,
+      CASE a.attstorage
+        WHEN 'p' THEN 'plain'
+        WHEN 'e' THEN 'external'
+        WHEN 'm' THEN 'main'
+        WHEN 'x' THEN 'extended'
+      END AS "Storage",
+      CASE WHEN a.attstattarget = -1 THEN NULL ELSE a.attstattarget::text END AS "Stats target",
+      pg_catalog.col_description(a.attrelid, a.attnum) AS "Description"`
+    : ''
+  return `
+    SELECT
+      a.attname AS "Column",
+      pg_catalog.format_type(a.atttypid, a.atttypmod) AS "Type",
+      CASE
+        WHEN a.attcollation <> t.typcollation THEN coll.collname
+        ELSE NULL
+      END AS "Collation",
+      CASE WHEN a.attnotnull THEN 'not null' ELSE '' END AS "Nullable",
+      pg_catalog.pg_get_expr(ad.adbin, ad.adrelid) AS "Default"
+      ${extra}
+    FROM pg_catalog.pg_attribute AS a
+    JOIN pg_catalog.pg_type AS t ON t.oid = a.atttypid
+    LEFT JOIN pg_catalog.pg_collation AS coll ON coll.oid = a.attcollation
+    LEFT JOIN pg_catalog.pg_attrdef AS ad
+      ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+    WHERE a.attrelid = ${regclass}
+      AND a.attnum > 0
+      AND NOT a.attisdropped
+    ORDER BY a.attnum`
+}
+
+async function describeRelation(argument, extended) {
+  if (!argument) return listRelations('d', '')
+  const literal = quoteLiteral(argument)
+  const regclass = `pg_catalog.to_regclass(${literal})`
+  const metadata = await queryCatalog(`
+    SELECT
+      n.nspname AS "Schema",
+      c.relname AS "Name",
+      CASE c.relkind
+        WHEN 'r' THEN 'Table'
+        WHEN 'p' THEN 'Partitioned table'
+        WHEN 'v' THEN 'View'
+        WHEN 'm' THEN 'Materialized view'
+        WHEN 'S' THEN 'Sequence'
+        WHEN 'f' THEN 'Foreign table'
+      END AS "Type",
+      am.amname AS "Access method",
+      pg_catalog.pg_size_pretty(pg_catalog.pg_total_relation_size(c.oid)) AS "Size"
+    FROM pg_catalog.pg_class AS c
+    JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+    LEFT JOIN pg_catalog.pg_am AS am ON am.oid = c.relam
+    WHERE c.oid = ${regclass}`)
+  if (metadata.error) return formatError(metadata.error, metadata.sql)
+  const relation = metadata.results.at(-1)?.rows[0]
+  if (!relation) return `Did not find any relation named "${argument}".`
+
+  const columns = await queryCatalog(describeColumnsSql(regclass, extended))
+  if (columns.error) return formatError(columns.error, columns.sql)
+  const indexes = await queryCatalog(`
+    SELECT
+      ic.relname AS "Name",
+      i.indisprimary AS "Primary",
+      i.indisunique AS "Unique",
+      pg_catalog.pg_get_indexdef(i.indexrelid) AS "Definition"
+    FROM pg_catalog.pg_index AS i
+    JOIN pg_catalog.pg_class AS ic ON ic.oid = i.indexrelid
+    WHERE i.indrelid = ${regclass}
+    ORDER BY ic.relname`)
+  if (indexes.error) return formatError(indexes.error, indexes.sql)
+  const constraints = await queryCatalog(`
+    SELECT
+      conname AS "Name",
+      CASE contype
+        WHEN 'f' THEN 'Foreign-key'
+        WHEN 'c' THEN 'Check'
+        WHEN 'u' THEN 'Unique'
+        WHEN 'x' THEN 'Exclusion'
+      END AS "Type",
+      pg_catalog.pg_get_constraintdef(oid, true) AS "Definition"
+    FROM pg_catalog.pg_constraint
+    WHERE conrelid = ${regclass}
+      AND contype IN ('f', 'c', 'u', 'x')
+    ORDER BY conname`)
+  if (constraints.error) return formatError(constraints.error, constraints.sql)
+
+  const columnResult = columns.results.at(-1)
+  const lines = [
+    `${relation.Type} "${relation.Schema}.${relation.Name}"`,
+    formatResult(columnResult.fields, columnResult.rows, {
+      maxWidth: terminalWidth(),
+      footer: false,
+    }),
+  ]
+  const indexRows = indexes.results.at(-1)?.rows ?? []
+  if (indexRows.length > 0) {
+    lines.push('Indexes:')
+    for (const row of indexRows) {
+      const using = String(row.Definition).split(' USING ')[1] ?? row.Definition
+      const kind = row.Primary ? ' PRIMARY KEY,' : row.Unique ? ' UNIQUE,' : ''
+      lines.push(`    "${row.Name}"${kind} ${using}`)
+    }
+  }
+  const constraintRows = constraints.results.at(-1)?.rows ?? []
+  if (constraintRows.length > 0) {
+    lines.push('Constraints:')
+    for (const row of constraintRows) {
+      lines.push(`    "${row.Name}" ${row.Type}: ${row.Definition}`)
+    }
+  }
+  if (extended) {
+    lines.push(`Access method: ${relation['Access method'] ?? 'unknown'}`)
+    lines.push(`Size: ${relation.Size}`)
+  }
+  return lines.join('\n')
+}
+
+async function executeMetaCommand(meta) {
+  if (meta.command === 'invalid') return `invalid command \\${meta.argument}`
+  if (meta.command === 'timing') {
+    const value = meta.argument.toLowerCase()
+    if (value && !['on', 'off'].includes(value)) {
+      return `unrecognized value "${meta.argument}" for "\\timing": Boolean expected`
+    }
+    postgres.timing = value ? value === 'on' : !postgres.timing
+    updatePostgresUi()
+    return `Timing is ${postgres.timing ? 'on' : 'off'}.`
+  }
+  if (meta.command === 'dt') return listRelations('dt', meta.argument)
+  if (meta.command === 'd') return describeRelation(meta.argument, false)
+  if (meta.command === 'd+') return describeRelation(meta.argument, true)
+  return `invalid command \\${meta.command}`
+}
+
+async function executeCommand(command, output) {
+  const source = await loadPostgres(false)
+  if (!source) {
+    output.className = 'terminal-output error'
+    output.textContent = postgres.initError ?? 'PostgreSQL could not start.'
+    return null
+  }
+
+  const started = performance.now()
+  postgres.status = 'querying'
+  updatePostgresUi()
+  const meta = parseMetaCommand(command)
+  let result
+  let report = null
+  try {
+    if (meta) {
+      result = await executeMetaCommand(meta)
+    } else {
+      report = await source.query(command)
+      setCurrentReport(report)
+      result = formatReport(report, { maxWidth: terminalWidth() })
+    }
+  } catch (error) {
+    postgres.status = 'ready'
+    updatePostgresUi()
+    result = error instanceof Error ? error.message : 'Command failed'
+    output.className = 'terminal-output error'
+  }
+
+  if (postgres.status === 'querying') {
+    postgres.status = 'ready'
+    updatePostgresUi()
+  }
+  const elapsed = performance.now() - started
+  if (postgres.timing && meta?.command !== 'timing') {
+    result += `\nTime: ${elapsed.toFixed(3)} ms`
+  }
+  if (report?.error) output.className = 'terminal-output error'
+  else if (!output.classList.contains('error')) output.className = 'terminal-output'
+  output.textContent = result
+  scrollTranscript()
+  return report
+}
+
+async function submitCommand(value) {
+  const command = String(value).trim()
+  if (!command || queryBusy) return null
+  history.push(command)
+  historyIndex = history.length
+  historyDraft = ''
+  const output = appendCommand(command)
+  terminalInput.value = ''
+  terminalInput.placeholder = ''
+  resizeTerminalInput()
+  queryBusy = true
+  terminalInput.disabled = true
+  try {
+    return await executeCommand(command, output)
+  } finally {
+    queryBusy = false
+    terminalInput.disabled = false
+    terminalInput.focus()
+  }
+}
+
+function recallHistory(direction) {
+  if (history.length === 0) return
+  if (historyIndex === history.length && direction < 0) historyDraft = terminalInput.value
+  historyIndex = clamp(historyIndex + direction, 0, history.length)
+  terminalInput.value =
+    historyIndex === history.length ? historyDraft : history[historyIndex]
+  terminalInput.setSelectionRange(terminalInput.value.length, terminalInput.value.length)
+  resizeTerminalInput()
 }
 
 window.addEventListener('resize', resize)
-window.addEventListener('keydown', (event) => {
+canvas.addEventListener('click', togglePaused)
+canvas.addEventListener('keydown', (event) => {
   if (event.code === 'Space') {
     event.preventDefault()
     togglePaused()
   } else if (event.key.toLowerCase() === 'r') {
+    event.preventDefault()
     setTime(0)
-  } else if (event.key === 'Escape' && !postgresPanel.hidden) {
-    hidePostgresPanel()
   }
 })
-canvas.addEventListener('click', togglePaused)
+machineToggle.addEventListener('click', togglePaused)
+machineReset.addEventListener('click', () => setTime(0))
 postgresToggle.addEventListener('click', () => {
-  if (!postgresPanel.hidden) {
-    hidePostgresPanel()
+  if (postgres.source) {
+    terminalInput.focus()
     return
   }
-  showPostgresPanel()
-  if (!postgres.source) void loadPostgres(true)
+  void loadPostgres(true).then(() => terminalInput.focus())
 })
-postgresClose.addEventListener('click', hidePostgresPanel)
-postgresRun.addEventListener('click', () => void runPostgresQuery())
-postgresSql.addEventListener('keydown', (event) => {
-  if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+terminalForm.addEventListener('submit', (event) => {
+  event.preventDefault()
+  void submitCommand(terminalInput.value)
+})
+terminalInput.addEventListener('input', resizeTerminalInput)
+terminalInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault()
-    void runPostgresQuery()
+    void submitCommand(terminalInput.value)
+  } else if (event.key === 'ArrowUp' && !event.shiftKey) {
+    event.preventDefault()
+    recallHistory(-1)
+  } else if (event.key === 'ArrowDown' && !event.shiftKey) {
+    event.preventDefault()
+    recallHistory(1)
   }
 })
 window.addEventListener('beforeunload', () => {
@@ -1295,14 +1533,20 @@ window.MAGNUM = Object.freeze({
   pause: () => setPaused(true),
   play: () => setPaused(false),
   setTime,
+  setLabels: (visible) => {
+    labelsVisible = Boolean(visible)
+    draw()
+  },
   loadPostgres,
-  runQuery: runPostgresQuery,
+  runQuery: (sql) => submitCommand(sql),
   setSql: (sql) => {
-    postgresSql.value = String(sql)
+    terminalInput.value = String(sql)
+    resizeTerminalInput()
   },
   getState: () => ({
     paused,
     time: manualTime,
+    labelsVisible,
     periods,
     postgres: {
       status: postgres.status,
@@ -1316,11 +1560,13 @@ window.MAGNUM = Object.freeze({
             : postgres.plan.buffers.sharedReads > 0
               ? 'read'
               : 'hit',
+      timing: postgres.timing,
       error: postgres.report?.error ?? postgres.initError,
     },
   }),
 })
 
 resize()
+resizeTerminalInput()
 updatePostgresUi()
 requestAnimationFrame(frame)
