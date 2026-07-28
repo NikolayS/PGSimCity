@@ -15,6 +15,7 @@ import { el, setClass, setText } from '../ui/uikit'
 import { TABLES } from '../world/layout'
 import { createFlowArchitecture } from './flow-architecture'
 import type { FlowArchitecture } from './flow-architecture'
+import { createRealPostgresConsole } from './real-postgres-ui'
 
 export interface FlowChoice {
   kind: QueryKind
@@ -1007,6 +1008,10 @@ export function createFlow2dView(
     paintTimeAxes()
   }
 
+  const realPostgres = createRealPostgresConsole(sim, {
+    beforeModelTrace: cancelRun,
+  })
+
   const root = el(
     'article',
     { class: 'flow2d' },
@@ -1017,16 +1022,17 @@ export function createFlow2dView(
       el('h1', { text: 'See the entire query lifecycle without moving a camera.' }),
       el('p', {
         class: 'lede',
-        text: 'The same TypeScript model that runs the city writes this trace at 30 Hz. The path, plan and figures below are projections of that record—not a PostgreSQL server and not a second lifecycle engine.',
+        text: 'Real PostgreSQL can supply parsing, plans, catalogs, buffer counters and results. The TypeScript model supplies the otherwise invisible interior: buffers, WAL insertion, fsync and eviction. Every figure below names its source.',
       }),
       sql,
     ),
+    realPostgres.root,
     el(
       'section',
       { class: 'flow-picker', 'aria-labelledby': 'flow-picker-title' },
       el('h2', { id: 'flow-picker-title', text: 'Choose one honest model statement' }),
       el('p', {
-        text: 'These six statements are the complete v1 grammar. Free-text SQL would imply behavior the model does not have.',
+        text: 'These six statements are the complete model grammar and remain available without a download. Free-text SQL above is real PostgreSQL; its invisible interior is mapped to the closest one of these model paths and stays labelled as modelled.',
       }),
       el('div', { class: 'flow-choices', role: 'group', 'aria-label': 'Statement' }, ...choiceButtons),
     ),
@@ -1077,14 +1083,17 @@ export function createFlow2dView(
     root,
     update() {
       if (disposed) return
-      if (activeLane === null) return
-      updateRun()
-      if (activeLane !== null) paint()
+      realPostgres.update()
+      if (activeLane !== null) {
+        updateRun()
+        if (activeLane !== null) paint()
+      }
     },
     dispose() {
       if (disposed) return
       disposed = true
       cancelRun()
+      realPostgres.dispose()
     },
   }
 }

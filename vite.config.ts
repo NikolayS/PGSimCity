@@ -52,11 +52,21 @@ export default defineConfig({
     __PGSIMCITY_VERSION__: JSON.stringify(pkg.version),
     __PGSIMCITY_GIT_SHA__: JSON.stringify(shortGitSha()),
   },
+  /* PGlite locates its data and WASM with import.meta.url. Vite's dependency
+   * pre-bundler rewrites that relationship and serves an HTML fallback where
+   * the filesystem bundle should be, so the package must remain unoptimised. */
+  optimizeDeps: {
+    exclude: ['@electric-sql/pglite'],
+  },
   server: { host: true, port: 5173, open: false },
   build: {
     target: 'es2022',
     sourcemap: false,
     chunkSizeWarningLimit: 2000,
+    /* ES modules still load imported chunks when an older browser ignores the
+     * preload hint. Omitting Vite's preload polyfill keeps the observability
+     * entry's dynamic database loader out of the city's shared critical path. */
+    modulePreload: { polyfill: false },
     rollupOptions: { input },
   },
   /* Agent worktrees land under .claude/worktrees/, inside the repo. Without this
