@@ -27,6 +27,13 @@
       })()
     </script>
     <title>PGSimCity · How PostgreSQL Works, in 3D</title>
+    <script
+      id="pgsimcity-analytics"
+      defer
+      src="https://plausible.io/js/script.pageview-props.js"
+      data-domain="nikolays.github.io"
+      event-entrypoint="city"
+    ></script>
 
     <!-- ============ icons ============ -->
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
@@ -84,7 +91,7 @@
     </div>
 
     <!-- ============ Boot screen ============ -->
-    <div id="boot">
+    <div id="boot" data-analytics-panel="boot">
       <div class="boot-inner">
         <div class="boot-mark">
           <svg viewBox="0 0 100 100" width="86" height="86" role="img" aria-label="PGSimCity">

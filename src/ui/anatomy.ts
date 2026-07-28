@@ -1322,6 +1322,7 @@ export function createAnatomy(ctx: UiContext): UiModule {
 
   const overlay = el('div', {
     class: 'an-overlay',
+    data: { analyticsPanel: 'anatomy-page' },
     role: 'dialog',
     ariaModal: true,
     ariaLabelledby: 'anatomy-title',
@@ -1398,6 +1399,7 @@ export function createAnatomy(ctx: UiContext): UiModule {
 
   function switchView(next: AnatomyView, updateUrl = true): void {
     view = next
+    overlay.dataset.analyticsPanel = `anatomy-${next}`
     page.root.hidden = next !== 'page'
     directory.root.hidden = next !== 'directory'
     pageTab.classList.toggle('is-active', next === 'page')

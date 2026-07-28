@@ -67,6 +67,9 @@ const W = Number(process.argv[5] || 1280)
 const H = Number(process.argv[6] || 760)
 const PRE = process.argv[7] || ''
 const PORT = Number(process.env.CDP_PORT || 9470)
+const BLOCK_URLS = (process.env.CDP_BLOCK_URLS || '').split(',').filter(Boolean)
+const LOG_URLS = (process.env.CDP_LOG_URLS || '').split(',').filter(Boolean)
+const ALLOW_ANALYTICS = process.env.CDP_ALLOW_ANALYTICS === '1'
 const PROFILE = process.env.CDP_PROFILE || `/tmp/claude-1000/-home-tars/bf57591f-d077-4c2a-80f3-46cf3b053fba/scratchpad/kprof${PORT}`
 
 const chrome = spawn('google-chrome', [
@@ -102,6 +105,7 @@ await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej })
 let id = 0
 const pending = new Map()
 const logs = []
+const loggedRequests = new Map()
 ws.onmessage = (ev) => {
   const m = JSON.parse(ev.data)
   if (m.id && pending.has(m.id)) {
@@ -115,6 +119,30 @@ ws.onmessage = (ev) => {
     logs.push(`[EXCEPTION] ${d.text} ${d.exception?.description || ''}`.slice(0, 600))
   } else if (m.method === 'Log.entryAdded') {
     logs.push(`[${m.params.entry.level}] ${m.params.entry.text}`.slice(0, 300))
+  } else if (
+    m.method === 'Network.requestWillBeSent'
+    && LOG_URLS.some((part) => m.params.request.url.includes(part))
+  ) {
+    loggedRequests.set(m.params.requestId, m.params.request.url)
+    logs.push(
+      `[REQUEST] ${m.params.request.method} ${m.params.request.url} ${m.params.request.postData || ''}`,
+    )
+  } else if (
+    m.method === 'Network.responseReceived'
+    && loggedRequests.has(m.params.requestId)
+  ) {
+    const dropped = m.params.response.headers['x-plausible-dropped']
+      ?? m.params.response.headers['X-Plausible-Dropped']
+      ?? ''
+    logs.push(
+      `[RESPONSE] ${m.params.response.status} ${loggedRequests.get(m.params.requestId)}`
+      + `${dropped ? ` x-plausible-dropped=${dropped}` : ''}`,
+    )
+  } else if (
+    m.method === 'Network.loadingFailed'
+    && BLOCK_URLS.length
+  ) {
+    logs.push(`[BLOCKED] ${m.params.errorText} ${m.params.blockedReason || ''}`)
   }
 }
 const send = (method, params = {}) => new Promise((resolve, reject) => {
@@ -122,12 +150,26 @@ const send = (method, params = {}) => new Promise((resolve, reject) => {
   ws.send(JSON.stringify({ id: mid, method, params }))
 })
 
-await send('Runtime.enable'); await send('Log.enable'); await send('Page.enable')
+await send('Runtime.enable'); await send('Log.enable'); await send('Page.enable'); await send('Network.enable')
+if (BLOCK_URLS.length) await send('Network.setBlockedURLs', { urls: BLOCK_URLS })
+if (ALLOW_ANALYTICS) {
+  await send('Page.addScriptToEvaluateOnNewDocument', {
+    source: 'window.__plausible = true',
+  })
+  await send('Network.setUserAgentOverride', {
+    userAgent:
+      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
+      + '(KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
+  })
+}
 await send('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false })
 await send('Page.navigate', { url: URL_ })
 await sleep(WAIT_MS)
 if (PRE) {
-  try { await send('Runtime.evaluate', { expression: PRE, awaitPromise: true }) } catch (e) { logs.push('[PRE-FAIL] ' + e.message) }
+  try {
+    const result = await send('Runtime.evaluate', { expression: PRE, awaitPromise: true, returnByValue: true })
+    logs.push(`[PRE] ${result.result.value ?? result.result.description ?? result.result.type}`)
+  } catch (e) { logs.push('[PRE-FAIL] ' + e.message) }
   await sleep(9000)
 }
 

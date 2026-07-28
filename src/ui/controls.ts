@@ -38,10 +38,10 @@ const nextId = (prefix: string): string => `${prefix}-${(uid += 1)}`
  * This is the single place that bridges the two.
  * -------------------------------------------------------------------------*/
 
-type LooseSetter = (key: keyof Knobs, value: KnobValue) => void
+type LooseSetter = (key: keyof Knobs, value: KnobValue, source?: 'user') => void
 
 export function applyKnob(sim: SimApi, key: keyof Knobs, value: KnobValue): void {
-  ;(sim.setKnob as unknown as LooseSetter)(key, value)
+  ;(sim.setKnob as unknown as LooseSetter)(key, value, 'user')
 }
 
 export function readKnob(sim: SimApi, key: keyof Knobs): KnobValue {
@@ -441,6 +441,7 @@ export function createControls(ctx: UiContext): UiModule {
   }
 
   function setOpen(next: boolean): void {
+    const changed = next !== open
     open = next
     saveFlag(OPEN_KEY, next)
     applyOpen()
@@ -450,6 +451,7 @@ export function createControls(ctx: UiContext): UiModule {
       void panel.offsetWidth
       panel.classList.add('pg-enter')
       if (compact) announceSheet('left')
+      if (changed) ctx.bus.emit('panel:open', { panel: 'console' })
     }
     ctx.bus.emit('ui:layout', {})
   }

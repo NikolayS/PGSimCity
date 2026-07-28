@@ -74,7 +74,60 @@ npm run preview
 npm run typecheck
 ```
 
-No server, no database, no network calls. It is a single static bundle.
+No application server and no database. It is a static bundle; at runtime it
+makes only the analytics requests described below, and the whole application
+continues to work when those requests are blocked.
+
+### Analytics and privacy
+
+PGSimCity uses [Plausible](https://plausible.io/) for aggregate, cookie-free
+analytics on both the city and the observability page. It records pageviews,
+unique visitors, referring sites, bounce rate, visit duration, and these
+interactions:
+
+| Event | Properties in addition to `entrypoint` |
+|---|---|
+| `Tour Started` | `source` (`button` or `keyboard`) |
+| `Pause Changed` | `paused` |
+| `Speed Changed` | `speed` |
+| `Panel Opened` | `panel`, optional `item` |
+| `Building Clicked` | `building` |
+| `Run a Query Opened` | `source` (`button`, `keyboard`, or `other`) |
+| `Statement Traced` | `statement`, `table`, `playback` |
+| `Outbound Link: Click` | `panel`, `destination`, attributed `url` |
+
+Every external link is routed through one central helper. It adds
+`?ref=pgsimcity-<panel>` (or appends `ref` to an existing query string) before
+the click is reported, so both the Plausible dashboard and the destination can
+attribute the visit to the mechanism panel that sent it.
+
+Plausible receives the IP address and user agent already present in the request
+and combines them with the site domain and a daily salt to count a visitor for
+one day. It does not store the raw values or a persistent identifier. PGSimCity
+sends an event payload containing no names, email addresses, free-form input,
+browser fingerprint, or personal data supplied by the application. It uses no
+analytics cookies or analytics local storage, creates no advertising or
+cross-site identifier, and performs no session recording. Blocking
+`plausible.io` disables measurement without a consent flow, console exception,
+or loss of functionality.
+
+Plausible was chosen over GoatCounter because this task requires bounce rate and
+visit duration as first-class metrics as well as unique visitors, referrers, and
+event reporting. The selected Plausible script is about 3.0 kB uncompressed
+(about 1.5 kB transferred). Plausible Cloud requires a paid account after its
+trial; the AGPL-licensed Community Edition is free to self-host without a
+Plausible subscription. GoatCounter offers a free hosted tier for modest
+non-commercial use and a smaller tracker, but its standard aggregate reports do
+not provide both required engagement metrics.
+
+Plausible account setup is part of making the received events visible. Add
+`nikolays.github.io` as the site, then create custom-event goals whose names
+exactly match the eight names in the table above. After one event has arrived,
+add these recorded custom properties in **Settings → Custom Properties**:
+`entrypoint`, `source`, `paused`, `speed`, `panel`, `item`, `building`,
+`statement`, `table`, `playback`, `destination`, and `url`. Plausible receives
+events before those dashboard definitions exist, but does not display them or
+backfill goal counts until the matching goals and properties are configured.
 
 ---
 
@@ -181,8 +234,9 @@ Three rules hold it together:
 3. **Structure is matte, meaning is neon.** Only emissive materials cross the
    bloom threshold, so anything that glows is carrying information.
 
-Stack: [three.js](https://threejs.org) r185, TypeScript, Vite. One runtime
-dependency, no framework, no CDN, no telemetry.
+Stack: [three.js](https://threejs.org) r185, TypeScript, Vite. One bundled
+runtime dependency, no framework, and one external service: the cookie-free
+Plausible analytics described above.
 
 `window.PGSIMCITY` in the browser console hands you
 `{ sim, registry, bus, rig, gfx, flows }`, if you would rather drive the city

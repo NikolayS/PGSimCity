@@ -99,7 +99,9 @@ The palette comes from `src/styles/tokens.css` via a single `@import`, and the
 subsystem accents agree with `src/core/theme.ts`: WAL amber, checkpointer pink,
 background writer teal, replication orange, vacuum violet, locks red. A reader
 who has learned the city's colour language must not be misinformed by this page.
-There is no remote font, no CDN and no network request of any kind.
+There is no remote font or CDN. The only runtime network calls are the aggregate,
+cookie-free Plausible analytics documented in the top-level README, and the page
+works unchanged when they are blocked.
 
 ## Files
 
