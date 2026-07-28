@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="A standalone mixed-source shop-floor view of PostgreSQL query and background activity."
+    />
+    <title>PGSimCity — Transaction Machine Spike</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./magnum.css" />
+  </head>
+  <body>
+    <main>
+      <canvas
+        id="machine"
+        width="1440"
+        height="900"
+        aria-label="A mixed-source PostgreSQL machine with a PostgreSQL-measured query arm and modelled concurrent background activity."
+      ></canvas>
+      <div class="readout" aria-live="polite">
+        <span id="clock">00.0 / 36s</span>
+        <span id="run-state">RUNNING · SPACE TO PAUSE</span>
+      </div>
+      <button
+        id="postgres-toggle"
+        class="postgres-toggle"
+        type="button"
+        aria-controls="postgres-panel"
+        aria-expanded="false"
+      >
+        LOAD POSTGRESQL (P)
+      </button>
+      <section id="postgres-panel" class="postgres-panel" hidden>
+        <header>
+          <div>
+            <strong>POSTGRESQL MEASUREMENT (P)</strong>
+            <span id="postgres-status">NOT LOADED · BOARD REMAINS MODELLED</span>
+          </div>
+          <button id="postgres-close" type="button" aria-label="Close PostgreSQL panel">×</button>
+        </header>
+        <label for="postgres-sql">SQL · PARSED AND RUN BY PGLITE</label>
+        <textarea id="postgres-sql" rows="5" spellcheck="false">UPDATE accounts
+SET balance = balance + 1, updated_at = now()
+WHERE id = 1
+RETURNING id, balance;</textarea>
+        <div class="postgres-actions">
+          <button id="postgres-run" type="button" disabled>RUN + EXPLAIN</button>
+          <span>CTRL / ⌘ + ENTER</span>
+        </div>
+        <div id="postgres-measurement" class="postgres-measurement">
+          <span>QUERY ARM</span>
+          <strong>MODELLED UNTIL POSTGRESQL LOADS</strong>
+        </div>
+        <pre id="postgres-output" aria-live="polite">PGlite loads only after reader action. The machine itself is already running.</pre>
+      </section>
+      <p class="fallback">
+        This prototype needs a browser with Canvas 2D support.
+      </p>
+    </main>
+    <script type="module" src="./magnum.js"></script>
+  </body>
+</html>
