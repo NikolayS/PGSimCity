@@ -9,6 +9,46 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.11.0] — 2026-07-28
+
+A machine view of a transaction, half of it real.
+
+### Added
+
+- **`spike/magnum/` — the shop floor.** The observability flow view was a
+  pipeline of boxes: order, and nothing else. This is the same subject in the
+  visual language of Zachtronics' *Opus Magnum* — axonometric, every element a
+  machine part with a visible pivot, and the whole cast on one floor.
+
+  **The rhythm is the lesson**, and it is explicit: one shared 36-second clock
+  with the walwriter at 3s, backends at 6s, the walsender at 9s, the bgwriter at
+  12s, autovacuum at 18s and the checkpointer at 36s, on a strip labelled top is
+  fast and continuous, bottom is rare and heavy. A viewer can see that the
+  checkpointer is slow and periodic while backends are frantic, and that
+  autovacuum is off doing something unrelated to the query in front of them —
+  relationships the city teaches through geography and a pipeline cannot express.
+
+  **Half of it is real.** PGlite supplies what only PostgreSQL can: the parse, so
+  a typo is a genuine error; the plan, with real node types, costs and estimates
+  against actuals; the catalogs; the results. The model supplies the interior and
+  everything concurrent, which a single-connection engine cannot produce. They
+  meet where it matters — `EXPLAIN` reports `shared hit=26 read=0` and the arm
+  makes the short reach, so the board's central claim stopped being an assertion
+  and became a measurement. Which components are real and which are modelled is
+  marked, because with a single connection most of them cannot be real.
+
+### Fixed
+
+- **Labels no longer take over the screen on a phone** ([#4](https://github.com/NikolayS/PGSimCity/issues/4)).
+  They were DOM elements at a fixed pixel size, so zooming out shrank the model
+  and not the text — a single chip was about 44% of a 390px viewport. The v0.9.0
+  detail tiering reduced how much text appeared but not how large it was, so the
+  problem returned at distance. Label area is now budgeted as a fraction of the
+  viewport at any camera distance and any screen size: a promise that can be
+  tested rather than an improvement that can be argued about.
+
+---
+
 ## [0.10.1] — 2026-07-28
 
 ### Fixed
