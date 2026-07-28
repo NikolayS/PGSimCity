@@ -9,6 +9,35 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.12.0] — 2026-07-28
+
+psql on the left, PostgreSQL's architecture on the right.
+
+### Changed
+
+- **The machine board is the layout it should always have been**: one screen,
+  a real psql workbench on the left, the architecture on the right. The previous
+  version was machine parts arranged on a floor — the Opus Magnum aesthetic
+  applied to a layout rather than to a structure — with a textarea and a Run
+  button standing in for a CLI.
+
+  The right half now draws **structure instead of arrangement**: one shared
+  memory segment as a real container holding the buffer pool, wal_buffers, the
+  ProcArray, the lock table and pg_xact, with backend private memory drawn
+  deliberately outside it. The postmaster forks backends, the client the query
+  arrives from is present, and the layers run client → processes → shared memory
+  → kernel → disk. Cover every label and the containment is still legible, which
+  is the test the earlier version failed.
+
+  The left half is a prompt you type into, with history on the arrow keys, real
+  PostgreSQL error text, and the backslash commands that can be answered
+  honestly from the real catalogs.
+
+  The machine language, the rhythm strip and the arm reach following real buffer
+  counters are unchanged — those were right.
+
+---
+
 ## [0.11.0] — 2026-07-28
 
 A machine view of a transaction, half of it real.
