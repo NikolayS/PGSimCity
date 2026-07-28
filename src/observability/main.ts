@@ -28,6 +28,12 @@ import { fmtNum } from '../core/util'
 import { BY_ID, CATALOG, CATALOG_SUBSYSTEMS, VERSIONS } from './catalog'
 import type { CatalogEntry } from './catalog'
 import { createCollector } from './collector'
+import {
+  createFlow2dView,
+  parseFlowQuery,
+  serializeFlowQuery,
+} from './flow2d'
+import type { Flow2dView } from './flow2d'
 import { NODES, SYMPTOMS } from './paths'
 import type { Node as PathNode, Step, Symptom, Verdict } from './paths'
 import { PROJECTIONS } from './views'
@@ -92,10 +98,14 @@ type Screen =
   | { kind: 'home' }
   | { kind: 'console'; symptom: Symptom; nodeId: string; trail: string[] }
   | { kind: 'instrument'; id: string }
+  | { kind: 'flow' }
 
-let screen: Screen = { kind: 'home' }
+let screen: Screen = new URLSearchParams(window.location.search).get('view') === 'flow'
+  ? { kind: 'flow' }
+  : { kind: 'home' }
 let counterMode: Mode = 'total'
 let pgVersion: number = VERSIONS[0]
+let flowView: Flow2dView | null = null
 
 /** Everything the current pane wants refreshed on the data tick. */
 let liveRefresh: (() => void)[] = []
@@ -125,18 +135,49 @@ const speedBtns = [1, 2, 4].map((x) => {
   return b
 })
 
+const modeName = el('strong', { text: 'DIAGNOSE' })
+const brand = el(
+  'a',
+  { class: 'brand', href: '../', title: 'Back to the city' },
+  el('span', { text: 'PG' }),
+  el('b', { text: 'PGSimCity'.slice(2) }),
+  el('i', { text: '/' }),
+  modeName,
+)
+const diagnoseTab = el('a', {
+  class: 'surface-tab',
+  href: './',
+  text: 'Diagnose',
+  on: {
+    click: (event: Event) => {
+      event.preventDefault()
+      openDiagnose()
+    },
+  },
+})
+const flowTab = el('a', {
+  class: 'surface-tab',
+  href: serializeFlowQuery(parseFlowQuery(window.location.search)),
+  text: 'Query flow',
+  on: {
+    click: (event: Event) => {
+      event.preventDefault()
+      openFlow()
+    },
+  },
+})
+const surfaceNav = el(
+  'nav',
+  { class: 'surface-nav', 'aria-label': 'Learning surfaces' },
+  diagnoseTab,
+  flowTab,
+)
 const top = el(
   'header',
   { class: 'top' },
-  el(
-    'a',
-    { class: 'brand', href: '../', title: 'Back to the city' },
-    el('span', { text: 'PG' }),
-    el('b', { text: 'PGSimCity'.slice(2) }),
-    el('i', { text: '/' }),
-    el('strong', { text: 'DIAGNOSE' }),
-  ),
+  brand,
   createCityExit(),
+  surfaceNav,
   vitals.root,
   el('div', { class: 'clock' }, pauseBtn, ...speedBtns),
 )
@@ -144,7 +185,8 @@ const top = el(
 const railBody = el('div', { class: 'rail__body' })
 const rail = el('aside', { class: 'rail' }, railBody)
 const pane = el('section', { class: 'pane' })
-root.replaceChildren(top, el('main', { class: 'body' }, rail, pane))
+const mainBody = el('main', { class: 'body' }, rail, pane)
+root.replaceChildren(top, mainBody)
 
 /* ---------------------------------------------------------------------------
  * Rail
@@ -167,6 +209,10 @@ for (const v of VERSIONS) {
 }
 
 function buildRail(): void {
+  if (screen.kind === 'flow') {
+    railBody.replaceChildren()
+    return
+  }
   const symptomList = el('div', { class: 'symptoms' })
   for (const s of SYMPTOMS) {
     const btn = el(
@@ -220,6 +266,25 @@ function buildRail(): void {
 /* ---------------------------------------------------------------------------
  * Navigation
  * -------------------------------------------------------------------------*/
+
+function openDiagnose(): void {
+  if (screen.kind === 'home') return
+  screen = { kind: 'home' }
+  window.history.replaceState(null, '', window.location.pathname)
+  buildRail()
+  render()
+  pane.scrollTo({ top: 0 })
+}
+
+function openFlow(): void {
+  if (screen.kind === 'flow') return
+  screen = { kind: 'flow' }
+  const state = parseFlowQuery(window.location.search)
+  window.history.replaceState(null, '', serializeFlowQuery(state))
+  buildRail()
+  render()
+  pane.scrollTo({ top: 0 })
+}
 
 function openSymptom(s: Symptom): void {
   stage(s.scenario)
@@ -749,11 +814,32 @@ function footer(): HTMLElement {
 }
 
 function render(): void {
+  flowView?.dispose()
+  flowView = null
   liveRefresh = []
   let content: HTMLElement
   let banner: HTMLElement | null = null
 
-  if (screen.kind === 'home') {
+  const inFlow = screen.kind === 'flow'
+  top.classList.toggle('is-flow', inFlow)
+  mainBody.classList.toggle('is-flow', inFlow)
+  diagnoseTab.classList.toggle('on', !inFlow)
+  flowTab.classList.toggle('on', inFlow)
+  modeName.textContent = inFlow ? 'QUERY FLOW' : 'DIAGNOSE'
+  document.title = inFlow ? 'Query flow · PGSimCity' : 'Diagnose · PGSimCity'
+
+  if (screen.kind === 'flow') {
+    const state = parseFlowQuery(window.location.search)
+    const canonicalSearch = serializeFlowQuery(state)
+    window.history.replaceState(null, '', canonicalSearch)
+    flowTab.href = canonicalSearch
+    flowView = createFlow2dView(sim, state, (next) => {
+      const search = serializeFlowQuery(next)
+      window.history.replaceState(null, '', search)
+      flowTab.href = search
+    })
+    content = flowView.root
+  } else if (screen.kind === 'home') {
     content = renderHome()
   } else if (screen.kind === 'instrument') {
     const e = BY_ID.get(screen.id)
@@ -782,6 +868,7 @@ function frame(now: number): void {
   last = now
   sim.update(dt * sim.state.knobs.timeScale)
   coll.sample()
+  flowView?.update()
 
   vitalT += dt
   if (vitalT > 0.1) {
@@ -799,10 +886,13 @@ function frame(now: number): void {
 installCityEscape()
 
 window.addEventListener('keydown', (e) => {
-  if (e.key === ' ' && !(e.target instanceof HTMLInputElement)) {
-    e.preventDefault()
-    pauseBtn.click()
-  }
+  if (e.key !== ' ') return
+  if (
+    e.target instanceof HTMLElement
+    && e.target.closest('button, a, input, select, textarea')
+  ) return
+  e.preventDefault()
+  pauseBtn.click()
 })
 
 /* The model boots at DEFAULT_KNOBS — ten transactions a second, which is a
