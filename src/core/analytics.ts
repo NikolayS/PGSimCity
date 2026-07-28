@@ -11,13 +11,6 @@ export const ANALYTICS_EVENTS = {
   outboundClick: 'Outbound Link: Click',
 } as const
 
-export const PLAUSIBLE_SCRIPT_URL =
-  'https://plausible.io/js/script.pageview-props.js'
-export const PLAUSIBLE_ENDPOINT = 'https://plausible.io/api/event'
-export const PLAUSIBLE_DOMAIN = 'nikolays.github.io'
-
-const SCRIPT_ID = 'pgsimcity-analytics'
-
 export type AnalyticsEntrypoint = 'city' | 'observability'
 export type AnalyticsProperty = string | number | boolean
 export type AnalyticsProperties = Record<string, AnalyticsProperty>
@@ -62,11 +55,10 @@ export function createPlausibleQueue(): PlausibleFunction {
 
 export function createPlausibleDispatcher(
   target: { plausible?: PlausibleFunction },
-  fallback: PlausibleFunction,
 ): PlausibleFunction {
   const dispatch = ((...args: PlausibleCall) => {
-    const active = target.plausible
-    ;(active && active !== dispatch ? active : fallback)(...args)
+    if (!target.plausible) target.plausible = createPlausibleQueue()
+    target.plausible(...args)
   }) as PlausibleFunction
   return dispatch
 }
@@ -121,25 +113,10 @@ export function attributedOutboundUrl(
   return destination.href
 }
 
-function installProvider(entrypoint: AnalyticsEntrypoint): PlausibleFunction {
+function installProvider(): PlausibleFunction {
   const target = window as AnalyticsWindow
-  const plausible = target.plausible ?? createPlausibleQueue()
-  target.plausible = plausible
-
-  if (!document.getElementById(SCRIPT_ID)) {
-    const script = document.createElement('script')
-    script.id = SCRIPT_ID
-    script.defer = true
-    script.src = PLAUSIBLE_SCRIPT_URL
-    script.setAttribute('data-domain', PLAUSIBLE_DOMAIN)
-    script.setAttribute('data-api', PLAUSIBLE_ENDPOINT)
-    script.setAttribute('event-entrypoint', entrypoint)
-    // A blocked request is expected for this audience and needs no fallback UI.
-    script.addEventListener('error', () => {}, { once: true })
-    document.head.append(script)
-  }
-
-  return createPlausibleDispatcher(target, plausible)
+  if (!target.plausible) target.plausible = createPlausibleQueue()
+  return createPlausibleDispatcher(target)
 }
 
 function installOutboundTracking(
@@ -250,7 +227,7 @@ export function listenForAnalyticsInteractions(
 }
 
 export function startAnalytics(entrypoint: AnalyticsEntrypoint): Analytics {
-  const tracker = createAnalyticsTracker(entrypoint, installProvider(entrypoint))
+  const tracker = createAnalyticsTracker(entrypoint, installProvider())
   const stopOutbound = installOutboundTracking(tracker, entrypoint)
   return {
     ...tracker,

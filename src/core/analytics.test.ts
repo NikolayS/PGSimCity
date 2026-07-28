@@ -8,7 +8,6 @@ import {
   createPlausibleQueue,
   listenForAnalyticsInteractions,
   panelSlug,
-  PLAUSIBLE_SCRIPT_URL,
 } from './analytics'
 import { createBus } from './bus'
 
@@ -46,8 +45,12 @@ describe('analytics attribution', () => {
 })
 
 describe('analytics event queue', () => {
-  it('loads only the provider features the central tracker needs', () => {
-    expect(PLAUSIBLE_SCRIPT_URL).toBe('https://plausible.io/js/script.pageview-props.js')
+  it('falls back to an inert window queue when the provider is unavailable', () => {
+    const target: { plausible?: ReturnType<typeof createPlausibleQueue> } = {}
+    const dispatch = createPlausibleDispatcher(target)
+
+    expect(() => dispatch(ANALYTICS_EVENTS.tourStarted)).not.toThrow()
+    expect(target.plausible?.q).toEqual([['Tour Started']])
   })
 
   it('keeps interaction events safe and queued when the provider script is blocked', () => {
@@ -157,7 +160,7 @@ describe('analytics event queue', () => {
   it('dispatches through the provider function that replaces the startup queue', () => {
     const queued = createPlausibleQueue()
     const target: { plausible?: typeof queued } = { plausible: queued }
-    const dispatch = createPlausibleDispatcher(target, queued)
+    const dispatch = createPlausibleDispatcher(target)
     const tracker = createAnalyticsTracker('city', dispatch)
     const loaded = vi.fn()
 
