@@ -3505,7 +3505,7 @@ export function createSim(bus: Bus): SimApi {
    * KNOBS
    * ====================================================================*/
 
-  function setKnob<Key extends keyof Knobs>(key: Key, value: Knobs[Key]): void {
+  function setKnob<Key extends keyof Knobs>(key: Key, value: Knobs[Key], source?: 'user'): void {
     const previousCheckpointTimeout = K.checkpointTimeout
     const previousHorizonPin = K.longRunningXact || K.standbyLongQuery
     K[key] = value
@@ -3605,7 +3605,7 @@ export function createSim(bus: Bus): SimApi {
 
     if (!applying) {
       applying = true
-      bus.emit('knob', { key, value })
+      bus.emit('knob', { key, value, source })
       applying = false
     }
   }
@@ -3956,7 +3956,7 @@ export function createSim(bus: Bus): SimApi {
   bus.on('knob', (p) => {
     if (applying) return
     applying = true
-    setKnob(p.key, p.value as Knobs[keyof Knobs])
+    setKnob(p.key, p.value as Knobs[keyof Knobs], p.source)
     applying = false
   })
   bus.on('scenario', (p) => {

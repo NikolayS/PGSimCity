@@ -592,6 +592,11 @@ export function createTour(ctx: UiContext): UiModule {
     traceMode = 'slow'
     sim.setTraceMode('slow')
     sim.request(choice.kind, choice.table, { hot: choice.hot })
+    bus.emit('trace:run', {
+      statement: choice.kind,
+      table: TABLES[choice.table].id,
+      playback: traceMode,
+    })
 
     traceActive = true
     traceAwaiting = true
@@ -723,7 +728,7 @@ export function createTour(ctx: UiContext): UiModule {
           on: {
             click: () => {
               hideFirstRun()
-              bus.emit('tour:start', {})
+              bus.emit('tour:start', { source: 'button' })
             },
           },
         },

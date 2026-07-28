@@ -50,10 +50,16 @@ event bus, registry, camera rig, renderer state, and flow controller.
 - Node.js 20 or newer for local development
 - WebGL2 in the browser
 
-three.js is the only runtime dependency. Do not add another runtime dependency,
-a framework, a CDN, remote fonts, binary assets, telemetry, or analytics. The
-shipped application must remain a static bundle with no server, database, or
-runtime network calls.
+three.js is the only bundled runtime dependency. Plausible's cookie-free
+analytics script is the sole allowed external runtime resource; do not add
+another runtime dependency, framework, CDN resource, remote font, binary asset,
+telemetry service, or analytics provider. No cookies, no consent banner, no
+fingerprinting, no personal data, no session recording, no third-party ad or
+tracking network. Aggregate, privacy-preserving page and interaction counts
+only. The shipped application remains a static bundle with no application
+server or database. Its only runtime network calls are Plausible pageview,
+engagement, and explicitly documented interaction events; analytics failure or
+blocking must never affect the application.
 
 ## Style Rules
 
@@ -218,8 +224,9 @@ silently replace another worktree's version of a file.
 6. **Code must be wired.** An unimported subsystem is not delivered.
 7. **Geometry must be reviewed as content.** Buildings can teach a falsehood
    more persuasively than nearby text teaches the truth.
-8. **The dependency boundary stays small.** three.js remains the only runtime
-   dependency, and the application remains offline and static.
+8. **The dependency boundary stays small.** three.js remains the only bundled
+   runtime dependency. Plausible is the only external runtime service, and the
+   application remains a static site that works when analytics is unavailable.
 
 ## Copyright
 

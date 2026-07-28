@@ -278,6 +278,16 @@ export function createHelp(ctx: UiContext): UiModule {
         '<a href="https://github.com/NikolayS/PGSimCity/issues/new" target="_blank" rel="noopener">open an issue</a> or send a ' +
         '<a href="https://github.com/NikolayS/PGSimCity/pulls" target="_blank" rel="noopener">pull request</a>.',
     }),
+    el('p', {
+      class: 'help-disclaimer',
+      html:
+        '<strong>Analytics & privacy.</strong> PGSimCity uses Plausible to count aggregate visits, referring sites, ' +
+        'bounce rate and visit duration, plus named interface actions and outbound clicks tagged with the panel that sent them. ' +
+        'Its event payload contains no names, email addresses, free-form input, browser fingerprint or personal data supplied ' +
+        'by the application. Plausible briefly derives a daily visitor count from request IP and user agent without storing ' +
+        'either raw value or a persistent identifier. There are no analytics cookies, ad networks or session recordings. ' +
+        'Blocking <code>plausible.io</code> disables measurement without breaking any part of the city.',
+    }),
     legalSection,
     el('p', {
       class: 'build-marker help-build',
@@ -314,6 +324,7 @@ export function createHelp(ctx: UiContext): UiModule {
     'div',
     {
       class: 'help-dialog pg-panel',
+      data: { analyticsPanel: 'help' },
       role: 'dialog',
       'aria-modal': 'true',
       'aria-labelledby': 'help-title',
@@ -353,6 +364,7 @@ export function createHelp(ctx: UiContext): UiModule {
     open = next
     root.hidden = !next
     if (next) {
+      bus.emit('panel:open', { panel: 'help' })
       lastFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
       dialog.scrollTop = 0
       // focus after the frame that unhides it, or the browser ignores it

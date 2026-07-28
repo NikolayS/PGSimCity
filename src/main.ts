@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import './styles/tokens.css'
 import './styles/ui.css'
 
+import { startAnalytics } from './core/analytics'
 import { createBus } from './core/bus'
 import { Registry } from './core/registry'
 import { createTheme, setThemeMode, themeMode } from './core/theme'
@@ -54,6 +55,8 @@ import { createZoomContext } from './ui/zoom-context'
 import { BOOT_STEPS, failBoot, finishBoot, presentBootStep } from './ui/boot'
 import type { UiContext, UiModule } from './ui/uikit'
 
+const analytics = startAnalytics('city')
+
 /* ============================================================================
  * PGSimCity — boot.
  *
@@ -93,6 +96,7 @@ async function boot(): Promise<void> {
   probeCtx.getExtension('WEBGL_lose_context')?.loseContext()
 
   const bus = createBus()
+  const stopAnalytics = analytics.listen(bus)
   const audio = createAudio(bus)
   const registry = new Registry()
   const theme = createTheme()
@@ -399,6 +403,8 @@ async function boot(): Promise<void> {
     window.removeEventListener('pointerdown', resumePreferredAudio, true)
     window.removeEventListener('keydown', resumePreferredAudio, true)
     offAudioToggle()
+    stopAnalytics()
+    analytics.dispose()
     timer.disconnect()
     for (const m of modules) m.dispose?.()
     for (const u of ui) u.dispose()

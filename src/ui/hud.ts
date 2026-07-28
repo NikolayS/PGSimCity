@@ -454,7 +454,7 @@ export function createHud(ctx: UiContext): UiModule {
       type: 'button',
       title: 'Guided tour  (T)',
       'aria-label': 'Guided tour',
-      on: { click: () => toggleTour() },
+      on: { click: () => toggleTour('button') },
     },
     icon('tour', 15),
     el('span', { text: 'Tour' }),
@@ -466,7 +466,7 @@ export function createHud(ctx: UiContext): UiModule {
       type: 'button',
       title: 'Trace one fixed query through PostgreSQL  (Enter)',
       'aria-label': 'Run a query',
-      on: { click: () => bus.emit('trace:open', {}) },
+      on: { click: () => bus.emit('trace:open', { source: 'button' }) },
     },
     el('span', { 'aria-hidden': 'true', text: '▷' }),
     el('span', { text: 'Run a query' }),
@@ -612,7 +612,7 @@ export function createHud(ctx: UiContext): UiModule {
      cluster moves into the transport dock and comes back on rotation. */
   const toolCluster = el(
     'div',
-    { class: 'hud-tools' },
+    { class: 'hud-tools', data: { analyticsPanel: 'hud' } },
     audioBtn,
     themeBtn,
     sourceLink,
@@ -1212,12 +1212,12 @@ export function createHud(ctx: UiContext): UiModule {
    * =====================================================================*/
 
   function togglePause(): void {
-    sim.setKnob('paused', !sim.state.knobs.paused)
+    sim.setKnob('paused', !sim.state.knobs.paused, 'user')
   }
 
   function nudgeSpeed(dir: -1 | 1): void {
     const i = clamp(nearestSpeed(sim.state.knobs.timeScale) + dir, 0, SPEEDS.length - 1)
-    sim.setKnob('timeScale', SPEEDS[i])
+    sim.setKnob('timeScale', SPEEDS[i], 'user')
   }
 
   function resetSim(): void {
@@ -1235,9 +1235,9 @@ export function createHud(ctx: UiContext): UiModule {
     setScenariosOpen(false)
   }
 
-  function toggleTour(): void {
+  function toggleTour(source: 'button' | 'keyboard'): void {
     if (tourRunning) bus.emit('tour:stop', {})
-    else bus.emit('tour:start', {})
+    else bus.emit('tour:start', { source })
   }
 
   function toggleHelp(): void {
@@ -1343,7 +1343,7 @@ export function createHud(ctx: UiContext): UiModule {
       case 'T':
         if (e.repeat) return
         e.preventDefault()
-        toggleTour()
+        toggleTour('keyboard')
         return
       case 'r':
       case 'R':
@@ -1401,7 +1401,7 @@ export function createHud(ctx: UiContext): UiModule {
       case 'Enter':
         if (e.repeat) return
         e.preventDefault()
-        bus.emit('trace:open', {})
+        bus.emit('trace:open', { source: 'keyboard' })
         return
       default:
         break

@@ -15,6 +15,7 @@
 
 import './style.css'
 
+import { ANALYTICS_EVENTS, startAnalytics } from '../core/analytics'
 import { BUILD_LABEL } from '../core/build'
 import { createBus } from '../core/bus'
 import { createSim } from '../sim/model'
@@ -35,11 +36,14 @@ import type { Mode } from './views'
 import { dataTable, knobRow, sqlBlock, vitalsStrip } from './ui'
 import { createCityExit, installCityEscape } from './shell'
 
+const analytics = startAnalytics('observability')
+
 /* ---------------------------------------------------------------------------
  * Model
  * -------------------------------------------------------------------------*/
 
 const bus = createBus()
+analytics.listen(bus)
 const sim = createSim(bus)
 const coll = createCollector(sim)
 
@@ -111,7 +115,7 @@ const vitals = vitalsStrip(sim, coll)
 
 const pauseBtn = el('button', { class: 'chip', type: 'button', text: '❚❚', title: 'Pause the model' })
 pauseBtn.addEventListener('click', () => {
-  sim.setKnob('paused', !sim.state.knobs.paused)
+  sim.setKnob('paused', !sim.state.knobs.paused, 'user')
   pauseBtn.textContent = sim.state.knobs.paused ? '▶' : '❚❚'
   pauseBtn.classList.toggle('on', sim.state.knobs.paused)
 })
@@ -119,7 +123,7 @@ pauseBtn.addEventListener('click', () => {
 const speedBtns = [1, 2, 4].map((x) => {
   const b = el('button', { class: `chip${x === 1 ? ' on' : ''}`, type: 'button', text: `${x}×` })
   b.addEventListener('click', () => {
-    sim.setKnob('timeScale', x)
+    sim.setKnob('timeScale', x, 'user')
     speedBtns.forEach((o) => o.classList.toggle('on', o === b))
   })
   return b
@@ -198,9 +202,7 @@ function buildRail(): void {
         ),
       )
       btn.addEventListener('click', () => {
-        screen = { kind: 'instrument', id: e.id }
-        buildRail()
-        render()
+        openInstrument(e.id)
       })
       if (screen.kind === 'instrument' && screen.id === e.id) btn.classList.add('on')
       instrumentList.append(btn)
@@ -226,9 +228,23 @@ function openSymptom(s: Symptom): void {
   coll.reset()
   warm(90)
   screen = { kind: 'console', symptom: s, nodeId: s.entry, trail: [] }
+  analytics.track(ANALYTICS_EVENTS.panelOpened, {
+    panel: 'observability',
+    item: `symptom:${s.id}`,
+  })
   buildRail()
   render()
   pane.scrollTo({ top: 0 })
+}
+
+function openInstrument(id: string): void {
+  screen = { kind: 'instrument', id }
+  analytics.track(ANALYTICS_EVENTS.panelOpened, {
+    panel: 'observability',
+    item: `instrument:${id}`,
+  })
+  buildRail()
+  render()
 }
 
 function goto(nodeId: string): void {
@@ -276,9 +292,7 @@ function instrumentChip(id: string): HTMLElement {
     el('span', { class: `cov cov-${e.coverage}`, text: e.coverage }),
   )
   chip.addEventListener('click', () => {
-    screen = { kind: 'instrument', id }
-    buildRail()
-    render()
+    openInstrument(id)
   })
   return chip
 }
@@ -703,6 +717,10 @@ function stagedBanner(sc: Extract<Screen, { kind: 'console' }>): HTMLElement {
   const home = el('button', { class: 'chip', type: 'button', text: 'start over' })
   home.addEventListener('click', () => {
     screen = { kind: 'home' }
+    analytics.track(ANALYTICS_EVENTS.panelOpened, {
+      panel: 'observability',
+      item: 'home',
+    })
     buildRail()
     render()
   })
@@ -741,6 +759,11 @@ function footer(): HTMLElement {
     el('p', { class: 'foot__legal', text: TRADEMARK_NOTICE }),
     el('p', { class: 'foot__legal', text: NO_EA_CONTENT }),
     el('p', {
+      class: 'foot__legal',
+      text:
+        'Privacy: cookie-free Plausible analytics counts aggregate visits and named interactions, including outbound links tagged by this panel. Its event payload contains no form input, browser fingerprint or personal data supplied by the application; Plausible derives a daily count from request IP and user agent without storing either raw value or a persistent identifier. There are no ad networks or session recordings, and blocking analytics does not affect this page.',
+    }),
+    el('p', {
       class: 'build-marker',
       text: `PGSimCity ${BUILD_LABEL}`,
       'aria-label': `PGSimCity build ${BUILD_LABEL}`,
@@ -754,11 +777,14 @@ function render(): void {
   let banner: HTMLElement | null = null
 
   if (screen.kind === 'home') {
+    pane.dataset.analyticsPanel = 'observability-home'
     content = renderHome()
   } else if (screen.kind === 'instrument') {
+    pane.dataset.analyticsPanel = screen.id
     const e = BY_ID.get(screen.id)
     content = e ? renderInstrument(e) : renderHome()
   } else {
+    pane.dataset.analyticsPanel = `${screen.symptom.id}-${screen.nodeId}`
     const node: PathNode | undefined = NODES.get(screen.nodeId)
     banner = stagedBanner(screen)
     if (!node) content = renderHome()

@@ -334,7 +334,12 @@ export function createPicker(opts: {
 
     const hit = pickAt(ev.clientX, ev.clientY)
     const id = hit?.id ?? null
-    bus.emit('select', hit ? { id, ...(hit.part ? { part: hit.part } : {}) } : { id: null })
+    bus.emit(
+      'select',
+      hit
+        ? { id, source: 'building', ...(hit.part ? { part: hit.part } : {}) }
+        : { id: null },
+    )
 
     const now = ev.timeStamp
     if (id !== null && id === lastClickId && now - lastClickT < DBL_MS) {

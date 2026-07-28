@@ -564,7 +564,7 @@ export interface SimApi {
   state: SimState
   /** advance by dt simulated seconds (already scaled by timeScale) */
   update(dt: number): void
-  setKnob<K extends keyof Knobs>(key: K, value: Knobs[K]): void
+  setKnob<K extends keyof Knobs>(key: K, value: Knobs[K], source?: 'user'): void
   runScenario(id: string | null): void
   request(kind: QueryKind, table: number, opts?: TraceRequestOptions): void
   setTraceMode(mode: TracePlayback): void
@@ -611,9 +611,9 @@ export interface BusEvents {
   /** camera should frame a component */
   focus: { id: string | null; instant?: boolean }
   /** inspector panel target changed; `part` names a directly-picked substructure */
-  select: { id: string | null; part?: 'page'; outlineOnly?: boolean }
+  select: { id: string | null; part?: 'page'; outlineOnly?: boolean; source?: 'building' }
   hover: { id: string | null }
-  knob: { key: keyof Knobs; value: unknown }
+  knob: { key: keyof Knobs; value: unknown; source?: 'user' }
   scenario: { id: string | null }
   toast: {
     text: string
@@ -622,10 +622,12 @@ export interface BusEvents {
     action?: { label: string; quality: QualityLevel }
   }
   narrate: { title: string; body: string; seconds?: number } | null
-  'tour:start': { chapter?: number }
+  'tour:start': { chapter?: number; source?: 'button' | 'keyboard' }
   'tour:stop': Record<string, never>
   'tour:chapter': { index: number; total: number; title: string }
-  'trace:open': Record<string, never>
+  'trace:open': { source?: 'button' | 'keyboard' }
+  'trace:run': { statement: QueryKind; table: string; playback: TracePlayback }
+  'panel:open': { panel: 'console' | 'inspector' | 'help'; item?: string }
   /** open one of the physical anatomy instruments, optionally for a component */
   'anatomy:open': { view: 'page' | 'directory'; id?: string }
   'camera:mode': { mode: CameraMode }

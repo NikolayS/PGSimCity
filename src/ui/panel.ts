@@ -238,6 +238,7 @@ export function createInspector(ctx: UiContext): UiModule {
   /* --- body -------------------------------------------------------------- */
 
   const body = el('div', { class: 'pg-panel__body pg-scroll pgc-insp__body', tabindex: '0' })
+  body.dataset.analyticsPanel = 'inspector'
   body.setAttribute('role', 'region')
   body.setAttribute('aria-label', 'Component notes')
 
@@ -565,6 +566,7 @@ export function createInspector(ctx: UiContext): UiModule {
     currentDef = def
 
     if (!id) {
+      body.dataset.analyticsPanel = 'inspector'
       kindBadge.hidden = true
       setText(title, 'Nothing selected')
       setText(subtitle, 'Click a building to open it up')
@@ -579,6 +581,7 @@ export function createInspector(ctx: UiContext): UiModule {
       return
     }
 
+    body.dataset.analyticsPanel = id
     const kind = def?.kind ?? inferKind(id)
     kindBadge.hidden = false
     kindBadge.dataset.kind = kind
@@ -599,6 +602,7 @@ export function createInspector(ctx: UiContext): UiModule {
     body.scrollTop = 0
     acc = TICK // paint the new metrics on the very next frame, not 160ms later
     setOpen(true)
+    ctx.bus.emit('panel:open', { panel: 'inspector', item: id })
   }
 
   /* --- wiring ------------------------------------------------------------ */
