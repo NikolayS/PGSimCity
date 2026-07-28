@@ -42,7 +42,7 @@ is really charging them.
 > and the source rather than memory; every finding was independently checked by a reviewer tasked
 > with refuting it. A separate audit treated buildings, adjacencies, and animations as claims.
 >
-> The suite has **210 tests**; CI fails the build on a red test. They pin the WAL trigger point as
+> The suite has **234 tests**; CI fails the build on a red test. They pin the WAL trigger point as
 > `max_wal_size / (1 + checkpoint_completion_target)` at every call site, cache hit ratio as
 > `blks_hit / (blks_hit + blks_read)`, and the clock-sweep `usage_count` cap at 5.
 >
@@ -125,36 +125,44 @@ or loss of functionality.
 
 ### Camera
 
-| | |
+| Input | Action |
 |---|---|
-| Left-drag | Pan — grab the ground and move it, the way a map does |
-| Right-drag | Orbit around the city |
-| Middle-drag / `Ctrl`-left-drag | Pan / orbit, if you have model-viewer habits |
-| Wheel | Zoom — the dolly follows the cursor, not the pivot |
-| Touch | 1 finger pans · 2 fingers pinch to zoom, twist to turn, drag up/down to tilt |
-| Click | Select a building. In fly mode, capture the mouse |
+| Left-drag | Pan in orbit mode — grab the ground and move it, the way a map does |
+| `Shift`-left-drag or `Ctrl`/`Cmd`-left-drag | Orbit around the city |
+| Middle-drag | Pan in orbit mode |
+| Right-click or touch long-press | Open the context menu |
+| Wheel | Zoom towards the cursor in orbit mode · adjust movement speed in fly mode |
+| 1 finger | Pan in orbit mode |
+| 2 fingers | Pinch to zoom · twist to orbit · drag both up/down to tilt |
+| First-person touch | Left thumb moves · right thumb looks · buttons jump and crouch (rise and dive while swimming) |
+| Click | Select a building · in fly or walk mode, capture the mouse for looking |
 | `W` `A` `S` `D` or the arrow keys | Move |
-| `Space` or `E` · `C` or `Q` | Rise · descend (fly mode) |
-| `PageUp` / `PageDown` | Change altitude (any mode) |
-| `Shift` · `Alt` | Boost · precision |
+| `Space` or `E` · `C` or `Q` | Rise · descend in fly mode; `Space` jumps and `C` crouches in walk mode |
+| `PageUp` / `PageDown` | Change altitude in orbit or fly mode |
+| `Shift` · `Alt` | Boost · precision in orbit or fly mode; `Shift` runs in walk mode |
 | `Esc` | Leave pointer lock |
 
 ### Keys
 
-| | |
+| Key | Action |
 |---|---|
 | `F` | Toggle fly / orbit camera |
 | `G` | Get down and walk the city on foot, 1.7 m tall |
 | `H` | Back to the establishing shot |
+| `Home` | Back to the default establishing shot |
+| `O` | Straight-down overview of the whole plate |
 | `T` | Guided tour — the whole city in 14 chapters |
-| `/` or `Ctrl-K` | Command palette — search every component, setting and scenario |
+| `Enter` | Open Run a Query |
+| `/` or `Ctrl`/`Cmd`-`K` | Command palette — search every component, setting and scenario |
 | `?` | Keyboard map and colour legend |
 | `L` | Toggle the floating labels |
+| `N` | Toggle daylight / night |
+| `M` | Toggle sound |
 | `K` or `P` | Pause / resume |
 | `,` `.` | Slower / faster (0.1× – 5×) |
 | `R` | Reset to the default settings |
 | `Esc` | Close the topmost overlay |
-| `1` – `8` | Jump to a district: clients, backends, shared buffers, WAL, storage, checkpointer, autovacuum, standby |
+| `1` – `8` | Jump to a district: clients, backends, buffer pool, WAL, storage, query lab, maintenance, standby |
 
 ---
 
