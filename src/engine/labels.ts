@@ -13,6 +13,7 @@ import {
   detailExpansionPriority,
   requestedLabelDetail,
 } from './label-detail'
+import { LABEL_AREA_PLACEMENT_BUDGET, labelScale } from './label-layout'
 
 /* ============================================================================
  * LABELS — map-grade annotation.
@@ -225,6 +226,7 @@ interface Entry {
   requestedDetail: LabelDetail
   nextDetail: LabelDetail
   alpha: number
+  scale: number
   place: boolean
   /** Cached camera-to-anchor visibility, refreshed round-robin. */
   occluded: boolean
@@ -247,6 +249,7 @@ interface Entry {
   fadeT: number
   lastRead: string
   lastOpacity: number
+  lastScale: number
   lastDx: number
   lastDy: number
   lastMore: number
@@ -401,6 +404,7 @@ export function createLabels(
       requestedDetail: LabelDetail.Name,
       nextDetail: LabelDetail.Name,
       alpha: 0,
+      scale: 1,
       place: false,
       occluded: false,
       shown: false,
@@ -416,6 +420,7 @@ export function createLabels(
       fadeT: 0,
       lastRead: '',
       lastOpacity: -1,
+      lastScale: NaN,
       lastDx: NaN,
       lastDy: NaN,
       lastMore: -1,
@@ -881,6 +886,7 @@ export function createLabels(
       e.onScreen = false
       e.nextDetail = LabelDetail.Name
       e.dist = camera.position.distanceTo(e.pos)
+      e.scale = labelScale(e.dist, viewW)
 
       if (e.rank === 3) {
         // A destination still exists when its presentation is dormant. The
@@ -997,24 +1003,34 @@ export function createLabels(
     if (!hudFirstRun) hudFirstRun = document.querySelector('.tour-first')
     reserveHudRect(hudFirstRun)
     let budget = maxLabels
+    let areaLeft = viewW * viewH * LABEL_AREA_PLACEMENT_BUDGET
 
     for (let i = 0; i < cand.length; i++) {
       const e = cand[i]
-      const w = detailWidth(e, e.nextDetail)
-      const h = detailHeight(e, e.nextDetail)
+      let w = detailWidth(e, e.nextDetail) * e.scale
+      let h = detailHeight(e, e.nextDetail) * e.scale
+      let area = w * h
+      // Attention requests the complete role, but the frame guarantee wins. A
+      // name can still identify the selected object when its prose will not fit.
+      if (area > areaLeft && e.nextDetail !== LabelDetail.Name) {
+        e.nextDetail = LabelDetail.Name
+        w = e.nameW * e.scale
+        h = e.nameH * e.scale
+        area = w * h
+      }
+      const withinArea = area <= areaLeft
       // Selected and hovered are placed first and are never collided away;
       // anything inside its dwell is held down so nothing can blink.
       const age = now - e.sinceT
-      // The eight destination identities are map furniture, not optional
-      // detail. Keeping them placed also prevents two colliding districts from
-      // taking turns inheriting the same screen position.
+      // Destination identities retain placement priority, but the area cap may
+      // remove them: keeping all eight is precisely what overwhelms a phone.
       const pinned = isDestination(e) || e.band <= B_HOVERED || (e.shown && age < MIN_DWELL)
       const cooling = !e.shown && age < HIDE_COOLDOWN && e.band > B_FOCUS
       const pad = e.shown ? PAD_KEEP : PAD_NEW
       let v = -1
       let forcedDestination = false
 
-      if ((budget > 0 || pinned) && (!cooling || pinned)) {
+      if (withinArea && (budget > 0 || pinned) && (!cooling || pinned)) {
         // Preserve the last successful slot whenever it remains valid.
         // Trying "home" first defeated the placer’s own hysteresis: two labels
         // could repeatedly reclaim one another's pixels at a fixed camera.
@@ -1030,11 +1046,10 @@ export function createLabels(
           }
         }
       }
-      // A pinned label has to go down somewhere — it is the selection, or too
-      // young to drop without strobing. Take the least-bad slot: a second sweep
-      // that will accept a real but bounded overlap, and only then fall back to
-      // wherever it was.
-      if (v < 0 && pinned) {
+      // A pinned label that fits the area budget has to go down somewhere — it
+      // is the selection, or too young to drop without strobing. Take the
+      // least-bad slot, then fall back to wherever it was.
+      if (v < 0 && pinned && withinArea) {
         for (let k = 0; k < N_VAR; k++) {
           if (fits(e, k, w, h, PAD_CRAMP)) {
             v = k
@@ -1055,6 +1070,7 @@ export function createLabels(
       e.dy = vy - e.sy
       e.place = true
       budget--
+      areaLeft -= area
       addRect(vx, vy, w, h)
     }
 
@@ -1086,15 +1102,20 @@ export function createLabels(
         e.needMeasure = true
       }
 
-      if (e.place && (e.dx !== e.lastDx || e.dy !== e.lastDy)) {
+      if (
+        e.place &&
+        (e.dx !== e.lastDx || e.dy !== e.lastDy || e.scale !== e.lastScale)
+      ) {
         e.lastDx = e.dx
         e.lastDy = e.dy
-        const w = detailWidth(e, e.detail)
-        const h = detailHeight(e, e.detail)
+        e.lastScale = e.scale
+        const w = detailWidth(e, e.detail) * e.scale
+        const h = detailHeight(e, e.detail) * e.scale
         // The leader runs from the anchor to whichever chip corner is nearest it.
         const cx = e.dx > 0 ? e.dx : e.dx + w < 0 ? e.dx + w : 0
         const cy = e.dy > 0 ? e.dy : e.dy + h < 0 ? e.dy + h : 0
         const st = e.el.style
+        st.setProperty('--lbl-scale', e.scale.toFixed(3))
         st.setProperty('--lbl-dx', `${e.dx.toFixed(1)}px`)
         st.setProperty('--lbl-dy', `${e.dy.toFixed(1)}px`)
         st.setProperty('--lbl-lead', `${Math.sqrt(cx * cx + cy * cy).toFixed(1)}px`)
@@ -1214,9 +1235,14 @@ export function createLabels(
   }
 
   function resize(w: number, h: number): void {
+    const widthChanged = w !== viewW
     viewW = w
     viewH = h
     renderer.setSize(w, h)
+    if (widthChanged) {
+      // The phone tier wraps names against vw, invalidating every cached box.
+      for (let i = 0; i < entries.length; i++) entries[i].needMeasure = true
+    }
     passT = PASS_SEC
   }
 

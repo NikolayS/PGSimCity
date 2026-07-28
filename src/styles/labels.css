@@ -39,6 +39,7 @@
   --lbl-dy: -50px;
   --lbl-lead: 23px;
   --lbl-lead-a: -45deg;
+  --lbl-scale: 1;
 
   position: absolute;
   /* A definite containing block: close-range roles and readouts wrap within
@@ -73,14 +74,15 @@
   pointer-events: auto;
   cursor: pointer;
   /* 6px below its resting place while it fades in */
-  transform: translate(var(--lbl-dx), calc(var(--lbl-dy) + 6px));
+  transform: translate(var(--lbl-dx), calc(var(--lbl-dy) + 6px)) scale(var(--lbl-scale));
+  transform-origin: 0 0;
   transition:
     transform 200ms var(--ease),
     background var(--dur) var(--ease);
 }
 
 .lbl.is-on .lbl__chip {
-  transform: translate(var(--lbl-dx), var(--lbl-dy));
+  transform: translate(var(--lbl-dx), var(--lbl-dy)) scale(var(--lbl-scale));
 }
 
 .lbl__name {
@@ -339,6 +341,19 @@
   pointer-events: none;
 }
 
+/* A phone is its own annotation tier. Long canonical names wrap instead of
+   spanning most of the city; the engine's area budget decides how many remain. */
+@media (max-width: 700px) {
+  .lbl {
+    width: min(210px, 52vw);
+  }
+
+  .lbl__name {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}
+
 /* ---------------------------- reduced motion ----------------------------- */
 
 @media (prefers-reduced-motion: reduce) {
@@ -349,6 +364,6 @@
   }
   /* no rise-in, so the chip must already sit at its resting offset */
   .lbl__chip {
-    transform: translate(var(--lbl-dx), var(--lbl-dy));
+    transform: translate(var(--lbl-dx), var(--lbl-dy)) scale(var(--lbl-scale));
   }
 }
