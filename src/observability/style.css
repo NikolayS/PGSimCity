@@ -1095,7 +1095,7 @@ body {
     var(--bg-panel);
 }
 .flow-lane > *,
-.flow-path {
+.flow-architecture-wrap {
   min-width: 0;
   width: 100%;
 }
@@ -1142,101 +1142,231 @@ body {
 .flow-lane[data-phase='running'] .flow-lane__phase { color: var(--c-backend); }
 .flow-lane[data-phase='done'] .flow-lane__phase { color: var(--c-ok); }
 
-.flow-path {
-  display: grid;
-  gap: 4px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.flow-stop {
-  --flow-accent: var(--c-backend);
-  position: relative;
-  min-width: 0;
-  display: grid;
-  grid-template-columns: 25px minmax(0, 1fr) auto 62px;
-  gap: 8px;
-  align-items: center;
-  min-height: 49px;
-  padding: 6px 8px;
+.flow-architecture-wrap {
+  display: flex;
+  justify-content: center;
+  overflow: hidden;
   border: 1px solid var(--line-hair);
-  border-left: 2px solid var(--line-soft);
-  border-radius: 3px;
+  border-radius: var(--r-sm);
   background: var(--bg-sunken);
 }
-.flow-stop[data-stop='fetch'] { --flow-accent: var(--c-buffer-clean); }
-.flow-stop[data-stop='wal'],
-.flow-stop[data-stop='commit'] { --flow-accent: var(--c-wal); }
-.flow-stop[data-stop='send'] { --flow-accent: var(--c-client); }
-.flow-stop__index {
-  width: 22px;
-  height: 22px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--line-soft);
-  border-radius: 50%;
-  color: var(--ink-faint);
+.flow-architecture {
+  width: min(100%, 460px);
+  height: auto;
+  display: block;
+  overflow: visible;
+  font-family: var(--f-ui);
+}
+.flow-architecture__boundary {
+  fill: color-mix(in srgb, var(--bg-panel-solid) 72%, transparent);
+  stroke: var(--line-soft);
+  stroke-width: 1.25;
+  vector-effect: non-scaling-stroke;
+}
+.flow-architecture__boundary.shared-boundary {
+  fill: color-mix(in srgb, var(--c-shmem) 5%, var(--bg-panel-solid));
+  stroke: color-mix(in srgb, var(--c-shmem) 58%, var(--line-soft));
+  stroke-width: 2;
+}
+.flow-architecture__boundary.disk-boundary {
+  fill: color-mix(in srgb, var(--c-storage) 4%, var(--bg-panel-solid));
+  stroke: color-mix(in srgb, var(--c-storage) 52%, var(--line-soft));
+}
+.flow-architecture__layer-label,
+.flow-architecture__process-label {
+  fill: var(--ink-faint);
   font-family: var(--f-mono);
   font-size: 9px;
-}
-.flow-stop__copy {
-  min-width: 0;
-  display: grid;
-  gap: 1px;
-}
-.flow-stop__copy strong {
-  color: var(--ink-dim);
-  font-size: var(--fs-xs);
   font-weight: 600;
+  letter-spacing: 0.1em;
 }
-.flow-stop__copy > span {
-  overflow: hidden;
-  color: var(--ink-faint);
-  font-size: 10px;
-  line-height: 1.3;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.flow-architecture__process-label {
+  font-size: 8px;
+  letter-spacing: 0.06em;
 }
-.flow-stop__state,
-.flow-stop__duration {
-  color: var(--ink-faint);
+.flow-architecture__relation-label {
+  fill: var(--c-backend);
   font-family: var(--f-mono);
-  font-size: 9px;
-  letter-spacing: 0.08em;
-  white-space: nowrap;
+  font-size: 8.5px;
 }
-.flow-stop__duration {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0;
+.flow-architecture__component,
+.flow-architecture__container {
+  --component-color: var(--line-hard);
+  cursor: default;
+  outline: none;
 }
-.flow-stop.is-current {
-  border-color: var(--flow-accent);
-  border-left-color: var(--flow-accent);
-  background: color-mix(in srgb, var(--flow-accent) 8%, var(--bg-sunken));
-  box-shadow: inset 0 0 16px color-mix(in srgb, var(--flow-accent) 7%, transparent);
+.flow-architecture__component > rect {
+  fill: var(--bg-panel-solid);
+  stroke: color-mix(in srgb, var(--component-color) 64%, var(--line-soft));
+  stroke-width: 1.25;
+  vector-effect: non-scaling-stroke;
+  transition:
+    fill var(--dur-fast) var(--ease),
+    stroke var(--dur-fast) var(--ease),
+    stroke-width var(--dur-fast) var(--ease);
 }
-.flow-stop.is-current .flow-stop__index {
-  border-color: var(--flow-accent);
-  background: var(--flow-accent);
-  color: var(--ink-invert);
+.flow-architecture__component-title {
+  fill: var(--ink);
+  font-family: var(--f-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.015em;
 }
-.flow-stop.is-current .flow-stop__copy strong,
-.flow-stop.is-current .flow-stop__state { color: var(--flow-accent); }
-.flow-stop.is-done { border-left-color: var(--c-ok); }
-.flow-stop.is-done .flow-stop__index {
-  border-color: var(--c-ok);
-  color: var(--c-ok);
+.flow-architecture__component-detail {
+  fill: var(--ink-faint);
+  font-size: 8.5px;
 }
-.flow-stop.is-done .flow-stop__state { color: var(--c-ok); }
-.flow-stop.is-skipped {
+.flow-architecture__component.tone-client { --component-color: var(--c-client); }
+.flow-architecture__component.tone-backend { --component-color: var(--c-backend); }
+.flow-architecture__component.tone-private { --component-color: var(--ink-dim); }
+.flow-architecture__component.tone-buffer { --component-color: var(--c-buffer-clean); }
+.flow-architecture__component.tone-wal { --component-color: var(--c-wal); }
+.flow-architecture__component.tone-shmem { --component-color: var(--c-shmem); }
+.flow-architecture__component.tone-lock { --component-color: var(--c-lock); }
+.flow-architecture__component.tone-storage { --component-color: var(--c-storage); }
+.flow-architecture__component.tone-kernel { --component-color: var(--ink-dim); }
+.flow-architecture__component.tone-checkpoint { --component-color: var(--c-checkpoint); }
+.flow-architecture__component.tone-bgwriter { --component-color: var(--c-bgwriter); }
+.flow-architecture__component.tone-vacuum { --component-color: var(--c-vacuum); }
+.flow-architecture__component.tone-replication { --component-color: var(--c-replication); }
+.flow-architecture__component.is-visited > rect {
+  stroke: color-mix(in srgb, var(--component-color) 78%, var(--c-ok));
+  stroke-width: 1.75;
+}
+.flow-architecture__component.is-current > rect {
+  fill: color-mix(in srgb, var(--component-color) 10%, var(--bg-panel-solid));
+  stroke: var(--component-color);
+  stroke-width: 2.75;
+}
+.flow-architecture__component.is-current > .flow-architecture__component-title {
+  fill: var(--component-color);
+}
+.flow-architecture__component:focus-visible > rect,
+.flow-architecture__container:focus-visible > .flow-architecture__boundary {
+  stroke: var(--c-backend);
+  stroke-width: 3;
+}
+.flow-architecture__connection {
+  fill: none;
+  stroke: var(--ink-faint);
+  stroke-width: 1.2;
+  opacity: 0.58;
+  vector-effect: non-scaling-stroke;
+}
+.flow-architecture__connection.relation-connection,
+.flow-architecture__connection.relation-fork { stroke: var(--c-backend); }
+.flow-architecture__connection.relation-read { stroke: var(--c-buffer-clean); }
+.flow-architecture__connection.relation-wal-write,
+.flow-architecture__connection.relation-flush { stroke: var(--c-wal); }
+.flow-architecture__connection.relation-return { stroke: var(--c-client); }
+.flow-architecture__connection.relation-background {
+  stroke: var(--ink-faint);
+  stroke-dasharray: 4 4;
+  opacity: 0.34;
+}
+.arrow-control { fill: var(--c-backend); }
+.arrow-read { fill: var(--c-buffer-clean); }
+.arrow-wal { fill: var(--c-wal); }
+.arrow-background { fill: var(--ink-faint); }
+.arrow-return { fill: var(--c-client); }
+
+.flow-trace-stage {
+  --trace-color: var(--c-backend);
+  outline: none;
+}
+.flow-trace-stage[data-stop='fetch'] { --trace-color: var(--c-buffer-clean); }
+.flow-trace-stage[data-stop='wal'],
+.flow-trace-stage[data-stop='commit'] { --trace-color: var(--c-wal); }
+.flow-trace-stage[data-stop='send'],
+.flow-trace-stage[data-stop='done'] { --trace-color: var(--c-client); }
+.flow-trace-stage__path {
+  fill: none;
+  stroke: var(--line-hard);
+  stroke-width: 2;
+  stroke-linecap: round;
+  opacity: 0.12;
+  vector-effect: non-scaling-stroke;
+}
+.flow-trace-stage__dot {
+  fill: var(--bg-panel-solid);
+  stroke: var(--line-hard);
+  stroke-width: 1.25;
+  vector-effect: non-scaling-stroke;
+}
+.flow-trace-stage__label {
+  fill: var(--ink-faint);
+  font-family: var(--f-mono);
+  font-size: 8.5px;
+}
+.flow-trace-stage.is-done .flow-trace-stage__path {
+  stroke: var(--c-ok);
+  opacity: 0.58;
+}
+.flow-trace-stage.is-done .flow-trace-stage__dot {
+  fill: var(--c-ok);
+  stroke: var(--c-ok);
+}
+.flow-trace-stage.is-current .flow-trace-stage__path {
+  stroke: var(--trace-color);
+  stroke-width: 3;
+  stroke-dasharray: 7 5;
+  opacity: 1;
+  animation: flow-trace-march 650ms linear infinite;
+}
+.flow-trace-stage.is-current .flow-trace-stage__dot {
+  fill: var(--trace-color);
+  stroke: var(--bg-panel-solid);
+  stroke-width: 2;
+}
+.flow-trace-stage.is-current .flow-trace-stage__label {
+  fill: var(--trace-color);
+  font-weight: 700;
+}
+.flow-trace-stage.is-skipped {
   opacity: 0.55;
-  border-style: dashed;
 }
-.flow-stop.is-skipped .flow-stop__copy,
-.flow-stop.is-skipped .flow-stop__state {
+.flow-trace-stage.is-skipped .flow-trace-stage__path {
+  stroke-dasharray: 3 5;
+}
+.flow-trace-stage.is-skipped .flow-trace-stage__label {
   text-decoration: line-through;
   text-decoration-thickness: 1px;
+}
+.flow-trace-stage:focus-visible .flow-trace-stage__dot {
+  stroke: var(--c-backend);
+  stroke-width: 3;
+}
+@keyframes flow-trace-march {
+  to { stroke-dashoffset: -24; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .flow-trace-stage.is-current .flow-trace-stage__path { animation: none; }
+}
+
+.flow-architecture-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 12px;
+  color: var(--ink-faint);
+  font-family: var(--f-mono);
+  font-size: 8px;
+}
+.flow-architecture-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.flow-architecture-legend span::before {
+  width: 16px;
+  height: 0;
+  border-top: 2px solid var(--c-backend);
+  content: '';
+}
+.flow-architecture-legend .legend-read::before { border-color: var(--c-buffer-clean); }
+.flow-architecture-legend .legend-wal::before { border-color: var(--c-wal); }
+.flow-architecture-legend .legend-background::before {
+  border-color: var(--ink-faint);
+  border-top-style: dashed;
 }
 
 .flow-narrative {
@@ -1424,11 +1554,6 @@ body {
   .flow-controls > div:first-child,
   .flow-run__status { grid-column: 1 / -1; }
   .flow-run { width: 100%; }
-  .flow-stop {
-    grid-template-columns: 25px minmax(0, 1fr) auto;
-  }
-  .flow-stop__duration { grid-column: 3; }
-  .flow-stop__state { display: none; }
 }
 
 @media (max-width: 720px) {
@@ -1448,10 +1573,6 @@ body {
   .flow-run,
   .flow-run__status { grid-column: 1 / -1; }
   .flow-lanes { grid-template-columns: minmax(0, 1fr); }
-  .flow-stop {
-    grid-template-columns: 25px minmax(0, 1fr) 66px;
-  }
-  .flow-stop__duration { grid-column: 3; }
   .flow-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
@@ -1471,13 +1592,8 @@ body {
     grid-column: 2;
     grid-row: 2;
   }
-  .flow-stop {
-    grid-template-columns: 24px minmax(0, 1fr);
-    gap: 7px;
-  }
-  .flow-stop__duration {
-    grid-column: 2;
-    text-align: left;
-  }
   .flow-narrative { min-height: 0; }
+  .flow-architecture__component-title { font-size: 10.5px; }
+  .flow-architecture__component-detail { font-size: 9px; }
+  .flow-trace-stage__label { font-size: 9px; }
 }

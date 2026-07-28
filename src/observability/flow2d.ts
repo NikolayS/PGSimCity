@@ -13,6 +13,8 @@ import { sqlFor } from '../sim/model'
 import { TRACE_COPY } from '../ui/trace-copy'
 import { el, setClass, setText } from '../ui/uikit'
 import { TABLES } from '../world/layout'
+import { createFlowArchitecture } from './flow-architecture'
+import type { FlowArchitecture } from './flow-architecture'
 
 export interface FlowChoice {
   kind: QueryKind
@@ -271,10 +273,7 @@ interface LaneState {
   planFinalized: boolean
 }
 
-interface StopElements {
-  root: HTMLLIElement
-  state: HTMLElement
-  duration: HTMLElement
+interface TimeElements {
   timeBar: HTMLElement
   timeLabel: HTMLElement
 }
@@ -282,7 +281,8 @@ interface StopElements {
 interface LaneElements {
   root: HTMLElement
   phase: HTMLElement
-  stops: StopElements[]
+  architecture: FlowArchitecture
+  timeStops: TimeElements[]
   narrative: HTMLElement
   narrativeTitle: HTMLElement
   narrativeLine: HTMLElement
@@ -374,29 +374,15 @@ function makeLane(
     class: 'flow-lane__setting',
     text: `synchronous_commit=${settings.synchronousCommit} · shared_buffers=${settings.sharedBuffers} MiB`,
   })
-  const stops = FLOW_PATH.map((segment, index) => {
-    const state = el('span', { class: 'flow-stop__state', text: 'WAITING' })
-    const duration = el('span', { class: 'flow-stop__duration', text: '—' })
-    const root = el(
-      'li',
-      { class: 'flow-stop is-pending', data: { stop: segment.stop } },
-      el('span', { class: 'flow-stop__index', text: String(index + 1), 'aria-hidden': 'true' }),
-      el(
-        'span',
-        { class: 'flow-stop__copy' },
-        el('strong', { text: segment.label }),
-        el('span', { text: segment.detail }),
-      ),
-      state,
-      duration,
-    )
+  const architecture = createFlowArchitecture(`flow-${name.toLowerCase()}`)
+  const timeStops = FLOW_PATH.map((segment) => {
     const timeLabel = el('span', { class: 'flow-time__label' })
     const timeBar = el(
       'span',
       { class: `flow-time__bar stop-${segment.stop}` },
       timeLabel,
     )
-    return { root, state, duration, timeBar, timeLabel }
+    return { timeBar, timeLabel }
   })
 
   const hits = metric('Buffer hits')
@@ -433,7 +419,19 @@ function makeLane(
         el('div', {}, setting),
         phase,
       ),
-      el('ol', { class: 'flow-path', 'aria-label': 'Complete query lifecycle' }, ...stops.map((stop) => stop.root)),
+      el(
+        'div',
+        { class: 'flow-architecture-wrap' },
+        architecture.root,
+      ),
+      el(
+        'div',
+        { class: 'flow-architecture-legend', 'aria-label': 'Connection legend' },
+        el('span', { class: 'legend-control', text: 'query / process control' }),
+        el('span', { class: 'legend-read', text: 'buffer read' }),
+        el('span', { class: 'legend-wal', text: 'WAL write / flush' }),
+        el('span', { class: 'legend-background', text: 'background work' }),
+      ),
       narrative,
       el(
         'dl',
@@ -450,7 +448,7 @@ function makeLane(
         { class: 'flow-time' },
         el('h3', { text: 'Time by stop' }),
         el('div', { class: 'flow-time__axis' }, el('span', { text: '0' }), timeAxisEnd),
-        el('div', { class: 'flow-time__bars' }, ...stops.map((stop) => stop.timeBar)),
+        el('div', { class: 'flow-time__bars' }, ...timeStops.map((stop) => stop.timeBar)),
       ),
       el(
         'section',
@@ -460,7 +458,8 @@ function makeLane(
       ),
     ),
     phase,
-    stops,
+    architecture,
+    timeStops,
     narrative,
     narrativeTitle,
     narrativeLine,
@@ -480,6 +479,63 @@ function makeLane(
 
 function selectOption(value: string, label = value): HTMLOptionElement {
   return el('option', { value, text: label })
+}
+
+const TRACE_COMPONENTS: Readonly<
+  Record<Exclude<TraceStop, 'blocked'>, readonly string[]>
+> = {
+  connect: ['client', 'postmaster', 'backend'],
+  parse_plan: ['backend'],
+  fetch: ['backend', 'buffer-pool'],
+  work: ['backend', 'private-memory'],
+  wal: ['backend', 'wal-buffers'],
+  commit: ['wal-buffers', 'kernel-page-cache', 'pg-wal-store'],
+  send: ['backend', 'postmaster', 'client'],
+  done: ['client'],
+}
+
+function paintArchitecture(
+  architecture: FlowArchitecture,
+  trace: TraceRecord | null,
+  query: QueryKind,
+): void {
+  for (const component of architecture.components.values()) {
+    component.classList.remove('is-current', 'is-visited')
+  }
+  architecture.root.dataset.stop = trace?.stop ?? 'ready'
+  if (!trace) return
+
+  for (const segment of FLOW_PATH) {
+    const status = segmentStatus(trace, segment)
+    if (status !== 'current' && status !== 'done') continue
+    const ids = TRACE_COMPONENTS[segment.stop]
+    for (const id of ids) {
+      const component = architecture.components.get(id)
+      if (component) component.classList.add(status === 'current' ? 'is-current' : 'is-visited')
+    }
+    if (
+      segment.stop === 'fetch'
+      && trace.buffersRead > 0
+      && (status === 'current' || status === 'done')
+    ) {
+      architecture.components.get('kernel-page-cache')?.classList.add(
+        status === 'current' ? 'is-current' : 'is-visited',
+      )
+      architecture.components.get('base-store')?.classList.add(
+        status === 'current' ? 'is-current' : 'is-visited',
+      )
+    }
+  }
+
+  if (trace.stop === 'blocked') {
+    architecture.components.get('backend')?.classList.add('is-current')
+    architecture.components.get('lock-table')?.classList.add('is-current')
+  }
+
+  if (!isWrite(query)) {
+    architecture.components.get('wal-buffers')?.classList.remove('is-current', 'is-visited')
+    architecture.components.get('pg-wal-store')?.classList.remove('is-current', 'is-visited')
+  }
 }
 
 /**
@@ -839,36 +895,41 @@ export function createFlow2dView(
 
     for (let i = 0; i < FLOW_PATH.length; i++) {
       const segment = FLOW_PATH[i]
-      const stop = elements.stops[i]
+      const stage = elements.architecture.stages[segment.stop]
       const status = trace
         ? segmentStatus(trace, segment)
         : segment.skipOnRead && !isWrite(selected.kind)
           ? 'skipped'
           : 'pending'
-      stop.root.className = `flow-stop is-${status}`
-      setText(
-        stop.state,
-        status === 'current'
-          ? 'NOW'
-          : status === 'done'
-            ? 'DONE'
-            : status === 'skipped'
-              ? 'SKIPPED'
-              : 'WAITING',
-      )
-      if (status === 'current') stop.root.setAttribute('aria-current', 'step')
-      else stop.root.removeAttribute('aria-current')
 
       const elapsed = lane.snapshot
         ? lane.snapshot.timings[segment.stop] ?? null
         : trace
           ? lane.timing.duration(segment.stop, trace)
           : null
-      setText(
-        stop.duration,
-        status === 'skipped' ? 'not visited' : elapsed === null ? '—' : `${(elapsed * 1000).toFixed(0)} ms`,
+      stage.root.setAttribute('class', `flow-trace-stage is-${status}`)
+      stage.root.setAttribute(
+        'aria-label',
+        `${segment.label}. ${
+          status === 'current'
+            ? 'Current step'
+            : status === 'done'
+              ? 'Done'
+              : status === 'skipped'
+                ? 'Skipped for this statement'
+                : 'Waiting'
+        }. ${
+          status === 'skipped'
+            ? 'Not visited'
+            : elapsed === null
+              ? 'Duration not known'
+              : `${(elapsed * 1000).toFixed(0)} milliseconds`
+        }. ${segment.detail}`,
       )
+      if (status === 'current') stage.root.setAttribute('aria-current', 'step')
+      else stage.root.removeAttribute('aria-current')
     }
+    paintArchitecture(elements.architecture, trace, selected.kind)
 
     if (!trace) {
       setText(elements.narrativeTitle, index === 0 ? 'Run A is ready' : 'Run B follows automatically')
@@ -926,7 +987,7 @@ export function createFlow2dView(
       for (let i = 0; i < FLOW_PATH.length; i++) {
         const segment = FLOW_PATH[i]
         const duration = durationFor(index, segment.stop)
-        const stop = laneEls[index].stops[i]
+        const stop = laneEls[index].timeStops[i]
         stop.timeBar.style.flexBasis = `${(duration / max) * 100}%`
         stop.timeBar.hidden =
           segment.skipOnRead && !isWrite(selected.kind)
