@@ -12,6 +12,18 @@ const VIEWPORTS = [
   { width: 390, height: 844, expectedVitals: 2 },
 ]
 const THEMES = ['night', 'day']
+const LABEL_AREA_BUDGET_PERCENT = 4
+const LABEL_VIEWPORTS = [
+  { width: 1280, height: 800 },
+  { width: 390, height: 844 },
+]
+const LABEL_CAMERAS = [
+  { name: 'close', distance: 120 },
+  { name: 'default', distance: null },
+  { name: 'far', distance: 900 },
+  { name: 'max', distance: 1650 },
+]
+const LABEL_SETTLE_MS = 9000
 
 const chrome = spawn(
   process.env.CHROME_BIN ?? 'google-chrome',
@@ -30,6 +42,10 @@ const chrome = spawn(
     '--window-size=1280,844',
     '--no-first-run',
     '--disable-extensions',
+    '--js-flags=--max-old-space-size=512',
+    '--disable-gpu-shader-disk-cache',
+    '--renderer-process-limit=1',
+    '--disable-background-networking',
     `--user-data-dir=${PROFILE}`,
     'about:blank',
   ],
@@ -358,6 +374,84 @@ const panelOverlayExpression = `(async () => {
   }
 })()`
 
+const labelCameraExpression = (camera) => `(() => {
+  document.querySelector('.tour-first__no')?.click()
+  window.PGSIMCITY.bus.emit('select', { id: null })
+  window.PGSIMCITY.bus.emit('ui:help', { open: false })
+  ${
+    camera.distance === null
+      ? 'window.PGSIMCITY.rig.home(true)'
+      : `window.PGSIMCITY.rig.focusOn(
+          { target: [-18, 0, -16], distance: ${camera.distance}, dir: [-200, 216, -326] },
+          { instant: true },
+        )`
+  }
+})()`
+
+const labelAreaExpression = (theme, state) => `(() => {
+  window.PGSIMCITY.setThemeMode(${JSON.stringify(theme)})
+
+  const chips = Array.from(document.querySelectorAll('.lbl__chip')).filter((chip) => {
+    const host = chip.closest('.lbl')
+    const style = getComputedStyle(host)
+    const box = chip.getBoundingClientRect()
+    return (
+      style.display !== 'none' &&
+      style.visibility !== 'hidden' &&
+      Number(style.opacity) > 0.01 &&
+      box.width > 0 &&
+      box.height > 0
+    )
+  })
+  let area = 0
+  let maxWidth = 0
+  let minFont = Infinity
+  let clippedChips = 0
+  let overlapPairs = 0
+  let overlapArea = 0
+  const boxes = []
+  for (const chip of chips) {
+    const box = chip.getBoundingClientRect()
+    area += box.width * box.height
+    maxWidth = Math.max(maxWidth, box.width)
+    boxes.push(box)
+    if (chip.scrollWidth > chip.clientWidth + 1 || chip.scrollHeight > chip.clientHeight + 1) {
+      clippedChips++
+    }
+    const scale = box.width / chip.offsetWidth
+    for (const text of chip.querySelectorAll('.lbl__name, .lbl__role, .lbl__read, .lbl__more')) {
+      const style = getComputedStyle(text)
+      if (style.display === 'none' || style.visibility === 'hidden') continue
+      minFont = Math.min(minFont, Number.parseFloat(style.fontSize) * scale)
+    }
+  }
+  for (let i = 0; i < boxes.length; i++) {
+    const a = boxes[i]
+    for (let j = i + 1; j < boxes.length; j++) {
+      const b = boxes[j]
+      const overlapWidth = Math.min(a.right, b.right) - Math.max(a.left, b.left)
+      const overlapHeight = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)
+      if (overlapWidth > 0.5 && overlapHeight > 0.5) {
+        overlapPairs++
+        overlapArea += overlapWidth * overlapHeight
+      }
+    }
+  }
+  return {
+    theme: ${JSON.stringify(theme)},
+    state: ${JSON.stringify(state)},
+    viewport: [innerWidth, innerHeight],
+    cameraAltitude: Number(window.PGSIMCITY.rig.altitude.toFixed(1)),
+    chips: chips.length,
+    areaPercent: Number(((area / innerWidth / innerHeight) * 100).toFixed(3)),
+    maxWidthPercent: Number(((maxWidth / innerWidth) * 100).toFixed(2)),
+    minFont: Number(minFont.toFixed(2)),
+    clippedChips,
+    overlapPairs,
+    overlapAreaPercent: Number(((overlapArea / innerWidth / innerHeight) * 100).toFixed(4)),
+  }
+})()`
+
 const failures = []
 const measurements = []
 
@@ -369,6 +463,43 @@ try {
   // Measure the settled first-run surface. The previous tour invitation waited
   // 2.8 seconds, so sampling as soon as the vitals mounted missed real chrome.
   await sleep(3200)
+
+  for (const viewport of LABEL_VIEWPORTS) {
+    await send('Emulation.setDeviceMetricsOverride', {
+      width: viewport.width,
+      height: viewport.height,
+      deviceScaleFactor: 1,
+      mobile: false,
+    })
+    for (const camera of LABEL_CAMERAS) {
+      await evaluate(labelCameraExpression(camera))
+      // Software WebGL can run at 1 fps. Two placement passes plus the chip
+      // fade must finish before stale pre-resize rectangles stop counting.
+      await sleep(LABEL_SETTLE_MS)
+      for (const theme of THEMES) {
+        const labelArea = await evaluate(labelAreaExpression(theme, camera.name))
+        measurements.push({ labelArea })
+        const where = `${viewport.width}x${viewport.height} ${theme} ${camera.name}`
+        if (labelArea.areaPercent > LABEL_AREA_BUDGET_PERCENT) {
+          failures.push(
+            `labels: ${where} area ${labelArea.areaPercent}% exceeds ${LABEL_AREA_BUDGET_PERCENT}%`,
+          )
+        }
+        if (labelArea.minFont < 10.9) {
+          failures.push(`labels: ${where} effective type is only ${labelArea.minFont}px`)
+        }
+        if (labelArea.clippedChips > 0) {
+          failures.push(`labels: ${where} clips ${labelArea.clippedChips} chip(s)`)
+        }
+        if (labelArea.overlapAreaPercent > 0.01) {
+          failures.push(`labels: ${where} overlap area reaches ${labelArea.overlapAreaPercent}%`)
+        }
+        if (viewport.width <= 700 && labelArea.maxWidthPercent > 56) {
+          failures.push(`labels: ${where} chip width reaches ${labelArea.maxWidthPercent}%`)
+        }
+      }
+    }
+  }
 
   for (const viewport of VIEWPORTS) {
     await send('Emulation.setDeviceMetricsOverride', {
