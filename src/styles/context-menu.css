@@ -2,7 +2,7 @@
    heading, and a compact vertical command list. */
 .pg-context {
   position: fixed;
-  z-index: 20;
+  z-index: var(--z-menu-popover);
   width: max-content;
   min-width: 208px;
   max-width: min(280px, calc(100vw - 16px));

@@ -354,7 +354,7 @@
 
 .hud-view-panel {
   position: fixed;
-  z-index: 18;
+  z-index: var(--z-menu-popover);
   top: calc(var(--hud-gap) + var(--safe-t) + 62px);
   right: calc(var(--hud-gap) + var(--safe-r));
   width: min(380px, calc(100vw - var(--hud-gap) * 2 - var(--safe-l) - var(--safe-r)));
@@ -792,7 +792,7 @@ body.pg-labels-off #labels-root {
 .help-overlay {
   position: fixed;
   inset: 0;
-  z-index: 30;
+  z-index: var(--z-modal);
   display: none;
   padding: 24px;
   background: var(--bg-overlay);

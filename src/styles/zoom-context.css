@@ -6,7 +6,7 @@
 .zoom-context {
   --zoom-context-accent: var(--c-backend);
   position: fixed;
-  z-index: 8;
+  z-index: var(--z-floating-overlay);
   left: 50%;
   bottom: calc(70px + var(--safe-b));
   width: min(680px, calc(100vw - 2 * var(--hud-gap) - var(--safe-l) - var(--safe-r)));

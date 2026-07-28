@@ -618,7 +618,9 @@
   .pgc-host.is-compact .pgc-tab {
     position: fixed;
     top: 50%;
-    z-index: 8;
+    /* The tab belongs to the panel layer but stays one local step above the
+       drawer edge so it remains the same surface's reachable handle. */
+    z-index: calc(var(--z-panel-drawer) + var(--z-local-base));
     margin: 0;
   }
   .pgc-host--left.is-compact .pgc-tab {
@@ -638,7 +640,7 @@
     position: fixed;
     top: var(--pgc-inset);
     bottom: var(--pgc-inset);
-    z-index: 7;
+    z-index: var(--z-panel-drawer);
     max-height: none;
     opacity: 0;
     visibility: hidden;

@@ -378,7 +378,8 @@ body.pg-tour #hud-bottom:focus-within {
 .trace-picker {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  /* Trace selection and the command palette are mutually exclusive modals. */
+  z-index: var(--z-modal);
   display: grid;
   grid-template-rows: minmax(5vh, 10vh) auto 1fr;
   justify-items: center;
@@ -529,7 +530,7 @@ body.pg-tour #hud-bottom:focus-within {
 .pal-overlay {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: var(--z-modal);
   display: grid;
   grid-template-rows: minmax(8vh, 12vh) auto 1fr;
   justify-items: center;

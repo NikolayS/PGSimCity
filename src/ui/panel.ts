@@ -14,6 +14,7 @@ import {
   syncSheetFlags,
 } from './controls'
 import type { KnobControl } from './controls'
+import { MODE_SURFACES, setModeSurface } from './mode-exits'
 import { clear, el, icon, metricTile, setClass, setText } from './uikit'
 import type { UiContext, UiModule } from './uikit'
 
@@ -275,6 +276,7 @@ export function createInspector(ctx: UiContext): UiModule {
     tab.setAttribute('aria-label', tab.title)
     panel.setAttribute('aria-hidden', String(!panelOpen))
     panel.inert = !panelOpen
+    setModeSurface(host, panelOpen ? (compact ? MODE_SURFACES.drawer : MODE_SURFACES.panel) : null)
     syncSheetFlags()
   }
 
@@ -661,6 +663,7 @@ export function createInspector(ctx: UiContext): UiModule {
       offCameraPreset()
       narrow.removeEventListener('change', onNarrow)
       window.removeEventListener(SHEET_EVENT, onSheet)
+      setModeSurface(host, null)
       teardown()
       host.remove()
       syncSheetFlags()

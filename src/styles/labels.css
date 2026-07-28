@@ -209,7 +209,7 @@
 
 .lbl.is-selected {
   /* CSS2DRenderer sortObjects is off, so this z-index is ours to use. */
-  z-index: 3;
+  z-index: var(--z-local-selected);
 }
 
 .lbl.is-selected .lbl__chip {
@@ -270,7 +270,7 @@
 /* One chip per district, at the centroid of its members — the label the city
    wears from a distance, and the reason an area can never read as empty. */
 .lbl--district {
-  z-index: 2;
+  z-index: var(--z-local-raised);
 }
 
 .lbl--district .lbl__chip {

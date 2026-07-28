@@ -3,7 +3,7 @@ import '../styles/zoom-context.css'
 import type { Registry } from '../core/registry'
 import type { CameraRig } from '../engine/camera'
 import type { PickerApi } from '../engine/picker'
-import { MODE_IDS } from './mode-exits'
+import { MODE_IDS, registerModeAffordance } from './mode-exits'
 import { el, icon, setText } from './uikit'
 import type { UiModule } from './uikit'
 
@@ -64,6 +64,12 @@ export function createZoomContext(opts: ZoomContextOptions): UiModule {
   let sampleT = PICK_INTERVAL_SECONDS
   let close = false
   let currentId: string | null = null
+  let available = false
+  let suppressed = false
+
+  function syncVisibility(): void {
+    root.hidden = !available || suppressed
+  }
 
   function measureCanvas(): void {
     const rect = dom.getBoundingClientRect()
@@ -72,7 +78,8 @@ export function createZoomContext(opts: ZoomContextOptions): UiModule {
   }
 
   function hide(): void {
-    if (!root.hidden) root.hidden = true
+    available = false
+    syncVisibility()
     currentId = null
   }
 
@@ -88,6 +95,10 @@ export function createZoomContext(opts: ZoomContextOptions): UiModule {
 
   exit.addEventListener('click', onExit)
   window.addEventListener('resize', onResize)
+  const offSuppression = registerModeAffordance(MODE_IDS.closeZoom, (next) => {
+    suppressed = next
+    syncVisibility()
+  })
   measureCanvas()
 
   return {
@@ -128,9 +139,11 @@ export function createZoomContext(opts: ZoomContextOptions): UiModule {
         setText(name, def.name)
         setText(role, def.role)
       }
-      root.hidden = false
+      available = true
+      syncVisibility()
     },
     dispose(): void {
+      offSuppression()
       exit.removeEventListener('click', onExit)
       window.removeEventListener('resize', onResize)
       root.remove()

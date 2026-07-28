@@ -90,6 +90,27 @@
 
   /* The smallest thing a thumb can reliably hit. Used, not decorative. */
   --tap: 44px;
+
+  /* --- stack order ---
+     World: canvas companions such as projected labels.
+     HUD: persistent instruments framing the city.
+     Panels and drawers: the console and inspector surfaces.
+     Floating overlays: close-view captions and direct-manipulation controls.
+     Menus and popovers: contextual and view menus above floating chrome.
+     Modals: mutually exclusive blocking dialogs, including boot and anatomy.
+     Toasts and notices: transient messages that must remain readable above all.
+     The local values order children only inside an existing stacking context;
+     they never choose an application layer. */
+  --z-world: 1;
+  --z-hud: 10;
+  --z-panel-drawer: 20;
+  --z-floating-overlay: 30;
+  --z-menu-popover: 40;
+  --z-modal: 50;
+  --z-toast-notice: 60;
+  --z-local-base: 1;
+  --z-local-raised: 2;
+  --z-local-selected: 3;
 }
 
 /* ============================================================
@@ -262,7 +283,7 @@ body {
   inset: 0;
   pointer-events: none;
   overflow: hidden;
-  z-index: 2;
+  z-index: var(--z-world);
 }
 
 /* The HUD is a four-row grid, and the fourth row exists for one reason: the
@@ -273,7 +294,7 @@ body {
 #hud {
   position: fixed;
   inset: 0;
-  z-index: 5;
+  z-index: var(--z-hud);
   pointer-events: none;
   display: grid;
   grid-template-columns: auto 1fr auto;
@@ -298,7 +319,12 @@ body {
 #hud-right { grid-area: right; align-self: start; justify-self: end; }
 #hud-bottom { grid-area: bottom; }
 #tour-layer { grid-area: deck; place-self: end center; }
-#toast-stack { grid-area: center; place-self: start end; }
+/* Notices intentionally outrank every HUD child, including blocking dialogs. */
+#toast-stack {
+  grid-area: center;
+  place-self: start end;
+  z-index: var(--z-toast-notice);
+}
 #compass { grid-area: center; place-self: end start; }
 
 /* Below this the free row is thinner than the minimap, and a squeezed grid row
@@ -335,7 +361,7 @@ body {
 #boot {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: var(--z-modal);
   display: grid;
   place-items: center;
   background: var(--bg-void);

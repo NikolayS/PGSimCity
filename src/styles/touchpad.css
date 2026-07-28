@@ -10,7 +10,7 @@
   display: none;
   position: fixed;
   inset: 0;
-  z-index: 12;
+  z-index: var(--z-floating-overlay);
   pointer-events: none;
   user-select: none;
   -webkit-user-select: none;
@@ -129,7 +129,8 @@
   position: absolute;
   right: calc(14px + var(--safe-r));
   bottom: calc(14px + var(--safe-b));
-  z-index: 2;
+  /* Both control groups are peers inside the touchpad stacking context. */
+  z-index: var(--z-local-raised);
   display: flex;
   gap: 10px;
   pointer-events: auto;
@@ -160,7 +161,7 @@
   position: absolute;
   top: calc(12px + var(--safe-t));
   right: calc(12px + var(--safe-r));
-  z-index: 2;
+  z-index: var(--z-local-raised);
   display: inline-flex;
   align-items: center;
   justify-content: center;

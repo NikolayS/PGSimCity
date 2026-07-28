@@ -18,7 +18,7 @@
 .an-overlay {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  z-index: var(--z-modal);
   display: grid;
   place-items: center;
   padding:
@@ -710,7 +710,7 @@
 .an-byte-region:hover,
 .an-byte-region:focus-visible,
 .an-byte-region.is-explained {
-  z-index: 2;
+  z-index: var(--z-local-raised);
   filter: brightness(1.25);
   outline: 2px solid color-mix(in srgb, currentColor 70%, white);
   outline-offset: -2px;
@@ -718,7 +718,7 @@
 
 .an-byte-region--header {
   position: relative;
-  z-index: 1;
+  z-index: var(--z-local-base);
   color: var(--c-backend);
   background: var(--c-backend);
 }

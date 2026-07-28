@@ -7,9 +7,11 @@ import { createCityExit, installCityEscape } from '../src/observability/shell'
 import { SCENARIOS } from '../src/sim/scenarios'
 import { createAnatomy } from '../src/ui/anatomy'
 import { createContextMenu } from '../src/ui/context-menu'
+import { createControls } from '../src/ui/controls'
 import { createHelp } from '../src/ui/help'
 import { createHud } from '../src/ui/hud'
 import { ENTERABLE_MODE_IDS } from '../src/ui/mode-exits'
+import { createInspector } from '../src/ui/panel'
 import { createSearch } from '../src/ui/search'
 import { createTour } from '../src/ui/tour'
 import { createTouchpad } from '../src/ui/touchpad'
@@ -249,5 +251,76 @@ describe('enterable mode exits', () => {
     expect(modes.at(-1)).toBe('orbit')
 
     touchpad.dispose()
+  })
+
+  it.each([
+    ['panel', false],
+    ['drawer', true],
+  ])('suppresses the close-zoom affordance while a %s is open', (_surface, compact) => {
+    const dom = installTestDom()
+    Object.defineProperty(dom.window, 'matchMedia', {
+      value: () => Object.assign(new EventTarget(), { matches: compact }),
+    })
+    const canvas = dom.mount('canvas')
+    const host = dom.mount('hud')
+    dom.mount('hud-left')
+    dom.mount('hud-right')
+    Object.defineProperties(canvas, {
+      clientWidth: { value: 800 },
+      clientHeight: { value: 600 },
+    })
+
+    const ctx = context()
+    const def = {
+      id: 'shared.buffers',
+      name: 'Buffer pool (shared_buffers)',
+      role: 'a representative sample of the page cache every backend reads through',
+      district: 'shmem',
+      kind: 'memory',
+      color: 0x7b6cff,
+    }
+    ctx.registry = {
+      all: () => [def],
+      get: () => def,
+    } as unknown as UiContext['registry']
+
+    const camera = {
+      position: { x: 0, y: 0, z: 32 },
+    }
+    const zoom = createZoomContext({
+      dom: canvas as unknown as HTMLElement,
+      picker: { pick: () => ({ id: def.id }) },
+      registry: ctx.registry,
+      rig: {
+        camera,
+        mode: 'orbit',
+        pivot: { x: 0, y: 0, z: 0 },
+        home: () => {},
+      } as unknown as Parameters<typeof createZoomContext>[0]['rig'],
+      host: host as unknown as HTMLElement,
+    })
+    const controls = createControls(ctx)
+    const inspector = createInspector(ctx)
+    const root = document.querySelector<HTMLElement>('.zoom-context')!
+
+    zoom.update(0.25)
+    expect(root.hidden).toBe(false)
+    expect(root.querySelector('[data-mode-exit="close-zoom"]')).not.toBeNull()
+
+    ctx.bus.emit('select', { id: def.id })
+    expect(document.querySelector('.pgc-host--right')?.classList.contains('is-open')).toBe(true)
+    expect(root.hidden).toBe(true)
+
+    ctx.bus.emit('select', { id: null })
+    expect(root.hidden).toBe(false)
+
+    document.querySelector<HTMLButtonElement>('.pgc-tab--left')!.click()
+    expect(root.hidden).toBe(true)
+    document.querySelector<HTMLButtonElement>('.pgc-tab--left')!.click()
+    expect(root.hidden).toBe(false)
+
+    inspector.dispose()
+    controls.dispose()
+    zoom.dispose()
   })
 })

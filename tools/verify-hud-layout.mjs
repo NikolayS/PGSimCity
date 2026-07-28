@@ -303,6 +303,61 @@ const helpExpression = `(async () => {
   }
 })()`
 
+const panelOverlayExpression = `(async () => {
+  const round = (value) => Number(value.toFixed(1))
+  const rect = (element) => {
+    const box = element.getBoundingClientRect()
+    return {
+      x: round(box.x),
+      y: round(box.y),
+      width: round(box.width),
+      height: round(box.height),
+      right: round(box.right),
+      bottom: round(box.bottom),
+    }
+  }
+  const visible = (element) => {
+    const style = getComputedStyle(element)
+    const box = element.getBoundingClientRect()
+    return style.display !== 'none' && style.visibility !== 'hidden' && box.width > 0 && box.height > 0
+  }
+  const overlaps = (a, b) =>
+    a.left < b.right - 0.5 &&
+    a.right > b.left + 0.5 &&
+    a.top < b.bottom - 0.5 &&
+    a.bottom > b.top + 0.5
+
+  window.PGSIMCITY.rig.focusOn(
+    { target: [-95, -24, -65], distance: 24, dir: [0, 1, 0.01] },
+    { instant: true },
+  )
+  const panel = document.querySelector('.pgc-host--right .pgc-panel')
+  panel.style.transition = 'none'
+  window.PGSIMCITY.bus.emit('select', { id: 'storage.datadir' })
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+
+  const panelRect = panel.getBoundingClientRect()
+  const panelMeasurement = rect(panel)
+  const overlays = Array.from(document.querySelectorAll('.zoom-context, .zoom-context__exit'))
+    .filter(visible)
+    .map((element) => ({
+      name: element.className,
+      rect: rect(element),
+      intersectsPanel: overlaps(element.getBoundingClientRect(), panelRect),
+    }))
+
+  window.PGSIMCITY.bus.emit('select', { id: null })
+  panel.style.removeProperty('transition')
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+  const zoomContext = document.querySelector('.zoom-context')
+
+  return {
+    panel: panelMeasurement,
+    overlays,
+    overlayVisibleAfterClose: visible(zoomContext),
+  }
+})()`
+
 const failures = []
 const measurements = []
 
@@ -392,6 +447,22 @@ try {
       }
     }
     await evaluate("window.PGSIMCITY.bus.emit('ui:help', { open: false })")
+
+    if (viewport.width === 390) {
+      const panelOverlay = await evaluate(panelOverlayExpression)
+      measurements.push({ viewport: [viewport.width, viewport.height], panelOverlay })
+      for (const overlay of panelOverlay.overlays) {
+        if (overlay.intersectsPanel) {
+          failures.push(`mobile: ${overlay.name} intersects the open inspector`)
+        }
+      }
+      if (panelOverlay.overlays.length > 0) {
+        failures.push(`mobile: ${panelOverlay.overlays.length} close-zoom affordances remain visible`)
+      }
+      if (!panelOverlay.overlayVisibleAfterClose) {
+        failures.push('mobile: close-zoom affordance does not return after the inspector closes')
+      }
+    }
   }
 } finally {
   socket.close()

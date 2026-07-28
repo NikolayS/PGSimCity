@@ -4,6 +4,7 @@ import { fmtBytes, fmtDuration, fmtNum } from '../core/util'
 import { SCENARIOS } from '../sim/scenarios'
 import { KNOB_GROUPS, KNOB_META, knobsInGroup } from './content'
 import type { KnobMeta } from './content'
+import { MODE_SURFACES, setModeSurface } from './mode-exits'
 import {
   el,
   icon,
@@ -437,6 +438,7 @@ export function createControls(ctx: UiContext): UiModule {
     panel.setAttribute('aria-hidden', String(!panelOpen))
     // Nothing inside a hidden panel should be reachable by keyboard.
     panel.inert = !panelOpen
+    setModeSurface(host, panelOpen ? (compact ? MODE_SURFACES.drawer : MODE_SURFACES.panel) : null)
     syncSheetFlags()
   }
 
@@ -637,6 +639,7 @@ export function createControls(ctx: UiContext): UiModule {
       offReset()
       offCameraPreset()
       offConsole()
+      setModeSurface(host, null)
       for (const c of controls) c.dispose()
       host.remove()
       syncSheetFlags()
