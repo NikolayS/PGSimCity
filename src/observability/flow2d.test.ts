@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
+import { createBus } from '../core/bus'
 import type { QueryKind, TraceRecord, TraceStop } from '../core/types'
-import { traceStopBit } from '../sim/model'
+import { createSim, traceStopBit } from '../sim/model'
+import { installTestDom } from '../../test/dom'
 import {
   FLOW_CHOICES,
   FLOW_PATH,
   FlowTiming,
+  createFlow2dView,
   laneSettings,
   parseFlowQuery,
   segmentStatus,
@@ -132,5 +135,84 @@ describe('2D query lifecycle state', () => {
       a: 'on',
       b: 'off',
     })
+  })
+
+  it('draws containment and layers as accessible SVG architecture', () => {
+    installTestDom()
+    const view = createFlow2dView(
+      createSim(createBus()),
+      {
+        statement: 'select_idx',
+        setting: 'synchronous_commit',
+        a: 'on',
+        b: 'off',
+      },
+      () => {},
+    )
+
+    const maps = view.root.querySelectorAll<SVGSVGElement>('svg.flow-architecture')
+    expect(maps).toHaveLength(2)
+
+    for (const map of maps) {
+      expect(map.getAttribute('role')).toBe('group')
+      expect(
+        Array.from(
+          map.querySelectorAll<SVGGElement>('[data-layer]'),
+          (layer) => layer.dataset.layer,
+        ),
+      ).toEqual(['client', 'processes', 'shared-memory', 'kernel', 'disk'])
+
+      const shared = map.querySelector<SVGGElement>('[data-component="shared-memory"]')!
+      expect(shared).not.toBeNull()
+      expect(
+        Array.from(
+          shared.querySelectorAll<SVGGElement>('[data-component]'),
+          (component) => component.dataset.component,
+        ),
+      ).toEqual([
+        'buffer-pool',
+        'wal-buffers',
+        'proc-array',
+        'lock-table',
+        'pg-xact-cache',
+      ])
+
+      const privateMemory = map.querySelector<SVGGElement>('[data-component="private-memory"]')!
+      expect(privateMemory).not.toBeNull()
+      expect(shared.contains(privateMemory)).toBe(false)
+
+      expect(
+        new Set(
+          Array.from(
+            map.querySelectorAll<SVGPathElement>('[data-relation]'),
+            (connection) => connection.dataset.relation,
+          ),
+        ),
+      ).toEqual(
+        new Set([
+          'connection',
+          'fork',
+          'read',
+          'wal-write',
+          'flush',
+          'background',
+          'return',
+        ]),
+      )
+      expect(map.querySelectorAll<SVGGElement>('[data-component][tabindex="0"]').length)
+        .toBeGreaterThanOrEqual(16)
+      expect(map.querySelector('[data-component="kernel-page-cache"]')).not.toBeNull()
+      expect(map.querySelector('[data-component="base-store"]')).not.toBeNull()
+      expect(map.querySelector('[data-component="pg-wal-store"]')).not.toBeNull()
+    }
+
+    expect(view.root.querySelector('.flow-path')).toBeNull()
+    expect(
+      view.root.querySelectorAll('[data-stop="wal"].is-skipped'),
+    ).toHaveLength(2)
+    expect(
+      view.root.querySelectorAll('[data-stop="commit"].is-skipped'),
+    ).toHaveLength(2)
+    view.dispose()
   })
 })
