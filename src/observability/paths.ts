@@ -925,10 +925,10 @@ const VERDICTS: Verdict[] = [
   {
     id: 'v.av_off',
     kind: 'verdict',
-    title: 'autovacuum is off. Nothing is ever coming to clean this up.',
+    title: 'Routine autovacuum is off. Anti-wraparound cleanup is the only override.',
     because: 'Dead row versions accumulate with every UPDATE and DELETE, and only vacuum removes them.',
     mechanism:
-      'Under MVCC an UPDATE writes a new row version and marks the old one dead; the old version stays on the page until somebody reclaims it. Without vacuum the table grows without limit, every sequential scan reads more pages for the same live rows, the indexes fatten, and the buffer pool fills with garbage. Bloat costs you cache, not just disk.',
+      'Under MVCC an UPDATE writes a new row version and marks the old one dead; the old version stays on the page until somebody reclaims it. With routine vacuum disabled the table and indexes bloat, every sequential scan reads more pages for the same live rows, and the buffer pool fills with garbage. PostgreSQL still forces anti-wraparound vacuum near autovacuum_freeze_max_age; PGSimCity does not yet model that XID-age safety valve. Bloat costs you cache, not just disk.',
     evidence: (s) => [
       { label: 'autovacuum', value: 'off', tone: 'crit' },
       { label: 'dead tuples', value: Math.round(s.tables.reduce((a, t) => a + t.deadTuples, 0)).toLocaleString(), tone: 'crit' },
@@ -942,7 +942,7 @@ const VERDICTS: Verdict[] = [
       sql: `SELECT relname, n_dead_tup, last_autovacuum FROM pg_stat_all_tables ORDER BY n_dead_tup DESC;`,
     },
     resolved: (s) => {
-      if (!s.knobs.autovacuum) return { ok: false, reading: 'autovacuum is still off — last_autovacuum will never advance' }
+      if (!s.knobs.autovacuum) return { ok: false, reading: 'routine autovacuum is still off — this model has no anti-wraparound override' }
       const worst = [...s.tables].sort((a, b) => b.bloat - a.bloat)[0]
       return {
         ok: worst.bloat < 0.12,

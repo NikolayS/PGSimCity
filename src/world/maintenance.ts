@@ -1345,7 +1345,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     labelAt: [AX, 44, AZ],
     color: COLOR.vacuum,
     readout: (s: SimState) => {
-      if (!s.autovac.enabled) return 'autovacuum off — dead tuples accumulate for ever'
+      if (!s.autovac.enabled) return 'routine vacuum off · anti-wraparound not modeled'
       let busy = 0
       for (let i = 0; i < s.autovac.workers.length; i++) if (s.autovac.workers[i].active) busy++
       let over = 0

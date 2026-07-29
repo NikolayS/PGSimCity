@@ -253,6 +253,10 @@ export function sqlFor(kind: QueryKind, ti: number): string {
  * exists. See ioPressure().
  */
 const DEVICE_PAGES_PER_SEC = 900
+/** Cost-based delay leaves three quarters of the device to foreground work. */
+const VACUUM_DEVICE_SHARE = 0.25
+const VACUUM_PAGES_PER_WORKER_SEC =
+  (DEVICE_PAGES_PER_SEC * VACUUM_DEVICE_SHARE) / N_VAC_WORKERS
 
 /**
  * The WAL distance that triggers a checkpoint. `CalculateCheckPointSegments()`,
@@ -606,6 +610,9 @@ export function createSim(bus: Bus): SimApi {
   const idxPages = baseIdxPages.slice()
   /** Index entries left behind by DELETE and non-HOT UPDATE until vacuum. */
   const deadIndexTuples: number[] = TABLES.map(() => 0)
+  /** Sampled DML page writes since the table's current/last vacuum began. */
+  const heapWritesSinceVacuum: number[] = TABLES.map(() => 0)
+  const indexWritesSinceVacuum: number[] = TABLES.map(() => 0)
   type RuntimeTable = TableSim & {
     deadIndexTuples: number
     insSinceVacuum: number
@@ -935,6 +942,62 @@ export function createSim(bus: Bus): SimApi {
   let horizonFrozen = false
   let horizonXid = state.xid
   let horizonT = 0
+
+  const standbyFeedbackActive = (): boolean =>
+    K.standbyLongQuery
+    && K.replicaEnabled
+    && rep.enabled
+    && rep.connected
+    && K.walLevel !== 'minimal'
+
+  const horizonPinRequested = (): boolean =>
+    K.longRunningXact || standbyFeedbackActive()
+
+  function engageHorizonPin(): void {
+    const inProgress: number[] = []
+    for (let i = 0; i < backends.length; i++) {
+      if (backends[i].xid > 0) inProgress.push(backends[i].xid)
+    }
+    horizonFrozen = true
+    horizonXid = state.xid + 1
+    for (let i = 0; i < inProgress.length; i++) {
+      horizonXid = Math.min(horizonXid, inProgress[i])
+    }
+    horizonT = state.t
+    for (let i = 0; i < N_TABLES; i++) {
+      holdRepresentativeSnapshot(
+        tables[i].mvcc,
+        state.xid + 1,
+        state.t,
+        inProgress,
+      )
+    }
+    toast(
+      standbyFeedbackActive()
+        ? 'hot_standby_feedback — a standby snapshot is now pinning the xmin horizon'
+        : 'BEGIN; SELECT … — an old snapshot is now pinning the xmin horizon',
+      'warn',
+      6000,
+    )
+  }
+
+  function releaseHorizonPin(): void {
+    horizonFrozen = false
+    horizonXid = state.xid + 1
+    // Releasing xmin makes existing dead rows removable; vacuum still has to
+    // visit them, so bloat and relation size do not recover instantly.
+    for (let i = 0; i < N_TABLES; i++) {
+      deadRemovable[i] = tables[i].deadTuples
+      releaseRepresentativeSnapshot(tables[i].mvcc)
+    }
+    toast('xmin pin released — vacuum can clean up now', 'good', 5000)
+  }
+
+  function syncHorizonPin(): void {
+    const requested = horizonPinRequested()
+    if (requested && !horizonFrozen) engageHorizonPin()
+    else if (!requested && horizonFrozen) releaseHorizonPin()
+  }
 
   let lockHolder = -1
   let lockTable = 3 // sessions — small, hot, and the one everybody wants
@@ -1305,6 +1368,11 @@ export function createSim(bus: Bus): SimApi {
 
   function markDirty(b: number, slot: number): void {
     buf.dirty[b] = 1
+    const rel = buf.rel[b]
+    if (rel < N_TABLES) {
+      if (buf.blk[b] < IDX_BASE) heapWritesSinceVacuum[rel]++
+      else indexWritesSinceVacuum[rel]++
+    }
     if (!K.fullPageWrites) return
     // full_page_writes: the first modification of a page after a checkpoint
     // carries an entire 8 KiB image into the WAL, so that replay can always
@@ -1325,16 +1393,23 @@ export function createSim(bus: Bus): SimApi {
    * a heap page pays at most one FPI between redo points no matter whether a
    * backend or vacuum touched it first.
    */
-  function walInsertPage(rel: number, blk: number, recBytes: number): void {
+  function walInsertPage(
+    rel: number,
+    blk: number,
+    recBytes: number,
+    passGeneration = fpiGeneration,
+  ): void {
     queueMaintenanceWal(recBytes)
     if (K.fullPageWrites) {
       const key = bufKey(rel, blk)
-      if (fpiGenerationByPage.get(key) !== fpiGeneration) {
-        fpiGenerationByPage.set(key, fpiGeneration)
-        const bytes = PAGE * rr(0.6, 1.0)
+      const seenGeneration = fpiGenerationByPage.get(key) ?? -1
+      if (seenGeneration < passGeneration) {
+        fpiGenerationByPage.set(key, passGeneration)
+        // Maintenance must not consume the workload RNG: toggling autovacuum
+        // should not silently re-roll the client query mix in an A/B sweep.
+        const bytes = PAGE * 0.8
         queueMaintenanceWal(bytes)
         maintenanceFpiPending += bytes
-        ioWriteAcc++
       }
     }
   }
@@ -1603,7 +1678,7 @@ export function createSim(bus: Bus): SimApi {
     // through the write phase and steps down exactly once, at the end.
     const sinceRedo = Math.max(0, wal.insertLsn - ckpt.completedRedoLsn)
     let slotHold = 0
-    if (rep.enabled) {
+    if (rep.connected) {
       const restart = rep.logicalEnabled ? Math.min(rep.flushLsn, rep.logicalSlotLsn) : rep.flushLsn
       slotHold = Math.max(0, wal.insertLsn - restart)
     }
@@ -1914,6 +1989,10 @@ export function createSim(bus: Bus): SimApi {
   const vacTarget: number[] = new Array(N_VAC_WORKERS).fill(0)
   const vacIndexTarget: number[] = new Array(N_VAC_WORKERS).fill(0)
   const vacHeapModified: number[] = new Array(N_VAC_WORKERS).fill(0)
+  const vacHeapHotModified: number[] = new Array(N_VAC_WORKERS).fill(0)
+  const vacIndexPageTouches: number[] = new Array(N_VAC_WORKERS).fill(0)
+  const vacScanModified: number[] = new Array(N_VAC_WORKERS).fill(0)
+  const vacFpiGeneration: number[] = new Array(N_VAC_WORKERS).fill(0)
   const vacPageAcc: number[] = new Array(N_VAC_WORKERS).fill(0)
   const vacPageCursor: number[] = new Array(N_VAC_WORKERS).fill(0)
 
@@ -1924,6 +2003,28 @@ export function createSim(bus: Bus): SimApi {
     vacPhaseDur[w.slot] = Math.max(0.05, dur)
     vacPageAcc[w.slot] = 0
     vacPageCursor[w.slot] = 0
+  }
+
+  /**
+   * Estimate distinct pages from the same hot/cold distribution that created
+   * the garbage. Treating every dead tuple as a uniform draw across the whole
+   * relation made vacuum dirty most of a table even though 93% of modeled heap
+   * writes repeatedly hit a 8–32 page hot set.
+   */
+  function affectedVacuumPages(
+    pages: number,
+    changes: number,
+    hotSet: number,
+    hotShare: number,
+  ): number {
+    if (pages <= 0 || changes <= 0) return 0
+    const hotN = Math.min(pages, Math.max(1, hotSet))
+    const coldN = Math.max(0, pages - hotN)
+    const hotTouched = hotN * (1 - Math.exp(-(changes * hotShare) / hotN))
+    const coldTouched = coldN > 0
+      ? coldN * (1 - Math.exp(-(changes * (1 - hotShare)) / coldN))
+      : 0
+    return Math.min(pages, Math.round(hotTouched + coldTouched))
   }
 
   function launchVacuum(): void {
@@ -1955,7 +2056,37 @@ export function createSim(bus: Bus): SimApi {
       const dead = Math.max(1, tables[best].deadTuples)
       vacIndexTarget[slot] = Math.floor(deadIndexTuples[best] * (vacTarget[slot] / dead))
       const pages = Math.max(1, tables[best].pages)
-      vacHeapModified[slot] = Math.round(pages * (1 - Math.exp(-vacTarget[slot] / pages)))
+      // Logical tuple counters are relation-wide while buffer traffic is a
+      // representative sample. Base vacuum WAL page counts on the sampled DML
+      // page writes that created the garbage, with a dense-page floor for the
+      // pre-existing tuples present when the city loads.
+      const heapPageDraws = Math.max(
+        Math.ceil(vacTarget[slot] / tables[best].def.tuplesPerPage),
+        heapWritesSinceVacuum[best],
+      )
+      vacHeapModified[slot] = affectedVacuumPages(
+        pages,
+        heapPageDraws,
+        hotPages[best],
+        HEAP_HOT_WRITE_SHARE,
+      )
+      vacHeapHotModified[slot] = Math.min(
+        vacHeapModified[slot],
+        Math.round(hotPages[best] * (1 - Math.exp(-(heapPageDraws * HEAP_HOT_WRITE_SHARE) / hotPages[best]))),
+      )
+      vacIndexPageTouches[slot] = Math.max(
+        Math.ceil(vacIndexTarget[slot] / INDEX_ENTRIES_PER_PAGE),
+        indexWritesSinceVacuum[best],
+      )
+      heapWritesSinceVacuum[best] = 0
+      indexWritesSinceVacuum[best] = 0
+      // Heap scanning may prune some pages immediately. The remaining pages
+      // are revisited after the index pass; they are disjoint WAL actions, not
+      // a second modification record for every page in the relation.
+      vacScanModified[slot] = Math.round(vacHeapModified[slot] * 0.15)
+      // A checkpoint that starts mid-pass does not make the same vacuum visit
+      // pay a second full-page image when it reaches vacuum_heap.
+      vacFpiGeneration[slot] = fpiGeneration
       tables[best].vacuuming = true
       av.totalRuns++
       vacNext(w, 'travel', 2.0)
@@ -1989,6 +2120,35 @@ export function createSim(bus: Bus): SimApi {
     vacPageAcc[worker] -= n
     if (done) n = total - vacPageCursor[worker]
     while (n-- > 0 && vacPageCursor[worker] < total) visit(vacPageCursor[worker]++)
+  }
+
+  /**
+   * vacuum_cost_delay as an aggregate rate cap. PostgreSQL budgets hits,
+   * misses and dirty pages with different points; the scaled city exposes the
+   * consequence as a physical-I/O ceiling shared equally by the three workers.
+   */
+  function chargeVacuumIo(readPagesPerSec: number, writePagesPerSec: number, dt: number): void {
+    const demand = readPagesPerSec + writePagesPerSec
+    const scale = demand > VACUUM_PAGES_PER_WORKER_SEC
+      ? VACUUM_PAGES_PER_WORKER_SEC / demand
+      : 1
+    ioReadAcc += readPagesPerSec * scale * dt
+    ioWriteAcc += writePagesPerSec * scale * dt
+  }
+
+  function vacuumHeapBlock(worker: number, tableIndex: number, ordinal: number): number {
+    const table = tables[tableIndex]
+    const hotModified = vacHeapHotModified[worker]
+    if (ordinal < hotModified) {
+      return Math.min(table.pages - 1, Math.floor((ordinal * hotPages[tableIndex]) / Math.max(1, hotModified)))
+    }
+    const coldModified = vacHeapModified[worker] - hotModified
+    const coldOrdinal = ordinal - hotModified
+    return Math.min(
+      table.pages - 1,
+      hotPages[tableIndex]
+        + Math.floor((coldOrdinal * Math.max(0, table.pages - hotPages[tableIndex])) / Math.max(1, coldModified)),
+    )
   }
 
   function tickAutovac(dt: number): void {
@@ -2030,12 +2190,17 @@ export function createSim(bus: Bus): SimApi {
           t.heat = Math.min(1, t.heat + dt * 0.6)
           const skip = t.def.id === 'events' ? 0.15 : 1
           const readPages = Math.max(1, Math.round(t.pages * skip))
-          ioReadAcc += (readPages * dt) / vacPhaseDur[i]
-          const modified = vacHeapModified[i]
-          const deadPerPage = modified > 0 ? vacTarget[i] / modified : 0
+          const modified = vacScanModified[i]
+          const allModified = vacHeapModified[i]
+          const deadPerPage = allModified > 0 ? vacTarget[i] / allModified : 0
+          chargeVacuumIo(
+            readPages / vacPhaseDur[i],
+            modified / vacPhaseDur[i],
+            dt,
+          )
           vacuumPageWork(i, modified, dt, done, (page) => {
-            const blk = Math.min(t.pages - 1, Math.floor((page * t.pages) / Math.max(1, modified)))
-            walInsertPage(ti, blk, 40 + 2 * deadPerPage)
+            const blk = vacuumHeapBlock(i, ti, page)
+            walInsertPage(ti, blk, 40 + 2 * deadPerPage, vacFpiGeneration[i])
           })
           if (++sVac >= 5) { sVac = 0; flow(rid.idxLookup(ti), 1, 'dead', 0.9) }
           if (done) {
@@ -2057,12 +2222,25 @@ export function createSim(bus: Bus): SimApi {
           const indexNo = t.def.indexes.length - vacIdxLeft[i]
           const pages = indexPagesFor(ti, indexNo)
           const killed = vacIndexTarget[i] / Math.max(1, t.def.indexes.length)
-          const modified = Math.round(pages * (1 - Math.exp(-killed / Math.max(1, pages))))
-          ioReadAcc += (pages * dt) / vacPhaseDur[i]
+          const hotSet = Math.max(
+            1,
+            Math.round(hotIdxPages[ti] * (pages / Math.max(1, idxPages[ti]))),
+          )
+          const modified = affectedVacuumPages(
+            pages,
+            vacIndexPageTouches[i] / Math.max(1, t.def.indexes.length),
+            hotSet,
+            INDEX_HOT_SHARE,
+          )
           const killedPerPage = modified > 0 ? killed / modified : 0
           const base = indexBlockOffset(ti, indexNo)
+          chargeVacuumIo(
+            pages / vacPhaseDur[i],
+            modified / vacPhaseDur[i],
+            dt,
+          )
           vacuumPageWork(i, modified, dt, done, (page) => {
-            walInsertPage(ti, base + page, 30 + 2 * killedPerPage)
+            walInsertPage(ti, base + page, 30 + 2 * killedPerPage, vacFpiGeneration[i])
           })
           if (++sVac >= 4) { sVac = 0; flow(rid.vacIdx(ti), 1, 'dead', 1.1) }
           if (done) {
@@ -2089,13 +2267,19 @@ export function createSim(bus: Bus): SimApi {
           }
           w.deadCollected += take
           av.landfill += take
-          const modified = vacHeapModified[i]
-          const deadPerPage = modified > 0 ? vacTarget[i] / modified : 0
+          const allModified = vacHeapModified[i]
+          const scanModified = vacScanModified[i]
+          const modified = Math.max(0, allModified - scanModified)
+          const deadPerPage = allModified > 0 ? vacTarget[i] / allModified : 0
+          chargeVacuumIo(
+            modified / vacPhaseDur[i],
+            modified / vacPhaseDur[i],
+            dt,
+          )
           vacuumPageWork(i, modified, dt, done, (page) => {
-            const blk = Math.min(t.pages - 1, Math.floor((page * t.pages) / Math.max(1, modified)))
-            // The scan pass already paid this page's FPI in this checkpoint
-            // generation; walInsertPage's generation check prevents a second.
-            walInsertPage(ti, blk, 40 + 2 * deadPerPage)
+            const ordinal = scanModified + page
+            const blk = vacuumHeapBlock(i, ti, ordinal)
+            walInsertPage(ti, blk, 40 + 2 * deadPerPage, vacFpiGeneration[i])
           })
           if (++sVac >= 4) { sVac = 0; flow(rid.ioWrite(ti), 1, 'page_write', 1.0) }
           if (done) vacNext(w, 'truncate', 0.7)
@@ -2265,7 +2449,6 @@ export function createSim(bus: Bus): SimApi {
   function tickReplication(dt: number): void {
     rep.enabled = K.replicaEnabled
     rep.networkLagMs = K.replicaNetworkLag
-    rep.logicalEnabled = K.walLevel === 'logical'
     // synchronous_commit='on' is a *local* flush guarantee. Only remote_apply
     // makes the standby part of the commit path.
     rep.mode = K.synchronousCommit === 'remote_apply' ? 'sync' : 'async'
@@ -2279,8 +2462,8 @@ export function createSim(bus: Bus): SimApi {
         ackCount = 0
         ackHead = 0
         ackTail = 0
-        ackSentLsn = rep.replayLsn
-        ackedApplyLsn = rep.replayLsn
+        ackSentLsn = wal.flushLsn
+        ackedApplyLsn = wal.flushLsn
         runtimeRep.ackedApplyLsn = ackedApplyLsn
         toast(
           K.walLevel === 'minimal'
@@ -2291,8 +2474,18 @@ export function createSim(bus: Bus): SimApi {
       }
       rep.inFlight = 0
       rep.applyActivity = damp(rep.applyActivity, 0, 3, dt)
-      rep.lagBytes = Math.max(0, wal.flushLsn - rep.replayLsn)
-      updateReplayLag()
+      rep.sentLsn = wal.flushLsn
+      rep.writeLsn = wal.flushLsn
+      rep.flushLsn = wal.flushLsn
+      rep.replayLsn = wal.flushLsn
+      rep.lagBytes = 0
+      rep.lagSec = 0
+      previousLagBytes = 0
+      previousLagSec = 0
+      rep.logicalEnabled = false
+      rep.logicalSlotLsn = wal.insertLsn
+      rep.logicalChangesPerSec = damp(rep.logicalChangesPerSec, 0, 3, dt)
+      syncHorizonPin()
       return
     }
     if (!rep.connected) {
@@ -2308,6 +2501,8 @@ export function createSim(bus: Bus): SimApi {
         toast('Standby resynchronised (required WAL had been recycled)', 'info')
       }
     }
+    rep.logicalEnabled = K.walLevel === 'logical' && rep.enabled && rep.connected
+    syncHorizonPin()
 
     // walsender: push flushed WAL onto the wire in packets
     const delay = (K.replicaNetworkLag * NET_STRETCH) / 1000
@@ -2392,7 +2587,7 @@ export function createSim(bus: Bus): SimApi {
         flow('logical.decode', 1, 'stream', 1.1)
       }
     } else {
-      rep.logicalSlotLsn = wal.flushLsn
+      rep.logicalSlotLsn = wal.insertLsn
       rep.logicalChangesPerSec = damp(rep.logicalChangesPerSec, 0, 3, dt)
     }
   }
@@ -3516,7 +3711,6 @@ export function createSim(bus: Bus): SimApi {
 
   function setKnob<Key extends keyof Knobs>(key: Key, value: Knobs[Key], source?: 'user'): void {
     const previousCheckpointTimeout = K.checkpointTimeout
-    const previousHorizonPin = K.longRunningXact || K.standbyLongQuery
     K[key] = value
 
     switch (key) {
@@ -3536,7 +3730,9 @@ export function createSim(bus: Bus): SimApi {
         break
       case 'autovacuum':
         av.enabled = K.autovacuum
-        if (!K.autovacuum) toast('autovacuum off — dead tuples will accumulate', 'warn')
+        if (!K.autovacuum) {
+          toast('autovacuum off — routine cleanup stops; anti-wraparound is not modeled', 'warn')
+        }
         break
       case 'checkpointTimeout':
         // A reload changes the interval from the last checkpoint start, so keep
@@ -3545,55 +3741,22 @@ export function createSim(bus: Bus): SimApi {
         break
       case 'longRunningXact':
       case 'standbyLongQuery':
-        if (
-          (K.longRunningXact || K.standbyLongQuery)
-          && !previousHorizonPin
-        ) {
-          const inProgress: number[] = []
-          for (let i = 0; i < backends.length; i++) {
-            if (backends[i].xid > 0) inProgress.push(backends[i].xid)
-          }
-          horizonFrozen = true
-          horizonXid = state.xid + 1
-          for (let i = 0; i < inProgress.length; i++) {
-            horizonXid = Math.min(horizonXid, inProgress[i])
-          }
-          horizonT = state.t
-          for (let i = 0; i < N_TABLES; i++) {
-            holdRepresentativeSnapshot(
-              tables[i].mvcc,
-              state.xid + 1,
-              state.t,
-              inProgress,
-            )
-          }
-          toast(
-            K.standbyLongQuery
-              ? 'hot_standby_feedback — a standby snapshot is now pinning the xmin horizon'
-              : 'BEGIN; SELECT … — an old snapshot is now pinning the xmin horizon',
-            'warn',
-            6000,
-          )
-        } else if (
-          !(K.longRunningXact || K.standbyLongQuery)
-          && previousHorizonPin
-        ) {
-          horizonFrozen = false
-          horizonXid = state.xid + 1
-          // everything dead is suddenly removable again
-          for (let i = 0; i < N_TABLES; i++) {
-            deadRemovable[i] = tables[i].deadTuples
-            releaseRepresentativeSnapshot(tables[i].mvcc)
-          }
-          toast('xmin pin released — vacuum can clean up now', 'good', 5000)
+        if (key === 'standbyLongQuery' && K.standbyLongQuery && !standbyFeedbackActive()) {
+          toast('hot_standby_feedback needs a connected standby — there is none', 'warn', 5000)
         }
+        syncHorizonPin()
         break
       case 'lockContention':
         if (!K.lockContention) releaseLock()
         break
       case 'replicaEnabled':
       case 'walLevel':
-        rep.logicalEnabled = K.walLevel === 'logical'
+        rep.logicalEnabled =
+          K.walLevel === 'logical'
+          && K.replicaEnabled
+          && rep.enabled
+          && rep.connected
+        syncHorizonPin()
         break
       case 'fullPageWrites':
         fpiGeneration++
@@ -3830,6 +3993,10 @@ export function createSim(bus: Bus): SimApi {
       vacTarget[i] = 0
       vacIndexTarget[i] = 0
       vacHeapModified[i] = 0
+      vacHeapHotModified[i] = 0
+      vacIndexPageTouches[i] = 0
+      vacScanModified[i] = 0
+      vacFpiGeneration[i] = 0
       vacPageAcc[i] = 0
       vacPageCursor[i] = 0
     }
@@ -3851,6 +4018,8 @@ export function createSim(bus: Bus): SimApi {
       frozenPages[i] = t.pages
       vacuumInsThreshold[i] = 1000
       deadIndexTuples[i] = 0
+      heapWritesSinceVacuum[i] = 0
+      indexWritesSinceVacuum[i] = 0
       idxPages[i] = baseIdxPages[i]
       const rt = runtimeTable(i)
       rt.indexPages = idxPages[i]
@@ -3880,7 +4049,7 @@ export function createSim(bus: Bus): SimApi {
     rep.lagSec = 0
     rep.networkLagMs = K.replicaNetworkLag
     rep.applyActivity = 0
-    rep.logicalEnabled = K.walLevel === 'logical'
+    rep.logicalEnabled = K.walLevel === 'logical' && rep.enabled && rep.connected
     rep.logicalSlotLsn = lsn0
     rep.logicalChangesPerSec = 0
     rep.inFlight = 0

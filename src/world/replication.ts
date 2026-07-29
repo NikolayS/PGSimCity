@@ -1299,7 +1299,10 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     labelAt: [RC[0], 13, RC[2]],
     color: COLOR.client,
     readout: (s: SimState) => {
-      const pin = s.knobs.longRunningXact && s.replication.connected
+      if (!s.replication.enabled || !s.replication.connected) {
+        return 'no standby — reads unavailable'
+      }
+      const pin = s.knobs.standbyLongQuery
       return pin
         ? `hot_standby_feedback — pinning primary xmin ${s.xminHorizon}`
         : `reads see ${fmtLsn(s.replication.replayLsn)} — ${s.replication.lagSec.toFixed(1)} s old`
