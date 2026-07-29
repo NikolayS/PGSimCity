@@ -1,0 +1,132 @@
+/* A single prompt owns every thing a walker can operate in the world. */
+.walk-up-prompt {
+  --walk-up-accent: var(--ink);
+  position: fixed;
+  left: 50%;
+  bottom: calc(76px + var(--safe-b));
+  z-index: var(--z-menu-popover);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "owner subject"
+    "action action";
+  align-items: center;
+  width: min(410px, calc(100vw - 24px - var(--safe-l) - var(--safe-r)));
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--walk-up-accent) 52%, var(--line));
+  border-radius: var(--r-md);
+  background: var(--bg-panel-solid);
+  box-shadow:
+    0 14px 42px rgba(0, 0, 0, 0.34),
+    inset 3px 0 0 var(--walk-up-accent);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.walk-up-prompt[hidden] {
+  display: none;
+}
+
+.walk-up-prompt__owner {
+  grid-area: owner;
+  padding: 0 9px 8px 5px;
+  color: var(--ink-dim);
+  font: 600 9px/1.2 var(--f-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.walk-up-prompt__subject {
+  grid-area: subject;
+  min-width: 0;
+  padding: 0 5px 8px 9px;
+  border-left: 1px solid var(--line-soft);
+  overflow: hidden;
+  color: var(--walk-up-accent);
+  font: 600 12px/1.2 var(--f-mono);
+  letter-spacing: 0.04em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.walk-up-prompt__action {
+  grid-area: action;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 50px;
+  padding: 0 14px;
+  border: 1px solid color-mix(in srgb, var(--walk-up-accent) 45%, var(--line-soft));
+  border-radius: var(--r-sm);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--walk-up-accent) 10%, var(--bg-panel));
+  font: 650 11px/1 var(--f-mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+
+.walk-up-prompt__action:hover,
+.walk-up-prompt__action:focus-visible {
+  border-color: var(--walk-up-accent);
+  color: var(--walk-up-accent);
+}
+
+.walk-up-prompt__action:active {
+  background: color-mix(in srgb, var(--walk-up-accent) 20%, var(--bg-panel-solid));
+}
+
+.walk-up-prompt__key {
+  display: grid;
+  place-items: center;
+  min-width: 28px;
+  height: 28px;
+  border: 1px solid var(--walk-up-accent);
+  border-radius: 4px;
+  color: var(--walk-up-accent);
+  background: var(--bg-panel-solid);
+  font: 700 11px/1 var(--f-mono);
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--walk-up-accent) 30%, transparent);
+}
+
+@media (pointer: coarse) {
+  .walk-up-prompt {
+    bottom: calc(82px + var(--safe-b));
+  }
+
+  .walk-up-prompt__action {
+    min-height: 54px;
+  }
+
+  .walk-up-prompt__key {
+    display: none;
+  }
+
+  .walk-up-prompt__action::before {
+    content: "TAP";
+    color: var(--walk-up-accent);
+    font-size: 9px;
+    letter-spacing: 0.14em;
+  }
+}
+
+@media (max-width: 430px) {
+  .walk-up-prompt {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "owner"
+      "subject"
+      "action";
+  }
+
+  .walk-up-prompt__owner {
+    padding-bottom: 4px;
+  }
+
+  .walk-up-prompt__subject {
+    padding: 0 5px 8px;
+    border-left: 0;
+  }
+}

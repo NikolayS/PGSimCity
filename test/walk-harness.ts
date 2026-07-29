@@ -22,6 +22,7 @@ import { createAccess, type AccessModule } from '../src/world/access'
 import { createBackends } from '../src/world/backends'
 import { createClients } from '../src/world/clients'
 import { createContinuity } from '../src/world/continuity'
+import { createWorldHandles } from '../src/world/handles'
 import { createMaintenance } from '../src/world/maintenance'
 import { createPlanner } from '../src/world/planner'
 import { createReplication } from '../src/world/replication'
@@ -189,6 +190,7 @@ export async function createWalkCityHarness(): Promise<WalkCityHarness> {
   addModule(scene, modules, createWal(ctx))
   addModule(scene, modules, createStorage(ctx))
   addModule(scene, modules, createMaintenance(ctx))
+  addModule(scene, modules, createWorldHandles(ctx))
   addModule(scene, modules, createReplication(ctx))
   addModule(scene, modules, createPlanner(ctx))
   addModule(scene, modules, createContinuity(ctx))
