@@ -9,6 +9,34 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.17.0] — 2026-07-29
+
+### Something in the city you can operate
+
+The autovacuum yard has a lever. Walk up to it in first person, press `E`, and
+autovacuum turns off — the lever reverses, a red lamp lights, and the vacuum
+trucks stop launching. Workers already mid-cycle are described as finishing,
+because that is what really happens.
+
+It is the same knob as the control rail's, in both directions. There is one
+walk-up interaction vocabulary shared with the postmaster tower's door, not two.
+
+**The rate at which bloat accrues was not changed to make the lever feel
+responsive.** Bloat follows write volume — that is a fact about PostgreSQL and one
+of the better lessons available here, and faking it would have been exactly the
+kind of persuasive falsehood the knob audit existed to prevent. Instead the lever
+says so: it teaches that bloat follows writes and will appear slowly at the
+current workload, and offers a control that takes you straight to the write rate.
+Raise it and watch.
+
+Measured: under hard writes, ten simulated minutes with autovacuum off takes
+`sessions` past 10% bloat and grows it by thousands of pages, while append-only
+`events` correctly stays at zero. Re-enabled, workers launch within fifteen
+simulated seconds and dead tuples fall — but relation pages do not shrink back,
+because vacuum does not return space to the filesystem.
+
+---
+
 ## [0.16.0] — 2026-07-29
 
 ### The simulation stops lying about the last of its knobs
