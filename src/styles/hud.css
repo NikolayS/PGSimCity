@@ -306,7 +306,8 @@
   gap: 6px;
 }
 
-.hud-source {
+.hud-source,
+.hud-machine {
   min-width: 68px;
   min-height: var(--tap);
   justify-content: center;
@@ -1078,6 +1079,7 @@ body.pg-labels-off #labels-root {
   .hud-audio,
   .hud-theme,
   .hud-source,
+  .hud-machine,
   .hud-tour,
   .hud-trace-open {
     min-width: 30px;
@@ -1090,11 +1092,16 @@ body.pg-labels-off #labels-root {
   .hud-trace-open span:last-child {
     display: none;
   }
-  .hud-source {
+  .hud-source,
+  .hud-machine {
     font-size: 0;
   }
   .hud-source::before {
     content: '↗';
+    font-size: var(--fs-sm);
+  }
+  .hud-machine::before {
+    content: 'M';
     font-size: var(--fs-sm);
   }
 }

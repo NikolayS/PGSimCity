@@ -5,6 +5,12 @@ import { fileURLToPath } from 'node:url'
 
 const entry = (rel: string) => fileURLToPath(new URL(rel, import.meta.url))
 const pkg = JSON.parse(readFileSync(entry('./package.json'), 'utf8')) as { version: string }
+const vitePreloadHelper = '\0vite/preload-helper.js'
+const machinePreloadHelper = '\0pgsimcity-machine-preload-helper'
+const localPreloadImporters = new Set([
+  entry('./machine/magnum.js'),
+  entry('./machine/postgres.js'),
+])
 
 function shortGitSha(): string {
   const supplied = process.env.PGSIMCITY_GIT_SHA ?? process.env.GITHUB_SHA
@@ -30,10 +36,10 @@ function shortGitSha(): string {
 const input: Record<string, string> = { city: entry('./index.html') }
 
 /**
- * The observability page is a second entry that is still being written. Build it
- * only when its whole entry graph is present — the page, its module, and the
- * module's own local imports. Checking just one of those still lets a partially
- * landed feature fail the build and block the deploy, which has happened twice.
+ * Build each secondary page only when its whole entry graph is present — the
+ * page, its module, and the module's own local imports. Checking just one of
+ * those still lets a partially landed feature fail the build and block the
+ * deploy, which has happened twice.
  *
  * Set PGSIMCITY_ENTRIES=city to force the city alone regardless.
  */
@@ -46,8 +52,38 @@ if (
   input.observability = entry('./observability/index.html')
 }
 
+if (
+  process.env.PGSIMCITY_ENTRIES !== 'city' &&
+  allExist('./machine/index.html', './machine/magnum.js', './machine/magnum.css', './machine/postgres.js')
+) {
+  input.machine = entry('./machine/index.html')
+}
+
 export default defineConfig({
   base: './',
+  plugins: [{
+    name: 'pgsimcity-machine-local-preload',
+    enforce: 'pre',
+    resolveId(id, importer) {
+      if (
+        id === vitePreloadHelper
+        && importer
+        && (
+          localPreloadImporters.has(importer)
+          || importer.includes('/node_modules/@electric-sql/pglite/')
+        )
+      ) {
+        return machinePreloadHelper
+      }
+    },
+    load(id) {
+      if (id === machinePreloadHelper) {
+        /* The machine's dynamic target has no CSS or eager dependencies.
+         * Its own error path reports a blocked or failed opt-in load. */
+        return 'export const __vitePreload = (load) => load()'
+      }
+    },
+  }],
   define: {
     __PGSIMCITY_VERSION__: JSON.stringify(pkg.version),
     __PGSIMCITY_GIT_SHA__: JSON.stringify(shortGitSha()),

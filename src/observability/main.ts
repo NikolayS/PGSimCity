@@ -170,11 +170,18 @@ const flowTab = el('a', {
     },
   },
 })
+const machineTab = el('a', {
+  class: 'surface-tab',
+  href: '../machine/',
+  text: 'Machine',
+  title: 'Machine room — real PostgreSQL beside the modelled architecture',
+})
 const surfaceNav = el(
   'nav',
   { class: 'surface-nav', 'aria-label': 'Learning surfaces' },
   diagnoseTab,
   flowTab,
+  machineTab,
 )
 const top = el(
   'header',

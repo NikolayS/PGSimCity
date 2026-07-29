@@ -37,6 +37,7 @@ describe('source code entry point', () => {
   it('exposes a working repository link in the global HUD controls', () => {
     const hud = createHud(context())
     const link = document.querySelector('#hud-top .hud-source') as HTMLAnchorElement | null
+    const machine = document.querySelector('#hud-top .hud-machine') as HTMLAnchorElement | null
 
     expect(link).not.toBeNull()
     expect(link!.textContent).toBe('Source')
@@ -48,6 +49,10 @@ describe('source code entry point', () => {
     link!.addEventListener('click', clicked)
     link!.dispatchEvent(new Event('click'))
     expect(clicked).toHaveBeenCalledOnce()
+
+    expect(machine).not.toBeNull()
+    expect(machine!.textContent).toBe('Machine')
+    expect(machine!.getAttribute('href')).toBe('machine/')
 
     hud.dispose()
   })

@@ -399,6 +399,15 @@ export function installTestDom(): TestDom {
     mount(id: string) {
       const node = document.createElement('div')
       node.id = id
+      /* index.html owns this static entry link; createHud re-parents it into
+       * the responsive tool cluster instead of adding bytes to the city chunk. */
+      if (id === 'hud-top') {
+        const machine = document.createElement('a')
+        machine.setAttribute('class', 'pg-btn hud-tool hud-machine')
+        machine.setAttribute('href', 'machine/')
+        machine.textContent = 'Machine'
+        node.append(machine)
+      }
       document.body.append(node)
       return node
     },

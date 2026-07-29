@@ -44,7 +44,7 @@ A machine view of a transaction, half of it real.
 
 ### Added
 
-- **`spike/magnum/` — the shop floor.** The observability flow view was a
+- **`machine/` — the shop floor.** The observability flow view was a
   pipeline of boxes: order, and nothing else. This is the same subject in the
   visual language of Zachtronics' *Opus Magnum* — axonometric, every element a
   machine part with a visible pivot, and the whole cast on one floor.
