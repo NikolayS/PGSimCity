@@ -9,6 +9,82 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.13.0] — 2026-07-29
+
+The city stops letting you walk through it, the machine room becomes something
+you can operate on a phone, and the simulation stops rewarding a bad habit.
+
+### The machine room is a place you can go
+
+Published at `machine/`, linked from the city and from Diagnose, with its own
+identity in a browser tab.
+
+- **A statement now visibly causes what follows.** The architecture pane used to
+  run on free-running rhythms and never read the query at all — the left half
+  executed real PostgreSQL while the right half animated beside it. A submitted
+  statement now traces the board: client, the process pipeline, the shared memory
+  segment, the buffer pool, and back, with ambient work dimmed while it runs.
+- **Half the numbers are measured.** Buffer counts and timings come from
+  `EXPLAIN (ANALYZE, BUFFERS)`. An index lookup reports 3 shared hits; an
+  aggregate reports 102. Measured values carry `P`, modelled ones carry `M`.
+- **It works on a phone.** The board no longer tries to fit — it renders where
+  its type is legible, 9.25 device pixels at the smallest label, and follows the
+  active stage so the reader is carried along the route without touching
+  anything.
+- **Pinch, drag, double-tap and wheel.** Continuous zoom from fit to 2.3x. Any
+  manual gesture hands control back from stage-following, and one control
+  returns it.
+
+### You can no longer walk through the city
+
+- **Collision resolved each axis independently**, so a fast oblique move could
+  pass through a thin wall between samples and an inside corner could be
+  squeezed through. It now sweeps the movement segment against each box
+  continuously.
+- Three specific surfaces were passable: the replication cable bundle, the
+  elevated query lab's floor and posts, and a painted route blocked by an
+  invisible selection proxy.
+- A scene-graph coverage test enumerates every visible human-scale mesh in reach
+  and asserts a collider covers it — and the reverse, that nothing is solid where
+  nothing is visible.
+
+### The simulation stops teaching two falsehoods
+
+A measured audit of all 23 knobs (`KNOB-AUDIT.md`) graded 13 correct and 10
+wrong. Two shared root causes behind most of them are fixed.
+
+- **Turning autovacuum off was rewarded with roughly 2x throughput.** Vacuum
+  charged a full-page image for every page it touched and nothing modelled
+  cost-based throttling, so three workers consumed the entire device budget.
+  This was also the true cause of WAL staying hot for twenty simulated minutes
+  after a load drop.
+- **`wal_level = minimal` froze replication mid-flight** and then drifted,
+  reporting 4.92 GiB of pg_wal against a 256 MiB `max_wal_size` and 4,800 MiB
+  held by a logical slot — when logical decoding is impossible at that level. The
+  same gating let a standby that does not exist pin the primary's xmin horizon.
+
+Anti-wraparound vacuum is still unmodelled and is now disclosed rather than
+implied away.
+
+### The control center
+
+The postmaster is the supervisor that owns the cluster, so it is the city hall.
+Enter it in first person and find a map of this city, a psql prompt, and your
+statement tracing across both the map and the districts visible through the
+windows. The map is the city's own topology — a differently-shaped diagram
+inside it would teach that the geography is arbitrary.
+
+### Labels and chrome
+
+- Label scale ran from 1.0 to 1.12, and to 1.06 on a phone — a range too small
+  to perceive, so labels never appeared to scale at all. Now 1.50 to 1.00, with
+  chips retiring past roughly 690 m rather than clamping at the legibility floor.
+  A zoomed-out phone view keeps three district names at 1.9% of the frame.
+- The checkpoint indicator painted through the PGSimCity wordmark. It was grid
+  overflow, not a stacking order problem.
+
+---
+
 ## [0.12.0] — 2026-07-28
 
 psql on the left, PostgreSQL's architecture on the right.
