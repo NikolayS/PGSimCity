@@ -308,6 +308,7 @@ interface TraceRequest {
   kind: QueryKind
   table: number
   hot: boolean | undefined
+  sql: string | undefined
   announced: boolean
   readyT: number
 }
@@ -1048,6 +1049,7 @@ export function createSim(bus: Bus): SimApi {
       kind,
       table,
       hot: opts.hot,
+      sql: opts.sql?.trim(),
       announced: false,
       readyT: 0,
     })
@@ -1062,7 +1064,7 @@ export function createSim(bus: Bus): SimApi {
     const trace = state.trace
     trace.query = request.kind
     trace.table = request.table
-    trace.sql = sqlFor(request.kind, request.table)
+    trace.sql = request.sql || sqlFor(request.kind, request.table)
     trace.stop = 'connect'
     trace.stopT = 0
     trace.visited = traceStopBit('connect')
@@ -2781,7 +2783,7 @@ export function createSim(bus: Bus): SimApi {
     // backend_xid is assigned lazily, at the first write — a read-only
     // transaction never consumes a transaction id. See beginExec().
     b.xid = 0
-    b.sql = sqlFor(kind, ti)
+    b.sql = requested?.sql || sqlFor(kind, ti)
     b.rowsSent = 0
     b.buffersTouched = 0
     b.buffersHit = 0

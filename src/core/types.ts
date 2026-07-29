@@ -226,6 +226,8 @@ export interface TraceRecord {
 export interface TraceRequestOptions {
   /** Override the model's HOT choice for a teaching example. */
   hot?: boolean
+  /** Reader-entered SQL retained as the receipt; execution still follows QueryKind. */
+  sql?: string
 }
 
 export type TracePlayback = 'step' | 'slow' | 'live'

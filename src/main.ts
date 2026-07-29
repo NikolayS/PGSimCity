@@ -42,6 +42,7 @@ import { createPlanner } from './world/planner'
 import { createContinuity } from './world/continuity'
 import { createAccess } from './world/access'
 import type { AccessModule } from './world/access'
+import { createControlCenterWorld } from './world/control-center'
 
 import { createContextMenu } from './ui/context-menu'
 import { createHud, setCompassCamera } from './ui/hud'
@@ -52,6 +53,7 @@ import { createTour } from './ui/tour'
 import { createSearch } from './ui/search'
 import { createTouchpad } from './ui/touchpad'
 import { createZoomContext } from './ui/zoom-context'
+import { createControlCenter } from './ui/control-center'
 import { BOOT_STEPS, failBoot, finishBoot, presentBootStep } from './ui/boot'
 import type { UiContext, UiModule } from './ui/uikit'
 
@@ -159,6 +161,7 @@ async function boot(): Promise<void> {
   // After replication: the continuity quarter reads the standby's anchors and
   // hangs its own second standby, archive estate and recovery ground off them.
   add(createContinuity(ctx))
+  add(createControlCenterWorld(ctx))
 
   // --- collision + the pedestrian -------------------------------------------
   // Every district is in the scene, so the registry's bounding boxes are final.
@@ -216,9 +219,16 @@ async function boot(): Promise<void> {
       volume: audio.volume,
     }),
   }
+  const controlCenter = createControlCenter({
+    ctx: uiCtx,
+    walk,
+    flows,
+    canvas: renderer.domElement,
+  })
   const ui: UiModule[] = [
     createHud(uiCtx),
     createTouchpad({ bus, walk }),
+    controlCenter,
     createHelp(uiCtx),
     createControls(uiCtx),
     createInspector(uiCtx),
@@ -438,7 +448,21 @@ async function boot(): Promise<void> {
 
   // Handy in the console. PGCITY is the pre-rename alias, kept because existing
   // notes and tooling still reach for it; both names are the same object.
-  const handle = { sim, registry, bus, rig, gfx, flows, walk, collision, audio, water, setThemeMode, themeMode }
+  const handle = {
+    sim,
+    registry,
+    bus,
+    rig,
+    gfx,
+    flows,
+    walk,
+    controlCenter,
+    collision,
+    audio,
+    water,
+    setThemeMode,
+    themeMode,
+  }
   Object.assign(window as unknown as Record<string, unknown>, { PGSIMCITY: handle, PGCITY: handle })
 }
 

@@ -72,6 +72,16 @@ function runTrace(testCase: TraceCase): {
 }
 
 describe('query trace model', () => {
+  it('keeps the reader statement in the model-owned trace record', () => {
+    const sim = createSim(createBus())
+    const sql = 'SELECT * FROM accounts WHERE id = 42'
+
+    sim.request('select_idx', 0, { sql })
+    sim.update(1 / 30)
+
+    expect(sim.state.trace.sql).toBe(sql)
+  })
+
   for (const testCase of CASES) {
     it(`records the complete ${testCase.kind} stop sequence at 30 Hz`, () => {
       const { sequence } = runTrace(testCase)

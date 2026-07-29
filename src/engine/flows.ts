@@ -178,6 +178,8 @@ export interface FlowsApi {
   group: THREE.Object3D
   emit(req: FlowRequest): void
   update(dt: number): void
+  /** Reduce ambient packets while a foreground statement owns the reading frame. */
+  setAmbientDimmed(dimmed: boolean): void
   readonly active: number
   readonly dropped: number
   setQuality(q: QualitySettings): void
@@ -203,6 +205,7 @@ export function createFlows(
     side: THREE.FrontSide,
   })
   material.name = 'flow:packet'
+  let ambientDimmed = false
 
   /* ---- route bakery -----------------------------------------------------*/
 
@@ -616,6 +619,15 @@ export function createFlows(
     buildPool(want)
   }
 
+  function setAmbientDimmed(dimmed: boolean): void {
+    if (dimmed === ambientDimmed) return
+    ambientDimmed = dimmed
+    material.transparent = dimmed
+    material.opacity = dimmed ? 0.14 : 1
+    material.depthWrite = !dimmed
+    material.needsUpdate = true
+  }
+
   function dispose(): void {
     offFlow()
     destroyPool()
@@ -631,6 +643,7 @@ export function createFlows(
     group,
     emit,
     update,
+    setAmbientDimmed,
     get active() {
       return nAct
     },
