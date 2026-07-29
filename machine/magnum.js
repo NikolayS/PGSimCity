@@ -24,6 +24,12 @@ import {
   needsCompletionFollow,
   zoomBoardView,
 } from './mobile-board.js'
+import {
+  formatViewingRate,
+  nearestViewingRate,
+  nudgeViewingRate,
+  viewingElapsed,
+} from './playback.js'
 
 const canvas = document.querySelector('#machine')
 const architecturePane = document.querySelector('.architecture-pane')
@@ -35,6 +41,9 @@ const clock = document.querySelector('#clock')
 const runState = document.querySelector('#run-state')
 const machineToggle = document.querySelector('#machine-toggle')
 const machineReset = document.querySelector('#machine-reset')
+const machineSlower = document.querySelector('#machine-slower')
+const machineRate = document.querySelector('#machine-rate')
+const machineFaster = document.querySelector('#machine-faster')
 const statementMode = document.querySelector('#statement-mode')
 const statementNext = document.querySelector('#statement-next')
 const statementState = document.querySelector('#statement-state')
@@ -59,6 +68,9 @@ if (
   || !runState
   || !machineToggle
   || !machineReset
+  || !machineSlower
+  || !machineRate
+  || !machineFaster
   || !statementMode
   || !statementNext
   || !statementState
@@ -273,8 +285,8 @@ const suppliedTimeParam = params.get('t')
 const suppliedTime = suppliedTimeParam === null ? Number.NaN : Number(suppliedTimeParam)
 let manualTime = Number.isFinite(suppliedTime) ? wrap(suppliedTime, MASTER_PERIOD) : 0
 let paused = Number.isFinite(suppliedTime) || params.get('paused') === '1'
+let viewingRate = nearestViewingRate(params.get('rate'))
 let labelsVisible = params.get('labels') !== '0'
-let startAt = performance.now() / 1000 - manualTime
 let lastFrame = performance.now()
 let cssWidth = 0
 let cssHeight = 0
@@ -1610,7 +1622,7 @@ function drawRhythmStrip(time) {
   const rowHeight = 13
 
   drawIsoPlate(box.x, box.y, box.width, box.height, 5, '#28211d', '#8b6439', 6)
-  mono('RHYTHM STRIP · ONE SHARED 36s CLOCK', box.x + 12, box.y + 13, 8.5, ink.ivory, 'left', 750)
+  mono('RHYTHM STRIP · ONE SHARED 36s MODEL CLOCK', box.x + 12, box.y + 13, 8.5, ink.ivory, 'left', 750)
   mono('TOP FAST / BOTTOM RARE', box.x + box.width - 12, box.y + 13, 6.5, ink.paperDim, 'right', 650)
 
   for (let second = 0; second <= MASTER_PERIOD; second += 6) {
@@ -1999,8 +2011,8 @@ function drawArchitecture() {
 }
 
 function updateReadout() {
-  clock.textContent = `${manualTime.toFixed(1).padStart(4, '0')} / 36s`
-  runState.textContent = paused ? 'AMBIENT PAUSED' : 'AMBIENT RUNNING'
+  clock.textContent = `${manualTime.toFixed(1).padStart(4, '0')} / 36s MODEL`
+  runState.textContent = paused ? 'VIEW PAUSED' : 'VIEW RUNNING'
   machineToggle.textContent = paused ? 'RUN' : 'PAUSE'
   updateStatementControls()
 }
@@ -2025,28 +2037,42 @@ function draw() {
 }
 
 function frame(now) {
-  const elapsed = Math.min(0.1, (now - lastFrame) / 1000)
+  const elapsed = (now - lastFrame) / 1000
   lastFrame = now
-  if (!paused) manualTime = wrap(now / 1000 - startAt, MASTER_PERIOD)
-  updateStatementReplay(elapsed)
+  const viewedElapsed = viewingElapsed(elapsed, viewingRate, paused)
+  manualTime = wrap(manualTime + viewedElapsed, MASTER_PERIOD)
+  updateStatementReplay(viewedElapsed)
   draw()
   requestAnimationFrame(frame)
 }
 
 function setTime(seconds) {
   manualTime = wrap(Number(seconds) || 0, MASTER_PERIOD)
-  startAt = performance.now() / 1000 - manualTime
   draw()
 }
 
 function setPaused(nextPaused) {
   paused = Boolean(nextPaused)
-  if (!paused) startAt = performance.now() / 1000 - manualTime
   updateReadout()
 }
 
 function togglePaused() {
   setPaused(!paused)
+}
+
+function setViewingRate(nextRate) {
+  viewingRate = nearestViewingRate(nextRate)
+  const label = formatViewingRate(viewingRate)
+  machineRate.textContent = `VIEW ${label}`
+  machineRate.setAttribute(
+    'aria-label',
+    `Viewing speed ${label}. Model periods and PostgreSQL measurements are unchanged.`,
+  )
+  updateReadout()
+}
+
+function nudgeMachineRate(direction) {
+  setViewingRate(nudgeViewingRate(viewingRate, direction))
 }
 
 function terminalWidth() {
@@ -2478,6 +2504,12 @@ canvas.addEventListener('keydown', (event) => {
   if (event.code === 'Space') {
     event.preventDefault()
     togglePaused()
+  } else if (event.key === ',' || event.key === '<') {
+    event.preventDefault()
+    nudgeMachineRate(-1)
+  } else if (event.key === '.' || event.key === '>') {
+    event.preventDefault()
+    nudgeMachineRate(1)
   } else if (event.key.toLowerCase() === 'r') {
     event.preventDefault()
     setTime(0)
@@ -2485,6 +2517,8 @@ canvas.addEventListener('keydown', (event) => {
 })
 machineToggle.addEventListener('click', togglePaused)
 machineReset.addEventListener('click', () => setTime(0))
+machineSlower.addEventListener('click', () => nudgeMachineRate(-1))
+machineFaster.addEventListener('click', () => nudgeMachineRate(1))
 boardView.addEventListener('click', toggleBoardFit)
 boardFollow.addEventListener('click', enableBoardFollow)
 statementMode.addEventListener('click', toggleStatementMode)
@@ -2521,6 +2555,7 @@ window.MAGNUM = Object.freeze({
   periods,
   pause: () => setPaused(true),
   play: () => setPaused(false),
+  setRate: setViewingRate,
   setTime,
   setLabels: (visible) => {
     labelsVisible = Boolean(visible)
@@ -2528,6 +2563,11 @@ window.MAGNUM = Object.freeze({
   },
   loadPostgres,
   runQuery: (sql) => submitCommand(sql),
+  replayLast: () => {
+    if (!postgres.report) return false
+    startStatementReplay(postgres.report)
+    return statement.status === 'replaying'
+  },
   setTraceMode: setStatementMode,
   stepTrace: stepStatementReplay,
   setBoardFit,
@@ -2537,6 +2577,7 @@ window.MAGNUM = Object.freeze({
   },
   getState: () => ({
     paused,
+    rate: viewingRate,
     time: manualTime,
     labelsVisible,
     periods,
@@ -2594,4 +2635,5 @@ resize()
 resizeTerminalInput()
 updatePostgresUi()
 updateStatementControls()
+setViewingRate(viewingRate)
 requestAnimationFrame(frame)

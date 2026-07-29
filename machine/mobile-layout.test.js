@@ -84,6 +84,25 @@ describe('machine room portrait layout', () => {
       /<button[^>]+id="board-follow"[^>]*>FOLLOW: ON<\/button>/,
     )
   })
+
+  it('keeps the viewing-speed control thumb-sized without taking board height', () => {
+    expect(html).toMatch(/aria-label="Viewing speed"/)
+    expect(html).toMatch(/id="machine-slower"/)
+    expect(html).toMatch(/id="machine-rate"/)
+    expect(html).toMatch(/id="machine-faster"/)
+    expect(blockAfter(portrait, '.viewing-rate button')).toMatch(
+      /min-(?:block-size|height):\s*44px/,
+    )
+    expect(blockAfter(portrait, '.viewing-rate button')).toMatch(
+      /margin-block:\s*-8px/,
+    )
+    expect(blockAfter(portrait, '.control-rack')).not.toMatch(/flex-wrap:\s*wrap/)
+    expect(blockAfter(portrait, '#clock')).toMatch(/display:\s*none/)
+  })
+
+  it('documents the city rate keys beside the existing board pause hint', () => {
+    expect(html).toMatch(/SPACE[^<]+PAUSES[^<]+,[^<]+\/[^<]+\.[^<]+VIEW SPEED/)
+  })
 })
 
 describe('machine room mobile board camera', () => {
