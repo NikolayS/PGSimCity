@@ -15,7 +15,9 @@
   plausible.init()
 </script>
 
-    <link rel="icon" href="data:," />
+    <link rel="icon" href="../machine-favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="../machine-favicon-32.png" type="image/png" sizes="32x32" />
+    <link rel="apple-touch-icon" href="../machine-favicon-180.png" sizes="180x180" />
     <link rel="stylesheet" href="./magnum.css" />
   </head>
   <body>
@@ -100,8 +102,15 @@ Available: \d  \dt  \d+ table  \timing</pre>
           aria-label="A layered PostgreSQL architecture: client and processes above one shared memory segment, backend private memory outside it, then the kernel page cache and durable disk."
         ></canvas>
         <div class="architecture-readout">
-          <span id="run-state">RUNNING</span>
-          <span>CLICK BOARD TO PAUSE</span>
+          <button
+            id="statement-mode"
+            type="button"
+            aria-pressed="false"
+            title="Toggle between automatic playback and one-stage-at-a-time playback"
+          >TRACE: AUTO</button>
+          <button id="statement-next" type="button" disabled>NEXT STAGE</button>
+          <span id="statement-state">NO STATEMENT</span>
+          <span id="run-state">AMBIENT RUNNING</span>
         </div>
       </section>
 

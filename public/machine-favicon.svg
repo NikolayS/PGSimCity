@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-.12 -.12 9.24 9.24" role="img" aria-label="PGSimCity machine-room elephant">
+  <title>PGSimCity machine-room elephant</title>
+  <defs>
+    <pattern id="machine-frames" width="1" height="1" patternUnits="userSpaceOnUse">
+      <rect x=".08" y=".08" width=".84" height=".84" rx=".04" fill="#c8923e"/>
+    </pattern>
+    <path id="machine-elephant" d="
+      M2 0h6v1H2z
+      M1 1h8v1H1z
+      M0 2h9v1H0z
+      M0 3h2v1H0z M3 3h6v1H3z
+      M0 4h9v1H0z
+      M0 5h1v1H0z M2 5h7v1H2z
+      M0 6h1v1H0z M2 6h7v1H2z
+      M0 7h1v1H0z M3 7h2v1H3z M7 7h2v1H7z
+      M0 8h2v1H0z M3 8h2v1H3z M7 8h2v1H7z"/>
+  </defs>
+
+  <use href="#machine-elephant" fill="#0d0a09"/>
+  <use href="#machine-elephant" fill="url(#machine-frames)"/>
+
+  <!-- Iron and copper frames give the sibling its machine-room register. -->
+  <g>
+    <rect x="3.08" y="1.08" width=".84" height=".84" rx=".04" fill="#5d5852"/>
+    <rect x="5.08" y="1.08" width=".84" height=".84" rx=".04" fill="#5d5852"/>
+    <rect x="7.08" y="1.08" width=".84" height=".84" rx=".04" fill="#5d5852"/>
+    <rect x="3.08" y="5.08" width=".84" height=".84" rx=".04" fill="#b85f35"/>
+    <rect x="7.08" y="5.08" width=".84" height=".84" rx=".04" fill="#b85f35"/>
+
+    <!-- The submitted-statement path is the same cyan used on the machine board. -->
+    <path
+      d="M.5 4.5h2v-2h2v2h2v-2h2"
+      fill="none"
+      stroke="#b9ffff"
+      stroke-width=".46"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+    <circle cx=".5" cy="4.5" r=".36" fill="#b9ffff" stroke="#173b3d" stroke-width=".13"/>
+    <circle cx="8.5" cy="2.5" r=".36" fill="#ed9760" stroke="#3b1b12" stroke-width=".13"/>
+  </g>
+</svg>
