@@ -9,6 +9,28 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.15.0] — 2026-07-29
+
+### The machine room has a name and gives credit
+
+The page was called **The Update Works** — a pun on *works* as in gasworks or
+waterworks, the plant where `UPDATE`s get processed. Nobody parsed it. It is now
+**The Machine**, which is what the roadmap has called it all along and what pairs
+with the city.
+
+**PGlite is credited where the claim is made.** The page's whole proposition is
+that half its numbers come from a real PostgreSQL, and it named PGlite only as a
+bare label. It now credits PGlite by ElectricSQL beside that claim, links
+`pglite.dev` and the source repository, and says what PGlite actually is —
+PostgreSQL compiled to WebAssembly, not a reimplementation — which is the honest
+reason its measurements can be trusted.
+
+The Legal disclosure mirrors `NOTICE`, including Electric DB Limited and
+Apache-2.0. The Query flow carries the same credit. Links only: nothing is
+fetched from an external host.
+
+---
+
 ## [0.14.0] — 2026-07-29
 
 Watching the machine at your own pace, and typing into it on a phone.
