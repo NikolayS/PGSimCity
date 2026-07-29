@@ -10,9 +10,21 @@ import {
   formatResult,
   parseMetaCommand,
 } from './psql.js'
+import {
+  DETAIL_HEIGHT,
+  DETAIL_WIDTH,
+  RECEIPT_FOCUS,
+  containBoardPoint,
+  detailFontSize,
+  effectiveLabelPixels,
+  needsCompletionFollow,
+} from './mobile-board.js'
 
 const canvas = document.querySelector('#machine')
 const architecturePane = document.querySelector('.architecture-pane')
+const architectureScroll = document.querySelector('.architecture-scroll')
+const architectureStage = document.querySelector('.architecture-stage')
+const boardView = document.querySelector('#board-view')
 const clock = document.querySelector('#clock')
 const runState = document.querySelector('#run-state')
 const machineToggle = document.querySelector('#machine-toggle')
@@ -32,6 +44,9 @@ const ctx = canvas?.getContext('2d')
 if (
   !canvas
   || !architecturePane
+  || !architectureScroll
+  || !architectureStage
+  || !boardView
   || !ctx
   || !clock
   || !runState
@@ -51,11 +66,16 @@ if (
   throw new Error('The Magnum workbench is missing a required browser element')
 }
 
-const VIEW_W = 720
-const VIEW_H = 900
+const VIEW_W = DETAIL_WIDTH
+const VIEW_H = DETAIL_HEIGHT
 const MASTER_PERIOD = 36
 const TAU = Math.PI * 2
 const PROMPT = 'pgsimcity=#'
+const SMALLEST_SOURCE_LABEL_PX = 4
+const MOBILE_BOARD_QUERY =
+  '(max-width: 760px), '
+  + '(max-width: 900px) and (max-height: 500px) and (hover: none) and (pointer: coarse)'
+const mobileBoardMedia = window.matchMedia(MOBILE_BOARD_QUERY)
 
 const periods = Object.freeze({
   walwriter: 3,
@@ -254,10 +274,28 @@ let cssHeight = 0
 let viewScale = 1
 let viewX = 0
 let viewY = 0
+let mobileBoard = false
+let boardFit = false
+let mobileBoardPositioned = false
+let detailScrollLeft = 12
+let detailScrollTop = 0
+let completionFollowPending = false
 let queryBusy = false
 let historyIndex = 0
 let historyDraft = ''
 const history = []
+const followViewport = {
+  scrollLeft: 0,
+  scrollTop: 0,
+  clientWidth: 0,
+  clientHeight: 0,
+  scrollWidth: 0,
+  scrollHeight: 0,
+  scale: 1,
+  viewX: 0,
+  viewY: 0,
+}
+const followPosition = { left: 0, top: 0 }
 
 function clamp(value, low = 0, high = 1) {
   return Math.max(low, Math.min(high, value))
@@ -306,6 +344,7 @@ function startStatementMeasurement(sql) {
   statement.stageElapsedMs = 0
   statement.stageIndex = 0
   statement.error = null
+  completionFollowPending = false
   postgres.report = null
   postgres.plan = null
   updatePostgresUi()
@@ -322,6 +361,7 @@ function startStatementReplay(report) {
   statement.error = report.error?.message ?? null
   statement.status = report.error ? 'error' : 'replaying'
   if (statement.status === 'error') statement.stageIndex = 2
+  completionFollowPending = statement.status === 'error'
   updatePostgresUi()
   updateStatementControls()
 }
@@ -331,6 +371,7 @@ function failStatementMeasurement(error) {
   statement.error = error instanceof Error ? error.message : String(error)
   statement.replay = null
   statement.stageIndex = 2
+  completionFollowPending = true
   updatePostgresUi()
   updateStatementControls()
 }
@@ -367,6 +408,7 @@ function stepStatementReplay() {
   const next = nextStatementStageIndex(statement.replay, statement.stageIndex)
   if (next === statement.stageIndex) {
     statement.status = 'complete'
+    completionFollowPending = true
   } else {
     statement.stageIndex = next
     statement.stageElapsedMs = statement.replay.stages[next].durationMs
@@ -391,6 +433,7 @@ function updateStatementReplay(elapsedSeconds) {
     statement.elapsedMs - elapsedAtStatementStage(statement.replay, nextIndex)
   if (statement.elapsedMs >= statement.replay.durationMs) {
     statement.status = 'complete'
+    completionFollowPending = true
   }
 }
 
@@ -420,8 +463,15 @@ function updateStatementControls() {
 }
 
 function resize() {
+  const wasMobileBoard = mobileBoard
+  mobileBoard = mobileBoardMedia.matches
+  if (mobileBoard !== wasMobileBoard) mobileBoardPositioned = false
+  if (!mobileBoard && boardFit) {
+    boardFit = false
+    architectureScroll.classList.remove('is-fit')
+  }
   const ratio = Math.min(window.devicePixelRatio || 1, 2)
-  const bounds = architecturePane.getBoundingClientRect()
+  const bounds = architectureStage.getBoundingClientRect()
   cssWidth = Math.max(1, bounds.width)
   cssHeight = Math.max(1, bounds.height)
   canvas.width = Math.max(1, Math.floor(cssWidth * ratio))
@@ -432,6 +482,82 @@ function resize() {
   viewX = (cssWidth - VIEW_W * viewScale) / 2
   viewY = (cssHeight - VIEW_H * viewScale) / 2
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0)
+  if (mobileBoard && !boardFit && !mobileBoardPositioned) {
+    architectureScroll.scrollLeft = Math.min(
+      Math.max(0, architectureScroll.scrollWidth - architectureScroll.clientWidth),
+      detailScrollLeft,
+    )
+    architectureScroll.scrollTop = Math.min(
+      Math.max(0, architectureScroll.scrollHeight - architectureScroll.clientHeight),
+      detailScrollTop,
+    )
+    mobileBoardPositioned = true
+  } else if (!mobileBoard || boardFit) {
+    architectureScroll.scrollLeft = 0
+    architectureScroll.scrollTop = 0
+  }
+  if (mobileBoard && !boardFit && needsCompletionFollow(statement.status)) {
+    completionFollowPending = true
+  }
+  updateBoardView()
+}
+
+function updateBoardView() {
+  boardView.textContent = boardFit ? '1:1 DETAIL' : 'FIT BOARD'
+  boardView.setAttribute('aria-pressed', String(boardFit))
+  boardView.title = boardFit
+    ? 'Return to the legible one-to-one board'
+    : 'Fit the whole board on screen'
+}
+
+function setBoardFit(nextFit) {
+  if (!mobileBoard) return
+  const next = Boolean(nextFit)
+  if (next === boardFit) return
+  if (next) {
+    detailScrollLeft = architectureScroll.scrollLeft
+    detailScrollTop = architectureScroll.scrollTop
+  }
+  boardFit = next
+  architectureScroll.classList.toggle('is-fit', boardFit)
+  resize()
+  if (!boardFit) {
+    architectureScroll.scrollLeft = detailScrollLeft
+    architectureScroll.scrollTop = detailScrollTop
+    if (needsCompletionFollow(statement.status)) {
+      completionFollowPending = true
+    }
+  }
+}
+
+function toggleBoardFit() {
+  setBoardFit(!boardFit)
+}
+
+function followMobileStatement() {
+  if (!mobileBoard || boardFit || statement.status === 'idle') return
+  const finished = needsCompletionFollow(statement.status)
+  if (finished && !completionFollowPending) return
+  let targetX = statementStagePoint.x
+  let targetY = statementStagePoint.y
+  if (finished) {
+    targetX = RECEIPT_FOCUS.x
+    targetY = RECEIPT_FOCUS.y
+  }
+
+  followViewport.scrollLeft = architectureScroll.scrollLeft
+  followViewport.scrollTop = architectureScroll.scrollTop
+  followViewport.clientWidth = architectureScroll.clientWidth
+  followViewport.clientHeight = architectureScroll.clientHeight
+  followViewport.scrollWidth = architectureScroll.scrollWidth
+  followViewport.scrollHeight = architectureScroll.scrollHeight
+  followViewport.scale = viewScale
+  followViewport.viewX = viewX
+  followViewport.viewY = viewY
+  containBoardPoint(followViewport, targetX, targetY, followPosition)
+  architectureScroll.scrollLeft = followPosition.left
+  architectureScroll.scrollTop = followPosition.top
+  if (finished) completionFollowPending = false
 }
 
 function pathRoundRect(x, y, width, height, radius) {
@@ -489,8 +615,11 @@ function arrow(x1, y1, x2, y2, color, width = 2) {
 
 function text(value, x, y, size, color, align = 'left', weight = 600) {
   if (!labelsVisible) return
+  const renderedSize = mobileBoard
+    ? detailFontSize(size, viewScale, boardFit)
+    : size
   ctx.fillStyle = color
-  ctx.font = `${weight} ${size}px Georgia, "Times New Roman", serif`
+  ctx.font = `${weight} ${renderedSize}px Georgia, "Times New Roman", serif`
   ctx.textAlign = align
   ctx.textBaseline = 'middle'
   ctx.fillText(value, x, y)
@@ -498,8 +627,11 @@ function text(value, x, y, size, color, align = 'left', weight = 600) {
 
 function mono(value, x, y, size, color, align = 'left', weight = 600) {
   if (!labelsVisible) return
+  const renderedSize = mobileBoard
+    ? detailFontSize(size, viewScale, boardFit)
+    : size
   ctx.fillStyle = color
-  ctx.font = `${weight} ${size}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`
+  ctx.font = `${weight} ${renderedSize}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`
   ctx.textAlign = align
   ctx.textBaseline = 'middle'
   ctx.fillText(value, x, y)
@@ -1577,6 +1709,7 @@ function draw() {
   )
   drawArchitecture()
   ctx.restore()
+  followMobileStatement()
   updateReadout()
 }
 
@@ -2021,6 +2154,9 @@ function recallHistory(direction) {
 }
 
 window.addEventListener('resize', resize)
+if (typeof ResizeObserver === 'function') {
+  new ResizeObserver(resize).observe(architectureScroll)
+}
 canvas.addEventListener('click', togglePaused)
 canvas.addEventListener('keydown', (event) => {
   if (event.code === 'Space') {
@@ -2033,6 +2169,7 @@ canvas.addEventListener('keydown', (event) => {
 })
 machineToggle.addEventListener('click', togglePaused)
 machineReset.addEventListener('click', () => setTime(0))
+boardView.addEventListener('click', toggleBoardFit)
 statementMode.addEventListener('click', toggleStatementMode)
 statementNext.addEventListener('click', stepStatementReplay)
 postgresToggle.addEventListener('click', () => {
@@ -2076,6 +2213,7 @@ window.MAGNUM = Object.freeze({
   runQuery: (sql) => submitCommand(sql),
   setTraceMode: setStatementMode,
   stepTrace: stepStatementReplay,
+  setBoardFit,
   setSql: (sql) => {
     terminalInput.value = String(sql)
     resizeTerminalInput()
@@ -2085,6 +2223,18 @@ window.MAGNUM = Object.freeze({
     time: manualTime,
     labelsVisible,
     periods,
+    board: {
+      mobile: mobileBoard,
+      fit: boardFit,
+      scale: viewScale,
+      smallestLabelPixels: mobileBoard
+        ? effectiveLabelPixels(SMALLEST_SOURCE_LABEL_PX, viewScale, boardFit)
+        : SMALLEST_SOURCE_LABEL_PX * viewScale,
+      scrollLeft: architectureScroll.scrollLeft,
+      scrollTop: architectureScroll.scrollTop,
+      viewportWidth: architectureScroll.clientWidth,
+      viewportHeight: architectureScroll.clientHeight,
+    },
     statement: {
       status: statement.status,
       mode: statement.mode,
