@@ -9,6 +9,46 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.14.0] — 2026-07-29
+
+Watching the machine at your own pace, and typing into it on a phone.
+
+### Speed control
+
+The only time control in the machine room was binary `PAUSE` / `RUN` against a
+fixed 36 s clock, so a reader who wanted to follow a mechanism could freeze it
+or keep up. There is now a rate control.
+
+**Rate is a viewing speed, not a change to the model.** The modelled periods and
+the values measured by PostgreSQL are identical at every setting — the same
+statement reports 3 shared hits, 0 reads, 0.1 ms planning, 0.2 ms execution and
+an Index Scan whether you watch it at a quarter speed or five times over. At 5x
+the full 36 s clock takes 7.2 wall seconds.
+
+### Typing SQL on a phone no longer hides the machine
+
+iOS Safari zooms the page whenever a focused input computes below 16 px. The
+terminal inherited the console's smaller monospace sizing, so tapping the prompt
+scaled the page and pushed the board off screen entirely. The field now computes
+to 16 px and the visual viewport stays at scale 1 on focus.
+
+No viewport zoom restriction was added. It would have appeared to fix this while
+disabling the reader's own zoom and fighting the board's pinch gesture.
+
+**Submitting a statement is a request to watch something happen**, so on a phone
+Enter now moves focus to the board and collapses the terminal. An error is the
+exception — it refocuses and expands the terminal, because an error belongs
+where it can be read.
+
+### And the two of them together
+
+The rate control and the collapsing terminal were verified independently and
+never in combination. Together, the speed cluster took 39% of the width of a
+390 px rack and its touch targets protruded past it. Landscape now reserves a
+toolbar area with real clearance from the board controls.
+
+---
+
 ## [0.13.0] — 2026-07-29
 
 The city stops letting you walk through it, the machine room becomes something
