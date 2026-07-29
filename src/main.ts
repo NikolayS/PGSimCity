@@ -155,7 +155,7 @@ async function boot(): Promise<void> {
 
   await progress(BOOT_STEPS.standby)
   add(createReplication(ctx))
-  add(createPlanner(ctx))
+  const plannerMod = add(createPlanner(ctx))
   // After replication: the continuity quarter reads the standby's anchors and
   // hangs its own second standby, archive estate and recovery ground off them.
   add(createContinuity(ctx))
@@ -181,6 +181,9 @@ async function boot(): Promise<void> {
   // MUST follow build(): build() resets the box array and would discard these.
   access.installCollision(collision)
   for (const b of (groundMod.group.userData.rimColliders as THREE.Box3[] | undefined) ?? []) collision.addBox(b)
+  for (const b of (plannerMod.group.userData.walkColliders as THREE.Box3[] | undefined) ?? []) {
+    collision.addBox(b, 'metal')
+  }
   const water = createBufferWater(scene)
   scene.add(water.group)
   const walk = createWalkController({

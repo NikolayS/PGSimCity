@@ -459,6 +459,39 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
     [LX, FLOOR_Y + 1.0, LZ, SHELL_W - 6, 0.4, SHELL_D - 6],
   ], true)
 
+  /*
+   * The lab hangs above collision.build()'s ordinary pedestrian ceiling, so
+   * publish only the surfaces a dropped-in walker can actually meet. The front
+   * and sides stay open; the floor, rear wall, and four corner posts do not.
+   */
+  group.userData.walkColliders = [
+    new THREE.Box3(
+      new THREE.Vector3(LX - SHELL_W / 2, FLOOR_Y - 1.2, LZ - SHELL_D / 2),
+      new THREE.Vector3(LX + SHELL_W / 2, FLOOR_Y, LZ + SHELL_D / 2),
+    ),
+    new THREE.Box3(
+      new THREE.Vector3(LX - SHELL_W / 2 + 0.6, FLOOR_Y - 1, LZ - SHELL_D / 2 - 0.1),
+      new THREE.Vector3(LX + SHELL_W / 2 - 0.6, ROOF_Y - 1, LZ - SHELL_D / 2 + 1.1),
+    ),
+    ...([-1, 1] as const).flatMap((sx) =>
+      ([-1, 1] as const).map(
+        (sz) =>
+          new THREE.Box3(
+            new THREE.Vector3(
+              LX + sx * (SHELL_W / 2) - 0.6,
+              LY - SHELL_H / 2,
+              LZ + sz * (SHELL_D / 2) - 0.6,
+            ),
+            new THREE.Vector3(
+              LX + sx * (SHELL_W / 2) + 0.6,
+              LY + SHELL_H / 2,
+              LZ + sz * (SHELL_D / 2) + 0.6,
+            ),
+          ),
+      ),
+    ),
+  ]
+
   // A back wall, so the diagram has something to read against.
   const wallGeo = own(new THREE.PlaneGeometry(SHELL_W - 2, SHELL_H - 2))
   const backWall = new THREE.Mesh(wallGeo, matBack)

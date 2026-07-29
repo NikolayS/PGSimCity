@@ -85,6 +85,11 @@ class TestNode extends EventTarget {
     }
   }
 
+  appendChild<T extends TestNode>(node: T): T {
+    this.append(node)
+    return node
+  }
+
   prepend(...nodes: (TestNode | string)[]): void {
     const prepared = nodes.map((value) => (typeof value === 'string' ? new TestText(value) : value))
     for (const node of prepared) {
@@ -169,6 +174,31 @@ function matchesSelector(element: TestElement, selector: string): boolean {
   return true
 }
 
+function testCanvasContext(canvas: TestElement): CanvasRenderingContext2D {
+  const gradient = { addColorStop: (_offset: number, _color: string): void => {} }
+  const base = {
+    canvas: canvas as unknown as HTMLCanvasElement,
+    measureText: (text: string) => ({ width: text.length * 24 }),
+    createLinearGradient: () => gradient,
+    createRadialGradient: () => gradient,
+    createConicGradient: () => gradient,
+    createPattern: () => null,
+    getImageData: (_sx: number, _sy: number, sw: number, sh: number) => ({
+      data: new Uint8ClampedArray(Math.max(0, sw * sh * 4)),
+      width: sw,
+      height: sh,
+      colorSpace: 'srgb',
+    }),
+  }
+  const noop = (): void => {}
+  return new Proxy(base, {
+    get(target, prop, receiver) {
+      if (Reflect.has(target, prop)) return Reflect.get(target, prop, receiver)
+      return noop
+    },
+  }) as unknown as CanvasRenderingContext2D
+}
+
 class TestElement extends TestNode {
   /* Keyboard-navigable menus move focus themselves. Without this the stub
    * throws instead of recording where focus went. */
@@ -250,7 +280,10 @@ class TestElement extends TestNode {
     return null
   }
 
-  getContext(): null {
+  testCanvas2d = false
+
+  getContext(type?: string): CanvasRenderingContext2D | null {
+    if (this.testCanvas2d && type === '2d') return testCanvasContext(this)
     return null
   }
 
@@ -280,14 +313,16 @@ class TestDocument extends TestNode {
   readonly body = new TestElement('body')
   activeElement: TestElement | null = null
 
-  constructor() {
+  constructor(private readonly canvas2d: boolean) {
     super()
     this.append(this.documentElement)
     this.documentElement.append(this.body)
   }
 
   createElement(tag: string): TestElement {
-    return new TestElement(tag)
+    const element = new TestElement(tag)
+    element.testCanvas2d = this.canvas2d && tag.toLowerCase() === 'canvas'
+    return element
   }
 
   createElementNS(_namespace: string, tag: string): TestElement {
@@ -373,8 +408,8 @@ export interface TestDom {
   mount(id: string): TestElement
 }
 
-export function installTestDom(): TestDom {
-  const document = new TestDocument()
+export function installTestDom(opts: { canvas2d?: boolean } = {}): TestDom {
+  const document = new TestDocument(opts.canvas2d === true)
   const window = new TestWindow()
   const globals: Record<string, unknown> = {
     window,
