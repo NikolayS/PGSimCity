@@ -506,8 +506,8 @@ export function createHud(ctx: UiContext): UiModule {
       href: 'https://github.com/NikolayS/PGSimCity',
       target: '_blank',
       rel: 'noopener',
-      title: 'View the PGSimCity source code on GitHub',
-      'aria-label': 'Source code on GitHub',
+      title: 'PGSimCity source code on GitHub',
+      'aria-label': 'Source on GitHub',
     },
     'Source',
   )
@@ -616,6 +616,7 @@ export function createHud(ctx: UiContext): UiModule {
     audioBtn,
     themeBtn,
     sourceLink,
+    topEl.children[0],
     legalBtn,
     viewBtn,
     tourBtn,

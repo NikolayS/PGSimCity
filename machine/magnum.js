@@ -1183,7 +1183,7 @@ async function loadPostgres(announce = true) {
   }
   postgres.loadPromise = (async () => {
     try {
-      const runtime = await import('../../src/observability/real-postgres.ts')
+      const runtime = await import('./postgres.js')
       postgres.source = await runtime.loadRealPostgres()
       postgres.status = 'ready'
       updatePostgresUi()

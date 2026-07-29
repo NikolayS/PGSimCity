@@ -83,6 +83,70 @@ textarea {
   letter-spacing: 0.02em;
 }
 
+.header-side {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 9px;
+  justify-items: end;
+}
+
+.machine-nav {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  color: #bda57b;
+  font: 700 8px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.machine-nav a,
+.machine-legal summary {
+  color: inherit;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.machine-nav a:hover,
+.machine-nav a:focus-visible,
+.machine-legal summary:hover,
+.machine-legal summary:focus-visible {
+  color: #f1dfba;
+  outline: none;
+}
+
+.machine-legal {
+  position: relative;
+}
+
+.machine-legal summary {
+  list-style: none;
+}
+
+.machine-legal summary::-webkit-details-marker {
+  display: none;
+}
+
+.machine-legal p {
+  position: absolute;
+  z-index: 5;
+  top: 14px;
+  right: 0;
+  width: min(390px, 76vw);
+  margin: 0;
+  padding: 11px 12px;
+  border: 1px solid #8b6940;
+  border-radius: 3px;
+  color: #d8c29a;
+  background: #1d1612;
+  box-shadow: 0 12px 30px rgb(0 0 0 / 58%);
+  font: 600 9px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.03em;
+  text-transform: none;
+  white-space: normal;
+}
+
 .source-key {
   display: grid;
   flex: 0 0 auto;

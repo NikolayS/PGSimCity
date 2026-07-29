@@ -19,9 +19,18 @@ export const MODE_IDS = {
   closeZoom: 'close-zoom',
 } as const
 
-export type ModeId = (typeof MODE_IDS)[keyof typeof MODE_IDS]
+export const ENTRY_MODE_IDS = {
+  machineRoom: 'machine-room',
+} as const
 
-export const ENTERABLE_MODE_IDS: readonly ModeId[] = Object.freeze(Object.values(MODE_IDS))
+export type ModeId =
+  | (typeof MODE_IDS)[keyof typeof MODE_IDS]
+  | (typeof ENTRY_MODE_IDS)[keyof typeof ENTRY_MODE_IDS]
+
+export const ENTERABLE_MODE_IDS: readonly ModeId[] = Object.freeze([
+  ...Object.values(MODE_IDS),
+  ...Object.values(ENTRY_MODE_IDS),
+])
 
 export function modeTokens(...ids: ModeId[]): string {
   return ids.join(' ')

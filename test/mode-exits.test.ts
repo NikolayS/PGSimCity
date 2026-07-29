@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 
 import { createBus } from '../src/core/bus'
@@ -101,7 +103,14 @@ describe('enterable mode exits', () => {
 
     const exits = Array.from(document.querySelectorAll<HTMLElement>('[data-mode-exit]'))
       .flatMap((node) => node.dataset.modeExit?.split(/\s+/) ?? [])
-      .sort()
+    const machine = readFileSync(
+      fileURLToPath(new URL('../machine/index.html', import.meta.url)),
+      'utf8',
+    )
+    const machineExit = machine.match(/data-mode-exit="([^"]+)"/)?.[1]
+    expect(machineExit).toBeTruthy()
+    exits.push(...(machineExit?.split(/\s+/) ?? []))
+    exits.sort()
 
     expect([...new Set(exits)].sort()).toEqual([...ENTERABLE_MODE_IDS].sort())
     for (const node of document.querySelectorAll<HTMLElement>('[data-mode-exit]')) {
@@ -125,6 +134,13 @@ describe('enterable mode exits', () => {
     window.dispatchEvent(escape)
     expect(navigate).toHaveBeenCalledOnce()
     expect(escape.defaultPrevented).toBe(true)
+
+    const machine = readFileSync(
+      fileURLToPath(new URL('../machine/index.html', import.meta.url)),
+      'utf8',
+    )
+    expect(machine).toMatch(/href="\.\.\/"[^>]*data-mode-exit="machine-room"/)
+    expect(machine).toContain('Back to city')
 
     disposeEscape()
   })

@@ -40,7 +40,12 @@ function context(): UiContext {
 describe('Electronic Arts trademark notice', () => {
   it('stays in the boot markup and the help attribution surface', () => {
     const index = readFileSync(fileURLToPath(new URL('../index.html', import.meta.url)), 'utf8')
+    const machine = readFileSync(
+      fileURLToPath(new URL('../machine/index.html', import.meta.url)),
+      'utf8',
+    )
     expect(normalize(index)).toContain(TRADEMARK_NOTICE)
+    expect(normalize(machine)).toContain(TRADEMARK_NOTICE)
 
     const dom = installTestDom()
     const root = dom.mount('help-overlay')
