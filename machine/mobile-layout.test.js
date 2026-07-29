@@ -106,6 +106,31 @@ describe('machine room portrait layout', () => {
   })
 })
 
+describe('machine room landscape layout', () => {
+  const portrait = blockAfter(
+    css,
+    '@media (max-width: 760px), (max-width: 900px) and (max-height: 500px) and (hover: none) and (pointer: coarse)',
+  )
+  const landscape = blockAfter(
+    css,
+    '@media (max-width: 900px) and (max-height: 500px) and (orientation: landscape) and (hover: none) and (pointer: coarse)',
+  )
+
+  it('keeps the touch viewing-speed control reachable beside the board toolbar', () => {
+    expect(blockAfter(landscape, '.control-rack')).toMatch(/display:\s*flex/)
+    expect(blockAfter(landscape, '.architecture-readout')).toMatch(
+      /padding-right:\s*216px/,
+    )
+  })
+
+  it('preserves the 72px collapsed terminal without overflowing its fixed rows', () => {
+    expect(blockAfter(landscape, '.terminal')).toMatch(/height:\s*72px/)
+    expect(blockAfter(landscape, '.terminal')).toMatch(/min-height:\s*72px/)
+    expect(blockAfter(portrait, '.terminal-header')).toMatch(/min-height:\s*32px/)
+    expect(blockAfter(portrait, '.terminal-entry')).toMatch(/min-height:\s*38px/)
+  })
+})
+
 describe('machine room mobile terminal', () => {
   const coarsePointer = blockAfter(css, '@media (pointer: coarse)')
 

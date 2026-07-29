@@ -789,6 +789,7 @@ button:focus-visible {
 
   .terminal-header {
     grid-template-columns: 1fr auto;
+    min-height: 32px;
   }
 
   .terminal-lamps {
@@ -800,12 +801,17 @@ button:focus-visible {
   }
 
   .terminal-entry {
-    min-height: 39px;
-    padding: 8px;
+    min-height: 38px;
+    padding: 7px 8px;
   }
 
   .terminal-entry textarea {
     max-height: 82px;
+  }
+
+  .terminal:not(:focus-within) .terminal-entry textarea {
+    height: 18px !important;
+    overflow-y: hidden;
   }
 
   .measurement-rack {
@@ -828,17 +834,51 @@ button:focus-visible {
       "architecture"
       "terminal";
     grid-template-rows: minmax(0, 1fr) auto;
+    position: relative;
   }
 
   .console-header,
-  .control-rack,
   .measurement-rack {
     display: none;
   }
 
+  .control-rack {
+    position: absolute;
+    z-index: 2;
+    top: 0;
+    right: 0;
+    display: flex;
+    width: 216px;
+    min-height: 46px;
+    padding: 1px 6px;
+    border: 0;
+    border-radius: 0;
+    background: #17110e;
+    box-shadow: none;
+  }
+
+  .control-rack .postgres-control {
+    display: none;
+  }
+
+  .control-rack .clock-control {
+    width: 100%;
+    justify-content: flex-end;
+    gap: 4px;
+  }
+
+  .control-rack .viewing-rate button {
+    margin-block: 0;
+  }
+
+  .architecture-readout {
+    min-height: 46px;
+    padding-right: 216px;
+  }
+
   .terminal {
-    height: 62px;
-    min-height: 62px;
+    height: 72px;
+    min-height: 72px;
   }
 
   .terminal:focus-within {
