@@ -633,6 +633,22 @@ export function createHud(ctx: UiContext): UiModule {
   const topBar = el('div', { class: 'pg-panel hud-bar' }, brand, vitalsRow, rightCluster)
   topEl.append(topBar)
 
+  const STACKED_TOP_MIN_WIDTH = 701
+  const STACKED_TOP_MAX_WIDTH = 1440
+
+  function applyTopLayout(): void {
+    const width = window.innerWidth
+    setClass(
+      topBar,
+      'is-stacked',
+      width >= STACKED_TOP_MIN_WIDTH && width <= STACKED_TOP_MAX_WIDTH,
+    )
+  }
+
+  window.addEventListener('resize', applyTopLayout)
+  cleanup.push(() => window.removeEventListener('resize', applyTopLayout))
+  applyTopLayout()
+
   /* The phone hides the minimap, so camera presets, labels, and all eight
      district jumps need a compact touch surface of their own. It is also useful
      on desktop: a shortcut is a convenience, never the only entrance. */

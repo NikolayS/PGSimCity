@@ -40,6 +40,21 @@
   border-radius: 0;
 }
 
+/* At laptop widths the non-shrinking control cluster and the brand need more
+   than one row. JS owns the content-fit width band so rotation updates this class
+   without making either track paint through the other. */
+.hud-bar.is-stacked {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    'brand'
+    'controls'
+    'vitals';
+  row-gap: 2px;
+}
+.hud-bar.is-stacked .hud-vitals {
+  justify-self: stretch;
+}
+
 /* --- identity + health ---------------------------------------------------- */
 
 .hud-brand {
@@ -1006,6 +1021,15 @@ body.pg-labels-off #labels-root {
   }
   .hud-right {
     justify-self: end;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .hud-right > .hud-sep {
+    display: none;
+  }
+  .hud-right > .hud-tools {
+    flex: 1 1 100%;
+    justify-content: flex-end;
   }
   .hud-perf__nums {
     display: none;

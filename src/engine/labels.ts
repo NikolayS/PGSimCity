@@ -13,7 +13,7 @@ import {
   detailExpansionPriority,
   requestedLabelDetail,
 } from './label-detail'
-import { LABEL_AREA_PLACEMENT_BUDGET, labelScale } from './label-layout'
+import { labelAreaPlacementBudget, labelScale, mapLabelPriority } from './label-layout'
 
 /* ============================================================================
  * LABELS — map-grade annotation.
@@ -87,8 +87,7 @@ const VIS_GAIN = 2.2
 const B_SELECTED = 0
 const B_HOVERED = 1
 const B_FOCUS = 2
-const B_CITY = 3
-const B_DISTRICT = 4
+const B_MAP = 3
 const B_TIER = [5, 7, 8]
 /** A district chip on screen only to carry its "+N". */
 const B_COLLAPSE = 6
@@ -886,7 +885,11 @@ export function createLabels(
       e.onScreen = false
       e.nextDetail = LabelDetail.Name
       e.dist = camera.position.distanceTo(e.pos)
-      e.scale = labelScale(e.dist, viewW)
+      e.scale = labelScale(
+        e.dist,
+        e.rank < 0 || isDestination(e) ? 'map' : 'component',
+        viewW,
+      )
 
       if (e.rank === 3) {
         // A destination still exists when its presentation is dormant. The
@@ -916,6 +919,11 @@ export function createLabels(
       e.sy = sy
       e.onScreen = true
 
+      // A scale of zero means the distance response crossed the 11 px legibility
+      // threshold. Keep onScreen true so a readable district chip can collapse
+      // this retired component into its "+N" count.
+      if (e.scale === 0) continue
+
       // City and district chips are map annotations. Promoted component chips
       // speak for their whole district too, so they follow the same rule:
       // buildings occlude object labels, never the map hierarchy.
@@ -929,7 +937,7 @@ export function createLabels(
       if (e.rank === 3) {
         const a = fadeIn(e.dist, DISTRICT_IN, DISTRICT_BAND)
         if (a > MIN_VIS) {
-          band = B_DISTRICT
+          band = B_MAP + mapLabelPriority('district', viewW)
           vis = e.collapseOn ? 1 : a
         } else if (e.collapseOn) {
           band = B_COLLAPSE
@@ -937,7 +945,7 @@ export function createLabels(
         } else continue
       } else if (e.rank < 0) {
         vis = fadeIn(e.dist, CITY_IN, CITY_BAND)
-        band = B_CITY
+        band = B_MAP + mapLabelPriority('city', viewW)
         if (vis <= MIN_VIS && !forced && !focused) continue
       } else {
         const tier = fadeOut(e.dist, TIER_OUT[e.rank], TIER_BAND[e.rank])
@@ -946,7 +954,7 @@ export function createLabels(
           // the only thing naming this part of the city.
           const a = fadeIn(e.dist, DISTRICT_IN, DISTRICT_BAND)
           vis = a > tier ? a : tier
-          band = B_DISTRICT
+          band = B_MAP + mapLabelPriority('district', viewW)
         } else {
           vis = tier
           band = B_TIER[e.rank]
@@ -1003,7 +1011,7 @@ export function createLabels(
     if (!hudFirstRun) hudFirstRun = document.querySelector('.tour-first')
     reserveHudRect(hudFirstRun)
     let budget = maxLabels
-    let areaLeft = viewW * viewH * LABEL_AREA_PLACEMENT_BUDGET
+    let areaLeft = viewW * viewH * labelAreaPlacementBudget(viewW)
 
     for (let i = 0; i < cand.length; i++) {
       const e = cand[i]
