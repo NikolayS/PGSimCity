@@ -9,6 +9,47 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.18.0] — 2026-07-29
+
+### The continuity quarter gets behaviour
+
+`archiveGate`, `objectStore`, `backupVault`, `recoveryPad`, `restoreWinch` and
+`timelineYard` have been standing since they were built — buildings without
+mechanisms. They now do what they are named for.
+
+Modelled on **pgBackRest**, with **WAL-G** named as an alternative and its
+differing commands and deletion model identified rather than implied to be the
+same:
+
+- Timed full backups that wait for the stop WAL to archive before completing.
+- An archive queue with retries — and **a stalled archive is reachable as a
+  failure**, which is the most common real backup incident. At 5,000 tps it
+  queued 28 segments, reached 512 MiB of `pg_wal` in 137 seconds, and then
+  rejected 51,194 writes. The city rejects writes where a real server can PANIC
+  as the WAL filesystem fills, and says so rather than implying otherwise.
+- Count-based retention, which is what makes a recovery window finite. Asking to
+  restore to a target older than the oldest retained backup fails with a reason
+  you can act on.
+- Point-in-time recovery that fetches a retained backup and replays WAL forward
+  to a target, without promoting.
+
+**Backup age is visibly a cost, not a number in a panel.** Taking the age from
+19.0 s to 57.6 s took WAL replay from 41.0 to 88.9 MiB. That relationship is the
+whole reason backup frequency is a decision.
+
+The lesson the rest of the project could not carry: **backups and replication are
+different things, and one is not a substitute for the other.** A replica applies
+`DELETE FROM accounts` faithfully and instantly.
+
+Patroni, promotion and failover are deliberately absent — those are the second
+half of roadmap item 1 and item 3. The high-availability buildings remain visible
+and explicitly inert.
+
+Scaled rates are disclosed rather than implied: 384 MiB/s backup, 640 MiB/s
+restore, 24 MiB/s replay, and an illustrative 65% repository compression.
+
+---
+
 ## [0.17.0] — 2026-07-29
 
 ### Something in the city you can operate
