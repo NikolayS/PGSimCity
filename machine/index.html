@@ -56,7 +56,26 @@
           <div class="clock-control">
             <button id="machine-toggle" type="button">PAUSE</button>
             <button id="machine-reset" type="button">RESET</button>
-            <output id="clock">00.0 / 36s</output>
+            <output id="clock">00.0 / 36s MODEL</output>
+            <div class="viewing-rate" role="group" aria-label="Viewing speed">
+              <button
+                id="machine-slower"
+                type="button"
+                title="Slower viewing speed (,)"
+                aria-label="Slower viewing speed"
+              >‹</button>
+              <output
+                id="machine-rate"
+                aria-live="polite"
+                title="Viewing speed changes ambient motion and automatic statement replay, never model periods or PostgreSQL measurements"
+              >VIEW 1×</output>
+              <button
+                id="machine-faster"
+                type="button"
+                title="Faster viewing speed (.)"
+                aria-label="Faster viewing speed"
+              >›</button>
+            </div>
           </div>
         </section>
 
@@ -89,7 +108,7 @@ Available: \d  \dt  \d+ table  \timing</pre>
             <span>QUERY ARM REACH</span>
             <strong>MODELLED UNTIL POSTGRESQL REPORTS BUFFERS</strong>
           </div>
-          <p>ENTER RUNS · SHIFT+ENTER ADDS A LINE · SPACE ON THE BOARD PAUSES</p>
+          <p>ENTER RUNS · SHIFT+ENTER ADDS A LINE · SPACE ON THE BOARD PAUSES · , / . CHANGES VIEW SPEED</p>
         </footer>
       </section>
 
@@ -126,7 +145,7 @@ Available: \d  \dt  \d+ table  \timing</pre>
           >TRACE: AUTO</button>
           <button id="statement-next" type="button" disabled>NEXT STAGE</button>
           <span id="statement-state">NO STATEMENT</span>
-          <span id="run-state">AMBIENT RUNNING</span>
+          <span id="run-state">VIEW RUNNING</span>
         </div>
       </section>
 

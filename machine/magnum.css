@@ -226,6 +226,30 @@ textarea {
   align-items: center;
 }
 
+.viewing-rate {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding-left: 6px;
+  border-left: 1px solid rgb(200 146 62 / 28%);
+}
+
+.viewing-rate button {
+  width: 29px;
+  padding-inline: 0;
+  font-size: 13px;
+}
+
+#machine-rate {
+  min-width: 55px;
+  padding-inline: 6px;
+  color: #d7eeee;
+  border-color: #5d8e91;
+  background: #263938;
+  text-align: center;
+  white-space: nowrap;
+}
+
 button,
 .clock-control output {
   min-height: 29px;
@@ -657,10 +681,28 @@ button:focus-visible {
     margin-left: auto;
   }
 
+  #clock {
+    display: none;
+  }
+
   button,
   .clock-control output {
     min-height: 28px;
     padding: 6px 8px;
+  }
+
+  .viewing-rate {
+    gap: 2px;
+    padding-left: 4px;
+  }
+
+  .viewing-rate button {
+    min-width: 44px;
+    min-height: 44px;
+    margin-block: -8px;
+    padding: 0;
+    position: relative;
+    z-index: 1;
   }
 
   .architecture-pane {
