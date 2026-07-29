@@ -94,14 +94,24 @@ Available: \d  \dt  \d+ table  \timing</pre>
       </section>
 
       <section class="architecture-pane" aria-label="PostgreSQL architecture">
-        <canvas
-          id="machine"
-          width="720"
-          height="900"
-          tabindex="0"
-          aria-label="A layered PostgreSQL architecture: client and processes above one shared memory segment, backend private memory outside it, then the kernel page cache and durable disk."
-        ></canvas>
+        <div class="architecture-scroll">
+          <div class="architecture-stage">
+            <canvas
+              id="machine"
+              width="720"
+              height="900"
+              tabindex="0"
+              aria-label="A layered PostgreSQL architecture: client and processes above one shared memory segment, backend private memory outside it, then the kernel page cache and durable disk."
+            ></canvas>
+          </div>
+        </div>
         <div class="architecture-readout">
+          <button
+            id="board-view"
+            type="button"
+            aria-pressed="false"
+            title="Fit the whole board on screen"
+          >FIT BOARD</button>
           <button
             id="statement-mode"
             type="button"
