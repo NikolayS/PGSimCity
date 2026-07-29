@@ -53,7 +53,7 @@ orderly. An unplanned failover is not, and the difference is the whole lesson:
 what is lost, what a timeline fork means, why the old primary cannot simply
 rejoin, and what `pg_rewind` is for.
 
-## 4. Break things from inside
+## 4. Break things from inside — in progress
 
 The knobs exist in a control rail. In first person they should be **things you
 walk to and operate** — pull the autovacuum yard's switch and then watch bloat
@@ -63,6 +63,25 @@ than described.
 This is the single change that most turns observation into understanding, and it
 costs less than any other item here because the simulation already models every
 consequence.
+
+The dependency is item 8, and it is sharp: **a lever in the world is far more
+persuasive than a slider in a panel.** Eleven knobs currently respond wrongly, so
+each knob's consequence chain has to be verified — moves, right direction,
+sensible amount, recovers on reset — before it earns a handle. A handle on a
+broken knob is a machine for teaching a falsehood convincingly.
+
+## 4b. The machine room, as a place in the city — in progress
+
+A console you walk up to in first person that opens the 2D machine room over the
+running city. Reachable on foot only: a terminal you find is discovered, a link
+in a top bar is announced.
+
+It also gives first person a destination. Today you can explore the city and
+there is nothing in it to do.
+
+The constraint that decides the implementation: the city chunk is 1,169 kB and
+PGlite must not enter it. Loading the machine as a separate document, only when
+a reader opens the console, satisfies that exactly.
 
 ## 5. Swimming that feels like swimming
 
@@ -126,7 +145,16 @@ concurrent, which a single connection cannot produce.
 arrangement — one shared memory segment visibly containing the buffer pool,
 wal_buffers, the ProcArray and the lock table, with backend private memory
 visibly outside it, the postmaster and its fork, the client, and layers from
-process down to disk.
+process down to disk. Published at `machine/`.
+
+**In progress — the statement must visibly cause what follows.** The
+architecture pane runs on free-running rhythms and never reads the query, so the
+left half executes real PostgreSQL while the right half animates beside it. Three
+parts: the statement's path made visually distinct from ambient background work,
+the trip replayed at human speed with a step control, and the buffer pool driven
+by measured `Shared Hit Blocks` / `Shared Read Blocks` from
+`EXPLAIN (ANALYZE, BUFFERS)` rather than generic motion — with measured and
+modelled values marked differently.
 
 **Then:** comparison — the same statement run twice with one setting changed,
 side by side. `synchronous_commit` on and off, collapsing the commit wait. The
