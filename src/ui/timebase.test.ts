@@ -145,4 +145,11 @@ describe('user-facing timebase', () => {
     expect(document.querySelector('.hud-now__time')?.textContent).toBe('0:01 / 2:00')
     hud.dispose()
   })
+
+  it('gives the brand and checkpoint controls separate rows at 1280px', () => {
+    const hud = createHud(context())
+
+    expect(document.querySelector('.hud-bar')?.classList.contains('is-stacked')).toBe(true)
+    hud.dispose()
+  })
 })

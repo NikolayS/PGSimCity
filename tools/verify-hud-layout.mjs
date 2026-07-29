@@ -12,7 +12,8 @@ const VIEWPORTS = [
   { width: 390, height: 844, expectedVitals: 2 },
 ]
 const THEMES = ['night', 'day']
-const LABEL_AREA_BUDGET_PERCENT = 4
+const LABEL_DESKTOP_AREA_BUDGET_PERCENT = 4
+const LABEL_PHONE_AREA_BUDGET_PERCENT = 2
 const LABEL_VIEWPORTS = [
   { width: 1280, height: 800 },
   { width: 390, height: 844 },
@@ -147,6 +148,8 @@ const measureExpression = (theme) => `(() => {
     child.bottom <= parent.bottom + 0.5
   const vitalViewport = document.querySelector('.hud-vitals')
   const vitalViewportRect = vitalViewport.getBoundingClientRect()
+  const brand = document.querySelector('.hud-brand')
+  const checkpoint = document.querySelector('.hud-ckpt')
   const controls = Array.from(
     document.querySelectorAll('.hud-ckpt, .hud-tools button, .hud-tools a, .hud-tools select'),
   ).filter(visible)
@@ -214,6 +217,10 @@ const measureExpression = (theme) => `(() => {
       Math.max(document.documentElement.scrollWidth, document.body.scrollWidth) - innerWidth,
     badTargets,
     chromeCoverage: samples ? round((covered / samples) * 100) : null,
+    brandCheckpointOverlap:
+      visible(brand) &&
+      visible(checkpoint) &&
+      overlaps(brand.getBoundingClientRect(), checkpoint.getBoundingClientRect()),
   }
 })()`
 
@@ -403,6 +410,10 @@ const labelAreaExpression = (theme, state) => `(() => {
       box.height > 0
     )
   })
+  const destinations = chips
+    .map((chip) => chip.closest('.lbl'))
+    .filter((host) => host?.dataset.destination)
+    .map((host) => host.querySelector('.lbl__name')?.textContent)
   let area = 0
   let maxWidth = 0
   let minFont = Infinity
@@ -443,6 +454,7 @@ const labelAreaExpression = (theme, state) => `(() => {
     viewport: [innerWidth, innerHeight],
     cameraAltitude: Number(window.PGSIMCITY.rig.altitude.toFixed(1)),
     chips: chips.length,
+    destinations,
     areaPercent: Number(((area / innerWidth / innerHeight) * 100).toFixed(3)),
     maxWidthPercent: Number(((maxWidth / innerWidth) * 100).toFixed(2)),
     minFont: Number(minFont.toFixed(2)),
@@ -480,12 +492,16 @@ try {
         const labelArea = await evaluate(labelAreaExpression(theme, camera.name))
         measurements.push({ labelArea })
         const where = `${viewport.width}x${viewport.height} ${theme} ${camera.name}`
-        if (labelArea.areaPercent > LABEL_AREA_BUDGET_PERCENT) {
+        const areaBudget =
+          viewport.width <= 480
+            ? LABEL_PHONE_AREA_BUDGET_PERCENT
+            : LABEL_DESKTOP_AREA_BUDGET_PERCENT
+        if (labelArea.areaPercent > areaBudget) {
           failures.push(
-            `labels: ${where} area ${labelArea.areaPercent}% exceeds ${LABEL_AREA_BUDGET_PERCENT}%`,
+            `labels: ${where} area ${labelArea.areaPercent}% exceeds ${areaBudget}%`,
           )
         }
-        if (labelArea.minFont < 10.9) {
+        if (labelArea.chips > 0 && labelArea.minFont < 10.9) {
           failures.push(`labels: ${where} effective type is only ${labelArea.minFont}px`)
         }
         if (labelArea.clippedChips > 0) {
@@ -496,6 +512,15 @@ try {
         }
         if (viewport.width <= 700 && labelArea.maxWidthPercent > 56) {
           failures.push(`labels: ${where} chip width reaches ${labelArea.maxWidthPercent}%`)
+        }
+        if (
+          viewport.width <= 700 &&
+          (camera.name === 'default' || camera.name === 'max') &&
+          labelArea.destinations.length < 3
+        ) {
+          failures.push(
+            `labels: ${where} shows only ${labelArea.destinations.length} district name(s)`,
+          )
         }
       }
     }
@@ -524,6 +549,11 @@ try {
       if (measurement.vitals.length !== viewport.expectedVitals) {
         failures.push(
           `B1 ${viewport.width}px ${theme}: expected ${viewport.expectedVitals} visible vitals, found ${measurement.vitals.length}`,
+        )
+      }
+      if (measurement.brandCheckpointOverlap) {
+        failures.push(
+          `B1 ${viewport.width}px ${theme}: checkpoint controls overlap the PGSimCity brand`,
         )
       }
       for (const vital of measurement.vitals) {
