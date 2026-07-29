@@ -69,6 +69,8 @@ export const ANCHOR = {
   clientTerminal: [0, 6, -300],
   postmaster: [0, 0, -215],
   postmasterTop: [0, 34, -215],
+  /** Feet position in the postmaster's windowed top-floor control room. */
+  controlCenter: [0, 27.8, -217],
   /** The gatehouse in the boundary fence — pg_hba.conf, at ground level. */
   connGate: [0, 0, -252],
   /** Where a connection is handed to the postmaster: its south door. */

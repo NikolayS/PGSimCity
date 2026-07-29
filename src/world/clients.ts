@@ -519,7 +519,7 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
     [0, 17.2, 0, 18.2, 1.0, 18.2], // service band
     [0, 22.4, 0, 13, 9.4, 13], // tier 2
     [0, 27.4, 0, 14, 0.8, 14], // service band
-    [0, 30.2, 0, 9.2, 4.8, 9.2], // tier 3 / control room
+    // Tier 3 is the hollow control room built by world/control-center.ts.
   ]
   const pmDetail: BoxSpec[] = [
     // corner fins — vertical structure, reads as ribs up close
@@ -574,8 +574,6 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
     [0, 22.4, -6.62, 9.5, 0.5, 0.12],
     [6.62, 22.4, 0, 0.12, 0.5, 9.5],
     [-6.62, 22.4, 0, 0.12, 0.5, 9.5],
-    [0, 30.2, 4.72, 8.4, 1.5, 0.1], // control room glazing
-    [0, 30.2, -4.72, 8.4, 1.5, 0.1],
   ]
   const pmGlow = new THREE.InstancedMesh(unitBox, neonWhite, pmGlowSpecs.length)
   fillBoxes(pmGlow, pmGlowSpecs)

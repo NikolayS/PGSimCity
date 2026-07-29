@@ -220,6 +220,28 @@ describe('collision.build: a merged structural mesh', () => {
   })
 })
 
+describe('walk interior hand-off', () => {
+  it('captures and restores the exact first-person pose', () => {
+    const world = createCollisionWorld()
+    world.addWalkable(plate(0, 200, FAR_X, 0), 'ground')
+    const h = harness(world, new THREE.Vector3(FAR_X, 0, 12))
+    const walk = h.walk as typeof h.walk & {
+      capturePose(target: { x: number; y: number; z: number; yaw: number; pitch: number }): void
+      setPose(pose: { x: number; y: number; z: number; yaw: number; pitch: number }): void
+    }
+    const saved = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 }
+
+    walk.setPose({ x: FAR_X + 3, y: 0, z: 8, yaw: 0.72, pitch: -0.18 })
+    walk.capturePose(saved)
+    walk.setPose({ x: 0, y: 27.8, z: -215, yaw: Math.PI, pitch: 0 })
+    walk.setPose(saved)
+
+    expect(walk.position.toArray()).toEqual([FAR_X + 3, 0, 8])
+    expect(saved).toEqual({ x: FAR_X + 3, y: 0, z: 8, yaw: 0.72, pitch: -0.18 })
+    h.dispose()
+  })
+})
+
 /* --------------------------------------------------------------------------
  * 2. Slopes.
  * ------------------------------------------------------------------------*/

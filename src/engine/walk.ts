@@ -73,6 +73,14 @@ export interface WalkExitView {
   target: [number, number, number]
 }
 
+export interface WalkPose {
+  x: number
+  y: number
+  z: number
+  yaw: number
+  pitch: number
+}
+
 export interface WalkController {
   readonly enabled: boolean
   /** Drop into the city. Resolves when the descent finishes. */
@@ -92,6 +100,10 @@ export interface WalkController {
   readonly distance: number
   /** Live feet position. Do not mutate. */
   readonly position: THREE.Vector3
+  /** Copy the body and view into caller-owned storage. */
+  capturePose(target: WalkPose): WalkPose
+  /** Move an enabled walker without changing camera mode or simulation time. */
+  setPose(pose: Readonly<WalkPose>): void
   /** Analogue touch movement: both axes are in the range -1..1. */
   setTouchMove(strafe: number, forward: number): void
   /** Relative touch look travel measured in CSS centimetres. */
@@ -863,6 +875,40 @@ export function createWalkController(opts: WalkOptions): WalkController {
     }
   }
 
+  function capturePose(target: WalkPose): WalkPose {
+    target.x = pos.x
+    target.y = pos.y
+    target.z = pos.z
+    target.yaw = yaw
+    target.pitch = pitch
+    return target
+  }
+
+  function setPose(pose: Readonly<WalkPose>): void {
+    if (descending) finishDescent()
+    keys.clear()
+    resetTouchInput()
+    pos.set(pose.x, pose.y, pose.z)
+    vel.set(0, 0, 0)
+    vy = 0
+    yaw = pose.yaw
+    pitch = clamp(pose.pitch, -T.pitchLimit, T.pitchLimit)
+    grounded = false
+    swimming = false
+    submerged = false
+    gait = 'walk'
+    surface = 'ground'
+    lostGroundT = 0
+    coyoteT = 0
+    jumpBufferT = 0
+    bobAmp = 0
+    landDip = 0
+    camera.position.set(pos.x, pos.y + eyeNow, pos.z)
+    camera.rotation.set(pitch, yaw, 0, 'YXZ')
+    camera.updateMatrixWorld()
+    updatePoolReadout(0)
+  }
+
   /* ---- the frame ---------------------------------------------------------*/
 
   function tickDescent(dt: number): void {
@@ -1244,6 +1290,8 @@ export function createWalkController(opts: WalkOptions): WalkController {
     get position(): THREE.Vector3 {
       return pos
     },
+    capturePose,
+    setPose,
     setTouchMove,
     addTouchLook,
     setTouchJump,
