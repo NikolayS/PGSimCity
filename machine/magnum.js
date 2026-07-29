@@ -1,4 +1,9 @@
-import { ARCHITECTURE_LAYOUT as layout } from './architecture.js'
+import {
+  ARCHITECTURE_LAYOUT as layout,
+  activeStatementStageIndex,
+  createStatementReplay,
+  nextStatementStageIndex,
+} from './architecture.js'
 import {
   formatError,
   formatReport,
@@ -12,6 +17,9 @@ const clock = document.querySelector('#clock')
 const runState = document.querySelector('#run-state')
 const machineToggle = document.querySelector('#machine-toggle')
 const machineReset = document.querySelector('#machine-reset')
+const statementMode = document.querySelector('#statement-mode')
+const statementNext = document.querySelector('#statement-next')
+const statementState = document.querySelector('#statement-state')
 const postgresToggle = document.querySelector('#postgres-toggle')
 const postgresStatus = document.querySelector('#postgres-status')
 const postgresMeasurement = document.querySelector('#postgres-measurement')
@@ -29,6 +37,9 @@ if (
   || !runState
   || !machineToggle
   || !machineReset
+  || !statementMode
+  || !statementNext
+  || !statementState
   || !postgresToggle
   || !postgresStatus
   || !postgresMeasurement
@@ -103,7 +114,7 @@ const backendSpecs = Object.freeze([
     miss: false,
   }),
   Object.freeze({
-    name: 'B2 QUERY',
+    name: 'B2',
     offset: 2,
     pivotX: 277,
     pivotY: 225,
@@ -138,6 +149,76 @@ const backendSpecs = Object.freeze([
   }),
 ])
 
+const statementRoutes = Object.freeze({
+  backend: Object.freeze([
+    Object.freeze([124, 128]),
+    Object.freeze([215, 128]),
+    Object.freeze([306, 128]),
+    Object.freeze([306, 188]),
+    Object.freeze([277, 211]),
+  ]),
+  parse: Object.freeze([
+    Object.freeze([277, 225]),
+    Object.freeze([360, 225]),
+    Object.freeze([407, 211]),
+    Object.freeze([428, 211]),
+  ]),
+  rewrite: Object.freeze([
+    Object.freeze([428, 211]),
+    Object.freeze([484, 211]),
+  ]),
+  plan: Object.freeze([
+    Object.freeze([484, 211]),
+    Object.freeze([540, 211]),
+  ]),
+  execute: Object.freeze([
+    Object.freeze([540, 211]),
+    Object.freeze([600, 211]),
+  ]),
+  buffer: Object.freeze([
+    Object.freeze([600, 211]),
+    Object.freeze([600, 284]),
+    Object.freeze([386, 318]),
+    Object.freeze([252, 402]),
+  ]),
+  kernel: Object.freeze([
+    Object.freeze([252, 402]),
+    Object.freeze([245, 536]),
+    Object.freeze([245, 625]),
+  ]),
+  disk: Object.freeze([
+    Object.freeze([245, 625]),
+    Object.freeze([245, 704]),
+  ]),
+  returnFromBuffer: Object.freeze([
+    Object.freeze([252, 402]),
+    Object.freeze([36, 402]),
+    Object.freeze([36, 128]),
+    Object.freeze([124, 128]),
+  ]),
+  returnFromDisk: Object.freeze([
+    Object.freeze([245, 704]),
+    Object.freeze([36, 704]),
+    Object.freeze([36, 128]),
+    Object.freeze([124, 128]),
+  ]),
+})
+
+const statementPipeline = Object.freeze([
+  Object.freeze({ id: 'parse', label: 'PARSE', x: 416 }),
+  Object.freeze({ id: 'rewrite', label: 'REWRITE', x: 474 }),
+  Object.freeze({ id: 'plan', label: 'PLAN', x: 532 }),
+  Object.freeze({ id: 'execute', label: 'EXECUTE', x: 590 }),
+])
+
+const statementStagePoint = { x: 124, y: 128 }
+const pendingStatementStage = Object.freeze({
+  source: 'model',
+  label: 'Client',
+  detail: 'waiting for PostgreSQL measurements',
+  measurement: null,
+})
+
 const postgres = {
   status: 'idle',
   source: null,
@@ -146,6 +227,18 @@ const postgres = {
   initError: null,
   loadPromise: null,
   timing: false,
+}
+
+const statement = {
+  status: 'idle',
+  mode: 'auto',
+  sql: '',
+  shortSql: '',
+  replay: null,
+  elapsedMs: 0,
+  stageElapsedMs: 0,
+  stageIndex: 0,
+  error: null,
 }
 
 const params = new URLSearchParams(window.location.search)
@@ -197,6 +290,133 @@ function pulse(value, center, radius) {
 
 function lerp(a, b, amount) {
   return a + (b - a) * amount
+}
+
+function shortenSql(sql) {
+  const oneLine = String(sql).replaceAll(/\s+/g, ' ').trim()
+  return oneLine.length > 82 ? `${oneLine.slice(0, 79)}…` : oneLine
+}
+
+function startStatementMeasurement(sql) {
+  statement.status = 'measuring'
+  statement.sql = String(sql)
+  statement.shortSql = shortenSql(sql)
+  statement.replay = null
+  statement.elapsedMs = 0
+  statement.stageElapsedMs = 0
+  statement.stageIndex = 0
+  statement.error = null
+  postgres.report = null
+  postgres.plan = null
+  updatePostgresUi()
+  updateStatementControls()
+}
+
+function startStatementReplay(report) {
+  statement.replay = createStatementReplay(report)
+  statement.sql = statement.replay.sql
+  statement.shortSql = shortenSql(statement.sql)
+  statement.elapsedMs = 0
+  statement.stageElapsedMs = 0
+  statement.stageIndex = activeStatementStageIndex(statement.replay, 0)
+  statement.error = report.error?.message ?? null
+  statement.status = report.error ? 'error' : 'replaying'
+  if (statement.status === 'error') statement.stageIndex = 2
+  updatePostgresUi()
+  updateStatementControls()
+}
+
+function failStatementMeasurement(error) {
+  statement.status = 'error'
+  statement.error = error instanceof Error ? error.message : String(error)
+  statement.replay = null
+  statement.stageIndex = 2
+  updatePostgresUi()
+  updateStatementControls()
+}
+
+function elapsedAtStatementStage(replay, targetIndex) {
+  let elapsed = 0
+  for (let index = 0; index < targetIndex; index += 1) {
+    const stage = replay.stages[index]
+    if (!stage.skipped) elapsed += stage.durationMs
+  }
+  return elapsed
+}
+
+function setStatementMode(mode) {
+  statement.mode = mode === 'step' ? 'step' : 'auto'
+  if (statement.status === 'replaying' && statement.replay) {
+    if (statement.mode === 'step') {
+      statement.stageElapsedMs = statement.replay.stages[statement.stageIndex].durationMs
+    } else {
+      statement.elapsedMs =
+        elapsedAtStatementStage(statement.replay, statement.stageIndex)
+        + statement.stageElapsedMs
+    }
+  }
+  updateStatementControls()
+}
+
+function toggleStatementMode() {
+  setStatementMode(statement.mode === 'auto' ? 'step' : 'auto')
+}
+
+function stepStatementReplay() {
+  if (statement.status !== 'replaying' || !statement.replay || statement.mode !== 'step') return
+  const next = nextStatementStageIndex(statement.replay, statement.stageIndex)
+  if (next === statement.stageIndex) {
+    statement.status = 'complete'
+  } else {
+    statement.stageIndex = next
+    statement.stageElapsedMs = statement.replay.stages[next].durationMs
+    statement.elapsedMs = elapsedAtStatementStage(statement.replay, next)
+  }
+  updateStatementControls()
+}
+
+function updateStatementReplay(elapsedSeconds) {
+  if (
+    statement.status !== 'replaying'
+    || statement.mode !== 'auto'
+    || !statement.replay
+  ) return
+  statement.elapsedMs = Math.min(
+    statement.replay.durationMs,
+    statement.elapsedMs + elapsedSeconds * 1000,
+  )
+  const nextIndex = activeStatementStageIndex(statement.replay, statement.elapsedMs)
+  statement.stageIndex = nextIndex
+  statement.stageElapsedMs =
+    statement.elapsedMs - elapsedAtStatementStage(statement.replay, nextIndex)
+  if (statement.elapsedMs >= statement.replay.durationMs) {
+    statement.status = 'complete'
+  }
+}
+
+function updateStatementControls() {
+  statementMode.textContent = statement.mode === 'auto' ? 'TRACE: AUTO' : 'TRACE: STEP'
+  statementMode.setAttribute('aria-pressed', String(statement.mode === 'step'))
+  statementNext.disabled = statement.status !== 'replaying' || statement.mode !== 'step'
+  if (statement.status === 'measuring') {
+    statementState.textContent = 'MEASURING'
+  } else if (statement.status === 'replaying' && statement.replay) {
+    statementState.textContent =
+      `STATEMENT ${statement.stageIndex + 1}/${statement.replay.stages.length}`
+  } else if (statement.status === 'complete') {
+    statementState.textContent = 'RECEIPT'
+  } else if (statement.status === 'error') {
+    statementState.textContent = 'STATEMENT ERROR'
+  } else {
+    statementState.textContent = 'NO STATEMENT'
+  }
+  const receipt = statement.replay?.receipt
+  canvas.setAttribute(
+    'aria-label',
+    receipt
+      ? `PostgreSQL statement replay and architecture. Measured: ${receipt.sharedHits} shared buffer hits, ${receipt.sharedReads} shared reads, ${receipt.planningTimeMs} milliseconds planning, ${receipt.executionTimeMs} milliseconds execution, ${receipt.rows} rows.`
+      : 'A layered PostgreSQL architecture with modelled ambient processes and a foreground trace for the submitted statement.',
+  )
 }
 
 function resize() {
@@ -384,7 +604,7 @@ function drawTrack(points, color = '#66513c', width = 6) {
   ctx.setLineDash([])
 }
 
-function pointOnRoute(points, progress) {
+function pointOnRoute(points, progress, target = null) {
   let total = 0
   for (let index = 1; index < points.length; index += 1) {
     total += Math.hypot(
@@ -401,12 +621,18 @@ function pointOnRoute(points, progress) {
     const length = Math.hypot(x2 - x1, y2 - y1)
     if (remaining <= length) {
       const amount = remaining / length
-      return { x: lerp(x1, x2, amount), y: lerp(y1, y2, amount) }
+      const point = target ?? {}
+      point.x = lerp(x1, x2, amount)
+      point.y = lerp(y1, y2, amount)
+      return point
     }
     remaining -= length
   }
   const last = points.at(-1)
-  return { x: last[0], y: last[1] }
+  const point = target ?? {}
+  point.x = last[0]
+  point.y = last[1]
+  return point
 }
 
 function drawBackdrop() {
@@ -681,31 +907,12 @@ function drawBackgroundProcesses() {
 }
 
 function backendProfile(spec, index) {
-  if (index !== 1 || postgres.report === null) {
-    return {
-      active: true,
-      miss: spec.miss,
-      fetchX: spec.fetchX,
-      fetchY: spec.fetchY,
-      source: 'model',
-    }
-  }
-  if (!postgres.plan) {
-    return {
-      active: false,
-      miss: false,
-      fetchX: spec.hitFetchX,
-      fetchY: spec.hitFetchY,
-      source: 'postgres',
-    }
-  }
-  const miss = postgres.plan.buffers.sharedReads > 0
   return {
     active: true,
-    miss,
-    fetchX: miss ? spec.fetchX : spec.hitFetchX,
-    fetchY: miss ? spec.fetchY : spec.hitFetchY,
-    source: 'postgres',
+    miss: spec.miss,
+    fetchX: spec.fetchX,
+    fetchY: spec.fetchY,
+    source: 'model',
   }
 }
 
@@ -1013,9 +1220,324 @@ function drawRhythmStrip(time) {
   ctx.fill()
 }
 
+function statementRouteForStage(stageId) {
+  if (stageId === 'return') {
+    return statement.replay?.receipt?.sharedReads > 0
+      ? statementRoutes.returnFromDisk
+      : statementRoutes.returnFromBuffer
+  }
+  return statementRoutes[stageId] ?? null
+}
+
+function drawStatementRoute(points, color, width, alpha = 1) {
+  if (!points) return
+  ctx.save()
+  ctx.globalAlpha = alpha
+  ctx.beginPath()
+  ctx.moveTo(points[0][0], points[0][1])
+  for (let index = 1; index < points.length; index += 1) {
+    ctx.lineTo(points[index][0], points[index][1])
+  }
+  ctx.lineJoin = 'round'
+  ctx.lineCap = 'round'
+  ctx.strokeStyle = '#101617'
+  ctx.lineWidth = width + 5
+  ctx.stroke()
+  ctx.strokeStyle = color
+  ctx.lineWidth = width
+  ctx.stroke()
+  ctx.restore()
+}
+
+function drawStatementPipeline(activeId) {
+  pathRoundRect(402, 174, 258, 88, 5)
+  fillStroke('#172526', '#79bdc1', 2)
+  drawSourceMedallion(416, 187, 'model', 7)
+  mono('B2 STATEMENT PIPELINE · MODELLED ROUTE', 428, 187, 6.5, '#b8dddd', 'left', 750)
+  for (let index = 0; index < statementPipeline.length; index += 1) {
+    const spec = statementPipeline[index]
+    const current = spec.id === activeId
+    pathRoundRect(spec.x, 199, 51, 47, 3)
+    fillStroke(
+      current ? '#306467' : '#1d3030',
+      current ? '#d2ffff' : '#52787a',
+      current ? 2 : 1,
+    )
+    drawSourceMedallion(
+      spec.x + 25.5,
+      211,
+      spec.id === 'plan' || spec.id === 'execute' ? 'postgres' : 'model',
+      6,
+    )
+    mono(spec.label, spec.x + 25.5, 232, 6.5, current ? '#e8ffff' : '#9fc8c6', 'center', 800)
+  }
+}
+
+function drawStatementStageOutline(stageId, progress) {
+  const alpha = 0.7 + smooth(progress) * 0.3
+  ctx.save()
+  ctx.globalAlpha = alpha
+  ctx.shadowColor = '#b9ffff'
+  ctx.shadowBlur = 16
+  ctx.strokeStyle = '#c9ffff'
+  ctx.lineWidth = 3
+  if (stageId === 'client' || stageId === 'return') {
+    pathRoundRect(layout.client.x - 5, layout.client.y - 5, layout.client.width + 10, layout.client.height + 10, 10)
+    ctx.stroke()
+  } else if (stageId === 'backend') {
+    ctx.beginPath()
+    ctx.arc(277, 225, 34, 0, TAU)
+    ctx.stroke()
+  } else if (stageId === 'buffer') {
+    pathRoundRect(
+      layout.bufferPool.x - 5,
+      layout.bufferPool.y - 5,
+      layout.bufferPool.width + 10,
+      layout.bufferPool.height + 10,
+      9,
+    )
+    ctx.stroke()
+  } else if (stageId === 'kernel') {
+    pathRoundRect(
+      layout.kernelCache.x - 5,
+      layout.kernelCache.y - 5,
+      layout.kernelCache.width + 10,
+      layout.kernelCache.height + 10,
+      9,
+    )
+    ctx.stroke()
+  } else if (stageId === 'disk') {
+    pathRoundRect(
+      layout.disk.x - 5,
+      layout.disk.y - 5,
+      layout.disk.width + 10,
+      layout.disk.height + 10,
+      9,
+    )
+    ctx.stroke()
+  }
+  ctx.restore()
+}
+
+function drawMeasuredBufferAction(progress) {
+  const receipt = statement.replay?.receipt
+  if (!receipt) return
+  const hitNow = Math.round(receipt.sharedHits * progress)
+  const readNow = Math.round(receipt.sharedReads * progress)
+  pathRoundRect(89, 478, 296, 45, 4)
+  fillStroke('#142b2b', '#b9ffff', 2)
+  drawSourceMedallion(103, 491, 'postgres', 7)
+  mono('MEASURED BUFFER REQUESTS', 116, 491, 7, '#d9ffff', 'left', 800)
+  mono(
+    `HITS ${hitNow}/${receipt.sharedHits} · READS ${readNow}/${receipt.sharedReads}`,
+    237,
+    510,
+    8,
+    receipt.sharedReads > 0 ? '#ffb19e' : '#b9e9d1',
+    'center',
+    800,
+  )
+}
+
+function drawStatementStageRail(activeIndex) {
+  const replay = statement.replay
+  if (!replay) return
+  const startX = 36
+  const width = 64
+  for (let index = 0; index < replay.stages.length; index += 1) {
+    const stage = replay.stages[index]
+    const x = startX + index * width
+    const current = index === activeIndex
+    const done = !stage.skipped && index < activeIndex
+    pathRoundRect(x, 824, 57, 36, 3)
+    fillStroke(
+      current ? '#315f62' : done ? '#263e3e' : '#211c19',
+      current ? '#d2ffff' : done ? '#6aa5a7' : '#5c4937',
+      current ? 2 : 1,
+    )
+    mono(
+      stage.label.toUpperCase(),
+      x + 28.5,
+      839,
+      stage.label.length > 9 ? 5.2 : 5.8,
+      stage.skipped ? '#715f4d' : current ? '#efffff' : done ? '#abd1d0' : ink.paperDim,
+      'center',
+      800,
+    )
+    mono(
+      stage.skipped ? 'SKIP' : current ? 'NOW' : done ? 'DONE' : 'WAIT',
+      x + 28.5,
+      851,
+      5.2,
+      stage.skipped ? ink.red : current ? '#b9ffff' : ink.paperDim,
+      'center',
+      750,
+    )
+    if (stage.skipped) line(x + 5, 855, x + 52, 829, ink.red, 1.2)
+  }
+}
+
+function drawStatementPanel(activeStage, progress) {
+  const box = layout.rhythm
+  drawIsoPlate(box.x, box.y, box.width, box.height, 5, '#172120', '#79aeb0', 6)
+  drawSourceMedallion(box.x + 15, box.y + 14, 'model', 7)
+  mono(
+    'YOUR STATEMENT · HUMAN-PACED REPLAY',
+    box.x + 28,
+    box.y + 14,
+    8.5,
+    '#d9ffff',
+    'left',
+    800,
+  )
+  mono(statement.shortSql, box.x + box.width - 12, box.y + 14, 6.5, '#a8cfcd', 'right', 650)
+
+  if (statement.status === 'measuring') {
+    mono('P  EXPLAIN (ANALYZE, BUFFERS) IS MEASURING THE FACTS…', box.x + 15, box.y + 54, 8, '#b9ffff', 'left', 800)
+    mono('M  AMBIENT RHYTHMS CONTINUE BEHIND THIS FOREGROUND PATH', box.x + 15, box.y + 78, 7, ink.paperDim, 'left', 700)
+    return
+  }
+
+  if (!statement.replay || statement.status === 'error') {
+    drawSourceMedallion(box.x + 15, box.y + 49, 'postgres', 7)
+    mono('STATEMENT STOPPED', box.x + 28, box.y + 49, 8, '#ffb19e', 'left', 800)
+    mono(statement.error ?? 'PostgreSQL did not return a plan.', box.x + 15, box.y + 78, 7, ink.paper, 'left', 650)
+    return
+  }
+
+  drawSourceMedallion(box.x + 15, box.y + 45, activeStage.source, 7)
+  mono(
+    `${activeStage.label.toUpperCase()} · ${activeStage.measurement ?? activeStage.detail}`,
+    box.x + 28,
+    box.y + 45,
+    8,
+    activeStage.source === 'postgres' ? '#d9ffff' : ink.paper,
+    'left',
+    800,
+  )
+  mono(
+    activeStage.source === 'postgres'
+      ? 'P = MEASURED BY POSTGRESQL'
+      : 'M = MODELLED ROUTE / REPLAY PACE',
+    box.x + box.width - 12,
+    box.y + 45,
+    6.3,
+    activeStage.source === 'postgres' ? '#9fcfd0' : ink.paperDim,
+    'right',
+    700,
+  )
+  drawStatementStageRail(statement.stageIndex)
+  if (activeStage.id === 'buffer') drawMeasuredBufferAction(progress)
+}
+
+function drawStatementReceipt() {
+  const box = layout.rhythm
+  const receipt = statement.replay?.receipt
+  drawIsoPlate(box.x, box.y, box.width, box.height, 5, '#182523', '#79aeb0', 6)
+  drawSourceMedallion(
+    box.x + 15,
+    box.y + 14,
+    receipt || statement.status === 'error' ? 'postgres' : 'model',
+    7,
+  )
+  mono(
+    receipt
+      ? 'STATEMENT RECEIPT · P MEASURED'
+      : statement.status === 'error'
+        ? 'STATEMENT RECEIPT · P ERROR'
+        : 'STATEMENT RECEIPT · NO BUFFER PLAN',
+    box.x + 28,
+    box.y + 14,
+    8.5,
+    receipt ? '#d9ffff' : ink.paper,
+    'left',
+    800,
+  )
+  mono('PERSISTS UNTIL THE NEXT STATEMENT', box.x + box.width - 12, box.y + 14, 6.5, ink.paperDim, 'right', 700)
+  mono(statement.shortSql, box.x + 14, box.y + 35, 7, '#b8d8d5', 'left', 650)
+  if (!receipt) {
+    mono(statement.error ?? 'PostgreSQL returned no EXPLAIN buffer report.', box.x + 14, box.y + 65, 8, ink.paper, 'left', 700)
+    mono('M  BACKGROUND PROCESS RHYTHMS CONTINUE', box.x + 14, box.y + 97, 6.5, ink.paperDim, 'left', 700)
+    return
+  }
+  mono(
+    `HIT ${receipt.sharedHits}  ·  READ ${receipt.sharedReads}  ·  PLAN ${receipt.planningTimeMs.toFixed(3)} ms  ·  EXEC ${receipt.executionTimeMs.toFixed(3)} ms  ·  ROWS ${receipt.rows}`,
+    box.x + 14,
+    box.y + 61,
+    8,
+    receipt.sharedReads > 0 ? '#ffb19e' : '#c7e8d3',
+    'left',
+    800,
+  )
+  mono(`PLAN NODE  ${receipt.planNode}`, box.x + 14, box.y + 84, 7, '#b9ffff', 'left', 750)
+  mono(
+    'M  REPLAY PACE + KERNEL / PHYSICAL STORAGE ROUTE · AMBIENT RHYTHMS',
+    box.x + 14,
+    box.y + 105,
+    6.3,
+    ink.paperDim,
+    'left',
+    700,
+  )
+}
+
+function drawStatementTrace() {
+  if (statement.status === 'idle') return
+  if (statement.status === 'complete' || statement.status === 'error') {
+    drawStatementReceipt()
+    return
+  }
+
+  let activeStage = null
+  let progress = 1
+  if (statement.replay && statement.status === 'replaying') {
+    activeStage = statement.replay.stages[statement.stageIndex]
+    progress = statement.mode === 'step'
+      ? 1
+      : clamp(statement.stageElapsedMs / Math.max(1, activeStage.durationMs))
+  }
+
+  const activeId = activeStage?.id ?? 'client'
+  drawStatementPipeline(activeId)
+
+  if (statement.replay && statement.status === 'replaying') {
+    for (let index = 1; index <= statement.stageIndex; index += 1) {
+      const stage = statement.replay.stages[index]
+      if (stage.skipped) continue
+      const route = statementRouteForStage(stage.id)
+      drawStatementRoute(route, '#8fe5e7', index === statement.stageIndex ? 4 : 3, index === statement.stageIndex ? 0.58 : 0.38)
+    }
+    const route = statementRouteForStage(activeStage.id)
+    if (route) {
+      pointOnRoute(route, smooth(progress), statementStagePoint)
+    } else {
+      statementStagePoint.x = 124
+      statementStagePoint.y = 128
+    }
+  } else {
+    statementStagePoint.x = activeId === 'parse' ? 428 : 124
+    statementStagePoint.y = activeId === 'parse' ? 211 : 128
+  }
+
+  drawStatementStageOutline(activeId, progress)
+  ctx.save()
+  ctx.shadowColor = '#d9ffff'
+  ctx.shadowBlur = 18
+  ctx.beginPath()
+  ctx.arc(statementStagePoint.x, statementStagePoint.y, 8, 0, TAU)
+  fillStroke('#d9ffff', '#173b3d', 2)
+  ctx.restore()
+  mono('SQL', statementStagePoint.x, statementStagePoint.y + 0.5, 5.5, '#173b3d', 'center', 900)
+  drawStatementPanel(activeStage ?? pendingStatementStage, progress)
+}
+
 function drawArchitecture() {
   drawBackdrop()
   const shake = checkpointShake(manualTime)
+  const foregroundStatement =
+    statement.status === 'measuring' || statement.status === 'replaying'
+  ctx.save()
+  if (foregroundStatement) ctx.globalAlpha = 0.28
   drawLayerConnections()
   drawClientAndPostmaster()
   drawWalSenderAndStandby()
@@ -1029,12 +1551,15 @@ function drawArchitecture() {
   drawVacuumCarts()
   drawBackends()
   drawRhythmStrip(manualTime)
+  ctx.restore()
+  drawStatementTrace()
 }
 
 function updateReadout() {
   clock.textContent = `${manualTime.toFixed(1).padStart(4, '0')} / 36s`
-  runState.textContent = paused ? 'PAUSED' : 'RUNNING'
+  runState.textContent = paused ? 'AMBIENT PAUSED' : 'AMBIENT RUNNING'
   machineToggle.textContent = paused ? 'RUN' : 'PAUSE'
+  updateStatementControls()
 }
 
 function draw() {
@@ -1059,7 +1584,7 @@ function frame(now) {
   const elapsed = Math.min(0.1, (now - lastFrame) / 1000)
   lastFrame = now
   if (!paused) manualTime = wrap(now / 1000 - startAt, MASTER_PERIOD)
-  else void elapsed
+  updateStatementReplay(elapsed)
   draw()
   requestAnimationFrame(frame)
 }
@@ -1156,13 +1681,15 @@ function updatePostgresUi() {
   delete postgresMeasurement.dataset.reach
   const measurementLabel = postgresMeasurement.querySelector('strong')
   if (!measurementLabel) return
-  if (postgres.plan) {
+  if (statement.status === 'measuring') {
+    measurementLabel.textContent = 'P MEASURING EXPLAIN (ANALYZE, BUFFERS)…'
+  } else if (postgres.plan) {
     const buffers = postgres.plan.buffers
     const hasRead = buffers.sharedReads > 0
     postgresMeasurement.dataset.reach = hasRead ? 'read' : 'hit'
     measurementLabel.textContent =
-      `P HIT ${buffers.sharedHits} · READ ${buffers.sharedReads}`
-      + ` · ${hasRead ? 'LONG REACH TO DISK' : 'SHORT REACH TO POOL'}`
+      `P MEASURED · HIT ${buffers.sharedHits} · READ ${buffers.sharedReads}`
+      + ` · ${hasRead ? 'READ BELOW SHARED_BUFFERS' : 'ALL HIT IN SHARED_BUFFERS'}`
   } else if (postgres.report) {
     measurementLabel.textContent = postgres.report.error
       ? 'P ERROR · QUERY ARM IDLE'
@@ -1415,6 +1942,9 @@ async function executeMetaCommand(meta) {
 async function executeCommand(command, output) {
   const source = await loadPostgres(false)
   if (!source) {
+    if (statement.status === 'measuring') {
+      failStatementMeasurement(postgres.initError ?? 'PostgreSQL could not start.')
+    }
     output.className = 'terminal-output error'
     output.textContent = postgres.initError ?? 'PostgreSQL could not start.'
     return null
@@ -1432,9 +1962,11 @@ async function executeCommand(command, output) {
     } else {
       report = await source.query(command)
       setCurrentReport(report)
+      startStatementReplay(report)
       result = formatReport(report, { maxWidth: terminalWidth() })
     }
   } catch (error) {
+    if (!meta) failStatementMeasurement(error)
     postgres.status = 'ready'
     updatePostgresUi()
     result = error instanceof Error ? error.message : 'Command failed'
@@ -1459,6 +1991,7 @@ async function executeCommand(command, output) {
 async function submitCommand(value) {
   const command = String(value).trim()
   if (!command || queryBusy) return null
+  if (!parseMetaCommand(command)) startStatementMeasurement(command)
   history.push(command)
   historyIndex = history.length
   historyDraft = ''
@@ -1500,6 +2033,8 @@ canvas.addEventListener('keydown', (event) => {
 })
 machineToggle.addEventListener('click', togglePaused)
 machineReset.addEventListener('click', () => setTime(0))
+statementMode.addEventListener('click', toggleStatementMode)
+statementNext.addEventListener('click', stepStatementReplay)
 postgresToggle.addEventListener('click', () => {
   if (postgres.source) {
     terminalInput.focus()
@@ -1539,6 +2074,8 @@ window.MAGNUM = Object.freeze({
   },
   loadPostgres,
   runQuery: (sql) => submitCommand(sql),
+  setTraceMode: setStatementMode,
+  stepTrace: stepStatementReplay,
   setSql: (sql) => {
     terminalInput.value = String(sql)
     resizeTerminalInput()
@@ -1548,6 +2085,15 @@ window.MAGNUM = Object.freeze({
     time: manualTime,
     labelsVisible,
     periods,
+    statement: {
+      status: statement.status,
+      mode: statement.mode,
+      sql: statement.sql,
+      stageIndex: statement.stageIndex,
+      stage: statement.replay?.stages[statement.stageIndex]?.id ?? null,
+      receipt: statement.replay?.receipt ?? null,
+      error: statement.error,
+    },
     postgres: {
       status: postgres.status,
       serverVersion: postgres.source?.serverVersion ?? null,
@@ -1569,4 +2115,5 @@ window.MAGNUM = Object.freeze({
 resize()
 resizeTerminalInput()
 updatePostgresUi()
+updateStatementControls()
 requestAnimationFrame(frame)

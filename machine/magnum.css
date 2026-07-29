@@ -490,11 +490,16 @@ button:focus-visible {
   top: 16px;
   right: 18px;
   display: flex;
+  max-width: calc(100% - 36px);
+  flex-wrap: wrap;
+  justify-content: end;
   gap: 7px;
   pointer-events: none;
 }
 
-.architecture-readout span {
+.architecture-readout span,
+.architecture-readout button {
+  min-height: 0;
   padding: 5px 7px;
   border: 1px solid rgb(220 172 93 / 30%);
   border-radius: 3px;
@@ -502,6 +507,21 @@ button:focus-visible {
   background: rgb(24 18 14 / 78%);
   font: 700 7px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   letter-spacing: 0.07em;
+}
+
+.architecture-readout button {
+  pointer-events: auto;
+}
+
+.architecture-readout button[aria-pressed="true"] {
+  color: #d9ffff;
+  border-color: #79aeb0;
+  background: rgb(26 58 59 / 92%);
+}
+
+.architecture-readout button:disabled {
+  cursor: default;
+  opacity: 0.38;
 }
 
 .fallback {
