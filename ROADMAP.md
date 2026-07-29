@@ -53,7 +53,15 @@ orderly. An unplanned failover is not, and the difference is the whole lesson:
 what is lost, what a timeline fork means, why the old primary cannot simply
 rejoin, and what `pg_rewind` is for.
 
-## 4. Break things from inside — in progress
+**Sequencing, decided 2026-07-29.** Items 4 and 4b are paused until the machine
+room's trace is right. Both of them and the machine room are the same problem —
+making a statement visibly cause what follows — and building them in parallel
+means solving that design question three times, differently. The 2D surface is
+the cheapest place to get it wrong and fix it, and the control center should
+inherit the answer rather than invent its own. Item 4's work is preserved on
+`pgsimcity-handles`.
+
+## 4. Break things from inside — paused
 
 The knobs exist in a control rail. In first person they should be **things you
 walk to and operate** — pull the autovacuum yard's switch and then watch bloat
@@ -70,7 +78,7 @@ each knob's consequence chain has to be verified — moves, right direction,
 sensible amount, recovers on reset — before it earns a handle. A handle on a
 broken knob is a machine for teaching a falsehood convincingly.
 
-## 4b. The control center in the postmaster tower — in progress
+## 4b. The control center in the postmaster tower — paused
 
 A room you enter, in first person, inside the postmaster tower — the supervisor
 process that owns the cluster is the city hall, and it already stands at the head
