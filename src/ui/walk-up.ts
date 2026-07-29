@@ -1,0 +1,175 @@
+import '../styles/walk-up.css'
+
+import type { WalkController } from '../engine/walk'
+import { el, setText } from './uikit'
+import type { UiModule } from './uikit'
+
+export type WalkUpState = string | number | boolean | null
+
+/**
+ * One world-space interaction bound to the shared proximity prompt.
+ *
+ * `state()` must return a primitive. It is polled every frame so the prompt can
+ * follow changes made elsewhere without allocating in the proximity path.
+ */
+export interface WalkUpInteractionSite {
+  id: string
+  x: number
+  z: number
+  radius?: number
+  owner: string
+  subject: string
+  /** CSS colour used by the prompt, for example `var(--c-vacuum)`. */
+  accent?: string
+  state(): WalkUpState
+  action(state: WalkUpState): string
+  ariaLabel(state: WalkUpState): string
+  operate(): void
+}
+
+export interface WalkUpInteractionOptions {
+  walk: WalkController
+  sites: readonly WalkUpInteractionSite[]
+  keyCode?: string
+  keyLabel?: string
+}
+
+/** Kept beyond arm's reach because solid cabinets stop the walker's capsule. */
+export const WALK_UP_RADIUS = 7.5
+
+function typingTarget(target: EventTarget | null): boolean {
+  const node = target as { tagName?: string; isContentEditable?: boolean } | null
+  const tag = node?.tagName?.toUpperCase()
+  return (
+    tag === 'INPUT'
+    || tag === 'SELECT'
+    || tag === 'TEXTAREA'
+    || node?.isContentEditable === true
+  )
+}
+
+export function createWalkUpInteraction(opts: WalkUpInteractionOptions): UiModule {
+  const { walk, sites } = opts
+  const keyCode = opts.keyCode ?? 'KeyE'
+  const keyLabel = opts.keyLabel ?? 'E'
+
+  const owner = el('span', { class: 'walk-up-prompt__owner' })
+  const subject = el('span', { class: 'walk-up-prompt__subject' })
+  const key = el('kbd', { class: 'walk-up-prompt__key', text: keyLabel })
+  const actionText = el('span', { class: 'walk-up-prompt__action-text' })
+  const action = el(
+    'button',
+    {
+      class: 'walk-up-prompt__action',
+      type: 'button',
+    },
+    key,
+    actionText,
+  )
+  const root = el(
+    'section',
+    {
+      class: 'walk-up-prompt',
+      'aria-live': 'polite',
+      'aria-label': 'Nearby interaction',
+    },
+    owner,
+    subject,
+    action,
+  )
+  root.hidden = true
+  document.body.append(root)
+
+  let active = -1
+  let paintedState: WalkUpState
+  let hasPaintedState = false
+
+  function paintSelection(index: number): void {
+    if (index === active) return
+    active = index
+    hasPaintedState = false
+    const site = sites[index]
+    root.hidden = site === undefined
+    if (!site) {
+      delete root.dataset.site
+      return
+    }
+    root.dataset.site = site.id
+    root.style.setProperty('--walk-up-accent', site.accent ?? 'var(--ink)')
+    setText(owner, site.owner)
+    setText(subject, site.subject)
+  }
+
+  function paintState(): void {
+    if (active < 0) return
+    const site = sites[active]
+    const next = site.state()
+    if (hasPaintedState && Object.is(next, paintedState)) return
+    hasPaintedState = true
+    paintedState = next
+    setText(actionText, site.action(next))
+    action.setAttribute('aria-label', site.ariaLabel(next))
+    if (next === null) delete action.dataset.state
+    else action.dataset.state = String(next)
+  }
+
+  function operate(): void {
+    if (active < 0 || !walk.enabled) return
+    sites[active].operate()
+    paintState()
+  }
+
+  function onKeyDown(event: KeyboardEvent): void {
+    if (
+      event.code !== keyCode
+      || event.repeat
+      || event.ctrlKey
+      || event.metaKey
+      || event.altKey
+      || typingTarget(event.target)
+      || active < 0
+      || !walk.enabled
+    ) {
+      return
+    }
+    event.preventDefault()
+    operate()
+  }
+
+  action.addEventListener('click', operate)
+  window.addEventListener('keydown', onKeyDown)
+
+  function update(): void {
+    if (!walk.enabled) {
+      paintSelection(-1)
+      return
+    }
+
+    const px = walk.position.x
+    const pz = walk.position.z
+    let nearest = -1
+    let nearestSq = Number.POSITIVE_INFINITY
+    for (let i = 0; i < sites.length; i++) {
+      const site = sites[i]
+      const radius = site.radius ?? WALK_UP_RADIUS
+      const dx = px - site.x
+      const dz = pz - site.z
+      const distanceSq = dx * dx + dz * dz
+      if (distanceSq <= radius * radius && distanceSq < nearestSq) {
+        nearestSq = distanceSq
+        nearest = i
+      }
+    }
+
+    paintSelection(nearest)
+    paintState()
+  }
+
+  function dispose(): void {
+    window.removeEventListener('keydown', onKeyDown)
+    action.removeEventListener('click', operate)
+    root.remove()
+  }
+
+  return { update, dispose }
+}

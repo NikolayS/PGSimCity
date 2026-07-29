@@ -1,13 +1,10 @@
 import * as THREE from 'three'
 
 import { COLOR } from '../core/theme'
-import type { Knobs, SimState, WorldContext, WorldModule } from '../core/types'
+import type { SimState, WorldContext, WorldModule } from '../core/types'
 import { ANCHOR } from './layout'
 
-export type WorldHandleKey =
-  | 'autovacuum'
-  | 'bgwriterEnabled'
-  | 'fullPageWrites'
+export type WorldHandleKey = 'autovacuum'
 
 export interface WorldHandleBinding {
   id: string
@@ -53,32 +50,10 @@ const SPECS: readonly HandleSpec[] = [
     yaw: Math.PI / 2,
     color: COLOR.vacuum,
   },
-  {
-    id: 'handle.bgwriter',
-    key: 'bgwriterEnabled',
-    guc: 'bgwriter_lru_maxpages > 0',
-    owner: 'background writer',
-    at: ANCHOR.handleBgwriter,
-    yaw: 0,
-    color: COLOR.bgwriter,
-  },
-  {
-    id: 'handle.full-page-writes',
-    key: 'fullPageWrites',
-    guc: 'full_page_writes',
-    owner: 'WAL write / flush station',
-    at: ANCHOR.handleFullPageWrites,
-    yaw: 0,
-    color: COLOR.wal,
-  },
 ] as const
 
 function cssColor(hex: number): string {
   return `#${hex.toString(16).padStart(6, '0')}`
-}
-
-function boolKnob(state: SimState, key: WorldHandleKey): boolean {
-  return state.knobs[key] as Knobs[WorldHandleKey] as boolean
 }
 
 export function createWorldHandles(ctx: WorldContext): WorldHandlesModule {
@@ -102,6 +77,7 @@ export function createWorldHandles(ctx: WorldContext): WorldHandlesModule {
   const labelMaterials: THREE.MeshBasicMaterial[] = []
   const visuals: HandleVisual[] = []
   const handles: WorldHandleBinding[] = []
+  const collisionBoxes: THREE.Box3[] = []
 
   function label(
     parent: THREE.Object3D,
@@ -165,9 +141,11 @@ export function createWorldHandles(ctx: WorldContext): WorldHandlesModule {
     label(root, 'WALK UP · E / TAP', 0.94, 4.4, 0.54, COLOR.ink, 30)
 
     const onLamp = new THREE.Mesh(ctx.theme.box(0.76, 0.76, 0.32), ctx.theme.neon(spec.color, 1.9))
+    onLamp.name = `${spec.id}.lamp.on`
     onLamp.position.set(-1.6, 4.24, 0.56)
     root.add(onLamp)
     const offLamp = new THREE.Mesh(ctx.theme.box(0.76, 0.76, 0.32), ctx.theme.neon(COLOR.crit, 1.9))
+    offLamp.name = `${spec.id}.lamp.off`
     offLamp.position.set(1.6, 4.24, 0.56)
     root.add(offLamp)
 
@@ -201,12 +179,26 @@ export function createWorldHandles(ctx: WorldContext): WorldHandlesModule {
       onText,
       offText,
     })
+
+    /* The plinth owns the largest footprint. Publish its rotated world box so
+     * collision stops a walker at the cabinet without editing collision.ts. */
+    const cos = Math.abs(Math.cos(spec.yaw))
+    const sin = Math.abs(Math.sin(spec.yaw))
+    const halfX = cos * 3.1 + sin * 1.4
+    const halfZ = sin * 3.1 + cos * 1.4
+    collisionBoxes.push(
+      new THREE.Box3(
+        new THREE.Vector3(spec.at[0] - halfX, spec.at[1], spec.at[2] - halfZ),
+        new THREE.Vector3(spec.at[0] + halfX, spec.at[1] + 6.42, spec.at[2] + halfZ),
+      ),
+    )
   }
+  group.userData.collisionBoxes = collisionBoxes
 
   function update(_dt: number, state: SimState): void {
     for (let i = 0; i < visuals.length; i++) {
       const visual = visuals[i]
-      const on = boolKnob(state, visual.key)
+      const on = state.knobs[visual.key]
       visual.lever.rotation.z = on ? -0.62 : 0.62
       visual.onLamp.visible = on
       visual.offLamp.visible = !on

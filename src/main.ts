@@ -43,6 +43,7 @@ import { createContinuity } from './world/continuity'
 import { createAccess } from './world/access'
 import type { AccessModule } from './world/access'
 import { createControlCenterWorld } from './world/control-center'
+import { createWorldHandles } from './world/handles'
 
 import { createContextMenu } from './ui/context-menu'
 import { createHud, setCompassCamera } from './ui/hud'
@@ -54,6 +55,8 @@ import { createSearch } from './ui/search'
 import { createTouchpad } from './ui/touchpad'
 import { createZoomContext } from './ui/zoom-context'
 import { createControlCenter } from './ui/control-center'
+import { createWalkUpInteraction } from './ui/walk-up'
+import { createWorldHandleSites } from './ui/world-handles'
 import { BOOT_STEPS, failBoot, finishBoot, presentBootStep } from './ui/boot'
 import type { UiContext, UiModule } from './ui/uikit'
 
@@ -128,7 +131,7 @@ async function boot(): Promise<void> {
   await progress(BOOT_STEPS.ground)
   scene.add(createSky(theme))
   const modules: WorldModule[] = []
-  const add = (m: WorldModule) => {
+  const add = <T extends WorldModule>(m: T): T => {
     modules.push(m)
     scene.add(m.group)
     return m
@@ -154,6 +157,7 @@ async function boot(): Promise<void> {
 
   await progress(BOOT_STEPS.maintenance)
   add(createMaintenance(ctx))
+  const handlesMod = add(createWorldHandles(ctx))
 
   await progress(BOOT_STEPS.standby)
   add(createReplication(ctx))
@@ -229,6 +233,7 @@ async function boot(): Promise<void> {
     createHud(uiCtx),
     createTouchpad({ bus, walk }),
     controlCenter,
+    createWalkUpInteraction({ walk, sites: createWorldHandleSites(uiCtx, handlesMod.handles) }),
     createHelp(uiCtx),
     createControls(uiCtx),
     createInspector(uiCtx),
