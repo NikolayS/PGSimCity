@@ -463,6 +463,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
 
   const group = new THREE.Group()
   group.name = 'district:maintenance'
+  const collisionBoxes: THREE.Box3[] = []
 
   const owned: { dispose(): void }[] = []
   const own = <T extends { dispose(): void }>(x: T): T => {
@@ -870,6 +871,14 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   }
   const depotStruct = batch(gDepot, unitBox, matStruct, depotMass, true)
   const depotDetailMesh = batch(gDepot, unitBox, matDeep, depotDetail)
+  for (const [x, y, z, sx, sy, sz] of depotDetail) {
+    collisionBoxes.push(
+      new THREE.Box3(
+        new THREE.Vector3(x - sx / 2, y - sy / 2, z - sz / 2),
+        new THREE.Vector3(x + sx / 2, y + sy / 2, z + sz / 2),
+      ),
+    )
+  }
 
   for (let i = 0; i < N_VAC_WORKERS; i++) {
     const b = vacBayPos(i)
@@ -1156,6 +1165,10 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   group.add(gYard)
 
   const FX0 = -250, FX1 = -120, FZ0 = -64, FZ1 = 104
+  const YARD_GATE_Z = -11.175
+  const YARD_GATE_W = 7.2
+  const yardGateLo = YARD_GATE_Z - YARD_GATE_W / 2
+  const yardGateHi = YARD_GATE_Z + YARD_GATE_W / 2
   const yardPosts: BoxSpec[] = []
   const POST_STEP = 13
   for (let x = FX0; x <= FX1 + 0.01; x += POST_STEP) {
@@ -1164,7 +1177,9 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   }
   for (let z = FZ0 + POST_STEP; z < FZ1 - 0.01; z += POST_STEP) {
     yardPosts.push([FX0, 2.0, z, 0.24, 3.2, 0.24])
-    yardPosts.push([FX1, 2.0, z, 0.24, 3.2, 0.24])
+    if (z < yardGateLo || z > yardGateHi) {
+      yardPosts.push([FX1, 2.0, z, 0.24, 3.2, 0.24])
+    }
   }
   // two rails per run: the chain link between them is implied, not drawn
   for (const y of [3.4, 1.6]) {
@@ -1172,7 +1187,8 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     yardPosts.push([(FX0 + FX1) / 2, y, FZ0, FX1 - FX0, th, th])
     yardPosts.push([(FX0 + FX1) / 2, y, FZ1, FX1 - FX0, th, th])
     yardPosts.push([FX0, y, (FZ0 + FZ1) / 2, th, th, FZ1 - FZ0])
-    yardPosts.push([FX1, y, (FZ0 + FZ1) / 2, th, th, FZ1 - FZ0])
+    yardPosts.push([FX1, y, (FZ0 + yardGateLo) / 2, th, th, yardGateLo - FZ0])
+    yardPosts.push([FX1, y, (yardGateHi + FZ1) / 2, th, th, FZ1 - yardGateHi])
   }
 
   // Kept clear of the excavation rim (x = -118).
@@ -1186,6 +1202,15 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     yardPosts.push([x + 0.9, 11.6, z, 2.4, 0.4, 0.9])
   }
   const yardDeep = batch(gYard, unitBox, matDeep, yardPosts)
+  for (const [x, y, z, sx, sy, sz] of yardPosts) {
+    collisionBoxes.push(
+      new THREE.Box3(
+        new THREE.Vector3(x - sx / 2, y - sy / 2, z - sz / 2),
+        new THREE.Vector3(x + sx / 2, y + sy / 2, z + sz / 2),
+      ),
+    )
+  }
+  group.userData.collisionBoxes = collisionBoxes
 
   /* Every static lit thing at ground level in one mesh: painted markings, the
    * bgwriter's circuit, and the lamp heads. */

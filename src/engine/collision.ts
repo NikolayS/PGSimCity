@@ -136,6 +136,13 @@ export interface CollisionWorld {
   build(source: ComponentSource, opts?: CollisionBuildOptions): void
   /** Add one static box by hand (guard rails, invisible walls). */
   addBox(box: THREE.Box3, surface?: Surface): void
+  /** Reduce one rendered object to static boxes and add them to this world. */
+  addSolid(obj: THREE.Object3D, surface?: Surface): void
+  /**
+   * Add `userData.collisionSolids` Object3Ds and `userData.collisionBoxes`
+   * Box3s published anywhere below a scene root.
+   */
+  addPublished(root: THREE.Object3D): void
   /** Register a surface root the ground ray may hit. Safe to call twice. */
   addWalkable(obj: THREE.Object3D, surface?: Surface): void
   removeWalkable(obj: THREE.Object3D): void
@@ -197,14 +204,16 @@ export interface CollisionWorld {
  *   world.ground     the floor itself — register it as a *walkable* instead
  *   world.pit        the excavation: a 236 x 208 m rim, glow band and wall set
  *                    whose flat pieces would pave over the hole you are meant
- *                    to be able to fall into
+ *                    to be able to fall into; ground.ts publishes exact wall
+ *                    boxes and the floor is a raycast walkable
  *   client.pool      the client sky, 40‥80 m up
- *   conn.gate        the connection gate, hanging at y = 14 over open air
+ *   conn.gate        a 300 m sparse fence: boxing or voxelising its registered
+ *                    root fills the real central opening; clients.ts publishes
+ *                    exact post, wall, pylon, and header boxes instead
  *   shared.buffers   1024 live-height tiles, see the header
  *   storage.tempfiles
  *                    its registry object is an invisible selection proxy twice
  *                    as tall as a walker; the visible bay is only a 0.36 m step
- *   shmem            (module id, harmless if it ever becomes a component)
  *   autovac.worker.N the vacuum trucks DRIVE. build() is a boot snapshot, so a
  *                    box for one of these is a ghost wall parked wherever the
  *                    truck happened to be at t = 0.
@@ -217,7 +226,6 @@ export const DEFAULT_EXCLUDE_IDS: readonly string[] = (() => {
     'conn.gate',
     'shared.buffers',
     'storage.tempfiles',
-    'shmem',
   ]
   for (let i = 0; i < N_VAC_WORKERS; i++) ids.push(`autovac.worker.${i}`)
   return ids
@@ -274,8 +282,51 @@ const _vb = new THREE.Vector3()
 const _vc = new THREE.Vector3()
 const _mat = new THREE.Matrix4()
 
-/** Set by solveAxis(); read immediately after. */
-let _axisHit = false
+function materialIsRendered(material: THREE.Material | readonly THREE.Material[]): boolean {
+  const materials = Array.isArray(material) ? material : [material]
+  for (let i = 0; i < materials.length; i++) {
+    const item = materials[i]
+    if (item.visible && (!item.transparent || item.opacity > 0.01)) return true
+  }
+  return false
+}
+
+/**
+ * `Box3.setFromObject()` includes hidden branches and invisible pick proxies.
+ * Collision follows pixels a walker can see, so measure rendered meshes only.
+ */
+function visibleBounds(obj: THREE.Object3D, target: THREE.Box3): THREE.Box3 {
+  target.makeEmpty()
+  expandVisibleBounds(obj, target)
+  return target
+}
+
+function expandVisibleBounds(obj: THREE.Object3D, target: THREE.Box3): void {
+  if (!obj.visible) return
+  const mesh = obj as THREE.Mesh
+  if (mesh.isMesh && mesh.geometry && materialIsRendered(mesh.material)) {
+    const instanced = mesh as THREE.InstancedMesh
+    if (instanced.isInstancedMesh) {
+      if (!instanced.boundingBox) instanced.computeBoundingBox()
+      if (instanced.boundingBox && !instanced.boundingBox.isEmpty()) {
+        _sub.copy(instanced.boundingBox).applyMatrix4(instanced.matrixWorld)
+        target.union(_sub)
+      }
+    } else {
+      if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox()
+      if (mesh.geometry.boundingBox && !mesh.geometry.boundingBox.isEmpty()) {
+        _sub.copy(mesh.geometry.boundingBox).applyMatrix4(mesh.matrixWorld)
+        target.union(_sub)
+      }
+    }
+  }
+  const children = obj.children
+  for (let i = 0; i < children.length; i++) expandVisibleBounds(children[i], target)
+}
+
+/** Set by sweepMove(); read immediately after. */
+let _sweepHitX = false
+let _sweepHitZ = false
 
 /* ---- leaf voxeliser scratch (build time only, but still hoisted) ----------*/
 
@@ -331,6 +382,20 @@ export function createCollisionWorld(): CollisionWorld {
   const savedNormal = new THREE.Vector3(0, 1, 0)
 
   let stepHeight = 0.45
+  let activeBuildOptions: Required<CollisionBuildOptions> = {
+    excludeIds: DEFAULT_EXCLUDE_IDS,
+    excludeDistricts: [],
+    maxSpan: DEFAULTS.maxSpan,
+    slabY: DEFAULTS.slabY,
+    maxHeight: DEFAULTS.maxHeight,
+    hugeSpan: DEFAULTS.hugeSpan,
+    minThickness: DEFAULTS.minThickness,
+    ceiling: DEFAULTS.ceiling,
+    floor: DEFAULTS.floor,
+    maxDepth: DEFAULTS.maxDepth,
+    pad: DEFAULTS.pad,
+    cell: DEFAULTS.cell,
+  }
 
   /* ---- building ----------------------------------------------------------*/
 
@@ -458,7 +523,7 @@ export function createCollisionWorld(): CollisionWorld {
   /** One mesh of the leaf being split, triangle by triangle. */
   const sgVisit = (child: THREE.Object3D): void => {
     const mesh = child as THREE.Mesh
-    if (!mesh.isMesh) return
+    if (!mesh.isMesh || !materialIsRendered(mesh.material)) return
     const geo = mesh.geometry
     if (!geo) return
     const inst = child as THREE.InstancedMesh
@@ -512,7 +577,7 @@ export function createCollisionWorld(): CollisionWorld {
    * re-classified, so an apron slab still fails minThickness.
    */
   function splitLeaf(obj: THREE.Object3D, o: Required<CollisionBuildOptions>, surface: Surface): void {
-    _leaf.setFromObject(obj)
+    visibleBounds(obj, _leaf)
     if (_leaf.isEmpty()) return
     const sx = _leaf.max.x - _leaf.min.x
     const sz = _leaf.max.z - _leaf.min.z
@@ -536,7 +601,7 @@ export function createCollisionWorld(): CollisionWorld {
         _cMaxZ[c] = -Infinity
       }
     }
-    obj.traverse(sgVisit)
+    obj.traverseVisible(sgVisit)
     for (let iz = 0; iz < sgNZ; iz++) {
       for (let ix = 0; ix < sgNX; ix++) {
         const c = iz * SPLIT_MAX + ix
@@ -554,10 +619,19 @@ export function createCollisionWorld(): CollisionWorld {
     o: Required<CollisionBuildOptions>,
     surface: Surface,
   ): void {
-    _box.setFromObject(obj)
+    visibleBounds(obj, _box)
     if (_box.isEmpty()) return
     const verdict = classify(_box, o)
     if (verdict === 1) {
+      const instanced = obj as THREE.InstancedMesh
+      const sx = _box.max.x - _box.min.x
+      const sz = _box.max.z - _box.min.z
+      // A sparse bank of posts is not a floor merely because its combined
+      // height fits slabY. Split instances before their empty gaps become solid.
+      if (instanced.isInstancedMesh && instanced.count > 1 && (sx > o.maxSpan || sz > o.maxSpan)) {
+        splitLeaf(obj, o, surface)
+        return
+      }
       pushBox(_box, o.pad, surface)
       return
     }
@@ -589,6 +663,7 @@ export function createCollisionWorld(): CollisionWorld {
       pad: opts.pad ?? DEFAULTS.pad,
       cell: opts.cell ?? DEFAULTS.cell,
     }
+    activeBuildOptions = o
     cell = o.cell > 1 ? o.cell : DEFAULTS.cell
     n = 0
 
@@ -628,6 +703,29 @@ export function createCollisionWorld(): CollisionWorld {
   function addBox(b: THREE.Box3, surface: Surface = 'metal'): void {
     if (b.isEmpty()) return
     pushBox(b, 0, surface)
+    rebuildGrid()
+  }
+
+  function addSolid(obj: THREE.Object3D, surface: Surface = 'metal'): void {
+    obj.updateWorldMatrix(true, false)
+    addObject(obj, 0, activeBuildOptions, surface)
+    rebuildGrid()
+  }
+
+  function addPublished(root: THREE.Object3D): void {
+    root.traverse((obj) => {
+      const solids = obj.userData.collisionSolids as THREE.Object3D[] | undefined
+      if (solids) {
+        for (let i = 0; i < solids.length; i++) {
+          solids[i].updateWorldMatrix(true, false)
+          addObject(solids[i], 0, activeBuildOptions, 'metal')
+        }
+      }
+      const boxes = obj.userData.collisionBoxes as THREE.Box3[] | undefined
+      if (boxes) {
+        for (let i = 0; i < boxes.length; i++) pushBox(boxes[i], 0, 'metal')
+      }
+    })
     rebuildGrid()
   }
 
@@ -919,46 +1017,72 @@ export function createCollisionWorld(): CollisionWorld {
     return false
   }
 
-  /**
-   * One axis of the slide. `isX` picks the axis; `other` is the walker's
-   * position on the perpendicular axis. Boxes the walker is already inside are
-   * ignored on purpose — pushing back out of them is how a controller gets
-   * stuck in a corner forever.
-   */
-  function solveAxis(
-    isX: boolean,
-    cur: number,
-    target: number,
-    other: number,
+  /** Earliest contact of one XZ segment against the candidate boxes. */
+  function sweepTime(
+    x: number,
+    z: number,
+    dx: number,
+    dz: number,
     radius: number,
     wallY: number,
     headY: number,
   ): number {
-    _axisHit = false
-    const d = target - cur
-    if (d === 0) return cur
-    let best = target
+    _sweepHitX = false
+    _sweepHitZ = false
+    let best = 2
     for (let i = 0; i < candN; i++) {
       const o = cand[i] * 6
-      // vertical band: below the step allowance it is a floor, above the head
-      // it is a ceiling; neither stops a horizontal move.
       if (data[o + 4] <= wallY) continue
       if (data[o + 1] >= headY) continue
-      const oMin = isX ? data[o + 2] : data[o]
-      const oMax = isX ? data[o + 5] : data[o + 3]
-      if (other + radius <= oMin || other - radius >= oMax) continue
-      if (d > 0) {
-        const limit = (isX ? data[o] : data[o + 2]) - radius
-        if (limit >= best) continue
-        if (limit < cur) continue
-        best = limit
-        _axisHit = true
+
+      const minX = data[o] - radius
+      const maxX = data[o + 3] + radius
+      const minZ = data[o + 2] - radius
+      const maxZ = data[o + 5] + radius
+      // Escape is always allowed when a spawn or a moving object left the
+      // capsule inside a box. Only strict containment counts; contact does not.
+      if (x > minX + EPS && x < maxX - EPS && z > minZ + EPS && z < maxZ - EPS) continue
+
+      let nearX = -Infinity
+      let farX = Infinity
+      if (Math.abs(dx) < EPS) {
+        if (x < minX || x > maxX) continue
       } else {
-        const limit = (isX ? data[o + 3] : data[o + 5]) + radius
-        if (limit <= best) continue
-        if (limit > cur) continue
-        best = limit
-        _axisHit = true
+        nearX = (minX - x) / dx
+        farX = (maxX - x) / dx
+        if (nearX > farX) {
+          const swap = nearX
+          nearX = farX
+          farX = swap
+        }
+      }
+
+      let nearZ = -Infinity
+      let farZ = Infinity
+      if (Math.abs(dz) < EPS) {
+        if (z < minZ || z > maxZ) continue
+      } else {
+        nearZ = (minZ - z) / dz
+        farZ = (maxZ - z) / dz
+        if (nearZ > farZ) {
+          const swap = nearZ
+          nearZ = farZ
+          farZ = swap
+        }
+      }
+
+      const enter = nearX > nearZ ? nearX : nearZ
+      const exit = farX < farZ ? farX : farZ
+      if (enter > exit || exit < 0 || enter < -EPS || enter > 1) continue
+      const hitX = nearX >= nearZ - EPS
+      const hitZ = nearZ >= nearX - EPS
+      if (enter < best - EPS) {
+        best = enter < 0 ? 0 : enter
+        _sweepHitX = hitX
+        _sweepHitZ = hitZ
+      } else if (Math.abs(enter - best) <= EPS) {
+        _sweepHitX ||= hitX
+        _sweepHitZ ||= hitZ
       }
     }
     return best
@@ -989,12 +1113,27 @@ export function createCollisionWorld(): CollisionWorld {
     queryRect(loX, loZ, hiX, hiZ)
     if (candN === 0) return out
 
-    // X first, then Z against the already-resolved X: that is what makes a
-    // walker slide along a wall instead of stopping dead in front of it.
-    const x = solveAxis(true, from.x, to.x, from.z, radius, wallY, headY)
-    out.hitX = _axisHit
-    const z = solveAxis(false, from.z, to.z, x, radius, wallY, headY)
-    out.hitZ = _axisHit
+    let x = from.x
+    let z = from.z
+    let dx = to.x - from.x
+    let dz = to.z - from.z
+    // Contact, then sweep the remaining tangent. Three passes resolve both
+    // faces of a corner without distance-dependent tunnelling.
+    for (let pass = 0; pass < 3 && (Math.abs(dx) > EPS || Math.abs(dz) > EPS); pass++) {
+      const contact = sweepTime(x, z, dx, dz, radius, wallY, headY)
+      if (contact > 1) {
+        x += dx
+        z += dz
+        break
+      }
+      x += dx * contact
+      z += dz * contact
+      const remain = 1 - contact
+      out.hitX ||= _sweepHitX
+      out.hitZ ||= _sweepHitZ
+      dx = _sweepHitX ? 0 : dx * remain
+      dz = _sweepHitZ ? 0 : dz * remain
+    }
     out.blocked = out.hitX || out.hitZ
 
     // Step-up: whatever we are actually standing over now, up to stepHeight.
@@ -1147,6 +1286,8 @@ export function createCollisionWorld(): CollisionWorld {
   return {
     build,
     addBox,
+    addSolid,
+    addPublished,
     addWalkable,
     removeWalkable,
     groundAt,

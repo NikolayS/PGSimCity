@@ -155,7 +155,7 @@ async function boot(): Promise<void> {
 
   await progress(BOOT_STEPS.standby)
   add(createReplication(ctx))
-  const plannerMod = add(createPlanner(ctx))
+  add(createPlanner(ctx))
   // After replication: the continuity quarter reads the standby's anchors and
   // hangs its own second standby, archive estate and recovery ground off them.
   add(createContinuity(ctx))
@@ -179,11 +179,8 @@ async function boot(): Promise<void> {
   // is ground. (Falls back to the whole group if shmem ever renames the deck.)
   collision.addWalkable(shmemMod.group.getObjectByName('shmem.deck') ?? shmemMod.group, 'deck')
   // MUST follow build(): build() resets the box array and would discard these.
+  collision.addPublished(scene)
   access.installCollision(collision)
-  for (const b of (groundMod.group.userData.rimColliders as THREE.Box3[] | undefined) ?? []) collision.addBox(b)
-  for (const b of (plannerMod.group.userData.walkColliders as THREE.Box3[] | undefined) ?? []) {
-    collision.addBox(b, 'metal')
-  }
   const water = createBufferWater(scene)
   scene.add(water.group)
   const walk = createWalkController({

@@ -251,6 +251,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
   const mData = keep(
     new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true, toneMapped: false }),
   )
+  mData.name = 'shmem.liveData'
   const mBeam = keep(
     new THREE.LineBasicMaterial({
       vertexColors: true,
@@ -268,6 +269,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
   const deck = new THREE.Group()
   deck.name = 'shmem.deck'
   group.add(deck)
+  const collisionBoxes: THREE.Box3[] = []
 
   // Body: inset so the cap above reads as a cantilevered edge with a shadow gap.
   const gDeckBody = keep(new THREE.BoxGeometry(DECK_W - 5, 1.5, DECK_D - 5))
@@ -332,7 +334,17 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     const pyl = new THREE.InstancedMesh(gPyl, mPylon, PYL_X.length * PYL_Z.length)
     const a = pyl.instanceMatrix.array as Float32Array
     let k = 0
-    for (const z of PYL_Z) for (const x of PYL_X) setTRS(a, k++, x, CITY.storage.y + len / 2, z, 1, 1, 1)
+    for (const z of PYL_Z) {
+      for (const x of PYL_X) {
+        setTRS(a, k++, x, CITY.storage.y + len / 2, z, 1, 1, 1)
+        collisionBoxes.push(
+          new THREE.Box3(
+            new THREE.Vector3(x - 3.6, CITY.storage.y, z - 3.6),
+            new THREE.Vector3(x + 3.6, CITY.storage.y + len, z + 3.6),
+          ),
+        )
+      }
+    }
     pyl.instanceMatrix.needsUpdate = true
     deck.add(pyl)
   }
@@ -452,7 +464,21 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     for (const [a, b] of eBars) setTRS(ra, rk++, rx, DECK_TOP + 1.44, (a + b) / 2, 0.1, 0.1, b - a)
     rail.instanceMatrix.needsUpdate = true
     fine.add(rail)
+    const railY = DECK_TOP + 1.44
+    for (const [a, b] of nBars) {
+      collisionBoxes.push(new THREE.Box3(new THREE.Vector3(a, railY, -rz - 0.05), new THREE.Vector3(b, railY + 0.1, -rz + 0.05)))
+    }
+    for (const [a, b] of sBars) {
+      collisionBoxes.push(new THREE.Box3(new THREE.Vector3(a, railY, rz - 0.05), new THREE.Vector3(b, railY + 0.1, rz + 0.05)))
+    }
+    for (const [a, b] of wBars) {
+      collisionBoxes.push(new THREE.Box3(new THREE.Vector3(-rx - 0.05, railY, a), new THREE.Vector3(-rx + 0.05, railY + 0.1, b)))
+    }
+    for (const [a, b] of eBars) {
+      collisionBoxes.push(new THREE.Box3(new THREE.Vector3(rx - 0.05, railY, a), new THREE.Vector3(rx + 0.05, railY + 0.1, b)))
+    }
   }
+  group.userData.collisionBoxes = collisionBoxes
 
   // Plinths under every sub-structure. Two draw calls for six buildings.
   {

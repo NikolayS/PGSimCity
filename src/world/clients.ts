@@ -443,6 +443,21 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
   }
   const gateStruct = new THREE.InstancedMesh(unitBox, matStruct, gateMass.length)
   fillBoxes(gateStruct, gateMass)
+  gate.userData.collisionBoxes = gateMass.map(
+    ([x, y, z, sx, sy, sz]) =>
+      new THREE.Box3(
+        new THREE.Vector3(
+          x + gate.position.x - sx / 2,
+          y + gate.position.y - sy / 2,
+          z + gate.position.z - sz / 2,
+        ),
+        new THREE.Vector3(
+          x + gate.position.x + sx / 2,
+          y + gate.position.y + sy / 2,
+          z + gate.position.z + sz / 2,
+        ),
+      ),
+  )
   gate.add(gateStruct)
   for (const s of gateMass) pushBoxEdges(edgeVerts, [s[0], s[1], s[2] + GZ, s[3], s[4], s[5]])
 
@@ -743,6 +758,7 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
   conduits.add(tubeMesh)
 
   const piers = new THREE.InstancedMesh(unitBox, matStruct, pierSpecs.length)
+  piers.name = 'conn.conduit.piers'
   fillBoxes(piers, pierSpecs)
   piers.raycast = () => {}
   conduits.add(piers)
@@ -766,6 +782,13 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
   conduits.add(manifoldGroup)
 
   group.add(conduits)
+  group.userData.collisionBoxes = [...termMass, ...pierSpecs].map(
+    ([x, y, z, sx, sy, sz]) =>
+      new THREE.Box3(
+        new THREE.Vector3(x - sx / 2, y - sy / 2, z - sz / 2),
+        new THREE.Vector3(x + sx / 2, y + sy / 2, z + sz / 2),
+      ),
+  )
 
   const termPlate = makePlate('client applications', 2.2, COLOR.inkDim)
   termPlate.position.set(TX, 11.4, TZ + 11.2)
