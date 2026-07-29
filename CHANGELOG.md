@@ -9,6 +9,36 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.16.0] — 2026-07-29
+
+### The simulation stops lying about the last of its knobs
+
+`KNOB-AUDIT.md` graded ten of twenty-three knobs WRONG. The two worst were fixed
+in 0.13.0; these are the remaining four root causes, and they close the audit.
+
+- **A backend paid nothing for evicting a dirty buffer**, so the background
+  writer had cost and no benefit and neither `bgwriter` knob could show what it
+  is for. Backend writes now fall from 129.0 to 76.0 per second when the writer
+  runs. `bgwriter_lru_maxpages` at 100 and at 400 were previously identical;
+  they now clean 28.4 and 54.2 pages per second.
+- **`wal_buffers` was a 256 KiB constant.** It now follows PostgreSQL's rule —
+  `shared_buffers/32`, floored at 64 kB, capped at one WAL segment.
+- **Two disclosed time constants disagreed with each other.** The wording now
+  consistently says one-way delay, across the observability paths, the panel
+  content and the storage documentation.
+- **`checkpoint_timeout` could not amortise full-page images** — the whole lesson
+  of the setting. The write set had no repeating middle band, so pages were never
+  re-touched within a checkpoint cycle. Scaled hot, warm and cold bands at
+  60/35/5 make the amortisation visible: raising the timeout from 15 s to 120 s
+  now moves estimated full-page images from 867 to 425 KiB/s, where before it
+  barely moved from 699 to 612.
+
+Every figure here was measured against the model with a seeded RNG and a warm-up,
+then re-measured on the way back down to check recovery — including the cases
+where recovery is legitimately asymmetric and a symmetry assertion would be wrong.
+
+---
+
 ## [0.15.0] — 2026-07-29
 
 ### The machine room has a name and gives credit
