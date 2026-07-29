@@ -175,6 +175,8 @@ export function knobDisplay(meta: KnobMeta, value: KnobValue): KnobDisplay {
   switch (meta.key) {
     case 'checkpointTimeout':
       return { num: String(Math.round(n)), unit: 's', alt: n >= 60 ? fmtDuration(n) : undefined }
+    case 'recoveryTargetAge':
+      return { num: String(Math.round(n)), unit: 's ago', alt: n >= 60 ? fmtDuration(n) : undefined }
     case 'maxWalSize':
       return { num: fmtNum(n), unit: 'MiB', alt: n >= 1024 ? fmtBytes(n * 1024 * 1024, 1) : undefined }
     case 'tps':

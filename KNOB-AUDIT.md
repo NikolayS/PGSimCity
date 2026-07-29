@@ -5,7 +5,9 @@ up to and pull is far more persuasive than a slider in a panel, so a lever wired
 to a knob with a wrong consequence chain is a machine for teaching a falsehood
 convincingly.
 
-Scope: all 23 fields of `Knobs` in `src/core/types.ts:75`. Method: read every
+Original scope: the 23 fields of `Knobs` in `src/core/types.ts:75`. The
+disaster-recovery addendum below audits the three controls added by roadmap
+item 1, bringing the current contract to 26 fields. Method: read every
 consumer, then drive the model directly — `createSim()` with a stub bus,
 `setKnob()`, `update(1/30)`, seeded RNG, 300–400 s of warm-up before every
 reading, and an explicit down-sweep afterwards to test recovery. Every number
@@ -872,6 +874,28 @@ does persist after a load drop is the **WAL rate**, which stayed at 3–5 MiB/s
 for roughly 120 s and did not reach zero until ~300 s — entirely vacuum WAL
 (with `autovacuum = false` the same drop reaches 0 KiB/s within 15 s). The
 user-visible symptom is real; the named mechanism was not.
+
+---
+
+## Disaster-recovery control addendum — roadmap item 1
+
+Measured with the same seeded direct-model method as the original audit. Each
+control was hard-stepped, observed for direction and magnitude, returned to its
+default, and checked for recovery. The retained-backup count has one legitimate
+asymmetry: expiration is deletion, so increasing retention later cannot
+resurrect a backup already expired.
+
+| # | Knob | Real setting | Verdict | Measured response and recovery |
+|---|---|---|---|---|
+| 24 | `archiveAvailable` | archive repository reachability, not a GUC | **CORRECT** | At 5,000 offered tps / 100% writes, off reached 28 queued segments and the scaled 512 MiB `pg_wal` limit after 137.2 s; 51,194 writes were then rejected over 5 s. Restoring the repository and dropping load to 1 tps drained the queue to 0, reduced `pg_wal` to 288 MiB, and reopened writes. |
+| 25 | `backupRetention` | pgBackRest `repo1-retention-full` | **CORRECT** | With retention 2, the third successful full backup retained 2 and expired 1. A target before the new oldest backup failed with the actionable retention reason. Returning the policy to 3 recovers future capacity but correctly does not recreate the expired backup or WAL. |
+| 26 | `recoveryTargetAge` | `recovery_target_time` teaching offset | **CORRECT** | Against the same retained backup, targets 2 / 20 / 40 s ago selected backup ages 58.0 / 40.0 / 20.0 s, required 89.0 / 66.6 / 42.3 MiB of WAL, and derived 16.96 / 16.02 / 15.01 s recovery. Returning the control to its 20 s default restored the selection exactly. |
+
+The last sweep is intentionally asymmetric in direction: moving the target
+further back toward the backup needs less WAL and is faster. Waiting longer
+after a backup while targeting the newest archived point does the opposite:
+the measured selected-backup age rose from 19.0 s to 57.6 s, replay bytes from
+41.0 MiB to 88.9 MiB, and estimated recovery from 14.96 s to 16.95 s.
 
 ---
 

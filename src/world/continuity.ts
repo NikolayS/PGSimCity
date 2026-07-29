@@ -5,8 +5,7 @@ import { clamp, clamp01, damp, fmtBytes, fmtDuration } from '../core/util'
 import { ANCHOR, CONTINUITY } from './layout'
 
 /* ============================================================================
- * THE CONTINUITY QUARTER — backups, point-in-time recovery, and the machinery
- * of failover.
+ * THE CONTINUITY QUARTER — backups and point-in-time recovery.
  *
  * The rest of the city answers "what is Postgres doing right now". This quarter
  * answers the two questions that decide whether anybody still has a job
@@ -23,10 +22,6 @@ import { ANCHOR, CONTINUITY } from './layout'
  *                    a time, a dial set to recovery_target_time, and a replay
  *                    belt with a stop line painted across it.
  *
- *   HA QUARTER       due south: three nodes, one leader lock in a store that
- *                    holds no user data, one service address out on the
- *                    arrivals avenue, and a rejoin bay for the node that loses.
- *
  * THE ONE IDEA WORTH THE TRIP is the switchyard. A timeline is not a version
  * number and not a branch you can merge: it is a fork in the identity of the
  * WAL itself, taken at one LSN, recorded in a `.history` file, and stamped into
@@ -36,25 +31,12 @@ import { ANCHOR, CONTINUITY } from './layout'
  * the turnout is the `.history` file; and no siding ever rejoins, because no
  * timeline ever does.
  *
- * WHAT IS SIMULATED, AND WHAT IS NOT. Continuous archiving and the lease board
- * are read straight off the live simulation. The restore drill is this module's
- * own clock: it takes a base backup from the STANDBY, hauls it and the archived
- * WAL round to the recovery ground, replays to a target time, stops on the
- * line, and — for the first three drills — promotes, which forks a new timeline
- * into the yard. After that it stops at the pause and shuts the drill cluster
- * down instead, and the board says why: a rehearsal that promotes burns a
- * timeline ID into your archive forever, so a real verification drill does not
- * promote.
- *
- * An unplanned FAILOVER is deliberately NOT animated. The primary's own
- * district is visibly serving traffic two hundred metres north; showing it dead
- * down here would be the one lie this city cannot afford, and faking it would
- * cost more trust than the animation is worth. Every standing part of the story
- * is built instead — who holds the lock, whose lease is counting down, which
- * candidate is eligible and exactly why the other never is, where the service
- * address points, and the bay a demoted node must pass through before it can
- * follow anyone. Wiring the event itself needs a `primary down` state in
- * sim/model.ts; the geometry here is already driven off `primaryNode`.
+ * WHAT IS SIMULATED, AND WHAT IS NOT. The model owns archive retries, pg_wal
+ * pressure, full backups, pgBackRest retention, and a restore that fetches one
+ * retained backup before replaying archived WAL to recovery_target_time. The
+ * world only projects that state. HA buildings already laid out south of this
+ * quarter stay inert: no Patroni agent, leader election, promotion, endpoint
+ * move, rejoin, or failover is modeled in this pass.
  * ==========================================================================*/
 
 /* --- module scope scratch: update() must never allocate -------------------- */
@@ -77,50 +59,6 @@ const N_TILE_B = BUF_B * BUF_B
 const N_HISTORY = CONTINUITY.branches.length
 /** Dark. Used for every unlit instance colour in the quarter. */
 const OFF = 0x0a1120
-
-/* --- the drill clock ------------------------------------------------------ */
-
-type Phase = 'archive' | 'basebackup' | 'haul' | 'unpack' | 'replay' | 'hold' | 'decide' | 'teardown'
-
-const PHASES: readonly Phase[] = ['archive', 'basebackup', 'haul', 'unpack', 'replay', 'hold', 'decide', 'teardown']
-const P_UNPACK = 3
-const P_DECIDE = 6
-
-/** Simulated seconds per phase. One drill is 96 s. */
-const PHASE_SEC: Readonly<Record<Phase, number>> = {
-  archive: 10,
-  basebackup: 16,
-  haul: 12,
-  unpack: 8,
-  replay: 28,
-  hold: 7,
-  decide: 6,
-  teardown: 9,
-}
-
-const PHASE_LABEL: Readonly<Record<Phase, string>> = {
-  archive: 'idle — archiving only',
-  basebackup: 'pg_basebackup, from standby_a',
-  haul: 'base backup + archived WAL leaving the bucket',
-  unpack: 'unpacking base.tar onto an empty data directory',
-  replay: 'replaying archived WAL toward the target',
-  hold: 'target reached — recovery paused',
-  decide: 'promote, or shut down',
-  teardown: 'drill cluster dropped',
-}
-
-/**
- * Patroni's `maximum_lag_on_failover`, in bytes. A candidate further behind
- * than this is not promoted, because promoting it throws the difference away.
- */
-const MAX_LAG_ON_FAILOVER = 1048576
-/** Patroni's `ttl` — how long the leader lock survives without a renewal. */
-const LEASE_TTL = 30
-/** Patroni's `loop_wait` — how often each agent wakes up and renews. */
-const LOOP_WAIT = 10
-/** Node 3's `recovery_min_apply_delay`, in seconds. */
-const APPLY_DELAY = 15 * 60
-
 const cssHex = (c: number) => '#' + (c >>> 0).toString(16).padStart(6, '0')
 
 /** `00000002.history` — a timeline history file name. */
@@ -463,7 +401,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   const windowBar = lamp(COLOR.storage, 1.3, 1, 0.55, 2.2, BV[0], 0.72, BV[2] + 18, gVault)
 
   plate('BASE BACKUPS', BV[0], 12.6, BV[2] - 14, Math.PI, 2.8, COLOR.storage, 0.9, gVault)
-  plate('base.tar · pg_wal.tar · backup_label · backup_manifest', BV[0], 9.4, BV[2] - 14.4, Math.PI, 1.45, COLOR.inkDim, 0.68)
+  plate('pgBackRest full backups · manifest · archived WAL stored separately', BV[0], 9.4, BV[2] - 14.4, Math.PI, 1.45, COLOR.inkDim, 0.68)
   plate('WAL alone restores nothing — it has to be replayed ONTO one of these', BV[0], 7.4, BV[2] - 14.4, Math.PI, 1.3, COLOR.inkDim, 0.62)
   plate('recovery window', BV[0], 1.6, BV[2] + 22, 0, 1.6, COLOR.storage, 0.7)
 
@@ -476,13 +414,13 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   box([BH[0], 11, BH[2], 1.4, 6, 1.4], 'none')
   const hostLamp = lamp(COLOR.storage, 1.6, 2.6, 1.0, 2.6, BH[0], 14.4, BH[2], gHost)
   hostLamp.visible = false
-  plate('backup host', BH[0], 10.8, BH[2] - 7.4, Math.PI, 2.2, COLOR.storage, 0.9, gHost)
+  plate('pgBackRest backup host', BH[0], 10.8, BH[2] - 7.4, Math.PI, 2.2, COLOR.storage, 0.9, gHost)
   plate(
-    'pg_basebackup -h standby_a -D /bk -Ft -X stream -c fast  ·  the primary never feels it',
+    'backup-standby=y · most files come from standby_a; the primary still coordinates start and stop',
     BH[0], 7.6, BH[2] - 7.8, Math.PI, 1.3, COLOR.inkDim, 0.68,
   )
   plate(
-    'and if standby_a is promoted mid-backup, the backup fails — that is documented, not a bug',
+    'WAL-G is named in the inspector; this model follows pgBackRest retention behavior',
     BH[0], 5.6, BH[2] - 7.8, Math.PI, 1.2, COLOR.inkDim, 0.6,
   )
 
@@ -525,12 +463,12 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   plate('recovery.signal', RP[0] - 16, 7.8, RP[2] - 10.2, 0, 1.5, COLOR.warn, 0.8)
   plate('restored data directory', RP[0], 1.8, RP[2] + 18, 0, 1.8, COLOR.bufClean, 0.75)
 
-  /** Shown only when the drill will NOT promote. */
+  /** Promotion is deliberately outside this disaster-recovery pass. */
   const drillBoard = plate(
-    'a drill that PROMOTES burns a timeline ID into the archive forever — verify, then shut it down',
+    'PITR STOPS AT recovery_target_time · no promotion or failover in this pass',
     RP[0], 12, RP[2] + 17, 0, 1.5, COLOR.warn, 0.85,
   )
-  drillBoard.visible = false
+  drillBoard.visible = true
 
   // the winch — restore_command, one hook, one file
   const gWinch = new THREE.Group()
@@ -594,7 +532,11 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   plate('stop line', RR[0] - 12, 3.6, RR[2] + 6, 0, 1.4, COLOR.crit, 0.75)
 
   /* ---------------------------------------------------------------------
-   * 6. THE HA QUARTER.
+   * 6. INERT FUTURE HA SCAFFOLD.
+   *
+   * These buildings predate this feature. They remain standing, registered,
+   * and collidable, but this disaster-recovery pass gives them no state,
+   * traffic, lease, promotion, delayed replay, or failover behaviour.
    * -------------------------------------------------------------------*/
 
   const gEndpoint = new THREE.Group()
@@ -620,7 +562,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
 
   plate('SERVICE ADDRESS', EP[0], 16.8, EP[2] - 1.7, Math.PI, 2.4, COLOR.client, 0.92, gEndpoint)
   plate(
-    'clients dial this, never a node · Patroni moves it, and Patroni is never in the data path',
+    'future high-availability scaffold · inactive in this disaster-recovery pass',
     EP[0], 13.8, EP[2] - 1.7, Math.PI, 1.3, COLOR.inkDim, 0.7,
   )
 
@@ -641,12 +583,12 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   gDcs.add(lockRing)
   const lockBody = lamp(COLOR.ok, 1.4, 4.4, 3.2, 2.4, DC[0], 12.6, DC[2], gDcs)
 
-  plate('DCS · the leader lock', DC[0], 18.8, DC[2], 0, 2.4, COLOR.ink, 0.9, gDcs)
+  plate('DCS · FUTURE HA SCAFFOLD', DC[0], 18.8, DC[2], 0, 2.4, COLOR.ink, 0.9, gDcs)
   plate(
-    'a lock, a lease and cluster state — and no user data, which is why it is not painted like Postgres',
+    'no leader lock, lease, election or failover is modelled in this pass',
     DC[0], 16.2, DC[2] + 0.4, 0, 1.25, COLOR.inkDim, 0.68,
   )
-  plate(`ttl = ${LEASE_TTL}s · loop_wait = ${LOOP_WAIT}s · lose the lock for ttl and you are demoted`, DC[0], 8.2, DC[2] - 10.4, Math.PI, 1.25, COLOR.inkDim, 0.7)
+  plate('disaster recovery is not automatic failover', DC[0], 8.2, DC[2] - 10.4, Math.PI, 1.25, COLOR.inkDim, 0.7)
 
   const LEASE_AT: readonly (readonly [number, number, number])[] = [ANCHOR.leaseNode1, ANCHOR.leaseNode2, ANCHOR.leaseNode3]
   const LEASE_TITLE = ['node 1 · primary', 'node 2 · standby_a', 'node 3 · standby_b']
@@ -655,8 +597,8 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     box([a[0], 4.5, a[2], 1.1, 9, 1.1], 'none')
     plate(LEASE_TITLE[i], a[0], 12.6, a[2], 0, 1.7, i === 0 ? COLOR.ok : COLOR.replication, 0.9)
   }
-  plate("ineligible: recovery_min_apply_delay = '15min'", ANCHOR.leaseNode3[0], 10.6, ANCHOR.leaseNode3[2] + 0.4, 0, 1.25, COLOR.warn, 0.85)
-  plate(`eligible while lag <= ${fmtBytes(MAX_LAG_ON_FAILOVER)}`, ANCHOR.leaseNode2[0], 10.6, ANCHOR.leaseNode2[2] + 0.4, 0, 1.25, COLOR.inkDim, 0.75)
+  plate('inactive · no delayed replay model', ANCHOR.leaseNode3[0], 10.6, ANCHOR.leaseNode3[2] + 0.4, 0, 1.25, COLOR.warn, 0.85)
+  plate('inactive · no failover candidate model', ANCHOR.leaseNode2[0], 10.6, ANCHOR.leaseNode2[2] + 0.4, 0, 1.25, COLOR.inkDim, 0.75)
 
   /** 0..2 are the role lamps; 3..5 the lease bars that drain and are renewed. */
   const leaseMesh = neonBank('ha.leases', unitBox, N_LEASE * 2, gDcs)
@@ -692,11 +634,11 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   plate('pg_basebackup -R', RJ[0] + 11, 10.6, RJ[2], 0, 1.8, COLOR.storage, 0.9, gRejoin)
   plate('REJOIN BAY', RJ[0], 8.0, RJ[2] - 10.5, 0, 2.0, COLOR.ink, 0.9, gRejoin)
   plate(
-    'after an unplanned failover the old primary holds WAL nobody will ever replay — it cannot just follow the winner',
+    'future high-availability scaffold · no demotion or rejoin is modelled in this pass',
     RJ[0], 5.6, RJ[2] - 10.5, 0, 1.2, COLOR.inkDim, 0.72,
   )
   plate(
-    'pg_rewind needs wal_log_hints = on (or data checksums) · full_page_writes = on · the target shut down cleanly',
+    'disaster recovery restores a separate cluster; it does not rejoin a failed primary',
     RJ[0], 3.6, RJ[2] - 10.5, 0, 1.2, COLOR.inkDim, 0.72,
   )
 
@@ -729,7 +671,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   plate('walreceiver', SBR[0], 10.6, SBR[2] - 5, Math.PI, 1.6, COLOR.replication, 0.8)
   plate('a TIME-DELAYED standby', SBD[0], 8.8, SBD[2] - 15.5, Math.PI, 2.0, COLOR.warn, 0.9, gStandbyB)
   plate(
-    'it receives and FLUSHES with the others — only replay waits 15 minutes, so a bad DELETE can still be outrun',
+    'future high-availability scaffold · no delayed replay is modelled in this disaster-recovery pass',
     SBD[0], 6.4, SBD[2] - 15.5, Math.PI, 1.2, COLOR.inkDim, 0.72,
   )
   const syncPlate = plate("synchronous_standby_names = ''", SBD[0], 4.4, SBD[2] - 15.5, Math.PI, 1.2, COLOR.inkDim, 0.72)
@@ -781,41 +723,17 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
    * 8. Live state.
    * -------------------------------------------------------------------*/
 
-  let phase: Phase = 'archive'
-  let phaseIdx = 0
-  let phaseT = 0
-  let drills = 1
-  let branches = 0
-  /** The timeline the NEXT promotion would create. The live one is 1. */
-  let nextTli = 2
-  let backupsHeld = 1
-  let newestBackupAge = 0
-  /** 0..1 — how far replay has got toward recovery_target_time. */
-  let replayProgress = 0
-  let lastSimT = -1
-  /** 0..1 through one Patroni loop_wait. */
-  let leasePhase = 0
   let clock = 0
   let queueEma = 0
   let prevArchived = -1
-  let node3LagBytes = 0
-  /**
-   * Which node owns the service address. Always 0 today; the arrow, the lamps
-   * and the readouts all key off it, so a real failover only has to move it.
-   */
-  const primaryNode = 0
 
-  const NODE_AT: readonly (readonly [number, number, number])[] = [ANCHOR.postmaster, ANCHOR.standby, ANCHOR.standbyB]
-
-  const phaseIn = (p: Phase) => phase === p
-  const willPromote = () => branches < CONTINUITY.branches.length
-
-  function nodeEligible(i: number, s: SimState): boolean {
-    if (i === primaryNode) return false // it already holds the lock
-    if (!s.replication.connected) return false
-    if (i === 2) return false // recovery_min_apply_delay keeps node 3 out, always
-    return s.replication.lagBytes <= MAX_LAG_ON_FAILOVER
-  }
+  // These structures are already built for a later roadmap item. They remain
+  // visible, registered, and collidable, but every behavioural indicator is
+  // dark: no Patroni state or failover model belongs to this DR pass.
+  epArrow.visible = false
+  lockRing.visible = false
+  lockBody.visible = false
+  syncPlate.visible = false
 
   /* ---------------------------------------------------------------------
    * 9. Registration.
@@ -833,8 +751,10 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     labelAt: [AG[0], 22, AG[2]],
     color: COLOR.archive,
     readout: (s: SimState) => {
-      const q = s.wal.archiveQueue
-      if (q > 6) return `${q} segments queued — the archive is falling behind`
+      const a = s.disasterRecovery.archive
+      const q = a.queueSegments
+      if (a.writesBlocked) return `${q} queued · scaled pg_wal safety limit reached · writes rejected`
+      if (!s.knobs.archiveAvailable) return `${q} queued · archive-push retrying after nonzero exit`
       if (q > 0) return `${q} queued · ${s.wal.archived} shipped`
       return `clear · ${s.wal.archived} segments shipped`
     },
@@ -851,10 +771,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     focus: { target: [yardMidX, 10, Y.z - 4], distance: 152, dir: [-0.34, 0.56, 0.76] },
     labelAt: [yardMidX, 26, Y.z],
     color: COLOR.archive,
-    readout: () =>
-      branches === 0
-        ? 'timeline 1 · no branches yet'
-        : `timeline 1 live · ${branches} branch${branches === 1 ? '' : 'es'} · next would be ${historyName(nextTli)}`,
+    readout: () => 'timeline 1 live · PITR stops at its target · no promotion in this pass',
   })
 
   ctx.register({
@@ -869,7 +786,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     labelAt: [OS[0], 18, OS[2]],
     color: COLOR.archive,
     readout: (s: SimState) =>
-      `${s.wal.archived} segments · ${branches + 1} timeline${branches === 0 ? '' : 's'} · ${fmtBytes(s.wal.archived * s.wal.segmentSize)}`,
+      `${s.wal.archived} segments · timeline 1 · ${fmtBytes(s.wal.archived * s.wal.segmentSize)}`,
   })
 
   ctx.register({
@@ -883,14 +800,18 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     focus: { target: [BV[0], 6, BV[2]], distance: 112, dir: [0.34, 0.5, 0.8] },
     labelAt: [BV[0], 20, BV[2]],
     color: COLOR.storage,
-    readout: () =>
-      `${backupsHeld} full backup${backupsHeld === 1 ? '' : 's'} held · newest ${fmtDuration(newestBackupAge)} old`,
+    readout: (s: SimState) => {
+      const backups = s.disasterRecovery.backups
+      if (backups.length === 0) return 'empty · archived WAL alone cannot restore the data directory'
+      const newest = backups[backups.length - 1]
+      return `${backups.length} full backup${backups.length === 1 ? '' : 's'} held · newest ${fmtDuration(s.t - newest.completedAt)} old`
+    },
   })
 
   ctx.register({
     id: 'backup.host',
     name: 'the backup host',
-    role: 'runs pg_basebackup against the standby, not the primary',
+    role: 'runs pgBackRest full backup with backup-standby=y',
     kind: 'process',
     district: 'replication',
     object: gHost,
@@ -898,10 +819,13 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     focus: { target: [BH[0], 6, BH[2]], distance: 72, dir: [0.4, 0.46, 0.79] },
     labelAt: [BH[0], 18, BH[2]],
     color: COLOR.storage,
-    readout: () =>
-      phaseIn('basebackup')
-        ? `running · ${((phaseT / PHASE_SEC.basebackup) * 100).toFixed(0)}%`
-        : 'idle — the next full backup is on the drill clock',
+    readout: (s: SimState) => {
+      const b = s.disasterRecovery.backup
+      if (b.status === 'copying') return `pgBackRest full backup · ${(b.progress * 100).toFixed(0)}% · ${fmtBytes(b.dataBytes)}`
+      if (b.status === 'waiting_wal') return 'data copied · waiting for required WAL to reach the archive'
+      if (b.status === 'failed') return b.failureReason
+      return 'idle · start a measured full backup from the inspector'
+    },
   })
 
   ctx.register({
@@ -915,7 +839,14 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     focus: { target: [-312, 6, 258], distance: 172, dir: [-0.24, 0.5, 0.83] },
     labelAt: [RP[0], 22, RP[2]],
     color: COLOR.bufClean,
-    readout: () => `drill ${drills} · ${PHASE_LABEL[phase]}`,
+    readout: (s: SimState) => {
+      const r = s.disasterRecovery.restore
+      if (r.status === 'failed') return r.failureReason
+      if (r.status === 'fetching') return `fetching full backup · ${(r.progress * 100).toFixed(0)}% of estimated recovery time`
+      if (r.status === 'replaying') return `replaying ${fmtBytes(r.walBytesRequired)} of archived WAL`
+      if (r.status === 'complete') return 'target reached · replay stopped · not promoted'
+      return 'empty recovery host · choose a target and start PITR'
+    },
   })
 
   ctx.register({
@@ -929,10 +860,12 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     focus: { target: [RC[0], 14, RC[2]], distance: 62, dir: [0.3, 0.55, 0.78] },
     labelAt: [RC[0], 28, RC[2]],
     color: COLOR.warn,
-    readout: () =>
-      phaseIn('hold') || phaseIn('decide')
-        ? "target reached · pg_get_wal_replay_pause_state() = 'paused'"
-        : `${(replayProgress * 100).toFixed(0)}% of the way to the target`,
+    readout: (s: SimState) => {
+      const r = s.disasterRecovery.restore
+      if (r.status === 'complete') return 'recovery_target_time reached · replay stopped'
+      if (r.status === 'failed') return r.failureReason
+      return `${s.knobs.recoveryTargetAge}s before now · ${(r.progress * 100).toFixed(0)}% restored`
+    },
   })
 
   ctx.register({
@@ -946,7 +879,10 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     focus: { target: [RW[0], 12, RW[2]], distance: 56, dir: [0.44, 0.42, 0.79] },
     labelAt: [RW[0], 26, RW[2]],
     color: COLOR.wal,
-    readout: () => (phaseIn('replay') ? 'fetching the next segment from the archive' : 'idle'),
+    readout: (s: SimState) =>
+      s.disasterRecovery.restore.status === 'replaying'
+        ? `archive-get fetching segments · ${fmtBytes(s.disasterRecovery.restore.walBytesReplayed)} replayed`
+        : 'idle',
   })
 
   ctx.register({
@@ -960,13 +896,18 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     focus: { target: [RR[0] - 4, 6, RR[2]], distance: 60, dir: [-0.2, 0.45, 0.87] },
     labelAt: [RR[0] - 4, 14, RR[2]],
     color: COLOR.bufClean,
-    readout: () => (phaseIn('hold') ? 'stopped on the line' : phaseIn('replay') ? 'replaying' : 'stopped'),
+    readout: (s: SimState) =>
+      s.disasterRecovery.restore.status === 'complete'
+        ? 'stopped on the selected recovery_target_time'
+        : s.disasterRecovery.restore.status === 'replaying'
+          ? 'startup process replaying archived WAL'
+          : 'stopped',
   })
 
   ctx.register({
     id: 'ha.endpoint',
-    name: 'the service address',
-    role: 'what clients dial — it follows the primary, and it is not Patroni',
+    name: 'future service address scaffold',
+    role: 'inert future HA structure — no service switching is modelled in this pass',
     kind: 'network',
     district: 'clients',
     object: gEndpoint,
@@ -974,13 +915,12 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     focus: { target: [EP[0], 8, EP[2]], distance: 80, dir: [0.16, 0.42, -0.89] },
     labelAt: [EP[0], 22, EP[2]],
     color: COLOR.client,
-    readout: () => `pointing at node ${primaryNode + 1}`,
   })
 
   ctx.register({
     id: 'ha.dcs',
-    name: 'the DCS',
-    role: 'holds the leader lock, the lease clock, and no user data',
+    name: 'future DCS scaffold',
+    role: 'inert future HA structure — no leader lock, lease, or election is modelled',
     kind: 'network',
     district: 'replication',
     object: gDcs,
@@ -988,16 +928,12 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     focus: { target: [DC[0], 8, DC[2]], distance: 98, dir: [-0.2, 0.48, 0.85] },
     labelAt: [DC[0], 24, DC[2]],
     color: COLOR.ink,
-    readout: (s: SimState) => {
-      const n = nodeEligible(1, s) ? 1 : 0
-      return `node 1 holds the lock · renewed every ${LOOP_WAIT}s against a ${LEASE_TTL}s ttl · ${n} eligible candidate${n === 1 ? '' : 's'}`
-    },
   })
 
   ctx.register({
     id: 'ha.rejoin',
-    name: 'the rejoin bay',
-    role: 'pg_rewind, or a rebuild — a demoted primary has no third option',
+    name: 'future rejoin scaffold',
+    role: 'inert future HA structure — no demotion, pg_rewind, or rebuild is modelled',
     kind: 'concept',
     district: 'replication',
     object: gRejoin,
@@ -1005,13 +941,12 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     focus: { target: [RJ[0], 6, RJ[2]], distance: 64, dir: [-0.3, 0.5, -0.81] },
     labelAt: [RJ[0], 16, RJ[2]],
     color: COLOR.warn,
-    readout: () => 'empty — nothing has been demoted on this cluster',
   })
 
   ctx.register({
     id: 'standby.b',
-    name: 'standby_b',
-    role: 'a time-delayed standby — 15 minutes in the past, on purpose',
+    name: 'future standby_b scaffold',
+    role: 'inert future HA structure — no second-standby traffic or delayed replay is modelled',
     kind: 'storage',
     district: 'replication',
     object: gStandbyB,
@@ -1019,10 +954,6 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     focus: { target: [SB[0], 6, SB[2] + 20], distance: 132, dir: [-0.5, 0.46, 0.73] },
     labelAt: [SB[0], 20, SB[2]],
     color: COLOR.replication,
-    readout: (s: SimState) =>
-      s.replication.connected
-        ? `flushed with standby_a · replay held ${fmtDuration(APPLY_DELAY)} · ${fmtBytes(node3LagBytes)} waiting in pg_wal`
-        : 'disconnected',
   })
 
   /* ---------------------------------------------------------------------
@@ -1031,8 +962,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
 
   /** Emission accumulators, one per route. Never reallocated. */
   const emit = {
-    take: 0, store: 0, haul: 0, unpack: 0,
-    replay: 0, apply: 0, streamB: 0, applyB: 0, lease1: 0, lease2: 0, lease3: 0,
+    take: 0, store: 0, haul: 0, unpack: 0, replay: 0, apply: 0,
   }
 
   function pump(acc: number, perSec: number, dt: number, route: string): number {
@@ -1044,55 +974,13 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     return a
   }
 
-  function advancePhase(): void {
-    phaseIdx = (phaseIdx + 1) % PHASES.length
-    phase = PHASES[phaseIdx]
-    phaseT = 0
-
-    switch (phase) {
-      case 'archive':
-        drills += 1
-        replayProgress = 0
-        break
-      case 'basebackup':
-        backupsHeld = Math.min(N_VAULT, backupsHeld + 1)
-        newestBackupAge = 0
-        break
-      case 'unpack':
-        signalFlag.visible = true
-        break
-      case 'decide':
-        drillBoard.visible = !willPromote()
-        if (willPromote()) {
-          branchGroup[branches].visible = true
-          branches += 1
-          nextTli += 1
-          ctx.bus.emit('fx:pulse', { at: [yardMidX, 12, Y.z], color: COLOR.archive, radius: 44 })
-        }
-        break
-      case 'teardown':
-        signalFlag.visible = false
-        break
-      default:
-        break
-    }
-  }
-
-  function update(dt: number, sim: SimState, t: number): void {
+  function update(dt: number, sim: SimState): void {
     clock += dt
 
-    /* The drill runs on SIMULATED time, so pausing the city pauses it and the
-     * speed control drives it — it is part of the model, not a screensaver. */
-    if (lastSimT < 0) lastSimT = t
-    const sdt = Math.max(0, Math.min(2, t - lastSimT))
-    lastSimT = t
-    phaseT += sdt
-    newestBackupAge += sdt
-    if (phaseT >= PHASE_SEC[phase]) advancePhase()
-
     /* --- 1. continuous archiving, read off the live WAL --------------------*/
-    queueEma = damp(queueEma, sim.wal.archiveQueue, 2.5, dt)
-    const failing = queueEma > 6
+    const archive = sim.disasterRecovery.archive
+    queueEma = damp(queueEma, archive.queueSegments, 2.5, dt)
+    const failing = !sim.knobs.archiveAvailable || archive.writesBlocked
     const busy = queueEma > 0.6
     gateLamp[0].visible = !busy
     gateLamp[1].visible = busy && !failing
@@ -1104,12 +992,11 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     prevArchived = sim.wal.archived
     while (shipped-- > 0) ctx.flow({ route: 'archive.ship', count: 1, kind: 'archive', color: COLOR.archive, size: 1.3 })
 
-    /* Row 0 is the live timeline and fills from the west; the branch rows only
-     * light for timelines that exist, and hold less WAL the later they forked. */
+    /* Row 0 is the only live timeline. PITR never promotes in this pass. */
     const liveFill = Math.min(sim.wal.archived, S.cols)
     for (let r = 0; r < S.rows; r++) {
-      const exists = r === 0 || r <= branches
-      const fill = r === 0 ? liveFill : S.cols - (r - 1) * 2
+      const exists = r === 0
+      const fill = r === 0 ? liveFill : 0
       for (let c = 0; c < S.cols; c++) {
         const lit = exists && c < fill
         const newest = r === 0 && liveFill > 0 && c === liveFill - 1
@@ -1121,14 +1008,13 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     if (siloCap.instanceColor) siloCap.instanceColor.needsUpdate = true
 
     for (let k = 0; k < N_HISTORY; k++) {
-      const lit = k < branches
-      _c.setHex(lit ? COLOR.archive : OFF)
-      if (lit) _c.multiplyScalar(1.5)
-      historyTablet.setColorAt(k, _c)
+      historyTablet.setColorAt(k, _c.setHex(OFF))
+      branchGroup[k].visible = false
     }
     if (historyTablet.instanceColor) historyTablet.instanceColor.needsUpdate = true
 
     /* --- 2. the vault and the recovery window -----------------------------*/
+    const backupsHeld = sim.disasterRecovery.backups.length
     for (let i = 0; i < N_VAULT; i++) {
       const held = i >= N_VAULT - backupsHeld
       const newest = i === N_VAULT - 1
@@ -1141,21 +1027,33 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     windowBar.scale.x = damp(windowBar.scale.x, want, 3, dt)
     windowBar.position.x = BV[0] + vaultSpan / 2 - windowBar.scale.x / 2
 
-    /* --- 3. the restore drill ---------------------------------------------*/
-    hostLamp.visible = phaseIn('basebackup') && Math.sin(clock * 2.2) > -0.2
-    if (phaseIn('basebackup')) {
+    /* --- 3. explicit backup and restore operations -------------------------*/
+    const backup = sim.disasterRecovery.backup
+    hostLamp.visible = backup.status === 'copying' && Math.sin(clock * 2.2) > -0.2
+    if (backup.status === 'copying') {
       emit.take = pump(emit.take, 6, dt, 'backup.take')
       emit.store = pump(emit.store, 5, dt, 'backup.store')
     }
-    if (phaseIn('haul')) emit.haul = pump(emit.haul, 3.5, dt, 'restore.haul')
-    if (phaseIn('unpack')) emit.unpack = pump(emit.unpack, 5, dt, 'restore.unpack')
-
-    const unpacked = phaseIn('unpack') ? clamp01(phaseT / PHASE_SEC.unpack) : phaseIdx > P_UNPACK && phaseIdx <= P_DECIDE ? 1 : 0
+    const restore = sim.disasterRecovery.restore
+    const fetching = restore.status === 'fetching'
+    const replaying = restore.status === 'replaying'
+    const complete = restore.status === 'complete'
+    if (fetching) {
+      emit.haul = pump(emit.haul, 3.5, dt, 'restore.haul')
+      emit.unpack = pump(emit.unpack, 5, dt, 'restore.unpack')
+    }
+    const unpacked = fetching
+      ? restore.backupBytesRequired > 0
+        ? clamp01(restore.backupBytesFetched / restore.backupBytesRequired)
+        : 0
+      : replaying || complete
+        ? 1
+        : 0
     pgdata.scale.y = damp(pgdata.scale.y, 0.2 + unpacked * 6.8, 3, dt)
     pgdata.position.y = pgdata.scale.y / 2 + 0.6
+    signalFlag.visible = fetching || replaying || complete
 
-    if (phaseIn('replay')) {
-      replayProgress = clamp01(phaseT / PHASE_SEC.replay)
+    if (replaying) {
       emit.replay = pump(emit.replay, 4.5, dt, 'restore.replay')
       emit.apply = pump(emit.apply, 3.5, dt, 'restore.apply')
       jib.rotation.y = Math.sin(clock * 0.9) * 0.7
@@ -1163,83 +1061,11 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
       beltFlow.position.x = RR[0] + 12 - ((clock * 9) % 24)
     } else {
       hook.visible = false
-      if (phaseIn('hold') || phaseIn('decide')) {
-        replayProgress = 1
-        beltFlow.position.x = RR[0] - 9.4
-      }
+      if (complete) beltFlow.position.x = RR[0] - 9.4
     }
-    replayHand.rotation.y = damp(replayHand.rotation.y, -1.1 + replayProgress * 3.2, 4, dt)
-    stopLine.visible = phaseIdx >= P_UNPACK && phaseIdx <= P_DECIDE
-
-    /* --- 4. the lease board ------------------------------------------------*/
-    leasePhase = (leasePhase + sdt / LOOP_WAIT) % 1
-    for (let i = 0; i < N_LEASE; i++) {
-      const leader = i === primaryNode
-      const hex = leader ? COLOR.ok : nodeEligible(i, sim) ? COLOR.replication : COLOR.warn
-      _c.setHex(hex).multiplyScalar(1.5)
-      leaseMesh.setColorAt(i, _c)
-
-      // the bar drains toward the ttl and is snapped full again on renewal
-      const remain = leader ? 1 - leasePhase * (LOOP_WAIT / LEASE_TTL) : 1
-      _p.set(LEASE_AT[i][0], 1 + (8 * remain) / 2, LEASE_AT[i][2] + 1.1)
-      _sc.set(1.6, 8 * remain, 0.4)
-      _m.compose(_p, _qi, _sc)
-      leaseMesh.setMatrixAt(N_LEASE + i, _m)
-      _c.setHex(leader ? COLOR.ok : mixHex(hex, OFF, 0.6)).multiplyScalar(1.2)
-      leaseMesh.setColorAt(N_LEASE + i, _c)
-    }
-    leaseMesh.instanceMatrix.needsUpdate = true
-    if (leaseMesh.instanceColor) leaseMesh.instanceColor.needsUpdate = true
-
-    // The DCS and its leader lock exist independently of streaming health.
-    // Renewal visibly breathes the lock; replication only changes eligibility.
-    const leasePulse = 1 + 0.07 * (1 - leasePhase)
-    lockRing.visible = true
-    lockRing.scale.setScalar(leasePulse)
-    lockBody.visible = true
-    lockBody.scale.set(1, 0.82 + 0.18 * (1 - leasePhase), 1)
-    emit.lease1 = pump(emit.lease1, 1.4, dt, 'ha.lease1')
-    if (sim.replication.connected) {
-      emit.lease2 = pump(emit.lease2, 1.4, dt, 'ha.lease2')
-      emit.lease3 = pump(emit.lease3, 1.4, dt, 'ha.lease3')
-    }
-
-    const na = NODE_AT[primaryNode]
-    epArrow.rotation.y = damp(epArrow.rotation.y, Math.atan2(na[0] - EP[0], na[2] - EP[2]), 3, dt)
-
-    /* --- 5. node 3 ---------------------------------------------------------*/
-    node3LagBytes = damp(node3LagBytes, sim.stats.walBytesPerSec * APPLY_DELAY, 0.6, dt)
-    if (sim.replication.connected) {
-      emit.streamB = pump(emit.streamB, 3.2, dt, 'net.streamB')
-      emit.applyB = pump(emit.applyB, 1.6, dt, 'replicaB.apply')
-    }
-    const heat = sim.replication.connected ? 0.7 + 0.3 * Math.sin(clock * 1.4) : 1
-    const wave = Math.floor(clock * 1.6)
-    for (let i = 0; i < N_TILE_B; i++) {
-      const lit = sim.replication.connected && (i + wave) % 7 !== 0
-      _c.setHex(lit ? COLOR.bufClean : OFF)
-      if (lit) _c.multiplyScalar(heat)
-      tileB.setColorAt(i, _c)
-    }
-    if (tileB.instanceColor) tileB.instanceColor.needsUpdate = true
-
-    /* --- 6. synchronous_standby_names, kept honest with the GUC ------------*/
-    const sc = sim.knobs.synchronousCommit
-    const line =
-      sc === 'off' || sc === 'local'
-        ? "synchronous_standby_names = '' — both standbys are asynchronous"
-        : sc === 'remote_apply'
-          ? 'remote_apply + a 15min delay = every COMMIT waits 15 minutes. Keep standby_b out of the sync set.'
-          : "synchronous_standby_names = 'ANY 1 (standby_a, standby_b)'"
-    if (syncPlate.userData.line !== line) {
-      syncPlate.userData.line = line
-      const tex = theme.textTexture(line, { size: 64, color: cssHex(sc === 'remote_apply' ? COLOR.crit : COLOR.inkDim) })
-      const img = tex.image as { width: number; height: number }
-      const mat = syncPlate.material as THREE.MeshBasicMaterial
-      mat.map = tex
-      mat.needsUpdate = true
-      syncPlate.scale.x = 1.2 * (img && img.height ? img.width / img.height : 6)
-    }
+    replayHand.rotation.y = damp(replayHand.rotation.y, -1.1 + restore.progress * 3.2, 4, dt)
+    targetHand.rotation.y = damp(targetHand.rotation.y, -1.1 + clamp(sim.knobs.recoveryTargetAge / 300, 0, 1) * 3.2, 4, dt)
+    stopLine.visible = replaying || complete
   }
 
   function setDetail(level: 0 | 1 | 2): void {
