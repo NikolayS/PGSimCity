@@ -104,6 +104,11 @@ export const ANCHOR = {
   logger: [-140, 0, 100],
   statsCollector: [-196, 0, 76],
 
+  // walk-up controls, outside their owners' collision volumes
+  handleAutovacuum: [-179.5, 0.72, 0],
+  handleBgwriter: [-140, 0.72, 54],
+  handleFullPageWrites: [132, 0.72, -21.5],
+
   // storage underworld
   dataDir: [0, CITY.storage.y, 0],
   osCache: [0, CITY.osCache.y, 0],
