@@ -2,6 +2,7 @@ import '../styles/panel.css'
 
 import { destinationForId } from '../core/destinations'
 import type { ComponentDef, ComponentDoc, ComponentKind, DocRef, DocReferences, Knobs, SimState } from '../core/types'
+import { fmtBytes } from '../core/util'
 import { doc, knobMeta, mdToHtml } from './content'
 import {
   SHEET_EVENT,
@@ -300,8 +301,11 @@ export function createInspector(ctx: UiContext): UiModule {
   /* --- live pieces, rebuilt on every selection --------------------------- */
 
   type Tile = { set(v: string, state?: '' | 'ok' | 'warn' | 'crit'): void; get: (s: SimState) => string }
+  type ActionId = NonNullable<ComponentDoc['actions']>[number]
+  type ActionControl = { root: HTMLElement; sync(): void }
   let tiles: Tile[] = []
   let knobs: KnobControl[] = []
+  let actions: ActionControl[] = []
   let liveDot: HTMLElement | null = null
   /** undefined until the first render, so the empty state is drawn on boot */
   let currentId: string | null | undefined
@@ -314,6 +318,7 @@ export function createInspector(ctx: UiContext): UiModule {
   function teardown(): void {
     for (const k of knobs) k.dispose()
     knobs = []
+    actions = []
     tiles = []
     liveDot = null
     clear(body)
@@ -353,6 +358,71 @@ export function createInspector(ctx: UiContext): UiModule {
         el('span', { class: 'pgc-anatomy-entry__arrow', ariaHidden: 'true', text: '→' }),
       ),
     )
+  }
+
+  function componentAction(action: ActionId): ActionControl {
+    const button = el('button', { class: 'pg-btn', type: 'button' })
+    const hint = el('p', { class: 'pg-hint' })
+    const root = el('div', { class: 'pg-field' }, button, hint)
+
+    if (action === 'start-full-backup') {
+      button.addEventListener('click', () => {
+        ctx.sim.startBaseBackup()
+        sync()
+      })
+    } else {
+      button.addEventListener('click', () => {
+        ctx.sim.startPointInTimeRestore()
+        sync()
+      })
+    }
+
+    function sync(): void {
+      const s = ctx.sim.state
+      if (action === 'start-full-backup') {
+        const op = s.disasterRecovery.backup
+        const active = op.status === 'copying' || op.status === 'waiting_wal'
+        button.disabled = active || !s.replication.connected || s.knobs.walLevel === 'minimal'
+        setText(
+          button,
+          op.status === 'copying'
+            ? `Full backup ${(op.progress * 100).toFixed(0)}%`
+            : op.status === 'waiting_wal'
+              ? 'Waiting for archived WAL'
+              : op.status === 'failed'
+                ? 'Retry pgBackRest full backup'
+                : 'Take pgBackRest full backup',
+        )
+        setText(
+          hint,
+          op.status === 'failed'
+            ? op.failureReason
+            : `Reads ${fmtBytes(s.disasterRecovery.dataDirectoryBytes)} from standby_a at a compressed teaching timescale.`,
+        )
+        return
+      }
+
+      const restore = s.disasterRecovery.restore
+      const active = restore.status === 'fetching' || restore.status === 'replaying'
+      button.disabled = active || s.disasterRecovery.backups.length === 0
+      setText(
+        button,
+        active
+          ? `PITR ${(restore.progress * 100).toFixed(0)}%`
+          : restore.status === 'failed'
+            ? 'Retry point-in-time restore'
+            : 'Restore to selected time',
+      )
+      setText(
+        hint,
+        restore.status === 'failed'
+          ? restore.failureReason
+          : `Target: ${s.knobs.recoveryTargetAge}s before now. This fetches a retained full backup, then replays archived WAL; it never promotes.`,
+      )
+    }
+
+    sync()
+    return { root, sync }
   }
 
   /* --- empty state ------------------------------------------------------- */
@@ -498,6 +568,20 @@ export function createInspector(ctx: UiContext): UiModule {
         added += 1
       }
       if (added) wrap.append(block)
+    }
+
+    if (info?.actions?.length) {
+      const block = el(
+        'div',
+        { class: 'pgc-block pgc-block--actions' },
+        el('div', { class: 'pgc-eyebrow-row' }, el('span', { class: 'pg-eyebrow', text: 'Operate it' })),
+      )
+      for (const action of info.actions) {
+        const control = componentAction(action)
+        actions.push(control)
+        block.append(control.root)
+      }
+      wrap.append(block)
     }
 
     /* related */
@@ -657,6 +741,7 @@ export function createInspector(ctx: UiContext): UiModule {
         }
       }
       for (const k of knobs) k.sync()
+      for (const action of actions) action.sync()
     },
     dispose() {
       offSelect()

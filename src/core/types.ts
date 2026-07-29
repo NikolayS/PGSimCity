@@ -113,6 +113,12 @@ export interface Knobs {
   replicaSlowApply: boolean
   /** A long-running standby read reports xmin through hot_standby_feedback. */
   standbyLongQuery: boolean
+  /** The remote archive repository is reachable by archive_command. */
+  archiveAvailable: boolean
+  /** pgBackRest repo1-retention-full count used by the DR model. */
+  backupRetention: number
+  /** Seconds before now selected by the recovery_target_time control. */
+  recoveryTargetAge: number
   /** Simulation speed multiplier. */
   timeScale: number
   paused: boolean
@@ -153,6 +159,9 @@ export const DEFAULT_KNOBS: Knobs = {
   replicaNetworkLag: 30,
   replicaSlowApply: false,
   standbyLongQuery: false,
+  archiveAvailable: true,
+  backupRetention: 3,
+  recoveryTargetAge: 20,
   timeScale: 1,
   paused: false,
 }
@@ -492,6 +501,90 @@ export interface ReplicationState {
   inFlight: number
 }
 
+export type BaseBackupStatus = 'idle' | 'copying' | 'waiting_wal' | 'failed'
+
+export interface BaseBackup {
+  id: number
+  /** pgBackRest full backup label in the city's compact teaching format. */
+  label: string
+  startedAt: number
+  completedAt: number
+  startLsn: number
+  stopLsn: number
+  /** Logical bytes read from the data directory. */
+  dataBytes: number
+  /** Scaled compressed bytes stored in the repository. */
+  repositoryBytes: number
+  durationSec: number
+  source: 'standby'
+  tool: 'pgBackRest'
+}
+
+export interface BaseBackupOperation {
+  status: BaseBackupStatus
+  progress: number
+  startedAt: number
+  startLsn: number
+  stopLsn: number
+  dataBytes: number
+  repositoryBytes: number
+  copiedBytes: number
+  estimatedDurationSec: number
+  failureReason: string
+}
+
+export type PointInTimeRestoreStatus =
+  | 'idle'
+  | 'fetching'
+  | 'replaying'
+  | 'complete'
+  | 'failed'
+
+export interface PointInTimeRestore {
+  status: PointInTimeRestoreStatus
+  progress: number
+  targetTime: number
+  targetLsn: number
+  backupId: number
+  backupAgeSec: number
+  backupBytesRequired: number
+  backupBytesFetched: number
+  walBytesRequired: number
+  walBytesReplayed: number
+  estimatedDurationSec: number
+  elapsedSec: number
+  failureReason: string
+  /** PITR stops at the target in this pass; promotion belongs to HA work. */
+  promoted: false
+}
+
+export interface ArchiveRecoveryState {
+  queueSegments: number
+  archivedThroughLsn: number
+  archivedThroughTime: number
+  failedAttempts: number
+  pgWalBytes: number
+  pgWalCapacityBytes: number
+  /**
+   * Teaching-scale guard. Real PostgreSQL PANICs when the filesystem fills;
+   * the city keeps reads and the archiver alive so the incident can be watched.
+   */
+  writesBlocked: boolean
+  rejectedWrites: number
+}
+
+export interface DisasterRecoveryState {
+  /** The concrete behavior used where WAL-G and pgBackRest differ. */
+  tool: 'pgBackRest'
+  dataDirectoryBytes: number
+  archive: ArchiveRecoveryState
+  backups: BaseBackup[]
+  expiredBackups: number
+  oldestRecoverableTime: number
+  backup: BaseBackupOperation
+  restore: PointInTimeRestore
+}
+
 export interface LockEdge {
   holder: number
   waiter: number
@@ -551,6 +644,7 @@ export interface SimState {
   autovac: AutovacState
   tables: TableSim[]
   replication: ReplicationState
+  disasterRecovery: DisasterRecoveryState
   locks: LockEdge[]
   stats: SimStats
   /** id of the running scenario, if any */
@@ -571,6 +665,10 @@ export interface SimApi {
   request(kind: QueryKind, table: number, opts?: TraceRequestOptions): void
   setTraceMode(mode: TracePlayback): void
   endTrace(): void
+  /** Start a pgBackRest full backup with backup-standby=y. */
+  startBaseBackup(): boolean
+  /** Restore to `targetAgeSec` before now, or the recoveryTargetAge control. */
+  startPointInTimeRestore(targetAgeSec?: number): boolean
   reset(): void
 }
 
@@ -970,6 +1068,8 @@ export interface ComponentDoc {
   metrics?: { label: string; get: (s: SimState) => string; hint?: string }[]
   /** related GUCs the user can twiddle right there */
   knobs?: (keyof Knobs)[]
+  /** explicit operations; unlike knobs these start work rather than set policy. */
+  actions?: ('start-full-backup' | 'start-pitr')[]
   /** ids of related components, rendered as jump links */
   see?: string[]
   /** source pointers for the curious, e.g. src/backend/postmaster/checkpointer.c */

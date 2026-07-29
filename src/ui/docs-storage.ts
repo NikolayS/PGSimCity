@@ -273,17 +273,17 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
     ],
     metrics: [
-      { label: 'Queue depth', get: (s) => fmtNum(s.wal.archiveQueue), hint: '.ready files waiting for the archiver' },
+      { label: 'Queue depth', get: (s) => fmtNum(s.disasterRecovery.archive.queueSegments), hint: '.ready files waiting for the archiver' },
       { label: 'Segments archived', get: (s) => fmtNum(s.wal.archived) },
       { label: 'In flight', get: (s) => fmtNum(countSegs(s, 'archiving')), hint: 'the archiver copies one at a time' },
       {
         label: 'Backlog size',
-        get: (s) => fmtBytes(s.wal.archiveQueue * s.wal.segmentSize),
+        get: (s) => fmtBytes(s.disasterRecovery.archive.queueSegments * s.wal.segmentSize),
         hint: 'WAL that exists only on the primary — still safe in pg_wal, lost only if you lose the primary\'s storage',
       },
     ],
-    knobs: ['tps', 'writeRatio', 'maxWalSize'],
-    see: ['archive.store', 'wal.vault', 'checkpointer', 'walsender'],
+    knobs: ['archiveAvailable', 'tps', 'writeRatio'],
+    see: ['archive.gate', 'object.store', 'wal.vault', 'checkpointer', 'walsender'],
     source: ['src/backend/postmaster/pgarch.c'],
     refs: {
       docs: [
@@ -299,7 +299,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
   },
 
   {
-    id: 'archive.store',
+    id: 'object.store',
     title: 'WAL archive',
     subtitle: 'off-cluster storage',
     tldr: 'A base backup plus every WAL segment since it — the only combination that is actually a backup.',
@@ -330,28 +330,323 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       { label: 'Segments held', get: (s) => fmtNum(s.wal.archived) },
       {
         label: 'Recovery window',
-        get: (s) => {
-          const bytes = s.wal.archived * s.wal.segmentSize
-          const rate = s.wal.bytesPerSec
-          return rate > 0 ? fmtDuration(bytes / rate) : '—'
-        },
-        hint: 'how far back you could rewind, at the current WAL rate',
+        get: (s) =>
+          s.disasterRecovery.backups.length > 0
+            ? fmtDuration(Math.max(0, s.t - s.disasterRecovery.oldestRecoverableTime))
+            : 'no base backup',
+        hint: 'oldest retained full backup through the newest archived WAL',
       },
-      { label: 'Unarchived', get: (s) => fmtNum(s.wal.archiveQueue), hint: 'segments not yet safe off-host' },
+      { label: 'Unarchived', get: (s) => fmtNum(s.disasterRecovery.archive.queueSegments), hint: 'segments not yet safe off-host' },
     ],
-    knobs: ['tps', 'writeRatio', 'fullPageWrites'],
+    knobs: ['archiveAvailable', 'tps', 'writeRatio', 'fullPageWrites'],
     see: ['archiver', 'wal.vault', 'startup.proc', 'replica.storage'],
     source: ['src/backend/postmaster/pgarch.c', 'src/backend/access/transam/xlog.c'],
     refs: {
       docs: [
         manual('continuous-archiving.html', '25.3. Continuous Archiving and Point-in-Time Recovery (PITR)'),
         manual('app-pgbasebackup.html', 'pg_basebackup'),
+        { label: 'pgBackRest user guide — backup, retention, restore and archive-push', url: 'https://pgbackrest.org/user-guide.html' },
+        { label: 'WAL-G PostgreSQL commands — backup-push, backup-fetch, wal-push and wal-fetch', url: 'https://wal-g.readthedocs.io/PostgreSQL/' },
       ],
       source: [
         srcFile('src/backend/access/transam/xlogrecovery.c', 'PerformWalRecovery, InitWalRecovery'),
         srcFile('src/backend/access/transam/xlogarchive.c', 'RestoreArchivedFile'),
       ],
       suzuki: suzuki(10, 'Online Backup and Point-In-Time Recovery (PITR) (§10.2)'),
+      rogov: rogov(R_WAL, 'Write-Ahead Log — recovery and continuous archiving'),
+    },
+  },
+
+  {
+    id: 'archive.gate',
+    title: 'Archive ownership boundary',
+    subtitle: 'archive_command → remote repository',
+    tldr: 'The failure line: success makes a completed segment recyclable; failure leaves it in pg_wal and retries.',
+    sections: [
+      {
+        heading: 'What crosses this gate',
+        body: 'PostgreSQL calls `archive_command` for a completed WAL segment. In this city the command is `pgbackrest archive-push`; WAL-G’s corresponding command is `wal-g wal-push`. A zero exit means the segment is durably stored in the remote repository. Any nonzero exit leaves its `.ready` marker in place, and PostgreSQL retries that same oldest file instead of skipping a hole in the recovery chain.',
+      },
+      {
+        heading: 'Break it here',
+        body: 'Turn **Archive object store** off. The application keeps writing, completed segments queue, and `pg_wal` grows because those files are not yet safe to recycle. At the city’s scaled 512 MiB safety line new writes are rejected so you can keep watching the archiver recover. A real filesystem does not preserve that teaching view: when the volume containing `pg_wal` fills, PostgreSQL PANICs and the whole database remains offline until an operator frees space and restarts it.',
+      },
+      {
+        heading: 'What to alert on',
+        body: 'Disk usage is the last alarm. Alert first on `.ready` files and on the distance between `pg_current_wal_lsn()` and `pg_stat_archiver.last_archived_wal`. Those two values tell you both that archiving is broken and how quickly the remaining disk budget is disappearing.',
+      },
+    ],
+    metrics: [
+      { label: '.ready queue', get: (s) => fmtNum(s.disasterRecovery.archive.queueSegments) },
+      { label: 'pg_wal', get: (s) => `${fmtBytes(s.disasterRecovery.archive.pgWalBytes)} / ${fmtBytes(s.disasterRecovery.archive.pgWalCapacityBytes)}` },
+      { label: 'Failed attempts', get: (s) => fmtNum(s.disasterRecovery.archive.failedAttempts) },
+      { label: 'Write admission', get: (s) => s.disasterRecovery.archive.writesBlocked ? 'blocked at scaled limit' : 'open' },
+    ],
+    knobs: ['archiveAvailable', 'tps', 'writeRatio'],
+    see: ['archiver', 'object.store', 'backup.vault'],
+    refs: {
+      docs: [
+        manual('continuous-archiving.html', '25.3. Continuous Archiving and Point-In-Time Recovery (PITR)'),
+        { label: 'pgBackRest archive-push', url: 'https://pgbackrest.org/user-guide.html' },
+        { label: 'WAL-G wal-push', url: 'https://wal-g.readthedocs.io/PostgreSQL/' },
+      ],
+      source: [srcFile('src/backend/postmaster/pgarch.c', 'pgarch_ArchiverCopyLoop, pgarch_archiveXlog')],
+      suzuki: suzuki(10, 'Online Backup and Point-In-Time Recovery (PITR)'),
+      rogov: rogov(R_WAL, 'Write-Ahead Log — recovery and continuous archiving'),
+    },
+  },
+
+  {
+    id: 'timeline.yard',
+    title: 'Timeline switchyard',
+    subtitle: 'WAL history, not a mergeable branch',
+    tldr: 'A recovery can stop without changing timeline; only a later promotion would fork one.',
+    sections: [
+      {
+        heading: 'Why only one track is live',
+        body: 'PITR replays archived WAL along a timeline and stops at `recovery_target_time`. That stop alone does not create a new timeline. Promotion would end recovery and fork a new timeline with a `.history` file, but promotion and failover are deliberately outside this pass, so the live through-line remains timeline 1 and every siding stays dark.',
+      },
+      {
+        heading: 'Why the history files matter',
+        body: 'A timeline is the identity of a WAL branch after recovery, not a database version and not something that can be merged back. A later restore that follows a child timeline needs its `.history` file to know the parent timeline and fork point. Real retention must preserve those files with the WAL they describe.',
+      },
+    ],
+    metrics: [
+      { label: 'Live timeline', get: () => '1' },
+      { label: 'Promotions', get: () => 'not modeled this pass' },
+    ],
+    see: ['object.store', 'recovery.clock'],
+    refs: {
+      docs: [manual('continuous-archiving.html', '25.3.5 Timelines')],
+      suzuki: suzuki(10, 'Online Backup and Point-In-Time Recovery (PITR)'),
+      rogov: rogov(R_WAL, 'Write-Ahead Log — recovery'),
+    },
+  },
+
+  {
+    id: 'backup.vault',
+    title: 'Full-backup vault',
+    subtitle: 'pgBackRest repository',
+    tldr: 'Archived WAL has nothing to replay onto without a retained base backup.',
+    sections: [
+      {
+        heading: 'The other half of PITR',
+        body: 'A streaming replica and a backup answer different failures. The replica applies a bad `DELETE FROM accounts` just as faithfully as a good transaction; it protects availability when a machine dies, not history from human error. A retained full backup plus an unbroken archived WAL chain can rebuild a separate cluster to the instant before that DELETE, but only after the restore finishes.',
+      },
+      {
+        heading: 'Retention is a recovery policy',
+        body: 'This model follows pgBackRest’s count-based `repo1-retention-full`. After a successful full backup, pgBackRest runs expiration: backup sets beyond the count go away, and by default archived WAL is retained for backups that have not expired. WAL-G has separate `delete` commands and permanence controls, so the city names it as an alternative but does not pretend its deletion workflow is pgBackRest’s.',
+      },
+      {
+        heading: 'Make the window fail',
+        body: 'Lower retention, take enough full backups to expire the oldest, then select a target before the new oldest backup. The restore refuses to start and says to increase retention before the window expires. That is intentional: no amount of surviving replica data can recreate history that both the backup and archive policy discarded.',
+      },
+    ],
+    metrics: [
+      { label: 'Full backups', get: (s) => fmtNum(s.disasterRecovery.backups.length) },
+      { label: 'Expired', get: (s) => fmtNum(s.disasterRecovery.expiredBackups) },
+      {
+        label: 'Oldest target',
+        get: (s) =>
+          s.disasterRecovery.backups.length > 0
+            ? `${fmtDuration(Math.max(0, s.t - s.disasterRecovery.oldestRecoverableTime))} ago`
+            : 'none',
+      },
+      { label: 'Retention', get: (s) => `${s.knobs.backupRetention} full backups` },
+    ],
+    knobs: ['backupRetention'],
+    see: ['backup.host', 'object.store', 'recovery.clock'],
+    refs: {
+      docs: [
+        { label: 'pgBackRest user guide — retention and archive retention', url: 'https://pgbackrest.org/user-guide.html' },
+        { label: 'WAL-G PostgreSQL commands — backup and delete', url: 'https://wal-g.readthedocs.io/PostgreSQL/' },
+        manual('continuous-archiving.html', '25.3. Continuous Archiving and Point-In-Time Recovery (PITR)'),
+      ],
+      suzuki: suzuki(10, 'Online Backup and Point-In-Time Recovery (PITR)'),
+      rogov: rogov(R_WAL, 'Write-Ahead Log — recovery and continuous archiving'),
+    },
+  },
+
+  {
+    id: 'backup.host',
+    title: 'pgBackRest backup host',
+    subtitle: 'full backup with backup-standby=y',
+    tldr: 'Copies a real amount of data over a real interval; “backup completed” is never instantaneous.',
+    sections: [
+      {
+        heading: 'Which tool this model follows',
+        body: 'The operation here is a pgBackRest **full** backup with `backup-standby=y`. pgBackRest still coordinates backup start and stop with the primary and copies a few primary-only files, while the vast majority of files come from the standby. WAL-G can instead run `backup-push` locally or through PostgreSQL’s `BASE_BACKUP` protocol; those are real alternatives, not aliases for pgBackRest internals.',
+      },
+      {
+        heading: 'Size creates duration',
+        body: 'The logical data-directory size is the declared heap and index pages plus a fixed catalog allowance. The city copies that many bytes at a fixed 384 MiB/s teaching rate and shows a repository copy at 65% of logical size. When the copy ends, PostgreSQL switches WAL and pgBackRest waits for the backup stop WAL to reach the archive before declaring success. Both size/rate numbers are explicit simplifications: production duration depends on storage, network, checksums, compression, encryption, file count and concurrency, and real compression depends on the data.',
+      },
+      {
+        heading: 'What is deliberately absent',
+        body: 'Only full backups are modeled. pgBackRest differential, incremental, bundling and block-incremental modes, WAL-G delta backups, tablespaces, encryption, verification and multi-repository behavior are not simulated. Durations are compressed into visible seconds; use the measured relationship here, never the absolute seconds, for capacity planning.',
+      },
+    ],
+    metrics: [
+      { label: 'Data directory', get: (s) => fmtBytes(s.disasterRecovery.dataDirectoryBytes) },
+      {
+        label: 'Backup progress',
+        get: (s) => s.disasterRecovery.backup.status === 'copying'
+          ? fmtPct(s.disasterRecovery.backup.progress)
+          : s.disasterRecovery.backup.status,
+      },
+      { label: 'Logical bytes', get: (s) => fmtBytes(s.disasterRecovery.backup.dataBytes) },
+      { label: 'Estimated copy', get: (s) => fmtDuration(s.disasterRecovery.backup.estimatedDurationSec) },
+    ],
+    knobs: ['backupRetention'],
+    actions: ['start-full-backup'],
+    see: ['replica.standby', 'backup.vault', 'object.store'],
+    refs: {
+      docs: [
+        { label: 'pgBackRest user guide — backup from a standby', url: 'https://pgbackrest.org/user-guide.html' },
+        { label: 'WAL-G backup-push', url: 'https://wal-g.readthedocs.io/PostgreSQL/' },
+        manual('app-pgbasebackup.html', 'pg_basebackup — taking a base backup from a standby'),
+      ],
+      source: [srcFile('src/backend/backup/basebackup.c', 'SendBaseBackup')],
+      suzuki: suzuki(10, 'Online Backup and Point-In-Time Recovery (PITR) (§10.1 Base Backup)'),
+      rogov: rogov(R_WAL, 'Write-Ahead Log — recovery'),
+    },
+  },
+
+  {
+    id: 'recovery.ground',
+    title: 'Recovery ground',
+    subtitle: 'a different host rebuilt from the repository',
+    tldr: 'Fetch a full backup first, then replay archived WAL; neither half can substitute for the other.',
+    sections: [
+      {
+        heading: 'The restore sequence',
+        body: 'The recovery host begins with an empty data directory. pgBackRest restores the selected full backup, PostgreSQL sees `recovery.signal`, and `restore_command` retrieves archived WAL while the startup process replays toward the target. A full backup without the WAL chain cannot reach the target; WAL without a full backup has no page files to start from.',
+      },
+      {
+        heading: 'Why backup age becomes recovery time',
+        body: 'Fetching the full backup costs roughly the same for two restores of the same data directory. The variable part is WAL after that backup: an older backup means more archived bytes for the startup process to replay. The model therefore derives recovery time from backup bytes plus replay bytes instead of printing a made-up RTO in a panel.',
+      },
+      {
+        heading: 'Replication is not this',
+        body: 'A replica continuously replays the newest WAL and can take traffic quickly after separate HA work promotes it. This recovery host intentionally walks backward into retained history, so it can escape a destructive transaction that every replica already applied. It protects data history at the cost of recovery time; it does not provide failover, and this pass never promotes it.',
+      },
+    ],
+    metrics: [
+      { label: 'Phase', get: (s) => s.disasterRecovery.restore.status },
+      { label: 'Estimated recovery', get: (s) => fmtDuration(s.disasterRecovery.restore.estimatedDurationSec) },
+      { label: 'Backup age', get: (s) => fmtDuration(s.disasterRecovery.restore.backupAgeSec) },
+      { label: 'WAL to replay', get: (s) => fmtBytes(s.disasterRecovery.restore.walBytesRequired) },
+    ],
+    see: ['backup.vault', 'recovery.clock', 'restore.winch', 'recovery.replay'],
+    refs: {
+      docs: [
+        manual('continuous-archiving.html', '25.3.4 Recovering Using a Continuous Archive Backup'),
+        { label: 'pgBackRest user guide — restore and point-in-time recovery', url: 'https://pgbackrest.org/user-guide.html' },
+      ],
+      source: [srcFile('src/backend/access/transam/xlogrecovery.c', 'PerformWalRecovery, InitWalRecovery')],
+      suzuki: suzuki(10, 'Online Backup and Point-In-Time Recovery (PITR)'),
+      rogov: rogov(R_WAL, 'Write-Ahead Log — recovery and checkpoint mechanics'),
+    },
+  },
+
+  {
+    id: 'recovery.clock',
+    title: 'recovery_target_time',
+    subtitle: 'the selected stop point for PITR',
+    tldr: 'Choose history still covered by a retained backup and an unbroken archived WAL chain.',
+    sections: [
+      {
+        heading: 'Choosing the point',
+        body: 'Set the target to a number of seconds before now, then start the restore. The model chooses the newest retained full backup that completed before that target and computes the WAL distance from the backup’s stop LSN to the target LSN. In production use PostgreSQL’s timestamp including its time-zone offset, and investigate the destructive transaction carefully: finding the right instant is often harder than running the restore.',
+      },
+      {
+        heading: 'Two actionable failures',
+        body: 'A target before the oldest retained full backup fails because retention removed the starting point. A target newer than the archived WAL frontier fails because `archive-push` has not made the required segment available to `restore_command`. The first needs a larger future retention policy; the second needs archive repair and a drained `.ready` queue. Neither is fixed by having a streaming replica.',
+      },
+      {
+        heading: 'Where this pass stops',
+        body: 'When replay reaches the target, the belt stops. PostgreSQL could pause, shut down, or promote according to recovery settings and operator procedure, but promotion would fork a timeline and belongs to the later HA/failover work. The city records `promoted = false` and does not move any service endpoint.',
+      },
+    ],
+    metrics: [
+      { label: 'Target', get: (s) => `${s.knobs.recoveryTargetAge}s ago` },
+      { label: 'Selected backup age', get: (s) => fmtDuration(s.disasterRecovery.restore.backupAgeSec) },
+      { label: 'Progress', get: (s) => fmtPct(s.disasterRecovery.restore.progress) },
+      { label: 'Result', get: (s) => s.disasterRecovery.restore.failureReason || s.disasterRecovery.restore.status },
+    ],
+    knobs: ['recoveryTargetAge'],
+    actions: ['start-pitr'],
+    see: ['backup.vault', 'object.store', 'recovery.ground', 'recovery.replay'],
+    refs: {
+      docs: [
+        manual('runtime-config-wal.html#RUNTIME-CONFIG-WAL-RECOVERY-TARGET', 'Recovery Target Settings'),
+        { label: 'pgBackRest user guide — point-in-time recovery', url: 'https://pgbackrest.org/user-guide.html' },
+      ],
+      source: [srcFile('src/backend/access/transam/xlogrecovery.c', 'recoveryStopsAfter, recoveryStopsBefore')],
+      suzuki: suzuki(10, 'Online Backup and Point-In-Time Recovery (PITR) (§10.2)'),
+      rogov: rogov(R_WAL, 'Write-Ahead Log — recovery'),
+    },
+  },
+
+  {
+    id: 'restore.winch',
+    title: 'restore_command',
+    subtitle: 'archived WAL retrieval',
+    tldr: 'Retrieves the next segment PostgreSQL asks for; a missing segment breaks the chain.',
+    sections: [
+      {
+        heading: 'Tool command and PostgreSQL contract',
+        body: 'For the modeled pgBackRest repository, `restore_command` calls `pgbackrest archive-get %f "%p"`. The WAL-G equivalent is `wal-g wal-fetch %f %p`. PostgreSQL supplies the requested file name and destination path, then replays the returned segment. A command must return nonzero when the requested file is absent; inventing success would turn a visible restore failure into silent corruption of the recovery procedure.',
+      },
+      {
+        heading: 'One chain, no gaps',
+        body: 'Recovery requests WAL in sequence from the backup’s starting point toward the target. The city draws one hook because the startup process consumes an ordered record stream, not because every backup tool is internally single-threaded: pgBackRest can prefetch archive files and parallelize the file restore. Those tool optimizations are not modeled here.',
+      },
+    ],
+    metrics: [
+      { label: 'WAL required', get: (s) => fmtBytes(s.disasterRecovery.restore.walBytesRequired) },
+      { label: 'WAL replayed', get: (s) => fmtBytes(s.disasterRecovery.restore.walBytesReplayed) },
+      { label: 'Archive frontier', get: (s) => fmtLsn(s.disasterRecovery.archive.archivedThroughLsn) },
+    ],
+    see: ['object.store', 'recovery.replay', 'recovery.clock'],
+    refs: {
+      docs: [
+        manual('continuous-archiving.html', '25.3.4 Recovering Using a Continuous Archive Backup'),
+        { label: 'pgBackRest archive-get', url: 'https://pgbackrest.org/user-guide.html' },
+        { label: 'WAL-G wal-fetch', url: 'https://wal-g.readthedocs.io/PostgreSQL/' },
+      ],
+      source: [srcFile('src/backend/access/transam/xlogarchive.c', 'RestoreArchivedFile')],
+      suzuki: suzuki(10, 'Online Backup and Point-In-Time Recovery (PITR)'),
+      rogov: rogov(R_WAL, 'Write-Ahead Log — recovery'),
+    },
+  },
+
+  {
+    id: 'recovery.replay',
+    title: 'Recovery replay belt',
+    subtitle: 'PostgreSQL startup process',
+    tldr: 'Replays WAL from the restored backup to the selected point, then stops.',
+    sections: [
+      {
+        heading: 'What PostgreSQL does',
+        body: 'The startup process reads each WAL record in order and applies the recorded page changes to the restored data directory. This is the same fundamental replay mechanism used for crash recovery and a physical standby, but the source here is an archive and the configured target tells recovery where to stop.',
+      },
+      {
+        heading: 'The measured simplification',
+        body: 'Replay runs at a fixed 24 MiB/s teaching rate, after a fixed 640 MiB/s restore rate for the full backup. The rates are intentionally compressed and do not estimate production hardware. What is real is the dependency: required replay bytes are the target LSN minus the selected backup’s stop LSN, so waiting longer between full backups produces a longer restore.',
+      },
+    ],
+    metrics: [
+      { label: 'Replay progress', get: (s) => fmtPct(s.disasterRecovery.restore.walBytesRequired > 0 ? s.disasterRecovery.restore.walBytesReplayed / s.disasterRecovery.restore.walBytesRequired : 0) },
+      { label: 'Target LSN', get: (s) => fmtLsn(s.disasterRecovery.restore.targetLsn) },
+      { label: 'Promoted', get: (s) => s.disasterRecovery.restore.promoted ? 'yes' : 'no — outside this pass' },
+    ],
+    see: ['restore.winch', 'recovery.clock', 'recovery.ground'],
+    refs: {
+      docs: [manual('continuous-archiving.html', '25.3.4 Recovering Using a Continuous Archive Backup')],
+      source: [srcFile('src/backend/access/transam/xlogrecovery.c', 'PerformWalRecovery')],
+      suzuki: suzuki(10, 'Online Backup and Point-In-Time Recovery (PITR)'),
+      rogov: rogov(R_WAL, 'Write-Ahead Log — recovery and checkpoint mechanics'),
     },
   },
 
@@ -1497,7 +1792,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
     ],
     knobs: ['replicaSlowApply', 'replicaEnabled', 'checkpointTimeout', 'maxWalSize'],
-    see: ['walreceiver', 'checkpointer', 'replica.standby', 'archive.store'],
+    see: ['walreceiver', 'checkpointer', 'replica.standby', 'object.store'],
     source: ['src/backend/postmaster/startup.c', 'src/backend/access/transam/xlog.c'],
     refs: {
       docs: [
@@ -1643,7 +1938,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       { label: 'Copy size', get: (s) => fmtBytes(sumTables(s, (t) => t.pages) * PAGE), hint: 'same heap files as the primary' },
     ],
     knobs: ['replicaEnabled', 'replicaSlowApply', 'replicaNetworkLag'],
-    see: ['storage.datadir', 'replica.standby', 'walreceiver', 'archive.store'],
+    see: ['storage.datadir', 'replica.standby', 'walreceiver', 'object.store'],
     source: ['src/backend/storage/smgr/md.c', 'src/backend/postmaster/startup.c'],
     refs: {
       docs: [

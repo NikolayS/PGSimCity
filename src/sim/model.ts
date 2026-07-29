@@ -115,6 +115,22 @@ const MVCC_SAMPLE_SECONDS = 3
 const MAX_STEPS = 20
 const IDLE_REAP = 22
 const MIB = 1024 * 1024
+/** A visible full backup of the ~8 GiB city takes tens of simulated seconds. */
+export const DR_BACKUP_BYTES_PER_SEC = 384 * MIB
+/** Object-store download is faster than the backup's checksum/compress path. */
+export const DR_RESTORE_BYTES_PER_SEC = 640 * MIB
+/** Startup-process replay rate on the separate recovery host. */
+export const DR_WAL_REPLAY_BYTES_PER_SEC = 24 * MIB
+/** Scaled archive-push service time for one completed 16 MiB segment. */
+export const DR_ARCHIVE_SEGMENT_SECONDS = 0.75
+/** Teaching-scale pg_wal volume; production capacity is installation-specific. */
+export const DR_PG_WAL_CAPACITY_BYTES = 512 * MIB
+/** Fixed metadata/catalog allowance outside the declared heap and index pages. */
+const DR_DATA_DIRECTORY_OVERHEAD_BYTES = 256 * MIB
+/** Compression is illustrative: data entropy and tool settings decide reality. */
+const DR_REPOSITORY_RATIO = 0.65
+/** Fixed rings retain timestamps without allocating in the update path. */
+const DR_HISTORY_SLOTS = 4096
 /** PostgreSQL's wal_buffers=-1 rule: shared_buffers/32, 64 KiB to one segment. */
 const walBufferCapacity = (sharedBuffersMiB: number): number =>
   clamp((sharedBuffersMiB * MIB) / 32, 64 * 1024, WAL_SEG)
@@ -511,6 +527,51 @@ export function createSim(bus: Bus): SimApi {
       logicalChangesPerSec: 0,
       inFlight: 0,
     },
+    disasterRecovery: {
+      tool: 'pgBackRest',
+      dataDirectoryBytes: 0,
+      archive: {
+        queueSegments: 0,
+        archivedThroughLsn: 0x1a000000,
+        archivedThroughTime: 0,
+        failedAttempts: 0,
+        pgWalBytes: N_WAL_SEG_SLOTS * WAL_SEG,
+        pgWalCapacityBytes: DR_PG_WAL_CAPACITY_BYTES,
+        writesBlocked: false,
+        rejectedWrites: 0,
+      },
+      backups: [],
+      expiredBackups: 0,
+      oldestRecoverableTime: 0,
+      backup: {
+        status: 'idle',
+        progress: 0,
+        startedAt: 0,
+        startLsn: 0,
+        stopLsn: 0,
+        dataBytes: 0,
+        repositoryBytes: 0,
+        copiedBytes: 0,
+        estimatedDurationSec: 0,
+        failureReason: '',
+      },
+      restore: {
+        status: 'idle',
+        progress: 0,
+        targetTime: 0,
+        targetLsn: 0,
+        backupId: -1,
+        backupAgeSec: 0,
+        backupBytesRequired: 0,
+        backupBytesFetched: 0,
+        walBytesRequired: 0,
+        walBytesReplayed: 0,
+        estimatedDurationSec: 0,
+        elapsedSec: 0,
+        failureReason: '',
+        promoted: false,
+      },
+    },
     locks: [],
     stats: {
       tps: 0,
@@ -571,6 +632,7 @@ export function createSim(bus: Bus): SimApi {
   const bgw = state.bgwriter
   const av = state.autovac
   const rep = state.replication
+  const dr = state.disasterRecovery
   type RuntimeReplication = typeof rep & {
     ackedFlushLsn: number
     ackedApplyLsn: number
@@ -953,7 +1015,18 @@ export function createSim(bus: Bus): SimApi {
   let flushDur = 0
   let flushBytes = 0
   let archT = 0
-  let archSlot = -1
+  let archiveNextSeg = 0
+  let archiveInFlight = -1
+  let archiveRetryT = 0
+  let lastObservedCurrentSeg = 0
+  let backupSeq = 1
+  const closedSegmentId = new Int32Array(DR_HISTORY_SLOTS)
+  const closedSegmentAt = new Float64Array(DR_HISTORY_SLOTS)
+  const walHistoryLsn = new Float64Array(DR_HISTORY_SLOTS)
+  const walHistoryAt = new Float64Array(DR_HISTORY_SLOTS)
+  let walHistoryHead = 0
+  let walHistoryCount = 0
+  let walHistoryT = 0
   let cleanedAcc = 0
   let bgwriterAllocations = 0
   let bgwriterAllocationEstimate = 0
@@ -962,6 +1035,7 @@ export function createSim(bus: Bus): SimApi {
   let statT = 0
   let degradeWarnT = -100
   let refuseWarnT = -100
+  let archiveWriteWarnT = -100
   let noBufWarnT = -100
   let planSeq = 1
 
@@ -1619,6 +1693,15 @@ export function createSim(bus: Bus): SimApi {
 
   function tickSegments(dt: number): void {
     const curSeg = Math.floor(wal.insertLsn / WAL_SEG)
+    if (curSeg > lastObservedCurrentSeg) {
+      for (let id = lastObservedCurrentSeg; id < curSeg; id++) {
+        const slot = ((id % DR_HISTORY_SLOTS) + DR_HISTORY_SLOTS) % DR_HISTORY_SLOTS
+        closedSegmentId[slot] = id
+        closedSegmentAt[slot] = state.t
+      }
+      lastObservedCurrentSeg = curSeg
+    }
+
     let base = Math.floor(segments[0].id)
     // scroll the visible window so the current segment sits ~2/3 along
     while (curSeg - base > N_WAL_SEG_SLOTS - 5) {
@@ -1639,7 +1722,6 @@ export function createSim(bus: Bus): SimApi {
       last.bytes = 0
       last.fill = 0
       last.state = 'recycled'
-      if (archSlot >= 0) archSlot--
     }
 
     for (let i = 0; i < N_WAL_SEG_SLOTS; i++) {
@@ -1649,7 +1731,9 @@ export function createSim(bus: Bus): SimApi {
       if (s.id < curSeg) {
         s.bytes = WAL_SEG
         s.fill = 1
-        if (s.state === 'current' || s.state === 'recycled') s.state = 'full'
+        if (s.id < archiveNextSeg) s.state = 'archived'
+        else if (s.id === archiveInFlight) s.state = 'archiving'
+        else s.state = 'full'
       } else if (s.id === curSeg) {
         s.bytes = wal.insertLsn - curSeg * WAL_SEG
         s.fill = clamp01(s.bytes / WAL_SEG)
@@ -1672,36 +1756,44 @@ export function createSim(bus: Bus): SimApi {
       }
     }
 
-    // archiver: one segment at a time, .ready → archive_command → .done
-    let queue = 0
-    for (let i = 0; i < N_WAL_SEG_SLOTS; i++) {
-      const st = segments[i].state
-      if (st === 'full' || st === 'streamed') queue++
-    }
+    // The queue is model-owned and unbounded by the 14-slot display window.
+    // PostgreSQL retries the oldest .ready file until archive-push returns 0.
+    const completedThrough = curSeg - 1
+    const queue = Math.max(0, completedThrough - archiveNextSeg + 1)
     wal.archiveQueue = queue
+    dr.archive.queueSegments = queue
 
-    if (archiverOn()) {
-      if (archSlot >= 0 && archSlot < N_WAL_SEG_SLOTS && segments[archSlot].state === 'archiving') {
-        archT += dt
-        flow('wal.archive', 1, 'archive', 1.2)
-        if (archT >= 2.4) {
-          segments[archSlot].state = 'archived'
-          wal.archived++
-          archSlot = -1
-          archT = 0
+    if (archiverOn() && queue > 0) {
+      if (!K.archiveAvailable) {
+        archiveRetryT += dt
+        if (archiveRetryT >= DR_ARCHIVE_SEGMENT_SECONDS) {
+          archiveRetryT -= DR_ARCHIVE_SEGMENT_SECONDS
+          dr.archive.failedAttempts++
         }
       } else {
-        archSlot = -1
-        for (let i = 0; i < N_WAL_SEG_SLOTS; i++) {
-          const s = segments[i]
-          if (s.state === 'full' || s.state === 'streamed') {
-            s.state = 'archiving'
-            archSlot = i
-            archT = 0
-            break
-          }
+        archiveRetryT = 0
+        if (archiveInFlight < 0) {
+          archiveInFlight = archiveNextSeg
+          archT = 0
+        }
+        archT += dt
+        flow('wal.archive', 1, 'archive', 1.2)
+        if (archT >= DR_ARCHIVE_SEGMENT_SECONDS) {
+          const archivedId = archiveInFlight
+          archiveNextSeg = archivedId + 1
+          archiveInFlight = -1
+          archT = 0
+          wal.archived++
+          dr.archive.archivedThroughLsn = archiveNextSeg * WAL_SEG
+          const slot = ((archivedId % DR_HISTORY_SLOTS) + DR_HISTORY_SLOTS) % DR_HISTORY_SLOTS
+          dr.archive.archivedThroughTime =
+            closedSegmentId[slot] === archivedId ? closedSegmentAt[slot] : state.t
         }
       }
+    } else if (queue === 0) {
+      archiveInFlight = -1
+      archT = 0
+      archiveRetryT = 0
     }
 
     // pg_wal size: everything since the REDO point of the last COMPLETED
@@ -1721,11 +1813,267 @@ export function createSim(bus: Bus): SimApi {
       const restart = rep.logicalEnabled ? Math.min(rep.flushLsn, rep.logicalSlotLsn) : rep.flushLsn
       slotHold = Math.max(0, wal.insertLsn - restart)
     }
+    const archiveHold = Math.max(0, wal.insertLsn - archiveNextSeg * WAL_SEG)
     wal.segmentCount = clamp(
-      Math.round(Math.max(sinceRedo, slotHold) / WAL_SEG) + 3 + wal.archiveQueue,
-      3,
+      Math.ceil(Math.max(sinceRedo, slotHold, archiveHold) / WAL_SEG) + 3,
+      N_WAL_SEG_SLOTS,
       512,
     )
+    dr.archive.pgWalBytes = wal.segmentCount * WAL_SEG
+    if (!dr.archive.writesBlocked && dr.archive.pgWalBytes >= dr.archive.pgWalCapacityBytes) {
+      dr.archive.writesBlocked = true
+      toast(
+        'pg_wal reached the scaled safety limit — writes rejected; real PostgreSQL would PANIC when the filesystem filled',
+        'warn',
+        8000,
+      )
+    } else if (
+      dr.archive.writesBlocked
+      && K.archiveAvailable
+      && dr.archive.pgWalBytes <= dr.archive.pgWalCapacityBytes * 0.75
+    ) {
+      dr.archive.writesBlocked = false
+      toast('Archive caught up below the scaled safety limit — writes admitted again', 'good', 5000)
+    }
+  }
+
+  /* ======================================================================
+   * DISASTER RECOVERY
+   * ====================================================================*/
+
+  function dataDirectoryBytes(): number {
+    let pages = 0
+    for (let i = 0; i < tables.length; i++) pages += tables[i].pages + tables[i].indexPages
+    return pages * PAGE + DR_DATA_DIRECTORY_OVERHEAD_BYTES
+  }
+
+  function applyBackupRetention(): void {
+    const keep = Math.max(1, Math.round(K.backupRetention))
+    while (dr.backups.length > keep) {
+      dr.backups.shift()
+      dr.expiredBackups++
+    }
+    dr.oldestRecoverableTime = dr.backups.length > 0 ? dr.backups[0].completedAt : 0
+  }
+
+  function completeBaseBackup(): void {
+    const op = dr.backup
+    const duration = Math.max(0, state.t - op.startedAt)
+    dr.backups.push({
+      id: backupSeq,
+      label: `F${String(backupSeq).padStart(4, '0')}`,
+      startedAt: op.startedAt,
+      completedAt: state.t,
+      startLsn: op.startLsn,
+      stopLsn: op.stopLsn,
+      dataBytes: op.dataBytes,
+      repositoryBytes: op.repositoryBytes,
+      durationSec: duration,
+      source: 'standby',
+      tool: 'pgBackRest',
+    })
+    backupSeq++
+    applyBackupRetention()
+    op.status = 'idle'
+    op.progress = 1
+    op.copiedBytes = op.dataBytes
+    op.failureReason = ''
+    toast('pgBackRest full backup stored; retention expired older backup sets and their PITR WAL', 'good', 6000)
+  }
+
+  function failBaseBackup(reason: string): void {
+    const op = dr.backup
+    op.status = 'failed'
+    op.failureReason = reason
+    toast(reason, 'warn', 6500)
+  }
+
+  function backupArchiveBoundary(stopLsn: number): number {
+    return Math.ceil(stopLsn / WAL_SEG) * WAL_SEG
+  }
+
+  function startBaseBackup(): boolean {
+    const op = dr.backup
+    if (op.status === 'copying' || op.status === 'waiting_wal') return false
+    if (!rep.connected || !K.replicaEnabled || K.walLevel === 'minimal') {
+      failBaseBackup(
+        K.walLevel === 'minimal'
+          ? 'Full backup refused: wal_level=minimal cannot support the required archive recovery chain'
+          : 'Full backup refused: pgBackRest backup-standby=y needs the configured standby and primary',
+      )
+      return false
+    }
+
+    dr.dataDirectoryBytes = dataDirectoryBytes()
+    op.status = 'copying'
+    op.progress = 0
+    op.startedAt = state.t
+    op.startLsn = wal.insertLsn
+    op.stopLsn = 0
+    op.dataBytes = dr.dataDirectoryBytes
+    op.repositoryBytes = Math.round(op.dataBytes * DR_REPOSITORY_RATIO)
+    op.copiedBytes = 0
+    op.estimatedDurationSec = op.dataBytes / DR_BACKUP_BYTES_PER_SEC
+    op.failureReason = ''
+    toast('pgBackRest full backup started — most files come from standby_a; the primary still coordinates it', 'info', 6000)
+    return true
+  }
+
+  function rememberWalPosition(dt: number): void {
+    walHistoryT += dt
+    if (walHistoryT < 0.25 && walHistoryCount > 0) return
+    walHistoryT = 0
+    walHistoryAt[walHistoryHead] = state.t
+    walHistoryLsn[walHistoryHead] = wal.insertLsn
+    walHistoryHead = (walHistoryHead + 1) % DR_HISTORY_SLOTS
+    if (walHistoryCount < DR_HISTORY_SLOTS) walHistoryCount++
+  }
+
+  function lsnAtTime(target: number): number {
+    let foundAt = -Infinity
+    let foundLsn = 0
+    for (let i = 0; i < walHistoryCount; i++) {
+      const idx = (walHistoryHead - 1 - i + DR_HISTORY_SLOTS) % DR_HISTORY_SLOTS
+      const at = walHistoryAt[idx]
+      if (at <= target && at >= foundAt) {
+        foundAt = at
+        foundLsn = walHistoryLsn[idx]
+      }
+    }
+    return foundLsn
+  }
+
+  function resetRestore(targetTime: number): void {
+    const restore = dr.restore
+    restore.status = 'idle'
+    restore.progress = 0
+    restore.targetTime = targetTime
+    restore.targetLsn = 0
+    restore.backupId = -1
+    restore.backupAgeSec = 0
+    restore.backupBytesRequired = 0
+    restore.backupBytesFetched = 0
+    restore.walBytesRequired = 0
+    restore.walBytesReplayed = 0
+    restore.estimatedDurationSec = 0
+    restore.elapsedSec = 0
+    restore.failureReason = ''
+  }
+
+  function failRestore(reason: string): false {
+    dr.restore.status = 'failed'
+    dr.restore.failureReason = reason
+    toast(reason, 'warn', 7000)
+    return false
+  }
+
+  function startPointInTimeRestore(targetAgeSec = K.recoveryTargetAge): boolean {
+    const targetTime = state.t - Math.max(0, targetAgeSec)
+    resetRestore(targetTime)
+    if (dr.backups.length === 0) {
+      return failRestore('PITR impossible: no retained full backup exists; take and verify a base backup first')
+    }
+    if (targetTime < dr.oldestRecoverableTime) {
+      return failRestore(
+        `PITR impossible: target is older than the oldest retained full backup; increase repo1-retention-full before the window expires`,
+      )
+    }
+
+    let selected: (typeof dr.backups)[number] | undefined
+    for (let i = dr.backups.length - 1; i >= 0; i--) {
+      const candidate = dr.backups[i]
+      if (candidate.completedAt <= targetTime) {
+        selected = candidate
+        break
+      }
+    }
+    if (!selected) {
+      return failRestore('PITR impossible: no retained full backup completed before the selected recovery_target_time')
+    }
+
+    const targetLsn = lsnAtTime(targetTime)
+    if (targetLsn <= 0 || targetLsn > dr.archive.archivedThroughLsn) {
+      return failRestore(
+        'PITR impossible: archived WAL does not reach the selected target; repair archive-push and wait for the .ready queue to drain',
+      )
+    }
+
+    const restore = dr.restore
+    restore.status = 'fetching'
+    restore.targetLsn = targetLsn
+    restore.backupId = selected.id
+    restore.backupAgeSec = Math.max(0, targetTime - selected.completedAt)
+    restore.backupBytesRequired = selected.dataBytes
+    restore.walBytesRequired = Math.max(0, targetLsn - selected.stopLsn)
+    restore.estimatedDurationSec =
+      restore.backupBytesRequired / DR_RESTORE_BYTES_PER_SEC
+      + restore.walBytesRequired / DR_WAL_REPLAY_BYTES_PER_SEC
+    toast(
+      `PITR started from ${selected.label}: fetch the full backup, then replay archived WAL to recovery_target_time`,
+      'info',
+      6500,
+    )
+    return true
+  }
+
+  function tickDisasterRecovery(dt: number): void {
+    dr.dataDirectoryBytes = dataDirectoryBytes()
+    rememberWalPosition(dt)
+
+    const backup = dr.backup
+    if (backup.status === 'copying') {
+      if (!rep.connected) {
+        failBaseBackup('Full backup failed: the standby disconnected while pgBackRest was copying files')
+      } else {
+        backup.copiedBytes = Math.min(
+          backup.dataBytes,
+          backup.copiedBytes + DR_BACKUP_BYTES_PER_SEC * dt,
+        )
+        backup.progress = backup.dataBytes > 0 ? backup.copiedBytes / backup.dataBytes : 1
+        if (backup.copiedBytes >= backup.dataBytes) {
+          backup.stopLsn = wal.insertLsn
+          const requiredArchiveLsn = backupArchiveBoundary(backup.stopLsn)
+          // pgBackRest waits for the backup stop WAL to be archived. Model the
+          // segment switch PostgreSQL requests at backup stop, then let the
+          // ordinary archive-push queue decide when completion is durable.
+          wal.insertLsn = Math.max(wal.insertLsn, requiredArchiveLsn)
+          if (dr.archive.archivedThroughLsn >= requiredArchiveLsn) completeBaseBackup()
+          else backup.status = 'waiting_wal'
+        }
+      }
+    } else if (backup.status === 'waiting_wal') {
+      backup.progress = 1
+      const requiredArchiveLsn = backupArchiveBoundary(backup.stopLsn)
+      if (dr.archive.archivedThroughLsn >= requiredArchiveLsn) completeBaseBackup()
+    }
+
+    const restore = dr.restore
+    if (restore.status !== 'fetching' && restore.status !== 'replaying') return
+    restore.elapsedSec += dt
+    if (restore.status === 'fetching') {
+      restore.backupBytesFetched = Math.min(
+        restore.backupBytesRequired,
+        restore.backupBytesFetched + DR_RESTORE_BYTES_PER_SEC * dt,
+      )
+      if (restore.backupBytesFetched >= restore.backupBytesRequired) {
+        restore.status = restore.walBytesRequired > 0 ? 'replaying' : 'complete'
+      }
+    }
+    if (restore.status === 'replaying') {
+      restore.walBytesReplayed = Math.min(
+        restore.walBytesRequired,
+        restore.walBytesReplayed + DR_WAL_REPLAY_BYTES_PER_SEC * dt,
+      )
+      if (restore.walBytesReplayed >= restore.walBytesRequired) restore.status = 'complete'
+    }
+    restore.progress =
+      restore.estimatedDurationSec > 0
+        ? Math.min(1, restore.elapsedSec / restore.estimatedDurationSec)
+        : 1
+    if (restore.status === 'complete') {
+      restore.progress = 1
+      toast('recovery_target_time reached — replay stopped; this pass does not promote or fail over', 'good', 6500)
+    }
   }
 
   /* ======================================================================
@@ -2951,6 +3299,22 @@ export function createSim(bus: Bus): SimApi {
       : kind === 'select_idx' ? 1 + Math.floor(rng() * 6)
       : 20 + Math.floor(rng() * 400)
 
+    if (x.writes && dr.archive.writesBlocked) {
+      dr.archive.rejectedWrites += x.txCount
+      stats.rollbacks += x.txCount
+      x.txCount = 0
+      x.writes = false
+      b.state = 'sending'
+      b.stateT = 0
+      b.stateDur = 0.05
+      b.progress = 0
+      if (state.t - archiveWriteWarnT > 5) {
+        archiveWriteWarnT = state.t
+        toast('Write rejected: the scaled pg_wal safety limit is full behind the stalled archive', 'warn', 5000)
+      }
+      return
+    }
+
     b.state = 'parse'
     b.stateT = 0
     b.stateDur = rr(0.02, 0.045)
@@ -3920,6 +4284,22 @@ export function createSim(bus: Bus): SimApi {
           toast('remote_apply needs a synchronous standby — there is none, so only the local flush is guaranteed', 'warn', 6000)
         }
         break
+      case 'archiveAvailable':
+        toast(
+          K.archiveAvailable
+            ? 'Object storage reachable — archive-push resumes with the oldest .ready segment'
+            : 'Object storage unreachable — archive-push returns nonzero and PostgreSQL keeps retrying',
+          K.archiveAvailable ? 'good' : 'warn',
+          6000,
+        )
+        break
+      case 'backupRetention':
+        K.backupRetention = clamp(Math.round(K.backupRetention), 1, 5)
+        applyBackupRetention()
+        break
+      case 'recoveryTargetAge':
+        K.recoveryTargetAge = clamp(Math.round(K.recoveryTargetAge), 0, 300)
+        break
       case 'timeScale':
         K.timeScale = clamp(K.timeScale, 0.05, 20)
         break
@@ -3966,6 +4346,7 @@ export function createSim(bus: Bus): SimApi {
     tickBgwriter(dt)
     tickCheckpoint(dt)
     tickWal(dt)
+    tickDisasterRecovery(dt)
     tickReplication(dt)
     tickAutovac(dt)
     tickTables(dt)
@@ -4090,8 +4471,18 @@ export function createSim(bus: Bus): SimApi {
       s.fill = s.id < seg0 ? 1 : 0
       s.state = s.id < seg0 ? 'archived' : s.id === seg0 ? 'current' : 'recycled'
     }
-    archSlot = -1
+    archiveNextSeg = seg0
+    archiveInFlight = -1
     archT = 0
+    archiveRetryT = 0
+    lastObservedCurrentSeg = seg0
+    closedSegmentId.fill(-1)
+    closedSegmentAt.fill(0)
+    walHistoryLsn.fill(0)
+    walHistoryAt.fill(0)
+    walHistoryHead = 0
+    walHistoryCount = 0
+    walHistoryT = 0
     flushing = false
     flushTarget = lsn0
     flushCovered = lsn0
@@ -4194,6 +4585,31 @@ export function createSim(bus: Bus): SimApi {
       t.mvcc = createRepresentativeRow(state.xid - 1, i + 1)
     }
 
+    dr.dataDirectoryBytes = dataDirectoryBytes()
+    dr.archive.queueSegments = 0
+    dr.archive.archivedThroughLsn = seg0 * WAL_SEG
+    dr.archive.archivedThroughTime = 0
+    dr.archive.failedAttempts = 0
+    dr.archive.pgWalBytes = N_WAL_SEG_SLOTS * WAL_SEG
+    dr.archive.pgWalCapacityBytes = DR_PG_WAL_CAPACITY_BYTES
+    dr.archive.writesBlocked = false
+    dr.archive.rejectedWrites = 0
+    dr.backups.length = 0
+    dr.expiredBackups = 0
+    dr.oldestRecoverableTime = 0
+    backupSeq = 1
+    dr.backup.status = 'idle'
+    dr.backup.progress = 0
+    dr.backup.startedAt = 0
+    dr.backup.startLsn = 0
+    dr.backup.stopLsn = 0
+    dr.backup.dataBytes = 0
+    dr.backup.repositoryBytes = 0
+    dr.backup.copiedBytes = 0
+    dr.backup.estimatedDurationSec = 0
+    dr.backup.failureReason = ''
+    resetRestore(0)
+
     rep.enabled = K.replicaEnabled
     rep.connected = K.replicaEnabled
     rep.mode = 'async'
@@ -4272,6 +4688,7 @@ export function createSim(bus: Bus): SimApi {
     horizonT = 0
     degradeWarnT = -100
     refuseWarnT = -100
+    archiveWriteWarnT = -100
     noBufWarnT = -100
     savedKeys = []
     beatIdx = 0
@@ -4305,5 +4722,16 @@ export function createSim(bus: Bus): SimApi {
 
   reset()
 
-  return { state, update, setKnob, runScenario, request, setTraceMode, endTrace, reset }
+  return {
+    state,
+    update,
+    setKnob,
+    runScenario,
+    request,
+    setTraceMode,
+    endTrace,
+    startBaseBackup,
+    startPointInTimeRestore,
+    reset,
+  }
 }

@@ -40,7 +40,7 @@ export function hasDoc(id: string | null | undefined): boolean {
  * it teaches. The control rail and the inspector both read this.
  * -------------------------------------------------------------------------*/
 
-export type KnobGroup = 'workload' | 'memory' | 'wal' | 'checkpoint' | 'vacuum' | 'replication' | 'chaos' | 'sim'
+export type KnobGroup = 'workload' | 'memory' | 'wal' | 'checkpoint' | 'vacuum' | 'replication' | 'recovery' | 'chaos' | 'sim'
 
 export interface KnobMeta {
   key: keyof Knobs
@@ -69,6 +69,7 @@ export const KNOB_GROUPS: { id: KnobGroup; label: string; hint: string }[] = [
   { id: 'checkpoint', label: 'Checkpoints', hint: 'Getting dirty pages onto disk' },
   { id: 'vacuum', label: 'Autovacuum', hint: 'Reclaiming dead rows' },
   { id: 'replication', label: 'Replication', hint: 'Keeping a second copy' },
+  { id: 'recovery', label: 'Disaster recovery', hint: 'Backups, archive health, retention and PITR' },
   { id: 'chaos', label: 'Break something', hint: 'The failure modes worth recognising' },
   { id: 'sim', label: 'Playback', hint: 'Simulation controls' },
 ]
@@ -279,6 +280,36 @@ export const KNOB_META: KnobMeta[] = [
     kind: 'toggle',
     hint: 'A long read on the standby reports its xmin through hot_standby_feedback and pins cleanup on the primary.',
     danger: true,
+  },
+  {
+    key: 'archiveAvailable',
+    label: 'Archive object store',
+    group: 'recovery',
+    kind: 'toggle',
+    hint: 'Reachability of the remote repository used by pgBackRest archive-push. Off makes archive_command return nonzero, so PostgreSQL retries the oldest completed segment while pg_wal grows.',
+    danger: true,
+  },
+  {
+    key: 'backupRetention',
+    label: 'repo1-retention-full',
+    group: 'recovery',
+    kind: 'range',
+    min: 1,
+    max: 5,
+    step: 1,
+    unit: 'full backups',
+    hint: 'pgBackRest full-backup count retention. Expiring a backup also expires the older archived WAL recovery window tied to it.',
+  },
+  {
+    key: 'recoveryTargetAge',
+    label: 'recovery_target_time',
+    group: 'recovery',
+    kind: 'range',
+    min: 0,
+    max: 300,
+    step: 5,
+    unit: 's ago',
+    hint: 'Choose a point before now. PITR fetches the newest retained full backup old enough for that target, then replays archived WAL forward.',
   },
   {
     key: 'longRunningXact',
