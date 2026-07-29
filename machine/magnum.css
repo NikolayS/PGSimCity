@@ -487,6 +487,8 @@ button:focus-visible {
 
 .architecture-scroll {
   overflow: hidden;
+  overscroll-behavior: contain;
+  touch-action: none;
 }
 
 .architecture-stage {
@@ -529,7 +531,8 @@ button:focus-visible {
   pointer-events: auto;
 }
 
-#board-view {
+#board-view,
+#board-follow {
   display: none;
 }
 
@@ -670,25 +673,9 @@ button:focus-visible {
 
   .architecture-scroll {
     grid-row: 2;
-    overflow: auto;
-    overscroll-behavior: contain;
-    scrollbar-color: #70583e #15100d;
-    scrollbar-width: thin;
-    touch-action: pan-x pan-y;
-  }
-
-  .architecture-stage {
-    width: 720px;
-    height: 900px;
-  }
-
-  .architecture-scroll.is-fit {
     overflow: hidden;
-  }
-
-  .architecture-scroll.is-fit .architecture-stage {
-    width: 100%;
-    height: 100%;
+    overscroll-behavior: contain;
+    touch-action: none;
   }
 
   #machine {
@@ -720,7 +707,8 @@ button:focus-visible {
     font-size: 8px;
   }
 
-  #board-view {
+  #board-view,
+  #board-follow {
     display: block;
   }
 

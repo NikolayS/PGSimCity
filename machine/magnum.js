@@ -11,13 +11,18 @@ import {
   parseMetaCommand,
 } from './psql.js'
 import {
+  BOARD_MAX_SCALE,
   DETAIL_HEIGHT,
   DETAIL_WIDTH,
+  MIN_DETAIL_LABEL_PX,
   RECEIPT_FOCUS,
+  clampBoardView,
   containBoardPoint,
   detailFontSize,
   effectiveLabelPixels,
+  fitBoardScale,
   needsCompletionFollow,
+  zoomBoardView,
 } from './mobile-board.js'
 
 const canvas = document.querySelector('#machine')
@@ -25,6 +30,7 @@ const architecturePane = document.querySelector('.architecture-pane')
 const architectureScroll = document.querySelector('.architecture-scroll')
 const architectureStage = document.querySelector('.architecture-stage')
 const boardView = document.querySelector('#board-view')
+const boardFollow = document.querySelector('#board-follow')
 const clock = document.querySelector('#clock')
 const runState = document.querySelector('#run-state')
 const machineToggle = document.querySelector('#machine-toggle')
@@ -47,6 +53,7 @@ if (
   || !architectureScroll
   || !architectureStage
   || !boardView
+  || !boardFollow
   || !ctx
   || !clock
   || !runState
@@ -274,28 +281,40 @@ let cssHeight = 0
 let viewScale = 1
 let viewX = 0
 let viewY = 0
+let boardFitScale = 1
+let boardCameraReady = false
+let boardViewportLeft = 0
+let boardViewportTop = 0
 let mobileBoard = false
-let boardFit = false
-let mobileBoardPositioned = false
-let detailScrollLeft = 12
-let detailScrollTop = 0
+let boardFollowing = true
+let detailViewX = -12
+let detailViewY = 0
 let completionFollowPending = false
 let queryBusy = false
 let historyIndex = 0
 let historyDraft = ''
 const history = []
 const followViewport = {
-  scrollLeft: 0,
-  scrollTop: 0,
   clientWidth: 0,
   clientHeight: 0,
-  scrollWidth: 0,
-  scrollHeight: 0,
   scale: 1,
   viewX: 0,
   viewY: 0,
 }
-const followPosition = { left: 0, top: 0 }
+const boardCameraOutput = { scale: 1, viewX: 0, viewY: 0 }
+const pointerIds = new Int32Array(2)
+const pointerActive = new Uint8Array(2)
+const pointerX = new Float64Array(2)
+const pointerY = new Float64Array(2)
+let activePointerCount = 0
+let pointerStartX = 0
+let pointerStartY = 0
+let gestureMoved = false
+let gestureHadMultiplePointers = false
+let suppressCanvasClickUntil = -1000
+let lastTapTime = -1000
+let lastTapX = 0
+let lastTapY = 0
 
 function clamp(value, low = 0, high = 1) {
   return Math.max(low, Math.min(high, value))
@@ -464,78 +483,182 @@ function updateStatementControls() {
 
 function resize() {
   const wasMobileBoard = mobileBoard
+  const wasFit = boardCameraReady && isBoardFit()
   mobileBoard = mobileBoardMedia.matches
-  if (mobileBoard !== wasMobileBoard) mobileBoardPositioned = false
-  if (!mobileBoard && boardFit) {
-    boardFit = false
-    architectureScroll.classList.remove('is-fit')
-  }
   const ratio = Math.min(window.devicePixelRatio || 1, 2)
   const bounds = architectureStage.getBoundingClientRect()
+  const viewportBounds = architectureScroll.getBoundingClientRect()
   cssWidth = Math.max(1, bounds.width)
   cssHeight = Math.max(1, bounds.height)
+  boardViewportLeft = viewportBounds.left
+  boardViewportTop = viewportBounds.top
+  boardFitScale = fitBoardScale(cssWidth, cssHeight)
+
+  if (!boardCameraReady || mobileBoard !== wasMobileBoard) {
+    viewScale = mobileBoard ? Math.max(boardFitScale, 1) : boardFitScale
+    viewX = mobileBoard && viewScale > boardFitScale
+      ? detailViewX
+      : (cssWidth - VIEW_W * viewScale) / 2
+    viewY = mobileBoard && viewScale > boardFitScale
+      ? detailViewY
+      : (cssHeight - VIEW_H * viewScale) / 2
+    boardCameraReady = true
+  } else {
+    viewScale = wasFit
+      ? boardFitScale
+      : clamp(viewScale, boardFitScale, BOARD_MAX_SCALE)
+  }
+
+  followViewport.clientWidth = cssWidth
+  followViewport.clientHeight = cssHeight
+  followViewport.scale = viewScale
+  followViewport.viewX = viewX
+  followViewport.viewY = viewY
+  clampBoardView(followViewport, viewX, viewY, boardCameraOutput)
+  viewScale = boardCameraOutput.scale
+  viewX = boardCameraOutput.viewX
+  viewY = boardCameraOutput.viewY
+
   canvas.width = Math.max(1, Math.floor(cssWidth * ratio))
   canvas.height = Math.max(1, Math.floor(cssHeight * ratio))
   canvas.style.width = `${cssWidth}px`
   canvas.style.height = `${cssHeight}px`
-  viewScale = Math.min(cssWidth / VIEW_W, cssHeight / VIEW_H)
-  viewX = (cssWidth - VIEW_W * viewScale) / 2
-  viewY = (cssHeight - VIEW_H * viewScale) / 2
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0)
-  if (mobileBoard && !boardFit && !mobileBoardPositioned) {
-    architectureScroll.scrollLeft = Math.min(
-      Math.max(0, architectureScroll.scrollWidth - architectureScroll.clientWidth),
-      detailScrollLeft,
-    )
-    architectureScroll.scrollTop = Math.min(
-      Math.max(0, architectureScroll.scrollHeight - architectureScroll.clientHeight),
-      detailScrollTop,
-    )
-    mobileBoardPositioned = true
-  } else if (!mobileBoard || boardFit) {
-    architectureScroll.scrollLeft = 0
-    architectureScroll.scrollTop = 0
-  }
-  if (mobileBoard && !boardFit && needsCompletionFollow(statement.status)) {
+  if (mobileBoard && !isBoardFit() && needsCompletionFollow(statement.status)) {
     completionFollowPending = true
   }
   updateBoardView()
 }
 
-function updateBoardView() {
-  boardView.textContent = boardFit ? '1:1 DETAIL' : 'FIT BOARD'
-  boardView.setAttribute('aria-pressed', String(boardFit))
-  boardView.title = boardFit
-    ? 'Return to the legible one-to-one board'
-    : 'Fit the whole board on screen'
+function isBoardFit() {
+  return Math.abs(viewScale - boardFitScale) < 0.0001
 }
 
-function setBoardFit(nextFit) {
+function populateBoardViewport() {
+  followViewport.clientWidth = cssWidth
+  followViewport.clientHeight = cssHeight
+  followViewport.scale = viewScale
+  followViewport.viewX = viewX
+  followViewport.viewY = viewY
+}
+
+function applyBoardCameraOutput() {
+  viewScale = boardCameraOutput.scale
+  viewX = boardCameraOutput.viewX
+  viewY = boardCameraOutput.viewY
+  if (!isBoardFit()) {
+    detailViewX = viewX
+    detailViewY = viewY
+  }
+}
+
+function updateBoardView() {
+  const fit = isBoardFit()
+  boardView.textContent = fit ? '1:1 DETAIL' : 'FIT BOARD'
+  boardView.setAttribute('aria-pressed', String(fit))
+  boardView.title = fit
+    ? 'Return to the legible one-to-one board'
+    : 'Fit the whole board on screen'
+  boardFollow.textContent = boardFollowing ? 'FOLLOW: ON' : 'FOLLOW STAGE'
+  boardFollow.setAttribute('aria-pressed', String(boardFollowing))
+  boardFollow.title = boardFollowing
+    ? 'The active statement stage stays in view'
+    : 'Resume following the active statement stage'
+}
+
+function takeManualBoardControl() {
+  if (!mobileBoard || !boardFollowing) return
+  boardFollowing = false
+  updateBoardView()
+}
+
+function setBoardScaleAt(
+  requestedScale,
+  fromX,
+  fromY,
+  toX,
+  toY,
+  manualControl = true,
+) {
+  if (manualControl) takeManualBoardControl()
+  populateBoardViewport()
+  zoomBoardView(
+    followViewport,
+    requestedScale,
+    fromX,
+    fromY,
+    toX,
+    toY,
+    boardFitScale,
+    boardCameraOutput,
+  )
+  applyBoardCameraOutput()
+  updateBoardView()
+}
+
+function setBoardFit(nextFit, manualControl = true) {
   if (!mobileBoard) return
   const next = Boolean(nextFit)
-  if (next === boardFit) return
+  if (next === isBoardFit()) return
+  if (manualControl) takeManualBoardControl()
   if (next) {
-    detailScrollLeft = architectureScroll.scrollLeft
-    detailScrollTop = architectureScroll.scrollTop
+    detailViewX = viewX
+    detailViewY = viewY
+    populateBoardViewport()
+    zoomBoardView(
+      followViewport,
+      boardFitScale,
+      cssWidth / 2,
+      cssHeight / 2,
+      cssWidth / 2,
+      cssHeight / 2,
+      boardFitScale,
+      boardCameraOutput,
+    )
+  } else {
+    followViewport.clientWidth = cssWidth
+    followViewport.clientHeight = cssHeight
+    followViewport.scale = Math.max(boardFitScale, 1)
+    followViewport.viewX = detailViewX
+    followViewport.viewY = detailViewY
+    clampBoardView(
+      followViewport,
+      detailViewX,
+      detailViewY,
+      boardCameraOutput,
+    )
   }
-  boardFit = next
-  architectureScroll.classList.toggle('is-fit', boardFit)
-  resize()
-  if (!boardFit) {
-    architectureScroll.scrollLeft = detailScrollLeft
-    architectureScroll.scrollTop = detailScrollTop
-    if (needsCompletionFollow(statement.status)) {
-      completionFollowPending = true
-    }
+  applyBoardCameraOutput()
+  if (!next && needsCompletionFollow(statement.status)) {
+    completionFollowPending = true
   }
+  updateBoardView()
 }
 
 function toggleBoardFit() {
-  setBoardFit(!boardFit)
+  setBoardFit(!isBoardFit())
+}
+
+function enableBoardFollow() {
+  if (!mobileBoard) return
+  boardFollowing = true
+  if (isBoardFit() && boardFitScale < 1) {
+    setBoardScaleAt(
+      1,
+      cssWidth / 2,
+      cssHeight / 2,
+      cssWidth / 2,
+      cssHeight / 2,
+      false,
+    )
+  }
+  completionFollowPending = true
+  updateBoardView()
+  followMobileStatement()
 }
 
 function followMobileStatement() {
-  if (!mobileBoard || boardFit || statement.status === 'idle') return
+  if (!mobileBoard || !boardFollowing || statement.status === 'idle') return
   const finished = needsCompletionFollow(statement.status)
   if (finished && !completionFollowPending) return
   let targetX = statementStagePoint.x
@@ -545,19 +668,205 @@ function followMobileStatement() {
     targetY = RECEIPT_FOCUS.y
   }
 
-  followViewport.scrollLeft = architectureScroll.scrollLeft
-  followViewport.scrollTop = architectureScroll.scrollTop
-  followViewport.clientWidth = architectureScroll.clientWidth
-  followViewport.clientHeight = architectureScroll.clientHeight
-  followViewport.scrollWidth = architectureScroll.scrollWidth
-  followViewport.scrollHeight = architectureScroll.scrollHeight
-  followViewport.scale = viewScale
-  followViewport.viewX = viewX
-  followViewport.viewY = viewY
-  containBoardPoint(followViewport, targetX, targetY, followPosition)
-  architectureScroll.scrollLeft = followPosition.left
-  architectureScroll.scrollTop = followPosition.top
+  populateBoardViewport()
+  containBoardPoint(
+    followViewport,
+    targetX,
+    targetY,
+    boardCameraOutput,
+  )
+  applyBoardCameraOutput()
   if (finished) completionFollowPending = false
+}
+
+function pointerSlot(pointerId) {
+  for (let index = 0; index < pointerActive.length; index += 1) {
+    if (pointerActive[index] && pointerIds[index] === pointerId) return index
+  }
+  return -1
+}
+
+function openPointerSlot() {
+  for (let index = 0; index < pointerActive.length; index += 1) {
+    if (!pointerActive[index]) return index
+  }
+  return -1
+}
+
+function otherPointerSlot(slot) {
+  const other = slot === 0 ? 1 : 0
+  return pointerActive[other] ? other : -1
+}
+
+function boardPointerX(event) {
+  return event.clientX - boardViewportLeft
+}
+
+function boardPointerY(event) {
+  return event.clientY - boardViewportTop
+}
+
+function onBoardPointerDown(event) {
+  if (event.pointerType === 'mouse' && event.button !== 0) return
+  if (pointerSlot(event.pointerId) >= 0) return
+  const slot = openPointerSlot()
+  if (slot < 0) return
+
+  const x = boardPointerX(event)
+  const y = boardPointerY(event)
+  pointerActive[slot] = 1
+  pointerIds[slot] = event.pointerId
+  pointerX[slot] = x
+  pointerY[slot] = y
+  activePointerCount += 1
+  architectureScroll.setPointerCapture(event.pointerId)
+
+  if (activePointerCount === 1) {
+    pointerStartX = x
+    pointerStartY = y
+    gestureMoved = false
+    gestureHadMultiplePointers = false
+  } else {
+    gestureHadMultiplePointers = true
+    gestureMoved = true
+    takeManualBoardControl()
+  }
+  event.preventDefault()
+}
+
+function onBoardPointerMove(event) {
+  const slot = pointerSlot(event.pointerId)
+  if (slot < 0) return
+  const previousX = pointerX[slot]
+  const previousY = pointerY[slot]
+  const nextX = boardPointerX(event)
+  const nextY = boardPointerY(event)
+  const other = otherPointerSlot(slot)
+
+  if (other >= 0) {
+    const oldMidpointX = (previousX + pointerX[other]) / 2
+    const oldMidpointY = (previousY + pointerY[other]) / 2
+    const oldDistance = Math.hypot(
+      previousX - pointerX[other],
+      previousY - pointerY[other],
+    )
+    pointerX[slot] = nextX
+    pointerY[slot] = nextY
+    const newMidpointX = (nextX + pointerX[other]) / 2
+    const newMidpointY = (nextY + pointerY[other]) / 2
+    const newDistance = Math.hypot(
+      nextX - pointerX[other],
+      nextY - pointerY[other],
+    )
+    if (oldDistance > 0.001 && newDistance > 0.001) {
+      setBoardScaleAt(
+        viewScale * newDistance / oldDistance,
+        oldMidpointX,
+        oldMidpointY,
+        newMidpointX,
+        newMidpointY,
+      )
+    }
+  } else {
+    pointerX[slot] = nextX
+    pointerY[slot] = nextY
+    const fromStartX = nextX - pointerStartX
+    const fromStartY = nextY - pointerStartY
+    if (
+      !gestureMoved
+      && fromStartX * fromStartX + fromStartY * fromStartY >= 16
+    ) {
+      gestureMoved = true
+      takeManualBoardControl()
+    }
+    if (gestureMoved) {
+      populateBoardViewport()
+      clampBoardView(
+        followViewport,
+        viewX + nextX - previousX,
+        viewY + nextY - previousY,
+        boardCameraOutput,
+      )
+      applyBoardCameraOutput()
+    }
+  }
+  event.preventDefault()
+}
+
+function toggleBoardDetailAt(x, y) {
+  if (isBoardFit()) {
+    setBoardScaleAt(Math.max(boardFitScale, 1), x, y, x, y)
+  } else {
+    setBoardFit(true)
+  }
+}
+
+function releaseBoardPointer(event, cancelled) {
+  const slot = pointerSlot(event.pointerId)
+  if (slot < 0) return
+  const wasTouch = event.pointerType === 'touch'
+  const tap =
+    !cancelled
+    && wasTouch
+    && activePointerCount === 1
+    && !gestureMoved
+    && !gestureHadMultiplePointers
+  const tapX = pointerX[slot]
+  const tapY = pointerY[slot]
+
+  pointerActive[slot] = 0
+  activePointerCount -= 1
+  if (architectureScroll.hasPointerCapture(event.pointerId)) {
+    architectureScroll.releasePointerCapture(event.pointerId)
+  }
+
+  if (tap) {
+    const elapsed = event.timeStamp - lastTapTime
+    const deltaX = tapX - lastTapX
+    const deltaY = tapY - lastTapY
+    if (elapsed > 0 && elapsed <= 320 && deltaX * deltaX + deltaY * deltaY <= 576) {
+      toggleBoardDetailAt(tapX, tapY)
+      lastTapTime = -1000
+    } else {
+      lastTapTime = event.timeStamp
+      lastTapX = tapX
+      lastTapY = tapY
+    }
+  }
+
+  if (wasTouch || gestureMoved) {
+    suppressCanvasClickUntil = event.timeStamp + 500
+  }
+  const remaining = pointerActive[0] ? 0 : pointerActive[1] ? 1 : -1
+  if (remaining >= 0) {
+    pointerStartX = pointerX[remaining]
+    pointerStartY = pointerY[remaining]
+  }
+  event.preventDefault()
+}
+
+function onBoardPointerUp(event) {
+  releaseBoardPointer(event, false)
+}
+
+function onBoardPointerCancel(event) {
+  releaseBoardPointer(event, true)
+}
+
+function onBoardWheel(event) {
+  event.preventDefault()
+  let delta = event.deltaY
+  if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) delta *= 16
+  if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) delta *= cssHeight
+  delta = clamp(delta, -120, 120)
+  const x = boardPointerX(event)
+  const y = boardPointerY(event)
+  setBoardScaleAt(viewScale * Math.exp(-delta * 0.002), x, y, x, y)
+}
+
+function onCanvasClick(event) {
+  if (event.timeStamp <= suppressCanvasClickUntil) return
+  togglePaused()
 }
 
 function pathRoundRect(x, y, width, height, radius) {
@@ -616,8 +925,9 @@ function arrow(x1, y1, x2, y2, color, width = 2) {
 function text(value, x, y, size, color, align = 'left', weight = 600) {
   if (!labelsVisible) return
   const renderedSize = mobileBoard
-    ? detailFontSize(size, viewScale, boardFit)
+    ? detailFontSize(size, viewScale, boardFitScale)
     : size
+  if (renderedSize === 0) return
   ctx.fillStyle = color
   ctx.font = `${weight} ${renderedSize}px Georgia, "Times New Roman", serif`
   ctx.textAlign = align
@@ -628,8 +938,9 @@ function text(value, x, y, size, color, align = 'left', weight = 600) {
 function mono(value, x, y, size, color, align = 'left', weight = 600) {
   if (!labelsVisible) return
   const renderedSize = mobileBoard
-    ? detailFontSize(size, viewScale, boardFit)
+    ? detailFontSize(size, viewScale, boardFitScale)
     : size
+  if (renderedSize === 0) return
   ctx.fillStyle = color
   ctx.font = `${weight} ${renderedSize}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`
   ctx.textAlign = align
@@ -2157,7 +2468,12 @@ window.addEventListener('resize', resize)
 if (typeof ResizeObserver === 'function') {
   new ResizeObserver(resize).observe(architectureScroll)
 }
-canvas.addEventListener('click', togglePaused)
+architectureScroll.addEventListener('pointerdown', onBoardPointerDown)
+architectureScroll.addEventListener('pointermove', onBoardPointerMove)
+architectureScroll.addEventListener('pointerup', onBoardPointerUp)
+architectureScroll.addEventListener('pointercancel', onBoardPointerCancel)
+architectureScroll.addEventListener('wheel', onBoardWheel, { passive: false })
+canvas.addEventListener('click', onCanvasClick)
 canvas.addEventListener('keydown', (event) => {
   if (event.code === 'Space') {
     event.preventDefault()
@@ -2170,6 +2486,7 @@ canvas.addEventListener('keydown', (event) => {
 machineToggle.addEventListener('click', togglePaused)
 machineReset.addEventListener('click', () => setTime(0))
 boardView.addEventListener('click', toggleBoardFit)
+boardFollow.addEventListener('click', enableBoardFollow)
 statementMode.addEventListener('click', toggleStatementMode)
 statementNext.addEventListener('click', stepStatementReplay)
 postgresToggle.addEventListener('click', () => {
@@ -2225,15 +2542,26 @@ window.MAGNUM = Object.freeze({
     periods,
     board: {
       mobile: mobileBoard,
-      fit: boardFit,
+      fit: isBoardFit(),
+      following: boardFollowing,
+      fitScale: boardFitScale,
+      maxScale: BOARD_MAX_SCALE,
       scale: viewScale,
       smallestLabelPixels: mobileBoard
-        ? effectiveLabelPixels(SMALLEST_SOURCE_LABEL_PX, viewScale, boardFit)
+        ? (
+            effectiveLabelPixels(
+              SMALLEST_SOURCE_LABEL_PX,
+              viewScale,
+              boardFitScale,
+            ) || MIN_DETAIL_LABEL_PX
+          )
         : SMALLEST_SOURCE_LABEL_PX * viewScale,
-      scrollLeft: architectureScroll.scrollLeft,
-      scrollTop: architectureScroll.scrollTop,
-      viewportWidth: architectureScroll.clientWidth,
-      viewportHeight: architectureScroll.clientHeight,
+      viewX,
+      viewY,
+      scrollLeft: Math.max(0, -viewX),
+      scrollTop: Math.max(0, -viewY),
+      viewportWidth: cssWidth,
+      viewportHeight: cssHeight,
     },
     statement: {
       status: statement.status,
