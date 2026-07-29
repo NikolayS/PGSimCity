@@ -439,12 +439,12 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         label: 'Decoding',
         get: (s) => (s.knobs.walLevel === 'logical' ? (s.replication.logicalEnabled ? 'active' : 'idle') : 'off — wal_level is not logical'),
       },
-      { label: 'Changes / s', get: (s) => fmtNum(s.replication.logicalChangesPerSec) },
-      { label: 'Slot position', get: (s) => fmtLsn(s.replication.logicalSlotLsn) },
+      { label: 'Changes / s', get: (s) => fmtNum(s.replication.logicalEnabled ? s.replication.logicalChangesPerSec : 0) },
+      { label: 'Slot position', get: (s) => (s.replication.logicalEnabled ? fmtLsn(s.replication.logicalSlotLsn) : '—') },
       {
         label: 'WAL held by the slot',
         get: (s) =>
-          !s.replication.enabled
+          !s.replication.logicalEnabled
             ? 'nothing — no slot exists'
             : fmtBytes(Math.max(0, s.wal.insertLsn - s.replication.logicalSlotLsn)),
         hint: 'cannot be recycled until the consumer confirms it',
@@ -1484,7 +1484,10 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       { label: 'Replay LSN', get: (s) => fmtLsn(s.replication.replayLsn) },
       {
         label: 'Behind by',
-        get: (s) => `${fmtBytes(s.replication.lagBytes)} · ${fmtDuration(s.replication.lagSec)}`,
+        get: (s) =>
+          !s.replication.enabled || !s.replication.connected
+            ? '—'
+            : `${fmtBytes(s.replication.lagBytes)} · ${fmtDuration(s.replication.lagSec)}`,
       },
       { label: 'Replay activity', get: (s) => fmtPct(s.replication.applyActivity, 0) },
       {
@@ -1738,12 +1741,12 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         label: 'Subscription',
         get: (s) => (s.knobs.walLevel !== 'logical' ? 'impossible — wal_level is not logical' : s.replication.logicalEnabled ? 'streaming' : 'idle'),
       },
-      { label: 'Changes / s', get: (s) => fmtNum(s.replication.logicalChangesPerSec), hint: 'row-level operations applied' },
-      { label: 'Confirmed to', get: (s) => fmtLsn(s.replication.logicalSlotLsn) },
+      { label: 'Changes / s', get: (s) => fmtNum(s.replication.logicalEnabled ? s.replication.logicalChangesPerSec : 0), hint: 'row-level operations applied' },
+      { label: 'Confirmed to', get: (s) => (s.replication.logicalEnabled ? fmtLsn(s.replication.logicalSlotLsn) : '—') },
       {
         label: 'WAL retained for it',
         get: (s) =>
-          !s.replication.enabled
+          !s.replication.logicalEnabled
             ? 'nothing — no subscription exists'
             : fmtBytes(Math.max(0, s.wal.insertLsn - s.replication.logicalSlotLsn)),
         hint: 'the publisher cannot recycle this until the subscriber confirms',

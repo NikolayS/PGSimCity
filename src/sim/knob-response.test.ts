@@ -314,4 +314,15 @@ describe('knob-response contract', () => {
     expect(base.buffers.dirtyCount).not.toBe(target.buffers.dirtyCount)
     expect(VACUOUS_SHARED_BUFFER_ASSERTIONS).toEqual([])
   })
+
+  it('does not advertise standby reads when replication is unavailable', () => {
+    const disabled = snapshots.get('hard:replicaEnabled')!
+    const minimal = snapshots.get('hard:walLevel')!
+
+    expect(disabled.state.replication.connected).toBe(false)
+    expect(disabled.readouts.get('replica.client')).toBe('no standby — reads unavailable')
+    expect(minimal.state.knobs.walLevel).toBe('minimal')
+    expect(minimal.state.replication.connected).toBe(false)
+    expect(minimal.readouts.get('replica.client')).toBe('no standby — reads unavailable')
+  })
 })

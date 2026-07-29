@@ -145,7 +145,7 @@ export const SCENARIOS: ScenarioDef[] = [
       maxWalSize: 512,
     },
     beats: [
-      [0, 'An UPDATE does not update', 'Under MVCC, UPDATE writes a *new* row version and marks the old one dead. Autovacuum is off now, so the launcher will send nobody new. PostgreSQL does let a worker that was already running finish; after that, these dead versions accumulate.'],
+      [0, 'An UPDATE does not update', 'Under MVCC, UPDATE writes a *new* row version and marks the old one dead. Routine autovacuum is off now, so the launcher will send nobody new in this city. PostgreSQL does let a worker that was already running finish, and still forces anti-wraparound vacuums — the city does not model per-relation XID age. Until then, these dead versions accumulate.'],
       [16, 'sessions is the victim', 'Small table, rewritten constantly, and at most 15% of its updates can be HOT — fewer and fewer as the pages fill up, because a HOT update needs room for the new version on the same page. Watch its bloat bar climb in the underworld while accounts — 85% HOT while it has space — barely moves.'],
       [34, 'HOT is the quiet hero', 'A Heap-Only Tuple update keeps the new version on the same page and does not touch any index. Postgres can then prune those dead versions during ordinary page access, with no vacuum at all. That is why accounts stays lean and sessions does not.'],
       [52, 'Bloat is not just size', 'The table is physically growing. Every sequential scan now reads more pages for the same live rows, every index is fatter, and the buffer pool holds more garbage. Bloat costs you cache, not just disk.'],

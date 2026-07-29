@@ -851,7 +851,7 @@ const progressVacuum: ProjectionFn = (s) => {
     rows,
     empty: s.knobs.autovacuum
       ? 'No vacuum is running this second — which is the normal state of this view, and the reason people conclude autovacuum is not working when it is. The launcher wakes on autovacuum_naptime (a few seconds in this model, sixty on a stock server); leave the page open and a worker will appear. Meanwhile n_dead_tup in pg_stat_all_tables is the counter that never stops telling you the truth.'
-      : 'autovacuum is off. Nothing will ever appear here, and n_dead_tup will climb without limit.',
+      : 'Routine autovacuum is off, so this city launches no new workers and n_dead_tup climbs. Real PostgreSQL still forces anti-wraparound vacuums even with autovacuum off; the city does not yet model per-relation XID age.',
     caption:
       'phase is the real enum: initializing, scanning heap, vacuuming indexes, vacuuming heap, cleaning up indexes, truncating heap, performing final cleanup. "removed" is not a column in this view — it is the model showing you what the pass actually reclaimed, which is the number pg_stat_progress_vacuum conspicuously does not give you.',
   }
