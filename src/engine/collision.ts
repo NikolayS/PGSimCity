@@ -24,13 +24,14 @@ import type { Surface } from './audio'
  * sees, costs nothing at runtime, and means a district that grows a new
  * building gets collision for free. No district has to know this file exists.
  *
- * WHAT IS DELIBERATELY NOT SOLID — see DEFAULT_EXCLUDE_IDS below. The two that
+ * WHAT IS DELIBERATELY NOT SOLID — see DEFAULT_EXCLUDE_IDS below. The three that
  * matter: `world.ground` (it is the floor, and the floor is a *walkable*, not a
- * blocker) and `shared.buffers` (1024 tiles whose heights change every frame
- * with usage_count; a 32x32 field of live-height blocks with 0.6 m gaps would
- * make the plaza deck impassable for a 0.7 m-wide human). You walk *through*
- * the buffer tiles. Standing inside a lit buffer is the entire point of the
- * feature.
+ * blocker), `shared.buffers` (1024 tiles whose heights change every frame with
+ * usage_count; a 32x32 field of live-height blocks with 0.6 m gaps would make
+ * the plaza deck impassable for a 0.7 m-wide human), and `storage.tempfiles`
+ * (its registered object is a 2 m-tall invisible pick proxy around a visible
+ * 0.36 m step-height bay). You walk *through* the buffer tiles. Standing inside
+ * a lit buffer is the entire point of the feature.
  *
  * OVERSIZED CONTAINERS. A registered root is often a whole district: the
  * backend row is one group 224 m wide and 26 m tall. Boxing that would wall off
@@ -200,16 +201,24 @@ export interface CollisionWorld {
  *   client.pool      the client sky, 40‥80 m up
  *   conn.gate        the connection gate, hanging at y = 14 over open air
  *   shared.buffers   1024 live-height tiles, see the header
+ *   storage.tempfiles
+ *                    its registry object is an invisible selection proxy twice
+ *                    as tall as a walker; the visible bay is only a 0.36 m step
  *   shmem            (module id, harmless if it ever becomes a component)
- *   net.wire         the replication cable bundle: 98 x 10 x 139 m of scenery
- *                    slung over the approach to the standby. Solid, it is a
- *                    wall across the only way in.
  *   autovac.worker.N the vacuum trucks DRIVE. build() is a boot snapshot, so a
  *                    box for one of these is a ghost wall parked wherever the
  *                    truck happened to be at t = 0.
  */
 export const DEFAULT_EXCLUDE_IDS: readonly string[] = (() => {
-  const ids = ['world.ground', 'world.pit', 'client.pool', 'conn.gate', 'shared.buffers', 'shmem', 'net.wire']
+  const ids = [
+    'world.ground',
+    'world.pit',
+    'client.pool',
+    'conn.gate',
+    'shared.buffers',
+    'storage.tempfiles',
+    'shmem',
+  ]
   for (let i = 0; i < N_VAC_WORKERS; i++) ids.push(`autovac.worker.${i}`)
   return ids
 })()
