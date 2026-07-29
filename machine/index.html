@@ -7,7 +7,7 @@
       name="description"
       content="A one-screen psql workbench and layered PostgreSQL architecture machine."
     />
-    <title>PGSimCity — PostgreSQL Architecture Workbench</title>
+    <title>The Machine — PGSimCity</title>
 <!-- Privacy-friendly analytics by Plausible -->
 <script async src="https://plausible.io/js/pa-8M-ssImnj4YBtK34iZRwy.js"></script>
 <script>
@@ -26,8 +26,22 @@
         <header class="console-header">
           <div>
             <p class="eyebrow">PGSIMCITY / MACHINE ROOM 01</p>
-            <h1>THE UPDATE WORKS</h1>
-            <p class="deck">REAL POSTGRESQL LEFT · THE CITY'S ARCHITECTURE + MODELLED INTERIOR RIGHT.</p>
+            <h1>THE MACHINE</h1>
+            <p class="deck">
+              REAL POSTGRESQL LEFT VIA
+              <a
+                href="https://pglite.dev"
+                target="_blank"
+                rel="noopener"
+              >PGLITE BY ELECTRICSQL</a>
+              — POSTGRESQL COMPILED TO WEBASSEMBLY.
+              <a
+                href="https://github.com/electric-sql/pglite"
+                target="_blank"
+                rel="noopener"
+              >SOURCE</a>.
+              THE CITY'S ARCHITECTURE + MODELLED INTERIOR RIGHT.
+            </p>
           </div>
           <div class="header-side">
             <nav class="machine-nav" aria-label="Machine room navigation">
@@ -38,6 +52,17 @@
                   PGSimCity is an independent, non-commercial educational visualization of
                   PostgreSQL internals. It is not affiliated with, sponsored, endorsed, or approved
                   by Electronic Arts Inc. SimCity is a trademark of Electronic Arts Inc.
+                  <span class="machine-legal__credit">
+                    <a href="https://pglite.dev" target="_blank" rel="noopener">PGlite</a>
+                    is by ElectricSQL (Electric DB Limited), copyright Electric DB Limited and
+                    licensed under Apache-2.0. It contains PostgreSQL code compiled to WebAssembly;
+                    PostgreSQL and modifications to it are distributed under the PostgreSQL License.
+                    <a
+                      href="https://github.com/electric-sql/pglite"
+                      target="_blank"
+                      rel="noopener"
+                    >Source</a>.
+                  </span>
                 </p>
               </details>
             </nav>
@@ -82,7 +107,11 @@
         <section class="terminal" aria-label="psql terminal">
           <header class="terminal-header">
             <span class="terminal-lamps" aria-hidden="true"><i></i><i></i><i></i></span>
-            <strong>PSQL / PGLITE · SINGLE CONNECTION</strong>
+            <strong>
+              PSQL /
+              <a href="https://pglite.dev" target="_blank" rel="noopener">PGLITE BY ELECTRICSQL</a>
+              · SINGLE CONNECTION
+            </strong>
             <span id="terminal-state">OFFLINE</span>
           </header>
           <div id="terminal-transcript" class="terminal-transcript" aria-live="polite">

@@ -75,6 +75,30 @@ textarea {
   text-transform: uppercase;
 }
 
+.deck a,
+.terminal-header a,
+.machine-legal a {
+  color: inherit;
+  text-decoration-color: rgb(216 194 154 / 56%);
+  text-underline-offset: 2px;
+}
+
+.deck a:hover,
+.terminal-header a:hover,
+.machine-legal a:hover {
+  color: #f1dfba;
+  text-decoration-color: currentColor;
+}
+
+.deck a:focus-visible,
+.terminal-header a:focus-visible,
+.machine-legal a:focus-visible {
+  color: #f1dfba;
+  outline: 1px solid currentColor;
+  outline-offset: 2px;
+  text-decoration-color: currentColor;
+}
+
 .console-header h1 {
   margin: 4px 0 2px;
   color: #f1dfba;
@@ -145,6 +169,13 @@ textarea {
   letter-spacing: 0.03em;
   text-transform: none;
   white-space: normal;
+}
+
+.machine-legal__credit {
+  display: block;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgb(200 146 62 / 24%);
 }
 
 .source-key {

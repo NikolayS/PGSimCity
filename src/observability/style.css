@@ -964,6 +964,16 @@ body {
   font-size: var(--fs-xs);
   line-height: 1.5;
 }
+.pg-real__intro a {
+  color: var(--ink-dim);
+  text-decoration-color: color-mix(in srgb, currentColor 55%, transparent);
+  text-underline-offset: 2px;
+}
+.pg-real__intro a:hover { color: var(--c-ok); }
+.pg-real__intro a:focus-visible {
+  outline: 2px solid var(--c-ok);
+  outline-offset: 2px;
+}
 .pg-mode {
   min-width: 0;
   display: grid;
