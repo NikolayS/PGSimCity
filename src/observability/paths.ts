@@ -362,7 +362,7 @@ const KB = {
   },
   replicaNetworkLag: {
     key: 'replicaNetworkLag',
-    guc: 'network round trip',
+    guc: 'network one-way delay',
     kind: 'range',
     min: 0,
     max: 200,
@@ -1196,7 +1196,7 @@ const VERDICTS: Verdict[] = [
       'Network latency delays every one of the four positions equally, which is exactly why it is so often misdiagnosed: the graph of "replication lag" moves, so people tune the standby. Look at sent_lsn specifically. If the primary cannot even send, nothing downstream of it is the problem.',
     evidence: (s) => [
       { label: 'primary − sent', value: fmtBytes(s.wal.writeLsn - s.replication.sentLsn), tone: 'crit' },
-      { label: 'round trip', value: `${s.replication.networkLagMs} ms`, tone: 'warn' },
+      { label: 'one-way delay', value: `${s.replication.networkLagMs} ms`, tone: 'warn' },
       { label: 'records in flight', value: String(s.replication.inFlight) },
     ],
     fix: 'Fix the link, or move the standby closer. Nothing you change inside Postgres will make bytes cross the wire faster.',
@@ -1214,7 +1214,7 @@ const VERDICTS: Verdict[] = [
       const behind = s.wal.writeLsn - s.replication.sentLsn
       return {
         ok: behind < 256 * 1024,
-        reading: `primary − sent_lsn is ${fmtBytes(Math.max(0, behind))} at ${s.replication.networkLagMs} ms round trip`,
+        reading: `primary − sent_lsn is ${fmtBytes(Math.max(0, behind))} at ${s.replication.networkLagMs} ms one way`,
       }
     },
     city: 'net.wire',
@@ -1331,7 +1331,7 @@ const VERDICTS: Verdict[] = [
     evidence: (s) => [
       { label: 'synchronous_commit', value: s.knobs.synchronousCommit, tone: 'warn' },
       { label: 'waiting to commit', value: String(waits(s).commit), tone: 'warn' },
-      { label: 'round trip', value: `${s.replication.networkLagMs} ms` },
+      { label: 'one-way delay', value: `${s.replication.networkLagMs} ms` },
       { label: 'replay_lag', value: `${s.replication.lagSec.toFixed(2)} s` },
     ],
     fix:
@@ -1344,7 +1344,7 @@ const VERDICTS: Verdict[] = [
     },
     resolved: (s) => ({
       ok: waits(s).commit === 0,
-      reading: `synchronous_commit = ${s.knobs.synchronousCommit} at ${s.replication.networkLagMs} ms round trip · ${waits(s).commit} backend${waits(s).commit === 1 ? '' : 's'} still waiting for the standby`,
+      reading: `synchronous_commit = ${s.knobs.synchronousCommit} at ${s.replication.networkLagMs} ms one way · ${waits(s).commit} backend${waits(s).commit === 1 ? '' : 's'} still waiting for the standby`,
     }),
     city: 'walsender',
     reading: [DOC('runtime-config-replication.html', 'Replication settings')],

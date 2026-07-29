@@ -74,12 +74,12 @@ interface Snapshots {
 const METRIC_MOVES = new Set([
   'world.pit::Buffer pool',
   'shmem.deck::Buffer pool',
+  'shmem.deck::WAL buffers',
   'shared.buffers::Pool size',
   'os.cache::shared_buffers',
 ])
 
 const METRIC_INVARIANTS = new Set([
-  'shmem.deck::WAL buffers',
   'shmem.deck::Lock waits',
 ])
 

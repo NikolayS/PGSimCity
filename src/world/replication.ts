@@ -58,8 +58,8 @@ const _lsn = new Float64Array(4)
 
 const TAU = Math.PI * 2
 const MB = 1024 * 1024
-/** ms of configured network lag → simulated seconds. Mirrors sim/model.ts. */
-const NET_STRETCH = 6
+/** Packet-flight animation only; model readouts convert this stretch back out. */
+const NET_PACKET_STRETCH = 6
 
 /** cx, cy, cz, w, h, d — for cylinders w/d are diameters. */
 type BoxSpec = [number, number, number, number, number, number]
@@ -1376,7 +1376,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     // One packet per send, rate-limited so a huge WAL rate does not flood the
     // cable with more boxes than a person can follow.
     sendAcc += dts
-    const flightDur = Math.max(0.1, (rep.networkLagMs * NET_STRETCH) / 1000)
+    const flightDur = Math.max(0.1, (rep.networkLagMs * NET_PACKET_STRETCH) / 1000)
     if (dSent > 0 && connected && sendAcc > flightDur / 5) {
       sendAcc = 0
       for (let i = 0; i < N_PKT; i++) {

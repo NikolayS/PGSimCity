@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createBus } from '../core/bus'
-import type { ComponentDoc } from '../core/types'
+import type { ComponentDoc, SyncCommit } from '../core/types'
 import { PROJECTIONS } from '../observability/views'
 import { DOCS_STORAGE } from '../ui/docs-storage'
 import { createSim } from './model'
@@ -204,6 +204,234 @@ describe('autovacuum cost balance', () => {
     }
 
     expect(ioReadTotal / samples).toBeLessThanOrEqual(225)
+  })
+})
+
+describe('backend dirty-eviction cost', () => {
+  function tracedScanSeconds(dirty: boolean): number {
+    const sim = createSim(createBus())
+    sim.setKnob('tps', 0)
+    sim.setKnob('sharedBuffers', 128)
+    sim.setKnob('bgwriterEnabled', false)
+    advanceBy(sim, 30)
+
+    const { buffers } = sim.state
+    buffers.valid.fill(1, 0, buffers.sampleFrames)
+    buffers.dirty.fill(dirty ? 1 : 0, 0, buffers.sampleFrames)
+    buffers.pinned.fill(0, 0, buffers.sampleFrames)
+    buffers.usage.fill(0, 0, buffers.sampleFrames)
+
+    sim.request('select_seq', 3)
+    let started = false
+    for (let tick = 0; tick < 1800; tick++) {
+      sim.update(1 / 30)
+      if (sim.state.trace.stop !== 'done') started = true
+      else if (started) break
+    }
+    return sim.state.trace.lastTripSec
+  }
+
+  it('charges the requesting backend for synchronously writing dirty victims', () => {
+    const clean = tracedScanSeconds(false)
+    const dirty = tracedScanSeconds(true)
+
+    expect(
+      dirty,
+      `clean pool=${clean}s; dirty pool=${dirty}s`,
+    ).toBeGreaterThan(clean + 0.02)
+  })
+
+  function bgwriterReading(maxpages: number, enabled = true): {
+    backendWritesPerSec: number
+    cleanedPerSec: number
+    tps: number
+  } {
+    const sim = createSim(createBus())
+    sim.setKnob('sharedBuffers', 512)
+    sim.setKnob('tps', 1500)
+    sim.setKnob('writeRatio', 0.8)
+    sim.setKnob('seqScanRatio', 0)
+    sim.setKnob('autovacuum', false)
+    sim.setKnob('bgwriterEnabled', enabled)
+    sim.setKnob('bgwriterLruMaxpages', maxpages)
+    advanceBy(sim, 300)
+
+    const commitStart = sim.state.stats.commits
+    const backendStart = sim.state.buffers.dirtyEvictions
+    const cleanedStart = sim.state.bgwriter.cleanedTotal
+    advanceBy(sim, 120)
+    return {
+      backendWritesPerSec:
+        (sim.state.buffers.dirtyEvictions - backendStart) / 120,
+      cleanedPerSec:
+        (sim.state.bgwriter.cleanedTotal - cleanedStart) / 120,
+      tps: (sim.state.stats.commits - commitStart) / 120,
+    }
+  }
+
+  it('lets a working bgwriter spare backends without lowering throughput', { timeout: 15_000 }, () => {
+    const disabled = bgwriterReading(400, false)
+    const enabled = bgwriterReading(400, true)
+
+    expect.soft(
+      enabled.backendWritesPerSec,
+      `off=${disabled.backendWritesPerSec}; on=${enabled.backendWritesPerSec}`,
+    ).toBeLessThan(disabled.backendWritesPerSec * 0.7)
+    expect(
+      enabled.tps,
+      `off=${disabled.tps}; on=${enabled.tps}`,
+    ).toBeGreaterThan(disabled.tps * 0.995)
+  })
+
+  it('lets bgwriter_lru_maxpages bind under a churning workload', { timeout: 15_000 }, () => {
+    const capped = bgwriterReading(100)
+    const raised = bgwriterReading(400)
+
+    expect.soft(
+      raised.cleanedPerSec,
+      `100=${capped.cleanedPerSec}; 400=${raised.cleanedPerSec}`,
+    ).toBeGreaterThan(capped.cleanedPerSec * 1.2)
+    expect(
+      raised.backendWritesPerSec,
+      `100=${capped.backendWritesPerSec}; 400=${raised.backendWritesPerSec}`,
+    ).toBeLessThan(capped.backendWritesPerSec * 0.9)
+  })
+})
+
+describe('wal_buffers auto-tuning', () => {
+  it('derives capacity from shared_buffers with PostgreSQL bounds', () => {
+    const sim = createSim(createBus())
+
+    expect(sim.state.wal.bufferCapacity).toBe(16 * MIB)
+    sim.setKnob('sharedBuffers', 128)
+    expect(sim.state.wal.bufferCapacity).toBe(4 * MIB)
+    sim.setKnob('sharedBuffers', 1)
+    expect(sim.state.wal.bufferCapacity).toBe(64 * 1024)
+    sim.setKnob('sharedBuffers', 64 * 1024)
+    expect(sim.state.wal.bufferCapacity).toBe(16 * MIB)
+    sim.setKnob('sharedBuffers', 2 * 1024)
+    expect(sim.state.wal.bufferCapacity).toBe(16 * MIB)
+  })
+})
+
+describe('replication timing units', () => {
+  function meanReplayLag(sim: ReturnType<typeof createSim>, seconds: number): number {
+    let total = 0
+    let samples = 0
+    const until = sim.state.t + seconds
+    while (sim.state.t < until) {
+      sim.update(Math.min(1 / 30, until - sim.state.t))
+      total += sim.state.replication.lagSec
+      samples++
+    }
+    return total / samples
+  }
+
+  it('reports replay_lag in real seconds while packet travel stays visible', { timeout: 15_000 }, () => {
+    const sim = createSim(createBus())
+    sim.setKnob('tps', 300)
+    sim.setKnob('writeRatio', 0.6)
+    sim.setKnob('autovacuum', false)
+    sim.setKnob('replicaNetworkLag', 400)
+    advanceBy(sim, 300)
+
+    const stretched = meanReplayLag(sim, 60)
+    expect(stretched).toBeGreaterThan(0.35)
+    expect(stretched).toBeLessThan(0.6)
+
+    sim.setKnob('replicaNetworkLag', 0)
+    advanceBy(sim, 300)
+    expect(meanReplayLag(sim, 60)).toBeLessThan(0.05)
+  })
+})
+
+describe('synchronous_commit guarantees', () => {
+  function meanCommitWaiters(mode: SyncCommit): number {
+    const sim = createSim(createBus())
+    sim.setKnob('tps', 300)
+    sim.setKnob('writeRatio', 0.6)
+    sim.setKnob('autovacuum', false)
+    sim.setKnob('replicaNetworkLag', 50)
+    sim.setKnob('synchronousCommit', mode)
+    advanceBy(sim, 300)
+
+    let waiters = 0
+    let samples = 0
+    const until = sim.state.t + 120
+    while (sim.state.t < until) {
+      sim.update(Math.min(1 / 30, until - sim.state.t))
+      waiters += sim.state.backends.filter((backend) => backend.state === 'commit_wait').length
+      samples++
+    }
+    return waiters / samples
+  }
+
+  it('forms the off < local < on < remote_apply commit-wait ladder', { timeout: 20_000 }, () => {
+    const off = meanCommitWaiters('off')
+    const local = meanCommitWaiters('local')
+    const on = meanCommitWaiters('on')
+    const remoteApply = meanCommitWaiters('remote_apply')
+
+    expect.soft(local, `off=${off}; local=${local}`).toBeGreaterThan(off)
+    expect.soft(on, `local=${local}; on=${on}`).toBeGreaterThan(local)
+    expect(
+      remoteApply,
+      `on=${on}; remote_apply=${remoteApply}`,
+    ).toBeGreaterThan(on)
+  })
+})
+
+describe('checkpoint_timeout full-page-image amortisation', () => {
+  function checkpointReading(timeout: number): {
+    checkpoints: number
+    fpiShare: number
+    walBytesPerSec: number
+  } {
+    const sim = createSim(createBus())
+    sim.setKnob('tps', 300)
+    sim.setKnob('writeRatio', 1)
+    sim.setKnob('updateRatio', 1)
+    sim.setKnob('seqScanRatio', 0)
+    sim.setKnob('autovacuum', false)
+    sim.setKnob('synchronousCommit', 'local')
+    sim.setKnob('maxWalSize', 4096)
+    sim.setKnob('checkpointTimeout', timeout)
+    advanceBy(sim, 400)
+
+    const checkpointStart = sim.state.checkpoint.count
+    const lsnStart = sim.state.wal.insertLsn
+    let fpiShare = 0
+    let samples = 0
+    const until = sim.state.t + 400
+    while (sim.state.t < until) {
+      sim.update(Math.min(1 / 30, until - sim.state.t))
+      fpiShare += sim.state.wal.fpwBurst
+      samples++
+    }
+    return {
+      checkpoints: sim.state.checkpoint.count - checkpointStart,
+      fpiShare: fpiShare / samples,
+      walBytesPerSec: (sim.state.wal.insertLsn - lsnStart) / 400,
+    }
+  }
+
+  it('re-touches a warm write band so longer intervals amortise page images', { timeout: 20_000 }, () => {
+    const short = checkpointReading(15)
+    const long = checkpointReading(120)
+
+    expect.soft(long.checkpoints).toBeLessThan(short.checkpoints / 3)
+    expect.soft(
+      long.fpiShare,
+      `15s=${short.fpiShare}; 120s=${long.fpiShare}`,
+    ).toBeLessThan(short.fpiShare * 0.85)
+    expect.soft(
+      long.fpiShare * long.walBytesPerSec,
+      `15s=${short.fpiShare * short.walBytesPerSec}; 120s=${long.fpiShare * long.walBytesPerSec}`,
+    ).toBeLessThan(short.fpiShare * short.walBytesPerSec * 0.6)
+    expect(
+      long.walBytesPerSec,
+      `15s=${short.walBytesPerSec}; 120s=${long.walBytesPerSec}`,
+    ).toBeLessThan(short.walBytesPerSec * 0.8)
   })
 })
 
