@@ -179,6 +179,45 @@ describe('collision.build: a merged structural mesh', () => {
     expect(world.groundAt(p, 8)).toBeCloseTo(4, 3)
     world.dispose()
   })
+
+  it('does not create a collider for a hidden scene branch', () => {
+    const world = createCollisionWorld()
+    const root = new THREE.Group()
+    const visible = new THREE.Mesh(new THREE.BoxGeometry(4, 4, 4))
+    visible.position.set(0, 2, 0)
+    const hidden = new THREE.Mesh(new THREE.BoxGeometry(4, 4, 4))
+    hidden.position.set(100, 2, 0)
+    hidden.visible = false
+    root.add(visible, hidden)
+    root.updateMatrixWorld(true)
+
+    world.build({ all: () => [component('branches', root)] })
+
+    expect(world.solidNear(0, 0, 2)).toBe(true)
+    expect(world.solidNear(100, 0, 2)).toBe(false)
+    world.dispose()
+  })
+
+  it('measures visible structure instead of an invisible pick proxy', () => {
+    const world = createCollisionWorld()
+    const root = new THREE.Group()
+    const visible = new THREE.Mesh(new THREE.BoxGeometry(4, 4, 4))
+    visible.position.set(0, 2, 0)
+    const proxy = new THREE.Mesh(
+      new THREE.BoxGeometry(20, 8, 20),
+      new THREE.MeshBasicMaterial({ visible: false }),
+    )
+    proxy.position.set(0, 4, 0)
+    root.add(visible, proxy)
+    root.updateMatrixWorld(true)
+
+    world.build({ all: () => [component('proxy', root)] })
+    const out = createMoveResult()
+    world.move(new THREE.Vector3(0, 0, 8), new THREE.Vector3(0, 0, 0), 0.35, 1.8, out)
+
+    expect(out.position.z).toBeCloseTo(2.35, 3)
+    world.dispose()
+  })
 })
 
 /* --------------------------------------------------------------------------
@@ -335,5 +374,57 @@ describe('landing', () => {
     world.build({ all: () => [component('shared.buffers', tiles)] })
     expect(world.boxCount).toBe(0)
     world.dispose()
+  })
+})
+
+/* --------------------------------------------------------------------------
+ * 5. Swept movement.
+ * ------------------------------------------------------------------------*/
+
+describe('swept movement', () => {
+  it('does not tunnel through a thin wall on a high-speed oblique crossing', () => {
+    const world = createCollisionWorld()
+    world.addBox(new THREE.Box3(new THREE.Vector3(-0.05, 0, -4), new THREE.Vector3(0.05, 3, 4)))
+    const out = createMoveResult()
+
+    world.move(new THREE.Vector3(-10, 0, -10), new THREE.Vector3(10, 0, 10), 0.35, 1.8, out)
+
+    expect(out.blocked).toBe(true)
+    expect(out.hitX).toBe(true)
+    expect(out.position.x).toBeLessThanOrEqual(-0.4 + 1e-3)
+    world.dispose()
+  })
+
+  it('stays outside both faces of an inside corner at speed', () => {
+    const world = createCollisionWorld()
+    world.addBox(new THREE.Box3(new THREE.Vector3(-0.05, 0, -8), new THREE.Vector3(0.05, 3, 0)))
+    world.addBox(new THREE.Box3(new THREE.Vector3(-8, 0, -0.05), new THREE.Vector3(0, 3, 0.05)))
+    const out = createMoveResult()
+
+    world.move(new THREE.Vector3(-4, 0, -4), new THREE.Vector3(4, 0, 4), 0.35, 1.8, out)
+
+    expect(out.hitX).toBe(true)
+    expect(out.hitZ).toBe(true)
+    expect(out.position.x).toBeLessThanOrEqual(-0.4 + 1e-3)
+    expect(out.position.z).toBeLessThanOrEqual(-0.4 + 1e-3)
+    world.dispose()
+  })
+
+  it('stops the real controller at full run gait on a thin wall', () => {
+    const world = createCollisionWorld()
+    world.addWalkable(plate(0, 80, FAR_X, 0), 'ground')
+    world.addBox(
+      new THREE.Box3(
+        new THREE.Vector3(FAR_X - 20, 0, -0.05),
+        new THREE.Vector3(FAR_X + 20, 3, 0.05),
+      ),
+    )
+    const h = harness(world, new THREE.Vector3(FAR_X, 0, 8))
+    h.walk.setTouchMove(0, 1)
+    for (let i = 0; i < 20; i++) h.walk.update(0.1)
+
+    expect(h.walk.position.z).toBeGreaterThanOrEqual(0.4 - 1e-3)
+    expect(h.walk.position.z).toBeLessThan(0.5)
+    h.dispose()
   })
 })

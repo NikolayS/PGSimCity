@@ -234,6 +234,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
   const { theme, quality } = ctx
   const group = new THREE.Group()
   group.name = 'storage'
+  const collisionBoxes: THREE.Box3[] = []
 
   const owned: { dispose(): void }[] = []
   const keep = <T extends { dispose(): void }>(x: T): T => {
@@ -250,6 +251,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
 
   /** One material for every instanced-colour mesh down here. */
   const mData = keep(new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true, toneMapped: false }))
+  mData.name = 'storage.liveData'
   // Kernel memory is a conceptual region, not physical matter: the one
   // deliberately translucent material in this district.
   const mVolume = keep(
@@ -263,6 +265,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
       depthWrite: true,
     }),
   )
+  mVolume.name = 'storage.osCache'
   const mIndexLine = keep(
     new THREE.LineBasicMaterial({
       vertexColors: true,
@@ -281,6 +284,8 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
   /* Static matte boxes are collected here and baked into two instanced meshes. */
   const boxLo: number[] = []
   const boxHi: number[] = []
+  const passableBoxLo = new Set<number>()
+  const passableBoxHi = new Set<number>()
   const addBox = (a: number[], x: number, y: number, z: number, sx: number, sy: number, sz: number) => {
     a.push(x, y, z, sx, sy, sz)
   }
@@ -357,8 +362,11 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
   const tempBayGroup = new THREE.Group()
   tempBayGroup.name = 'storage.tempfiles'
   group.add(tempBayGroup)
+  passableBoxLo.add(boxLo.length)
   addBox(boxLo, 0, FLOOR_Y + 0.18, -89, CITY.backend.span + 8, 0.36, 7.5)
+  passableBoxHi.add(boxHi.length)
   addBox(boxHi, 0, FLOOR_Y + 0.5, -92.5, CITY.backend.span + 8, 0.28, 0.3)
+  passableBoxHi.add(boxHi.length)
   addBox(boxHi, 0, FLOOR_Y + 0.5, -85.5, CITY.backend.span + 8, 0.28, 0.3)
   const tempBayProxy = new THREE.Mesh(gUnit, mPick)
   tempBayProxy.position.set(0, FLOOR_Y + 0.8, -89)
@@ -690,6 +698,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
   const strutColAttr = gStrut.getAttribute('color') as THREE.BufferAttribute
 
   const idxMasts = instanced(gCyl, mStructHi, idx.length)
+  idxMasts.name = 'storage.index.masts'
   idxMasts.instanceColor = null
   group.add(idxMasts)
 
@@ -739,6 +748,14 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
       addBox(boxLo, it.x, FLOOR_Y + 0.5, it.z, 22, 1.0, 10)
       addBox(boxHi, it.x, FLOOR_Y + 1.15, it.z, 19, 0.4, 8)
       setTRS(mastArr, s, it.x, FLOOR_Y + (ROOT_Y - FLOOR_Y) / 2 + 1, it.z, 0.7, ROOT_Y - FLOOR_Y - 2, 0.7)
+      // The index mast starts 2 m above the storage floor: clear at a walk,
+      // but inside a 1.8 m capsule during a normal jump.
+      collisionBoxes.push(
+        new THREE.Box3(
+          new THREE.Vector3(it.x - 0.7, FLOOR_Y + 2, it.z - 0.7),
+          new THREE.Vector3(it.x + 0.7, ROOT_Y, it.z + 0.7),
+        ),
+      )
 
       const proxy = new THREE.Mesh(gUnit, mPick)
       proxy.position.set(it.x, (FLOOR_Y + ROOT_Y) / 2 + 2, it.z)
@@ -1000,9 +1017,11 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
   const CABS = 6
   for (let i = 0; i < CABS; i++) {
     const x = (i - (CABS - 1) / 2) * (RACK_W / CABS)
-    addBox(boxLo, x, PIT_FLOOR_Y + rackH / 2, RACK_Z, RACK_W / CABS - 1.4, rackH, RACK_D)
-    addBox(boxHi, x, PIT_FLOOR_Y + rackH + 0.4, RACK_Z, RACK_W / CABS - 1.0, 0.8, RACK_D + 0.8)
-    addBox(boxHi, x, PIT_FLOOR_Y + 0.5, RACK_Z, RACK_W / CABS - 1.0, 1.0, RACK_D + 0.8)
+    const bodyW = RACK_W / CABS - 1.4
+    const trimW = RACK_W / CABS - 1.0
+    addBox(boxLo, x, PIT_FLOOR_Y + rackH / 2, RACK_Z, bodyW, rackH, RACK_D)
+    addBox(boxHi, x, PIT_FLOOR_Y + rackH + 0.4, RACK_Z, trimW, 0.8, RACK_D + 0.8)
+    addBox(boxHi, x, PIT_FLOOR_Y + 0.5, RACK_Z, trimW, 1.0, RACK_D + 0.8)
   }
   {
     const gRack = keep(new THREE.BoxGeometry(RACK_W, rackH, RACK_D))
@@ -1102,6 +1121,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     const nCollar = collar.length / 7
     const gCollar = keep(new THREE.CylinderGeometry(1.6, 1.6, 0.8, 8, 1, true))
     const collars = new THREE.InstancedMesh(gCollar, mStructHi, nCollar)
+    collars.name = 'storage.io.collars'
     collars.instanceColor = null
     collars.frustumCulled = false
     const ca = collars.instanceMatrix.array as Float32Array
@@ -1136,6 +1156,27 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     mesh.raycast = () => {}
     parent.add(mesh)
   }
+  for (const [boxes, passable] of [
+    [boxLo, passableBoxLo],
+    [boxHi, passableBoxHi],
+  ] as const) {
+    for (let i = 0; i < boxes.length; i += 6) {
+      if (passable.has(i)) continue
+      const x = boxes[i]
+      const y = boxes[i + 1]
+      const z = boxes[i + 2]
+      const sx = boxes[i + 3]
+      const sy = boxes[i + 4]
+      const sz = boxes[i + 5]
+      collisionBoxes.push(
+        new THREE.Box3(
+          new THREE.Vector3(x - sx / 2, y - sy / 2, z - sz / 2),
+          new THREE.Vector3(x + sx / 2, y + sy / 2, z + sz / 2),
+        ),
+      )
+    }
+  }
+  group.userData.collisionBoxes = collisionBoxes
 
   /* ============================================================ 8. STATE */
 

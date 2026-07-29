@@ -190,7 +190,7 @@ export async function createWalkCityHarness(): Promise<WalkCityHarness> {
   addModule(scene, modules, createStorage(ctx))
   addModule(scene, modules, createMaintenance(ctx))
   addModule(scene, modules, createReplication(ctx))
-  const planner = addModule(scene, modules, createPlanner(ctx))
+  addModule(scene, modules, createPlanner(ctx))
   addModule(scene, modules, createContinuity(ctx))
   scene.updateMatrixWorld(true)
 
@@ -198,13 +198,8 @@ export async function createWalkCityHarness(): Promise<WalkCityHarness> {
   collision.build(registry, { excludeIds: [...DEFAULT_EXCLUDE_IDS, 'shmem.deck'] })
   collision.addWalkable(ground.group, 'ground')
   collision.addWalkable(shmem.group.getObjectByName('shmem.deck') ?? shmem.group, 'deck')
+  collision.addPublished(scene)
   access.installCollision(collision)
-  for (const box of (ground.group.userData.rimColliders as THREE.Box3[] | undefined) ?? []) {
-    collision.addBox(box)
-  }
-  for (const box of (planner.group.userData.walkColliders as THREE.Box3[] | undefined) ?? []) {
-    collision.addBox(box, 'metal')
-  }
   const slonik = ground.group.userData.slonik as {
     ring: Float64Array
     contains(x: number, z: number): boolean
@@ -215,7 +210,19 @@ export async function createWalkCityHarness(): Promise<WalkCityHarness> {
   }
   const platePerimeter: WalkPoint[] = []
   for (let i = 0; i < insetRing.length; i += 2) {
-    platePerimeter.push([insetRing[i], 0, insetRing[i + 1]])
+    const point: WalkPoint = [insetRing[i], 0, insetRing[i + 1]]
+    const previous = platePerimeter.at(-1)
+    if (previous) {
+      const fenceZ = -252
+      const crossesFence = (previous[2] - fenceZ) * (point[2] - fenceZ) < 0
+      const t = crossesFence ? (fenceZ - previous[2]) / (point[2] - previous[2]) : 0
+      const crossX = previous[0] + (point[0] - previous[0]) * t
+      if (crossesFence && Math.abs(crossX) < 150) {
+        const side = Math.sign(previous[2] - fenceZ)
+        platePerimeter.push([0, 0, fenceZ + side * 6], [0, 0, fenceZ - side * 6])
+      }
+    }
+    platePerimeter.push(point)
   }
   platePerimeter.push(platePerimeter[0])
 

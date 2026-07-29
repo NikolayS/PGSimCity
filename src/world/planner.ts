@@ -464,7 +464,7 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
    * publish only the surfaces a dropped-in walker can actually meet. The front
    * and sides stay open; the floor, rear wall, and four corner posts do not.
    */
-  group.userData.walkColliders = [
+  const walkColliders = [
     new THREE.Box3(
       new THREE.Vector3(LX - SHELL_W / 2, FLOOR_Y - 1.2, LZ - SHELL_D / 2),
       new THREE.Vector3(LX + SHELL_W / 2, FLOOR_Y, LZ + SHELL_D / 2),
@@ -491,6 +491,8 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
       ),
     ),
   ]
+  group.userData.walkColliders = walkColliders
+  group.userData.collisionBoxes = walkColliders
 
   // A back wall, so the diagram has something to read against.
   const wallGeo = own(new THREE.PlaneGeometry(SHELL_W - 2, SHELL_H - 2))

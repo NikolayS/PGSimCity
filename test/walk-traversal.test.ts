@@ -42,11 +42,17 @@ const STAIR_DOWN: readonly WalkPoint[] = [
   [88, -44.57, -88],
   [88, -44.57, -92],
   [68, -52, -92],
-  [53, -52, -92],
+  [64, -52, -92],
 ]
 
 const DISTRICT_BOUNDARIES: TraversalRoute[] = [
-  ...bothDirections('boundary:clients-backends', [[100, 0.62, -286], [100, 0.62, -156]]),
+  ...bothDirections('boundary:clients-backends', [
+    [10, 0.02, -257],
+    [0, 0.02, -256],
+    [0, 0.02, -246],
+    [35, 0.62, -235],
+    [35, 0.62, -156],
+  ]),
   ...bothDirections('boundary:backends-shmem', [[0, 0.02, -110], [0, 3, -55]]),
   ...bothDirections('boundary:shmem-wal', [[72, 3, 26.075], [126, 0.62, 26.075]]),
   ...bothDirections('boundary:shmem-maintenance', [[-72, 3, -11.175], [-126, 0.62, -11.175]]),
@@ -87,12 +93,36 @@ function structureProbes(spec: SolidProbe): TraversalRoute[] {
   return routes
 }
 
+function solidRoute(id: string, start: WalkPoint, target: WalkPoint): TraversalRoute {
+  return {
+    id: `structure:${id}:run`,
+    points: [start, target],
+    gait: 'run',
+    tolerance: 0.2,
+    maxFramesPerLeg: 500,
+    stopOnCollision: true,
+  }
+}
+
 const STRUCTURES: TraversalRoute[] = [
+  solidRoute('ground.mast', [224.23, 0.02, -205], [224.23, 0.02, -213.6]),
+  solidRoute('client.terminal', [0, 0.02, -275], [0, 0.02, -300]),
+  solidRoute('conn.gate.fence', [30, 0.02, -244], [30, 0.02, -252]),
+  solidRoute('conn.conduit.pier', [-82.25, 0.02, -250], [-82.25, 0.02, -260]),
+  solidRoute('shmem.pylon', [50, -52, 44], [58, -52, 44]),
+  solidRoute('storage.annex', [-88, -52, 52], [-96, -52, 52]),
+  {
+    ...solidRoute('storage.index-mast', [-96, -52, 30], [-104, -52, 30]),
+    jumpEveryFrames: 12,
+  },
+  solidRoute('maintenance.depot-post', [-216, 0.62, -33], [-223.4, 0.62, -33]),
+  solidRoute('maintenance.yard-rail', [-180, 0.62, -55], [-180, 0.62, -64]),
+  solidRoute('excavation.wall', [108, -60, 80], [118, -60, 80]),
   ...structureProbes({ id: 'standby.b', at: [-112, 0.02, 262], halfX: 5, halfZ: 4 }),
   ...structureProbes({ id: 'recovery.ground', at: [-286, 0.02, 291], halfX: 1.3, halfZ: 1.3 }),
   ...structureProbes({ id: 'backup.vault', at: [396, 0.6, 96], halfX: 5, halfZ: 6 }),
   ...structureProbes({ id: 'wal.vault', at: [168, 1, 4.5], halfX: 8, halfZ: 4 }),
-  ...structureProbes({ id: 'disk.array', at: [0, -60, -99], halfX: 66, halfZ: 4.5 }),
+  solidRoute('disk.array', [-75, -60, -99], [0, -60, -99]),
   ...structureProbes({
     id: 'net.wire',
     at: (() => {
@@ -143,10 +173,10 @@ const PLAZA_ROUTES: TraversalRoute[] = [
 ]
 
 const EXCAVATION_FLOOR: readonly WalkPoint[] = [
-  [53, -52, -92],
-  [40, -52, -90],
-  [30, -52, -90],
-  [30, -52, -30],
+  [64, -52, -92],
+  [64, -52, -80],
+  [64, -52, -16],
+  [30, -52, -16],
   [22, -52, -20],
   [12, -52, -16],
   [4, -52, -12],
@@ -163,14 +193,17 @@ const EXCAVATION_ROUTES: TraversalRoute[] = [
       [0, 0.02, -107],
       [75, 0.02, -110],
       [100, 0.02, -110],
-      [121, 0.62, -107],
-      [121, 0.62, 26.075],
+      [119, 0.02, -107],
+      [119, 0.02, 26.075],
       [121, 0.62, 107],
       [3.78, 0.02, 107],
       [-121, 0.62, 107],
-      [-119, 0.02, 55],
+      [-119, 0.02, 107],
+      [-119, 0.02, -11.175],
+      [-126, 0.62, -11.175],
       [-170, 0.62, 55],
-      [-170, 0.62, -75],
+      [-126, 0.62, -11.175],
+      [-119, 0.02, -11.175],
       [-119, 0.02, -80],
       [-121, 0.62, -107],
     ],
@@ -283,12 +316,15 @@ describe('real-city first-person traversal', () => {
 
   it('jumps onto a district plinth that is too tall to step onto', () => {
     const result = city.run({
-      id: 'jump:client-plinth',
-      points: [[30, 0.02, -238], [30, 0.62, -249]],
+      id: 'jump:backend-plinth',
+      points: [[30, 0.02, -110], [30, 0.62, -117]],
       gait: 'run',
       jumpEveryFrames: 12,
     })
-    expect(result.reached).toBe(true)
+    expect(
+      result.reached,
+      `final=${JSON.stringify(result.finalPosition)}, minY=${result.minFeetY}, collisions=${result.collisions}`,
+    ).toBe(true)
     expect(result.finalPosition[1]).toBeCloseTo(0.62, 1)
     expect(result.steps.at(-1)?.grounded).toBe(true)
   })

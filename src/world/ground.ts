@@ -659,6 +659,8 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     }
   }
   group.userData.rimColliders = rimColliders
+  const collisionBoxes = [...rimColliders]
+  group.userData.collisionBoxes = collisionBoxes
   /** Published so the plate's containment of every district can be *checked*. */
   group.userData.slonik = {
     ring,
@@ -756,6 +758,28 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     m.rotation.y = ry
     pit.add(m)
   }
+  // world.pit stays excluded because its combined bounds would pave over the
+  // excavation. Publish the four zero-thickness rendered walls as honest thin
+  // solids instead; their top is still low enough to enter from the rim.
+  const wallT = 0.1
+  collisionBoxes.push(
+    new THREE.Box3(
+      new THREE.Vector3(-px, pitFloorY, -pz - wallT / 2),
+      new THREE.Vector3(px, 0, -pz + wallT / 2),
+    ),
+    new THREE.Box3(
+      new THREE.Vector3(-px, pitFloorY, pz - wallT / 2),
+      new THREE.Vector3(px, 0, pz + wallT / 2),
+    ),
+    new THREE.Box3(
+      new THREE.Vector3(-px - wallT / 2, pitFloorY, -pz),
+      new THREE.Vector3(-px + wallT / 2, 0, pz),
+    ),
+    new THREE.Box3(
+      new THREE.Vector3(px - wallT / 2, pitFloorY, -pz),
+      new THREE.Vector3(px + wallT / 2, 0, pz),
+    ),
+  )
 
   // Strata. Horizontal cuts every 6 m, cooling from grid blue to storage green
   // and fading with depth: the excavation reads as geology, not as a box.
@@ -953,12 +977,15 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   const crownGeo = new THREE.BoxGeometry(2.2, 1.1, 2.2)
   const floorGeo = new THREE.BoxGeometry(2.8, 0.5, 2.8)
   geos.push(crownGeo, floorGeo)
+  const collisionSolids: THREE.Object3D[] = []
 
   for (let i = 0; i < dressing; i++) {
     const [mx, mz, mh] = masts[i]
     const mast = new THREE.Mesh(theme.cyl(0.3, 0.55, mh, 6), mastMat)
+    mast.name = `ground.mast.${i}`
     mast.position.set(mx, mh / 2, mz)
     group.add(mast)
+    collisionSolids.push(mast)
 
     // one lit floor near the top, one crown light — a building, not a beacon
     const lit = new THREE.Mesh(floorGeo, lampMat)
@@ -971,6 +998,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     crown.raycast = () => {}
     group.add(crown)
   }
+  group.userData.collisionSolids = collisionSolids
 
   const coneLayer = new THREE.Group()
   coneLayer.name = 'ground.lightCones'
