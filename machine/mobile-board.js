@@ -35,6 +35,10 @@ export function needsCompletionFollow(status) {
   return status === 'complete' || status === 'error'
 }
 
+export function shouldFocusBoardAfterSubmit(mobile, statement, error) {
+  return mobile && statement && !error
+}
+
 /**
  * Clamp a proposed board origin without exposing space beyond a zoomed axis.
  * The board stays centred on any axis that is smaller than the viewport.

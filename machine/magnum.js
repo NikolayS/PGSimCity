@@ -22,6 +22,7 @@ import {
   effectiveLabelPixels,
   fitBoardScale,
   needsCompletionFollow,
+  shouldFocusBoardAfterSubmit,
   zoomBoardView,
 } from './mobile-board.js'
 import {
@@ -2461,7 +2462,8 @@ async function executeCommand(command, output) {
 async function submitCommand(value) {
   const command = String(value).trim()
   if (!command || queryBusy) return null
-  if (!parseMetaCommand(command)) startStatementMeasurement(command)
+  const isStatement = !parseMetaCommand(command)
+  if (isStatement) startStatementMeasurement(command)
   history.push(command)
   historyIndex = history.length
   historyDraft = ''
@@ -2470,13 +2472,27 @@ async function submitCommand(value) {
   terminalInput.placeholder = ''
   resizeTerminalInput()
   queryBusy = true
+  if (shouldFocusBoardAfterSubmit(mobileBoard, isStatement, false)) {
+    terminalInput.blur()
+    canvas.focus({ preventScroll: true })
+  }
   terminalInput.disabled = true
   try {
     return await executeCommand(command, output)
   } finally {
     queryBusy = false
     terminalInput.disabled = false
-    terminalInput.focus()
+    if (
+      shouldFocusBoardAfterSubmit(
+        mobileBoard,
+        isStatement,
+        output.classList.contains('error'),
+      )
+    ) {
+      canvas.focus({ preventScroll: true })
+    } else {
+      terminalInput.focus()
+    }
   }
 }
 

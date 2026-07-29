@@ -13,6 +13,7 @@ import {
   effectiveLabelPixels,
   fitBoardScale,
   needsCompletionFollow,
+  shouldFocusBoardAfterSubmit,
   zoomBoardView,
 } from './mobile-board.js'
 
@@ -102,6 +103,35 @@ describe('machine room portrait layout', () => {
 
   it('documents the city rate keys beside the existing board pause hint', () => {
     expect(html).toMatch(/SPACE[^<]+PAUSES[^<]+,[^<]+\/[^<]+\.[^<]+VIEW SPEED/)
+  })
+})
+
+describe('machine room mobile terminal', () => {
+  const coarsePointer = blockAfter(css, '@media (pointer: coarse)')
+
+  it('keeps every focusable terminal field at the iOS-safe font size', () => {
+    const focusableFields = blockAfter(
+      coarsePointer,
+      '.terminal-entry :is(input, textarea, select, button)',
+    )
+
+    expect(focusableFields).toMatch(/font-size:\s*16px/)
+  })
+
+  it('hands successful phone statements to the board without disrupting desktop or errors', () => {
+    expect(shouldFocusBoardAfterSubmit(true, true, false)).toBe(true)
+    expect(shouldFocusBoardAfterSubmit(false, true, false)).toBe(false)
+    expect(shouldFocusBoardAfterSubmit(true, false, false)).toBe(false)
+    expect(shouldFocusBoardAfterSubmit(true, true, true)).toBe(false)
+  })
+
+  it('dismisses the phone prompt when a statement starts and applies the final focus decision', () => {
+    expect(script).toMatch(
+      /terminalInput\.blur\(\)[\s\S]*canvas\.focus\(\{\s*preventScroll:\s*true\s*\}\)/,
+    )
+    expect(script).toMatch(
+      /shouldFocusBoardAfterSubmit\(\s*mobileBoard,\s*isStatement,\s*output\.classList\.contains\('error'\),?\s*\)/,
+    )
   })
 })
 
