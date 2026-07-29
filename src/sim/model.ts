@@ -9,13 +9,13 @@
  *
  * TWO HONEST DISTORTIONS, both deliberate:
  *
- *  1. TIME IS STRETCHED for anything sub-second. A real parse is ~50µs and a
- *     real fsync is ~1ms; at 60fps you would never see either. Every duration
- *     below is a monotone stretch (~100x) of the real one, so the *shape* is
- *     faithful — plan is longer than parse, exec_io dwarfs exec_cpu on a miss,
- *     commit_wait at remote_apply dwarfs commit_wait at 'on' — while the
- *     absolute numbers are theatre. Rates (tps, bytes/sec, LSNs) are NOT
- *     stretched; those are reported in real units.
+ *  1. BACKEND LIFECYCLE TIME IS STRETCHED for anything sub-second. A real
+ *     parse is ~50µs and a real fsync is ~1ms; at 60fps you would never see
+ *     either. Those durations are a monotone stretch (~100x) of the real one,
+ *     so the *shape* is faithful while the absolute numbers are theatre.
+ *     Replication packet travel uses its own smaller 6x visual stretch, but
+ *     configured network delay and replay_lag are converted back to real
+ *     seconds at every readout. Rates (tps, bytes/sec, LSNs) are not stretched.
  *
  *  2. THE CITY IS A SCALE MODEL. The plaza samples at most 1,024 frames from
  *     the logical shared_buffers pool, alongside 16 backend slots and 14 visible
@@ -100,8 +100,6 @@ import {
 
 const PAGE = 8192
 const WAL_SEG = 16 * 1024 * 1024
-/** wal_buffers: PostgreSQL auto-tunes this to shared_buffers/32 → 256 KiB here. */
-const WAL_BUF_CAP = 256 * 1024
 /** BAS_BULKREAD: a big seq scan gets a 256 KiB ring so it cannot evict the pool. */
 const RING = 32
 const STEP_MAX = 1 / 30
@@ -117,6 +115,9 @@ const MVCC_SAMPLE_SECONDS = 3
 const MAX_STEPS = 20
 const IDLE_REAP = 22
 const MIB = 1024 * 1024
+/** PostgreSQL's wal_buffers=-1 rule: shared_buffers/32, 64 KiB to one segment. */
+const walBufferCapacity = (sharedBuffersMiB: number): number =>
+  clamp((sharedBuffersMiB * MIB) / 32, 64 * 1024, WAL_SEG)
 const DECLARED_WORKING_SET_PAGES = TABLES.reduce(
   (total, table) => total + table.pages + table.indexes.reduce((sum, index) => sum + index.pages, 0),
   0,
@@ -206,7 +207,10 @@ const IDX_BASE = 1 << 20
 const FLOW_BUDGET_PER_SEC = 420
 const WAL_WRITER_DELAY = 0.2
 const BGW_DELAY = 0.2
-const NET_STRETCH = 6 // ms of configured network lag → sim seconds (see header)
+/** Packet-flight animation only; replication timings are converted back out. */
+const NET_PACKET_STRETCH = 6
+/** Startup-process replay work after the standby has flushed a commit record. */
+const REPLICA_APPLY_ACK_DELAY = 0.12
 
 export function traceStopBit(stop: TraceStop): number {
   switch (stop) {
@@ -453,7 +457,7 @@ export function createSim(bus: Bus): SimApi {
       writeLsn: 0x1a000000,
       flushLsn: 0x1a000000,
       bufferBytes: 0,
-      bufferCapacity: WAL_BUF_CAP,
+      bufferCapacity: walBufferCapacity(DEFAULT_KNOBS.sharedBuffers),
       segmentSize: WAL_SEG,
       segments,
       bytesPerSec: 0,
@@ -567,8 +571,12 @@ export function createSim(bus: Bus): SimApi {
   const bgw = state.bgwriter
   const av = state.autovac
   const rep = state.replication
-  type RuntimeReplication = typeof rep & { ackedApplyLsn: number }
+  type RuntimeReplication = typeof rep & {
+    ackedFlushLsn: number
+    ackedApplyLsn: number
+  }
   const runtimeRep = rep as RuntimeReplication
+  runtimeRep.ackedFlushLsn = rep.flushLsn
   runtimeRep.ackedApplyLsn = rep.replayLsn
   const stats = state.stats
   type RuntimeStats = typeof stats & {
@@ -598,14 +606,22 @@ export function createSim(bus: Bus): SimApi {
   const hotPages: number[] = TABLES.map((d) =>
     clamp(Math.round(d.pages * HOT_HEAP_PAGE_SHARE), 8, 32),
   )
+  const warmPages: number[] = TABLES.map((d) =>
+    clamp(Math.round(d.pages * 0.002), 256, 1024),
+  )
   const HEAP_HOT_READ_SHARE = 0.85
-  const HEAP_HOT_WRITE_SHARE = 0.93
+  const HEAP_HOT_WRITE_SHARE = 0.60
+  const HEAP_WARM_WRITE_SHARE = 0.35
+  const HEAP_COLD_WRITE_SHARE = 0.05
   const INDEX_HOT_SHARE = 0.85
   /** Total index pages per table, used to place index blocks past the heap. */
   const baseIdxPages: number[] = TABLES.map((d) => d.indexes.reduce((a, ix) => a + ix.pages, 0))
   /** B-tree leaf traffic is skewed independently of the heap working set. */
   const hotIdxPages: number[] = baseIdxPages.map((pages) =>
     clamp(Math.round(pages * HOT_INDEX_PAGE_SHARE), 4, 24),
+  )
+  const warmIdxPages: number[] = baseIdxPages.map((pages) =>
+    clamp(Math.round(pages * 0.002), 32, 256),
   )
   /** Effective index pages, including leaf pages occupied by dead entries. */
   const idxPages = baseIdxPages.slice()
@@ -786,6 +802,13 @@ export function createSim(bus: Bus): SimApi {
   let ackCount = 0
   let ackSentLsn = wal.flushLsn
   let ackedApplyLsn = wal.flushLsn
+  const flushAckLsn = new Float64Array(ACKW)
+  const flushAckAt = new Float64Array(ACKW)
+  let flushAckHead = 0
+  let flushAckTail = 0
+  let flushAckCount = 0
+  let flushAckSentLsn = wal.flushLsn
+  let ackedFlushLsn = wal.flushLsn
 
   /**
    * LagTrackerWrite/LagTrackerRead: primary flush positions paired with the
@@ -843,9 +866,10 @@ export function createSim(bus: Bus): SimApi {
     // Interpolation and tick ordering can add a fraction of a second while the
     // byte gap is already closing. Do not let that sampling jitter recreate the
     // old, glaring inverse response.
+    const reported = measured / NET_PACKET_STRETCH
     rep.lagSec = rep.lagBytes < previousLagBytes
-      ? Math.min(previousLagSec, measured)
-      : measured
+      ? Math.min(previousLagSec, reported)
+      : reported
     previousLagBytes = rep.lagBytes
     previousLagSec = rep.lagSec
   }
@@ -931,6 +955,8 @@ export function createSim(bus: Bus): SimApi {
   let archT = 0
   let archSlot = -1
   let cleanedAcc = 0
+  let bgwriterAllocations = 0
+  let bgwriterAllocationEstimate = 0
   let logicalAcc = 0
   let replicaReadT = 0
   let statT = 0
@@ -1210,8 +1236,8 @@ export function createSim(bus: Bus): SimApi {
   }
 
   /** A dirty victim has to hit the disk before the frame can be reused. */
-  function writeOut(b: number, byBackend: boolean): void {
-    if (!buf.dirty[b]) return
+  function writeOut(b: number, byBackend: boolean): boolean {
+    if (!buf.dirty[b]) return false
     buf.dirty[b] = 0
     ioWriteAcc++
     if (byBackend) {
@@ -1222,6 +1248,7 @@ export function createSim(bus: Bus): SimApi {
         flow(rid.ioWrite(rel), 1, 'page_write', 1.3)
       }
     }
+    return true
   }
 
   /**
@@ -1252,6 +1279,7 @@ export function createSim(bus: Bus): SimApi {
           trycounter = size
           continue
         }
+        bgwriterAllocations++
         return b
       }
       if (--trycounter === 0) return -1
@@ -1338,7 +1366,14 @@ export function createSim(bus: Bus): SimApi {
       throw new Error(`buffer invariant: attempted to evict pinned frame ${v}`)
     }
     if (buf.valid[v]) {
-      writeOut(v, true) // the backend that wanted the frame does this write
+      if (writeOut(v, true)) {
+        // BufferAlloc() cannot reuse a dirty victim until this backend has
+        // synchronously written it. Charge the write and the queue ahead of it
+        // to the statement whose clock sweep selected the frame.
+        const writeSec = ioPressure() / DEVICE_PAGES_PER_SEC
+        x.execTotal += writeSec
+        b.stateDur += writeSec
+      }
       bufMap.delete(representativeBufKey(buf.rel[v], buf.blk[v]))
       buf.evictions++
     }
@@ -1423,6 +1458,8 @@ export function createSim(bus: Bus): SimApi {
 
   function resizePool(logicalMib: number): void {
     const size = sampledBufferFrames(logicalMib)
+    wal.bufferCapacity = walBufferCapacity(logicalMib)
+    wal.bufferBytes = Math.min(wal.bufferCapacity, wal.insertLsn - wal.writeLsn)
     // shared_buffers only changes at restart, and the shutdown checkpoint that
     // precedes one writes every dirty buffer out. Dropping the frames without
     // writing them was a silent loss of modified pages — and the one remaining
@@ -1889,17 +1926,37 @@ export function createSim(bus: Bus): SimApi {
     if (!bgw.enabled) {
       bgw.activity = damp(bgw.activity, 0, 4, dt)
       bgw.cleanedPerSec = damp(bgw.cleanedPerSec, 0, 2, dt)
+      bgwriterAllocations = 0
+      bgwriterAllocationEstimate = 0
       return
     }
     bgwT += dt
     if (bgwT < BGW_DELAY) return
     bgwT = 0
 
-    const lookahead = clamp(Math.round(stats.ioReadPerSec * 0.5 + 32), 16, 420)
+    // BgBufferSync sizes its scan from recent buffer allocations, not physical
+    // reads. Keep the estimate in representative frames and apply PostgreSQL's
+    // default bgwriter_lru_multiplier of 2.0.
+    const recentAllocations = bgwriterAllocations
+    bgwriterAllocations = 0
+    bgwriterAllocationEstimate = Math.max(
+      recentAllocations,
+      damp(bgwriterAllocationEstimate, recentAllocations, 1.5, BGW_DELAY),
+    )
+    const lookahead = clamp(
+      Math.round(bgwriterAllocationEstimate * 2),
+      16,
+      buf.sampleFrames,
+    )
+    // cleanedTotal counts representative frames. Project the real-page GUC
+    // onto that sample so 100 and 400 do not both exceed a 64-frame plaza.
+    const cleanLimit = K.bgwriterLruMaxpages <= 0
+      ? 0
+      : Math.max(1, Math.ceil((K.bgwriterLruMaxpages * buf.sampleFrames) / N_BUFFERS))
     let cleaned = 0
     let scanned = 0
     bgw.scanPos = buf.clockHand
-    while (scanned < lookahead && cleaned < K.bgwriterLruMaxpages) {
+    while (scanned < lookahead && cleaned < cleanLimit) {
       const b = (bgw.scanPos + scanned) % buf.sampleFrames
       scanned++
       // only frames that are about to be handed out: usage 0, unpinned
@@ -1915,7 +1972,7 @@ export function createSim(bus: Bus): SimApi {
     }
     bgw.cleanedTotal = asSampleFrames(bgw.cleanedTotal + cleaned)
     cleanedAcc += cleaned
-    bgw.activity = damp(bgw.activity, clamp01(cleaned / Math.max(1, K.bgwriterLruMaxpages)), 6, BGW_DELAY)
+    bgw.activity = damp(bgw.activity, clamp01(cleaned / Math.max(1, cleanLimit)), 6, BGW_DELAY)
   }
 
   /* ======================================================================
@@ -1992,6 +2049,7 @@ export function createSim(bus: Bus): SimApi {
   const vacIndexTarget: number[] = new Array(N_VAC_WORKERS).fill(0)
   const vacHeapModified: number[] = new Array(N_VAC_WORKERS).fill(0)
   const vacHeapHotModified: number[] = new Array(N_VAC_WORKERS).fill(0)
+  const vacHeapWarmModified: number[] = new Array(N_VAC_WORKERS).fill(0)
   const vacIndexPageTouches: number[] = new Array(N_VAC_WORKERS).fill(0)
   const vacScanModified: number[] = new Array(N_VAC_WORKERS).fill(0)
   const vacFpiGeneration: number[] = new Array(N_VAC_WORKERS).fill(0)
@@ -2008,10 +2066,8 @@ export function createSim(bus: Bus): SimApi {
   }
 
   /**
-   * Estimate distinct pages from the same hot/cold distribution that created
-   * the garbage. Treating every dead tuple as a uniform draw across the whole
-   * relation made vacuum dirty most of a table even though 93% of modeled heap
-   * writes repeatedly hit a 8–32 page hot set.
+   * Estimate distinct pages drawn from a bounded set. Vacuum uses this for
+   * index traffic; heap traffic is split into hot, warm and cold bands below.
    */
   function affectedVacuumPages(
     pages: number,
@@ -2027,6 +2083,11 @@ export function createSim(bus: Bus): SimApi {
       ? coldN * (1 - Math.exp(-(changes * (1 - hotShare)) / coldN))
       : 0
     return Math.min(pages, Math.round(hotTouched + coldTouched))
+  }
+
+  function distinctPagesTouched(pages: number, draws: number): number {
+    if (pages <= 0 || draws <= 0) return 0
+    return Math.min(pages, Math.round(pages * (1 - Math.exp(-draws / pages))))
   }
 
   function launchVacuum(): void {
@@ -2066,16 +2127,28 @@ export function createSim(bus: Bus): SimApi {
         Math.ceil(vacTarget[slot] / tables[best].def.tuplesPerPage),
         heapWritesSinceVacuum[best],
       )
-      vacHeapModified[slot] = affectedVacuumPages(
-        pages,
-        heapPageDraws,
-        hotPages[best],
-        HEAP_HOT_WRITE_SHARE,
+      const heapHotN = Math.min(pages, hotPages[best])
+      const heapWarmN = Math.min(
+        Math.max(0, pages - heapHotN),
+        warmPages[best],
       )
-      vacHeapHotModified[slot] = Math.min(
-        vacHeapModified[slot],
-        Math.round(hotPages[best] * (1 - Math.exp(-(heapPageDraws * HEAP_HOT_WRITE_SHARE) / hotPages[best]))),
+      const heapColdN = Math.max(0, pages - heapHotN - heapWarmN)
+      vacHeapHotModified[slot] = distinctPagesTouched(
+        heapHotN,
+        heapPageDraws * HEAP_HOT_WRITE_SHARE,
       )
+      vacHeapWarmModified[slot] = distinctPagesTouched(
+        heapWarmN,
+        heapPageDraws * HEAP_WARM_WRITE_SHARE,
+      )
+      const heapColdModified = distinctPagesTouched(
+        heapColdN,
+        heapPageDraws * HEAP_COLD_WRITE_SHARE,
+      )
+      vacHeapModified[slot] =
+        vacHeapHotModified[slot]
+        + vacHeapWarmModified[slot]
+        + heapColdModified
       vacIndexPageTouches[slot] = Math.max(
         Math.ceil(vacIndexTarget[slot] / INDEX_ENTRIES_PER_PAGE),
         indexWritesSinceVacuum[best],
@@ -2144,12 +2217,27 @@ export function createSim(bus: Bus): SimApi {
     if (ordinal < hotModified) {
       return Math.min(table.pages - 1, Math.floor((ordinal * hotPages[tableIndex]) / Math.max(1, hotModified)))
     }
-    const coldModified = vacHeapModified[worker] - hotModified
-    const coldOrdinal = ordinal - hotModified
+    const warmModified = vacHeapWarmModified[worker]
+    if (ordinal < hotModified + warmModified) {
+      const warmOrdinal = ordinal - hotModified
+      return Math.min(
+        table.pages - 1,
+        hotPages[tableIndex]
+          + Math.floor((warmOrdinal * warmPages[tableIndex]) / Math.max(1, warmModified)),
+      )
+    }
+    const coldModified = vacHeapModified[worker] - hotModified - warmModified
+    const coldOrdinal = ordinal - hotModified - warmModified
     return Math.min(
       table.pages - 1,
       hotPages[tableIndex]
-        + Math.floor((coldOrdinal * Math.max(0, table.pages - hotPages[tableIndex])) / Math.max(1, coldModified)),
+        + warmPages[tableIndex]
+        + Math.floor(
+          (
+            coldOrdinal
+            * Math.max(0, table.pages - hotPages[tableIndex] - warmPages[tableIndex])
+          ) / Math.max(1, coldModified),
+        ),
     )
   }
 
@@ -2451,9 +2539,13 @@ export function createSim(bus: Bus): SimApi {
   function tickReplication(dt: number): void {
     rep.enabled = K.replicaEnabled
     rep.networkLagMs = K.replicaNetworkLag
-    // synchronous_commit='on' is a *local* flush guarantee. Only remote_apply
-    // makes the standby part of the commit path.
-    rep.mode = K.synchronousCommit === 'remote_apply' ? 'sync' : 'async'
+    // This scale model names its connected standby in
+    // synchronous_standby_names: on waits for remote flush, remote_apply for
+    // replay. local and off never put the standby in the commit path.
+    rep.mode =
+      K.synchronousCommit === 'on' || K.synchronousCommit === 'remote_apply'
+        ? 'sync'
+        : 'async'
 
     if (!rep.enabled || K.walLevel === 'minimal') {
       if (rep.connected) {
@@ -2466,6 +2558,12 @@ export function createSim(bus: Bus): SimApi {
         ackTail = 0
         ackSentLsn = wal.flushLsn
         ackedApplyLsn = wal.flushLsn
+        flushAckCount = 0
+        flushAckHead = 0
+        flushAckTail = 0
+        flushAckSentLsn = wal.flushLsn
+        ackedFlushLsn = wal.flushLsn
+        runtimeRep.ackedFlushLsn = ackedFlushLsn
         runtimeRep.ackedApplyLsn = ackedApplyLsn
         toast(
           K.walLevel === 'minimal'
@@ -2499,6 +2597,9 @@ export function createSim(bus: Bus): SimApi {
         rep.sentLsn = rep.writeLsn = rep.flushLsn = rep.replayLsn = wal.flushLsn
         ackCount = ackHead = ackTail = 0
         ackSentLsn = ackedApplyLsn = rep.replayLsn
+        flushAckCount = flushAckHead = flushAckTail = 0
+        flushAckSentLsn = ackedFlushLsn = rep.flushLsn
+        runtimeRep.ackedFlushLsn = ackedFlushLsn
         runtimeRep.ackedApplyLsn = ackedApplyLsn
         toast('Standby resynchronised (required WAL had been recycled)', 'info')
       }
@@ -2507,7 +2608,7 @@ export function createSim(bus: Bus): SimApi {
     syncHorizonPin()
 
     // walsender: push flushed WAL onto the wire in packets
-    const delay = (K.replicaNetworkLag * NET_STRETCH) / 1000
+    const delay = (K.replicaNetworkLag * NET_PACKET_STRETCH) / 1000
     if (wal.flushLsn > rep.sentLsn && wireCount < WIRE) {
       const chunk = Math.min(wal.flushLsn - rep.sentLsn, Math.max(16 * 1024, wal.bytesPerSec * dt * 4))
       rep.sentLsn = Math.floor(rep.sentLsn + chunk)
@@ -2533,6 +2634,22 @@ export function createSim(bus: Bus): SimApi {
       rep.flushLsn = Math.floor(Math.min(rep.writeLsn, rep.flushLsn + rate * dt))
     }
 
+    // A synchronous_commit=on waiter needs the standby's flush watermark after
+    // the status reply has crossed back to the primary.
+    if (rep.flushLsn > flushAckSentLsn && flushAckCount < ACKW) {
+      flushAckSentLsn = rep.flushLsn
+      flushAckLsn[flushAckHead] = rep.flushLsn
+      flushAckAt[flushAckHead] = state.t + delay
+      flushAckHead = (flushAckHead + 1) % ACKW
+      flushAckCount++
+    }
+    while (flushAckCount > 0 && flushAckAt[flushAckTail] <= state.t) {
+      ackedFlushLsn = Math.max(ackedFlushLsn, flushAckLsn[flushAckTail])
+      runtimeRep.ackedFlushLsn = ackedFlushLsn
+      flushAckTail = (flushAckTail + 1) % ACKW
+      flushAckCount--
+    }
+
     // Startup process: single-threaded replay of a WAL stream that sixteen
     // backends produced in parallel. Sequential replay is fast — until the
     // primary out-produces one CPU, and then the gap only ever grows.
@@ -2554,7 +2671,7 @@ export function createSim(bus: Bus): SimApi {
     if (rep.replayLsn > ackSentLsn && ackCount < ACKW) {
       ackSentLsn = rep.replayLsn
       ackLsn[ackHead] = rep.replayLsn
-      ackAt[ackHead] = state.t + delay
+      ackAt[ackHead] = state.t + delay + REPLICA_APPLY_ACK_DELAY
       ackHead = (ackHead + 1) % ACKW
       ackCount++
       flow('net.ack', 1, 'ack', 1.0)
@@ -2707,13 +2824,23 @@ export function createSim(bus: Bus): SimApi {
       return Math.max(0, t.pages - 1 - Math.floor(rng() * 2))
     }
     if (mode === 'scan' && x) return scanBlkOf(t, x.scanBlk++)
-    // Reads mix a compact hot set with a relation-wide cold tail. Writes are
-    // tighter because workloads modify fewer pages than they read.
-    if (rng() < (forWrite ? HEAP_HOT_WRITE_SHARE : HEAP_HOT_READ_SHARE)) {
-      const u = rng()
-      return Math.floor(hotPages[ti] * u * u)
+    // Reads mix a compact hot set with a relation-wide cold tail. Writes add a
+    // repeating middle band: checkpoints can amortise its first-touch images,
+    // while the uniform cold tail remains the irreducible floor.
+    const band = rng()
+    const u = rng()
+    if (!forWrite) {
+      if (band < HEAP_HOT_READ_SHARE) return Math.floor(hotPages[ti] * u * u)
+      return Math.floor(t.pages * u)
     }
-    return Math.floor(t.pages * rng())
+    if (band < HEAP_HOT_WRITE_SHARE) return Math.floor(hotPages[ti] * u * u)
+    if (band < HEAP_HOT_WRITE_SHARE + HEAP_WARM_WRITE_SHARE) {
+      return Math.min(
+        t.pages - 1,
+        hotPages[ti] + Math.floor(warmPages[ti] * u * u),
+      )
+    }
+    return Math.floor(t.pages * u)
   }
 
   /**
@@ -2724,17 +2851,30 @@ export function createSim(bus: Bus): SimApi {
    * which is why `idx_blks_hit` is very nearly all of `idx_blks_read + hit` on a
    * healthy server, and why an index scan almost never reaches storage.
    */
-  function idxBlk(ti: number, level: 0 | 1 | 2): number {
+  function idxBlk(ti: number, level: 0 | 1 | 2, forWrite = false): number {
     const base = IDX_BASE
     if (level === 0) return base // root — always cached
     if (level === 1) return base + 1 + Math.floor(rng() * 4)
     const roll = rng()
+    if (forWrite) {
+      const u = rng()
+      if (roll < HEAP_HOT_WRITE_SHARE) {
+        return base + 8 + Math.floor(hotIdxPages[ti] * u * u)
+      }
+      if (roll < HEAP_HOT_WRITE_SHARE + HEAP_WARM_WRITE_SHARE) {
+        return base
+          + 8
+          + hotIdxPages[ti]
+          + Math.floor(warmIdxPages[ti] * u * u)
+      }
+      return base + 8 + Math.floor(idxPages[ti] * u)
+    }
     const hot = roll < INDEX_HOT_SHARE
-    const u = hot
+    const skewed = hot
       ? roll / INDEX_HOT_SHARE
       : (roll - INDEX_HOT_SHARE) / (1 - INDEX_HOT_SHARE)
     const pages = hot ? hotIdxPages[ti] : idxPages[ti]
-    return base + 8 + Math.floor(pages * u * u)
+    return base + 8 + Math.floor(pages * skewed * skewed)
   }
 
   function startVisit(slot: number): void {
@@ -3031,12 +3171,12 @@ export function createSim(bus: Bus): SimApi {
       } else if (b.query === 'insert') {
         const k = i % (1 + nIdx)
         if (k === 0) { blk = pickBlk(ti, 'append'); forWrite = true }
-        else { blk = idxBlk(ti, 2); forWrite = true }
+        else { blk = idxBlk(ti, 2, true); forWrite = true }
       } else {
         const k = i % 5
         if (k === 0) blk = idxBlk(ti, 0)
         else if (k === 1) blk = idxBlk(ti, 1)
-        else if (k === 2) blk = idxBlk(ti, 2)
+        else if (k === 2) blk = idxBlk(ti, 2, write && !x.hot)
         else { blk = pickBlk(ti, 'hot', undefined, write); forWrite = write }
         // a non-HOT update also has to write every index entry
         if (write && !x.hot && k === 2) forWrite = true
@@ -3406,15 +3546,17 @@ export function createSim(bus: Bus): SimApi {
             // Commit returns immediately; the WAL is written by walwriter later.
             // Crash here and you lose the last few hundred ms of transactions.
             done = b.stateT >= 0.012
-          } else if (sc === 'remote_apply' && rep.enabled) {
-            done = wal.flushLsn >= x.commitLsn && ackedApplyLsn >= x.commitLsn
+          } else if ((sc === 'on' || sc === 'remote_apply') && rep.enabled) {
+            const acknowledged =
+              sc === 'on' ? ackedFlushLsn : ackedApplyLsn
+            done = wal.flushLsn >= x.commitLsn && acknowledged >= x.commitLsn
             if (!rep.connected && state.t - degradeWarnT > 20) {
               degradeWarnT = state.t
               toast('commits are waiting for a synchronous standby that is not there', 'warn', 6000)
             }
           } else {
-            // No synchronous standby configured at all is an empty
-            // synchronous_standby_names: local flush is the correct guarantee.
+            // With no standby configured, every synchronous_commit mode
+            // collapses to the local durability guarantee.
             done = wal.flushLsn >= x.commitLsn
             if (b.stateT > 8) done = true // watchdog for local states only
           }
@@ -3459,10 +3601,15 @@ export function createSim(bus: Bus): SimApi {
       case 'off':
         return 0.012
       case 'local':
-      case 'on':
         return fsync
+      case 'on':
+        return fsync + (K.replicaEnabled ? (K.replicaNetworkLag * 2) / 1000 : 0)
       case 'remote_apply':
-        return fsync + (K.replicaNetworkLag * NET_STRETCH * 2) / 1000 + 0.12
+        return fsync + (
+          K.replicaEnabled
+            ? (K.replicaNetworkLag * 2) / 1000 + REPLICA_APPLY_ACK_DELAY
+            : 0
+        )
     }
   }
 
@@ -3769,6 +3916,9 @@ export function createSim(bus: Bus): SimApi {
         break
       case 'synchronousCommit':
         if (K.synchronousCommit === 'off') toast("synchronous_commit=off — commits no longer wait for fsync", 'warn', 5000)
+        else if (K.synchronousCommit === 'remote_apply' && !K.replicaEnabled) {
+          toast('remote_apply needs a synchronous standby — there is none, so only the local flush is guaranteed', 'warn', 6000)
+        }
         break
       case 'timeScale':
         K.timeScale = clamp(K.timeScale, 0.05, 20)
@@ -3925,7 +4075,7 @@ export function createSim(bus: Bus): SimApi {
     const lsn0 = 0x1a000000
     wal.insertLsn = wal.writeLsn = wal.flushLsn = lsn0
     wal.bufferBytes = 0
-    wal.bufferCapacity = WAL_BUF_CAP
+    wal.bufferCapacity = walBufferCapacity(K.sharedBuffers)
     wal.bytesPerSec = 0
     wal.fpwBurst = 0
     wal.archiveQueue = 0
@@ -3996,6 +4146,7 @@ export function createSim(bus: Bus): SimApi {
       vacIndexTarget[i] = 0
       vacHeapModified[i] = 0
       vacHeapHotModified[i] = 0
+      vacHeapWarmModified[i] = 0
       vacIndexPageTouches[i] = 0
       vacScanModified[i] = 0
       vacFpiGeneration[i] = 0
@@ -4058,6 +4209,9 @@ export function createSim(bus: Bus): SimApi {
     wireHead = wireTail = wireCount = 0
     ackHead = ackTail = ackCount = 0
     ackSentLsn = ackedApplyLsn = lsn0
+    flushAckHead = flushAckTail = flushAckCount = 0
+    flushAckSentLsn = ackedFlushLsn = lsn0
+    runtimeRep.ackedFlushLsn = ackedFlushLsn
     runtimeRep.ackedApplyLsn = ackedApplyLsn
     lagSampleHead = 0
     lagSampleCount = 1
@@ -4109,6 +4263,8 @@ export function createSim(bus: Bus): SimApi {
     emaHits = emaSeen = 0
     rateT = histT = coverageT = 0
     cleanedAcc = 0
+    bgwriterAllocations = 0
+    bgwriterAllocationEstimate = 0
     lockHolder = -1
     lockTimeout = LOCK_TIMEOUT_DEFAULT
     horizonFrozen = false

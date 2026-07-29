@@ -35,7 +35,7 @@ describe('bloat-and-vacuum scenario', () => {
     bus.on('narrate', (beat) => {
       if (beat?.title === 'An UPDATE does not update') opening = beat.body
     })
-    for (let i = 0; i < 60 * 30 && !sim.state.autovac.workers.some((worker) => worker.active); i++) {
+    for (let i = 0; i < 300 * 30 && !sim.state.autovac.workers.some((worker) => worker.active); i++) {
       sim.update(1 / 30)
     }
     const activeBefore = sim.state.autovac.workers

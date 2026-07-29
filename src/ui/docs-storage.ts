@@ -1374,9 +1374,8 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       { label: 'Mode', get: (s) => (s.replication.enabled ? s.replication.mode : 'no standby') },
       { label: 'Network latency', get: (s) => `${fmtNum(s.replication.networkLagMs)} ms`, hint: 'one way' },
       {
-        // synchronous_commit = 'on' is a LOCAL flush guarantee: it never puts the
-        // network in the commit path. Only a genuinely synchronous standby does,
-        // and only while one is actually connected.
+        // This model names its connected standby in synchronous_standby_names,
+        // so on and remote_apply both put the network in the commit path.
         label: 'Commit tax',
         get: (s) =>
           s.replication.enabled && s.replication.connected && s.replication.mode === 'sync'

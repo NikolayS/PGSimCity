@@ -263,7 +263,7 @@ export const KNOB_META: KnobMeta[] = [
     max: 400,
     step: 5,
     unit: 'ms',
-    hint: 'One-way network delay to the standby. synchronous_commit = on waits for a LOCAL flush and pays none of it; only remote_apply makes a commit wait for the round trip.',
+    hint: 'One-way network delay to the standby. With this standby named as synchronous, on waits for its flush and remote_apply waits for replay; both pay the round trip.',
   },
   {
     key: 'replicaSlowApply',

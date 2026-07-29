@@ -125,7 +125,7 @@ describe('WAL workload response', () => {
     sim.setKnob('writeRatio', 0.06)
 
     const highLoadStartLsn = sim.state.wal.insertLsn
-    advanceTo(sim, sim.state.t + 120)
+    advanceTo(sim, sim.state.t + 180)
     expect(sim.state.wal.insertLsn - highLoadStartLsn).toBeGreaterThan(
       sim.state.wal.bufferCapacity,
     )
