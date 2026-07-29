@@ -551,6 +551,12 @@ button:focus-visible {
   display: none;
 }
 
+@media (pointer: coarse) {
+  .terminal-entry :is(input, textarea, select, button) {
+    font-size: 16px;
+  }
+}
+
 @media (max-width: 1100px) {
   .workbench {
     grid-template-columns: minmax(0, 46%) minmax(0, 54%);
