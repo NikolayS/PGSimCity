@@ -53,15 +53,14 @@ orderly. An unplanned failover is not, and the difference is the whole lesson:
 what is lost, what a timeline fork means, why the old primary cannot simply
 rejoin, and what `pg_rewind` is for.
 
-**Sequencing, decided 2026-07-29.** Items 4 and 4b are paused until the machine
-room's trace is right. Both of them and the machine room are the same problem —
-making a statement visibly cause what follows — and building them in parallel
-means solving that design question three times, differently. The 2D surface is
-the cheapest place to get it wrong and fix it, and the control center should
-inherit the answer rather than invent its own. Item 4's work is preserved on
-`pgsimcity-handles`.
+**Sequencing, resolved 2026-07-29.** Items 4 and 4b were paused until the machine
+room's trace was right, on the reasoning that they are the same problem — making
+a statement visibly cause what follows — and building them in parallel would solve
+that design question three times, differently. That worked: the 2D trace shipped
+first, and the control center inherited its vocabulary rather than inventing a
+second one.
 
-## 4. Break things from inside — paused
+## 4. Break things from inside — in progress
 
 The knobs exist in a control rail. In first person they should be **things you
 walk to and operate** — pull the autovacuum yard's switch and then watch bloat
@@ -78,7 +77,7 @@ each knob's consequence chain has to be verified — moves, right direction,
 sensible amount, recovers on reset — before it earns a handle. A handle on a
 broken knob is a machine for teaching a falsehood convincingly.
 
-## 4b. The control center in the postmaster tower — paused
+## 4b. The control center in the postmaster tower — shipped
 
 A room you enter, in first person, inside the postmaster tower — the supervisor
 process that owns the cluster is the city hall, and it already stands at the head
@@ -108,13 +107,20 @@ The swim volume, the surface and the splash all exist; it still does not feel
 like water. Sound is not the fix on its own — the missing parts are drag,
 buoyancy, muffling under the surface, and something to see moving past you.
 
-## 6. First-person physics
+## 6. First-person physics — shipped
 
-Buildings became solid in v0.10.0, when 33 merged district meshes turned out to
-be silently dropped from collision — the collider count went from 765 to 989.
-Slopes gained real surface normals at the same time. **Re-test before treating
-this as open**; if something is still passable, it is a specific bug rather than
-a missing system.
+v0.13.0. The re-test found the real defect, and it was not missing colliders:
+**the solver resolved each axis independently**, so a fast oblique move could pass
+through a thin wall between samples and an inside corner could be squeezed
+through. Collision now sweeps the movement segment against each box continuously.
+
+Three specific surfaces were also passable — the replication cable bundle, the
+query lab's floor and posts, and a route blocked by an invisible selection proxy.
+
+A scene-graph coverage test now enumerates every visible human-scale mesh in reach
+and asserts a collider covers it, and asserts the reverse: nothing solid where
+nothing is visible. A district that grows a building cannot silently become
+passable.
 
 ## 7. Network and multiplayer
 
@@ -122,16 +128,23 @@ Several people in the same city. Unclear whether the value is teaching together,
 operating a cluster together, or watching someone else break something. Worth
 prototyping the question before the feature.
 
-## 8. Better simulation of problems
+## 8. Better simulation of problems — shipped
 
-Eleven of twenty-two knobs have outputs that do not respond correctly — found by
-sweeping every knob and watching, after three rounds of expert review missed
-them all. Worst: high-load recovery leaves WAL hot for twenty simulated minutes
-after the workload drops, and `wal_level = minimal` reports 677 MiB held by a
-logical slot when logical decoding is impossible at that level.
+v0.13.0 and v0.16.0. A measured audit of all 23 knobs (`KNOB-AUDIT.md`) graded
+ten wrong, and eight of those traced to six shared root causes. All are fixed.
 
-**This one gates the others.** Failover, breakage and game scenarios are all
-built on the simulation telling the truth.
+The two that mattered most: **turning autovacuum off was rewarded with roughly 2x
+throughput**, because vacuum charged a full-page image for every page it touched
+and nothing modelled cost-based throttling — which was also the true cause of WAL
+staying hot for twenty simulated minutes after a load drop. And `wal_level =
+minimal` froze replication mid-flight, reporting 4.92 GiB of pg_wal against a
+256 MiB `max_wal_size` and 4,800 MiB held by a logical slot, when logical decoding
+is impossible at that level.
+
+**This gated the others**, and it no longer does. Two limitations are now
+disclosed rather than implied away: anti-wraparound vacuum is unmodelled, and at
+low write rates bloat accrues too slowly to see — which is true of real
+PostgreSQL and is taught rather than tuned.
 
 ## 9. Query path walkthrough — shipped
 
@@ -166,14 +179,20 @@ wal_buffers, the ProcArray and the lock table, with backend private memory
 visibly outside it, the postmaster and its fork, the client, and layers from
 process down to disk. Published at `machine/`.
 
-**In progress — the statement must visibly cause what follows.** The
-architecture pane runs on free-running rhythms and never reads the query, so the
-left half executes real PostgreSQL while the right half animates beside it. Three
-parts: the statement's path made visually distinct from ambient background work,
-the trip replayed at human speed with a step control, and the buffer pool driven
-by measured `Shared Hit Blocks` / `Shared Read Blocks` from
-`EXPLAIN (ANALYZE, BUFFERS)` rather than generic motion — with measured and
-modelled values marked differently.
+**Shipped — the statement visibly causes what follows.** v0.13.0 to v0.16.0. The
+architecture pane used to run on free-running rhythms and never read the query at
+all. A submitted statement now traces the board with ambient work dimmed, the
+buffer pool is driven by measured `Shared Hit Blocks` / `Shared Read Blocks`, and
+measured values carry `P` against modelled `M`. An index lookup reports 3 shared
+hits; an aggregate reports 102.
+
+It works on a phone: the board renders where its type is legible rather than
+shrinking to fit, follows the active stage so a reader is carried along the route,
+and takes pinch, drag, double-tap and wheel. A viewing-rate control changes how
+fast you watch without touching the modelled periods or the measured values.
+
+The page is called **The Machine**, and PGlite by ElectricSQL is credited where
+the real-PostgreSQL claim is made.
 
 **Then:** comparison — the same statement run twice with one setting changed,
 side by side. `synchronous_commit` on and off, collapsing the commit wait. The
