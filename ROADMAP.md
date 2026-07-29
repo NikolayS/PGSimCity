@@ -70,18 +70,29 @@ each knob's consequence chain has to be verified — moves, right direction,
 sensible amount, recovers on reset — before it earns a handle. A handle on a
 broken knob is a machine for teaching a falsehood convincingly.
 
-## 4b. The machine room, as a place in the city — in progress
+## 4b. The control center in the postmaster tower — in progress
 
-A console you walk up to in first person that opens the 2D machine room over the
-running city. Reachable on foot only: a terminal you find is discovered, a link
-in a top bar is announced.
+A room you enter, in first person, inside the postmaster tower — the supervisor
+process that owns the cluster is the city hall, and it already stands at the head
+of the central avenue with a door defined. Inside: a **map of this city**, a psql
+prompt, and your statement tracing across both the map and the districts visible
+through the windows.
+
+An earlier version of this item was "install the 2D machine room in the city".
+That was wrong, and the reason is worth keeping: **the city's topology is already
+an architecture diagram.** Districts are placed and scaled to say true things
+about how PostgreSQL is organised. A second, differently-shaped diagram inside it
+would teach that the layout is arbitrary and undercut the premise. The map must
+be the city.
+
+Most of the machinery exists — `sim.request()`, `setTraceMode()` with step
+playback, `SimState.trace`, and the v0.7.0 narration. This gives it a home, a
+front door and a prompt. The open question is whether the statement is really
+planned by PGlite, loaded lazily on entering, so that an index scan and a
+sequential scan differ in the world because the planner chose differently.
 
 It also gives first person a destination. Today you can explore the city and
 there is nothing in it to do.
-
-The constraint that decides the implementation: the city chunk is 1,169 kB and
-PGlite must not enter it. Loading the machine as a separate document, only when
-a reader opens the console, satisfies that exactly.
 
 ## 5. Swimming that feels like swimming
 
