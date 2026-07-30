@@ -1,6 +1,10 @@
 import type { UiContext } from './uikit'
 import { applyKnob } from './controls'
-import type { WalkUpInteractionSite, WalkUpState } from './walk-up'
+import {
+  WALK_UP_APPROACH_RADIUS,
+  type WalkUpInteractionSite,
+  type WalkUpState,
+} from './walk-up'
 import type { WorldHandleBinding } from '../world/handles'
 
 const PULL_ON = 'PULL · CURRENTLY ON'
@@ -38,6 +42,8 @@ export function createWorldHandleSites(
       z: handle.z,
       owner: handle.owner,
       subject: handle.guc,
+      approach: 'Approach the lever',
+      approachRadius: WALK_UP_APPROACH_RADIUS,
       accent: 'var(--c-vacuum)',
       state: () => stateLabel(ctx),
       action: actionLabel,

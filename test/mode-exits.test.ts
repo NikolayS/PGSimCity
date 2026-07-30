@@ -169,8 +169,11 @@ describe('enterable mode exits', () => {
     const walk = document.querySelector<HTMLButtonElement>('.hud-walk')!
     ctx.bus.emit('camera:mode', { mode: 'walk' })
     expect(walk.textContent).toContain('Exit')
+    expect(document.body.classList.contains('pg-walk')).toBe(true)
     walk.click()
     expect(modes.at(-1)).toBe('orbit')
+    ctx.bus.emit('camera:mode', { mode: 'orbit' })
+    expect(document.body.classList.contains('pg-walk')).toBe(false)
 
     const scenario = SCENARIOS[0]
     const stop = document.querySelector<HTMLButtonElement>('button.hud-now')!

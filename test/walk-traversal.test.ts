@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { WALK_UP_RADIUS } from '../src/ui/walk-up'
 import { routePoint } from '../src/world/layout'
 import type { TraversalRoute, WalkCityHarness, WalkPoint } from './walk-harness'
 import { createWalkCityHarness } from './walk-harness'
@@ -281,6 +282,28 @@ describe('real-city first-person traversal', () => {
         `collisions=${result.collisions}, last=${JSON.stringify(result.steps.at(-7))}`,
     ).toBe(true)
     expect(result.minFeetY).toBeGreaterThanOrEqual(3)
+    expect(result.steps.at(-1)?.grounded).toBe(true)
+  })
+
+  it('walks from the plaza into operating range of the autovacuum lever', () => {
+    const result = city.run({
+      id: 'acceptance:plaza-autovacuum-lever',
+      gait: 'run',
+      points: [
+        [-46, 3.2, -11.175],
+        [-72, 3, -11.175],
+        [-126, 0.62, -11.175],
+        [-153, 0.62, -8],
+        [-172.5, 0.62, 0],
+      ],
+    })
+    const distance = Math.hypot(result.finalPosition[0] + 179.5, result.finalPosition[2])
+
+    expect(
+      result.reached,
+      `final=${JSON.stringify(result.finalPosition)}, minY=${result.minFeetY}, collisions=${result.collisions}`,
+    ).toBe(true)
+    expect(distance).toBeLessThan(WALK_UP_RADIUS)
     expect(result.steps.at(-1)?.grounded).toBe(true)
   })
 

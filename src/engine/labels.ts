@@ -5,7 +5,14 @@ import '../styles/labels.css'
 import { destinationForDistrict } from '../core/destinations'
 import { COLOR } from '../core/theme'
 import type { Registry } from '../core/registry'
-import type { Bus, ComponentDef, DistrictId, QualitySettings, SimState } from '../core/types'
+import type {
+  Bus,
+  CameraMode,
+  ComponentDef,
+  DistrictId,
+  QualitySettings,
+  SimState,
+} from '../core/types'
 import type { CollisionWorld } from './collision'
 import {
   EXPANDED_LABEL_CAP,
@@ -13,7 +20,14 @@ import {
   detailExpansionPriority,
   requestedLabelDetail,
 } from './label-detail'
-import { labelAreaPlacementBudget, labelScale, mapLabelPriority } from './label-layout'
+import {
+  WALK_LABEL_CAP,
+  WALK_LABEL_SCALE,
+  labelAreaPlacementBudget,
+  labelScale,
+  mapLabelPriority,
+  walkLabelPriority,
+} from './label-layout'
 
 /* ============================================================================
  * LABELS — map-grade annotation.
@@ -95,6 +109,8 @@ const B_COLLAPSE = 6
 const BAND_STEP = 100000
 /** A shown label beats a hidden one of the same band — but never crosses a band. */
 const STICKY = 40000
+/** Walking changes identity as the visitor turns, so map-grade stickiness is too strong. */
+const WALK_STICKY = 1200
 
 /* --- timing --------------------------------------------------------------- */
 /** Full placement pass ~9x/sec. Faster is invisible to the eye and costs a layout. */
@@ -318,6 +334,7 @@ export function createLabels(
   let passT = PASS_SEC
   let readT = 0
   let occlusionCursor = 0
+  let cameraMode: CameraMode = 'orbit'
 
   /* --------------------------------- DOM --------------------------------- */
 
@@ -657,6 +674,12 @@ export function createLabels(
     passT = PASS_SEC
   })
 
+  const offCameraMode = bus.on('camera:mode', ({ mode }) => {
+    if (cameraMode === mode) return
+    cameraMode = mode
+    passT = PASS_SEC
+  })
+
   /* ------------------------- HUD-aware placement box ---------------------- */
 
   const hudTop = document.getElementById('hud-top')
@@ -851,6 +874,7 @@ export function createLabels(
   }
 
   function pass(camera: THREE.PerspectiveCamera): void {
+    const walking = cameraMode === 'walk'
     /* ---- READ PHASE — nothing below here may touch the DOM ------------- */
     readBox()
     for (let i = 0; i < entries.length; i++) {
@@ -885,11 +909,14 @@ export function createLabels(
       e.onScreen = false
       e.nextDetail = LabelDetail.Name
       e.dist = camera.position.distanceTo(e.pos)
-      e.scale = labelScale(
-        e.dist,
-        e.rank < 0 || isDestination(e) ? 'map' : 'component',
-        viewW,
-      )
+      if (walking && (e.rank < 0 || e.rank > 2 || e.proxy)) continue
+      e.scale = walking
+        ? WALK_LABEL_SCALE
+        : labelScale(
+            e.dist,
+            e.rank < 0 || isDestination(e) ? 'map' : 'component',
+            viewW,
+          )
 
       if (e.rank === 3) {
         // A destination still exists when its presentation is dormant. The
@@ -931,6 +958,25 @@ export function createLabels(
 
       const forced = e.id === selectedId || e.id === hoveredId
       const focused = !forced && now < focusUntil && e.id === focusId
+      const centreX = sx - hw
+      const centreY = sy - hh
+      if (walking) {
+        const walkPrio = walkLabelPriority(
+          e.rank,
+          e.proxy,
+          e.dist,
+          centreX * centreX + centreY * centreY,
+        )
+        if (walkPrio === null) continue
+        e.band = forced ? (e.id === selectedId ? B_SELECTED : B_HOVERED) : focused ? B_FOCUS : B_TIER[0]
+        e.alpha = 1
+        e.prio =
+          walkPrio
+          - (e.shown ? WALK_STICKY : 0)
+          - (forced ? BAND_STEP * 2 : focused ? BAND_STEP : 0)
+        cand.push(e)
+        continue
+      }
       let band: number
       let vis: number
 
@@ -982,18 +1028,20 @@ export function createLabels(
        without either, screen-centre proximity decides which near labels earn a
        readout. The placement budget still decides whether the chip is shown. */
     expandedCand.length = 0
-    for (let i = 0; i < cand.length; i++) {
-      const e = cand[i]
-      if (e.rank < 0 || e.rank > 2) continue
-      const selected = e.id === selectedId
-      const hovered = e.id === hoveredId
-      const detail = requestedLabelDetail(e.dist, e.read !== null, selected, hovered)
-      if (detail === LabelDetail.Name) continue
-      const dx = e.sx - hw
-      const dy = e.sy - hh
-      e.requestedDetail = detail
-      e.detailPrio = detailExpansionPriority(selected, hovered, dx * dx + dy * dy)
-      expandedCand.push(e)
+    if (!walking) {
+      for (let i = 0; i < cand.length; i++) {
+        const e = cand[i]
+        if (e.rank < 0 || e.rank > 2) continue
+        const selected = e.id === selectedId
+        const hovered = e.id === hoveredId
+        const detail = requestedLabelDetail(e.dist, e.read !== null, selected, hovered)
+        if (detail === LabelDetail.Name) continue
+        const dx = e.sx - hw
+        const dy = e.sy - hh
+        e.requestedDetail = detail
+        e.detailPrio = detailExpansionPriority(selected, hovered, dx * dx + dy * dy)
+        expandedCand.push(e)
+      }
     }
     expandedCand.sort(byDetailPrio)
     const expandedN =
@@ -1010,7 +1058,7 @@ export function createLabels(
     reserveHudRect(hudToasts)
     if (!hudFirstRun) hudFirstRun = document.querySelector('.tour-first')
     reserveHudRect(hudFirstRun)
-    let budget = maxLabels
+    let budget = walking ? Math.min(maxLabels, WALK_LABEL_CAP) : maxLabels
     let areaLeft = viewW * viewH * labelAreaPlacementBudget(viewW)
 
     for (let i = 0; i < cand.length; i++) {
@@ -1083,19 +1131,21 @@ export function createLabels(
     }
 
     /* ---- collapse counts ------------------------------------------------ */
-    for (const d of districts.values()) d.hidden = 0
-    for (let i = 0; i < entries.length; i++) {
-      const e = entries[i]
-      if (e.rank < 0 || e.rank > 2 || !e.onScreen || e.place) continue
-      const d = districts.get(e.district)
-      if (d && d !== e && d.members.length >= DISTRICT_MIN) d.hidden++
-    }
-    for (const d of districts.values()) {
-      if (d.hidden > 0) d.zeroPasses = 0
-      else d.zeroPasses++
-      // Four passes of grace, so a count flickering across zero cannot take the
-      // whole district chip down with it.
-      d.collapseOn = d.hidden > 0 || d.zeroPasses < 4
+    if (!walking) {
+      for (const d of districts.values()) d.hidden = 0
+      for (let i = 0; i < entries.length; i++) {
+        const e = entries[i]
+        if (e.rank < 0 || e.rank > 2 || !e.onScreen || e.place) continue
+        const d = districts.get(e.district)
+        if (d && d !== e && d.members.length >= DISTRICT_MIN) d.hidden++
+      }
+      for (const d of districts.values()) {
+        if (d.hidden > 0) d.zeroPasses = 0
+        else d.zeroPasses++
+        // Four passes of grace, so a count flickering across zero cannot take the
+        // whole district chip down with it.
+        d.collapseOn = d.hidden > 0 || d.zeroPasses < 4
+      }
     }
 
     /* ---- WRITE PHASE ---------------------------------------------------- */
@@ -1267,6 +1317,7 @@ export function createLabels(
     offSelect()
     offHover()
     offFocus()
+    offCameraMode()
     for (let i = 0; i < entries.length; i++) {
       const e = entries[i]
       group.remove(e.obj) // CSS2DObject's 'removed' handler unmounts the element

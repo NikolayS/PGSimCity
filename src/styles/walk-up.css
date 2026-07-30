@@ -78,6 +78,14 @@
   background: color-mix(in srgb, var(--walk-up-accent) 20%, var(--bg-panel-solid));
 }
 
+.walk-up-prompt[data-range='approach'] .walk-up-prompt__action {
+  justify-content: flex-start;
+  min-height: 42px;
+  color: var(--ink-dim);
+  background: color-mix(in srgb, var(--walk-up-accent) 7%, var(--bg-panel));
+  pointer-events: none;
+}
+
 .walk-up-prompt__key {
   display: grid;
   place-items: center;
@@ -89,6 +97,10 @@
   background: var(--bg-panel-solid);
   font: 700 11px/1 var(--f-mono);
   box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--walk-up-accent) 30%, transparent);
+}
+
+.walk-up-prompt__key[hidden] {
+  display: none;
 }
 
 @media (pointer: coarse) {

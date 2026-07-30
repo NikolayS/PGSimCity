@@ -29,11 +29,6 @@
     pointer-events: none;
   }
 
-  /* At eye level the floating building plates can cover most of a phone view.
-     The walk controls are the legend here, so leave the city itself readable. */
-  body.touch-walk-active #labels-root {
-    visibility: hidden;
-  }
 }
 
 .touchpad__move-zone,

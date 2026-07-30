@@ -135,10 +135,41 @@ export function createWorldHandles(ctx: WorldContext): WorldHandlesModule {
     trim.position.set(0, 5.72, 0.43)
     root.add(trim)
 
+    /*
+     * The launcher is a 41 m tower: a cabinet-height caption disappears beside
+     * it from the plaza. This lit header is the city-scale discovery cue; the
+     * cabinet remains the thing the visitor actually operates.
+     */
+    const beacon = new THREE.Group()
+    beacon.name = `${spec.id}.beacon`
+    root.add(beacon)
+    const beaconPanel = new THREE.Mesh(ctx.theme.box(10.4, 3.1, 0.32), structure)
+    beaconPanel.position.set(0, 11.65, 0.05)
+    beacon.add(beaconPanel)
+    const beaconTop = new THREE.Mesh(
+      ctx.theme.box(10.9, 0.24, 0.46),
+      ctx.theme.neon(spec.color, 1.35),
+    )
+    beaconTop.position.set(0, 13.3, 0.12)
+    beacon.add(beaconTop)
+    const beaconSolids: THREE.Object3D[] = [beaconPanel, beaconTop]
+    for (let side = -1; side <= 1; side += 2) {
+      const blade = new THREE.Mesh(
+        ctx.theme.box(0.26, 7.0, 0.2),
+        ctx.theme.neon(spec.color, 1.2),
+      )
+      blade.position.set(side * 5.15, 8.45, 0.14)
+      beacon.add(blade)
+      beaconSolids.push(blade)
+    }
+    beacon.userData.collisionSolids = beaconSolids
+    label(beacon, 'AUTOVACUUM', 12.15, 9.35, 1.12, spec.color, 48)
+    label(beacon, 'CONTROL / LEVER', 10.95, 7.8, 0.72, COLOR.ink, 32)
+
     label(root, spec.guc, 5.28, 4.65, 0.72, spec.color, 42)
     const onText = label(root, 'ON', 4.25, 1.6, 0.64, spec.color, 46)
     const offText = label(root, 'OFF', 4.25, 1.6, 0.64, COLOR.crit, 46)
-    label(root, 'WALK UP · E / TAP', 0.94, 4.4, 0.54, COLOR.ink, 30)
+    label(root, 'E / TAP AT LEVER', 0.94, 4.4, 0.54, COLOR.ink, 30)
 
     const onLamp = new THREE.Mesh(ctx.theme.box(0.76, 0.76, 0.32), ctx.theme.neon(spec.color, 1.9))
     onLamp.name = `${spec.id}.lamp.on`
