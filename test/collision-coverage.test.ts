@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { expect, it } from 'vitest'
+import type { TraversalRoute, WalkPoint } from './walk-harness'
 import { createWalkCityHarness } from './walk-harness'
 
 interface MeshRecord {
@@ -103,7 +104,10 @@ function passableReason(record: MeshRecord): string | null {
   const geometry = record.mesh.geometry.type
   const material = materialNames(record.mesh)
   if (geometry === 'PlaneGeometry') return 'zero-thickness floor, label, or sign plane'
-  if (material === 'shmem.liveData') return 'dynamic shared-memory data'
+  if (record.box.max.y - record.box.min.y < 0.3) return 'sub-collider-thickness slab or trim'
+  if (material === 'shmem.liveData' || record.path.includes('shmem/shared.buffers/')) {
+    return 'dynamic shared-memory data'
+  }
   if (material === 'storage.liveData') return 'dynamic storage data'
   if (material === 'storage.osCache') return 'zero-thickness kernel-cache tiles'
   if (record.path.includes('storage.io.collars')) return 'overhead I/O conduit trim'
@@ -212,3 +216,247 @@ it('covers every visible human-scale solid found by scene-graph enumeration', as
     city.dispose()
   }
 })
+
+interface WallProbe {
+  id: string
+  start: WalkPoint
+  target: WalkPoint
+  hit: THREE.Vector3
+  normal: THREE.Vector3
+  openAway: boolean
+}
+
+const STANDING_LEVELS = [45, 3.7, 3.2, 0.62, 0.02, -52, -60] as const
+
+function standingFeet(
+  city: Awaited<ReturnType<typeof createWalkCityHarness>>,
+  x: number,
+  z: number,
+): number | null {
+  const point = new THREE.Vector3()
+  for (const level of STANDING_LEVELS) {
+    point.set(x, level + 0.6, z)
+    const ground = city.collision.groundAt(point, 1.2)
+    if (ground !== null && Math.abs(ground - level) < 0.8) return ground
+  }
+  return null
+}
+
+function firstVerticalHit(
+  ray: THREE.Raycaster,
+  object: THREE.Object3D,
+  normalMatrix: THREE.Matrix3,
+  normal: THREE.Vector3,
+): THREE.Intersection | null {
+  const hits = ray.intersectObject(object, true)
+  for (const hit of hits) {
+    const mesh = hit.object as THREE.Mesh
+    if (!mesh.isMesh || !mesh.geometry || !hit.face || !isRendered(mesh)) continue
+    normalMatrix.getNormalMatrix(mesh.matrixWorld)
+    normal.copy(hit.face.normal).applyNormalMatrix(normalMatrix).normalize()
+    if (Math.abs(normal.y) < 0.55) return hit
+  }
+  return null
+}
+
+function sampleWallProbes(
+  city: Awaited<ReturnType<typeof createWalkCityHarness>>,
+): { probes: WallProbe[]; counts: Readonly<Record<string, number>> } {
+  const ids = [
+    'postmaster',
+    'wal.buffers',
+    'backend.row',
+    'wal.vault',
+    'storage.table.accounts',
+    'checkpointer',
+    'replica.standby',
+  ] as const
+  const probes: WallProbe[] = []
+  const counts: Record<string, number> = {}
+  const seen = new Set<string>()
+  const ray = new THREE.Raycaster()
+  const origin = new THREE.Vector3()
+  const direction = new THREE.Vector3()
+  const normal = new THREE.Vector3()
+  const normalMatrix = new THREE.Matrix3()
+  const solidMeshes = enumerateMeshes(city.scene).filter(
+    (record) => isHumanScaleAtWalkableHeight(record.box) && passableReason(record) === null,
+  )
+  const openSweep = new THREE.Box3()
+
+  for (const id of ids) {
+    const component = city.registry.get(id)
+    if (!component) throw new Error(`Unknown reachability component: ${id}`)
+    const box = new THREE.Box3().setFromObject(component.object)
+    const cx = (box.min.x + box.max.x) / 2
+    const cz = (box.min.z + box.max.z) / 2
+    const starts: [number, number][] = []
+    for (let x = Math.ceil(box.min.x / 3) * 3; x <= box.max.x; x += 3) {
+      starts.push([x, box.min.z - 8], [x, box.max.z + 8])
+    }
+    for (let z = Math.ceil(box.min.z / 3) * 3; z <= box.max.z; z += 3) {
+      starts.push([box.min.x - 8, z], [box.max.x + 8, z])
+    }
+
+    for (const start of starts) {
+      const feet = standingFeet(city, start[0], start[1])
+      if (feet === null) continue
+      origin.set(start[0], feet + 0.9, start[1])
+      direction.set(cx - start[0], 0, cz - start[1]).normalize()
+      ray.set(origin, direction)
+      ray.near = 0
+      ray.far = Math.hypot(cx - start[0], cz - start[1]) * 2
+      const hit = firstVerticalHit(ray, component.object, normalMatrix, normal)
+      if (!hit) continue
+      if (normal.dot(direction) > 0) normal.negate()
+      const probeX = hit.point.x + normal.x * 2
+      const probeZ = hit.point.z + normal.z * 2
+      const probeFeet = standingFeet(city, probeX, probeZ)
+      if (probeFeet === null || Math.abs(probeFeet - feet) > 0.7) continue
+      const openX = probeX + normal.x
+      const openZ = probeZ + normal.z
+      openSweep.min.set(
+        Math.min(probeX, openX) - 0.35,
+        probeFeet + 0.45,
+        Math.min(probeZ, openZ) - 0.35,
+      )
+      openSweep.max.set(
+        Math.max(probeX, openX) + 0.35,
+        probeFeet + 1.35,
+        Math.max(probeZ, openZ) + 0.35,
+      )
+      const openAway = !solidMeshes.some((record) => record.box.intersectsBox(openSweep))
+      const key = [
+        id,
+        Math.round(hit.point.x * 2),
+        Math.round(hit.point.z * 2),
+        Math.round(normal.x * 10),
+        Math.round(normal.z * 10),
+      ].join(':')
+      if (seen.has(key)) continue
+      seen.add(key)
+      probes.push({
+        id,
+        start: [probeX, probeFeet, probeZ],
+        target: [hit.point.x - normal.x, probeFeet, hit.point.z - normal.z],
+        hit: hit.point.clone(),
+        normal: normal.clone(),
+        openAway,
+      })
+      counts[id] = (counts[id] ?? 0) + 1
+    }
+  }
+
+  // The query lab is reached from its own floor; there is no standing ground
+  // outside the suspended shell for the perimeter sampler to discover.
+  for (let x = -56; x <= 56; x += 16) {
+    probes.push({
+      id: 'planner.lab',
+      start: [x, 45, -142],
+      target: [x, 45, -147],
+      hit: new THREE.Vector3(x, 45.9, -145.5),
+      normal: new THREE.Vector3(0, 0, 1),
+      openAway: true,
+    })
+    counts['planner.lab'] = (counts['planner.lab'] ?? 0) + 1
+  }
+  return { probes, counts }
+}
+
+it('keeps visible building walls reachable by the real walk controller', async () => {
+  const city = await createWalkCityHarness()
+  try {
+    /*
+     * Coverage and reachability are separate properties. A component-wide box
+     * can overlap every mesh yet be ignored from a valid standing position
+     * inside that loose box, leaving the visible wall itself passable.
+     */
+    const { probes, counts } = sampleWallProbes(city)
+    const failures: unknown[] = []
+    const openFailures: unknown[] = []
+    for (let i = 0; i < probes.length; i++) {
+      const probe = probes[i]
+      const route: TraversalRoute = {
+        id: `reachability:${probe.id}:${i}`,
+        points: [probe.start, probe.target],
+        gait: 'run',
+        tolerance: 0.15,
+        maxFramesPerLeg: 160,
+        stopOnCollision: true,
+      }
+      const result = city.run(route)
+      const final = new THREE.Vector3(
+        result.finalPosition[0],
+        result.finalPosition[1] + 0.9,
+        result.finalPosition[2],
+      )
+      const side = probe.normal.dot(final.sub(probe.hit))
+      if (result.reached || result.collisions === 0 || side < 0.3) {
+        failures.push({
+          id: probe.id,
+          start: probe.start,
+          target: probe.target,
+          final: result.finalPosition,
+          reached: result.reached,
+          collisions: result.collisions,
+          wallSide: side,
+        })
+      }
+
+      // The reverse property matters too: the same reachable standing sample
+      // must remain free when the controller walks away from the visible wall.
+      if (probe.openAway) {
+        const openTarget: WalkPoint = [
+          probe.start[0] + probe.normal.x,
+          probe.start[1],
+          probe.start[2] + probe.normal.z,
+        ]
+        const open = city.run({
+          id: `open-ground:${probe.id}:${i}`,
+          points: [probe.start, openTarget],
+          gait: 'walk',
+          tolerance: 0.25,
+          maxFramesPerLeg: 100,
+          stopOnCollision: true,
+        })
+        if (!open.reached || open.collisions > 0) {
+          openFailures.push({
+            id: probe.id,
+            start: probe.start,
+            target: openTarget,
+            final: open.finalPosition,
+            reached: open.reached,
+            collisions: open.collisions,
+          })
+        }
+      }
+    }
+
+    expect(counts).toMatchObject({
+      postmaster: expect.any(Number),
+      'wal.buffers': expect.any(Number),
+      'backend.row': expect.any(Number),
+      'wal.vault': expect.any(Number),
+      'storage.table.accounts': expect.any(Number),
+      checkpointer: expect.any(Number),
+      'replica.standby': expect.any(Number),
+      'planner.lab': 8,
+    })
+    if (process.env.COLLISION_REACHABILITY_REPORT === '1') {
+      console.log(JSON.stringify({
+        wallProbes: counts,
+        openGroundProbes: probes.filter((probe) => probe.openAway).length,
+        wallFailures: failures.length,
+        openGroundFailures: openFailures.length,
+      }))
+    }
+    for (const [id, count] of Object.entries(counts)) {
+      expect(count, `${id} systematic wall probes`).toBeGreaterThanOrEqual(8)
+    }
+    expect(probes.filter((probe) => probe.openAway).length).toBeGreaterThanOrEqual(24)
+    expect(failures).toEqual([])
+    expect(openFailures).toEqual([])
+  } finally {
+    city.dispose()
+  }
+}, 20_000)

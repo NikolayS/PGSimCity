@@ -35,10 +35,11 @@ import type { Surface } from './audio'
  *
  * OVERSIZED CONTAINERS. A registered root is often a whole district: the
  * backend row is one group 224 m wide and 26 m tall. Boxing that would wall off
- * the north side of the city. So a box that is too big is not dropped — it is
- * SPLIT: we recurse into the object's children and box those instead. Sixteen
- * backend towers, one box each. Recursion stops at `maxDepth` (default 4) or as
- * soon as a level yields boxes of sane size.
+ * the north side of the city. Even a smaller compound building cannot be boxed
+ * as one mass: its loose AABB contains valid standing space between protruding
+ * parts, and the solver must allow a walker spawned there to escape. Containers
+ * are therefore split into children, and instanced box batches into individual
+ * instances. Recursion stops at `maxDepth` (default 4).
  *
  * …AND OVERSIZED *LEAVES*. Nine districts merge their whole structure into one
  * childless mesh (`standby.b.struct`, `recovery.ground.struct`, the WAL vault,
@@ -613,6 +614,30 @@ export function createCollisionWorld(): CollisionWorld {
     }
   }
 
+  /**
+   * An InstancedMesh is already an exact list of repeated solids. Keeping one
+   * AABB for the whole batch fills every gap between instances; coarse leaf
+   * cells still leave visible faces inside boxes the walker may start within.
+   */
+  function splitInstances(
+    inst: THREE.InstancedMesh,
+    o: Required<CollisionBuildOptions>,
+    surface: Surface,
+  ): boolean {
+    if (inst.count <= 1 || inst.count > SPLIT_INSTANCE_CAP) return false
+    const geo = inst.geometry
+    if (!geo.boundingBox) geo.computeBoundingBox()
+    const bb = geo.boundingBox
+    if (!bb || bb.isEmpty()) return true
+    for (let i = 0; i < inst.count; i++) {
+      inst.getMatrixAt(i, _mat)
+      _mat.premultiply(inst.matrixWorld)
+      _sub.copy(bb).applyMatrix4(_mat)
+      if (classify(_sub, o) === 1) pushBox(_sub, o.pad, surface)
+    }
+    return true
+  }
+
   function addObject(
     obj: THREE.Object3D,
     depth: number,
@@ -622,21 +647,43 @@ export function createCollisionWorld(): CollisionWorld {
     visibleBounds(obj, _box)
     if (_box.isEmpty()) return
     const verdict = classify(_box, o)
-    if (verdict === 1) {
-      const instanced = obj as THREE.InstancedMesh
+    if (verdict === 0) return
+
+    const mesh = obj as THREE.Mesh
+    const instanced = obj as THREE.InstancedMesh
+    if (instanced.isInstancedMesh && splitInstances(instanced, o, surface)) return
+    if (instanced.isInstancedMesh && instanced.count > 1) {
       const sx = _box.max.x - _box.min.x
       const sz = _box.max.z - _box.min.z
-      // A sparse bank of posts is not a floor merely because its combined
-      // height fits slabY. Split instances before their empty gaps become solid.
-      if (instanced.isInstancedMesh && instanced.count > 1 && (sx > o.maxSpan || sz > o.maxSpan)) {
+      // Preserve the bounded fallback for batches too large to expand exactly.
+      if (sx > o.maxSpan || sz > o.maxSpan) {
         splitLeaf(obj, o, surface)
         return
       }
+    }
+
+    /*
+     * A valid standing point can lie inside a compound root's loose AABB while
+     * remaining outside every rendered child. The sweep deliberately permits
+     * escape from containing boxes, so retaining that root box makes internal
+     * walls unreachable. Children are the collision ownership boundary.
+     */
+    let visitedChildren = false
+    if (!mesh.isMesh && depth < o.maxDepth && obj.children.length > 0) {
+      visitedChildren = true
+      const before = n
+      const kids = obj.children
+      for (let i = 0; i < kids.length; i++) addObject(kids[i], depth + 1, o, surface)
+      if (n > before) return
+      visibleBounds(obj, _box)
+      if (_box.isEmpty()) return
+    }
+
+    if (verdict === 1) {
       pushBox(_box, o.pad, surface)
       return
     }
-    if (verdict !== 2) return
-    if (depth < o.maxDepth && obj.children.length > 0) {
+    if (!visitedChildren && depth < o.maxDepth && obj.children.length > 0) {
       const before = n
       const kids = obj.children
       for (let i = 0; i < kids.length; i++) addObject(kids[i], depth + 1, o, surface)

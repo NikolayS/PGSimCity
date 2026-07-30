@@ -218,6 +218,50 @@ describe('collision.build: a merged structural mesh', () => {
     expect(out.position.z).toBeCloseTo(2.35, 3)
     world.dispose()
   })
+
+  it('stops the real controller at a wall inside a compound component box', () => {
+    const world = createCollisionWorld()
+    const building = new THREE.Group()
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(10, 3, 1))
+    wall.position.set(FAR_X, 1.5, 0)
+    const northMarker = new THREE.Mesh(new THREE.BoxGeometry(1, 3, 1))
+    northMarker.position.set(FAR_X + 6, 1.5, -6)
+    const southMarker = northMarker.clone()
+    southMarker.position.z = 6
+    building.add(wall, northMarker, southMarker)
+    building.updateMatrixWorld(true)
+    world.build({ all: () => [component('compound', building)] })
+    world.addWalkable(plate(0, 30, FAR_X, 0), 'ground')
+
+    const h = harness(world, new THREE.Vector3(FAR_X, 0, 2))
+    h.walk.setTouchMove(0, 1)
+    for (let i = 0; i < 40; i++) h.walk.update(1 / 50)
+
+    // A component-wide AABB contains this valid standing position. Ignoring a
+    // containing collider must not make the visible wall inside it unreachable.
+    expect(h.walk.position.z).toBeGreaterThanOrEqual(0.85 - 1e-3)
+    h.dispose()
+  })
+
+  it('keeps the visible gap between compound component parts walkable', () => {
+    const world = createCollisionWorld()
+    const gateway = new THREE.Group()
+    const west = new THREE.Mesh(new THREE.BoxGeometry(2, 3, 10))
+    west.position.set(FAR_X - 4, 1.5, 0)
+    const east = west.clone()
+    east.position.x = FAR_X + 4
+    gateway.add(west, east)
+    gateway.updateMatrixWorld(true)
+    world.build({ all: () => [component('gateway', gateway)] })
+    world.addWalkable(plate(0, 30, FAR_X, 0), 'ground')
+
+    const h = harness(world, new THREE.Vector3(FAR_X, 0, 7))
+    h.walk.setTouchMove(0, 1)
+    for (let i = 0; i < 80; i++) h.walk.update(1 / 50)
+
+    expect(h.walk.position.z).toBeLessThan(-1)
+    h.dispose()
+  })
 })
 
 describe('walk interior hand-off', () => {
@@ -404,6 +448,23 @@ describe('landing', () => {
  * ------------------------------------------------------------------------*/
 
 describe('swept movement', () => {
+  it('reaches a box from every spatial cell across its footprint', () => {
+    const world = createCollisionWorld()
+    world.addBox(new THREE.Box3(new THREE.Vector3(-25, 0, -25), new THREE.Vector3(25, 3, 25)))
+    const out = createMoveResult()
+
+    for (const offset of [-24, -16, -8, 0, 8, 16, 24]) {
+      world.move(new THREE.Vector3(offset, 0, 35), new THREE.Vector3(offset, 0, 15), 0.35, 1.8, out)
+      expect(out.blocked, `south face at x=${offset}`).toBe(true)
+      expect(out.position.z, `south face at x=${offset}`).toBeGreaterThanOrEqual(25.35 - 1e-3)
+
+      world.move(new THREE.Vector3(35, 0, offset), new THREE.Vector3(15, 0, offset), 0.35, 1.8, out)
+      expect(out.blocked, `east face at z=${offset}`).toBe(true)
+      expect(out.position.x, `east face at z=${offset}`).toBeGreaterThanOrEqual(25.35 - 1e-3)
+    }
+    world.dispose()
+  })
+
   it('does not tunnel through a thin wall on a high-speed oblique crossing', () => {
     const world = createCollisionWorld()
     world.addBox(new THREE.Box3(new THREE.Vector3(-0.05, 0, -4), new THREE.Vector3(0.05, 3, 4)))
