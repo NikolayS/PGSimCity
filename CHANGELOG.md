@@ -9,6 +9,44 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.19.0] — 2026-07-30
+
+### Environment lighting and ambient occlusion
+
+Two techniques were entirely absent. `scene.environment` was never set and there
+was no `PMREMGenerator` anywhere, so the gloss, glass and metal the cel shader
+already computes had nothing to reflect. And there was no ambient occlusion of
+any kind, which is why geometry read as slightly floating.
+
+The sky is now prefiltered into an environment map, regenerated when the theme
+changes rather than per frame. GTAO grounds geometry where surfaces meet. Shadows
+go to 1536² with a softer penumbra.
+
+Tiered so `low` and `reduced` are unchanged. The semantic colours were checked
+and still read: dirty-page red and lock red stay distinguishable, and maintenance
+violet does not converge with shared-memory indigo.
+
+**Honest note on the payoff.** Matched before/after pairs — identical camera,
+identical simulated time, UI animation hidden on both sides — show a real but
+modest difference. Close and dense views gain grounding; wide and phone views
+change little. This is a correct foundation rather than a transformation, and the
+remaining gap against comparable browser work is art direction — palette, value
+contrast, atmosphere — not more render passes.
+
+### The screenshot driver stops leaking browser profiles
+
+Every verification run created a Chrome user-data directory keyed on its port and
+never removed it. **106 accumulated to 8.6 GB**, took the host to 99% disk with
+swap fully exhausted, and killed two agents' in-flight work.
+
+Profiles are now removed on exit including signals — a killed run was the common
+case — and stale ones are reaped by age on startup, following the concurrency
+gate's existing pattern. A live run's profile is never touched, and an explicitly
+supplied `CDP_PROFILE` is left alone, since a caller that named the directory owns
+its lifetime.
+
+---
+
 ## [0.18.0] — 2026-07-29
 
 ### The continuity quarter gets behaviour
