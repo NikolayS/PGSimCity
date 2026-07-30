@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { COLOR, themeMode } from '../core/theme'
+import { COLOR, onThemeMode, themeMode } from '../core/theme'
 import { BUF_GRID, N_BACKEND_SLOTS, N_BUFFERS, poolBytes } from '../core/types'
 import type { SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, fmtBytes, fmtLsn, fmtNum, fmtPct, makeRng } from '../core/util'
@@ -212,6 +212,33 @@ function tileX(idx: number): number {
 }
 function tileZ(idx: number): number {
   return -HALF_GRID + Math.floor(idx / G) * PITCH
+}
+
+/**
+ * Sparse tile mask beneath four virtual north-edge uprights. The direction is
+ * the ground projection of the daylight key, so this catch reads as the same
+ * long cast shadow as the real shadow map on lit materials.
+ */
+export function rakingShadowTileIndices(): Uint16Array {
+  const selected: number[] = []
+  const origins = [-70, -56, -42, -28] as const
+  const dx = 0.633
+  const dz = 0.774
+  for (let i = 0; i < N; i++) {
+    const x = tileX(i)
+    const z = tileZ(i)
+    const fromNorth = z + HALF_GRID
+    for (let origin = 0; origin < origins.length; origin++) {
+      const fromWest = x - origins[origin]
+      const along = fromWest * dx + fromNorth * dz
+      const across = Math.abs(fromWest * dz - fromNorth * dx)
+      if (along >= 0 && across < 2.5) {
+        selected.push(i)
+        break
+      }
+    }
+  }
+  return Uint16Array.from(selected)
 }
 
 function setColor3(arr: Float32Array, i: number, r: number, g: number, b: number): void {
@@ -561,6 +588,88 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     setTRS(tileMat, i, p[0], BASE_Y, p[2], TILE, 0.2, TILE)
   }
   tiles.instanceMatrix.needsUpdate = true
+
+  /*
+   * Semantic tiles are unlit by design, so Three cannot project a building
+   * shadow onto them. One instanced ShadowMaterial skin follows their roof
+   * heights and contributes only the high-tier daylight shadow term.
+   */
+  const gTileShadow = keep(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2))
+  const mTileShadow = keep(
+    new THREE.ShadowMaterial({
+      color: 0x24364a,
+      transparent: true,
+      opacity: 0.48,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    }),
+  )
+  mTileShadow.name = 'shmem.tileShadow'
+  mTileShadow.userData.pgTheme = true
+  const tileShadows = new THREE.InstancedMesh(gTileShadow, mTileShadow, N)
+  tileShadows.name = 'shmem.tileShadows'
+  tileShadows.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  tileShadows.frustumCulled = false
+  tileShadows.castShadow = false
+  tileShadows.receiveShadow = true
+  tileShadows.raycast = () => {}
+  tileShadows.userData.pgNoShadow = true
+  tileShadows.userData.pgShadowReceiver = true
+  /*
+   * MeshBasic tile colour must remain unlit to preserve its data meaning. The
+   * real ShadowMaterial above catches any mapped occlusion; this second sparse
+   * skin carries the same north-west → south-east shadow rhythm across gaps
+   * where the live page towers have no lit receiver.
+   */
+  const rakeIndices = rakingShadowTileIndices()
+  const rakeSlotByTile = new Int16Array(N).fill(-1)
+  for (let i = 0; i < rakeIndices.length; i++) rakeSlotByTile[rakeIndices[i]] = i
+  const mRakeShadow = keep(
+    new THREE.MeshBasicMaterial({
+      color: 0x2f4b68,
+      transparent: true,
+      opacity: 0.42,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -3,
+      polygonOffsetUnits: -3,
+    }),
+  )
+  mRakeShadow.name = 'shmem.rakingShadow'
+  mRakeShadow.userData.pgTheme = true
+  const rakeShadows = new THREE.InstancedMesh(gTileShadow, mRakeShadow, rakeIndices.length)
+  rakeShadows.name = 'shmem.rakingShadows'
+  rakeShadows.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  rakeShadows.frustumCulled = false
+  rakeShadows.castShadow = false
+  rakeShadows.receiveShadow = false
+  rakeShadows.raycast = () => {}
+  rakeShadows.userData.pgNoShadow = true
+  rakeShadows.renderOrder = 3
+  const tileShadowLayer = new THREE.Group()
+  tileShadowLayer.name = 'shmem.tileShadowLayer'
+  tileShadowLayer.userData.pgDayOnly = true
+  tileShadowLayer.visible = false
+  tileShadowLayer.add(tileShadows)
+  tileShadowLayer.add(rakeShadows)
+  bufGroup.add(tileShadowLayer)
+  const tileShadowMat = tileShadows.instanceMatrix.array as Float32Array
+  const rakeShadowMat = rakeShadows.instanceMatrix.array as Float32Array
+  let shadowTilesActive = false
+  let shadowQuality = ctx.quality.level
+  const applyTileShadowTier = (): void => {
+    shadowTilesActive =
+      themeMode() === 'day' && (shadowQuality === 'high' || shadowQuality === 'ultra')
+    tileShadows.visible = shadowTilesActive
+    rakeShadows.visible = shadowTilesActive
+  }
+  const offTileShadowTheme = onThemeMode(applyTileShadowTier)
+  const offTileShadowQuality = ctx.bus.on('quality', ({ level }) => {
+    shadowQuality = level
+    applyTileShadowTier()
+  })
+  applyTileShadowTier()
 
   const tileH = new Float32Array(N).fill(0.2)
   const tileCollapse = new Float32Array(N)
@@ -1272,6 +1381,32 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
       const h = tileH[i] + (target - tileH[i]) * kH
       tileH[i] = h
       tileMat[i * 16 + 5] = h < 0.06 ? 0.06 : h
+      if (shadowTilesActive) {
+        const y = BASE_Y + (h < 0.06 ? 0.06 : h)
+        setTRS(
+          tileShadowMat,
+          i,
+          tileX(i),
+          y + 0.025,
+          tileZ(i),
+          TILE * 0.98,
+          1,
+          TILE * 0.98,
+        )
+        const rakeSlot = rakeSlotByTile[i]
+        if (rakeSlot >= 0) {
+          setTRS(
+            rakeShadowMat,
+            rakeSlot,
+            tileX(i),
+            y + 0.04,
+            tileZ(i),
+            TILE * 0.98,
+            1,
+            TILE * 0.98,
+          )
+        }
+      }
 
       if (isPinned && nPins < MAX_PINS) {
         setTRS(pinMat, nPins, tileX(i), BASE_Y + h, tileZ(i), 1, 1.9, 1)
@@ -1296,6 +1431,10 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     tilesPrimed = true
     tiles.instanceMatrix.needsUpdate = true
     tiles.instanceColor!.needsUpdate = true
+    if (shadowTilesActive) {
+      tileShadows.instanceMatrix.needsUpdate = true
+      rakeShadows.instanceMatrix.needsUpdate = true
+    }
     pins.count = nPins
     if (nPins > 0) pins.instanceMatrix.needsUpdate = true
 
@@ -1769,6 +1908,8 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
       haze.visible = level < 2 // up close the floor haze just washes out the tiles
     },
     dispose(): void {
+      offTileShadowTheme()
+      offTileShadowQuality()
       // theme.edges() hands back geometry this module now owns.
       group.traverse((o) => {
         const ls = o as THREE.LineSegments

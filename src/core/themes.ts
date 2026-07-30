@@ -10,7 +10,7 @@ import type { ColorKey } from './types'
  *           only thing that clears the bloom threshold. Edges are blueprint
  *           hairlines that glow. ACES tone mapping, low key light, no sun.
  *
- *   DAY     Structure is light warm stone under a stepped toon ramp; meaning is
+ *   DAY     Structure is pale stone under a low golden-hour sun; meaning is
  *           a flat, deep, poster-print fill that needs no glow at all. Edges
  *           become the cartoon's ink line: dark, opaque, heavier. Bloom is all
  *           but off, the sun is on, and it casts real shadows.
@@ -77,7 +77,7 @@ export const NIGHT_PALETTE: Record<ColorKey, number> = {
 }
 
 /* ---------------------------------------------------------------------------
- * DAY — the same city at noon.
+ * DAY — the same city at golden hour.
  *
  * Picked against a #948d7a taupe paving stage and a #bcdcf2 sky. The whole set
  * sits in the 29–62% lightness band with saturation pushed up: value separates
@@ -104,9 +104,9 @@ export const NIGHT_PALETTE: Record<ColorKey, number> = {
  * -------------------------------------------------------------------------*/
 
 export const DAY_PALETTE: Record<ColorKey, number> = {
-  /* --- surfaces: warm stone under a blue sky --- */
-  bg: 0xbcdcf2, // clear colour behind the sky dome
-  fog: 0xd0dce8, // distance haze — and the sky's own below-horizon band
+  /* --- surfaces: warm light, cool air, neutral stone --- */
+  bg: 0x8fb5d4, // clear colour behind the sky dome
+  fog: 0xb7c5d3, // blue-grey distance haze and the below-horizon band
   grid: 0x777164, // 10 m survey line, drawn ON the stone
   gridBright: 0x5e5a50, // 50 m block line, one step darker again
   ground: 0x948d7a, // deep civic paving beneath the pale mineral structures
@@ -181,21 +181,21 @@ export interface Atmosphere {
   hemiSky: number
   hemiGround: number
   hemiIntensity: number
-  /** Key light: the moon at night, the sun at noon. */
+  /** Key light: the moon at night, the low sun in daylight. */
   keyColor: number
   keyIntensity: number
   keyPos: readonly [number, number, number]
   keyTarget: readonly [number, number, number]
   shadowBias: number
   shadowNormalBias: number
-  /** 0..1 — how dark a cast shadow goes. A cartoon shadow is a tone, not a hole. */
+  /** 0..1 — how much direct light a cast shadow removes. */
   shadowIntensity: number
   /** Night keeps its original unshadowed render; the sun alone casts. */
   shadows: boolean
   fillColor: number
   fillIntensity: number
   fillPos: readonly [number, number, number]
-  /** District mood lamps. Zero at noon — they only make sense in the dark. */
+  /** District mood lamps. Zero in daylight — they only make sense in the dark. */
   walGlow: number
   yardGlow: number
   /** Extra light paid back when the bloom pass is unavailable ('low' quality). */
@@ -203,7 +203,7 @@ export interface Atmosphere {
   noBloomFill: number
   noBloomWalGlow: number
   noBloomYardGlow: number
-  /** Whether the bloom pass runs at all. Off at noon: see the day entry. */
+  /** Whether the bloom pass runs at all. Off in daylight: see the day entry. */
   bloomEnabled: boolean
   bloomStrength: number
   bloomRadius: number
@@ -267,7 +267,7 @@ export const ATMOSPHERE: Record<ThemeMode, Atmosphere> = {
     toon: false,
   },
   day: {
-    // ACES at a noon exposure crushes saturation into pastel — exactly the
+    // ACES at a daylight exposure crushes saturation into pastel — exactly the
     // "night theme with the lights turned up" failure. Khronos PBR Neutral
     // holds hue and saturation and rolls the top end off instead of clipping,
     // which is what a poster-flat city needs.
@@ -279,98 +279,58 @@ export const ATMOSPHERE: Record<ThemeMode, Atmosphere> = {
     // irradiance, and 0.92 exposure brings the top of that back under the knee.
     exposure: 1.0,
     /*
-     * Daylight sees a long way, but "a long way" is not "no haze at all". At
-     * 2.0/2.0 the curve did not start until 440, so the near half of the city
-     * received none of it at all and depth was flat.
-     *
-     * It cannot simply be tightened. The city is framed from two very different
-     * distances — the desktop home camera is 450 units from the city centre and
-     * the phone's is 1071 — so fog authored for the desktop's depth is measured
-     * at 0.54 on the phone, and every district loses the saturated hue that
-     * carries its meaning. Tried and photographed; the phone read as grey mush.
-     *
-     * So: pull the START in (341, from 440) and push the END out to match, which
-     * grades the near and middle distances while leaving the far end exactly
-     * where it already was. Measured fog fraction: 0.00 at 340, 0.24 at the far
-     * side of the city, 0.35 at the phone's city centre — within a point of
-     * today's — and 0.47 at the standby cluster, which is identical to today.
-     * The seam at the horizon is closed by plateFogScale instead, because that
-     * is a property of the one surface that has the problem.
+     * Aerial perspective begins at 264 m and finishes at 1,897.5 m. Across the
+     * city's 830 m span that moves the far districts 35% toward the blue-grey
+     * horizon; from the phone framing the centre is 49% into the curve. Semantic
+     * colour still survives, but distance can no longer look equally sharp.
      */
-    fogNearScale: 1.55,
-    fogFarScale: 2.1,
+    fogNearScale: 1.2,
+    fogFarScale: 1.65,
     fogColor: DAY_PALETTE.fog,
-    plateFogScale: 0.72,
-    hemiSky: 0xd7ecff,
-    hemiGround: 0xd6c49b, // warm bounce off the stone
-    // The budget is a Lambert one: reflectance is irradiance/PI, so a sunlit
-    // top face only returns its own albedo when key + hemi + fill ≈ PI. Under
-    // that and every lit surface reads darker than the (unlit) ground plate
-    // beside it, which is what made the first pass look like night with the
-    // lights up. 1.95 + 1.35 + 0.25 = 3.55, and 0.95 exposure trims the top.
-    //
-    // The split between the two matters as much as the sum. A cartoon shadow is
-    // a flat darker tone, not an absence of light: this weighting puts a fully
-    // shadowed face at 0.51x albedo and a sunlit one at 1.13x, which is the
-    // roughly 2:1 the drawing convention wants. Push more into the key and the
-    // excavation and every north wall go to mud.
-    hemiIntensity: 1.35,
-    keyColor: 0xfff0c8, // the sun
-    keyIntensity: 1.95,
-    /* East-south-east and high. The exact azimuth is load-bearing, not taste:
-     * the toon ramp has two thresholds (0.16 and 0.52 on N·L), and this
-     * direction is chosen so a box's three visible faces land in three
-     * different bands. Normalised it is (0.635, 0.718, 0.284), so +X → 1.00,
-     * +Y → 1.00 plus the up-face lift, +Z → 0.55, and everything else → 0.
-     * The three-tone facet split is roof, sun wall, half-lit wall, shade.
-     *
-     * The previous (0.524, 0.751, 0.402) put +X and +Y in the same band and
-     * left +Z at 0.402 — eighteen thousandths under the old single threshold —
-     * so a building read as a silhouette rather than as facets. */
-    keyPos: [380, 430, 150],
+    plateFogScale: 0.84,
+    hemiSky: 0xa7c6e8,
+    hemiGround: 0x687f9d,
+    hemiIntensity: 0.98,
+    keyColor: 0xffc47d,
+    keyIntensity: 2.4,
+    /*
+     * North-west at 8.4°. A one-metre object casts 6.81 m across the ground;
+     * the backend row therefore stripes the plaza to the south-east, and the
+     * establishing camera sees building silhouettes against the bright side.
+     */
+    keyPos: [-520, 120, -650],
     keyTarget: [0, 0, -20],
     shadowBias: -0.0004,
-    shadowNormalBias: 0.45,
-    // The plaza is 1024 towers on one deck: at full strength their own shadows
-    // turn the buffer pool into a dark field and the page colours lose the
-    // surface they are supposed to sit on. A drawn shadow is a flat tone about
-    // two thirds of the lit value, and that is what this is.
-    shadowIntensity: 0.66,
+    shadowNormalBias: 0.2,
+    shadowIntensity: 0.84,
     shadows: true,
-    fillColor: 0xbfd8ff, // sky bounce from behind
-    fillIntensity: 0.25,
-    fillPos: [-300, 150, -230],
+    fillColor: 0x769bc6,
+    fillIntensity: 0.18,
+    fillPos: [420, 220, 360],
     walGlow: 0,
     yardGlow: 0,
-    noBloomHemi: 1.5,
-    noBloomFill: 0.3,
+    noBloomHemi: 0.98,
+    noBloomFill: 0.18,
     noBloomWalGlow: 0,
     noBloomYardGlow: 0,
     // OFF, and it has to be off rather than merely quiet. Several districts
     // over-drive their per-instance colours well past 1.0 so that the night
     // bloom will halo them — the plaza's hot page tiles, the WAL insert ring,
     // the lamp crowns. Leave the pass on at any threshold and those halo at
-    // noon too, and the city disappears into white fog. The threshold below is
+    // daylight too, and the city disappears into white fog. The threshold below is
     // what the pass would run at if a future mode wanted a trace of it.
     bloomEnabled: false,
     bloomStrength: 0.1,
     bloomRadius: 0.35,
     bloomThreshold: 1.2,
     /*
-     * Authored against the tone curve, not by eye: every value here passes
-     * through NeutralToneMapping at exposure 1.0, which flattens anything
-     * picked in hex. Measured output of the shipped ramp — 0° #97badb,
-     * 10° #6298cf, 25° #4480c7, 45° #276ec1, 90° #0461be — is a sky that keeps
-     * deepening instead of stopping at a painted ceiling around 38°.
+     * Deep blue overhead, a quieter horizon, and cool haze at distance. Warmth
+     * is introduced only by the azimuthal sun glow in the dome shader.
      */
-    skyZenith: 0x1f66c0,
-    skyHorizon: 0x7fb6e4,
+    skyZenith: 0x24568c,
+    skyHorizon: 0x759abc,
     skyHaze: DAY_PALETTE.fog,
-    // Warm WHITE, not amber. The horizon glow is mixed into a pale blue band,
-    // and an orange glow there subtracts the blue and lands on neutral grey —
-    // measured (211,206,203) at the sun's azimuth. This reads as brightness
-    // instead: (211,215,219), warm but still a sky.
-    skyGlow: 0xfff0d8,
+    skyGlow: 0xffc07a,
     daylight: true,
     stars: false,
     clouds: true,
@@ -631,7 +591,7 @@ export function dayAccent(hex: number): number {
  * Ink — every line material.
  *
  * At night the blueprint edges glow, and that glow is what draws the silhouette.
- * At noon glow is invisible, so the same edges become the cartoon's ink line:
+ * In daylight glow is invisible, so the same edges become the cartoon's ink line:
  * the hue survives as a trace, the value does not. `dayInkOpacity` is the other
  * half of "heavier" — WebGL cannot widen a line, so weight has to come from
  * opacity.
@@ -658,7 +618,7 @@ export function dayEmissive(hex: number): number {
   return dayAccent(hex)
 }
 
-/** Neon intensity is a bloom lever at night; at noon it is nearly flat. */
+/** Neon intensity is a bloom lever at night; in daylight it is nearly flat. */
 export function dayNeonIntensity(intensity: number): number {
   return Math.max(0.98, Math.min(1.18, 1.0 + (intensity - 1) * 0.1))
 }
