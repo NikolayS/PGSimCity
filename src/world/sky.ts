@@ -322,16 +322,16 @@ void main() {
   d = min( d, circle( p, vec2( 0.34, 0.14 - spread ), 0.37 ) );
   d = min( d, circle( p, vec2( 0.63 + spread, -0.07 ), 0.29 ) );
   d = max( d, base - p.y );
-  // The low bank is farther through more air: softer edge, hazier, and lower
-  // in contrast — but not invisible. Against the band it sits in it has to
-  // clear roughly 20 levels, or the sky is a flat wash again.
-  float edge = mix( 0.105, 0.185, vHaze );
-  float alpha = ( 1.0 - smoothstep( -0.015, edge, d ) ) * mix( 0.72, 0.62, vHaze );
+  // The low bank is farther through more air, but the previous 44% haze mix at
+  // 0.62 alpha erased it into the exact band behind it. Distance now softens
+  // the edge without surrendering the warm top / cool underside value split.
+  float edge = mix( 0.085, 0.145, vHaze );
+  float alpha = ( 1.0 - smoothstep( -0.020, edge, d ) ) * mix( 0.86, 0.74, vHaze );
   if ( alpha < 0.006 ) discard;
 
   float light = smoothstep( base, 0.62, p.y );
   vec3 col = mix( uCloudBottom, uCloudTop, 0.32 + light * 0.68 );
-  col = mix( col, uCloudHaze, vHaze * 0.44 );
+  col = mix( col, uCloudHaze, vHaze * 0.28 );
   gl_FragColor = vec4( col, alpha );
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
@@ -345,21 +345,25 @@ const STAR_TINTS: readonly number[] = [
 
 /** Azimuth°, elevation°, width, height, silhouette variant, radians/second. */
 const CLOUDS: readonly (readonly [number, number, number, number, number, number])[] = [
-  [-68, 17, 190, 76, 0.15, 0.00016],
-  [-39, 25, 235, 88, 0.72, 0.00012],
-  [-10, 14, 170, 66, 0.38, 0.00019],
-  [24, 29, 215, 82, 0.9, 0.00014],
-  [58, 19, 178, 68, 0.52, 0.00021],
-  [118, 24, 225, 84, 0.64, 0.00013],
+  [-82, 18, 300, 96, 0.15, 0.00016],
+  [-52, 31, 340, 104, 0.72, 0.00012],
+  [-22, 14, 300, 92, 0.38, 0.00019],
+  [8, 8, 350, 108, 0.9, 0.00014],
+  [39, 12, 305, 94, 0.52, 0.00021],
+  [70, 30, 420, 118, 0.64, 0.00013],
+  [105, 18, 300, 92, 0.27, 0.00017],
+  [142, 27, 360, 108, 0.78, 0.00011],
+  [178, 16, 310, 96, 0.48, 0.0002],
   /* The low bank. Home looks down toward azimuth 149° with a 39° horizontal
    * half-angle, so 110°–188° is what is on screen, and ESTABLISHING_BAND is
    * the only elevation strip that is sky rather than plate or HUD. A cloud
    * outside those two windows is a cloud nobody sees until they orbit — which
    * is what the whole table above was. These sit BEYOND the plate edge, so the
    * plate correctly draws over them as the viewer descends toward it. */
-  [113, -13.1, 215, 66, 0.44, 0.00009],
-  [149, -13.9, 240, 72, 0.81, 0.00007],
-  [180, -12.9, 195, 60, 0.22, 0.00011],
+  [116, -12.8, 300, 78, 0.44, 0.00009],
+  [140, -14.0, 320, 82, 0.81, 0.00007],
+  [154, -13.3, 330, 86, 0.22, 0.00011],
+  [178, -12.4, 295, 76, 0.61, 0.00008],
 ]
 
 /** Elevation of every cloud instance, in degrees. */
@@ -367,21 +371,17 @@ export function cloudElevations(): number[] {
   return CLOUDS.map((c) => c[1])
 }
 
+/** Apparent horizontal footprint of every existing cloud billboard. */
+export function cloudAngularWidths(): number[] {
+  return CLOUDS.map((c) => THREE.MathUtils.radToDeg(2 * Math.atan(c[2] / (2 * CLOUD_RADIUS))))
+}
+
 /**
  * Clouds are one instanced draw but they are TRANSPARENT FILL over the largest
- * thing in frame, and this renderer is fill-bound. Measured by alternating the
- * layer on and off in software WebGL: 0.398 fps with, 0.569 without — 30% of
- * the frame — at the sizes the low bank was first authored at.
- *
- * The low bank was then halved in area and each quad rejects its empty margin
- * before the SDF runs, which must help; how much was NOT re-measured, because
- * this machine could no longer hold a stable frame rate long enough to A/B it.
- * 30% is therefore the only number anyone should quote, and it is far outside
- * the ~5% that would justify shipping this to people already short of frames.
- *
- * So the two tiers that exist because the machine could not keep up do without
- * them. The dome's own gradient is what carries the establishing shot, and it
- * costs nothing extra — clouds are the bonus, not the fix.
+ * thing in frame, and this renderer is fill-bound. The fragment shader rejects
+ * each quad's empty margin before evaluating its silhouette, but the two tiers
+ * that exist to rescue a struggling machine still do without the entire layer.
+ * The dome carries those tiers; clouds are the higher-tier weather pass.
  */
 export function skyCloudsVisible(air: Atmosphere, quality: QualityLevel): boolean {
   return air.clouds && quality !== 'low' && quality !== 'reduced'
@@ -475,7 +475,7 @@ export function createSky(theme: ThemeApi): THREE.Object3D {
   dome.raycast = () => {}
   group.add(dome)
 
-  /* ---- clouds: seven instances, one draw, no texture ------------------- */
+  /* ---- clouds: one instanced draw, no texture -------------------------- */
 
   const cloudGeo = new THREE.InstancedBufferGeometry()
   cloudGeo.setIndex([0, 1, 2, 0, 2, 3])
@@ -513,8 +513,8 @@ export function createSky(theme: ThemeApi): THREE.Object3D {
   const cloudMat = new THREE.ShaderMaterial({
     uniforms: {
       uTime: skyTime,
-      uCloudTop: { value: new THREE.Color(0xfffdf6) },
-      uCloudBottom: { value: new THREE.Color(0xaebfcd) },
+      uCloudTop: { value: new THREE.Color(0xfff8e8) },
+      uCloudBottom: { value: new THREE.Color(0x829eb3) },
       uCloudHaze: { value: new THREE.Color(0xd0dce8) },
     },
     vertexShader: cloudVert,

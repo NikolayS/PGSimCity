@@ -7,6 +7,7 @@ import {
   ESTABLISHING_BAND,
   SLONIK_LINK_OPACITY,
   applySkyAtmosphere,
+  cloudAngularWidths,
   cloudElevations,
   createSky,
   dayHazeMix,
@@ -108,6 +109,12 @@ describe('day sky', () => {
     expect(inBand.length).toBeGreaterThanOrEqual(3)
     // …and still keep a high bank for anyone who orbits or looks up.
     expect(cloudElevations().filter((deg) => deg > 10).length).toBeGreaterThanOrEqual(4)
+  })
+
+  it('gives the existing instanced layer enough angular presence to read as weather', () => {
+    const widths = cloudAngularWidths()
+    expect(widths.filter((deg) => deg >= 11).length).toBeGreaterThanOrEqual(6)
+    expect(Math.max(...widths)).toBeGreaterThanOrEqual(15)
   })
 
   it('keeps stars out of day and drops the cloud layer on both rescue tiers', () => {

@@ -79,11 +79,9 @@ export const NIGHT_PALETTE: Record<ColorKey, number> = {
 /* ---------------------------------------------------------------------------
  * DAY — the same city at noon.
  *
- * Picked against a #d2ccbb stone ground and a #bcdcf2 sky, which is the worst
- * case: mid-lightness backgrounds eat mid-lightness colours from both ends. The
- * whole set therefore sits in the 29–62% lightness band with saturation pushed
- * up, so every swatch is darker than the sky and most are darker than the
- * pavement.
+ * Picked against a #948d7a taupe paving stage and a #bcdcf2 sky. The whole set
+ * sits in the 29–62% lightness band with saturation pushed up: value separates
+ * pale mineral structures from the ground, while hue still separates meaning.
  *
  * Hue budget, walked once around the wheel so neighbours are always separated
  * by either hue or lightness, never by neither:
@@ -109,9 +107,9 @@ export const DAY_PALETTE: Record<ColorKey, number> = {
   /* --- surfaces: warm stone under a blue sky --- */
   bg: 0xbcdcf2, // clear colour behind the sky dome
   fog: 0xd0dce8, // distance haze — and the sky's own below-horizon band
-  grid: 0xa79f8c, // 10 m survey line, drawn ON the stone
-  gridBright: 0x827a68, // 50 m block line, one step darker again
-  ground: 0xcbc4b1, // the pavement itself
+  grid: 0x777164, // 10 m survey line, drawn ON the stone
+  gridBright: 0x5e5a50, // 50 m block line, one step darker again
+  ground: 0x948d7a, // deep civic paving beneath the pale mineral structures
 
   /* --- the plaza: page state --- */
   bufClean: 0x1d5fcb, // clean page — deep true blue
@@ -337,7 +335,7 @@ export const ATMOSPHERE: Record<ThemeMode, Atmosphere> = {
     // turn the buffer pool into a dark field and the page colours lose the
     // surface they are supposed to sit on. A drawn shadow is a flat tone about
     // two thirds of the lit value, and that is what this is.
-    shadowIntensity: 0.55,
+    shadowIntensity: 0.66,
     shadows: true,
     fillColor: 0xbfd8ff, // sky bounce from behind
     fillIntensity: 0.25,
@@ -541,27 +539,27 @@ const STONE: Record<string, Stone> = {
    * within a few degrees, so a nominally 10-degree gap can measure as three
    * and two quarters collapse into each other again. */
   // outside the server: pale sand, the softest quarter.
-  clients: { h: 20, s: 0.1, lo: 0.44, hi: 0.68 },
+  clients: { h: 20, s: 0.1, lo: 0.52, hi: 0.72 },
   // pg_wal: ochre sandstone. The one properly warm quarter, and the amber
   // district — the only place where stone and meaning share a family.
-  wal: { h: 42, s: 0.2, lo: 0.4, hi: 0.68 },
+  wal: { h: 42, s: 0.2, lo: 0.48, hi: 0.7 },
   // backend towers: pale straw plaster, so the window bands sit on something.
-  backends: { h: 64, s: 0.09, lo: 0.44, hi: 0.7 },
+  backends: { h: 64, s: 0.09, lo: 0.52, hi: 0.74 },
   // the maintenance yard: painted works grey-green, an industrial finish.
-  maint: { h: 106, s: 0.1, lo: 0.33, hi: 0.58 },
+  maint: { h: 106, s: 0.1, lo: 0.45, hi: 0.65 },
   // the data directory: cool poured concrete with the faintest green in it.
-  storage: { h: 150, s: 0.08, lo: 0.36, hi: 0.62 },
+  storage: { h: 150, s: 0.08, lo: 0.46, hi: 0.68 },
   // replication: cool slate — this quarter reads as machinery.
-  rep: { h: 196, s: 0.1, lo: 0.35, hi: 0.62 },
+  rep: { h: 196, s: 0.1, lo: 0.45, hi: 0.67 },
   // shared memory: cool white precast. The brightest structure in the city.
-  shmem: { h: 226, s: 0.06, lo: 0.46, hi: 0.7 },
+  shmem: { h: 226, s: 0.06, lo: 0.56, hi: 0.76 },
   // the planner: the least coloured stone anywhere, a bare trace of lilac.
-  planner: { h: 268, s: 0.07, lo: 0.38, hi: 0.64 },
+  planner: { h: 268, s: 0.07, lo: 0.48, hi: 0.68 },
   // continuity: old limestone gone grey-mauve with iron. The oldest-looking
   // quarter, which suits the district that keeps the archive.
-  continuity: { h: 316, s: 0.09, lo: 0.4, hi: 0.66 },
+  continuity: { h: 316, s: 0.09, lo: 0.48, hi: 0.7 },
   // access paths and index halls: dusty brick.
-  access: { h: 352, s: 0.11, lo: 0.34, hi: 0.6 },
+  access: { h: 352, s: 0.11, lo: 0.44, hi: 0.66 },
   // the plate itself, its kerb and its masts: light structural concrete, and
   // deliberately the pavement's own hue — this is ground, not a quarter.
   ground: { h: 36, s: 0.08, lo: 0.4, hi: 0.66 },
