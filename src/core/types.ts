@@ -870,7 +870,7 @@ export interface ThemeApi {
   /** canvas-backed text texture (for decals on floors/walls) */
   textTexture(text: string, opts?: TextTexOpts): THREE.Texture
   /** shared box/cyl geometry cache */
-  box(w: number, h: number, d: number): THREE.BoxGeometry
+  box(w: number, h: number, d: number): THREE.BufferGeometry
   cyl(rt: number, rb: number, h: number, seg?: number): THREE.CylinderGeometry
   dispose(): void
 }

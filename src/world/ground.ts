@@ -1,10 +1,11 @@
 import * as THREE from 'three'
 import { destinationForDistrict } from '../core/destinations'
-import { COLOR, DAY_PALETTE, mixHex, themeMode } from '../core/theme'
+import { ATMOSPHERE, COLOR, DAY_PALETTE, mixHex, themeMode } from '../core/theme'
 import { clamp01, fmtBytes, fmtNum } from '../core/util'
 import { ANCHOR, CITY, DISTRICT_BOUNDS } from './layout'
 import { plateFogK } from './plate-fog'
 import {
+  GROUND_SURFACE_CHANNELS,
   GROUND_SURFACE_SIZE,
   createGroundSurfaceData,
   groundSurfaceDetail,
@@ -83,6 +84,9 @@ uniform float uTime;
 uniform float uSweepR;
 uniform sampler2D uSurface;
 uniform float uSurfaceDetail;
+uniform float uSurfaceResponse;
+uniform vec3 uSunDirection;
+uniform vec3 uSunColor;
 uniform sampler2D uEdge;
 uniform vec4 uEdgeMap;   // x0, z0, 1/width, 1/depth of the edge field
 uniform float uEdgeMax;  // metres encoded across the signed field
@@ -151,12 +155,32 @@ void main() {
     col *= 1.0 - panel * 0.115;
   }
   if ( uSurfaceDetail > 1.5 ) {
-    // One mipmapped lookup carries both curing variation and fine aggregate.
+    // One mipmapped lookup carries albedo, a two-component normal and roughness.
     // Medium skips it: sampling over the largest surface in the framebuffer is
     // precisely the tax that tier exists to avoid.
     vec2 surfaceUv = mat2( 0.9239, -0.3827, 0.3827, 0.9239 ) * p / 52.0;
-    float aggregate = texture2D( uSurface, surfaceUv ).r - 0.515;
+    vec4 surface = texture2D( uSurface, surfaceUv );
+    float aggregate = surface.b - 0.515;
     col *= 1.0 + aggregate * 0.24;
+
+    // Mips average RG toward neutral, so the normal becomes flat before a
+    // distant texel can shimmer. Reconstructing Y preserves unit length without
+    // spending a third channel.
+    vec2 tangentXZ = ( surface.rg * 2.0 - 1.0 ) * 0.12;
+    float tangentY = sqrt( max( 0.0, 1.0 - dot( tangentXZ, tangentXZ ) ) );
+    vec3 surfaceNormal = normalize( vec3(
+      0.9239 * tangentXZ.x + 0.3827 * tangentXZ.y,
+      tangentY,
+      -0.3827 * tangentXZ.x + 0.9239 * tangentXZ.y
+    ) );
+    float roughness = surface.a;
+    float raking = dot( surfaceNormal, uSunDirection ) - uSunDirection.y;
+    col *= 1.0 + clamp( raking * 0.72, -0.075, 0.09 ) * uSurfaceResponse;
+
+    vec3 halfDirection = normalize( uSunDirection + normalize( cameraPosition - vWorld ) );
+    float gloss = 1.0 - roughness;
+    float highlight = pow( max( dot( surfaceNormal, halfDirection ), 0.0 ), mix( 12.0, 46.0, gloss ) );
+    col += uSunColor * highlight * gloss * 0.12 * uSurfaceResponse;
   }
 
   col = mix( col, uMinor, minor * 0.9 );
@@ -475,7 +499,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     createGroundSurfaceData(),
     GROUND_SURFACE_SIZE,
     GROUND_SURFACE_SIZE,
-    THREE.RedFormat,
+    THREE.RGBAFormat,
     THREE.UnsignedByteType,
   )
   surfaceTex.name = 'ground.proceduralSurface'
@@ -490,7 +514,10 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   group.userData.surfaceTexture = {
     width: GROUND_SURFACE_SIZE,
     height: GROUND_SURFACE_SIZE,
-    bytes: GROUND_SURFACE_SIZE * GROUND_SURFACE_SIZE,
+    bytes: GROUND_SURFACE_SIZE * GROUND_SURFACE_SIZE * GROUND_SURFACE_CHANNELS,
+    bytesWithMipmaps: Math.floor(
+      GROUND_SURFACE_SIZE * GROUND_SURFACE_SIZE * GROUND_SURFACE_CHANNELS * (4 / 3),
+    ),
     bootMs: surfaceBootMs,
   }
 
@@ -506,6 +533,13 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
       uSweepR: { value: 900 },
       uSurface: { value: surfaceTex },
       uSurfaceDetail: { value: 0 },
+      uSurfaceResponse: { value: 0 },
+      uSunDirection: {
+        value: new THREE.Vector3(...ATMOSPHERE.day.keyPos)
+          .sub(new THREE.Vector3(...ATMOSPHERE.day.keyTarget))
+          .normalize(),
+      },
+      uSunColor: { value: new THREE.Color(ATMOSPHERE.day.keyColor) },
       uEdgeMax: { value: EDGE_MAX },
       uEdgeMap: {
         value: new THREE.Vector4(bounds.x0, bounds.z0, 1 / (bounds.x1 - bounds.x0), 1 / (bounds.z1 - bounds.z0)),
@@ -521,6 +555,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   gridUniforms.uFogK = plateFogK
   const uTime = gridUniforms.uTime as { value: number }
   const uSurfaceDetail = gridUniforms.uSurfaceDetail as { value: number }
+  const uSurfaceResponse = gridUniforms.uSurfaceResponse as { value: number }
 
   const plateMat = new THREE.ShaderMaterial({
     uniforms: gridUniforms,
@@ -1138,6 +1173,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     if (nextSurfaceDetail !== surfaceDetail) {
       surfaceDetail = nextSurfaceDetail
       uSurfaceDetail.value = surfaceDetail
+      uSurfaceResponse.value = themeMode() === 'day' && surfaceDetail > 1 ? 1 : 0
     }
     // Ambient, not simulated: the survey sweep keeps running while the
     // simulation is paused so the model never looks dead. The mast lights do
