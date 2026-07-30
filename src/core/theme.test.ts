@@ -221,8 +221,8 @@ describe('the day toon ramp', () => {
     /* Three ingredients, all required: two N·L thresholds for the wall tones,
      * and a world-space up term for the roof, which no dot product against the
      * sun can find on its own — a roof and a wall can share a dot product. */
-    expect(out.fragmentShader).toContain('0.16 - w')
-    expect(out.fragmentShader).toContain('0.52 - w')
+    expect(out.fragmentShader).toContain('0.14 - w')
+    expect(out.fragmentShader).toContain('0.68 - w')
     expect(out.fragmentShader).toContain('worldN.y')
   })
 

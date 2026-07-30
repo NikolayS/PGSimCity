@@ -43,17 +43,15 @@ describe('daylight rendering contract', () => {
     // The near half of the city used to receive literally no fog: at 2.0/2.0
     // over CITY.fog (220/1150) the curve did not start until 440.
     //
-    // Both bounds are load-bearing, and they pull against each other. The city
-    // is framed from two distances — the desktop home camera is 450 units from
-    // the city centre, the phone's is 1071 — so fog tight enough to give the
-    // desktop real depth is measured at over half strength on the phone, where
-    // it erases the district hues that carry the meaning.
+    // Both bounds are load-bearing. Golden hour needs visible aerial
+    // perspective across the 830 m city, while the phone view still needs hue.
     const near = 220 * ATMOSPHERE.day.fogNearScale
     const far = 1150 * ATMOSPHERE.day.fogFarScale
     const fogAt = (depth: number): number => (depth - near) / (far - near)
-    expect(near).toBeLessThan(400)
-    expect(fogAt(840)).toBeGreaterThan(0.2) // desktop: the far side of the city
-    expect(fogAt(1071)).toBeLessThan(0.4) // phone: districts keep their colour
+    expect(near).toBeLessThanOrEqual(300)
+    expect(fogAt(840)).toBeGreaterThan(0.35) // desktop: the far side visibly recedes
+    expect(fogAt(1071)).toBeGreaterThan(0.45) // phone: distance cannot stay equally sharp
+    expect(fogAt(1071)).toBeLessThan(0.62) // phone: semantic hue still survives
     // The Slonik plate silhouette depends on this number at night. Do not move it.
     expect(ATMOSPHERE.night.plateFogScale).toBe(0.32)
     expect(ATMOSPHERE.day.plateFogScale).toBeGreaterThan(ATMOSPHERE.night.plateFogScale)
@@ -223,11 +221,7 @@ describe('daySurface — per-district stone', () => {
 })
 
 describe('the day sun', () => {
-  /* The toon ramp in core/theme.ts has thresholds at 0.16 and 0.52 on N·L, and
-   * it only produces three tones if the sun direction puts a box's three
-   * visible faces in three different bands. Those two numbers and these three
-   * are one design, so they are asserted together. */
-  it('lands the three visible faces of a box in three different bands', () => {
+  it('rakes across the city low enough to cast shadows several storeys long', () => {
     const { keyPos, keyTarget } = ATMOSPHERE.day
     const dx = keyPos[0] - keyTarget[0]
     const dy = keyPos[1] - keyTarget[1]
@@ -236,15 +230,34 @@ describe('the day sun', () => {
     const nx = dx / len
     const ny = dy / len
     const nz = dz / len
+    const elevation = Math.asin(ny) * (180 / Math.PI)
+    const shadowRunPerMetre = Math.hypot(nx, nz) / ny
 
-    const LOW = 0.16
-    const HIGH = 0.52
-    const MARGIN = 0.05
+    expect(elevation).toBeGreaterThanOrEqual(7)
+    expect(elevation).toBeLessThanOrEqual(10)
+    expect(shadowRunPerMetre).toBeGreaterThan(5.5)
+    // The north-west key throws the backend row across the plaza to the south-east.
+    expect(nx).toBeLessThan(-0.5)
+    expect(nz).toBeLessThan(-0.65)
+  })
 
-    expect(nx).toBeGreaterThan(HIGH + MARGIN) // +X wall: fully sunlit
-    expect(ny).toBeGreaterThan(HIGH + MARGIN) // roof: fully sunlit, plus the up lift
-    expect(nz).toBeGreaterThan(LOW + MARGIN) // +Z wall: the half band
-    expect(nz).toBeLessThan(HIGH - MARGIN)
-    expect(ny).toBeGreaterThan(nx) // still a high sun, not a raking one
+  it('puts a warm key against genuinely cool shade with a real value split', () => {
+    const air = ATMOSPHERE.day
+    const channels = (hex: number): [number, number, number] => [
+      (hex >> 16) & 255,
+      (hex >> 8) & 255,
+      hex & 255,
+    ]
+    const [keyR, , keyB] = channels(air.keyColor)
+    const [skyR, , skyB] = channels(air.hemiSky)
+    const [groundR, , groundB] = channels(air.hemiGround)
+    const [fillR, , fillB] = channels(air.fillColor)
+
+    expect(keyR - keyB).toBeGreaterThan(45)
+    expect(skyB - skyR).toBeGreaterThan(18)
+    expect(groundB - groundR).toBeGreaterThan(12)
+    expect(fillB - fillR).toBeGreaterThan(24)
+    expect(air.keyIntensity / air.hemiIntensity).toBeGreaterThan(2.2)
+    expect(air.shadowIntensity).toBeGreaterThanOrEqual(0.78)
   })
 })

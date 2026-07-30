@@ -4,7 +4,6 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js'
-import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import {
   COLOR,
   applyStoredThemeMode,
@@ -20,6 +19,7 @@ import { ANCHOR, CITY } from '../world/layout'
 import { applyGroundAtmosphere } from '../world/plate-fog'
 import { applySkyAtmosphere } from '../world/sky'
 import type { Bus, QualityLevel, QualitySettings } from '../core/types'
+import { GoldenHourOutputPass } from './color-grade'
 
 /* ============================================================================
  * THE RENDERER
@@ -30,17 +30,17 @@ import type { Bus, QualityLevel, QualitySettings } from '../core/types'
  * + fill; meaning is neon (toneMapped:false, emissive > 1) and is the only
  * thing that clears the bloom threshold.
  *
- * DAY — the same city at noon, and deliberately NOT the night rig turned up.
- * The sun is the key and casts real shadows, hemisphere bounce fills the rest,
+ * DAY — the same city at golden hour, and deliberately NOT the night rig turned
+ * up. A low warm sun casts long shadows, cool sky bounce fills the shade,
  * bloom is all but switched off (nothing semantic is allowed to glow, because
  * a glow is invisible against a bright sky), and tone mapping moves from ACES
- * to Khronos PBR Neutral — ACES at a noon exposure washes saturated colour into
+ * to Khronos PBR Neutral — ACES at a daylight exposure washes saturated colour into
  * pastel, which is precisely the failure this mode exists to avoid. Structure
  * is cel-shaded by core/theme.ts and outlined in ink. See core/themes.ts.
  *
  * COLOUR PIPELINE — the part everybody gets wrong.
- *   Direct path ('low'): renderer.render() draws to the default framebuffer, so
- *     WebGLRenderer applies ACES tone mapping + sRGB encode itself. Correct.
+ *   Direct path ('low' night): renderer.render() draws to the default framebuffer,
+ *     so WebGLRenderer applies ACES tone mapping + sRGB encode itself. Correct.
  *   Composer path: RenderPass draws into a HalfFloat render target. When the
  *     current render target is not null, WebGLRenderer forces NoToneMapping and
  *     LinearSRGB output (see WebGLPrograms / getParameters: `toneMapping` is
@@ -48,7 +48,8 @@ import type { Bus, QualityLevel, QualitySettings } from '../core/types'
  *     buffer stays linear HDR — which is exactly what UnrealBloomPass needs to
  *     threshold against — and OutputPass at the end of the chain re-reads
  *     renderer.toneMapping / toneMappingExposure / outputColorSpace and applies
- *     them once. Nothing is double-applied, nothing is washed out.
+ *     them once. Daylight's lift/gamma/gain, saturation curve and vignette are
+ *     fused into that OutputPass, so the grade adds no second fullscreen pass.
  *   Consequence: the SAME renderer settings are valid on both paths. Never
  *   toggle renderer.toneMapping when switching quality.
  * ==========================================================================*/
@@ -350,13 +351,13 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   /* ---- lighting rig -----------------------------------------------------*/
 
   // Sky/ground bounce. Cheap, and it keeps north-facing walls from going black.
-  // At noon it is doing most of the work: it is the ambient floor the toon
+  // In daylight it is doing most of the work: it is the cool ambient floor the toon
   // ramp's darkest band lands on, which is what stops cel shadows going to mud.
   const hemi = new THREE.HemisphereLight(air.hemiSky, air.hemiGround, air.hemiIntensity)
   scene.add(hemi)
 
-  // Key: cold moonlight from high north-east at night, the sun from the
-  // south-east at noon. Only the sun casts; night keeps its original render.
+  // Key: cold moonlight from high north-east at night, the low sun from the
+  // north-west in daylight. Only the sun casts; night keeps its original render.
   const key = new THREE.DirectionalLight(air.keyColor, air.keyIntensity)
   key.position.set(air.keyPos[0], air.keyPos[1], air.keyPos[2])
   key.target.position.set(air.keyTarget[0], air.keyTarget[1], air.keyTarget[2])
@@ -501,7 +502,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   fitShadowCamera()
 
   // Fill: colder and from the south-west at night, sky bounce from behind at
-  // noon. No shadow either way — it only shapes the dark side.
+  // daylight. No shadow either way — it only shapes the dark side.
   const fill = new THREE.DirectionalLight(air.fillColor, air.fillIntensity)
   fill.position.set(air.fillPos[0], air.fillPos[1], air.fillPos[2])
   fill.target.position.set(0, 0, 20)
@@ -526,7 +527,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   let gtaoPass: GTAOPass | null = null
   let bloomPass: UnrealBloomPass | null = null
   let smaaPass: SMAAPass | null = null
-  let outputPass: OutputPass | null = null
+  let outputPass: GoldenHourOutputPass | null = null
   let composerDepthEnabled = false
 
   function buildComposer(): void {
@@ -587,8 +588,8 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     smaaPass = new SMAAPass()
     composer.addPass(smaaPass)
 
-    // Tone mapping + colour conversion happen here, exactly once.
-    outputPass = new OutputPass()
+    // Day grade, tone mapping and colour conversion happen here, exactly once.
+    outputPass = new GoldenHourOutputPass()
     composer.addPass(outputPass)
 
     applyPassToggles()
@@ -616,6 +617,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
       bloomPass.threshold = air.bloomThreshold
     }
     if (smaaPass) smaaPass.enabled = wantsSmaa(quality.level)
+    outputPass?.setDaylight(air.daylight)
   }
 
   /**
@@ -641,7 +643,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
    * emissive neon, and their form is carried by the bloom halo around it. 'low'
    * drops the whole post chain, which is right for a weak GPU but leaves those
    * districts as near-black silhouettes. Paying it back with real lights costs
-   * nothing. At noon there is no halo to lose, so the compensation is only the
+   * nothing. In daylight there is no halo to lose, so the compensation is only the
    * half-stop of hemisphere that the (barely-there) bloom would have added.
    */
   function applyLightCompensation(): void {
@@ -762,9 +764,9 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     gtaoPass.setSize(w, h)
   }
 
-  /** 'low' bypasses post-processing entirely. */
+  /** Low night keeps its exact direct path; daylight pays one fused output pass. */
   function useComposer(): boolean {
-    return quality.level !== 'low'
+    return quality.level !== 'low' || air.daylight
   }
 
   /* ---- sizing -----------------------------------------------------------*/

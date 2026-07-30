@@ -1278,7 +1278,7 @@ export function createHud(ctx: UiContext): UiModule {
     const next = toggleThemeMode()
     emitLoose(bus, 'theme:mode', { mode: next })
     bus.emit('toast', {
-      text: next === 'day' ? 'Daylight — the city at noon' : 'Night — the city lit by its own data',
+      text: next === 'day' ? 'Daylight — golden hour' : 'Night — the city lit by its own data',
       kind: 'info',
       ms: 1800,
     })

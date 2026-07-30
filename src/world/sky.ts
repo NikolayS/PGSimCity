@@ -75,14 +75,14 @@ const DAY = {
   hazeFrom: 0.0,
   hazeTo: -0.4,
   /**
-   * Low sun-side warmth, centred in the visible band. Cubed in azimuth, so the
+   * Low sun-side warmth, centred just below the horizon. Cubed in azimuth, so the
    * frame is warm-grey on the sun's side and stays blue away from it. Vertical
    * range is only a few degrees on the desktop, so this LATERAL shift is half
    * of what stops the band reading as one flat wash.
    */
-  glowCentre: -0.24,
-  glowFalloff: 4.5,
-  glowWeight: 0.46,
+  glowCentre: -0.12,
+  glowFalloff: 5.5,
+  glowWeight: 0.62,
 } as const
 
 const g = (v: number): string => v.toFixed(4)
@@ -195,9 +195,9 @@ void main() {
     // goes paler and warmer downward. Night keeps its multiply-down, below.
     col = mix( col, uHaze, smoothstep( ${g(DAY.hazeFrom)}, ${g(DAY.hazeTo)}, h ) );
 
-    // Horizon haze is brightest under the sun, and the sun's azimuth is 21°
-    // off the home camera's — so this is the one sun cue the default framing
-    // can carry. The disc itself is 49° up and out of frame until you orbit.
+    // Horizon haze is brightest under the sun. The establishing camera looks
+    // down, so this low directional band carries the hour even when the disc is
+    // just above its frame.
     vec2 fxz = vec2( d.x, d.z );
     float toward = max( 0.0, dot( fxz / max( length( fxz ), 1e-4 ), uSunFlat ) );
     float low = exp( - abs( h - ${g(DAY.glowCentre)} ) * ${g(DAY.glowFalloff)} );
@@ -210,8 +210,8 @@ void main() {
     float sunDot = dot( d, uSunDirection );
     float halo = smoothstep( 0.99756, 0.99970, sunDot );
     float disc = smoothstep( 0.99951, 0.99978, sunDot );
-    col += vec3( 1.0, 0.72, 0.34 ) * halo * 0.11;
-    col = mix( col, vec3( 1.0, 0.82, 0.48 ), disc * 0.94 );
+    col += vec3( 1.0, 0.52, 0.18 ) * halo * 0.12;
+    col = mix( col, vec3( 1.0, 0.68, 0.30 ), disc * 0.94 );
   } else {
     // The established night gradient and restrained eastern warmth.
     col = mix( uHorizon, uZenith, smoothstep( -0.04, 0.62, h ) );
@@ -269,9 +269,11 @@ attribute vec2 aSize;
 attribute float aShape;
 attribute float aSpeed;
 uniform float uTime;
+uniform vec3 uSunDirection;
 varying vec2 vUv;
 varying float vShape;
 varying float vHaze;
+varying vec2 vSunScreen;
 
 void main() {
   float angle = uTime * aSpeed;
@@ -290,16 +292,19 @@ void main() {
   gl_Position = projectionMatrix * mv;
   vUv = uv * 2.0 - 1.0;
   vShape = aShape;
+  vec2 sunScreen = ( viewMatrix * vec4( uSunDirection, 0.0 ) ).xy;
+  vSunScreen = sunScreen / max( length( sunScreen ), 1e-4 );
 }
 `
 
 const cloudFrag = /* glsl */ `
-uniform vec3 uCloudTop;
-uniform vec3 uCloudBottom;
+uniform vec3 uCloudLight;
+uniform vec3 uCloudShade;
 uniform vec3 uCloudHaze;
 varying vec2 vUv;
 varying float vShape;
 varying float vHaze;
+varying vec2 vSunScreen;
 
 float circle( vec2 p, vec2 center, float radius ) {
   return length( p - center ) - radius;
@@ -329,8 +334,13 @@ void main() {
   float alpha = ( 1.0 - smoothstep( -0.020, edge, d ) ) * mix( 0.86, 0.74, vHaze );
   if ( alpha < 0.006 ) discard;
 
-  float light = smoothstep( base, 0.62, p.y );
-  vec3 col = mix( uCloudBottom, uCloudTop, 0.32 + light * 0.68 );
+  float heightLight = smoothstep( base, 0.62, p.y );
+  float rake = dot( p, vSunScreen );
+  float sideLight = smoothstep( -0.72, 0.78, rake );
+  vec3 col = mix( uCloudShade, uCloudLight, 0.16 + heightLight * 0.28 + sideLight * 0.56 );
+  // The sunward lobe catches a narrow edge; the opposite lobe stays blue-grey.
+  float brightEdge = smoothstep( -0.14, -0.008, d ) * smoothstep( 0.08, 0.82, rake );
+  col = mix( col, uCloudLight * 1.06, brightEdge * 0.34 );
   col = mix( col, uCloudHaze, vHaze * 0.28 );
   gl_FragColor = vec4( col, alpha );
   #include <tonemapping_fragment>
@@ -428,6 +438,14 @@ export function applySkyAtmosphere(sky: THREE.Object3D, air: Atmosphere, quality
     clouds.visible = skyCloudsVisible(air, quality)
     const cloudHaze = clouds.material.uniforms.uCloudHaze?.value as THREE.Color | undefined
     cloudHaze?.setHex(air.skyHaze)
+    const cloudSun = clouds.material.uniforms.uSunDirection?.value as THREE.Vector3 | undefined
+    if (cloudSun) {
+      const x = air.keyPos[0] - air.keyTarget[0]
+      const y = air.keyPos[1] - air.keyTarget[1]
+      const z = air.keyPos[2] - air.keyTarget[2]
+      const invLength = 1 / Math.hypot(x, y, z)
+      cloudSun.set(x * invLength, y * invLength, z * invLength)
+    }
   }
 
   const stars = sky.getObjectByName('sky.stars')
@@ -513,9 +531,10 @@ export function createSky(theme: ThemeApi): THREE.Object3D {
   const cloudMat = new THREE.ShaderMaterial({
     uniforms: {
       uTime: skyTime,
-      uCloudTop: { value: new THREE.Color(0xfff8e8) },
-      uCloudBottom: { value: new THREE.Color(0x829eb3) },
-      uCloudHaze: { value: new THREE.Color(0xd0dce8) },
+      uSunDirection: { value: new THREE.Vector3(0, 1, 0) },
+      uCloudLight: { value: new THREE.Color(0xffd7a4) },
+      uCloudShade: { value: new THREE.Color(0x7891ac) },
+      uCloudHaze: { value: new THREE.Color(0xb7c5d3) },
     },
     vertexShader: cloudVert,
     fragmentShader: cloudFrag,

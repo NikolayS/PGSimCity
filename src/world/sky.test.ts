@@ -55,6 +55,12 @@ describe('day sky', () => {
     const flatExpected = new THREE.Vector2(expected.x, expected.z).normalize()
     expect(flat.dot(flatExpected)).toBeGreaterThan(0.999999)
 
+    const clouds = sky.getObjectByName('sky.clouds') as THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>
+    const cloudSun = clouds.material.uniforms.uSunDirection.value as THREE.Vector3
+    expect(cloudSun.dot(expected)).toBeGreaterThan(0.999999)
+    expect(clouds.material.uniforms.uCloudLight.value).toBeInstanceOf(THREE.Color)
+    expect(clouds.material.uniforms.uCloudShade.value).toBeInstanceOf(THREE.Color)
+
     ;(sky.userData.dispose as () => void)()
   })
 

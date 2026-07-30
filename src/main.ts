@@ -44,6 +44,7 @@ import { createAccess } from './world/access'
 import type { AccessModule } from './world/access'
 import { createControlCenterWorld } from './world/control-center'
 import { createWorldHandles } from './world/handles'
+import { createSilhouetteDetails } from './world/silhouette'
 
 import { createContextMenu } from './ui/context-menu'
 import { createHud, setCompassCamera } from './ui/hud'
@@ -166,6 +167,7 @@ async function boot(): Promise<void> {
   // hangs its own second standby, archive estate and recovery ground off them.
   add(createContinuity(ctx))
   const controlCenterWorld = add(createControlCenterWorld(ctx))
+  add(createSilhouetteDetails(ctx))
 
   // --- collision + the pedestrian -------------------------------------------
   // Every district is in the scene, so the registry's bounding boxes are final.

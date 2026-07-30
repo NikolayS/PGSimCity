@@ -28,7 +28,7 @@ export { ATMOSPHERE, DAY_PALETTE, NIGHT_PALETTE, PALETTES } from './themes'
  * meaning — data, state, energy — with `neon()`.
  *
  * DAY: the same call sites, a different rendering model. `mat()` becomes light
- * warm stone under a stepped toon ramp lit by a real sun; `neon()` becomes a
+ * pale stone under a stepped toon ramp lit by a low warm sun; `neon()` becomes a
  * flat poster fill that carries meaning without any glow, because bloom is off;
  * `line()` becomes the cartoon's ink. Nothing in src/world has to know.
  *
@@ -219,16 +219,14 @@ void RE_Direct_Toon( const in IncidentLight directLight, const in vec3 geometryP
 
 	float dotNL = saturate( dot( geometryNormal, directLight.direction ) );
 
-	// TWO thresholds, not one. A single split gives a box exactly two tones, so
-	// its roof and its sunlit wall come out identical and the whole model reads
-	// as a silhouette. With the sun where themes.ts puts it these thresholds put
-	// +X on 1.0, +Z on 0.55 and everything facing away on 0.0.
+	// The high threshold isolates the one wall aimed at the low sun. Roofs and
+	// crossing walls catch the middle band; the return side stays genuinely cool.
 	//
 	// The edge width follows the screen-space gradient of dotNL so each
 	// terminator stays about one pixel wide instead of aliasing at distance.
 	float w = fwidth( dotNL ) * 0.9 + 0.012;
-	float sun = 0.55 * smoothstep( 0.16 - w, 0.16 + w, dotNL )
-	          + 0.45 * smoothstep( 0.52 - w, 0.52 + w, dotNL );
+	float sun = 0.55 * smoothstep( 0.14 - w, 0.14 + w, dotNL )
+	          + 0.45 * smoothstep( 0.68 - w, 0.68 + w, dotNL );
 
 	// The third tone a drawn city needs is the roof, and no N·L threshold can
 	// find it — a roof and a wall can share a dot product. This lifts faces that
@@ -239,7 +237,8 @@ void RE_Direct_Toon( const in IncidentLight directLight, const in vec3 geometryP
 	vec3 worldN = normalize( ( vec4( geometryNormal, 0.0 ) * viewMatrix ).xyz );
 	float up = smoothstep( 0.55, 0.85, worldN.y );
 
-	vec3 irradiance = ( 0.34 + 0.50 * sun + 0.16 * sun * up ) * directLight.color;
+	float graze = 0.14 * smoothstep( 0.02, 0.14, dotNL );
+	vec3 irradiance = ( graze + 0.66 * sun + 0.20 * sun * up ) * directLight.color;
 
 	// One clipped highlight instead of a smooth lobe: glass and metal still read
 	// as glass and metal, but as a cartoon would draw them. Gated on roughness,
