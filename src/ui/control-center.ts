@@ -25,10 +25,17 @@ export interface ControlCenterOptions {
   walk: WalkController
   flows: FlowsApi
   canvas: HTMLElement
+  door: {
+    setOpenness(value: number): void
+  }
+  /** Test override; production reads prefers-reduced-motion once at creation. */
+  reducedMotion?: boolean
 }
 
 export interface ControlCenterApi extends UiModule {
   readonly inside: boolean
+  readonly doorState: DoorState
+  readonly doorOpenness: number
   enter(): boolean
   leave(): void
 }
@@ -43,12 +50,24 @@ interface SvgRoute {
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
 const DOOR_RADIUS_SQ = 22 * 22
+const DOOR_TRAVEL_SECONDS = 0.8
 const INTERIOR_POSE: Readonly<WalkPose> = {
   x: ANCHOR.controlCenter[0],
   y: ANCHOR.controlCenter[1],
   z: ANCHOR.controlCenter[2],
   yaw: Math.PI,
   pitch: -0.25,
+}
+
+type DoorState = 'closed' | 'opening' | 'open' | 'closing'
+
+function prefersReducedMotion(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false
+  try {
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  } catch {
+    return false
+  }
 }
 
 function svg<K extends keyof SVGElementTagNameMap>(
@@ -170,20 +189,22 @@ function createCityPlan(): {
 }
 
 export function createControlCenter(options: ControlCenterOptions): ControlCenterApi {
-  const { ctx, walk, flows, canvas } = options
+  const { ctx, walk, flows, canvas, door } = options
   const { sim, bus } = ctx
+  const reducedMotion = options.reducedMotion ?? prefersReducedMotion()
 
   /* Same walk-up grammar as the in-world handles: owner, object, E action.
    * The button itself is the touch route. */
+  const actionText = el('span', { class: 'world-handle-prompt__action-text', text: 'OPEN' })
   const enterButton = el(
     'button',
     {
       class: 'world-handle-prompt__action',
       type: 'button',
-      'aria-label': 'Enter the postmaster control center',
+      'aria-label': 'Open the postmaster control center door',
     },
     el('kbd', { class: 'world-handle-prompt__key', text: 'E' }),
-    el('span', { class: 'world-handle-prompt__action-text', text: 'ENTER' }),
+    actionText,
   )
   const doorPrompt = el(
     'section',
@@ -371,6 +392,8 @@ export function createControlCenter(options: ControlCenterOptions): ControlCente
 
   let inside = false
   let nearDoor = false
+  let doorState: DoorState = 'closed'
+  let doorOpenness = 0
   let stepMode = false
   let pendingStep = false
   let playbackSaved = false
@@ -385,6 +408,68 @@ export function createControlCenter(options: ControlCenterOptions): ControlCente
   let lastWal = -1
   let lastRows = -1
   let lastTime = -1
+  door.setOpenness(0)
+
+  function syncDoorPrompt(): void {
+    let label = 'OPEN'
+    let aria = 'Open the postmaster control center door'
+    let disabled = false
+    if (doorState === 'opening') {
+      label = 'OPENING'
+      aria = 'Postmaster control center door opening'
+      disabled = true
+    } else if (doorState === 'open') {
+      label = 'ENTER'
+      aria = 'Enter the postmaster control center'
+    } else if (doorState === 'closing') {
+      label = 'CLOSING'
+      aria = 'Postmaster control center door closing'
+      disabled = true
+    }
+    setText(actionText, label)
+    enterButton.setAttribute('aria-label', aria)
+    enterButton.disabled = disabled
+  }
+
+  function openDoor(): void {
+    if (doorState === 'open' || doorState === 'opening') return
+    if (reducedMotion) {
+      doorState = 'open'
+      doorOpenness = 1
+      door.setOpenness(doorOpenness)
+    } else {
+      doorState = 'opening'
+    }
+    syncDoorPrompt()
+  }
+
+  function closeDoor(): void {
+    if (doorState === 'closed' || doorState === 'closing') return
+    if (reducedMotion) {
+      doorState = 'closed'
+      doorOpenness = 0
+      door.setOpenness(doorOpenness)
+    } else {
+      doorState = 'closing'
+    }
+    syncDoorPrompt()
+  }
+
+  function updateDoor(dt: number): void {
+    if (doorState !== 'opening' && doorState !== 'closing') return
+    const direction = doorState === 'opening' ? 1 : -1
+    doorOpenness += (dt / DOOR_TRAVEL_SECONDS) * direction
+    if (doorOpenness >= 1) {
+      doorOpenness = 1
+      doorState = 'open'
+      syncDoorPrompt()
+    } else if (doorOpenness <= 0) {
+      doorOpenness = 0
+      doorState = 'closed'
+      syncDoorPrompt()
+    }
+    door.setOpenness(doorOpenness)
+  }
 
   function savePlayback(): void {
     if (playbackSaved) return
@@ -493,6 +578,10 @@ export function createControlCenter(options: ControlCenterOptions): ControlCente
 
   function enter(): boolean {
     if (inside || !walk.enabled) return false
+    if (doorState !== 'open') {
+      openDoor()
+      return false
+    }
     walk.capturePose(outsidePose)
     walk.setPose(INTERIOR_POSE)
     if (typeof document.exitPointerLock === 'function' && document.pointerLockElement) {
@@ -506,6 +595,9 @@ export function createControlCenter(options: ControlCenterOptions): ControlCente
     flows.setAmbientDimmed(true)
     paintTrace()
     sqlInput.focus()
+    // The exterior leaves close while the reader is at the console, so leaving
+    // restores a threshold rather than an entrance permanently stuck open.
+    closeDoor()
     return true
   }
 
@@ -553,7 +645,8 @@ export function createControlCenter(options: ControlCenterOptions): ControlCente
     enter()
   }
 
-  function update(): void {
+  function update(dt: number): void {
+    updateDoor(dt)
     const dx = walk.position.x - ANCHOR.postmasterDoor[0]
     const dz = walk.position.z - ANCHOR.postmasterDoor[2]
     const nextNear = !inside && walk.enabled && dx * dx + dz * dz < DOOR_RADIUS_SQ
@@ -632,6 +725,12 @@ export function createControlCenter(options: ControlCenterOptions): ControlCente
   return {
     get inside(): boolean {
       return inside
+    },
+    get doorState(): DoorState {
+      return doorState
+    },
+    get doorOpenness(): number {
+      return doorOpenness
     },
     enter,
     leave,

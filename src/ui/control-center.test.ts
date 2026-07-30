@@ -71,7 +71,7 @@ describe('control-center trace rail', () => {
 })
 
 describe('control-center room hand-off', () => {
-  it('enters by touch, runs through SimApi, keeps a model receipt, and restores the walker', () => {
+  it('opens fully before touch can enter, runs through SimApi, and restores the walker', () => {
     const dom = installTestDom()
     const bus = createBus()
     const sim = createSim(bus)
@@ -114,15 +114,40 @@ describe('control-center room hand-off', () => {
       },
     } as unknown as FlowsApi
     const canvas = dom.document.createElement('canvas') as unknown as HTMLElement
-    const control = createControlCenter({ ctx, walk, flows, canvas })
+    const door = {
+      openness: 0,
+      setOpenness(value: number): void {
+        this.openness = value
+      },
+    }
+    const control = createControlCenter({ ctx, walk, flows, canvas, door })
     const outside = position.clone()
 
     control.update(0)
     const enter = document.querySelector('.control-center-door-prompt button') as HTMLButtonElement
     expect(enter).not.toBeNull()
+    expect(enter.textContent).toContain('OPEN')
+    enter.click()
+    expect(control.inside).toBe(false)
+    expect(enter.disabled).toBe(true)
+    expect(enter.textContent).toContain('OPENING')
+
+    control.update(0.4)
+    expect(control.inside).toBe(false)
+    expect(door.openness).toBeGreaterThan(0)
+    expect(door.openness).toBeLessThan(1)
+
+    control.update(0.5)
+    expect(enter.disabled).toBe(false)
+    expect(enter.textContent).toContain('ENTER')
+    expect(door.openness).toBe(1)
+
     enter.click()
     expect(control.inside).toBe(true)
     expect(dimmed).toEqual([true])
+    control.update(0.9)
+    expect(control.doorState).toBe('closed')
+    expect(door.openness).toBe(0)
 
     const input = document.querySelector('.control-center__sql-input') as HTMLTextAreaElement
     input.value = 'UPDATE sessions SET updated_at = now() WHERE id = 7'
@@ -144,6 +169,61 @@ describe('control-center room hand-off', () => {
     expect(control.inside).toBe(false)
     expect(position.toArray()).toEqual(outside.toArray())
     expect(dimmed).toEqual([true, false])
+    control.dispose()
+  })
+
+  it('opens without animation under reduced motion but still waits for explicit entry', () => {
+    const dom = installTestDom()
+    const bus = createBus()
+    const sim = createSim(bus)
+    const ctx = {
+      bus,
+      sim,
+      registry: { get: () => undefined },
+      getFps: () => 60,
+      getQuality: () => ({
+        level: 'high',
+        pixelRatio: 1,
+        bloom: true,
+        shadows: true,
+        maxParticles: 100,
+        maxLabels: 20,
+        antialias: true,
+      }),
+      getFlowStats: () => ({ active: 0, dropped: 0 }),
+    } as unknown as UiContext
+    const position = new THREE.Vector3(0, 0, -206)
+    const walk = {
+      enabled: true,
+      position,
+      capturePose(target: WalkPose): WalkPose {
+        Object.assign(target, { x: position.x, y: position.y, z: position.z, yaw: 0, pitch: 0 })
+        return target
+      },
+      setPose(pose: Readonly<WalkPose>): void {
+        position.set(pose.x, pose.y, pose.z)
+      },
+    } as unknown as WalkController
+    const flows = { setAmbientDimmed: () => {} } as unknown as FlowsApi
+    const door = { openness: 0, setOpenness(value: number): void { this.openness = value } }
+    const control = createControlCenter({
+      ctx,
+      walk,
+      flows,
+      canvas: dom.document.createElement('canvas') as unknown as HTMLElement,
+      door,
+      reducedMotion: true,
+    })
+
+    control.update(0)
+    const enter = document.querySelector('.control-center-door-prompt button') as HTMLButtonElement
+    enter.click()
+    expect(control.inside).toBe(false)
+    expect(door.openness).toBe(1)
+    expect(enter.textContent).toContain('ENTER')
+    enter.click()
+    expect(control.inside).toBe(true)
+
     control.dispose()
   })
 })

@@ -165,7 +165,7 @@ async function boot(): Promise<void> {
   // After replication: the continuity quarter reads the standby's anchors and
   // hangs its own second standby, archive estate and recovery ground off them.
   add(createContinuity(ctx))
-  add(createControlCenterWorld(ctx))
+  const controlCenterWorld = add(createControlCenterWorld(ctx))
 
   // --- collision + the pedestrian -------------------------------------------
   // Every district is in the scene, so the registry's bounding boxes are final.
@@ -192,6 +192,7 @@ async function boot(): Promise<void> {
   scene.add(water.group)
   const walk = createWalkController({
     camera,
+    scene,
     dom: renderer.domElement,
     collision,
     audio,
@@ -228,6 +229,7 @@ async function boot(): Promise<void> {
     walk,
     flows,
     canvas: renderer.domElement,
+    door: controlCenterWorld.door,
   })
   const ui: UiModule[] = [
     createHud(uiCtx),

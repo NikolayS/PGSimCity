@@ -65,6 +65,8 @@ const PORT = Number(process.env.CDP_PORT || 9470)
 const BLOCK_URLS = (process.env.CDP_BLOCK_URLS || '').split(',').filter(Boolean)
 const LOG_URLS = (process.env.CDP_LOG_URLS || '').split(',').filter(Boolean)
 const ALLOW_ANALYTICS = process.env.CDP_ALLOW_ANALYTICS === '1'
+const REDUCED_MOTION = process.env.CDP_REDUCED_MOTION === '1'
+const MOBILE = process.env.CDP_MOBILE === '1'
 const profile = acquireCdpProfile({
   explicitProfile: process.env.CDP_PROFILE,
   port: PORT,
@@ -157,6 +159,11 @@ const send = (method, params = {}) => new Promise((resolve, reject) => {
 
 await send('Runtime.enable'); await send('Log.enable'); await send('Page.enable'); await send('Network.enable')
 if (BLOCK_URLS.length) await send('Network.setBlockedURLs', { urls: BLOCK_URLS })
+if (REDUCED_MOTION) {
+  await send('Emulation.setEmulatedMedia', {
+    features: [{ name: 'prefers-reduced-motion', value: 'reduce' }],
+  })
+}
 if (ALLOW_ANALYTICS) {
   await send('Page.addScriptToEvaluateOnNewDocument', {
     source: 'window.__plausible = true',
@@ -167,7 +174,13 @@ if (ALLOW_ANALYTICS) {
       + '(KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
   })
 }
-await send('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false })
+await send('Emulation.setDeviceMetricsOverride', {
+  width: W,
+  height: H,
+  deviceScaleFactor: 1,
+  mobile: MOBILE,
+})
+if (MOBILE) await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 })
 await send('Page.navigate', { url: URL_ })
 await sleep(WAIT_MS)
 if (PRE) {
