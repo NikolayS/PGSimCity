@@ -215,6 +215,7 @@ export function createPicker(opts: {
   let hoveredId: string | null = null
   let selDef: ComponentDef | undefined
   let hovDef: ComponentDef | undefined
+  let walkMode = false
 
   /* --- pointer bookkeeping ------------------------------------------------ */
   let pointerX = 0
@@ -386,7 +387,7 @@ export function createPicker(opts: {
   /** The hover marker never doubles up on the selection marker. */
   function refreshHover(): void {
     hovBoxT = 0
-    if (hovDef && hoveredId !== selectedId) {
+    if (!walkMode && hovDef && hoveredId !== selectedId) {
       applyAccent(hov, accentOf(hovDef))
       applyBox(hov, hovDef)
     } else {
@@ -413,6 +414,13 @@ export function createPicker(opts: {
     hoveredId = id
     hovDef = id ? registry.get(id) : undefined
     document.body.style.cursor = id ? 'pointer' : ''
+    refreshHover()
+  })
+
+  const offCameraMode = bus.on('camera:mode', ({ mode }) => {
+    const walking = mode === 'walk'
+    if (walking === walkMode) return
+    walkMode = walking
     refreshHover()
   })
 
@@ -534,7 +542,7 @@ export function createPicker(opts: {
       sel.glowMat.opacity = sel.lamp * (0.84 + 0.16 * Math.sin((t * Math.PI * 2) / LAMP_SEC))
     }
 
-    if (hovDef && hoveredId !== selectedId) {
+    if (!walkMode && hovDef && hoveredId !== selectedId) {
       hovBoxT += dt
       if (hovBoxT >= BOX_SEC) {
         hovBoxT = 0
@@ -552,6 +560,7 @@ export function createPicker(opts: {
     window.removeEventListener('resize', onWinResize)
     offSelect()
     offHover()
+    offCameraMode()
     document.body.style.cursor = ''
     sel.plan.geometry.dispose()
     hov.plan.geometry.dispose()
