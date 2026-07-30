@@ -66,6 +66,7 @@ const STANDARD_FRAG = [
   '  vec4 diffuseColor = vec4( diffuse, opacity );',
   '  #include <color_fragment>',
   '  #include <roughnessmap_fragment>',
+  '  #include <normal_fragment_maps>',
   '}',
 ].join('\n')
 
@@ -150,10 +151,16 @@ describe('the masonry surface term', () => {
     expect(out.fragmentShader).toContain('RE_Direct_Toon')
   })
 
-  it('only ever multiplies albedo — never emissive, never an output', () => {
+  it('derives roughness and a restrained normal from the same surface height', () => {
     const out = inMode('day', () => compile(theme.mat('storage.struct', { color: 0x1a2333 }), true))
     const surface = out.fragmentShader.slice(out.fragmentShader.indexOf('vec3 pgDX'))
     expect(surface.length).toBeGreaterThan(0)
+    expect(surface).toContain('pgSurfaceHeight')
+    expect(surface).toContain('roughnessFactor = clamp')
+    expect(surface).toContain('normal = normalize')
+    expect(surface).toContain('dFdx( pgSurfaceHeight )')
+    expect(surface).toContain('dFdy( pgSurfaceHeight ) ) * 0.65')
+    expect(surface).toMatch(/pgNormalFade = 1\.0 - smoothstep\( 0\.[0-9]+, 0\.[0-9]+, pgPx \)/)
     for (const forbidden of ['emissive', 'gl_FragColor', 'reflectedLight', 'totalEmissiveRadiance']) {
       expect(surface, forbidden).not.toContain(forbidden)
     }

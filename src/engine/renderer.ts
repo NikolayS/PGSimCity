@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { applyBoxBevelDetail } from '../core/beveled-box'
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js'
@@ -843,6 +844,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     quality.maxLabels = preset.maxLabels
     quality.antialias = preset.antialias
     quality.pixelRatio = Math.min(DPR_CAP[level], deviceDpr())
+    scene.userData.boxBevel = applyBoxBevelDetail(scene, level)
     const sky = scene.getObjectByName('sky')
     if (sky) applySkyAtmosphere(sky, air, level)
     applyFidelityQuality()

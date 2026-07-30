@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { pairBoxGeometries } from './beveled-box'
 import type { ColorKey, MatOpts, NeonOpts, TextTexOpts, ThemeApi } from './types'
 import {
   ATMOSPHERE,
@@ -259,7 +260,7 @@ const TOON_ANCHOR = '#include <lights_physical_pars_fragment>'
 const VCOLOR_ANCHOR = '#include <color_fragment>'
 
 /* ============================================================================
- * THE SURFACE TERM — masonry, in both modes, for zero draw calls and zero bytes.
+ * THE SURFACE TERM — masonry response in both modes, for zero draw calls/bytes.
  *
  * From five metres a thirty-metre wall was one unbroken field of a single RGB
  * value: no course, no joint, no gradient, no noise, and therefore no way for a
@@ -267,13 +268,10 @@ const VCOLOR_ANCHOR = '#include <color_fragment>'
  * and it lives here rather than in the districts because this hook already owns
  * onBeforeCompile for every mat() material in the city.
  *
- * WHAT IT MAY DO. It multiplies `diffuseColor` and nothing else. It never
- * writes emissive, never adds a bright seam, and its total contrast is capped
- * at roughly eight percent of albedo. That ceiling is the whole reason it reads
- * as a building rather than as a sci-fi panel: the pitches are architectural
- * (1.15 m course, 2.6 m stone, 3.7 m paving slab), the pattern is a running
- * bond so no two rows of joints line up into a grid, and nothing about it
- * glows. Structure gets texture; it does not get meaning.
+ * WHAT IT MAY DO. The one height signal affects albedo, roughness, and the
+ * standard material's lighting normal. It never writes emissive or adds a
+ * bright seam. Albedo contrast stays below eight percent and relief below
+ * 1.2 cm, so structure acquires material response without acquiring meaning.
  *
  * WHERE IT MAY GO. Injection is guarded on <roughnessmap_fragment>, an anchor
  * that exists only in the standard/physical fragment shader — which is exactly
@@ -296,10 +294,17 @@ const VCOLOR_ANCHOR = '#include <color_fragment>'
 
 const SURFACE_ANCHOR = '#include <roughnessmap_fragment>'
 const SURFACE_VERT_ANCHOR = '#include <worldpos_vertex>'
+const SURFACE_NORMAL_ANCHOR = '#include <normal_fragment_maps>'
 
 const SURFACE_VARYINGS = /* glsl */ `
 varying vec3 pgWorld;
 varying vec2 pgSeed;
+`
+
+const SURFACE_FRAG_DECLS = /* glsl */ `
+varying vec3 pgWorld;
+varying vec2 pgSeed;
+float pgSurfaceHeight;
 `
 
 const SURFACE_VERT = /* glsl */ `
@@ -363,6 +368,12 @@ const SURFACE_FRAG = /* glsl */ `
 	          + 0.30 * sin( pgMu * 2.9 + pgMv * 2.2 );
 	pgN *= 0.54 * ( 1.0 - smoothstep( 1.2, 4.5, pgPx ) );
 
+	// Relief retires sooner than albedo. At orbit range a one-pixel normal
+	// variation shimmers even when the colour variation still reads as tone.
+	float pgNormalFade = 1.0 - smoothstep( 0.12, 0.42, pgPx );
+	pgSurfaceHeight = ( pgN * 0.008 - pgJoint * 0.16 ) * pgNormalFade;
+	roughnessFactor = clamp( roughnessFactor + pgN * 0.025 + pgJoint * 0.42, 0.38, 1.0 );
+
 	// Grade and rain: dirt collects in the first two metres above the pavement,
 	// and the top of a tall building is washed cleaner than its middle.
 	float pgGrade = 1.0 - 0.055 * ( 1.0 - smoothstep( 0.0, 1.8, pgWorld.y ) );
@@ -375,6 +386,26 @@ const SURFACE_FRAG = /* glsl */ `
 
 	diffuseColor.rgb *= ( 1.0 - pgJoint ) * pgGrade * pgRain * pgTone * ( 1.0 + pgN * 0.038 );
 	diffuseColor.rgb *= vec3( 1.0 + pgWarm, 1.0, 1.0 - pgWarm );
+}
+`
+
+const SURFACE_NORMAL_FRAG = /* glsl */ `
+{
+	// Mikkelsen's derivative-space perturbation, fed by the height already used
+	// above. No UV, tangent, texture fetch, or per-frame state is introduced.
+	// Keep the surface derivatives in metres: unlike a UV bump map, this height
+	// is authored in world metres, so normalising them would make a 1 cm joint
+	// almost flat at walking distance.
+	vec3 pgSigmaX = dFdx( - vViewPosition );
+	vec3 pgSigmaY = dFdy( - vViewPosition );
+	vec3 pgR1 = cross( pgSigmaY, normal );
+	vec3 pgR2 = cross( normal, pgSigmaX );
+	float pgDet = dot( pgSigmaX, pgR1 ) * faceDirection;
+	// A 0.65 response keeps the mortar legible without turning weathering into
+	// orange-peel. Distance retirement above handles the orbit case separately.
+	vec2 pgDH = vec2( dFdx( pgSurfaceHeight ), dFdy( pgSurfaceHeight ) ) * 0.65;
+	vec3 pgGrad = sign( pgDet ) * ( pgDH.x * pgR1 + pgDH.y * pgR2 );
+	normal = normalize( abs( pgDet ) * normal - pgGrad );
 }
 `
 
@@ -442,7 +473,10 @@ function patchThemeShader(shader: ThemeShaderSource, surface: boolean): void {
   // shader, so meaning — every basic, line and ShaderMaterial in the city —
   // cannot receive this even by accident.
   if (surface && f.indexOf(SURFACE_ANCHOR) >= 0) {
-    f = SURFACE_VARYINGS + f.replace(SURFACE_ANCHOR, SURFACE_ANCHOR + '\n' + SURFACE_FRAG)
+    f = SURFACE_FRAG_DECLS + f.replace(SURFACE_ANCHOR, SURFACE_ANCHOR + '\n' + SURFACE_FRAG)
+    if (f.indexOf(SURFACE_NORMAL_ANCHOR) >= 0) {
+      f = f.replace(SURFACE_NORMAL_ANCHOR, SURFACE_NORMAL_ANCHOR + '\n' + SURFACE_NORMAL_FRAG)
+    }
     shader.vertexShader =
       SURFACE_VARYINGS +
       shader.vertexShader.replace(SURFACE_VERT_ANCHOR, SURFACE_VERT_ANCHOR + '\n' + SURFACE_VERT)
@@ -835,7 +869,7 @@ export function createTheme(): ThemeApi {
   const neonSpecs = new Map<string, NeonSpec>()
   const lines = new Map<string, THREE.LineBasicMaterial>()
   const lineSpecs = new Map<string, LineSpec>()
-  const boxes = new Map<string, THREE.BoxGeometry>()
+  const boxes = new Map<string, ReturnType<typeof pairBoxGeometries>>()
   const cyls = new Map<string, THREE.CylinderGeometry>()
   const texts = new Map<string, THREE.Texture>()
   const textSpecs = new Map<string, { text: string; opts: TextTexOpts; canvas: HTMLCanvasElement }>()
@@ -932,11 +966,11 @@ export function createTheme(): ThemeApi {
     return ls
   }
 
-  function box(w: number, h: number, d: number): THREE.BoxGeometry {
+  function box(w: number, h: number, d: number): THREE.BufferGeometry {
     const key = `${w}|${h}|${d}`
-    let g = boxes.get(key)
-    if (!g) boxes.set(key, (g = new THREE.BoxGeometry(w, h, d)))
-    return g
+    let pair = boxes.get(key)
+    if (!pair) boxes.set(key, (pair = pairBoxGeometries(w, h, d)))
+    return pair.beveled
   }
 
   function cyl(rt: number, rb: number, h: number, seg = 16): THREE.CylinderGeometry {
@@ -1031,7 +1065,10 @@ export function createTheme(): ThemeApi {
     for (const m of mats.values()) m.dispose()
     for (const m of neons.values()) m.dispose()
     for (const m of lines.values()) m.dispose()
-    for (const g of boxes.values()) g.dispose()
+    for (const pair of boxes.values()) {
+      pair.plain.dispose()
+      pair.beveled.dispose()
+    }
     for (const g of cyls.values()) g.dispose()
     for (const t of texts.values()) t.dispose()
     mats.clear()
