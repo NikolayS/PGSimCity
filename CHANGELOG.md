@@ -9,6 +9,70 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.20.0] — 2026-07-30
+
+### Buildings are solid. This time the diagnosis was right.
+
+Two previous releases fixed real collision bugs and the city was still walkable
+through. The third attempt found why, and it was neither of the obvious answers.
+
+The spatial grid was innocent — every box was already inserted into every cell it
+overlapped, and the solver already queried the whole swept segment.
+
+**A compound building was one loose bounding box containing its walls, its
+protrusions, and the valid standing space between them.** The solver deliberately
+skips any collider the walker starts inside, so that nobody can be trapped in a
+box. So the grid returned the building and the solver ignored it — including the
+visible wall inside it. The larger and more compound the building, the worse it
+was, which is why it read as "many buildings".
+
+The coverage test could not see this because it asked whether *any collider
+overlapped a mesh*. That was true. It was ignored at runtime. Existence and
+reachability are different properties, and the tests now assert the second.
+
+Compound roots and instanced batches are decomposed into tight per-child boxes at
+build time. Colliders **1,821 → 3,982**. The per-frame path is unchanged and still
+allocates nothing.
+
+### A street is not a map legend
+
+Standing in first person showed twelve district chips across the sky at full
+size, naming districts a kilometre away — wayfinding labels for an orbit map,
+leaking into a view where you are a person standing in a street. Walk mode now has
+its own policy. Orbit is untouched.
+
+### The autovacuum lever can be found
+
+It was reachable all along: the 7.5 m operating radius was fine and the prompt had
+good contrast. It was simply **invisible** — a 6.42 m cabinet with a small caption
+standing next to a 41 m launcher, with no cue whatsoever until you were already in
+range. A 13 m illuminated control header now reads from **53.5 m**, "Approach the
+lever" appears at 28 m, and activation stays at 7.5 m.
+
+### Ground that reads as a material, and a sky with weather
+
+The previous graphics pass added environment lighting and ambient occlusion to a
+scene whose largest surface was an untextured grey plane — correct techniques,
+wrong bottleneck.
+
+Procedural textures, generated in code with no image files, give the ground and
+building faces a material and a sense of scale: **16 KiB of source data, 2.4–5.2 ms
+at boot**. The clouds that already existed are now actually visible. Day mode has a
+committed value hierarchy instead of pale on pale.
+
+Clouds cost **+2.8 ms per frame** under software rendering — 0.8%, below the run's
+own baseline drift. The chunk grew 2.08 kB, because procedural texture costs code
+rather than bytes.
+
+### A door that opens, and a body that exists
+
+The postmaster door is where a reader crosses from outside the system to inside
+it, and that crossing was instant and unmarked. It now reads as an entrance and
+animates open, respecting `prefers-reduced-motion`. First person had a floating
+camera; it now has a body, driven from the existing gait state.
+
+---
+
 ## [0.19.0] — 2026-07-30
 
 ### Environment lighting and ambient occlusion
