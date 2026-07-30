@@ -17,7 +17,7 @@ import { createCdpRunCleanup, installProcessCleanup } from './cdp-run.mjs'
  * whoever creates slot N owns it. Stale slots (a killed run) are reaped by age.
  * ------------------------------------------------------------------------- */
 const GATE = '/tmp/claude-1000/cdp-gate'
-const MAX_CHROMES = Number(process.env.CDP_MAX || 3)
+const MAX_CHROMES = Number(process.env.CDP_MAX || 2)
 const SLOT_STALE_MS = 10 * 60 * 1000
 
 let heldSlot = null
