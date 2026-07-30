@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 
-import type { SimState, TraceStop, WorldFactory, WorldModule } from '../core/types'
+import type { SimState, TraceStop, WorldContext, WorldModule } from '../core/types'
+import { easeInOutCubic } from '../core/util'
 import { traceStopBit } from '../sim/model'
 import { traceStageState } from '../sim/trace-presentation'
 import { ANCHOR } from './layout'
@@ -8,6 +9,7 @@ import { CONTROL_TRACE_ROUTES } from './control-center-plan'
 
 const TRACE_CYAN = 0x8fe5e7
 const ROUTE_SAMPLES = 72
+const DOOR_OPEN_ANGLE = Math.PI * 0.55
 
 type BoxSpec = readonly [
   x: number,
@@ -23,6 +25,15 @@ interface RouteVisual {
   requiresRead: boolean
   mesh: THREE.Mesh
   samples: Float32Array
+}
+
+export interface ControlCenterDoorVisual {
+  readonly openness: number
+  setOpenness(value: number): void
+}
+
+export interface ControlCenterWorldModule extends WorldModule {
+  readonly door: ControlCenterDoorVisual
 }
 
 const _matrix = new THREE.Matrix4()
@@ -42,7 +53,7 @@ function fillBoxes(mesh: THREE.InstancedMesh, specs: readonly BoxSpec[]): void {
   mesh.instanceMatrix.needsUpdate = true
 }
 
-export const createControlCenterWorld: WorldFactory = (ctx): WorldModule => {
+export function createControlCenterWorld(ctx: WorldContext): ControlCenterWorldModule {
   const { theme } = ctx
   const group = new THREE.Group()
   group.name = 'control-center'
@@ -95,20 +106,115 @@ export const createControlCenterWorld: WorldFactory = (ctx): WorldModule => {
   fillBoxes(trimMesh, trimSpecs)
   room.add(trimMesh)
 
-  const doorSpecs: readonly BoxSpec[] = [
+  const doorFrameSpecs: readonly BoxSpec[] = [
     [-3.05, 3.2, 12.7, 0.26, 5.8, 0.32],
     [3.05, 3.2, 12.7, 0.26, 5.8, 0.32],
     [0, 6.0, 12.7, 6.35, 0.26, 0.32],
-    [0, 0.12, 12.7, 6.35, 0.2, 1.4],
   ]
-  const doorMesh = new THREE.InstancedMesh(
+  const doorFrame = new THREE.InstancedMesh(
     theme.box(1, 1, 1),
     theme.neon(TRACE_CYAN, 2.35),
-    doorSpecs.length,
+    doorFrameSpecs.length,
   )
-  doorMesh.name = 'control-center:door'
-  fillBoxes(doorMesh, doorSpecs)
-  room.add(doorMesh)
+  doorFrame.name = 'control-center:door'
+  fillBoxes(doorFrame, doorFrameSpecs)
+  room.add(doorFrame)
+
+  const threshold = new THREE.Mesh(
+    theme.box(6.35, 0.2, 1.4),
+    theme.neon(TRACE_CYAN, 2.35),
+  )
+  threshold.name = 'control-center:door-threshold'
+  threshold.position.set(0, 0.12, 12.7)
+  room.add(threshold)
+
+  /* The old facade supplied a dark rectangle but no threshold: the paired
+   * leaves, deep reveal and canopy make this a place to cross from plaza to
+   * supervisor, not another luminous diagram laid over a wall. */
+  const entranceMat = theme.mat('control-center.entrance', {
+    color: 0x101b25,
+    roughness: 0.88,
+    metalness: 0.42,
+    emissive: 0x050a10,
+    surface: false,
+  })
+  const leafMat = theme.mat('control-center.door-leaf', {
+    color: 0x263341,
+    roughness: 0.72,
+    metalness: 0.62,
+    emissive: 0x090d16,
+    surface: false,
+  })
+  const panelMat = theme.mat('control-center.door-panel', {
+    color: 0x121a24,
+    roughness: 0.76,
+    metalness: 0.5,
+    emissive: 0x04070c,
+    surface: false,
+  })
+  const portalMaterial = own(new THREE.MeshBasicMaterial({
+    color: 0x000000,
+    side: THREE.DoubleSide,
+  }))
+  const portal = new THREE.Mesh(theme.box(5.75, 5.55, 0.04), portalMaterial)
+  portal.name = 'control-center:door-reveal'
+  portal.position.set(0, 3.12, 12.51)
+  room.add(portal)
+
+  const canopy = new THREE.Mesh(theme.box(7.7, 0.42, 2.4), entranceMat)
+  canopy.name = 'control-center:door-canopy'
+  canopy.position.set(0, 6.55, 13.25)
+  room.add(canopy)
+
+  const doorLeaves = new THREE.Group()
+  doorLeaves.name = 'control-center:door-leaves'
+  const leafWidth = 2.82
+  const leafHeight = 5.42
+  const leafDepth = 0.36
+  const hinges = 2.94
+  const makeLeaf = (side: -1 | 1): THREE.Group => {
+    const pivot = new THREE.Group()
+    pivot.name = side < 0 ? 'control-center:door-left' : 'control-center:door-right'
+    pivot.position.set(side * hinges, 0.38, 12.48)
+
+    const centreX = -side * leafWidth * 0.5
+    const leaf = new THREE.Mesh(theme.box(leafWidth, leafHeight, leafDepth), leafMat)
+    leaf.name = `${pivot.name}-leaf`
+    leaf.position.set(centreX, leafHeight * 0.5, 0)
+    pivot.add(leaf)
+
+    const panels = new THREE.InstancedMesh(theme.box(1, 1, 1), panelMat, 2)
+    panels.name = `${pivot.name}-panels`
+    fillBoxes(panels, [
+      [centreX, 1.58, leafDepth * 0.55, leafWidth - 0.38, 2.0, 0.08],
+      [centreX, 3.88, leafDepth * 0.55, leafWidth - 0.38, 2.0, 0.08],
+    ])
+    pivot.add(panels)
+
+    const handle = new THREE.Mesh(
+      theme.box(0.16, 1.15, 0.17),
+      theme.neon(TRACE_CYAN, 1.72),
+    )
+    handle.name = `${pivot.name}-handle`
+    handle.position.set(-side * (leafWidth - 0.34), 2.78, leafDepth * 0.82)
+    pivot.add(handle)
+    doorLeaves.add(pivot)
+    return pivot
+  }
+  const leftDoor = makeLeaf(-1)
+  const rightDoor = makeLeaf(1)
+  room.add(doorLeaves)
+
+  let doorOpenness = 0
+  function setDoorOpenness(value: number): void {
+    const next = value < 0 ? 0 : value > 1 ? 1 : value
+    if (next === doorOpenness && leftDoor.rotation.y !== 0) return
+    doorOpenness = next
+    const angle = easeInOutCubic(next) * DOOR_OPEN_ANGLE
+    leftDoor.rotation.y = -angle
+    rightDoor.rotation.y = angle
+  }
+  setDoorOpenness(0)
 
   const plateTexture = theme.textTexture('CONTROL CENTER  ·  E', {
     size: 42,
@@ -226,5 +332,16 @@ export const createControlCenterWorld: WorldFactory = (ctx): WorldModule => {
     group.clear()
   }
 
-  return { id: 'control-center', group, update, dispose }
+  return {
+    id: 'control-center',
+    group,
+    update,
+    dispose,
+    door: {
+      get openness(): number {
+        return doorOpenness
+      },
+      setOpenness: setDoorOpenness,
+    },
+  }
 }

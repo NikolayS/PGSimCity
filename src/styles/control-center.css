@@ -571,6 +571,11 @@ body.pg-control-center .touchpad {
     min-width: 0;
   }
 
+  body.touch-walk-active .control-center-door-prompt {
+    top: calc(70px + var(--safe-t));
+    bottom: auto;
+  }
+
   .control-center__head {
     top: calc(7px + var(--safe-t));
     left: calc(7px + var(--safe-l));
