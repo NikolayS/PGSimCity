@@ -3,6 +3,8 @@
 // Named *-keep so the scratchpad sweep does not delete it.
 import { spawn } from 'node:child_process'
 import { writeFileSync, mkdirSync, rmdirSync, readdirSync, statSync } from 'node:fs'
+import { acquireCdpProfile } from './cdp-profile.mjs'
+import { createCdpRunCleanup, installProcessCleanup } from './cdp-run.mjs'
 
 /* ---------------------------------------------------------------------------
  * CONCURRENCY GATE.
@@ -53,13 +55,6 @@ function releaseSlot() {
   heldSlot = null
 }
 
-for (const sig of ['exit', 'SIGINT', 'SIGTERM', 'uncaughtException']) {
-  process.on(sig, () => { releaseSlot(); if (sig !== 'exit') process.exit(1) })
-}
-
-await acquireSlot()
-
-
 const URL_ = process.argv[2] || 'http://localhost:5173/'
 const OUT = process.argv[3] || 'shot.png'
 const WAIT_MS = Number(process.argv[4] || 45000)
@@ -70,9 +65,16 @@ const PORT = Number(process.env.CDP_PORT || 9470)
 const BLOCK_URLS = (process.env.CDP_BLOCK_URLS || '').split(',').filter(Boolean)
 const LOG_URLS = (process.env.CDP_LOG_URLS || '').split(',').filter(Boolean)
 const ALLOW_ANALYTICS = process.env.CDP_ALLOW_ANALYTICS === '1'
-const PROFILE = process.env.CDP_PROFILE || `/tmp/claude-1000/-home-tars/bf57591f-d077-4c2a-80f3-46cf3b053fba/scratchpad/kprof${PORT}`
+const profile = acquireCdpProfile({
+  explicitProfile: process.env.CDP_PROFILE,
+  port: PORT,
+})
+const run = createCdpRunCleanup({ profile, releaseSlot })
+const removeProcessCleanup = installProcessCleanup(() => run.cleanup())
 
-const chrome = spawn('google-chrome', [
+await acquireSlot()
+
+const chrome = spawn(process.env.CHROME_BIN || 'google-chrome', [
   '--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--hide-scrollbars',
   '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
   // This machine needs all three or DevToolsActivePort never appears.
@@ -82,8 +84,10 @@ const chrome = spawn('google-chrome', [
   // Keep one renderer from eating the box while SwiftShader rasterises.
   '--js-flags=--max-old-space-size=512', '--disable-gpu-shader-disk-cache',
   '--renderer-process-limit=1', '--disable-background-networking',
-  `--user-data-dir=${PROFILE}`, 'about:blank',
+  `--user-data-dir=${profile.path}`, 'about:blank',
 ], { stdio: ['ignore', 'ignore', 'ignore'] })
+run.trackChild(chrome)
+profile.setOwner(chrome.pid)
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -101,6 +105,7 @@ async function targetWs() {
 
 const ws = new WebSocket(await targetWs())
 await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej })
+run.trackSocket(ws)
 
 let id = 0
 const pending = new Map()
@@ -197,4 +202,5 @@ const probe = await send('Runtime.evaluate', {
 })
 console.log('=== PROBE ===\n' + probe.result.value)
 console.log('=== CONSOLE (' + logs.length + ') ===\n' + logs.slice(0, 25).join('\n'))
-chrome.kill(); process.exit(0)
+await run.cleanup()
+removeProcessCleanup()
