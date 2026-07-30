@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from 'vitest'
 import type { WalkController } from '../src/engine/walk'
 import {
   createWalkUpInteraction,
+  WALK_UP_APPROACH_RADIUS,
+  WALK_UP_RADIUS,
   type WalkUpInteractionSite,
 } from '../src/ui/walk-up'
 import { installTestDom } from './dom'
@@ -66,6 +68,35 @@ describe('reusable walk-up interaction', () => {
     expect(root.dataset.site).toBe('second')
     expect(root.textContent).toContain('second owner')
     expect(root.textContent).toContain('second subject')
+    expect(root.textContent).toContain('OPERATE')
+
+    interaction.dispose()
+  })
+
+  it('announces an approaching control before E is in operating range', () => {
+    installTestDom()
+    const position = new THREE.Vector3(WALK_UP_APPROACH_RADIUS - 1, 0, 0)
+    const operate = vi.fn()
+    const target = site('lever', 0, 0, operate)
+    target.approach = 'Approach the lever'
+    target.approachRadius = WALK_UP_APPROACH_RADIUS
+    const interaction = createWalkUpInteraction({ walk: walk(position), sites: [target] })
+    const root = document.querySelector<HTMLElement>('.walk-up-prompt')!
+    const button = root.querySelector<HTMLButtonElement>('.walk-up-prompt__action')!
+
+    interaction.update(0)
+    expect(root.hidden).toBe(false)
+    expect(root.dataset.range).toBe('approach')
+    expect(root.textContent).toContain('Approach the lever')
+    expect(button.disabled).toBe(true)
+
+    window.dispatchEvent(keyDown('KeyE'))
+    expect(operate).not.toHaveBeenCalled()
+
+    position.set(WALK_UP_RADIUS - 0.1, 0, 0)
+    interaction.update(0)
+    expect(root.dataset.range).toBe('operate')
+    expect(button.disabled).toBe(false)
     expect(root.textContent).toContain('OPERATE')
 
     interaction.dispose()

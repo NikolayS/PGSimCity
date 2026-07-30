@@ -990,6 +990,56 @@ body.pg-labels-off #labels-root {
 }
 
 /* ==========================================================================
+   WALK MODE
+   Eye level is an interaction surface, not a rescaled map. Keep the explicit
+   mode exit and notices; remove map instruments, panels, scenarios and chrome.
+   ========================================================================*/
+
+body.pg-walk #hud-left,
+body.pg-walk #hud-right,
+body.pg-walk #compass,
+body.pg-walk .hud-brand,
+body.pg-walk .hud-vitals,
+body.pg-walk .hud-ckpt,
+body.pg-walk .hud-right > .hud-sep,
+body.pg-walk .hud-view-panel,
+body.pg-walk .hud-transport > :not(.hud-transport__dock),
+body.pg-walk .hud-transport__dock > :not(.hud-tools),
+body.pg-walk .hud-tools > :not(.hud-walk) {
+  display: none;
+}
+
+body.pg-walk .hud-bar,
+body.pg-walk .hud-transport {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+body.pg-walk .hud-transport__dock {
+  overflow: visible;
+}
+
+body.pg-walk .hud-walk {
+  position: fixed;
+  top: calc(14px + var(--safe-t));
+  left: calc(14px + var(--safe-l));
+  z-index: var(--z-floating-overlay);
+  display: inline-flex;
+  min-width: 86px;
+  min-height: var(--tap);
+  justify-content: center;
+  color: var(--c-backend);
+  background: var(--bg-panel-solid);
+}
+
+body.pg-walk.touch-walk-active .hud-walk {
+  display: none;
+}
+
+/* ==========================================================================
    RESPONSIVE
    ========================================================================*/
 

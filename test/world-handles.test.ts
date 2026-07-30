@@ -79,6 +79,19 @@ describe('autovacuum world handle', () => {
     h.theme.dispose()
   })
 
+  it('reads as an autovacuum control from the plaza approach', () => {
+    const h = harness()
+    const module = createWorldHandles(h.world)
+    const root = module.group.getObjectByName('handle.autovacuum')!
+    const bounds = new THREE.Box3().setFromObject(root)
+
+    expect(bounds.max.y - bounds.min.y).toBeGreaterThan(12)
+    expect(root.getObjectByName('handle.autovacuum.beacon')).toBeDefined()
+
+    module.dispose?.()
+    h.theme.dispose()
+  })
+
   it('shows the same state as the knob in its lever and lamps', () => {
     const h = harness()
     const module = createWorldHandles(h.world)

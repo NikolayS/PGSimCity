@@ -19,6 +19,10 @@ export interface WalkUpInteractionSite {
   radius?: number
   owner: string
   subject: string
+  /** Non-actionable cue shown before the visitor is close enough to operate. */
+  approach?: string
+  /** Discovery distance; the operating radius remains `radius`. */
+  approachRadius?: number
   /** CSS colour used by the prompt, for example `var(--c-vacuum)`. */
   accent?: string
   state(): WalkUpState
@@ -36,6 +40,8 @@ export interface WalkUpInteractionOptions {
 
 /** Kept beyond arm's reach because solid cabinets stop the walker's capsule. */
 export const WALK_UP_RADIUS = 7.5
+/** Early enough to teach that an approaching city-scale control is interactive. */
+export const WALK_UP_APPROACH_RADIUS = 28
 
 function typingTarget(target: EventTarget | null): boolean {
   const node = target as { tagName?: string; isContentEditable?: boolean } | null
@@ -81,27 +87,38 @@ export function createWalkUpInteraction(opts: WalkUpInteractionOptions): UiModul
   document.body.append(root)
 
   let active = -1
+  let actionable = false
   let paintedState: WalkUpState
   let hasPaintedState = false
 
-  function paintSelection(index: number): void {
-    if (index === active) return
+  function paintSelection(index: number, canOperate: boolean): void {
+    if (index === active && canOperate === actionable) return
     active = index
+    actionable = canOperate
     hasPaintedState = false
     const site = sites[index]
     root.hidden = site === undefined
     if (!site) {
       delete root.dataset.site
+      delete root.dataset.range
       return
     }
     root.dataset.site = site.id
+    root.dataset.range = canOperate ? 'operate' : 'approach'
     root.style.setProperty('--walk-up-accent', site.accent ?? 'var(--ink)')
     setText(owner, site.owner)
     setText(subject, site.subject)
+    action.disabled = !canOperate
+    key.hidden = !canOperate
+    if (!canOperate) {
+      setText(actionText, site.approach ?? 'Approach to interact')
+      action.setAttribute('aria-label', site.approach ?? 'Approach to interact')
+      delete action.dataset.state
+    }
   }
 
   function paintState(): void {
-    if (active < 0) return
+    if (active < 0 || !actionable) return
     const site = sites[active]
     const next = site.state()
     if (hasPaintedState && Object.is(next, paintedState)) return
@@ -114,7 +131,7 @@ export function createWalkUpInteraction(opts: WalkUpInteractionOptions): UiModul
   }
 
   function operate(): void {
-    if (active < 0 || !walk.enabled) return
+    if (active < 0 || !actionable || !walk.enabled) return
     sites[active].operate()
     paintState()
   }
@@ -141,7 +158,7 @@ export function createWalkUpInteraction(opts: WalkUpInteractionOptions): UiModul
 
   function update(): void {
     if (!walk.enabled) {
-      paintSelection(-1)
+      paintSelection(-1, false)
       return
     }
 
@@ -149,19 +166,22 @@ export function createWalkUpInteraction(opts: WalkUpInteractionOptions): UiModul
     const pz = walk.position.z
     let nearest = -1
     let nearestSq = Number.POSITIVE_INFINITY
+    let nearestActionable = false
     for (let i = 0; i < sites.length; i++) {
       const site = sites[i]
       const radius = site.radius ?? WALK_UP_RADIUS
+      const approachRadius = Math.max(radius, site.approachRadius ?? radius)
       const dx = px - site.x
       const dz = pz - site.z
       const distanceSq = dx * dx + dz * dz
-      if (distanceSq <= radius * radius && distanceSq < nearestSq) {
+      if (distanceSq <= approachRadius * approachRadius && distanceSq < nearestSq) {
         nearestSq = distanceSq
         nearest = i
+        nearestActionable = distanceSq <= radius * radius
       }
     }
 
-    paintSelection(nearest)
+    paintSelection(nearest, nearestActionable)
     paintState()
   }
 

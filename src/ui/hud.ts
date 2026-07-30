@@ -1441,6 +1441,7 @@ export function createHud(ctx: UiContext): UiModule {
     bus.on('camera:mode', ({ mode }) => {
       cameraMode = mode
       const walking = mode === 'walk'
+      document.body.classList.toggle('pg-walk', walking)
       setClass(walkBtn, 'is-active', walking)
       walkBtn.setAttribute('aria-pressed', String(walking))
       walkBtn.setAttribute('aria-label', walking ? 'Exit walk mode' : 'Walk the city')
@@ -1717,6 +1718,7 @@ export function createHud(ctx: UiContext): UiModule {
     for (const t of toasts) window.clearTimeout(t.timer)
     toasts.length = 0
     document.body.classList.remove('pg-labels-off')
+    document.body.classList.remove('pg-walk')
     topBar.remove()
     viewPanel.remove()
     transport.remove()

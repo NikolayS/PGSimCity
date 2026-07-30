@@ -9,6 +9,29 @@ const PHONE_LAYOUT_MAX_WIDTH = 700
 const AREA_PLACEMENT_RESERVE = 0.95
 
 /**
+ * Walking annotates one nearby object in the visitor's line of sight. The
+ * orbit hierarchy is a map legend and is deliberately ineligible here.
+ */
+export const WALK_LABEL_CAP = 1
+export const WALK_LABEL_MAX_DISTANCE = 85
+/** Object signage stays subordinate at eye level; orbit's near zoom is too loud here. */
+export const WALK_LABEL_SCALE = 1
+
+/**
+ * Lower wins. `centreDistanceSq` is already available from the placement pass,
+ * so this adds no square root or temporary vector to the hot path.
+ */
+export function walkLabelPriority(
+  rank: number,
+  districtProxy: boolean,
+  distance: number,
+  centreDistanceSq: number,
+): number | null {
+  if (rank < 0 || rank > 2 || districtProxy || distance > WALK_LABEL_MAX_DISTANCE) return null
+  return centreDistanceSq + distance * distance * 0.25
+}
+
+/**
  * A chip occupies more of the useful scene on a narrow screen, so the budget
  * grows smoothly from 2% on phones to the existing 4% on desktop.
  */
