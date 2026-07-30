@@ -9,6 +9,52 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.21.0] — 2026-07-30
+
+### Daylight commits to an hour
+
+Two previous graphics passes specified techniques — environment lighting, ambient
+occlusion, procedural textures — and both were competently done and visually
+quiet. Techniques do not produce a look. This one specifies a look.
+
+**The sun is now at 8.4°**, giving 6.81 metres of shadow run per metre of height.
+The plaza carries long directional bands, buildings cast across each other, and
+a warm `#ffc47d` key is opposed by a genuinely cool hemisphere, ground bounce and
+fill — so faces split warm against blue shade rather than tinting orange. Clouds
+take the same light: warm sunward edges, blue-grey bodies.
+
+**Aerial perspective** runs from 264 m to 1,897 m, so the far side of an 830 m
+city sits about 35% into the haze. Distance now reads as distance, which is the
+strongest depth cue available and was entirely absent.
+
+**A colour grade** — lift 0.008, gamma 0.96, gain 1.035, midtone saturation 1.07,
+vignette 0.075 — fused into the existing output pass rather than added as another
+one.
+
+**Silhouette detail**: build-time roof discovery adds instanced plant housings,
+vents, masts, varied parapets and railings, budgeted 0 / 0 / 18 / 34 / 48 roofs
+from `low` through `ultra`. A textured box still reads as a box against a bright
+sky; an interrupted outline does not.
+
+**Every semantic colour survives.** All ten meanings were measured before and
+after the grade and all 45 pairs remain distinguishable, the closest margin being
+lock red against dirty-page red at 0.0666. A grade that costs a colour its
+identity would be wrong however good it looked.
+
+Night is untouched — it already had a point of view. Frame cost: `low` one fused
+fullscreen draw, `reduced` none, `medium` five instanced draws, `high`/`ultra`
+twelve. Chunk +6.84 kB.
+
+### No wireframes follow the crosshair on foot
+
+The picker drew hover as line segments and nothing in it gated on walk mode, so
+in first person — where the pointer is locked to screen centre — it painted a
+wireframe on whatever the walker faced, continuously. In orbit the highlight
+answers "this one" because someone pointed at it. On foot nobody pointed at
+anything, so it was answering a question that was never asked.
+
+---
+
 ## [0.20.0] — 2026-07-30
 
 ### Buildings are solid. This time the diagnosis was right.
