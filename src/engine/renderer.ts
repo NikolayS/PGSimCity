@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
+import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
@@ -144,6 +145,69 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
   },
 }
 
+export interface FidelitySettings {
+  environment: boolean
+  ambientOcclusion: boolean
+  /** Fraction of the device framebuffer used by GTAO's normal/depth buffers. */
+  aoScale: number
+  aoSamples: number
+  aoDenoiseSamples: number
+  shadowMapSize: number
+  shadowRadius: number
+}
+
+/**
+ * Fidelity is a separate ladder so the low/reduced rendering paths stay
+ * byte-for-byte free of extra per-frame work.
+ */
+export const FIDELITY_PRESETS: Record<QualityLevel, FidelitySettings> = {
+  low: {
+    environment: false,
+    ambientOcclusion: false,
+    aoScale: 0,
+    aoSamples: 0,
+    aoDenoiseSamples: 0,
+    shadowMapSize: 1024,
+    shadowRadius: 1,
+  },
+  reduced: {
+    environment: false,
+    ambientOcclusion: false,
+    aoScale: 0,
+    aoSamples: 0,
+    aoDenoiseSamples: 0,
+    shadowMapSize: 1024,
+    shadowRadius: 1,
+  },
+  medium: {
+    environment: true,
+    ambientOcclusion: true,
+    aoScale: 0.25,
+    aoSamples: 3,
+    aoDenoiseSamples: 4,
+    shadowMapSize: 1024,
+    shadowRadius: 1,
+  },
+  high: {
+    environment: true,
+    ambientOcclusion: true,
+    aoScale: 0.35,
+    aoSamples: 4,
+    aoDenoiseSamples: 6,
+    shadowMapSize: 1536,
+    shadowRadius: 1.7,
+  },
+  ultra: {
+    environment: true,
+    ambientOcclusion: true,
+    aoScale: 0.5,
+    aoSamples: 6,
+    aoDenoiseSamples: 8,
+    shadowMapSize: 2048,
+    shadowRadius: 2.5,
+  },
+}
+
 /** Where we start before adaptive quality has an opinion. */
 const DEFAULT_LEVEL: QualityLevel = 'high'
 
@@ -163,6 +227,26 @@ function toneMappingFor(a: Atmosphere): THREE.ToneMapping {
 
 /* Module-scope scratch — nothing is allocated inside render(). */
 const _size = new THREE.Vector2()
+const AO_SCENE_BOX = new THREE.Box3(new THREE.Vector3(-540, -90, -430), new THREE.Vector3(540, 150, 430))
+
+/**
+ * The beauty pass already rasterises every opaque mesh and writes depth.
+ * Reusing that texture avoids GTAOPass's otherwise redundant normal/depth
+ * scene render; screen-space normals are reconstructed from depth instead.
+ */
+class ComposerDepthGTAOPass extends GTAOPass {
+  override render(
+    renderer: THREE.WebGLRenderer,
+    writeBuffer: THREE.WebGLRenderTarget,
+    readBuffer: THREE.WebGLRenderTarget,
+    deltaTime: number,
+    maskActive: boolean,
+  ): void {
+    const depth = readBuffer.depthTexture as THREE.DepthTexture | null
+    if (depth && this.depthTexture !== depth) this.setGBuffer(depth)
+    super.render(renderer, writeBuffer, readBuffer, deltaTime, maskActive)
+  }
+}
 
 export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   const quality: QualitySettings = { ...QUALITY_PRESETS[DEFAULT_LEVEL] }
@@ -205,6 +289,58 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   scene.fog = fog
   applyGroundAtmosphere(air)
 
+  /*
+   * The visible dome is also the lighting source. PMREM captures it six times
+   * only when the sky model changes, then standard materials sample the
+   * prefiltered result without another pass per frame.
+   */
+  const environmentScene = new THREE.Scene()
+  const environmentBackground = new THREE.Color(COLOR.bg)
+  environmentScene.background = environmentBackground
+  let pmremGenerator: THREE.PMREMGenerator | null = null
+  let environmentTarget: THREE.WebGLRenderTarget | null = null
+  let environmentMode: ThemeMode | null = null
+
+  function applyEnvironmentIntensity(): void {
+    // Day keeps the poster-flat cel bands; night gives glossy machinery enough
+    // sky response to read without making matte structure luminous.
+    scene.environmentIntensity = air.daylight ? 0.18 : 0.55
+  }
+
+  function refreshEnvironment(force = false): void {
+    const fidelity = FIDELITY_PRESETS[quality.level]
+    applyEnvironmentIntensity()
+    if (!fidelity.environment) {
+      scene.environment = null
+      return
+    }
+
+    const sky = scene.getObjectByName('sky')
+    if (!sky?.parent) return
+    const targetMode = themeMode()
+    if (!force && environmentTarget && environmentMode === targetMode) {
+      scene.environment = environmentTarget.texture
+      return
+    }
+
+    if (!pmremGenerator) pmremGenerator = new THREE.PMREMGenerator(renderer)
+    environmentBackground.setHex(COLOR.bg)
+    const parent = sky.parent
+    environmentScene.add(sky)
+    let nextTarget: THREE.WebGLRenderTarget
+    try {
+      nextTarget = pmremGenerator.fromScene(environmentScene, 0, 0.1, 2200)
+    } finally {
+      parent.add(sky)
+    }
+    nextTarget.texture.name = `pgsimcity.environment.${targetMode}`
+    const previous = environmentTarget
+    environmentTarget = nextTarget
+    environmentMode = targetMode
+    scene.environment = nextTarget.texture
+    previous?.dispose()
+  }
+
   const camera = new THREE.PerspectiveCamera(52, measureAspect(), 0.5, 4000)
   // Establishing shot: high above the plaza, looking north up the city axis.
   // engine/camera.ts takes over on its first update.
@@ -227,11 +363,13 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   scene.add(key)
   scene.add(key.target)
 
-  // One modest map, fitted to the actual built city rather than to the whole
-  // Slonik plate. At 1024² the texel density stays useful without asking the
-  // software renderer to fill a 2048² depth target before every frame.
+  // Tiered maps, fitted to the actual built city rather than to the whole
+  // Slonik plate. Medium keeps the original 1024² budget; high and ultra spend
+  // their headroom on 1536² and 2048² with a progressively softer penumbra.
   const sc = key.shadow.camera
-  key.shadow.mapSize.set(1024, 1024)
+  const initialFidelity = FIDELITY_PRESETS[quality.level]
+  key.shadow.mapSize.set(initialFidelity.shadowMapSize, initialFidelity.shadowMapSize)
+  key.shadow.radius = initialFidelity.shadowRadius
   key.shadow.bias = air.shadowBias
   key.shadow.normalBias = air.shadowNormalBias
   key.shadow.intensity = air.shadowIntensity
@@ -385,9 +523,11 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
 
   let composer: EffectComposer | null = null
   let renderPass: RenderPass | null = null
+  let gtaoPass: GTAOPass | null = null
   let bloomPass: UnrealBloomPass | null = null
   let smaaPass: SMAAPass | null = null
   let outputPass: OutputPass | null = null
+  let composerDepthEnabled = false
 
   function buildComposer(): void {
     if (composer) return
@@ -395,12 +535,41 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     const h = viewH
     const pr = quality.pixelRatio
 
-    composer = new EffectComposer(renderer)
+    const composerTarget = new THREE.WebGLRenderTarget(w, h, {
+      type: THREE.HalfFloatType,
+      depthBuffer: true,
+      stencilBuffer: false,
+      depthTexture: new THREE.DepthTexture(w, h, THREE.UnsignedIntType),
+    })
+    composerTarget.texture.name = 'PGSimCity.composer.hdr'
+    composerTarget.depthTexture!.name = 'PGSimCity.composer.depth'
+    composer = new EffectComposer(renderer, composerTarget)
+    composerDepthEnabled = true
     composer.setPixelRatio(pr)
     composer.setSize(w, h)
 
     renderPass = new RenderPass(scene, camera)
     composer.addPass(renderPass)
+
+    gtaoPass = new ComposerDepthGTAOPass(scene, camera, 1, 1)
+    gtaoPass.setSceneClipBox(AO_SCENE_BOX)
+    gtaoPass.updateGtaoMaterial({
+      radius: 0.28,
+      distanceExponent: 1.5,
+      thickness: 0.8,
+      distanceFallOff: 0.7,
+      scale: 3.2,
+      screenSpaceRadius: true,
+    })
+    gtaoPass.updatePdMaterial({
+      lumaPhi: 8,
+      depthPhi: 3,
+      normalPhi: 4,
+      radius: 5,
+      radiusExponent: 1.8,
+      rings: 2,
+    })
+    composer.addPass(gtaoPass)
 
     // Half-resolution bloom chain: UnrealBloomPass halves again internally for
     // mip 0, so the blur runs at a quarter of the framebuffer. Bloom is a wide
@@ -424,9 +593,22 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
 
     applyPassToggles()
     sizeBloom()
+    sizeAmbientOcclusion()
   }
 
   function applyPassToggles(): void {
+    if (gtaoPass) {
+      const fidelity = FIDELITY_PRESETS[quality.level]
+      configureComposerDepth(fidelity.ambientOcclusion)
+      gtaoPass.enabled = fidelity.ambientOcclusion
+      // AO is a solidity cue, not a new night-time black channel. Keeping the
+      // night blend restrained preserves neon value and its bloom threshold.
+      gtaoPass.blendIntensity = air.daylight ? 0.78 : 0.34
+      if (fidelity.ambientOcclusion) {
+        gtaoPass.updateGtaoMaterial({ samples: fidelity.aoSamples })
+        gtaoPass.updatePdMaterial({ samples: fidelity.aoDenoiseSamples })
+      }
+    }
     if (bloomPass) {
       bloomPass.enabled = quality.bloom && air.bloomEnabled
       bloomPass.strength = air.bloomStrength
@@ -434,6 +616,24 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
       bloomPass.threshold = air.bloomThreshold
     }
     if (smaaPass) smaaPass.enabled = wantsSmaa(quality.level)
+  }
+
+  /**
+   * Depth textures are an AO input, not a tax on the composer. Restore the
+   * original depth-renderbuffer targets whenever AO is tiered off.
+   */
+  function configureComposerDepth(enabled: boolean): void {
+    if (!composer || enabled === composerDepthEnabled) return
+    const targets = [composer.renderTarget1, composer.renderTarget2]
+    for (let i = 0; i < targets.length; i++) {
+      const target = targets[i]
+      target.dispose()
+      target.depthTexture = enabled
+        ? new THREE.DepthTexture(target.width, target.height, THREE.UnsignedIntType)
+        : null
+      if (target.depthTexture) target.depthTexture.name = `PGSimCity.composer.depth${i + 1}`
+    }
+    composerDepthEnabled = enabled
   }
 
   /**
@@ -539,6 +739,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     scene.traverse((obj) => paintObject(obj, target))
     applyShadowRenderer()
     renderer.shadowMap.needsUpdate = true
+    refreshEnvironment(true)
   }
 
   const offTheme = onThemeMode(applyThemeMode)
@@ -550,6 +751,15 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     const h = Math.max(1, Math.round((viewH * quality.pixelRatio) / 2))
     bloomPass.resolution.set(w, h)
     bloomPass.setSize(w, h)
+  }
+
+  /** GTAO is deliberately sub-resolution; its bilateral denoise restores edges. */
+  function sizeAmbientOcclusion(): void {
+    if (!gtaoPass) return
+    const scale = FIDELITY_PRESETS[quality.level].aoScale
+    const w = Math.max(1, Math.round(viewW * quality.pixelRatio * Math.max(scale, 0.01)))
+    const h = Math.max(1, Math.round(viewH * quality.pixelRatio * Math.max(scale, 0.01)))
+    gtaoPass.setSize(w, h)
   }
 
   /** 'low' bypasses post-processing entirely. */
@@ -600,6 +810,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
       composer.setPixelRatio(quality.pixelRatio)
       composer.setSize(w, h)
       sizeBloom() // must follow composer.setSize — it overwrites every pass size
+      sizeAmbientOcclusion()
     }
   }
 
@@ -632,6 +843,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     quality.pixelRatio = Math.min(DPR_CAP[level], deviceDpr())
     const sky = scene.getObjectByName('sky')
     if (sky) applySkyAtmosphere(sky, air, level)
+    applyFidelityQuality()
 
     // Shadow maps: toggling shadowMap.enabled changes shader defines, so every
     // material in the scene has to be recompiled. Once per quality change only.
@@ -647,6 +859,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     // Force a full re-size so pixel ratio / composer targets follow the level.
     viewW = -1
     resize()
+    refreshEnvironment()
 
     settleT = 0
     slowT = 0
@@ -655,6 +868,19 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
 
   function invalidateMaterials(): void {
     scene.traverse(markMaterialDirty)
+  }
+
+  function applyFidelityQuality(): void {
+    const fidelity = FIDELITY_PRESETS[quality.level]
+    const sizeChanged = key.shadow.mapSize.x !== fidelity.shadowMapSize
+    if (sizeChanged) {
+      key.shadow.mapSize.set(fidelity.shadowMapSize, fidelity.shadowMapSize)
+      if (key.shadow.map) {
+        key.shadow.map.dispose()
+        key.shadow.map = null
+      }
+    }
+    key.shadow.radius = fidelity.shadowRadius
   }
 
   function applyShadowRenderer(): void {
@@ -775,6 +1001,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     if (!themeRestored) {
       themeRestored = true
       applyStoredThemeMode()
+      refreshEnvironment()
     }
     const d = clamp(dt, 1 / 1000, 0.25)
     // The fps readout and the adapt timers run on real time, not on the delta
@@ -872,14 +1099,23 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     }
 
     if (bloomPass) bloomPass.dispose()
+    if (gtaoPass) gtaoPass.dispose()
     if (smaaPass) smaaPass.dispose()
     if (outputPass) outputPass.dispose()
     if (composer) composer.dispose()
     composer = null
+    composerDepthEnabled = false
     renderPass = null
+    gtaoPass = null
     bloomPass = null
     smaaPass = null
     outputPass = null
+
+    scene.environment = null
+    environmentTarget?.dispose()
+    environmentTarget = null
+    pmremGenerator?.dispose()
+    pmremGenerator = null
 
     if (key.shadow.map) {
       key.shadow.map.dispose()
