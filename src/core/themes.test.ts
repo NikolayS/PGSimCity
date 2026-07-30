@@ -200,10 +200,16 @@ describe('daySurface — per-district stone', () => {
     }
   })
 
-  it('keeps buildings darker than the pavement they stand on', () => {
+  it('sets pale civic structure against a materially deeper pavement', () => {
     const ground = hslOf(DAY_PALETTE.ground)[2]
-    for (const [key, night] of STRUCTURE) {
-      expect(hslOf(daySurface(night, key))[2], key).toBeLessThan(ground - 0.06)
+    const faces = [
+      ['clients.struct', 0x26354c],
+      ['backends.struct', 0x2a3852],
+      ['shmem.structHi', 0x27334a],
+      ['storage.structHi', 0x27334c],
+    ] as const
+    for (const [key, night] of faces) {
+      expect(hslOf(daySurface(night, key))[2], key).toBeGreaterThan(ground + 0.055)
     }
   })
 

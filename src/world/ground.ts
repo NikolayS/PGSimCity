@@ -1,9 +1,14 @@
 import * as THREE from 'three'
 import { destinationForDistrict } from '../core/destinations'
-import { COLOR, DAY_PALETTE, mixHex } from '../core/theme'
+import { COLOR, DAY_PALETTE, mixHex, themeMode } from '../core/theme'
 import { clamp01, fmtBytes, fmtNum } from '../core/util'
 import { ANCHOR, CITY, DISTRICT_BOUNDS } from './layout'
 import { plateFogK } from './plate-fog'
+import {
+  GROUND_SURFACE_SIZE,
+  createGroundSurfaceData,
+  groundSurfaceDetail,
+} from './ground-surface'
 import {
   clearance,
   contains,
@@ -36,9 +41,10 @@ export function worldPitReadout(s: SimState): string {
  *     — a poured slab with real thickness, a kerb and an edge light, standing in
  *     an empty void. No district moves; only the shape of the ground under them.
  *     Look straight down (the `O` preset) and the ground is the PostgreSQL mark.
- *  3. The surface is a survey grid, not a texture — a two-tier world-space grid
- *     with screen-constant line width, fading out in the last few metres before
- *     the kerb instead of running off into nothing.
+ *  3. The surface is poured civic paving: one small runtime-generated aggregate
+ *     tile under staggered cast-panel joints, then a two-tier world-space survey
+ *     grid. Mips retire aggregate before it aliases; screen-space derivatives
+ *     keep both joint systems honest from walking range through plan view.
  *  4. Districts stand on plinths with lit rims and floor signage, so a newcomer
  *     can orient themselves before they know a single Postgres word.
  * ==========================================================================*/
@@ -75,6 +81,8 @@ uniform vec3 uSweep;
 uniform vec3 uRim;
 uniform float uTime;
 uniform float uSweepR;
+uniform sampler2D uSurface;
+uniform float uSurfaceDetail;
 uniform sampler2D uEdge;
 uniform vec4 uEdgeMap;   // x0, z0, 1/width, 1/depth of the edge field
 uniform float uEdgeMax;  // metres encoded across the signed field
@@ -131,6 +139,26 @@ void main() {
   // Keep enough surface value at the boundary to separate the poured plate
   // from the void before the practical lights are added.
   vec3 col = uBase * mix( 0.72, 1.08, smoothstep( 0.0, 230.0, edge ) );
+
+  if ( uSurfaceDetail > 0.5 ) {
+    // 4.2 × 3.1 m cast panels give a standing visitor scale. Alternate rows
+    // shift half a bay, so the paving reads as laid work instead of graph paper.
+    float row = floor( p.y / 3.1 );
+    vec2 panelP = vec2( p.x + mod( row, 2.0 ) * 2.1, p.y * ( 4.2 / 3.1 ) );
+    float dPanel;
+    float panel = gridMask( panelP, 4.2, 1.18, dPanel );
+    panel *= 1.0 - smoothstep( 0.16, 0.58, dPanel );
+    col *= 1.0 - panel * 0.115;
+  }
+  if ( uSurfaceDetail > 1.5 ) {
+    // One mipmapped lookup carries both curing variation and fine aggregate.
+    // Medium skips it: sampling over the largest surface in the framebuffer is
+    // precisely the tax that tier exists to avoid.
+    vec2 surfaceUv = mat2( 0.9239, -0.3827, 0.3827, 0.9239 ) * p / 52.0;
+    float aggregate = texture2D( uSurface, surfaceUv ).r - 0.515;
+    col *= 1.0 + aggregate * 0.24;
+  }
+
   col = mix( col, uMinor, minor * 0.9 );
   col = mix( col, uMajor, major );
   col += uSweep * sweep * ( 0.35 + 0.65 * max( minor, major ) );
@@ -442,6 +470,29 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   const ccw = ringArea2(ring) > 0
   const bounds = outlineBounds(ring)
   const edgeTex = bakeEdgeField(bounds)
+  const surfaceStarted = performance.now()
+  const surfaceTex = new THREE.DataTexture(
+    createGroundSurfaceData(),
+    GROUND_SURFACE_SIZE,
+    GROUND_SURFACE_SIZE,
+    THREE.RedFormat,
+    THREE.UnsignedByteType,
+  )
+  surfaceTex.name = 'ground.proceduralSurface'
+  surfaceTex.wrapS = THREE.RepeatWrapping
+  surfaceTex.wrapT = THREE.RepeatWrapping
+  surfaceTex.minFilter = THREE.LinearMipmapLinearFilter
+  surfaceTex.magFilter = THREE.LinearFilter
+  surfaceTex.generateMipmaps = true
+  surfaceTex.anisotropy = 4
+  surfaceTex.needsUpdate = true
+  const surfaceBootMs = performance.now() - surfaceStarted
+  group.userData.surfaceTexture = {
+    width: GROUND_SURFACE_SIZE,
+    height: GROUND_SURFACE_SIZE,
+    bytes: GROUND_SURFACE_SIZE * GROUND_SURFACE_SIZE,
+    bootMs: surfaceBootMs,
+  }
 
   const gridUniforms = THREE.UniformsUtils.merge([
     THREE.UniformsLib.fog,
@@ -453,6 +504,8 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
       uRim: { value: new THREE.Color(mixHex(0x000000, RIM_LIGHT, 0.72)) },
       uTime: { value: 0 },
       uSweepR: { value: 900 },
+      uSurface: { value: surfaceTex },
+      uSurfaceDetail: { value: 0 },
       uEdgeMax: { value: EDGE_MAX },
       uEdgeMap: {
         value: new THREE.Vector4(bounds.x0, bounds.z0, 1 / (bounds.x1 - bounds.x0), 1 / (bounds.z1 - bounds.z0)),
@@ -464,8 +517,10 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   // the texture by reference, and the fog damping so the slab shares the one
   // live object the rim materials were patched with.
   ;(gridUniforms.uEdge as { value: THREE.Texture | null }).value = edgeTex
+  ;(gridUniforms.uSurface as { value: THREE.Texture | null }).value = surfaceTex
   gridUniforms.uFogK = plateFogK
   const uTime = gridUniforms.uTime as { value: number }
+  const uSurfaceDetail = gridUniforms.uSurfaceDetail as { value: number }
 
   const plateMat = new THREE.ShaderMaterial({
     uniforms: gridUniforms,
@@ -486,7 +541,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   plate.frustumCulled = false
   group.add(plate)
 
-  // The survey grid is deliberately a custom unlit shader, so it cannot receive
+  // The paving is deliberately a custom unlit shader, so it cannot receive
   // Three's shadow chunks. A transparent ShadowMaterial over the exact same cut
   // shape contributes only the sun shadow and leaves every grid line visible.
   const dayShadowMat = new THREE.ShadowMaterial({
@@ -832,6 +887,9 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
       roughness: 0.96,
       metalness: 0,
       flatShading: true,
+      transparent: true,
+      opacity: 0.84,
+      depthWrite: false,
       polygonOffset: true,
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -1,
@@ -1072,9 +1130,15 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
    * -------------------------------------------------------------------*/
 
   let clock = 0
+  let surfaceDetail = -1
 
   function update(dt: number, _sim: SimState, _t: number): void {
     syncConeLayer()
+    const nextSurfaceDetail = groundSurfaceDetail(themeMode(), quality.level)
+    if (nextSurfaceDetail !== surfaceDetail) {
+      surfaceDetail = nextSurfaceDetail
+      uSurfaceDetail.value = surfaceDetail
+    }
     // Ambient, not simulated: the survey sweep keeps running while the
     // simulation is paused so the model never looks dead. The mast lights do
     // not move at all — they are lit windows, and lit windows hold still.
@@ -1087,6 +1151,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     for (const m of mats) m.dispose()
     // The edge field is ours alone — the theme cache never saw it.
     edgeTex.dispose()
+    surfaceTex.dispose()
     coneLayer.clear()
     group.clear()
   }
