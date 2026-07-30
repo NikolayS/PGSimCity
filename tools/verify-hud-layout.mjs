@@ -1,10 +1,15 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process'
+import { acquireCdpProfile } from './cdp-profile.mjs'
+import { createCdpRunCleanup, installProcessCleanup } from './cdp-run.mjs'
 
 const APP_URL = process.argv[2] ?? 'http://localhost:5173/'
 const PORT = Number(process.env.CDP_PORT ?? 9571)
-const PROFILE = `/tmp/pgsimcity-hud-layout-${PORT}`
+const profile = acquireCdpProfile({
+  explicitProfile: process.env.CDP_PROFILE,
+  port: PORT,
+})
 const VIEWPORTS = [
   { width: 1280, height: 760, expectedVitals: 5 },
   { width: 1024, height: 760, expectedVitals: 5 },
@@ -25,6 +30,10 @@ const LABEL_CAMERAS = [
   { name: 'max', distance: 1650 },
 ]
 const LABEL_SETTLE_MS = 9000
+const failures = []
+const measurements = []
+const run = createCdpRunCleanup({ profile })
+const removeProcessCleanup = installProcessCleanup(() => run.cleanup())
 
 const chrome = spawn(
   process.env.CHROME_BIN ?? 'google-chrome',
@@ -47,11 +56,13 @@ const chrome = spawn(
     '--disable-gpu-shader-disk-cache',
     '--renderer-process-limit=1',
     '--disable-background-networking',
-    `--user-data-dir=${PROFILE}`,
+    `--user-data-dir=${profile.path}`,
     'about:blank',
   ],
   { stdio: ['ignore', 'ignore', 'ignore'] },
 )
+run.trackChild(chrome)
+profile.setOwner(chrome.pid)
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -74,6 +85,7 @@ await new Promise((resolve, reject) => {
   socket.onopen = resolve
   socket.onerror = reject
 })
+run.trackSocket(socket)
 
 let commandId = 0
 const pending = new Map()
@@ -464,9 +476,6 @@ const labelAreaExpression = (theme, state) => `(() => {
   }
 })()`
 
-const failures = []
-const measurements = []
-
 try {
   await send('Runtime.enable')
   await send('Page.enable')
@@ -626,8 +635,8 @@ try {
     }
   }
 } finally {
-  socket.close()
-  chrome.kill()
+  await run.cleanup()
+  removeProcessCleanup()
 }
 
 console.log(JSON.stringify({ measurements, failures }, null, 2))
