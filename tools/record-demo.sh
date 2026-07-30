@@ -4,9 +4,9 @@ set -Eeuo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 url="${1:-http://127.0.0.1:5173/}"
-output="${2:-/tmp/pgsimcity-v0.20.0-walkthrough.mp4}"
+output="${2:-/tmp/pgsimcity-v0.21.0-walkthrough.mp4}"
 port="${CDP_PORT:-9780}"
-seconds="${DEMO_SECONDS:-140}"
+seconds="${DEMO_SECONDS:-147}"
 minimum_kib=$((2 * 1024 * 1024))
 
 if [[ "${output}" != /* ]]; then

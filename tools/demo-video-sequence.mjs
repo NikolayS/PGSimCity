@@ -3,17 +3,81 @@ import { once } from 'node:events'
 import { existsSync, writeFileSync } from 'node:fs'
 
 const FPS = 30
-const DEFAULT_SECONDS = 140
+const DEFAULT_SECONDS = 147
 const FRAME_MS = 1000 / FPS
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+export function measureWallProof(past, current, approach, wallPlane) {
+  const dx = current.x - past.x
+  const dz = current.z - past.z
+  const tangentX = -approach.z
+  const tangentZ = approach.x
+  return {
+    towardWallMetres: Math.max(0, dx * approach.x + dz * approach.z),
+    lateralMetres: Math.abs(dx * tangentX + dz * tangentZ),
+    wallGapMetres: Math.abs(
+      wallPlane - (current.x * approach.x + current.z * approach.z),
+    ),
+  }
+}
+
+export function fullReportProblems(report) {
+  const problems = []
+  const collisionIds = [
+    'backends',
+    'checkpointer',
+    'maintenance',
+    'standby',
+    'wal',
+    'query-lab',
+  ]
+  for (const id of collisionIds) {
+    const proof = report.collision[id]
+    if (!proof) {
+      problems.push(`${id}: no collision proof`)
+      continue
+    }
+    if (proof.totalMetres < 2) problems.push(`${id}: approach was not visible`)
+    if (proof.lastSecondTowardWallMetres > 0.03) {
+      problems.push(`${id}: still advanced into the wall`)
+    }
+    if (proof.lastSecondLateralMetres > 0.03) {
+      problems.push(`${id}: slid during the final hold`)
+    }
+    if (proof.finalWallGapMetres < 0.3 || proof.finalWallGapMetres > 0.4) {
+      problems.push(`${id}: final wall gap was ${proof.finalWallGapMetres}`)
+    }
+  }
+  if (report.labels.maxDistrictLabels > 1) {
+    problems.push(`walk mode showed ${report.labels.maxDistrictLabels} district chips`)
+  }
+  if (!report.body.visible) problems.push('first-person body was not visible')
+  if (!report.lever.approachSeen || !report.lever.operateSeen) {
+    problems.push('autovacuum approach/operate prompt was not demonstrated')
+  }
+  if (report.lever.before !== true || report.lever.after !== false) {
+    problems.push('autovacuum lever did not change on to off')
+  }
+  if (report.lever.activeAfterWait !== 0) {
+    problems.push(`autovacuum still had ${report.lever.activeAfterWait} active workers`)
+  }
+  if (!report.door.inside || !report.door.mapVisible || report.door.maxOpenness < 0.95) {
+    problems.push('postmaster door/control-center proof was incomplete')
+  }
+  const themes = new Set(report.environment.themes.map(({ mode }) => mode))
+  if (!themes.has('day') || !themes.has('night')) {
+    problems.push('day/night environment pass was incomplete')
+  }
+  return problems
+}
 
 /*
  * Runs inside the page after normal boot. The app already owns one scheduled
  * animation frame; replacing requestAnimationFrame here lets that frame enter
  * a caller-driven queue without inventing a second renderer or simulation.
  */
-function installDemo() {
+function installDemo(measureWallProof_) {
   const pg = window.PGSIMCITY
   if (!pg?.walk || !pg?.rig || !pg?.controlCenter) {
     throw new Error('PGSimCity debugging surface is incomplete')
@@ -68,7 +132,6 @@ function installDemo() {
       width: min(570px, calc(100vw - 56px));
       padding: 13px 16px 14px;
       border: 1px solid color-mix(in srgb, var(--ink) 34%, transparent);
-      border-left: 4px solid var(--c-shmem);
       background: var(--bg-panel);
       box-shadow: 0 12px 34px rgba(0, 0, 0, 0.28);
       color: var(--ink);
@@ -126,6 +189,32 @@ function installDemo() {
       opacity: 0;
       pointer-events: none;
     }
+    #pg-demo-walker {
+      position: fixed;
+      z-index: 9997;
+      width: 11px;
+      height: 11px;
+      border: 2px solid var(--ink);
+      border-radius: 50%;
+      background: var(--bg-panel);
+      box-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+    }
+    #pg-demo-walker::after {
+      content: 'WALKER';
+      position: absolute;
+      left: 15px;
+      top: -4px;
+      padding: 3px 5px;
+      border: 1px solid color-mix(in srgb, var(--ink) 30%, transparent);
+      background: var(--bg-panel);
+      color: var(--ink);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 9px;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+    }
   `
   document.head.append(style)
   document.body.classList.add('pg-demo-capture')
@@ -147,6 +236,12 @@ function installDemo() {
   const fade = document.createElement('div')
   fade.id = 'pg-demo-fade'
   document.body.append(fade)
+
+  const walkerMarker = document.createElement('div')
+  walkerMarker.id = 'pg-demo-walker'
+  walkerMarker.hidden = true
+  document.body.append(walkerMarker)
+  const witnessPoint = pg.walk.position.clone()
 
   const report = {
     fps: FPS_,
@@ -255,11 +350,20 @@ function installDemo() {
     const final = capturePose()
     const first = collisionHistory[0] ?? final
     const lastSecond = collisionHistory[Math.max(0, collisionHistory.length - FPS_)] ?? final
-    report.collision[activeCollision] = {
+    const proof = measureWallProof_(
+      lastSecond,
+      final,
+      activeCollision.approach,
+      activeCollision.wallPlane,
+    )
+    report.collision[activeCollision.id] = {
       start: first,
       final,
       totalMetres: Math.hypot(final.x - first.x, final.z - first.z),
       lastSecondMetres: Math.hypot(final.x - lastSecond.x, final.z - lastSecond.z),
+      lastSecondTowardWallMetres: proof.towardWallMetres,
+      lastSecondLateralMetres: proof.lateralMetres,
+      finalWallGapMetres: proof.wallGapMetres,
       grounded: pg.walk.grounded,
       surface: pg.walk.surface,
     }
@@ -267,17 +371,40 @@ function installDemo() {
     collisionHistory = []
   }
 
-  function startCollision(id, nextPose, title) {
+  function startCollision(id, nextPose, title, approach, wallPlane, witness) {
     finishCollision()
     ensureWalk(nextPose)
-    activeCollision = id
+    activeCollision = { id, approach, wallPlane, witness }
     collisionHistory = [capturePose()]
     setCaption(
       '01 / RUNTIME COLLISION',
       title,
-      'FORWARD INPUT HELD • measuring movement through the real walk controller',
-      'W HELD',
+      'FORWARD HELD · witness camera tracks the real walk controller',
+      'APPROACH',
     )
+  }
+
+  function frameCollisionWitness() {
+    walkerMarker.hidden = !activeCollision
+    if (!activeCollision) return
+    const camera = pg.gfx.camera
+    const { position, target } = activeCollision.witness
+    camera.position.set(position[0], position[1], position[2])
+    camera.lookAt(target[0], target[1], target[2])
+    camera.updateMatrixWorld(true)
+    witnessPoint.copy(pg.walk.position)
+    witnessPoint.y += 0.08
+    witnessPoint.project(camera)
+    walkerMarker.style.left = `${(witnessPoint.x * 0.5 + 0.5) * innerWidth}px`
+    walkerMarker.style.top = `${(-witnessPoint.y * 0.5 + 0.5) * innerHeight}px`
+  }
+
+  function frameDoorWitness() {
+    if (currentFrame < F(107) || currentFrame >= F(108.2)) return
+    const camera = pg.gfx.camera
+    camera.position.set(15, 7, -190)
+    camera.lookAt(0, 4.5, -206)
+    camera.updateMatrixWorld(true)
   }
 
   function startOrbitPath(points, lookAt, duration) {
@@ -348,80 +475,120 @@ function installDemo() {
    * its deterministic 60 fps signal while the city itself advances by 1/30 s.
    */
   const render = pg.gfx.render.bind(pg.gfx)
-  pg.gfx.render = (dt) => render(dt, 1 / 60)
-  pg.gfx.setQuality('medium')
+  pg.gfx.render = (dt) => {
+    frameCollisionWitness()
+    frameDoorWitness()
+    render(dt, 1 / 60)
+  }
+  pg.gfx.setQuality('high')
   pg.rig.home(true)
   report.environment.themes.push({ frame: 0, mode: 'day' })
-  scene(0, 6)
+  scene(0, 7)
   setCaption(
-    'PGSIMCITY · v0.20.0',
-    'RELEASE WALKTHROUGH',
-    'One fixed 1/30 s simulation step per captured frame • encoded at 30 fps',
+    'PGSIMCITY · v0.21.0',
+    'GOLDEN HOUR · RELEASE WALKTHROUGH',
+    'Low sun · long shadows · sky · fixed 1/30 s simulation steps',
     'DETERMINISTIC',
   )
   pg.rig.flyPath(
     [
       [-330, 185, -390],
-      [-235, 128, -245],
-      [-175, 92, -90],
+      [-245, 118, -245],
+      [-165, 72, -80],
     ],
     [
       [-24, 4, -42],
       [-10, 6, -72],
       [-18, 8, -20],
     ],
-    6,
+    7,
   )
 
   function beforeFrame(frame) {
     currentFrame = frame
 
-    if (frame === F(6)) {
-      scene(6, 5)
+    if (frame === F(7)) {
+      scene(7, 6)
       pg.gfx.setQuality('reduced')
       startCollision(
         'backends',
-        { x: 37.3, y: 0.02, z: -114, yaw: 0, pitch: -0.06 },
-        'BACKENDS ROW • SOUTH WALL',
+        { x: 37.3, y: 0.02, z: -115, yaw: 0, pitch: -0.06 },
+        'BACKENDS ROW · SOUTH WALL',
+        { x: 0, z: -1 },
+        123.4,
+        {
+          position: [53, 8, -105],
+          target: [37.2, 2.5, -124],
+        },
       )
-    } else if (frame === F(11)) {
-      scene(11, 5)
+    } else if (frame === F(13)) {
+      scene(13, 6)
       startCollision(
         'checkpointer',
-        { x: -172, y: 0.02, z: -40, yaw: -Math.PI / 2, pitch: -0.04 },
-        'CHECKPOINTER • WEST WALL',
+        { x: -170, y: 0.02, z: -40, yaw: -Math.PI / 2, pitch: -0.04 },
+        'CHECKPOINTER · WEST WALL',
+        { x: 1, z: 0 },
+        -161.5,
+        {
+          position: [-179, 9, -56],
+          target: [-160.5, 3.5, -39.5],
+        },
       )
-    } else if (frame === F(16)) {
-      scene(16, 5)
+    } else if (frame === F(19)) {
+      scene(19, 6)
       startCollision(
         'maintenance',
-        { x: -196, y: 0.02, z: -18, yaw: Math.PI, pitch: -0.05 },
-        'MAINTENANCE YARD • LAUNCHER WALL',
+        { x: -196, y: 0.62, z: -18, yaw: Math.PI, pitch: -0.05 },
+        'MAINTENANCE YARD · LAUNCHER WALL',
+        { x: 0, z: 1 },
+        -9,
+        {
+          position: [-215, 10, -21],
+          target: [-196, 4, -8.8],
+        },
       )
-    } else if (frame === F(21)) {
-      scene(21, 5)
+    } else if (frame === F(25)) {
+      scene(25, 6)
       startCollision(
         'standby',
-        { x: 120, y: 0.02, z: 268, yaw: Math.PI, pitch: -0.08 },
-        'STANDBY • NORTH FACE',
-      )
-    } else if (frame === F(26)) {
-      scene(26, 5)
-      startCollision(
-        'wal',
-        { x: 168, y: 0.02, z: -79, yaw: Math.PI, pitch: -0.05 },
-        'WAL DISTRICT • pg_wal DOOR',
+        { x: 120, y: 0.02, z: 267, yaw: Math.PI, pitch: -0.08 },
+        'STANDBY · NORTH FACE',
+        { x: 0, z: 1 },
+        275.5,
+        {
+          position: [99, 10, 263],
+          target: [120, 3.5, 277],
+        },
       )
     } else if (frame === F(31)) {
-      scene(31, 5)
+      scene(31, 6)
+      startCollision(
+        'wal',
+        { x: 168, y: 0.02, z: -76.5, yaw: Math.PI, pitch: -0.05 },
+        'WAL DISTRICT · pg_wal DOOR',
+        { x: 0, z: 1 },
+        -67,
+        {
+          position: [188, 10, -80],
+          target: [168, 4, -67],
+        },
+      )
+    } else if (frame === F(37)) {
+      scene(37, 6)
       startCollision(
         'query-lab',
-        { x: 0, y: 45, z: -142, yaw: 0, pitch: -0.04 },
-        'QUERY LAB • SUSPENDED SHELL',
+        { x: 0, y: 45, z: -135.5, yaw: 0, pitch: -0.04 },
+        'QUERY LAB · SUSPENDED SHELL',
+        { x: 0, z: -1 },
+        143.9,
+        {
+          position: [20, 57, -132],
+          target: [0, 47, -144],
+        },
       )
-    } else if (frame === F(36)) {
+    } else if (frame === F(43)) {
       finishCollision()
-      scene(36, 8)
+      scene(43, 8)
       pg.gfx.setQuality('reduced')
       ensureWalk({ x: 0, y: 0.02, z: -174, yaw: Math.PI, pitch: -0.03 })
       setCaption(
@@ -430,8 +597,8 @@ function installDemo() {
         'Walk mode keeps context local; turn toward the postmaster for its in-world entrance sign.',
         'ON FOOT',
       )
-    } else if (frame === F(44)) {
-      scene(44, 4)
+    } else if (frame === F(51)) {
+      scene(51, 4)
       ensureWalk({ x: 30, y: 0.02, z: -180, yaw: Math.PI, pitch: -1.05 })
       pg.walk.setTouchMove(0, 0.25)
       setCaption(
@@ -440,8 +607,8 @@ function installDemo() {
         'The body projection follows position and gait; this release does not add hands.',
         'WALKING',
       )
-    } else if (frame === F(48)) {
-      scene(48, 37)
+    } else if (frame === F(55)) {
+      scene(55, 37)
       pg.gfx.setQuality('reduced')
       ensureWalk({
         x: -126,
@@ -460,7 +627,7 @@ function installDemo() {
         'left',
         'top',
       )
-    } else if (frame === F(62)) {
+    } else if (frame === F(69)) {
       pg.walk.setTouchMove(0, 0)
       report.lever.activeBeforePull = activeWorkers()
       report.lever.promptAtPull = promptText()
@@ -476,8 +643,8 @@ function installDemo() {
         'left',
         'top',
       )
-    } else if (frame === F(63)) {
-      scene(63, 22)
+    } else if (frame === F(70)) {
+      scene(70, 22)
       ensureWalk({
         x: -176,
         y: 0.02,
@@ -485,11 +652,11 @@ function installDemo() {
         yaw: 2.39,
         pitch: -0.12,
       })
-    } else if (frame === F(84)) {
+    } else if (frame === F(91)) {
       pg.sim.setKnob('timeScale', 1)
       report.lever.activeAfterWait = activeWorkers()
-    } else if (frame === F(85)) {
-      scene(85, 5)
+    } else if (frame === F(92)) {
+      scene(92, 5)
       pg.walk.setTouchMove(0, 0)
       showConsoleGroup('Workload')
       setCaption(
@@ -499,8 +666,8 @@ function installDemo() {
         'CONSOLE',
         'right',
       )
-    } else if (frame === F(90)) {
-      scene(90, 5)
+    } else if (frame === F(97)) {
+      scene(97, 5)
       showConsoleGroup('Autovacuum')
       setCaption(
         'CONSEQUENCE PATH',
@@ -509,9 +676,9 @@ function installDemo() {
         'CONSOLE',
         'right',
       )
-    } else if (frame === F(95)) {
+    } else if (frame === F(102)) {
       closeConsole()
-      scene(95, 15)
+      scene(102, 15)
       pg.gfx.setQuality('reduced')
       ensureWalk({ x: 0, y: 0.02, z: -188, yaw: 0, pitch: -0.035 })
       pg.walk.setTouchMove(0, 0.55)
@@ -523,7 +690,7 @@ function installDemo() {
         'left',
         'top',
       )
-    } else if (frame === F(100)) {
+    } else if (frame === F(107)) {
       pg.walk.setTouchMove(0, 0)
       pressE()
       setCaption(
@@ -534,18 +701,18 @@ function installDemo() {
         'left',
         'top',
       )
-    } else if (frame === F(101.2)) {
+    } else if (frame === F(108.2)) {
       pressE()
       report.door.inside = pg.controlCenter.inside
       captionRoot.style.display = 'none'
-    } else if (frame === F(103.5) && pg.controlCenter.inside && !traceStarted) {
+    } else if (frame === F(110.5) && pg.controlCenter.inside && !traceStarted) {
       document.querySelector('.control-center__run')?.click()
       traceStarted = true
-    } else if (frame === F(110)) {
-      scene(110, 12)
+    } else if (frame === F(117)) {
+      scene(117, 12)
       pg.controlCenter.leave()
       pg.setThemeMode('day', { persist: false })
-      pg.gfx.setQuality('medium')
+      pg.gfx.setQuality('high')
       report.environment.themes.push({ frame, mode: 'day' })
       captionRoot.style.display = ''
       setCaption(
@@ -567,8 +734,8 @@ function installDemo() {
         ],
         12,
       )
-    } else if (frame === F(122)) {
-      scene(122, 18)
+    } else if (frame === F(129)) {
+      scene(129, 18)
       pg.setThemeMode('night', { persist: false })
       report.environment.themes.push({ frame, mode: 'night' })
       setCaption(
@@ -596,8 +763,8 @@ function installDemo() {
 
     if (activeCollision) pg.walk.setTouchMove(0, 0.55)
 
-    if (frame >= F(36) && frame < F(44)) {
-      const turnT = Math.max(0, Math.min(1, (frame / FPS_ - 39) / 4.5))
+    if (frame >= F(43) && frame < F(51)) {
+      const turnT = Math.max(0, Math.min(1, (frame / FPS_ - 46) / 4.5))
       const next = capturePose()
       next.yaw = Math.PI + Math.PI * turnT
       pg.walk.setPose(next)
@@ -611,14 +778,21 @@ function installDemo() {
       const current = capturePose()
       collisionHistory.push(current)
       const past = collisionHistory[Math.max(0, collisionHistory.length - FPS_)]
-      const lastMetres = Math.hypot(current.x - past.x, current.z - past.z)
+      const proof = measureWallProof_(
+        past,
+        current,
+        activeCollision.approach,
+        activeCollision.wallPlane,
+      )
+      const contact = proof.wallGapMetres <= 0.37
+      captionBadge.textContent = contact ? 'CONTACT · HELD' : 'APPROACH'
       setCaptionDetail(
-        `FORWARD INPUT HELD • last 1.0 s movement ${lastMetres.toFixed(2)} m • `
-        + `feet ${current.x.toFixed(2)}, ${current.z.toFixed(2)}`,
+        `W HELD · INTO-WALL ${proof.towardWallMetres.toFixed(2)} m / last 1.0 s · `
+        + `GAP ${proof.wallGapMetres.toFixed(2)} m · SLIDE ${proof.lateralMetres.toFixed(2)} m`,
       )
     }
 
-    if (frame >= F(36) && frame < F(44)) {
+    if (frame >= F(43) && frame < F(51)) {
       const labels = visibleLabels()
       const districts = labels.filter((node) => node.classList.contains('lbl--district'))
       report.labels.maxDistrictLabels = Math.max(report.labels.maxDistrictLabels, districts.length)
@@ -636,11 +810,11 @@ function installDemo() {
       )
     }
 
-    if (frame >= F(44) && frame < F(48)) {
+    if (frame >= F(51) && frame < F(55)) {
       report.body.visible ||= pg.gfx.scene.getObjectByName('walk:body-shadow')?.visible === true
     }
 
-    if (frame >= F(48) && frame < F(62)) {
+    if (frame >= F(55) && frame < F(69)) {
       const root = document.querySelector('.walk-up-prompt:not([hidden])')
       const range = visible(root) ? root.dataset.range : ''
       report.lever.approachSeen ||= range === 'approach'
@@ -652,14 +826,14 @@ function installDemo() {
       setCaptionDetail(
         `DISTANCE ${distance.toFixed(1)} m • ${promptText() || 'AUTOVACUUM beacon ahead'}`,
       )
-    } else if (leverPulled && frame >= F(62) && frame < F(85)) {
+    } else if (leverPulled && frame >= F(69) && frame < F(92)) {
       setCaptionDetail(
         `5× MODEL TIME • ACTIVE WORKERS ${activeWorkers()} • autovacuum = `
         + `${pg.sim.state.knobs.autovacuum ? 'on' : 'off'}`,
       )
     }
 
-    if (frame >= F(95) && frame < F(110)) {
+    if (frame >= F(102) && frame < F(117)) {
       const state = pg.controlCenter.doorState
       if (report.door.states.at(-1)?.state !== state) {
         report.door.states.push({ frame, state })
@@ -670,7 +844,7 @@ function installDemo() {
       report.door.inside ||= pg.controlCenter.inside
     }
 
-    if (frame === F(139.9)) {
+    if (frame === F(146.9)) {
       report.environment.finalQuality = pg.gfx.quality.level
     }
   }
@@ -754,7 +928,7 @@ export async function runSequence({ send, logs, output, width, height }) {
   }
 
   const installed = await send('Runtime.evaluate', {
-    expression: `(${installDemo.toString()})()`,
+    expression: `(${installDemo.toString()})(${measureWallProof.toString()})`,
     awaitPromise: true,
     returnByValue: true,
   })
@@ -822,4 +996,10 @@ export async function runSequence({ send, logs, output, width, height }) {
   console.log(`[demo] wrote ${output}`)
   console.log(`[demo] wrote ${reportPath}`)
   console.log(`[demo] report ${JSON.stringify(result.result.value)}`)
+  if (startFrame === 0 && frames >= DEFAULT_SECONDS * FPS) {
+    const problems = fullReportProblems(result.result.value)
+    if (problems.length > 0) {
+      throw new Error(`full demo verification failed:\n- ${problems.join('\n- ')}`)
+    }
+  }
 }
