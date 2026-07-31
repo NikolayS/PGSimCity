@@ -419,7 +419,16 @@ function makeExtra(): Extra {
  * createSim
  * ------------------------------------------------------------------------*/
 
-export function createSim(bus: Bus): SimApi {
+export interface SimOptions {
+  /** Aggregate probes may trade frame resolution for fewer deterministic steps. */
+  maxStep?: number
+}
+
+export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi {
+  const maxStep = options.maxStep ?? STEP_MAX
+  if (!isFinite(maxStep) || maxStep <= 0 || maxStep > STEP_MAX * MAX_STEPS) {
+    throw new Error(`invalid simulation maxStep: ${maxStep}`)
+  }
   const rng = makeRng(0xc0ffee)
   const rr = (lo: number, hi: number) => lo + (hi - lo) * rng()
 
@@ -5788,7 +5797,7 @@ export function createSim(bus: Bus): SimApi {
     const cap = STEP_MAX * MAX_STEPS
     const d = dt > cap ? cap : dt
     state.realT += d / Math.max(0.05, K.timeScale)
-    const steps = d > STEP_MAX ? Math.ceil(d / STEP_MAX) : 1
+    const steps = d > maxStep ? Math.ceil(d / maxStep) : 1
     const sd = d / steps
     for (let i = 0; i < steps; i++) step(sd)
   }

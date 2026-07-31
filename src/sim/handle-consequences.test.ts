@@ -2,10 +2,20 @@ import { describe, expect, it } from 'vitest'
 import { createBus } from '../core/bus'
 import type { SimApi, SimState, TableSim } from '../core/types'
 import { createSim } from './model'
+import { AGGREGATE_TEST_STEP, createAggregateSim } from './test-support'
 
 function step(sim: SimApi, seconds: number): void {
-  const frames = Math.ceil(seconds * 30)
-  for (let i = 0; i < frames; i++) sim.update(1 / 30)
+  const target = sim.state.t + seconds
+  while (sim.state.t < target) {
+    sim.update(Math.min(AGGREGATE_TEST_STEP, target - sim.state.t))
+  }
+}
+
+function stepUntil(sim: SimApi, done: () => boolean, seconds: number): void {
+  const deadline = sim.state.t + seconds
+  while (!done() && sim.state.t < deadline) {
+    sim.update(Math.min(AGGREGATE_TEST_STEP, deadline - sim.state.t))
+  }
 }
 
 function deadTuples(state: SimState): number {
@@ -44,14 +54,14 @@ describe('autovacuum in-world handle consequence', () => {
   })
 
   it('produces material bloat under hard writes, then launches delayed cleanup', { timeout: 20_000 }, () => {
-    const sim = createSim(createBus())
+    const sim = createAggregateSim()
     sim.setKnob('autovacuum', false)
     sim.setKnob('tps', 500)
     sim.setKnob('writeRatio', 0.8)
     sim.setKnob('updateRatio', 1)
     const runsBefore = sim.state.autovac.totalRuns
 
-    step(sim, 600)
+    stepUntil(sim, () => relation(sim.state, 'sessions').bloat > 0.1, 600)
     const deadOff = deadTuples(sim.state)
     const bloatOff = maxBloat(sim.state)
     const sessionsBloatOff = relation(sim.state, 'sessions').bloat
@@ -73,7 +83,11 @@ describe('autovacuum in-world handle consequence', () => {
     expect(sim.state.autovac.totalRuns).toBeGreaterThan(runsBefore)
     expect(maxBloat(sim.state)).toBeGreaterThanOrEqual(bloatOff)
 
-    step(sim, 870)
+    stepUntil(
+      sim,
+      () => deadTuples(sim.state) < deadOff * 0.95 && maxBloat(sim.state) < bloatOff * 0.8,
+      870,
+    )
     expect(deadTuples(sim.state)).toBeLessThan(deadOff * 0.95)
     expect(maxBloat(sim.state)).toBeLessThan(bloatOff * 0.8)
     expect(relation(sim.state, 'sessions').pages).toBeGreaterThanOrEqual(sessionsPagesOff)
