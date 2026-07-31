@@ -267,7 +267,16 @@ findings that are deliberately left must be stated in the release notes.
    the frame-starved renderer collect garbage.
 6. **Code must be wired.** An unimported subsystem is not delivered.
 7. **Geometry must be reviewed as content.** Buildings can teach a falsehood
-   more persuasively than nearby text teaches the truth.
+   more persuasively than nearby text teaches the truth. **And the inverse:
+   prose must not promise what the model cannot do.** A sentence can be perfectly
+   true of PostgreSQL and still be a lie about this app, because it sends a
+   reader looking for something that is not there. A review found the tour
+   promising join-order costing with no join node in the codebase, a plate
+   promising that stale statistics misprice plans with no path from `ANALYZE` to
+   a plan, and a scenario telling the reader to watch a latency spike when
+   `SimStats` has no latency field. For any claim about mechanism, the code that
+   implements it must exist — or the absence must be marked, the way
+   `pg_stat_statements` is marked `coverage: 'absent'`.
 8. **The dependency boundary stays small.** three.js remains the only bundled
    runtime dependency of the 3D application. PGlite is allowed only as a lazy,
    opt-in dependency of Query flow in `observability/` and `machine/`; it must
