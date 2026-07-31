@@ -9,6 +9,39 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.28.0] — 2026-07-31
+
+### The documentation says what the app does
+
+Twenty releases in a day, and the docs had drifted. `CLAUDE.md` warns about
+exactly this and records that it has been caught three times before.
+
+**The worst was a claim about the project's own premise.** The README said "no
+PostgreSQL source code runs here" — true when it was written, false once the
+Machine shipped PGlite. The 3D city is still a model and no PostgreSQL runs in
+it; the Machine and the opt-in Query flow run a real PostgreSQL compiled to
+WebAssembly. That distinction is now made rather than flattened, in the README
+and in `CLAUDE.md`'s own dependency rules.
+
+Also corrected: a single standby described where there are now two independent
+ones, a screenshot caption describing the pre-golden-hour look, and a fixed test
+count that had been stale for eighteen releases. **Counts in prose go stale by
+construction**, so that claim no longer carries a number.
+
+### A test that drives each documented instruction
+
+The durable fix the roadmap has asked for since the first time this happened.
+It exercises every district key, the touch Walk button, all 33 rendered knob
+controls, the README's scenario walkthroughs, and the Machine's key routing.
+Changing documented walk from `G` to `X` makes it fail.
+
+**What it cannot prove is written down beside it**: real-device touch, pointer
+lock, audible sound under browser autoplay policy, whether a consequence looks
+semantically right, and whether the prose is true about PostgreSQL. Those still
+need eyes, and a green suite should not be mistaken for them.
+
+---
+
 ## [0.27.0] — 2026-07-31
 
 ### Swimming that feels like swimming
