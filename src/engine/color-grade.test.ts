@@ -4,8 +4,10 @@ import { DAY_PALETTE } from '../core/themes'
 import {
   GOLDEN_HOUR_GRADE,
   gradeDaylightHex,
+  gradeDaylightHexWithScatter,
   perceptualColorDistance,
 } from './color-grade'
+import { LIGHT_SHAFT_COLOR, LIGHT_SHAFT_PRESETS } from './light-shafts'
 
 const SEMANTIC = [
   'wal',
@@ -32,6 +34,28 @@ describe('golden-hour colour grade', () => {
 
   it('keeps every semantic colour identifiable from all nine neighbours after grading', () => {
     const graded = SEMANTIC.map((key) => [key, gradeDaylightHex(DAY_PALETTE[key])] as const)
+    expect(new Set(graded.map(([, hex]) => hex)).size).toBe(SEMANTIC.length)
+
+    for (let i = 0; i < graded.length; i++) {
+      for (let j = i + 1; j < graded.length; j++) {
+        const distance = perceptualColorDistance(graded[i][1], graded[j][1])
+        expect(distance, `${graded[i][0]} vs ${graded[j][0]}`).toBeGreaterThan(0.045)
+      }
+    }
+  })
+
+  it('keeps every semantic colour identifiable inside the strongest shaft', () => {
+    const graded = SEMANTIC.map(
+      (key) =>
+        [
+          key,
+          gradeDaylightHexWithScatter(
+            DAY_PALETTE[key],
+            LIGHT_SHAFT_COLOR,
+            LIGHT_SHAFT_PRESETS.ultra.strength,
+          ),
+        ] as const,
+    )
     expect(new Set(graded.map(([, hex]) => hex)).size).toBe(SEMANTIC.length)
 
     for (let i = 0; i < graded.length; i++) {
