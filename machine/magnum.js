@@ -1921,7 +1921,7 @@ function drawStatementReceipt() {
     return
   }
   mono(
-    `HIT ${receipt.sharedHits}  ·  READ ${receipt.sharedReads}  ·  PLAN ${receipt.planningTimeMs.toFixed(3)} ms  ·  EXEC ${receipt.executionTimeMs.toFixed(3)} ms  ·  ROWS ${receipt.rows}`,
+    `HIT ${receipt.sharedHits}  ·  READ ${receipt.sharedReads}  ·  PLAN ${receipt.planningTimeMs.toFixed(3)} ms  ·  EXEC ${receipt.executionTimeMs.toFixed(3)} ms  ·  ${receipt.rowLabel} ${receipt.rows}`,
     box.x + 14,
     box.y + 61,
     8,
@@ -2137,7 +2137,7 @@ function updatePostgresUi() {
     terminalState.textContent = 'BOOTING'
   } else if (postgres.status === 'querying') {
     postgresToggle.textContent = 'POSTGRESQL (P) · BUSY'
-    postgresStatus.textContent = 'REAL QUERY + EXPLAIN (ANALYZE, BUFFERS)'
+    postgresStatus.textContent = 'ONE ANALYZED EXECUTION · DISPLAY CAPTURED FROM IT'
     terminalState.textContent = 'BUSY'
   } else if (postgres.status === 'failed') {
     postgresToggle.textContent = 'POSTGRESQL (P) · RETRY'

@@ -7,8 +7,8 @@ import type {
   TraceRecord,
   TraceStop,
 } from '../core/types'
+import { traceStopBit } from '../core/model-helpers'
 import { fmtBytes } from '../core/util'
-import { traceStopBit } from '../sim/model'
 import { sqlFor } from '../sim/model'
 import { TRACE_COPY } from '../ui/trace-copy'
 import { el, setClass, setText } from '../ui/uikit'
@@ -177,7 +177,7 @@ export type FlowLinkState =
     }
 
 const QUERY_KINDS = new Set<QueryKind>(FLOW_CHOICES.map((choice) => choice.kind))
-const SYNC_VALUES = new Set<SyncCommit>(['off', 'local', 'on', 'remote_apply'])
+const SYNC_VALUES = new Set<SyncCommit>(['off', 'local', 'remote_write', 'on', 'remote_apply'])
 const DEFAULT_FLOW_STATE: FlowLinkState = {
   statement: 'update',
   setting: 'synchronous_commit',
@@ -310,7 +310,7 @@ type FlowBaseline = Pick<
 >
 
 const BUFFER_OPTIONS = [32, 128, 512, 2048, 8192] as const
-const SYNC_OPTIONS: readonly SyncCommit[] = ['on', 'off', 'local', 'remote_apply']
+const SYNC_OPTIONS: readonly SyncCommit[] = ['on', 'off', 'local', 'remote_write', 'remote_apply']
 
 const flowTableIndex = (choice: FlowChoice): number =>
   TABLES.findIndex((table) => table.id === choice.tableId)
@@ -1022,7 +1022,7 @@ export function createFlow2dView(
       el('h1', { text: 'See the entire query lifecycle without moving a camera.' }),
       el('p', {
         class: 'lede',
-        text: 'Real PostgreSQL can supply parsing, plans, catalogs, buffer counters and results. The TypeScript model supplies the otherwise invisible interior: buffers, WAL insertion, fsync and eviction. Every figure below names its source.',
+        text: 'Real PostgreSQL executes free-text SQL and supplies plans, catalogs, buffer counters and results. EXPLAIN does not time parsing or rewriting. The TypeScript model supplies the otherwise invisible interior: buffers, WAL insertion, fsync and eviction. Every figure below names its source.',
       }),
       sql,
     ),

@@ -88,8 +88,6 @@ const READOUT_MOVES = new Set([
   'shared.buffers',
 ])
 
-export const VACUOUS_SHARED_BUFFER_ASSERTIONS: readonly string[] = []
-
 function metricContract(key: string): Contract {
   if (METRIC_MOVES.has(key)) return 'moves-with: sharedBuffers'
   if (METRIC_INVARIANTS.has(key)) return 'invariant-under: sharedBuffers'
@@ -174,20 +172,397 @@ function makeSnapshots(
   }
 }
 
-function hardValue(key: keyof Knobs): Knobs[keyof Knobs] {
-  const meta = KNOB_META.find((candidate) => candidate.key === key)
-  if (!meta) throw new Error(`missing knob metadata for ${key}`)
-  const current = DEFAULT_KNOBS[key]
-  if (meta.kind === 'toggle') return !current
-  if (meta.kind === 'select') {
-    const option = meta.options?.find((candidate) => candidate.value !== current)
-    if (!option) throw new Error(`no alternate option for ${key}`)
-    return option.value as Knobs[keyof Knobs]
-  }
-  if (meta.max !== undefined && meta.max !== current) return meta.max
-  if (meta.min !== undefined) return meta.min
-  throw new Error(`no hard step for ${key}`)
+type Sim = ReturnType<typeof createSim>
+
+interface ResponseContract {
+  target: Knobs[keyof Knobs]
+  measure(value: never): unknown
 }
+
+function advance(sim: Sim, seconds: number): void {
+  const target = sim.state.t + seconds
+  while (sim.state.t < target) sim.update(Math.min(1 / 15, target - sim.state.t))
+}
+
+function advanceUntil(sim: Sim, done: () => boolean, limit = 360): void {
+  const deadline = sim.state.t + limit
+  while (!done() && sim.state.t < deadline) sim.update(1 / 15)
+  if (!done()) throw new Error(`condition was not reached within ${limit}s`)
+}
+
+function setWorkload(sim: Sim, tps = 2_000): void {
+  sim.setKnob('tps', tps)
+  sim.setKnob('writeRatio', 1)
+  sim.setKnob('synchronousCommit', 'local')
+}
+
+function takeBackup(sim: Sim): void {
+  if (!sim.startBaseBackup()) throw new Error('base backup did not start')
+  advanceUntil(sim, () => sim.state.disasterRecovery.backup.status === 'idle')
+}
+
+function failedOver(value: boolean, key: 'walLogHints' | 'oldPrimaryDataIntact' | 'rewindWalRetained'): Sim {
+  const sim = createSim(createBus())
+  sim.setKnob('standbyBEnabled', false)
+  setWorkload(sim)
+  if (key === 'walLogHints') sim.setKnob(key, value)
+  sim.setKnob('replicaNetworkLag', 400)
+  advance(sim, 35)
+  if (!sim.startFailover('standbyA')) throw new Error('failover did not start')
+  advanceUntil(sim, () => sim.state.highAvailability.transition.status === 'complete', 60)
+  if (key !== 'walLogHints') sim.setKnob(key, value)
+  return sim
+}
+
+const RESPONSE_CONTRACTS = {
+  tps: {
+    target: 5_000,
+    measure(value: number) {
+      const sim = createSim(createBus())
+      sim.setKnob('tps', value)
+      advance(sim, 20)
+      return sim.state.stats.commits
+    },
+  },
+  writeRatio: {
+    target: 1,
+    measure(value: number) {
+      const sim = createSim(createBus())
+      sim.setKnob('tps', 1_000)
+      sim.setKnob('writeRatio', value)
+      advance(sim, 20)
+      return sim.state.wal.insertLsn
+    },
+  },
+  updateRatio: {
+    target: 1,
+    measure(value: number) {
+      const sim = createSim(createBus())
+      setWorkload(sim, 1_000)
+      sim.setKnob('updateRatio', value)
+      advance(sim, 20)
+      return sim.state.stats.tupUpdated + sim.state.stats.tupDeleted
+    },
+  },
+  seqScanRatio: {
+    target: 1,
+    measure(value: number) {
+      const sim = createSim(createBus())
+      sim.setKnob('tps', 1_000)
+      sim.setKnob('writeRatio', 0)
+      sim.setKnob('seqScanRatio', value)
+      advance(sim, 20)
+      return sim.state.tables.reduce((total, table) => total + table.seqScans, 0)
+    },
+  },
+  sharedBuffers: {
+    target: 64 * 1_024,
+    measure(value: number) {
+      const sim = createSim(createBus())
+      sim.setKnob('sharedBuffers', value)
+      return sim.state.buffers.sampleFrames
+    },
+  },
+  checkpointTimeout: {
+    target: 15,
+    measure(value: number) {
+      const sim = createSim(createBus())
+      sim.setKnob('maxWalSize', 2_048)
+      sim.setKnob('checkpointTimeout', value)
+      advance(sim, 40)
+      return sim.state.checkpoint.count
+    },
+  },
+  checkpointCompletionTarget: {
+    target: 0.1,
+    measure(value: number) {
+      const sim = createSim(createBus())
+      setWorkload(sim, 5_000)
+      sim.setKnob('checkpointTimeout', 15)
+      sim.setKnob('maxWalSize', 2_048)
+      sim.setKnob('checkpointCompletionTarget', value)
+      advanceUntil(sim, () => sim.state.checkpoint.phase === 'writing', 25)
+      advance(sim, 2)
+      return sim.state.checkpoint.buffersWritten
+    },
+  },
+  maxWalSize: {
+    target: 2_048,
+    measure(value: number) {
+      const sim = createSim(createBus())
+      setWorkload(sim, 5_000)
+      sim.setKnob('checkpointTimeout', 600)
+      sim.setKnob('maxWalSize', value)
+      advance(sim, 75)
+      return sim.state.checkpoint.count
+    },
+  },
+  bgwriterEnabled: {
+    target: false,
+    measure(value: boolean) {
+      const sim = createSim(createBus())
+      sim.setKnob('bgwriterEnabled', value)
+      return sim.state.bgwriter.enabled
+    },
+  },
+  bgwriterLruMaxpages: {
+    target: 0,
+    measure(value: number) {
+      const sim = createSim(createBus())
+      setWorkload(sim, 5_000)
+      sim.setKnob('sharedBuffers', 128)
+      sim.setKnob('bgwriterLruMaxpages', value)
+      advance(sim, 30)
+      return sim.state.bgwriter.cleanedTotal
+    },
+  },
+  synchronousCommit: {
+    target: 'off',
+    measure(value: Knobs['synchronousCommit']) {
+      const sim = createSim(createBus())
+      sim.setKnob('tps', 1_000)
+      sim.setKnob('writeRatio', 1)
+      sim.setKnob('replicaNetworkLag', 400)
+      sim.setKnob('synchronousCommit', value)
+      advance(sim, 20)
+      return sim.state.stats.commits
+    },
+  },
+  synchronousStandbyNames: {
+    target: false,
+    measure(value: boolean) {
+      const sim = createSim(createBus())
+      sim.setKnob('synchronousStandbyNames', value)
+      advance(sim, 1)
+      return sim.state.replication.standbys[0].mode
+    },
+  },
+  walLevel: {
+    target: 'minimal',
+    measure(value: Knobs['walLevel']) {
+      const sim = createSim(createBus())
+      sim.setKnob('walLevel', value)
+      advance(sim, 1)
+      return sim.state.replication.standbys.map((standby) => standby.connected)
+    },
+  },
+  fullPageWrites: {
+    target: false,
+    measure(value: boolean) {
+      const sim = createSim(createBus())
+      setWorkload(sim, 2_000)
+      sim.setKnob('fullPageWrites', value)
+      advance(sim, 30)
+      return sim.state.wal.insertLsn
+    },
+  },
+  autovacuum: {
+    target: false,
+    measure(value: boolean) {
+      const sim = createSim(createBus())
+      sim.setKnob('autovacuum', value)
+      return sim.state.autovac.enabled
+    },
+  },
+  autovacuumScaleFactor: {
+    target: 0.5,
+    measure(value: number) {
+      const sim = createSim(createBus())
+      sim.setKnob('autovacuumScaleFactor', value)
+      advance(sim, 1)
+      return sim.state.tables.map((table) => table.vacuumThreshold)
+    },
+  },
+  longRunningXact: {
+    target: true,
+    measure(value: boolean) {
+      const sim = createSim(createBus())
+      sim.setKnob('longRunningXact', value)
+      advance(sim, 12)
+      return sim.state.oldestSnapshotAge
+    },
+  },
+  lockContention: {
+    target: true,
+    measure(value: boolean) {
+      const sim = createSim(createBus())
+      sim.setKnob('tps', 1_000)
+      sim.setKnob('lockContention', value)
+      advance(sim, 12)
+      return sim.state.locks.length
+    },
+  },
+  replicaEnabled: {
+    target: false,
+    measure(value: boolean) {
+      const sim = createSim(createBus())
+      sim.setKnob('replicaEnabled', value)
+      advance(sim, 1)
+      return sim.state.replication.standbys[0].connected
+    },
+  },
+  replicaNetworkLag: {
+    target: 400,
+    measure(value: number) {
+      const sim = createSim(createBus())
+      sim.setKnob('replicaNetworkLag', value)
+      advance(sim, 1)
+      return sim.state.replication.standbys[0].networkLagMs
+    },
+  },
+  replicaSlowApply: {
+    target: true,
+    measure(value: boolean) {
+      const sim = createSim(createBus())
+      setWorkload(sim)
+      sim.setKnob('replicaSlowApply', value)
+      advance(sim, 35)
+      return sim.state.replication.standbys[0].lagBytes
+    },
+  },
+  standbyBEnabled: {
+    target: false,
+    measure(value: boolean) {
+      const sim = createSim(createBus())
+      sim.setKnob('standbyBEnabled', value)
+      advance(sim, 1)
+      return sim.state.replication.standbys[1].connected
+    },
+  },
+  standbyBNetworkLag: {
+    target: 400,
+    measure(value: number) {
+      const sim = createSim(createBus())
+      sim.setKnob('standbyBNetworkLag', value)
+      advance(sim, 1)
+      return sim.state.replication.standbys[1].networkLagMs
+    },
+  },
+  standbyBSlowApply: {
+    target: true,
+    measure(value: boolean) {
+      const sim = createSim(createBus())
+      setWorkload(sim)
+      sim.setKnob('standbyBSlowApply', value)
+      advance(sim, 35)
+      return sim.state.replication.standbys[1].lagBytes
+    },
+  },
+  standbyLongQuery: {
+    target: true,
+    measure(value: boolean) {
+      const sim = createSim(createBus())
+      sim.setKnob('standbyLongQuery', value)
+      advance(sim, 12)
+      return sim.state.oldestSnapshotAge
+    },
+  },
+  walGArchiveCredentialsValid: {
+    target: false,
+    measure(value: boolean) {
+      const sim = createSim(createBus())
+      setWorkload(sim, 5_000)
+      sim.setKnob('walGArchiveCredentialsValid', value)
+      advance(sim, 60)
+      return sim.state.disasterRecovery.archive.failedAttempts
+    },
+  },
+  walGDownloadConcurrency: {
+    target: 1,
+    measure(value: number) {
+      const sim = createSim(createBus())
+      setWorkload(sim, 1_600)
+      takeBackup(sim)
+      advance(sim, 24)
+      advanceUntil(
+        sim,
+        () => sim.state.disasterRecovery.archive.archivedThroughTime >= sim.state.t - 2,
+        180,
+      )
+      sim.setKnob('walGDownloadConcurrency', value)
+      if (!sim.startPointInTimeRestore(2)) throw new Error('point-in-time restore did not start')
+      advance(sim, 1)
+      return sim.state.disasterRecovery.restore.backupBytesFetched
+    },
+  },
+  backupRetention: {
+    target: 1,
+    measure(value: number) {
+      const sim = createSim(createBus())
+      sim.setKnob('backupRetention', value)
+      takeBackup(sim)
+      advance(sim, 8)
+      takeBackup(sim)
+      return sim.state.disasterRecovery.backups.length
+    },
+  },
+  recoveryTargetAge: {
+    target: 300,
+    measure(value: number) {
+      const sim = createSim(createBus())
+      setWorkload(sim, 1_600)
+      takeBackup(sim)
+      advance(sim, 60)
+      advanceUntil(
+        sim,
+        () => sim.state.disasterRecovery.archive.archivedThroughTime >= sim.state.t - 2,
+        180,
+      )
+      sim.setKnob('recoveryTargetAge', value)
+      return sim.startPointInTimeRestore()
+    },
+  },
+  haPartition: {
+    target: 'isolate_node',
+    measure(value: Knobs['haPartition']) {
+      const sim = createSim(createBus())
+      sim.setKnob('haPartition', value)
+      return sim.state.highAvailability.patroni.agents.map((agent) => agent.reachableDcsMembers)
+    },
+  },
+  walLogHints: {
+    target: false,
+    measure(value: boolean) {
+      return failedOver(value, 'walLogHints').state.highAvailability.rejoin.blockChangeTrackingAvailable
+    },
+  },
+  oldPrimaryDataIntact: {
+    target: false,
+    measure(value: boolean) {
+      const sim = failedOver(value, 'oldPrimaryDataIntact')
+      if (!sim.startPgRewind()) throw new Error('pg_rewind did not start')
+      advanceUntil(sim, () => ['complete', 'failed'].includes(sim.state.highAvailability.rejoin.status))
+      return sim.state.highAvailability.rejoin.status
+    },
+  },
+  rewindWalRetained: {
+    target: false,
+    measure(value: boolean) {
+      const sim = failedOver(value, 'rewindWalRetained')
+      if (!sim.startPgRewind()) throw new Error('pg_rewind did not start')
+      advanceUntil(sim, () => ['complete', 'failed'].includes(sim.state.highAvailability.rejoin.status))
+      return sim.state.highAvailability.rejoin.status
+    },
+  },
+  timeScale: {
+    target: 5,
+    measure(value: number) {
+      const sim = createSim(createBus())
+      sim.setKnob('timeScale', value)
+      sim.update(0.5)
+      return sim.state.realT
+    },
+  },
+  paused: {
+    target: true,
+    measure(value: boolean) {
+      const sim = createSim(createBus())
+      sim.setKnob('paused', value)
+      sim.update(0.5)
+      return sim.state.t
+    },
+  },
+} satisfies Record<keyof Knobs, ResponseContract>
 
 describe('knob-response contract', () => {
   const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document')
@@ -244,9 +619,8 @@ describe('knob-response contract', () => {
 
     snapshots.set('sharedBuffers:base', makeSnapshots(defs, 'sharedBuffers', 128))
     snapshots.set('sharedBuffers:target', makeSnapshots(defs, 'sharedBuffers', 1024))
-    for (const key of Object.keys(DEFAULT_KNOBS) as (keyof Knobs)[]) {
-      snapshots.set(`hard:${key}`, makeSnapshots(defs, key, hardValue(key)))
-    }
+    snapshots.set('hard:replicaEnabled', makeSnapshots(defs, 'replicaEnabled', false))
+    snapshots.set('hard:walLevel', makeSnapshots(defs, 'walLevel', 'minimal'))
   }, 30_000)
 
   afterAll(() => {
@@ -256,17 +630,15 @@ describe('knob-response contract', () => {
     else Reflect.deleteProperty(globalThis, 'document')
   })
 
-  it('hard-steps every knob and snapshots every metric and readout', () => {
+  it('makes every knob change a declared model output', () => {
     expect(new Set(KNOB_META.map((meta) => meta.key))).toEqual(new Set(Object.keys(DEFAULT_KNOBS)))
     for (const key of Object.keys(DEFAULT_KNOBS) as (keyof Knobs)[]) {
-      const snapshot = snapshots.get(`hard:${key}`)
-      expect(snapshot, `${key} was not stepped`).toBeDefined()
-      expect(snapshot!.metrics.size).toBeGreaterThan(200)
-      expect(snapshot!.readouts.size).toBeGreaterThan(100)
-      expect([...snapshot!.metrics.values()].every((value) => typeof value === 'string')).toBe(true)
-      expect([...snapshot!.readouts.values()].every((value) => typeof value === 'string')).toBe(true)
+      const contract = RESPONSE_CONTRACTS[key]
+      const before = contract.measure(DEFAULT_KNOBS[key] as never)
+      const after = contract.measure(contract.target as never)
+      expect(after, `${key} did not change its declared model output`).not.toEqual(before)
     }
-  })
+  }, 30_000)
 
   it('enforces every declared shared_buffers response', () => {
     const base = snapshots.get('sharedBuffers:base')!
@@ -296,12 +668,15 @@ describe('knob-response contract', () => {
   it('requires every pool-size metric to move when shared_buffers moves 8x', () => {
     const base = snapshots.get('sharedBuffers:base')!
     const target = snapshots.get('sharedBuffers:target')!
+    let inspected = 0
     for (const [key, before] of base.metrics) {
       const label = key.slice(key.indexOf('::') + 2)
       if (!/\bpool\b/i.test(label) && label !== 'shared_buffers') continue
+      inspected++
       expect(metricContract(key), `${key} needs a moves-with declaration`).toBe('moves-with: sharedBuffers')
       expect(target.metrics.get(key), `${key} must move with sharedBuffers`).not.toBe(before)
     }
+    expect(inspected).toBeGreaterThan(0)
   })
 
   it('exercises real sample travel across the 8x pool step', () => {
@@ -312,7 +687,6 @@ describe('knob-response contract', () => {
     expect(target.buffers.sampleFrames).toBeLessThan(N_BUFFERS)
     expect(base.buffers.usedCount).not.toBe(target.buffers.usedCount)
     expect(base.buffers.dirtyCount).not.toBe(target.buffers.dirtyCount)
-    expect(VACUOUS_SHARED_BUFFER_ASSERTIONS).toEqual([])
   })
 
   it('does not advertise standby reads when replication is unavailable', () => {

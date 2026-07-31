@@ -4,8 +4,8 @@ import type { TraceStop } from '../core/types'
 import { fmtBytes } from '../core/util'
 import type { FlowsApi } from '../engine/flows'
 import type { WalkController, WalkPose } from '../engine/walk'
-import { traceStopBit } from '../sim/model'
-import { PRESENTED_TRACE_STAGES, traceStageState } from '../sim/trace-presentation'
+import { traceStopBit } from '../core/model-helpers'
+import { PRESENTED_TRACE_STAGES, traceStageState } from '../core/trace-presentation'
 import {
   ANCHOR,
   TABLES,
@@ -302,7 +302,7 @@ export function createControlCenter(options: ControlCenterOptions): ControlCente
     autocomplete: 'off',
     autocapitalize: 'off',
     value: 'SELECT * FROM accounts WHERE id = 42',
-    'aria-label': 'SQL statement to model',
+    'aria-label': 'SQL-shaped model route selector',
   })
   const promptError = el('p', {
     class: 'control-center__prompt-error',
@@ -317,7 +317,11 @@ export function createControlCenter(options: ControlCenterOptions): ControlCente
   const form = el(
     'form',
     { class: 'control-center__prompt' },
-    el('label', {}, el('span', { text: 'pgsimcity=> ' }), sqlInput),
+    el('label', {}, el('span', { text: 'model-route=> ' }), sqlInput),
+    el('p', {
+      class: 'control-center__prompt-note',
+      text: 'SQL-SHAPED ROUTE SELECTOR · MATCHES OPERATION + CITY TABLE ONLY · NOT PARSED OR NAME-RESOLVED',
+    }),
     el('div', { class: 'control-center__prompt-actions' }, runButton),
     promptError,
   )

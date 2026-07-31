@@ -3,7 +3,7 @@ import { TABLES } from '../world/layout'
 export {
   PRESENTED_TRACE_STAGES as CONTROL_TRACE_STAGES,
   traceStageState,
-} from '../sim/trace-presentation'
+} from '../core/trace-presentation'
 
 export interface ModelStatement {
   kind: QueryKind

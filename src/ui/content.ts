@@ -165,6 +165,7 @@ export const KNOB_META: KnobMeta[] = [
     options: [
       { value: 'off', label: 'off — fast, can lose commits' },
       { value: 'local', label: 'local — fsync here only' },
+      { value: 'remote_write', label: 'remote_write — standby wrote it' },
       { value: 'on', label: 'on — fsync before ack' },
       { value: 'remote_apply', label: 'remote_apply — standby applied it' },
     ],

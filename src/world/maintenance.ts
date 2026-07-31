@@ -3,7 +3,7 @@ import { COLOR, mixHex } from '../core/theme'
 import { N_BACKEND_SLOTS, N_BUFFERS, N_VAC_WORKERS } from '../core/types'
 import type { SimState, VacPhase, WorldContext, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, damp, fmtDuration, fmtNum, fmtPct, lerp, makeRng, smoothstep } from '../core/util'
-import { walTriggerBytes } from '../sim/model'
+import { walTriggerBytes } from '../core/model-helpers'
 import {
   ANCHOR, CITY, N_TABLES, TABLES,
   rid, routePoint, routeTangent, vacBayPos,

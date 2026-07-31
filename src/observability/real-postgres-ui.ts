@@ -4,7 +4,7 @@ import type {
   TraceRecord,
   TraceStop,
 } from '../core/types'
-import { traceStopBit } from '../sim/model'
+import { traceStopBit } from '../core/model-helpers'
 import { el, setText } from '../ui/uikit'
 import {
   cityRelationForPlan,
@@ -308,7 +308,7 @@ export function createRealPostgresConsole(
         'header',
         {},
         sourceBadge('postgres', 'POSTGRES · MEASURED'),
-        el('span', { text: 'parse · plan · buffers · result' }),
+        el('span', { text: 'plan · buffers · result' }),
       ),
       el(
         'div',
@@ -342,7 +342,7 @@ export function createRealPostgresConsole(
     ),
     el('p', {
       class: 'pg-plan-disclosure',
-      text: 'PostgreSQL’s plan and buffer counts come from EXPLAIN ANALYZE in a rolled-back preflight; the SQL then runs for its real result. The model uses that plan to choose the closest interior route. Its buffer, WAL, fsync, eviction and timing values remain simulated.',
+      text: 'PostgreSQL executes each submitted statement once. For statements that can be captured, EXPLAIN ANALYZE drives that execution and a temporary table supplies its displayed rows; Execution Time includes that capture overhead. EXPLAIN Planning Time excludes parsing and rewriting. The model uses the resulting plan to choose the closest interior route; its buffer, WAL, fsync, eviction and timing values remain simulated.',
     }),
   )
 
@@ -399,7 +399,7 @@ export function createRealPostgresConsole(
       setText(modeBadge, 'POSTGRES MODE · ACTIVE')
       setText(
         modeText,
-        'Real PostgreSQL now supplies parsing, plans, catalogs, buffer counters and results. The animated interior remains the model.',
+        'Real PostgreSQL now executes the SQL and supplies catalogs and results. EXPLAIN ANALYZE measures planning, execution and buffer counters; parsing and rewriting are not timed. The animated interior remains the model.',
       )
       loadProgress.classList.remove('is-active')
       setText(

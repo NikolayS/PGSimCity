@@ -70,6 +70,7 @@ describe('machine room viewing speed', () => {
       planningTimeMs: 0.35,
       executionTimeMs: 1.8,
       rows: 1,
+      rowLabel: 'RESULT ROWS',
       planNode: 'Index Scan',
     })
   })

@@ -2,8 +2,8 @@ import * as THREE from 'three'
 
 import type { SimState, TraceStop, WorldContext, WorldModule } from '../core/types'
 import { easeInOutCubic } from '../core/util'
-import { traceStopBit } from '../sim/model'
-import { traceStageState } from '../sim/trace-presentation'
+import { traceStopBit } from '../core/model-helpers'
+import { traceStageState } from '../core/trace-presentation'
 import { ANCHOR } from './layout'
 import { CONTROL_TRACE_ROUTES } from './control-center-plan'
 

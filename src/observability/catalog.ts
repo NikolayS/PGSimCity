@@ -105,7 +105,7 @@ export const CATALOG: CatalogEntry[] = [
     kind: 'view',
     since: 8.1,
     subsystem: 'storage',
-    what: 'Per-table access and maintenance counters. Where bloat becomes visible.',
+    what: 'Per-table access and maintenance counters, including estimated live/dead row counts—not physical bloat.',
     columns: [
       'relid', 'schemaname', 'relname', 'seq_scan', 'last_seq_scan', 'seq_tup_read',
       'idx_scan', 'last_idx_scan', 'idx_tup_fetch', 'n_tup_ins', 'n_tup_upd', 'n_tup_del',
@@ -118,7 +118,7 @@ export const CATALOG: CatalogEntry[] = [
     docs: `${M}#MONITORING-PG-STAT-ALL-TABLES-VIEW`,
     coverage: 'partial',
     coverageNote:
-      'The model tracks five tables with real seq_scan, idx_scan, n_tup_ins/upd/del, n_tup_hot_upd, n_live_tup, n_dead_tup and last_autovacuum. It never ANALYZEs, so the analyze columns stay blank.',
+      'The model tracks five tables with seq_scan, idx_scan, n_tup_ins/upd/del, n_tup_hot_upd, n_live_tup, n_dead_tup and last_autovacuum. Its tuple counts are exact model state; PostgreSQL labels n_live_tup and n_dead_tup as estimates. The model never ANALYZEs, so the analyze columns stay blank.',
     version:
       'last_seq_scan, last_idx_scan and n_tup_newpage_upd arrived in 16. The four total_*_time columns arrived in 18.',
     projection: 'tables',
@@ -181,7 +181,7 @@ export const CATALOG: CatalogEntry[] = [
     kind: 'view',
     since: 16,
     subsystem: 'buffers',
-    what: 'I/O broken down by who did it. The view that names the process hurting you.',
+    what: 'Cluster-wide I/O grouped by backend type, object and context; it does not name a PID, relation or query.',
     columns: [
       'backend_type', 'object', 'context', 'reads', 'read_bytes', 'read_time', 'writes',
       'write_bytes', 'write_time', 'writebacks', 'writeback_time', 'extends',
@@ -289,7 +289,7 @@ export const CATALOG: CatalogEntry[] = [
     coverageNote:
       'The city\'s 1,024 buffer tiles are a representative sample of the model\'s logical pool. isdirty and usagecount come from those sampled frames, not from a claim that the whole pool is only 1,024 pages.',
     version:
-      'pg_buffercache_summary() and pg_buffercache_usage_counts() arrived in 16 and are far cheaper than scanning the view — the view takes a lock on every buffer header. Do not run it in a loop on a large pool.',
+      'pg_buffercache_summary() and pg_buffercache_usage_counts() arrived in 16 and are cheaper than scanning the full view. These readers do not acquire buffer-manager locks, so values can be slightly inconsistent while buffers change concurrently.',
     projection: 'buffercache',
     city: 'shared.buffers',
   },

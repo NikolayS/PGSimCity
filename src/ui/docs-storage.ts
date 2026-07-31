@@ -1382,7 +1382,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Random versus sequential',
-        body: 'Sequential scans read big contiguous runs and get the full bandwidth of the device; index access jumps around and pays per-operation latency instead. The planner encodes that as `seq_page_cost = 1.0` against `random_page_cost = 4.0`, a ratio calibrated for spinning disks with a bit of caching. On NVMe the real ratio is far closer to 1, and lowering `random_page_cost` to something like 1.1 is one of the very few cost constants worth adjusting — it makes the planner stop avoiding index scans it should be choosing.',
+        body: 'Sequential scans often benefit from contiguous access and read-ahead, while index access can pay more per operation. The planner represents that distinction with relative estimates: `seq_page_cost` defaults to 1.0 and `random_page_cost` to 4.0. The latter also incorporates an assumption that many random reads are cached; it is not a direct benchmark of one device class. If sound row estimates still produce the wrong access paths, compare representative plans and timings for the real workload and cache residency, then calibrate the page, CPU and cache assumptions together. An SSD or NVMe label alone does not prescribe a truthful constant.',
       },
       {
         heading: 'Torn pages',
@@ -1870,7 +1870,9 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         get: (s) => {
           if (s.knobs.synchronousCommit === 'off') return 'none — the commit does not wait at all'
           if (
-            (s.knobs.synchronousCommit === 'on' || s.knobs.synchronousCommit === 'remote_apply')
+            (s.knobs.synchronousCommit === 'remote_write'
+              || s.knobs.synchronousCommit === 'on'
+              || s.knobs.synchronousCommit === 'remote_apply')
             && s.knobs.synchronousStandbyNames
           ) {
             return synchronousStandby(s).connected

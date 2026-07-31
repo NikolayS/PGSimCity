@@ -66,4 +66,96 @@ describe('PostgreSQL 18 content corrections', () => {
     const replication = CATALOG.find((entry) => entry.id === 'pg_stat_replication')!
     expect(replication.columns.at(-1)).toBe('reply_time')
   })
+
+  it('treats dead-tuple statistics as pressure estimates, not measured bloat', () => {
+    const first = ALL_STEPS.find((step) => step.id === 'bloat.1')!
+    const noBloat = ALL_VERDICTS.find((verdict) => verdict.id === 'v.no_bloat')!
+    const tableCatalog = CATALOG.find((entry) => entry.id === 'pg_stat_all_tables')!
+
+    expect(`${first.why} ${first.look}`).toMatch(/estimated/i)
+    expect(first.sql).toContain('pg_total_relation_size')
+    expect(first.look).toContain('pgstattuple')
+    expect(noBloat.title).not.toMatch(/not bloated/i)
+    expect(tableCatalog.what).not.toMatch(/bloat becomes visible/i)
+  })
+
+  it('never converts the pg_stat_wal FPI count into a byte share', () => {
+    const wal = ALL_STEPS.find((step) => step.id === 'stall.2')!
+    const storm = ALL_VERDICTS.find((verdict) => verdict.id === 'v.ckpt_storm')!
+    const copy = `${wal.look} ${wal.note} ${storm.because} ${storm.mechanism}`
+
+    expect(copy).toContain('cannot be converted')
+    expect(copy).toContain('wal_compression')
+    expect(storm.evidence({} as never, {
+      total: { ckptTimed: 0, ckptRequested: 0, walFpi: 12 },
+      rate: { walFpi: 3, walBytes: 4096 },
+    } as never).map((item) => item.label)).not.toContain('full-page images')
+  })
+
+  it('keeps aggregate and per-backend I/O attribution distinct', () => {
+    const io = ALL_STEPS.find((step) => step.id === 'io.1')!
+    const verdict = ALL_VERDICTS.find((entry) => entry.id === 'v.backend_writes')!
+    const catalog = CATALOG.find((entry) => entry.id === 'pg_stat_io')!
+
+    expect(`${io.why} ${io.look} ${io.note}`).toContain('backend type')
+    expect(io.note).toContain('pg_stat_get_backend_io(pid)')
+    expect(io.look).not.toContain('only writes a page when')
+    expect(verdict.because).not.toContain('exactly one situation')
+    expect(catalog.what).not.toMatch(/names the process/i)
+  })
+
+  it('shows waited locks separately from blocker activity', () => {
+    const locks = ALL_STEPS.find((step) => step.id === 'lock.1')!
+
+    expect(locks.sql).toContain('waited_mode')
+    expect(locks.sql).toContain('blocker_query')
+    expect(locks.sql).not.toContain('OR l.pid IN')
+    expect(locks.look).toContain('does not claim which of the blocker’s locks conflicts')
+  })
+
+  it('does not infer pool size from a usage-count histogram', () => {
+    const cache = ALL_STEPS.find((step) => step.id === 'io.2')!
+    const churn = ALL_VERDICTS.find((verdict) => verdict.id === 'v.small_pool')!
+
+    expect(cache.look).toContain('cannot distinguish')
+    expect(cache.note).toContain('do not acquire buffer-manager locks')
+    expect(churn.title).not.toContain('too small')
+    expect(churn.fix).toContain('one-pass')
+  })
+
+  it('checks every documented xmin-horizon source before tuning vacuum', () => {
+    const horizon = ALL_STEPS.find((step) => step.id === 'bloat.2')!
+
+    expect(horizon.sql).toContain('backend_xid IS NOT NULL')
+    expect(horizon.sql).toContain('pg_prepared_xacts')
+    expect(horizon.sql).toContain('pg_replication_slots')
+    expect(horizon.sql).toContain('pg_stat_replication')
+    expect(horizon.look).not.toContain('**is** the horizon')
+    expect(horizon.note).toContain('READ COMMITTED')
+  })
+
+  it('separates raw parsing from analysis locks and avoids planner-cost recipes', () => {
+    const parser = DOCS_MEMORY.find((doc) => doc.id === 'planner.parser')!
+    const planner = DOCS_MEMORY.find((doc) => doc.id === 'planner.planner')!
+    const planTree = DOCS_MEMORY.find((doc) => doc.id === 'planner.plantree')!
+    const parserCopy = parser.sections.map((section) => section.body).join('\n')
+    const plannerCopy = planner.sections.map((section) => section.body).join('\n')
+    const planTreeCopy = planTree.sections.map((section) => section.body).join('\n')
+
+    expect(parserCopy).toContain('Raw parsing alone')
+    expect(parserCopy).not.toContain('merely *parsed*')
+    expect(plannerCopy).toContain('cache assumptions')
+    expect(plannerCopy).toContain('representative workload')
+    expect(plannerCopy).not.toMatch(/spinning disk|single most valuable|1\.1 and 2\.0/i)
+    expect(planTreeCopy).toContain('cannot safely isolate')
+    expect(planTreeCopy).not.toContain('subtract to see what a node cost')
+  })
+
+  it('does not repeat the planner-cost recipe on the storage surface', () => {
+    const storage = DOCS_STORAGE.find((doc) => doc.id === 'disk.array')!
+    const copy = storage.sections.map((section) => section.body).join('\n')
+
+    expect(copy).toContain('workload and cache residency')
+    expect(copy).not.toMatch(/calibrated for spinning disks|something like 1\.1/i)
+  })
 })

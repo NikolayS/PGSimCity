@@ -152,6 +152,8 @@ describe('control-center room hand-off', () => {
     const input = document.querySelector('.control-center__sql-input') as HTMLTextAreaElement
     input.value = 'UPDATE sessions SET updated_at = now() WHERE id = 7'
     const form = document.querySelector('.control-center__prompt') as HTMLFormElement
+    expect(form.textContent).toContain('SQL-SHAPED ROUTE SELECTOR')
+    expect(form.textContent).toContain('NOT PARSED OR NAME-RESOLVED')
     form.dispatchEvent(new Event('submit'))
     for (let tick = 0; tick < 900; tick++) {
       sim.update(1 / 30)

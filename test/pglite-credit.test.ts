@@ -84,4 +84,28 @@ describe('PGlite credit', () => {
 
     console.dispose()
   })
+
+  it('does not present parsing or rewriting as EXPLAIN measurements', () => {
+    installTestDom()
+    const console = createRealPostgresConsole(createSim(createBus()))
+    const measured = console.root.querySelector('.pg-source-panel.source-postgres')
+
+    expect(measured?.textContent).toContain('plan · buffers · result')
+    expect(measured?.textContent).not.toMatch(/parse|rewrite/i)
+    expect(console.root.textContent).toContain(
+      'EXPLAIN Planning Time excludes parsing and rewriting',
+    )
+
+    console.dispose()
+  })
+
+  it('states the limits of the in-browser PostgreSQL runtime', () => {
+    const terminal = machine.match(/<section class="terminal"[\s\S]*?<\/section>/)?.[0] ?? ''
+    const copy = normalize(terminal)
+
+    expect(copy).toContain('IN-MEMORY, SINGLE-CONNECTION RUNTIME')
+    expect(copy).toContain('NO CONCURRENCY, LOCK CONTENTION, REPLICATION, STANDBY, OR REAL DEVICE I/O')
+    expect(copy).toContain('EACH SUBMITTED STATEMENT EXECUTES ONCE')
+    expect(copy).toContain('DISPLAYED ROWS COME FROM THAT EXECUTION')
+  })
 })

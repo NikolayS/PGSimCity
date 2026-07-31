@@ -1,7 +1,12 @@
 import * as THREE from 'three'
+import { N_TABLES, TABLES } from '../core/catalog'
+import { rid } from '../core/route-ids'
 import { COLOR } from '../core/theme'
 import { N_BACKEND_SLOTS, N_VAC_WORKERS, N_WAL_SEG_SLOTS, BUF_GRID } from '../core/types'
-import type { RouteDef, TableDef } from '../core/types'
+import type { RouteDef } from '../core/types'
+
+export { N_TABLES, TABLES } from '../core/catalog'
+export { rid } from '../core/route-ids'
 
 /* ============================================================================
  * THE CITY PLAN
@@ -339,85 +344,6 @@ export function bufferTilePos(idx: number): [number, number, number] {
 }
 
 /* --------------------------------------------------------------------------
- * The data. Five relations, chosen so every storage lesson has a home:
- *   accounts   — HOT updates, the pgbench classic
- *   orders     — normal OLTP, two indexes
- *   events     — append-only, never bloats
- *   sessions   — update-everything, bloats fast (the autovacuum demo)
- *   documents  — wide rows → TOAST, plus a GIN index
- * ------------------------------------------------------------------------*/
-
-export const TABLES: TableDef[] = [
-  {
-    id: 'accounts',
-    name: 'accounts',
-    blurb: 'Balances updated in place. Most updates are HOT, so indexes stay quiet.',
-    pages: 217088,
-    tuplesPerPage: 60,
-    weight: 3,
-    hotFriendly: 0.85,
-    color: COLOR.storage,
-    indexes: [{ id: 'accounts_pkey', name: 'accounts_pkey', kind: 'btree', pages: 26816 }],
-  },
-  {
-    id: 'orders',
-    name: 'orders',
-    blurb: 'Classic OLTP table: inserts plus status updates, read through two indexes.',
-    pages: 150336,
-    tuplesPerPage: 45,
-    weight: 2.4,
-    hotFriendly: 0.35,
-    color: COLOR.backend,
-    indexes: [
-      { id: 'orders_pkey', name: 'orders_pkey', kind: 'btree', pages: 20032 },
-      { id: 'orders_cust_idx', name: 'orders_customer_id_idx', kind: 'btree', pages: 15872 },
-    ],
-  },
-  {
-    id: 'events',
-    name: 'events',
-    blurb: 'Append-only log. Nothing is ever updated, so autovacuum only freezes it.',
-    pages: 434304,
-    tuplesPerPage: 90,
-    weight: 1.6,
-    hotFriendly: 1,
-    color: COLOR.wal,
-    indexes: [{ id: 'events_ts_idx', name: 'events_created_at_idx', kind: 'btree', pages: 35072 }],
-  },
-  {
-    id: 'sessions',
-    name: 'sessions',
-    blurb: 'Small and rewritten constantly — the table that teaches you about bloat.',
-    pages: 35072,
-    tuplesPerPage: 70,
-    weight: 2.8,
-    hotFriendly: 0.15,
-    color: COLOR.checkpoint,
-    indexes: [
-      { id: 'sessions_pkey', name: 'sessions_pkey', kind: 'btree', pages: 4992 },
-      { id: 'sessions_exp_idx', name: 'sessions_expires_idx', kind: 'btree', pages: 4608 },
-    ],
-  },
-  {
-    id: 'documents',
-    name: 'documents',
-    blurb: 'Wide rows: big values are pushed out to TOAST and searched with GIN.',
-    pages: 75136,
-    tuplesPerPage: 12,
-    weight: 1.1,
-    hotFriendly: 0.4,
-    color: COLOR.vacuum,
-    toast: true,
-    indexes: [
-      { id: 'documents_pkey', name: 'documents_pkey', kind: 'btree', pages: 7552 },
-      { id: 'documents_gin', name: 'documents_body_gin', kind: 'gin', pages: 21696 },
-    ],
-  },
-]
-
-export const N_TABLES = TABLES.length
-
-/* --------------------------------------------------------------------------
  * ROUTES — the road network.
  *
  * Every animated packet in the city travels along one of these. Districts emit
@@ -460,24 +386,6 @@ route('conn.in', [
 ], { color: COLOR.client, speed: 70, visible: true, roadOpacity: 0.14, size: 1.4 })
 
 /* --- per-backend routes -------------------------------------------------- */
-
-export const rid = {
-  fork: (i: number) => `fork.${i}`,
-  query: (i: number) => `query.${i}`,
-  result: (i: number) => `result.${i}`,
-  bufReq: (i: number) => `buf.req.${i}`,
-  bufRet: (i: number) => `buf.ret.${i}`,
-  walIns: (i: number) => `wal.ins.${i}`,
-  lockWait: (i: number) => `lock.wait.${i}`,
-  ioRead: (t: number) => `io.read.${t}`,
-  ioReadCache: (t: number) => `io.read.cache.${t}`,
-  ioWrite: (t: number) => `io.write.${t}`,
-  vacGo: (t: number) => `vac.go.${t}`,
-  vacBack: (t: number) => `vac.back.${t}`,
-  vacIdx: (t: number) => `vac.idx.${t}`,
-  fsmReturn: (t: number) => `fsm.return.${t}`,
-  idxLookup: (t: number) => `idx.lookup.${t}`,
-} as const
 
 for (let i = 0; i < N_BACKEND_SLOTS; i++) {
   const bx = backendX(i)

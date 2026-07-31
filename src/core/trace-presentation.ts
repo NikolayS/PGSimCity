@@ -1,5 +1,5 @@
-import type { TraceRecord, TraceStop } from '../core/types'
-import { traceStopBit } from './model'
+import { traceStopBit } from './model-helpers'
+import type { TraceRecord, TraceStop } from './types'
 
 export type TraceStageState = 'wait' | 'now' | 'done' | 'skip'
 

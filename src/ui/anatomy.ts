@@ -1256,13 +1256,6 @@ function computeSnapshot(ctx: UiContext, tableIndex: number): PageSnapshot {
   const linePointers = clamp(Math.round(capacity * density), 1, capacity)
   const pointerBytes = linePointers * ITEM_ID_BYTES
 
-  // TableDef.tuplesPerPage is intentionally rough. Reserve 10% breathing room
-  // so the representative page can teach pd_lower/pd_upper even at baseline.
-  const tupleBytesEach = Math.max(TUPLE_HEADER_BYTES + 1, Math.floor(((PAGE_BYTES - PAGE_HEADER_BYTES - capacity * ITEM_ID_BYTES) * 0.9) / capacity))
-  const tupleBytes = Math.min(PAGE_BYTES - PAGE_HEADER_BYTES - pointerBytes, tupleBytesEach * linePointers)
-  const pdLower = PAGE_HEADER_BYTES + pointerBytes
-  const pdUpper = PAGE_BYTES - tupleBytes
-  const freeBytes = Math.max(0, pdUpper - pdLower)
   const deadFraction = clamp(table.bloat, 0, 1)
   const deadTuples = Math.min(linePointers, Math.round(linePointers * deadFraction))
   const deadPointers = Math.min(deadTuples, Math.round(deadTuples * 0.72))
@@ -1270,6 +1263,15 @@ function computeSnapshot(ctx: UiContext, tableIndex: number): PageSnapshot {
   const redirectPointers = Math.min(linePointers - deadPointers, hotShare > 0.01 ? Math.max(1, Math.round(linePointers * Math.min(0.04, hotShare * 0.08))) : 0)
   const unusedPointers = Math.min(linePointers - deadPointers - redirectPointers, density < 0.94 ? Math.max(1, Math.round(linePointers * (1 - density) * 0.3)) : 0)
   const normalPointers = Math.max(0, linePointers - deadPointers - redirectPointers - unusedPointers)
+  const bodyPointers = normalPointers + deadPointers
+
+  // TableDef.tuplesPerPage is intentionally rough. Reserve 10% breathing room
+  // so the representative page can teach pd_lower/pd_upper even at baseline.
+  const tupleBytesEach = Math.max(TUPLE_HEADER_BYTES + 1, Math.floor(((PAGE_BYTES - PAGE_HEADER_BYTES - capacity * ITEM_ID_BYTES) * 0.9) / capacity))
+  const tupleBytes = Math.min(PAGE_BYTES - PAGE_HEADER_BYTES - pointerBytes, tupleBytesEach * bodyPointers)
+  const pdLower = PAGE_HEADER_BYTES + pointerBytes
+  const pdUpper = PAGE_BYTES - tupleBytes
+  const freeBytes = Math.max(0, pdUpper - pdLower)
   const allVisible = table.deadTuples < 0.5 && table.heat < 0.08 && !table.vacuuming
 
   return {
@@ -1287,7 +1289,7 @@ function computeSnapshot(ctx: UiContext, tableIndex: number): PageSnapshot {
     redirectPointers,
     unusedPointers,
     normalPointers,
-    deadTuples,
+    deadTuples: deadPointers,
     allVisible,
     tupleBytesEach,
   }
@@ -1477,7 +1479,7 @@ export function createAnatomy(ctx: UiContext): UiModule {
       ),
     )
 
-    const tupleCount = snapshot.linePointers
+    const tupleCount = snapshot.normalPointers + snapshot.deadPointers
     const deadCount = snapshot.deadTuples
     page.tupleRegion.replaceChildren(
       ...Array.from({ length: tupleCount }, (_, i) => {
@@ -1493,7 +1495,7 @@ export function createAnatomy(ctx: UiContext): UiModule {
 
     setText(
       page.pointerSummary,
-      `${snapshot.linePointers} slots · ${snapshot.normalPointers} normal · ${snapshot.deadPointers} dead`,
+      `${snapshot.linePointers} slots · ${snapshot.normalPointers} normal · ${snapshot.redirectPointers} redirect · ${snapshot.deadPointers} dead · ${snapshot.unusedPointers} unused`,
     )
   }
 
@@ -1750,11 +1752,11 @@ export function createAnatomy(ctx: UiContext): UiModule {
     )
     setText(
       page.tupleValues.t_infomask2,
-      version.nextHot
-        ? 'natts 6 · HOT_UPDATED'
-        : version.hot
-          ? 'natts 6 · HEAP_ONLY_TUPLE'
-          : 'natts 6',
+      [
+        'natts 6',
+        version.nextHot ? 'HEAP_HOT_UPDATED' : '',
+        version.hot ? 'HEAP_ONLY_TUPLE' : '',
+      ].filter(Boolean).join(' · '),
     )
     setText(
       page.tupleValues.t_infomask,
@@ -1765,7 +1767,7 @@ export function createAnatomy(ctx: UiContext): UiModule {
     setText(page.tupleValues.t_hoff, '24 · MAXALIGN')
     setText(page.tupleValues.null_bitmap, '111110 · 6 attrs')
     setText(page.tupleValues.user_data, `same row · revision ${version.revision}`)
-    setText(page.chain.index, `index → TID (${version.block},${version.offset})`)
+    setText(page.chain.index, `index → TID (${version.indexBlock},${version.indexOffset})`)
     setText(page.chain.old, `v${version.revision} · t_ctid`)
     setText(
       page.chain.newest,

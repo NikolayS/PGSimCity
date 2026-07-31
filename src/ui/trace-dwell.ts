@@ -1,5 +1,5 @@
 import type { TraceRecord, TraceStop } from '../core/types'
-import { traceStopBit } from '../sim/model'
+import { traceStopBit } from '../core/model-helpers'
 
 export const MIN_DWELL_S = 2.4
 
