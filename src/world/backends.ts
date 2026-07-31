@@ -549,7 +549,7 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
   ctx.register({
     id: 'backend.row',
     name: 'Backends',
-    role: 'one process per connection',
+    role: 'one modeled slot per connection · no process or memory cost',
     kind: 'process',
     district: 'backends',
     object: group,
@@ -565,7 +565,7 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
     ctx.register({
       id: `backend.${slot}`,
       name: `backend ${slot}`,
-      role: `pid ${PID[slot]} — a whole OS process, private memory and all`,
+      role: `display pid ${PID[slot]} · activity slot, not an OS process model`,
       kind: 'process',
       district: 'backends',
       object: towerObjects[slot],
@@ -576,7 +576,7 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
       readout: (s) => {
         const b = s.backends[slot]
         if (!b || !b.active) return `pid ${PID[slot]} · free slot`
-        return `pid ${PID[slot]} · ${b.state} · ${fmtDuration(b.stateT)} · ${short(b.sql)}`
+        return `pid ${PID[slot]} · ${b.state} · ${fmtDuration(b.stateT)} model phase · ${short(b.sql)}`
       },
     })
   }
@@ -584,7 +584,7 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
   ctx.register({
     id: 'backend.localmem',
     name: 'Private memory ×16',
-    role: 'one work_mem / maintenance_work_mem / temp_buffers arena inside each backend',
+    role: 'illustrative private arenas · no modeled work_mem',
     kind: 'memory',
     district: 'backends',
     object: privateMemory,
@@ -592,7 +592,7 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
     focus: { target: [XS[7] + MEM_X_OFF, MEM_BASE_Y + memoryH[7] * 0.5, MEM_Z], distance: 38, dir: [0.35, 0.3, 1] },
     labelAt: [XS[7] + MEM_X_OFF, MEM_BASE_Y + memoryH[7] + 3, MEM_Z],
     color: COLOR.vacuum,
-    readout: () => `${N} private arenas · ${sorting} sorting · temp files ${fmtBytes(tempBytes)}`,
+    readout: () => `${N} illustrative arenas · ${sorting} sorting · no modeled work_mem or temp bytes`,
   })
 
   /* =======================================================================

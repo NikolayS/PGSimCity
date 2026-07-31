@@ -910,7 +910,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   ctx.register({
     id: 'object.store',
     name: 'object storage',
-    role: 'the S3 bucket: WAL-G writes archived WAL and base-backup objects here',
+    role: 'modeled backup/WAL objects and byte counts · no S3 API or files',
     kind: 'storage',
     district: 'wal',
     object: gStore,
@@ -925,7 +925,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   ctx.register({
     id: 'backup.vault',
     name: 'WAL-G base-backup objects',
-    role: 'backup-push objects in S3 — the only thing archived WAL can be replayed onto',
+    role: 'modeled backup metadata and bytes · no copied relation files',
     kind: 'storage',
     district: 'wal',
     object: gVault,
@@ -944,7 +944,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   ctx.register({
     id: 'recovery.ground',
     name: 'the recovery ground',
-    role: 'a whole other cluster, built back out of the archive',
+    role: 'aggregate restore and promotion state · no restored rows or pages',
     kind: 'storage',
     district: 'world',
     object: gRecovery,
@@ -984,7 +984,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   ctx.register({
     id: 'restore.winch',
     name: 'restore_command',
-    role: 'ordered PostgreSQL replay supplied by WAL-G wal-fetch and prefetch',
+    role: 'ordered byte-progress model at a fixed teaching rate',
     kind: 'process',
     district: 'world',
     object: gWinch,
@@ -1001,7 +1001,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   ctx.register({
     id: 'recovery.replay',
     name: 'the replay belt',
-    role: 'the startup process, replaying, with a line painted across it',
+    role: 'replay-progress illustration · no WAL-record or page application',
     kind: 'process',
     district: 'world',
     object: gReplay,
@@ -1056,7 +1056,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   ctx.register({
     id: 'ha.rejoin',
     name: 'rewind or reinitialise bay',
-    role: 'repairs every data directory that is ahead of the new timeline fork',
+    role: 'modeled prerequisite checks and byte-copy progress · no block repair',
     kind: 'concept',
     district: 'replication',
     object: gRejoin,
@@ -1084,7 +1084,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   ctx.register({
     id: 'standby.b',
     name: 'standby_b',
-    role: 'independent physical standby and failover candidate',
+    role: 'independent LSN and HA state · no replica rows or pages',
     kind: 'storage',
     district: 'replication',
     object: gStandbyB,
@@ -1108,7 +1108,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   ctx.register({
     id: 'standby.b.receiver',
     name: 'standby_b walreceiver',
-    role: 'receives one physical WAL stream into standby_b’s own pg_wal',
+    role: 'advances standby_b receive and write LSNs · no files',
     kind: 'process',
     district: 'replication',
     object: gBReceiver,
@@ -1127,7 +1127,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   ctx.register({
     id: 'standby.b.wal',
     name: 'standby_b write-ahead log',
-    role: 'standby_b’s own received and flushed WAL files',
+    role: 'aggregate WAL positions and bytes · no segment files',
     kind: 'storage',
     district: 'replication',
     object: gBWal,
@@ -1144,7 +1144,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   ctx.register({
     id: 'standby.b.startup',
     name: 'standby_b startup process',
-    role: 'applies standby_b’s flushed WAL in order',
+    role: 'advances one ordered applied-LSN frontier',
     kind: 'process',
     district: 'replication',
     object: gBStartup,
@@ -1178,7 +1178,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   ctx.register({
     id: 'standby.b.storage',
     name: 'standby_b data directory',
-    role: 'standby_b’s own data files, current only through applied LSN',
+    role: 'aggregate size and applied LSN · no copied files or pages',
     kind: 'storage',
     district: 'replication',
     object: gBStorage,

@@ -87,7 +87,7 @@ const STEPS: TourStep[] = [
     id: 'connect',
     title: 'A client connects',
     body:
-      'Everything starts with a TCP connection. The postmaster has listened since server boot: it accepts the socket and starts a child process, then steps out of the client path. The child reads the startup packet, checks the requested database and `pg_hba.conf`, authenticates the user, and becomes the dedicated backend. Watch the pulse leave the tower and land in the row of buildings ahead.',
+      'Everything starts with a TCP connection. On PostgreSQL the postmaster accepts the socket, starts a child process, and leaves the client path while that child handles startup and authentication. The city starts one modeled backend and uses the pulse to stand in for that whole exchange; authentication itself is not simulated. Watch the pulse leave the tower and land in the row of buildings ahead.',
     focus: 'client.pool',
     duration: 16,
     knobs: { tps: 140, writeRatio: 0.3, updateRatio: 0.6, seqScanRatio: 0.15, timeScale: 1, paused: false },
@@ -97,7 +97,7 @@ const STEPS: TourStep[] = [
     id: 'backend',
     title: 'One process per connection',
     body:
-      'That fork is a whole operating-system process, and it is yours alone until you disconnect. It gets private memory for sorting and hashing, plus a window onto the shared memory every other backend can see. This is why an idle connection is never free, and why every large deployment eventually puts a pooler in front of the database. Watch the colour of each block — it tells you what that process is waiting for, and most of the time it is waiting.',
+      'On PostgreSQL that fork is a whole operating-system process with private memory and a mapping of the shared segment. The city models one occupied slot and activity phase per connection; it does not allocate process memory, charge scheduler or ProcArray costs, or model work_mem. Watch the colour of each block — it tells you the modeled phase or wait.',
     focus: 'backend.row',
     duration: 16,
   },
@@ -105,7 +105,7 @@ const STEPS: TourStep[] = [
     id: 'plan',
     title: 'The query becomes a plan',
     body:
-      'Your SQL says what you want, never how to fetch it. The text is parsed into a tree, views and rules are expanded, and then the planner prices every strategy it can think of — this index, that join order, a full sweep of the table — using statistics about the data rather than the data itself. Watch the plan tree assemble above the lab: the shape it settles on is the difference between reading four pages and reading four thousand.',
+      'PostgreSQL normally parses SQL, expands rules and views, and costs competing paths. This city does not run those algorithms: one of six fixed single-table statement kinds selects a plan template, with no joins, statistics-driven estimates, or cost-driven choice. Watch that model plan template assemble above the lab and then drive the page-access animation.',
     focus: 'planner.planner',
     duration: 16,
     look: [[10, 'planner.plantree']],
@@ -144,16 +144,16 @@ const STEPS: TourStep[] = [
     id: 'commit',
     title: 'Commit, and what fsync costs',
     body:
-      'A durable commit does not wait for data pages; it waits for the WAL record describing the change to be flushed. We have set `synchronous_commit` to off, so PostgreSQL may acknowledge commits before that flush. Watch the queue at the WAL writer drain: that is the latency you bought, and the last fraction of a second of acknowledged transactions you agreed could be lost after a PostgreSQL server crash, operating-system crash or power failure. Recovery remains consistent; it may be older than the client acknowledgements.',
+      'A durable commit does not wait for data pages; it waits for the WAL record describing the change to be flushed. We have set `synchronous_commit` to off, so PostgreSQL may acknowledge commits before that flush. In the city, watch modeled `commit_wait` occupancy and the deliberately stretched model duration fall; it is not a production latency measurement. The real trade is that the last fraction of a second of acknowledged transactions may be lost after a PostgreSQL server crash, operating-system crash or power failure.',
     focus: 'walwriter',
     duration: 20,
     knobs: { synchronousCommit: 'off', tps: 600, writeRatio: 0.7 },
   },
   {
     id: 'checkpoint',
-    title: 'Checkpoints, and the spike',
+    title: 'Checkpoints, WAL and I/O',
     body:
-      'The WAL cannot grow forever, so the checkpointer periodically walks the whole buffer pool and writes every page that was dirty when it began down to storage — after which no WAL older than the point that checkpoint started from is needed to recover. We have deliberately made the WAL ceiling (max_wal_size) tiny, so checkpoints now fire back to back. Watch two things: the pink flood down into the pit, and the amber surge that starts with each checkpoint, because the first change to any page after the checkpoint began puts the entire page into the WAL. That loop is what your users feel as random latency spikes.',
+      'The WAL cannot grow forever, so the checkpointer periodically walks the buffer pool and writes the pages that were dirty when it began. We have deliberately made the WAL ceiling (`max_wal_size`) tiny, so modeled checkpoints now fire back to back. Watch the pink checkpoint writes and the amber full-page-image surge; those are the effects this city computes. PostgreSQL can turn this pressure into query-latency spikes, but the city has no latency series and does not display that outcome.',
     focus: 'checkpointer',
     duration: 22,
     scenario: 'checkpoint-storm',
@@ -192,7 +192,7 @@ const STEPS: TourStep[] = [
     id: 'stream',
     title: 'Streaming to a standby',
     body:
-      'The same write-ahead log that makes a commit durable keeps each standby alive. Follow standby A: its walsender reads the WAL as it is written and pushes it down one TCP connection, where one startup process replays it into an identical copy of every page. Standby B has an independent connection and replay process. Nothing about your SQL crosses either wire — only the physical changes it produced. Watch a record leave the vault, cross the first gap, and land.',
+      'The same write-ahead log that makes a commit durable feeds PostgreSQL standbys. The city tracks independent sent, written, flushed and replayed LSNs for two nodes and animates records along their routes; it does not keep a second copy of table rows or pages. Watch standby A’s modeled record leave the vault, cross the wire, and advance its replay frontier.',
     focus: 'walsender',
     duration: 20,
     knobs: { replicaEnabled: true, walLevel: 'replica', replicaSlowApply: false, replicaNetworkLag: 30 },
@@ -214,7 +214,7 @@ const STEPS: TourStep[] = [
     id: 'city',
     title: 'The whole city again',
     body:
-      'That is the core query and maintenance loop. Fork a process, plan the query, pull pages into memory, write the change into the WAL before the changed page reaches disk, flush that WAL to keep the promise, write the pages out later, collect dead versions, and ship the same WAL to two standby copies. The wider city also models backup, archive, recovery, failover, and operator decisions. The console on the left drives the model — break something, and watch which street goes quiet.',
+      'That is the core query and maintenance loop. Occupy a backend slot, select a fixed plan template, pull sampled pages into memory, write WAL before dirty data pages, flush that WAL, write pages later, collect modeled dead-version counts, and advance two standby LSN pipelines. The wider city also models backup, archive, recovery, failover, and operator decisions. The console on the left drives the model — break something, and watch which measured counter or route changes.',
     focus: 'world.ground',
     duration: 18,
     scenario: null,

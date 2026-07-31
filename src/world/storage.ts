@@ -1246,7 +1246,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
   ctx.register({
     id: 'storage.datadir',
     name: 'Data directory',
-    role: 'base/, pg_wal/, and friends',
+    role: 'aggregate heap-page projection · no filesystem or relation forks',
     kind: 'storage',
     district: 'storage',
     object: dirGroup,
@@ -1254,13 +1254,13 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     color: COLOR.storage,
     focus: { target: [0, FLOOR_Y + 6, -20], distance: 250, dir: [0.26, 0.62, 0.74] },
     labelAt: [0, FLOOR_Y + 4, 62],
-    readout: (s) => `${fmtNum(totalPages(s))} pages · ${fmtBytes(totalPages(s) * 8192)} in ${s.tables.length} relations`,
+    readout: (s) => `${fmtNum(totalPages(s))} aggregate pages · ${fmtBytes(totalPages(s) * 8192)} in ${s.tables.length} modeled tables`,
   })
 
   ctx.register({
     id: 'storage.tempfiles',
     name: 'base/pgsql_tmp',
-    role: 'shared on-volume bay for private backend temp files',
+    role: 'illustrative temp-file bay · no modeled spill I/O',
     kind: 'storage',
     district: 'storage',
     object: tempBayGroup,
@@ -1268,7 +1268,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     color: COLOR.vacuum,
     focus: { target: [0, FLOOR_Y + 2, -89], distance: 150, dir: [0.1, 0.55, -0.83] },
     labelAt: [0, FLOOR_Y + 5, -89],
-    readout: () => '16 private spill runs · one base/pgsql_tmp bay · inside the data directory',
+    readout: () => 'illustrative spill routes · no modeled work_mem, temp bytes, or spill cost',
   })
 
   for (let ti = 0; ti < N_TABLES; ti++) {
@@ -1277,7 +1277,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     ctx.register({
       id: `storage.table.${def.id}`,
       name: def.name,
-      role: 'heap file — 8 KiB pages of row versions',
+      role: 'aggregate page and row-version counts · no page layout',
       kind: 'storage',
       district: 'storage',
       object: tableGroups[ti],
@@ -1299,7 +1299,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     ctx.register({
       id: `storage.index.${it.id}`,
       name: it.name,
-      role: it.gin ? 'GIN index — entry B-tree feeding posting lists of ctids' : 'B-tree index — root, internals, linked leaves',
+      role: it.gin ? 'illustrative GIN shape · kind is cosmetic in the model' : 'illustrative B-tree shape · aggregate index state only',
       kind: 'storage',
       district: 'storage',
       object: it.group,
@@ -1315,10 +1315,10 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
       labelAt: [it.x, ROOT_Y + 3, it.z],
       readout: (sim) => {
         const t = sim.tables[it.table]
-        return `${fmtNum(liveIndexPages(sim, it))} pages · ${fmtNum(t.idxScans)} scans · ${fmtPct(
+        return `${fmtNum(liveIndexPages(sim, it))} display pages · ${fmtNum(t.idxScans)} table-level index scans · ${fmtPct(
           clamp01(t.bloat * 1.2),
           0,
-        )} dead pointers`
+        )} derived pointer illustration`
       },
     })
   }
@@ -1326,7 +1326,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
   ctx.register({
     id: 'storage.toast',
     name: 'pg_toast',
-    role: 'oversized values, sliced and stored out of line',
+    role: 'illustrative TOAST route · no modeled chunk storage',
     kind: 'storage',
     district: 'storage',
     object: toastGroup,
@@ -1334,7 +1334,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     color: COLOR.toast,
     focus: { target: [ANCHOR.toastYard[0], FLOOR_Y + 8, ANCHOR.toastYard[2]], distance: 56, dir: [-0.1, 0.5, 0.86] },
     labelAt: [ANCHOR.toastYard[0], FLOOR_Y + 18, ANCHOR.toastYard[2]],
-    readout: () => `${fmtNum(toastChunks)} chunks · ${fmtBytes(toastBytes)} out of line`,
+    readout: () => 'illustrative chunks · model records no TOAST chunk count or bytes',
   })
 
   for (let ti = 0; ti < N_TABLES; ti++) {
@@ -1343,7 +1343,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     ctx.register({
       id: `storage.fsm.${def.id}`,
       name: `${def.name} free space map`,
-      role: 'one _fsm fork for this heap relation',
+      role: 'derived _fsm illustration · no modeled map lookup',
       kind: 'storage',
       district: 'storage',
       object: fsmGroups[ti],
@@ -1355,13 +1355,13 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
         const table = s.tables[ti]
         const cap = table.pages * table.def.tuplesPerPage
         const free = clamp01(1 - (table.liveTuples + table.deadTuples) / Math.max(1, cap))
-        return `${fmtPct(free, 1)} free space · ${fmtNum(table.pages)} heap pages`
+        return `${fmtPct(free, 1)} derived capacity estimate · no modeled FSM entries`
       },
     })
     ctx.register({
       id: `storage.vm.${def.id}`,
       name: `${def.name} visibility map`,
-      role: 'one _vm fork for this heap relation',
+      role: 'derived _vm illustration · no modeled visibility bits',
       kind: 'storage',
       district: 'storage',
       object: vmGroups[ti],
@@ -1370,14 +1370,14 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
       focus: { target: [tx + PANEL_X, ROOF_Y + 2, FILE_Z0 + 10], distance: 34, dir: [0.62, 0.5, 0.6] },
       labelAt: [tx + PANEL_X + 1.5, ROOF_Y + 5, FILE_Z0 + 10],
       readout: () =>
-        `${fmtPct(vmCover[ti], 0)} of pages all-visible · index-only scans ${vmCover[ti] > 0.5 ? 'cheap' : 'degraded'}`,
+        `${fmtPct(vmCover[ti], 0)} derived illustration · no modeled visibility bits or index-only plan`,
     })
   }
 
   ctx.register({
     id: 'os.cache',
     name: 'OS page cache',
-    role: 'kernel memory — the cache Postgres does not control',
+    role: 'illustrative cache route · no modeled kernel cache state',
     kind: 'memory',
     district: 'storage',
     object: osGroup,
@@ -1386,7 +1386,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     focus: { target: [0, OC_Y, -10], distance: 190, dir: [0.3, 0.42, 0.86] },
     labelAt: [0, OC_Y + 4, -74],
     readout: () =>
-      `${fmtPct(osHitRatio, 0)} of shared_buffers misses served from RAM · ${fmtPct(osResidentPct, 0)} slab resident`,
+      `${fmtPct(osHitRatio, 0)} illustrative route hits · no modeled cache residency or timing effect`,
   })
 
   ctx.register({
@@ -1406,7 +1406,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
   ctx.register({
     id: 'disk.array',
     name: 'Storage',
-    role: 'the platters — everything above exists to avoid this',
+    role: 'illustrative device layer · no calibrated latency or queue',
     kind: 'storage',
     district: 'storage',
     object: diskGroup,

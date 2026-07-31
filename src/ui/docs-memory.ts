@@ -148,9 +148,14 @@ export const DOCS_MEMORY: ComponentDoc[] = [
         body:
           'On a real box, `ps` shows one `postgres` parent and a long list of children: `checkpointer`, `background writer`, `walwriter`, `autovacuum launcher`, `logical replication launcher`, plus one process per client. `pg_stat_activity` has exactly one row per backend. If the Linux OOM killer picks off any one of those children, every connection dies at once and the server log says the database system is in recovery mode. That is not a bug; it is the price of the shared segment.',
       },
+      {
+        heading: 'What the city represents',
+        body:
+          'The city uses buildings for PostgreSQL processes and files, but the engine stores aggregate counters, fixed backend activity slots, representative buffer/WAL samples and selected maintenance/replication state. It does not create operating-system processes, address spaces, sockets, shared-memory mappings or a filesystem, and those architectural metaphors do not add their real resource costs.',
+      },
     ],
     metrics: [
-      { label: 'Backends', get: (s) => `${fmtNum(nz(s.stats?.activeBackends))} / ${fmtNum(nz(s.maxConnections))}`, hint: 'connected / max_connections' },
+      { label: 'Backend slots', get: (s) => `${fmtNum(nz(s.stats?.activeBackends))} / ${fmtNum(nz(s.maxConnections))}`, hint: 'modeled occupied slots / fixed capacity' },
       { label: 'Throughput', get: (s) => `${fmtNum(nz(s.stats?.tps))} tps` },
       { label: 'Uptime', get: (s) => fmtDuration(nz(s.t)), hint: 'simulated time since startup' },
       { label: 'Next xid', get: (s) => fmtNum(nz(s.xid)) },
@@ -196,11 +201,16 @@ export const DOCS_MEMORY: ComponentDoc[] = [
         body:
           'A cache miss is not the end of the world; a *storm* of them is. In `pg_stat_io` you can see reads attributed to client backends and to autovacuum workers separately — and note that the checkpointer and the background writer never read pages at all, so their `reads` cells are NULL. When a table stops fitting in memory, latency does not degrade gently — it steps, because a plan that was doing random index lookups against RAM is now doing random reads against a device. The same query, the same plan, ten to a hundred times slower.',
       },
+      {
+        heading: 'What the city measures',
+        body:
+          'The excavation receives representative shared-buffer-miss routes and exposes sampled read/write rates and shared storage pressure. The OS-cache branch is a renderer choice only: it does not keep kernel-cache contents, change model duration or distinguish a device read. The city has no calibrated device latency or query-latency series, and its fixed plan templates cannot become slower because estimates changed.',
+      },
     ],
     metrics: [
       { label: 'Buffer pool', get: poolSize, hint: 'shared_buffers; the plaza is a representative frame sample' },
       { label: 'Hit ratio', get: (s) => fmtPct(nz(s.buffers?.hitRatio)) },
-      { label: 'Reads', get: (s) => `${fmtNum(nz(s.stats?.ioReadPerSec))} pages/s`, hint: 'pages pulled up from storage' },
+      { label: 'Reads', get: (s) => `${fmtNum(nz(s.stats?.ioReadPerSec))} pages/s`, hint: 'modeled shared-buffer-miss reads; OS-cache animation does not alter this counter' },
       {
         label: 'Writes (sample)',
         get: (s) => `${fmtNum(nz(s.stats?.ioWritePerSec))} frames/s`,
@@ -258,6 +268,11 @@ export const DOCS_MEMORY: ComponentDoc[] = [
         body:
           "The classic shape is a system that is fine at 200 connections and falls over at 600, with CPU dominated by system time and `pg_stat_activity` full of sessions in state 'idle'. Idle is not free: an idle session still owns a process and a slot, and an idle session inside a transaction is far worse — it holds its locks and, once it has written anything or is holding a snapshot open, holds back cleanup for every table in its database. Set `idle_in_transaction_session_timeout` so a forgotten transaction cannot do that indefinitely.",
       },
+      {
+        heading: 'What the city models',
+        body:
+          'The city has sixteen backend slots, a fixed startup cadence, a request queue and achieved TPS. It does not model TCP, authentication, backend memory, catalog or plan-cache warming, operating-system scheduling, ProcArray scans or a pooler, and it has no connection-latency series.',
+      },
     ],
     metrics: [
       { label: 'Connections', get: (s) => `${fmtNum(nz(s.stats?.activeBackends))} / ${fmtNum(nz(s.maxConnections))}` },
@@ -296,6 +311,11 @@ export const DOCS_MEMORY: ComponentDoc[] = [
         heading: 'What you would see in production',
         body:
           'Changes take effect on reload, not restart: `SELECT pg_reload_conf()` or a SIGHUP. Before reloading, check your edit against the parsed view `pg_hba_file_rules`, which shows exactly how the server understood each line and flags the ones it could not parse. When a client is refused, the server log has the real reason — the message the client receives is deliberately vague.',
+      },
+      {
+        heading: 'What the city models',
+        body:
+          'The gate admits work only when a fixed backend slot is available and counts accepted starts. It has no `pg_hba.conf` rules, users, databases, addresses, TLS, credentials, authentication methods or authentication failures; every non-capacity verdict is absent.',
       },
     ],
     metrics: [
@@ -346,6 +366,11 @@ export const DOCS_MEMORY: ComponentDoc[] = [
         heading: 'What you would see in production',
         body:
           'In the server log this looks like a terse sequence: a message that a server process was terminated by signal 9, then that the server is terminating all other active server processes, then that all connections were closed because another server process exited abnormally, then the database system is in recovery mode. Applications see every connection drop at the same instant. Recovery time is bounded by how much WAL was written since the last checkpoint, which is exactly what `checkpoint_timeout` and `max_wal_size` are trading against.',
+      },
+      {
+        heading: 'What the city models',
+        body:
+          'A connection pulse starts one backend after a fixed delay. Socket negotiation, startup packets, database selection, `pg_hba.conf`, authentication methods, process memory and failure during startup are not simulated.',
       },
     ],
     metrics: [
@@ -402,6 +427,11 @@ export const DOCS_MEMORY: ComponentDoc[] = [
         body:
           'One row per backend in `pg_stat_activity`, with `state`, `wait_event_type` and `wait_event` telling you what each one is doing right now. Grouping that view by wait event is the fastest diagnostic in Postgres: a wall of `LWLock` says shared memory contention, a wall of `Lock` says one transaction is blocking many, and a wall of `IO` says you have left the memory side of the excavation.',
       },
+      {
+        heading: 'What the city does not charge',
+        body:
+          'The city has sixteen fixed slots and a fixed fork cadence. It does not charge backend memory, authentication, scheduler contention, context switches, shared-lock contention or ProcArray scan cost, so its achieved-TPS curve cannot demonstrate PostgreSQL’s connection-scaling cost or latency.',
+      },
     ],
     metrics: [
       { label: 'Active', get: (s) => `${fmtNum(nIn(s, ...BUSY))} running` },
@@ -456,7 +486,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'Where the model simplifies',
         body:
-          "In the real thing these phases overlap and interleave far more than one tower can show: WAL records are inserted throughout execution rather than in a distinct phase, and a single statement can bounce between CPU and I/O thousands of times. `pg_stat_activity.state` instead reports values such as `starting`, `active`, `idle`, `idle in transaction`, `idle in transaction (aborted)`, `fastpath function call` and `disabled`; wait events are a separate dimension. The tower's finer phases are explicitly a teaching model, not observable activity states.",
+          "In the real thing these phases overlap and interleave far more than one tower can show: WAL records are inserted throughout execution rather than in a distinct phase, and a single statement can bounce between CPU and I/O thousands of times. The city does not parse arbitrary SQL, resolve catalogs, rewrite views, cache prepared plans or cost alternatives; six fixed statement templates select its phases and plan shapes. `pg_stat_activity.state` reports coarser activity states, with wait events as a separate dimension.",
       },
     ],
     metrics: [
@@ -509,6 +539,11 @@ export const DOCS_MEMORY: ComponentDoc[] = [
         body:
           'The failure mode is not a slow query, it is a memory cliff: everything is fine until a plan flips from index scan to hash join across the fleet, and suddenly hundreds of backends each want hundreds of megabytes. Prefer raising `work_mem` for the specific session or role that needs it (`SET LOCAL work_mem` inside the transaction that runs the report) over raising it globally. In PG 17 the vacuum side got better too: dead tuple tracking was rewritten into a compact structure, so `maintenance_work_mem` above 1 GiB is finally useful to `VACUUM`.',
       },
+      {
+        heading: 'What the city models',
+        body:
+          'The private-memory and temp-file visuals are illustrative. The engine does not model `work_mem`, memory bytes, hash batches, spill thresholds, temp-file bytes or spill I/O, and those renderer animations do not change model time or counters.',
+      },
     ],
     metrics: [
       { label: 'Sorting or hashing', get: (s) => `${fmtNum(nIn(s, 'sort'))} backends`, hint: 'backends inside a sort or hash node — the model does not simulate work_mem, so it cannot say which of them would spill' },
@@ -560,6 +595,11 @@ export const DOCS_MEMORY: ComponentDoc[] = [
         heading: 'The exception: dynamic shared memory',
         body:
           'Parallel query needs a communication area whose size is not known until a plan runs, so it does not come from this segment. Parallel workers attach a *dynamic* shared memory segment created for that one query, holding the tuple queues and any shared hash table. It is created when the Gather node starts and destroyed when the query ends — the only shared memory in Postgres that appears and disappears at runtime.',
+      },
+      {
+        heading: 'What the city models',
+        body:
+          'The deck groups model structures that are shared TypeScript state: the buffer sample, WAL ring, backend/xid projection, direct lock waiters and cumulative counters. It does not allocate a shared-memory segment, map it into processes, size structures from all PostgreSQL settings, use huge pages or create dynamic shared memory for the illustrative Gather plan nodes.',
       },
     ],
     metrics: [
@@ -614,6 +654,11 @@ export const DOCS_MEMORY: ComponentDoc[] = [
         heading: 'Sizing it honestly',
         body:
           'Postgres reads through the OS page cache, so a page can be cached twice — once here, once by the kernel. That double buffering wastes some RAM, but the OS cache is not the enemy: it can satisfy a shared-buffer miss without physical device I/O. 25% of system RAM is a traditional starting point; larger values are common on dedicated machines, but returns fall off and the checkpointer must scan more buffer descriptors. Buffer-pool capacity does not determine how many pages are dirty: workload, background writing, checkpoint pacing and dirtying rate do. Do not tune to a hit ratio — a 99% hit ratio on a badly estimated plan reading a million pages is worse than 90% on a plan reading a hundred. PostgreSQL 18 also protects the pool during a large sequential scan with a bulk-read ring: `GetAccessStrategy(BAS_BULKREAD)` starts at 256 KiB, adds space for `io_combine_limit × effective_io_concurrency`, and applies pin and one-eighth-of-`shared_buffers` caps. With PostgreSQL 18.3 defaults and 8 KiB blocks that is about 2.25 MiB, not a fixed 256 KiB. PGSimCity’s current TypeScript buffer sample still uses the historical fixed 32-frame ring, so its animation teaches cache isolation but does not reproduce PostgreSQL 18’s numeric ring sizing.',
+      },
+      {
+        heading: 'What the city measures',
+        body:
+          'The engine models a representative buffer sample, tags, pins, usage counts, dirty victims, a clock sweep and background cleaning. It does not model content-lock acquisition, cleanup-lock failure or per-page visibility checks. A dirty-victim write adds representative time to that statement’s stretched model trip and increments sampled counters. There is no calibrated storage time, latency series or p99, and the OS-cache route does not change the cost.',
       },
     ],
     metrics: [
@@ -676,6 +721,11 @@ export const DOCS_MEMORY: ComponentDoc[] = [
         body:
           'The most common trigger is a plan flip that turns a cheap index lookup into a sequential scan on a hot table across every connection at once. Nothing is on disk, the hit ratio still looks fantastic, and yet the system is saturated: it is spending its time in the mapping table and in memory copies. Look at `blks_hit` in `pg_stat_database` rather than the hit ratio — buffer hits are cheap, but a hundred million of them per second is not.',
       },
+      {
+        heading: 'What the city models',
+        body:
+          'The engine uses a direct in-memory page-key map for its representative buffer sample and counts hits and misses. It does not model 128 buffer-mapping partitions, lightweight locks, lock modes, lookup contention, memory-copy cost or a workload-wide cost from those probes. Its fixed plan mix cannot flip because this table became contended.',
+      },
     ],
     metrics: [
       { label: 'Lookups', get: (s) => fmtNum(nz(s.buffers?.hits) + nz(s.buffers?.misses)), hint: 'cumulative probes: hits plus misses' },
@@ -731,6 +781,11 @@ export const DOCS_MEMORY: ComponentDoc[] = [
         heading: 'What you would see in production',
         body:
           '`pg_stat_activity.backend_xid` is set only once a transaction has written something — read-only transactions do not consume transaction ids. `backend_xmin` is the xmin horizon of that one backend — how far back it is pinning cleanup for every table in its database. `SELECT pg_current_snapshot()` returns the raw `xmin:xmax:in-progress` triple if you want to see one directly.',
+      },
+      {
+        heading: 'What the city models',
+        body:
+          'The city assigns transaction ids to modeled writes, displays backend slots and computes an aggregate xmin horizon from its scripted pins. It does not build snapshots, scan the ProcArray, store in-progress xid lists, evaluate tuple visibility from a snapshot or charge snapshot acquisition cost. More displayed slots therefore do not make every statement slower.',
       },
     ],
     metrics: [
@@ -860,16 +915,21 @@ export const DOCS_MEMORY: ComponentDoc[] = [
         body:
           'Postgres does not prevent deadlocks, it detects them. A backend that has waited `deadlock_timeout` (default 1s) builds the wait-for graph, and if it finds a cycle one transaction is aborted with SQLSTATE `40P01 deadlock_detected`. SQLSTATE `40001 serialization_failure` is a different condition, although applications commonly retry both at the whole-transaction boundary. Deadlocks are usually an application ordering bug. Operationally: set `lock_timeout` on sessions that run DDL, turn on `log_lock_waits`, and diagnose live incidents with `pg_blocking_pids(pid)` joined against `pg_stat_activity`.',
       },
+      {
+        heading: 'What the city models',
+        body:
+          'One scripted backend holds `ACCESS EXCLUSIVE` on one table and affected model statements wait directly on that holder. The city has no lock-mode conflict table, waiter-to-waiter queue fairness, row locks, deadlock graph or general timeout setting. The lock-pileup scenario alone applies a fixed 15 model-second release; there is no `lock_timeout` knob.',
+      },
     ],
     metrics: [
       { label: 'Blocked backends', get: (s) => fmtNum(nIn(s, 'blocked')) },
       { label: 'Wait edges', get: (s) => fmtNum((s.locks ?? []).length), hint: 'holder to waiter pairs in pg_locks terms' },
       {
-        label: 'Oldest wait',
+        label: 'Oldest model wait',
         get: (s) => {
           let m = 0
           for (const l of s.locks ?? []) if (l && nz(l.ageSec) > m) m = nz(l.ageSec)
-          return fmtDuration(m)
+          return `${fmtDuration(m)} model time`
         },
       },
       {
@@ -926,6 +986,11 @@ export const DOCS_MEMORY: ComponentDoc[] = [
         heading: 'What you would see in production',
         body:
           'Wait events named after the SLRUs mean a working set of transaction ids larger than the cache, typically from very long transactions coexisting with a high commit rate, or from subtransaction overflow. There is no `SLRU` wait event type: `wait_event_type` is `LWLock`, and the names are `XactBuffer` and `XactSLRU` for `pg_xact`, `SubtransBuffer` and `SubtransSLRU` for `pg_subtrans` — the `…Buffer` events are waits on page I/O, the `…SLRU` events waits to reach the cache itself. PG 17 renamed the sizing parameters to `transaction_buffers` and `subtransaction_buffers`, but the wait events kept the older `Xact` and `Subtrans` spellings. `pg_stat_slru` gives the hit and read counts for each cache directly. Vacuum eventually truncates `pg_xact` as the frozen transaction id advances, which is one of the quieter reasons vacuum is not optional.',
+      },
+      {
+        heading: 'What the city models',
+        body:
+          'The city increments transaction ids and can derive how many two-bit status pages that range would occupy. It has no SLRU buffers, status lookups, hint-bit reads, cache hits, cache misses, eviction or I/O cost.',
       },
     ],
     metrics: [
@@ -1029,6 +1094,11 @@ export const DOCS_MEMORY: ComponentDoc[] = [
         body:
           'Wait events `LWLock:WALWrite` and `LWLock:WALBufMapping` are the signature of a ring that is too small or storage that is too slow for the write rate — the two look similar from the application, which just sees write latency. `pg_stat_wal` gives the honest counters, including how many times a backend had to write buffers itself. Note that with `synchronous_commit = off` commits do not wait for the flush at all; the walwriter does it shortly afterwards, and the window of loss is bounded by that delay rather than by zero.',
       },
+      {
+        heading: 'What the city models',
+        body:
+          'The engine keeps aggregate insert, write and flush LSNs, a scaled WAL-buffer capacity, fill level, flush requests and a full-ring gate for backend/maintenance WAL. It does not store WAL records or ring pages, run insertion-lock contention, call write/fsync, expose real WAL wait events or calibrate the added model duration to storage latency.',
+      },
     ],
     metrics: [
       { label: 'wal_buffers', get: (s) => fmtBytes(nz(s.wal?.bufferCapacity)) },
@@ -1089,6 +1159,11 @@ export const DOCS_MEMORY: ComponentDoc[] = [
         heading: 'Where the time actually goes',
         body:
           'For a short OLTP statement, planning can be a serious fraction of total time — hundreds of microseconds against a query that executes in one millisecond — which is the practical argument for prepared statements. For anything analytic, planning is noise and you should spend your attention on estimates and access paths. `EXPLAIN (ANALYZE)` prints Planning Time and Execution Time separately so you do not have to guess which case you are in.',
+      },
+      {
+        heading: 'What the city models',
+        body:
+          'The lab uses six fixed statement templates and fixed teaching phases. It has no SQL grammar, catalog analysis, rewrite rules, prepared-plan cache or cost-based plan selection; the displayed alternative costs are fitted after the statement kind has already selected a plan template.',
       },
     ],
     metrics: [
@@ -1239,6 +1314,11 @@ export const DOCS_MEMORY: ComponentDoc[] = [
         body:
           'First check the estimates, with `EXPLAIN (ANALYZE, BUFFERS)`, and find the *lowest* node where estimated and actual rows diverge — everything above it is a consequence, not a cause. Then fix the input: `ANALYZE` the table if it is stale, raise `default_statistics_target` or the per-column target for skewed columns, and use `CREATE STATISTICS` for correlated column groups or expressions. Add an expression index when indexed access is useful, not merely to obtain expression statistics. If estimates are sound but representative plans still price I/O incorrectly, calibrate `random_page_cost`, `seq_page_cost`, the CPU constants and `effective_cache_size` as a set from measured workload evidence. Use `enable_seqscan = off` only as a diagnostic; never leave it that way in production.',
       },
+      {
+        heading: 'What the city models',
+        body:
+          'A statement kind selects one fixed single-table plan template before the lab renders it. There are no joins, path enumeration, `ANALYZE` statistics, selectivity estimates or cost-driven alternatives; table statistics do not choose or change the model plan. Card costs, row estimates and node time are display-only teaching values.',
+      },
     ],
     metrics: [
       { label: 'Planning', get: (s) => fmtNum(nIn(s, 'plan')) },
@@ -1305,6 +1385,11 @@ export const DOCS_MEMORY: ComponentDoc[] = [
         body:
           '`EXPLAIN (ANALYZE)` prints Workers Planned and Workers Launched; when launched is lower than planned you have exhausted `max_parallel_workers` or `max_worker_processes` cluster-wide, and queries are quietly running with less parallelism than the plan assumed. It is a common and invisible cause of "the same query is sometimes three times slower".',
       },
+      {
+        heading: 'What the city models',
+        body:
+          'The executor advances fixed teaching phases and activity through a preselected plan template. It does not pull or materialize tuples node by node, execute joins, launch parallel workers, create dynamic shared memory, allocate work_mem, fire triggers, recheck concurrent updates or measure CPU. Gather and parallel scan labels are illustrative plan shapes only.',
+      },
     ],
     metrics: [
       { label: 'Model CPU phase', get: (s) => fmtNum(nIn(s, 'exec_cpu')), hint: 'a teaching phase, not a pg_stat_activity CPU-running signal' },
@@ -1358,6 +1443,11 @@ export const DOCS_MEMORY: ComponentDoc[] = [
         body:
           '`EXPLAIN` alone gives you only estimates; `EXPLAIN (ANALYZE)` actually runs the statement, so never run it on a `DELETE` outside a transaction you intend to roll back. Timing instrumentation itself costs something on systems with a slow clock — `EXPLAIN (ANALYZE, TIMING OFF)` tells you if that is distorting the result. Turn on `track_io_timing` to get real I/O times in the buffers output. And for the queries you cannot reproduce by hand, `auto_explain` with a duration threshold captures the plan that was actually used in production, which is frequently not the plan you get in psql.',
       },
+      {
+        heading: 'What the city shows',
+        body:
+          'The tree is a fixed model template. Its row figures and costs are display-only, it has no estimated-versus-actual pair, loops, filters, buffer annotations, heap fetches, sort spill, worker launch, plan instrumentation or EXPLAIN execution. Node time is accumulated on the stretched model clock and is labeled model time, not PostgreSQL execution time.',
+      },
     ],
     metrics: [
       {
@@ -1369,14 +1459,14 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       },
       { label: 'Nodes', get: (s) => fmtNum(countPlanNodes(firstPlan(s))) },
       {
-        label: 'Estimated rows',
+        label: 'Display rows',
         get: (s) => {
           const p = firstPlan(s)
           return p ? fmtNum(nz(p.rows)) : '—'
         },
       },
       {
-        label: 'Total cost',
+        label: 'Display cost',
         get: (s) => {
           const p = firstPlan(s)
           return p ? fmtNum(nz(p.cost), 2) : '—'

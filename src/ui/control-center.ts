@@ -5,7 +5,11 @@ import { fmtBytes } from '../core/util'
 import type { FlowsApi } from '../engine/flows'
 import type { WalkController, WalkPose } from '../engine/walk'
 import { traceStopBit } from '../core/model-helpers'
-import { PRESENTED_TRACE_STAGES, traceStageState } from '../core/trace-presentation'
+import {
+  formatModelMilliseconds,
+  PRESENTED_TRACE_STAGES,
+  traceStageState,
+} from '../core/trace-presentation'
 import {
   ANCHOR,
   TABLES,
@@ -554,7 +558,7 @@ export function createControlCenter(options: ControlCenterOptions): ControlCente
     setText(metricReads, live ? String(trace.buffersRead) : '—')
     setText(metricWal, live ? fmtBytes(trace.walBytes) : '—')
     setText(metricRows, live ? String(trace.rowsSent) : '—')
-    setText(metricTime, live ? `${(trace.lastTripSec * 1000).toFixed(0)} ms` : '—')
+    setText(metricTime, live ? formatModelMilliseconds(trace.lastTripSec * 1000) : '—')
 
     let markerRoute: SvgRoute | null = null
     for (let i = 0; i < map.routes.length; i++) {

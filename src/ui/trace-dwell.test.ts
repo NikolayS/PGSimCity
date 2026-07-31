@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { createBus } from '../core/bus'
 import type { QueryKind, TraceRecord, TraceStop } from '../core/types'
+import { traceStopBit } from '../core/model-helpers'
 import { createSim } from '../sim/model'
 import { installTestDom } from '../../test/dom'
 import { createHud } from './hud'
@@ -9,7 +10,6 @@ import { createTour } from './tour'
 import type { UiContext } from './uikit'
 import { createTraceDwell, MIN_DWELL_S } from './trace-dwell'
 import { TRACE_COPY } from './trace-copy'
-import { traceStopBit } from '../sim/model'
 
 const STOPS: TraceStop[] = [
   'connect',

@@ -5,6 +5,7 @@ import type {
   TraceStop,
 } from '../core/types'
 import { traceStopBit } from '../core/model-helpers'
+import { formatModelMilliseconds } from '../core/trace-presentation'
 import { el, setText } from '../ui/uikit'
 import {
   cityRelationForPlan,
@@ -603,7 +604,7 @@ export function createRealPostgresConsole(
       setText(modelHits, String(trace.buffersHit))
       setText(modelReads, String(trace.buffersRead))
       setText(modelRows, String(trace.rowsSent))
-      setText(modelTime, `${(trace.lastTripSec * 1000).toFixed(0)} ms`)
+      setText(modelTime, formatModelMilliseconds(trace.lastTripSec * 1000))
       setText(
         modelState,
         trace.stop === 'done'

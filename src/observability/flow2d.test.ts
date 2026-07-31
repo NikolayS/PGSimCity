@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import { createBus } from '../core/bus'
 import type { QueryKind, TraceRecord, TraceStop } from '../core/types'
-import { createSim, sqlFor, traceStopBit } from '../sim/model'
+import { traceStopBit } from '../core/model-helpers'
+import { createSim, sqlFor } from '../sim/model'
 import { TABLES } from '../world/layout'
 import { installTestDom } from '../../test/dom'
 import {

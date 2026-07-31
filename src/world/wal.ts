@@ -1289,7 +1289,7 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
   ctx.register({
     id: 'walsender',
     name: 'walsender',
-    role: 'streams WAL to the standby, and holds a slot open for it',
+    role: 'advances sent LSN and slot state · no sender process or socket',
     kind: 'process',
     district: 'wal',
     object: gSender,
@@ -1303,7 +1303,7 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
   ctx.register({
     id: 'logical.decoder',
     name: 'logical decoder',
-    role: 'turns physical WAL into per-row changes',
+    role: 'derived change rate and collapsed slot LSN · no decoded rows',
     kind: 'process',
     district: 'wal',
     object: gLogical,
@@ -1313,7 +1313,7 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
     color: COLOR.toast,
     readout: (s: SimState) =>
       s.replication.logicalEnabled
-        ? `${s.replication.logicalChangesPerSec.toFixed(0)} changes/s · slot ${fmtLsn(s.replication.logicalSlotLsn)}`
+        ? `${s.replication.logicalChangesPerSec.toFixed(0)} derived changes/s · slot ${fmtLsn(s.replication.logicalSlotLsn)}`
         : 'dark — requires wal_level = logical',
   })
 

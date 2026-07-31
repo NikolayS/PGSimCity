@@ -19,6 +19,11 @@ export const PRESENTED_TRACE_STAGES: readonly PresentedTraceStage[] = [
   { stop: 'done', label: 'RECEIPT' },
 ]
 
+/** Statement timings run on the deliberately stretched model clock. */
+export function formatModelMilliseconds(milliseconds: number, fractionDigits = 0): string {
+  return `${milliseconds.toFixed(fractionDigits)} model ms`
+}
+
 export function traceStageState(trace: TraceRecord, stop: TraceStop): TraceStageState {
   const write =
     trace.query === 'insert'

@@ -262,7 +262,7 @@ export function createFlowArchitecture(prefix: string): FlowArchitecture {
   const processLayer = svgElement(
     'g',
     { 'data-layer': 'processes' },
-    ...boundary(8, 88, 404, 310, 'POSTGRESQL PROCESSES · separate address spaces', 'process-boundary'),
+    ...boundary(8, 88, 404, 310, 'POSTGRESQL PROCESS ROLES · model uses activity slots', 'process-boundary'),
   )
   register(components, processLayer, {
     id: 'postmaster',
@@ -278,7 +278,7 @@ export function createFlowArchitecture(prefix: string): FlowArchitecture {
   register(components, processLayer, {
     id: 'backend',
     label: 'BACKEND',
-    detail: ['parser · planner', 'executor'],
+    detail: ['fixed query stages', 'executor'],
     x: 142,
     y: 180,
     width: 136,
@@ -288,7 +288,7 @@ export function createFlowArchitecture(prefix: string): FlowArchitecture {
   register(components, processLayer, {
     id: 'private-memory',
     label: 'PRIVATE MEMORY',
-    detail: ['per backend', 'work_mem'],
+    detail: ['illustrative only', 'no work_mem model'],
     x: 294,
     y: 180,
     width: 106,
@@ -363,10 +363,10 @@ export function createFlowArchitecture(prefix: string): FlowArchitecture {
       class: 'flow-architecture__container tone-shmem',
       tabindex: '0',
       role: 'group',
-      'aria-label': 'One shared memory segment containing the buffer pool, WAL buffers, ProcArray, lock table, and pg_xact transaction status cache',
+      'aria-label': 'Architectural shared-memory map; the engine shares TypeScript state and does not create process mappings',
     },
-    svgElement('title', {}, 'One shared memory segment, attached to by every PostgreSQL process'),
-    ...boundary(8, 414, 404, 238, 'ONE SHARED MEMORY SEGMENT · attached by every process', 'shared-boundary'),
+    svgElement('title', {}, 'Architectural shared-memory map; no operating-system shared segment is created'),
+    ...boundary(8, 414, 404, 238, 'SHARED-STATE MAP · no process mappings', 'shared-boundary'),
   )
   components.set('shared-memory', sharedLayer)
   register(components, sharedLayer, {
@@ -392,7 +392,7 @@ export function createFlowArchitecture(prefix: string): FlowArchitecture {
   register(components, sharedLayer, {
     id: 'proc-array',
     label: 'PROCARRAY',
-    detail: ['active xids'],
+    detail: ['active xids', 'no scan cost'],
     x: 24,
     y: 550,
     width: 108,
@@ -402,7 +402,7 @@ export function createFlowArchitecture(prefix: string): FlowArchitecture {
   register(components, sharedLayer, {
     id: 'lock-table',
     label: 'LOCK TABLE',
-    detail: ['shared locks'],
+    detail: ['scripted holder', 'direct waiters only'],
     x: 142,
     y: 550,
     width: 118,
@@ -412,7 +412,7 @@ export function createFlowArchitecture(prefix: string): FlowArchitecture {
   register(components, sharedLayer, {
     id: 'pg-xact-cache',
     label: 'pg_xact CACHE',
-    detail: ['SLRU buffers', 'commit status'],
+    detail: ['architecture only', 'no SLRU model'],
     x: 270,
     y: 550,
     width: 126,
@@ -425,7 +425,7 @@ export function createFlowArchitecture(prefix: string): FlowArchitecture {
   register(components, kernelLayer, {
     id: 'kernel-page-cache',
     label: 'KERNEL PAGE CACHE',
-    detail: ['operating system controlled · PostgreSQL cannot size or evict it'],
+    detail: ['illustrative route only · no model-time effect'],
     x: 8,
     y: 672,
     width: 404,
@@ -442,7 +442,7 @@ export function createFlowArchitecture(prefix: string): FlowArchitecture {
       class: 'flow-architecture__container tone-storage',
       tabindex: '0',
       role: 'group',
-      'aria-label': 'Durable storage containing separate base and pg_wal stores, plus backend temporary files',
+      'aria-label': 'Storage architecture map with aggregate base and pg_wal state; temporary files are illustrative',
     },
     svgElement('title', {}, 'Durable storage below the operating system page cache'),
     ...boundary(8, 760, 404, 136, 'DISK · data directory and temporary files', 'disk-boundary'),
@@ -451,7 +451,7 @@ export function createFlowArchitecture(prefix: string): FlowArchitecture {
   register(components, diskLayer, {
     id: 'base-store',
     label: 'base/',
-    detail: ['heap + indexes'],
+    detail: ['aggregate heap + indexes', 'no relation files'],
     x: 22,
     y: 797,
     width: 145,
@@ -461,7 +461,7 @@ export function createFlowArchitecture(prefix: string): FlowArchitecture {
   register(components, diskLayer, {
     id: 'temp-files',
     label: 'TEMP FILES',
-    detail: ['work_mem spills'],
+    detail: ['illustrative; no work_mem spill model'],
     x: 177,
     y: 797,
     width: 78,

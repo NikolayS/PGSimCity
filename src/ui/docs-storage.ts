@@ -856,6 +856,10 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         heading: 'What you would see in production',
         body: 'In `pg_stat_replication`, compare the four LSNs as stage boundaries. A gap from primary WAL to `sent_lsn` means backlog at or before transmission; inspect the walsender, WAL availability and the link. A `sent_lsn` to `write_lsn` gap focuses attention between sender and walreceiver, while `flush_lsn` close to `write_lsn` with `replay_lsn` behind focuses on apply. These gaps localise investigation but do not prove a root cause. If the row disappears, the walsender is gone and any surviving slot may begin retaining WAL.',
       },
+      {
+        heading: 'What the city models',
+        body: 'The city advances independent sent LSNs, delayed acknowledgement queues and physical-slot retention for two followers. It does not fork a walsender, read WAL buffers or segment files, open replication-protocol sockets, schedule a process or expose a real pg_stat_replication row.',
+      },
     ],
     metrics: [
       { label: 'standby_a sent', get: (s) => fmtLsn(s.replication.standbys[0].sentLsn) },
@@ -917,13 +921,17 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         heading: 'What it is used for',
         body: 'Everything that calls itself CDC: native publications and subscriptions, Debezium, cross-major-version upgrades with near-zero downtime, selective replication into a data warehouse. The catch is that decoding is single-threaded per slot and runs on the machine holding the slot, so a busy primary with three CDC consumers is doing that reconstruction work three times.',
       },
+      {
+        heading: 'What the city models',
+        body: 'The city derives an illustrative changes-per-second rate from modeled writes, adds representative logical-WAL overhead and advances one collapsed slot LSN. It does not decode WAL into row values, group changes into transactions, filter publications, preserve commit order, spill a reorder buffer or maintain subscriber tables.',
+      },
     ],
     metrics: [
       {
         label: 'Decoding',
         get: (s) => (s.knobs.walLevel === 'logical' ? (s.replication.logicalEnabled ? 'active' : 'idle') : 'off — wal_level is not logical'),
       },
-      { label: 'Changes / s', get: (s) => fmtNum(s.replication.logicalEnabled ? s.replication.logicalChangesPerSec : 0) },
+      { label: 'Changes / s', get: (s) => fmtNum(s.replication.logicalEnabled ? s.replication.logicalChangesPerSec : 0), hint: 'derived rate projection; no WAL rows are decoded' },
       { label: 'Confirmed flush (model)', get: (s) => (s.replication.logicalEnabled ? fmtLsn(s.replication.logicalSlotLsn) : '—'), hint: 'the model collapses logical restart_lsn to this same position; real slots expose both' },
       {
         label: 'WAL held by the slot',
@@ -976,6 +984,10 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         heading: 'What you would see in production',
         body: 'You go looking for the file eating your disk, find `base/16384/24591.3`, and it tells you nothing. Map it back with `SELECT relname FROM pg_class WHERE relfilenode = 24591`. Two more habits worth having: never touch anything inside the data directory while the server is running, and remember that `du` on the directory and `pg_database_size()` can disagree because of deleted-but-still-open files.',
       },
+      {
+        heading: 'What the city models',
+        body: 'The engine keeps aggregate heap and index page counts per table plus WAL segment state. It does not create a data-directory tree, relation forks, relfilenodes, 1 GiB segments, database OIDs, tablespaces, pg_control, deleted files or filesystem allocation. The declared relation total below includes illustrative schema metadata such as a TOAST sidecar even though no TOAST relation state exists.',
+      },
     ],
     metrics: [
       {
@@ -988,7 +1000,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         get: (s) => fmtBytes(sumTables(s, (t) => t.indexPages) * PAGE),
       },
       { label: 'pg_wal', get: (s) => fmtBytes(walDirBytes(s)) },
-      { label: 'Relations', get: (s) => fmtNum(sumTables(s, (t) => 1 + t.def.indexes.length + (t.def.toast ? 2 : 0))) },
+      { label: 'Declared relation shapes', get: (s) => fmtNum(sumTables(s, (t) => 1 + t.def.indexes.length + (t.def.toast ? 2 : 0))), hint: 'schema/renderer count; not stored relation objects' },
     ],
     see: ['storage.table', 'storage.index', 'wal.vault', 'disk.array'],
     source: ['src/backend/storage/smgr/md.c'],
@@ -1105,6 +1117,10 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         heading: 'When it is not a B-tree',
         body: '`documents_body_gin` is a **GIN** index, which is a different animal: it stores one entry per *element* — each lexeme of a `tsvector`, each key of a `jsonb` — with a posting list of the rows containing it. That makes containment and full-text search fast and makes writes expensive, since one row insert can touch dozens of keys. GIN softens that with a pending list (`fastupdate`), which batches new entries and folds them in later, so an insert-heavy period can leave searches temporarily slower until the list is merged.',
       },
+      {
+        heading: 'What the city models',
+        body: 'The engine keeps aggregate index pages and scan counts per table, charges representative pages to fixed index-plan templates, and distinguishes HOT from non-HOT update counts. Individual index kinds are cosmetic: there are no B-tree keys, GIN entries or pending list, index-only scans, bottom-up deletion, page splits, per-index bloat, selectivity or cost-driven plan choice.',
+      },
     ],
     metrics: [
       {
@@ -1170,6 +1186,10 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         heading: 'What you can control',
         body: '`ALTER TABLE … ALTER COLUMN … SET STORAGE` picks the strategy: `EXTENDED` (compress then move out, the default), `EXTERNAL` (out of line, uncompressed — worth it when you constantly `substr()` the start of a large value), `MAIN` (compress, resist moving out), `PLAIN` (never). Since PostgreSQL 14 `default_toast_compression` can be `lz4` instead of `pglz`, which is usually several times faster to compress and decompress for a small loss of ratio. One useful property: an UPDATE that does not change a toasted column reuses the existing pointer rather than rewriting the value.',
       },
+      {
+        heading: 'What the city models',
+        body: 'The TOAST yard is an illustrative renderer animation. The engine marks one table as wide and adds representative WAL for its writes, but it does not store TOAST chunks, out-of-line bytes, pointers, compression state, reads, bloat or vacuum cost. The animated chunk count is not database state.',
+      },
     ],
     metrics: [
       {
@@ -1196,11 +1216,12 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         hint: 'wide rows pack badly; big values are already out of line',
       },
       {
-        label: 'Writes to it',
+        label: 'Owning-table writes',
         get: (s) => {
           const t = s.tables.find((x) => x.def.toast)
           return t ? fmtNum(t.inserts + t.updates) : '—'
         },
+        hint: 'not a TOAST write counter; the model has none',
       },
     ],
     knobs: ['writeRatio', 'updateRatio', 'seqScanRatio'],
@@ -1239,12 +1260,16 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         heading: 'What you would see in production',
         body: 'Install `pg_freespacemap` and `SELECT sum(avail) FROM pg_freespace(\'sessions\')` to see, in bytes, how much reusable space a table is sitting on. A table with 4 GiB of tracked free space is bloated but stable — inserts will refill it. A table with almost none, that is still growing, is either genuinely growing or has an old snapshot pinning its dead row versions so vacuum cannot free anything.',
       },
+      {
+        heading: 'What the city models',
+        body: 'The `_fsm` panel derives a capacity illustration from aggregate page and tuple counts. The engine has no FSM bytes, tree, stale hints, lookup, retry or page-placement path, so this panel does not decide where an INSERT lands or whether a relation extends.',
+      },
     ],
     metrics: [
       {
-        label: 'Reusable space',
+        label: 'Dead-version bytes estimate',
         get: (s) => fmtBytes(sumTables(s, (t) => t.deadTuples) * 120),
-        hint: 'rough model estimate: dead row versions × an average tuple width',
+        hint: 'rough illustration only; not modeled FSM free space',
       },
       { label: 'Dead row versions', get: (s) => fmtNum(sumTables(s, (t) => t.deadTuples)) },
       { label: 'Inserts served', get: (s) => fmtNum(sumTables(s, (t) => t.inserts)) },
@@ -1288,6 +1313,10 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         heading: 'How the bits move',
         body: 'Vacuum sets them, with one exception: since PostgreSQL 14, `COPY … WITH (FREEZE)` into a table created or truncated in the same transaction marks each page all-visible and all-frozen as it fills it, so a freshly bulk-loaded table is ready for index-only scans without a vacuum. Any modification to a page clears both bits immediately, and the clearing is WAL-logged so a standby stays correct. A page can therefore lose all-visible status because of one UPDATE and stay that way until the next vacuum pass. Use the `pg_visibility` extension to see the real distribution: `pg_visibility_map_summary(\'orders\')` returns how many pages are all-visible and how many are all-frozen, which tells you honestly how much of your table index-only scans can actually skip.',
       },
+      {
+        heading: 'What the city models',
+        body: 'The colored caps are a derived illustration based on churn and vacuum animation. The engine has no per-page visibility-map bits and no index-only plan, heap-fetch counter or timing path, so changing this visual cannot make a query cheaper.',
+      },
     ],
     metrics: [
       {
@@ -1299,7 +1328,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         },
         hint: 'model estimate only — real numbers come from pg_visibility',
       },
-      { label: 'Index scans', get: (s) => fmtNum(sumTables(s, (t) => t.idxScans)), hint: 'the plans that benefit' },
+      { label: 'Index scans', get: (s) => fmtNum(sumTables(s, (t) => t.idxScans)), hint: 'ordinary model index templates; there is no index-only plan' },
       { label: 'Since last vacuum', get: (s) => fmtDuration(sinceVacuum(s)) },
       { label: 'Vacuum', get: (s) => vacSummary(s) },
     ],
@@ -1341,6 +1370,10 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       {
         heading: 'Where this is going',
         body: 'Relying on the kernel is convenient and imprecise: Postgres cannot control readahead well, cannot see what the kernel evicted, and pays a copy on every read. `debug_io_direct` exists to bypass the cache but is a development setting, not a production one, because Postgres does not yet do its own prefetching well enough to cover the loss. PostgreSQL 18 added a real asynchronous I/O subsystem (`io_method`, with a worker-based default and `io_uring` on Linux), which is the groundwork for a future where the database manages its own I/O depth instead of hoping the kernel guesses right.',
+      },
+      {
+        heading: 'What the city models',
+        body: 'The OS-cache route animation is illustrative: each shared-buffer miss is randomly drawn along a cache-hit or storage route. That draw does not change model time, counters, plan choice or device work, and the engine has no kernel-cache capacity, residency or eviction state.',
       },
     ],
     metrics: [
@@ -1392,6 +1425,10 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         heading: 'What you would see in production',
         body: 'The healthy signature is fsync latency in the low single-digit milliseconds, with a periodic bump at the end of each checkpoint. The unhealthy one is a queue depth that never drains and commit latency that tracks it — storage that cannot absorb the checkpoint’s fsyncs on top of the ordinary WAL flush rate. Under a spread checkpoint the full-page-image surge has largely decayed by the time the fsync phase arrives, so the two costs land at opposite ends of the interval; when they do collide, it is because `max_wal_size` is forcing checkpoints early. Also worth knowing: if an `fsync()` fails, Postgres deliberately PANICs rather than retrying, because on Linux a failed fsync could drop the error and let a later fsync return success on data that never landed.',
       },
+      {
+        heading: 'What the city models',
+        body: 'The storage model combines sampled read/write demand into one pressure scalar used by backend phases, and exposes representative rates, WAL positions and checkpoint state. It has no device queue, calibrated read or fsync latency, failure result, random-versus-sequential service time, media durability state or link from device cost constants to plan selection. OS-cache route draws do not alter device work.',
+      },
     ],
     metrics: [
       { label: 'WAL fsynced to', get: (s) => fmtLsn(s.wal.flushLsn) },
@@ -1401,7 +1438,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         get: (s) => fmtNum(s.buffers.dirtyEvictions),
         hint: 'a backend had to write a page before it could reuse the buffer',
       },
-      { label: 'Checkpoint', get: (s) => CKPT_PHASE[s.checkpoint.phase], hint: 'fsync is where the latency spike lives' },
+      { label: 'Checkpoint', get: (s) => CKPT_PHASE[s.checkpoint.phase], hint: 'model phase only; the city has no query-latency series' },
       { label: 'Full-page burst', get: (s) => fmtPct(s.wal.fpwBurst, 0), hint: 'extra WAL from the full-page images owed since this checkpoint began' },
     ],
     knobs: ['fullPageWrites', 'synchronousCommit', 'checkpointTimeout', 'maxWalSize'],
@@ -1449,6 +1486,10 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       {
         heading: 'How to tune it',
         body: 'Read PostgreSQL checkpoint messages and correlate them with WAL generation, `num_requested`, explicit maintenance and backup activity. If WAL pressure is the verified cause, raise `max_wal_size` against measured peak WAL rate and available disk; if explicit requests are the cause, changing it will not help. Lengthening `checkpoint_timeout` can reduce full-page-image frequency but may lengthen crash recovery, so decide it against the actual RTO. Leave `checkpoint_completion_target` at 0.9 unless measurements establish a reason to finish writes earlier.',
+      },
+      {
+        heading: 'What the city measures',
+        body: 'The city computes sampled dirty-page writes, checkpoint phases, request reasons, full-page-image WAL and shared storage pressure. The city has no query-latency series, response-time histogram or p99, so the PostgreSQL latency pattern described above is not a plotted model result.',
       },
     ],
     metrics: [
@@ -1505,7 +1546,11 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'The knobs',
-        body: '`bgwriter_delay` (200 ms) is how often it wakes, `bgwriter_lru_maxpages` (100) caps how many buffers it may write per round, and `bgwriter_lru_multiplier` (2.0) scales how far ahead of recent demand it tries to stay. Raising `bgwriter_lru_maxpages` to a few hundred is a reasonable first move on a write-heavy system with fast storage. Turning the writer off entirely is a good way to *see* what it was doing: backend writes climb and query latency picks up a long tail almost immediately.',
+        body: '`bgwriter_delay` (200 ms) is how often it wakes, `bgwriter_lru_maxpages` (100) caps how many buffers it may write per round, and `bgwriter_lru_multiplier` (2.0) scales how far ahead of recent demand it tries to stay. Raising `bgwriter_lru_maxpages` to a few hundred is a reasonable first move on a write-heavy system with fast storage. On PostgreSQL, turning the writer off moves dirty-victim writes onto query critical paths and can create a long latency tail.',
+      },
+      {
+        heading: 'What the city measures',
+        body: 'The city charges representative dirty-victim write time to a backend and shows sampled client-backend writes, bgwriter cleans, dirty frames and route particles. The city has no query-latency series or p99, so it cannot display the production latency tail described above.',
       },
     ],
     metrics: [
@@ -1626,6 +1671,10 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         heading: 'Memory and repeat passes',
         body: 'The dead TIDs collected in the heap scan have to fit in `maintenance_work_mem` (or `autovacuum_work_mem`). If they do not, vacuum stops, does a full pass over every index, empties the list and resumes — so a large table with five indexes and a small memory setting can read all five indexes several times in one vacuum. PostgreSQL 17 replaced the old flat TID array with a much more compact structure and removed the 1 GiB ceiling that used to force this, which made large-table vacuums substantially cheaper.',
       },
+      {
+        heading: 'What the city models',
+        body: 'The worker follows one fixed pass through heap scan, one pass per declared index, heap cleanup, truncation, a folded-in analyze stage and return, with representative page I/O and WAL. It does not model `maintenance_work_mem`, repeated index passes, per-page visibility bits, freeze age, anti-wraparound launches, cost points, lock acquisition for truncation or FSM updates. File truncation is a tail-density heuristic, not a lock outcome.',
+      },
     ],
     metrics: [
       { label: 'Fleet', get: (s) => vacSummary(s) },
@@ -1693,13 +1742,17 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         heading: 'What you would see in production',
         body: 'Measure before you rewrite: `pgstattuple` gives an exact free-space percentage at the cost of reading the table, and `pg_freespace()` shows what the map already knows about. If a table is 60% dead space and stable, a rewrite buys real scan performance. If it is 60% dead space and climbing, rewriting it changes nothing — find the long-running transaction or the too-timid autovacuum setting first. And for delete-driven bloat, partitioning plus `DROP TABLE` on old partitions eliminates the problem instead of managing it.',
       },
+      {
+        heading: 'What the city models',
+        body: 'The landfill is a cumulative teaching pile driven by the model’s removed-tuple count. Removing dead rows increases aggregate spare capacity and can delay relation extension, but the engine has no per-page free-space or FSM placement path and no reclaimed byte count.',
+      },
     ],
     metrics: [
       { label: 'Tuples reclaimed', get: (s) => fmtNum(s.autovac.landfill) },
       {
-        label: 'Space reusable',
+        label: 'Dead bytes remaining estimate',
         get: (s) => fmtBytes(sumTables(s, (t) => t.deadTuples) * 120),
-        hint: 'rough model estimate of dead space still inside the files',
+        hint: 'rough dead-version estimate, not reusable-space state',
       },
       {
         label: 'Worst table',
@@ -1751,6 +1804,10 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         heading: 'What you would see in production',
         body: 'With those four on, an incident reads itself: lock waits name the blocking pid, checkpoint lines line up with the latency spikes, and slow-query entries carry plans. Two cautions. The collector is one process, so logging every statement on a high-TPS cluster makes it a bottleneck and can stall backends writing to a full pipe. And `log_temp_files = 0` plus `log_autovacuum_min_duration` are worth adding — they catch the two problems that otherwise never appear anywhere: work_mem spilling to disk, and vacuums that take longer than you assumed.',
       },
+      {
+        heading: 'What the city models',
+        body: 'The logging building animates a derived teaching rate from modeled locks, checkpoints and activity. The engine has no log messages, pipe, rotation, thresholds, searchable history, collector backpressure, slow-query timing or auto_explain plans.',
+      },
     ],
     metrics: [
       {
@@ -1759,8 +1816,8 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         hint: 'what log_lock_waits would be printing right now',
       },
       {
-        label: 'Longest wait',
-        get: (s) => fmtDuration(s.locks.reduce((m, l) => (l.ageSec > m ? l.ageSec : m), 0)),
+        label: 'Longest model wait',
+        get: (s) => `${fmtDuration(s.locks.reduce((m, l) => (l.ageSec > m ? l.ageSec : m), 0))} model time`,
       },
       { label: 'Checkpoints logged', get: (s) => fmtNum(s.checkpoint.count) },
       { label: 'Autovacuum runs', get: (s) => fmtNum(s.autovac.totalRuns) },
@@ -1854,6 +1911,10 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         heading: 'The availability trap',
         body: 'Synchronous replication is a durability feature that reduces availability. If the only synchronous standby stops responding, commits wait until it returns or the configuration changes. PostgreSQL’s `ANY 1 (s1, s2)` is **quorum-based synchronous replication**: a commit needs one eligible standby acknowledgement. It is not a leader-election or consensus quorum and does not make PostgreSQL a consensus system. That commit quorum is separate from the DCS voting majority used by etcd and from Patroni’s ownership of the DCS leader lock.',
       },
+      {
+        heading: 'What the city models',
+        body: 'The link is a bounded queue of modeled WAL positions with a configurable one-way delay and acknowledgement paths. It has no TCP packets, PostgreSQL protocol, bandwidth, congestion, reconnect timing or socket failures. The network setting can hold modeled commits in commit_wait, but displayed statement time remains deliberately stretched model time rather than production latency.',
+      },
     ],
     metrics: [
       {
@@ -1866,7 +1927,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       { label: 'Network latency', get: (s) => `${fmtNum(synchronousStandby(s).networkLagMs)} ms`, hint: 'one way to the active synchronous follower' },
       {
-        label: 'Commit tax',
+        label: 'Configured round-trip floor',
         get: (s) => {
           if (s.knobs.synchronousCommit === 'off') return 'none — the commit does not wait at all'
           if (
@@ -1881,7 +1942,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
           }
           return 'none — local flush only'
         },
-        hint: 'a commit only pays the network when a synchronous standby is in the path',
+        hint: 'input-derived teaching figure; not measured statement latency',
       },
       { label: 'In flight', get: (s) => fmtNum(s.replication.inFlight), hint: 'WAL records on the wire' },
       {
@@ -1930,6 +1991,10 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         heading: 'What you would see in production',
         body: '`pg_stat_wal_receiver` on the standby shows `status`, the latest received LSN, and the primary’s host. Compare its received LSN with the startup process’s replay position: if receive is current and replay is far behind, the network is fine and replay is the bottleneck, which is a completely different problem with completely different fixes. `recovery_min_apply_delay` deliberately creates that gap when you want a time-delayed standby as protection against a bad DELETE.',
       },
+      {
+        heading: 'What the city models',
+        body: 'The city advances received, written and flushed LSNs through delayed queues and uses those frontiers for modeled acknowledgements. It does not run a walreceiver, write standby pg_wal files, call write or fsync, retry a broken socket, use restore_command or model a standby disk.',
+      },
     ],
     metrics: [
       { label: 'Link', get: (s) => (s.replication.connected ? 'streaming' : s.replication.enabled ? 'reconnecting' : 'no standby') },
@@ -1939,7 +2004,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       {
         label: 'Not yet applied',
         get: (s) => fmtBytes(Math.max(0, s.replication.flushLsn - s.replication.replayLsn)),
-        hint: 'received and safe, but not yet visible to queries there',
+        hint: 'modeled visibility frontier; no standby query results are executed',
       },
     ],
     knobs: ['replicaEnabled', 'replicaNetworkLag', 'replicaSlowApply', 'synchronousCommit'],
@@ -1976,6 +2041,10 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       {
         heading: 'What you would see in production',
         body: 'A standby on identical hardware falling steadily behind a busy primary, with the replay LSN trailing while the flush LSN keeps pace, is the classic signature: the WAL arrives fine and cannot be applied fast enough. Big index builds, mass updates and anything that dirties a lot of pages at once make it worse. On the primary side, the corresponding number to care about is recovery time after a crash, which is bounded by how much WAL was written since the last checkpoint — that is the trade you make every time you raise `checkpoint_timeout`.',
+      },
+      {
+        heading: 'What the city models',
+        body: 'The city moves one applied-LSN frontier at a fixed teaching rate and touches representative standby buffer frames as bytes are applied. It does not parse WAL records, identify target relation blocks, compare page LSNs, prefetch pages, charge replay I/O or maintain replica row contents.',
       },
     ],
     metrics: [
@@ -2033,6 +2102,10 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       {
         heading: 'Failover',
         body: 'Promotion stops recovery, bumps the **timeline**, and opens for writes. Everything downstream of the old primary must then follow that timeline or be rebuilt, which is what timeline history files are for. Two things people learn the hard way: with asynchronous replication, promotion loses whatever WAL had not reached the standby, so measure your lag if you care about the answer; and the old primary must never be brought back up as a primary — use `pg_rewind` or re-seed it, because two writable copies of the same cluster diverge in ways nothing can merge.',
+      },
+      {
+        heading: 'What the city models',
+        body: 'The standby is an independent receive/write/flush/apply LSN pipeline with an aggregate data-directory projection and representative buffer sample. It has no copied heap or index pages, replica catalog, row visibility checks, hot-standby SELECT execution, recovery conflicts, query cancellation, restartpoint scheduler or standby-local background processes.',
       },
     ],
     metrics: [
@@ -2135,12 +2208,16 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         heading: 'What you would see in production',
         body: 'A standby’s file sizes track the primary’s closely but not instantly, because the extension records have not all been replayed yet. If they diverge permanently, something is wrong — most often the standby was promoted at some point, wrote its own data, and is now a fork rather than a copy. That is what `pg_rewind` is for: it uses WAL to find the blocks that changed since divergence and copies just those back, which is far cheaper than a full re-seed.',
       },
+      {
+        heading: 'What the city models',
+        body: 'This building reports the primary model’s aggregate data-directory byte estimate together with the standby applied LSN. It does not copy or extend relation files, keep per-fork sizes, store standby-local WAL/control/configuration, or make the byte total lag behind replay.',
+      },
     ],
     metrics: [
       { label: 'Replayed to', get: (s) => fmtLsn(s.replication.replayLsn) },
       { label: 'Primary at', get: (s) => fmtLsn(s.wal.insertLsn) },
       { label: 'Divergence', get: (s) => fmtBytes(Math.max(0, s.wal.insertLsn - s.replication.replayLsn)), hint: 'how stale the copy is right now' },
-      { label: 'Copy size', get: (s) => fmtBytes(sumTables(s, (t) => t.pages) * PAGE), hint: 'same heap files as the primary' },
+      { label: 'Aggregate size projection', get: (s) => fmtBytes(sumTables(s, (t) => t.pages) * PAGE), hint: 'primary relation-size estimate; no replica files are stored' },
     ],
     knobs: ['replicaEnabled', 'replicaSlowApply', 'replicaNetworkLag'],
     see: ['storage.datadir', 'replica.standby', 'walreceiver', 'object.store'],
@@ -2367,9 +2444,13 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         heading: 'What you would see in production',
         body: 'Tables bloating on the primary with no long transactions visible in its own `pg_stat_activity` — check `backend_xmin` in `pg_stat_replication`, which is the standby holding the horizon. The usual compromise is to leave `hot_standby_feedback` off and raise `max_standby_streaming_delay` on a standby dedicated to reporting, so long queries survive without the primary paying, at the cost of that standby lagging while they run. Keep the failover standby separate from the reporting standby, and give them different settings.',
       },
+      {
+        heading: 'What the city models',
+        body: 'The read-only client emits illustrative traffic and the standby-long-query control can pin the primary xmin horizon through modeled feedback. The city does not execute a standby SELECT, return replica rows, maintain a replica catalog or buffer query, detect recovery conflicts, cancel queries or measure standby-query time. Replay LSN is only a visibility frontier here.',
+      },
     ],
     metrics: [
-      { label: 'Standby', get: (s) => (s.replication.enabled ? (s.replication.connected ? 'accepting reads' : 'offline') : 'not running') },
+      { label: 'Standby route', get: (s) => (s.replication.enabled ? (s.replication.connected ? 'illustrative reads active' : 'offline') : 'not running'), hint: 'no replica query results are modeled' },
       {
         label: 'Staleness',
         get: (s) =>
@@ -2387,7 +2468,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         get: (s) => fmtNum(sumTables(s, (t) => t.deadTuples)),
       },
     ],
-    knobs: ['replicaEnabled', 'replicaSlowApply', 'longRunningXact', 'seqScanRatio'],
+    knobs: ['replicaEnabled', 'replicaSlowApply', 'standbyLongQuery', 'seqScanRatio'],
     see: ['replica.standby', 'autovac.worker', 'net.wire', 'replica.buffers'],
     source: ['src/backend/storage/ipc/procarray.c', 'src/backend/replication/walsender.c'],
     refs: {
@@ -2424,13 +2505,17 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         heading: 'What you would see in production',
         body: 'The characteristic failure is replication stopping dead on one conflicting row — a duplicate key, a missing row for an UPDATE — with the apply worker retrying the same transaction in a loop and lag growing without bound. You fix it by resolving the row, or by skipping the transaction, and `subscription … disable_on_error` (PostgreSQL 15) keeps it from spinning. Also watch the slot on the publisher: an unhealthy subscriber is an idle slot, and an idle slot is the primary’s WAL volume filling up. PostgreSQL 16 added parallel apply for large streamed transactions, which helps when a single apply worker is the bottleneck.',
       },
+      {
+        heading: 'What the city models',
+        body: 'The subscriber is an illustrative endpoint for the decoder’s derived changes-per-second rate and collapsed logical-slot LSN. It has no publications, table sync, decoded transactions, row values, apply worker, subscriber tables, conflicts, DDL, sequences or acknowledgement independent of that one slot position.',
+      },
     ],
     metrics: [
       {
-        label: 'Subscription',
-        get: (s) => (s.knobs.walLevel !== 'logical' ? 'impossible — wal_level is not logical' : s.replication.logicalEnabled ? 'streaming' : 'idle'),
+        label: 'Illustrative route',
+        get: (s) => (s.knobs.walLevel !== 'logical' ? 'off — wal_level is not logical' : s.replication.logicalEnabled ? 'active' : 'idle'),
       },
-      { label: 'Changes / s', get: (s) => fmtNum(s.replication.logicalEnabled ? s.replication.logicalChangesPerSec : 0), hint: 'row-level operations applied' },
+      { label: 'Changes / s', get: (s) => fmtNum(s.replication.logicalEnabled ? s.replication.logicalChangesPerSec : 0), hint: 'derived rate projection; no row-level operations are applied' },
       { label: 'Confirmed to', get: (s) => (s.replication.logicalEnabled ? fmtLsn(s.replication.logicalSlotLsn) : '—'), hint: 'confirmed_flush_lsn; real retention can begin earlier at restart_lsn' },
       {
         label: 'WAL retained for it',

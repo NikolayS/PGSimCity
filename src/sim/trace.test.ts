@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest'
 import { createBus } from '../core/bus'
 import type { QueryKind, TraceStop } from '../core/types'
 import { TABLES } from '../core/catalog'
-import { createSim, traceStopBit } from './model'
+import { traceStopBit } from '../core/model-helpers'
+import { createSim } from './model'
 
 interface TraceCase {
   kind: QueryKind
