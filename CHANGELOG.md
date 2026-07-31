@@ -9,6 +9,78 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.29.0] — 2026-07-31
+
+**The first release gated by an independent review panel**, and it found things
+twenty-one previous releases and a green suite did not.
+
+Three reviewers read `main` with distinct lenses — the simulation's PostgreSQL
+fidelity, the operational claims, and the user-facing prose — two on Opus and one
+on GPT, independently. Everything below was **measured**, not inferred.
+
+### Falsehoods, now fixed
+
+- **`wal_level = minimal` froze the whole database, permanently.** `standby.enabled`
+  was assigned before the guard that disconnects the standby at that level, so the
+  synchronous commit branch was entered against a frozen acknowledgement — and that
+  branch had no watchdog while the local branch did. Measured: 16 backends in
+  `commit_wait`, **0 tps**, no recovery. One click from the control rail.
+- **Losing the synchronous standby silently downgraded durability and made the
+  city faster** — 272 tps to **366 tps**. Real PostgreSQL enters
+  `SyncRepWaitForLSN()` and waits forever. The app's own documentation already
+  said so: *"commits hang — not fail, hang."* Commits now hang, and the plated
+  `synchronous_standby_names` can be cleared to release them, which is what an
+  operator actually does.
+- **A follower ahead of the new leader silently followed the new timeline.**
+  PostgreSQL refuses — *"requested timeline 2 does not contain minimum recovery
+  point"*. Promoting a laggard leaves **zero** healthy standbys, not one; the
+  scenario now says so and reports both repair costs.
+- **Vacuum's cost throttle scaled the reported I/O instead of vacuum's pace** —
+  eleven of every twelve heap reads unaccounted, so autovacuum could not produce
+  the I/O event the Diagnose page tells readers to suspect. Real cost-based vacuum
+  sleeps. And the disclosure was itself false: under the heading *"Where this
+  model cheats"* it claimed a shared cost budget that did not exist.
+- **A bulk-read sequential scan scored a 99% buffer hit, and rising** — the ring
+  was implemented correctly and defeated by the hit accounting, contradicting both
+  the model's own code and its own prose.
+- **The background writer never lapped an idle pool**, because its cursor
+  re-anchored to the clock hand every round. Real `BgBufferSync()` keeps a
+  persistent cursor precisely so idle periods end with clean buffers.
+- **The Query Lab printed plans PostgreSQL cannot produce**, and plans that
+  contradicted their own displayed SQL.
+
+### Consensus, not an arbiter
+
+The model had one central Patroni, one boolean for DCS reachability, and every
+node and DCS member on one plate — teaching that split-brain is prevented by a
+lock server you can switch off.
+
+Patroni is now an agent per node; etcd is a member per site running a consensus
+protocol with terms and commit indices; three failure-domain platforms sit 320 m
+apart. **A minority is not outvoted — it cannot commit**, so it never observes
+itself holding the leader key. Isolating the primary elects on the majority side
+and keeps serving. Splitting every member leaves no leader at all: availability
+given up to keep correctness.
+
+### 43 reviewed content claims
+
+39 corrected, 4 deferred as structural. Among them: a shared-buffer miss is not
+proof of physical I/O, `active` with no wait event is not proof of CPU time, a
+deadlock victim does not fail with `serialization_failure`, and *"nothing is ever
+modified in place"* was false in the sentence asserting it.
+
+**The project now states which PostgreSQL it describes — 18** — after two
+reviewers disagreed about the bulk-read ring and both turned out to be right
+about different versions.
+
+### Deliberately left
+
+Four structural findings are deferred rather than fixed, and `KNOB-AUDIT.md` is
+marked re-verified with its stale line references labelled historical rather than
+silently rewritten.
+
+---
+
 ## [0.28.0] — 2026-07-31
 
 ### The documentation says what the app does
