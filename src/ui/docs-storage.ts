@@ -400,19 +400,23 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     id: 'timeline.yard',
     title: 'Timeline switchyard',
     subtitle: 'WAL history, not a mergeable branch',
-    tldr: 'Promotion creates a new WAL history at one exact LSN; the old primary’s later WAL belongs to a different past.',
+    tldr: 'This promotion leaves one live history; a concurrent split-brain would leave two unmergeable live histories, and fencing is why the city cannot show one.',
     sections: [
       {
-        heading: 'Read the turnout literally',
-        body: 'Before promotion there is one through-line: timeline 1. Promotion writes a timeline-history file and makes timeline 2 at the promoted standby’s durable LSN. The turnout is that divergence point. Timeline 1 can continue on the former primary and timeline 2 can continue on the new primary, but those rails are different histories after the turnout—not one server being “behind” another.',
+        heading: 'The fork in front of you is sequential',
+        body: 'The old primary stopped before this standby was promoted, so only one history is accepting writes. Promotion made timeline 2 at the standby’s durable LSN. The former primary had flushed a tail of timeline 1 after that point but never shipped it; those measured bytes and committed write transactions are lost. `pg_rewind` repairs the old data directory for the one surviving history by discarding that already-orphaned WAL tail. This is bad, but bounded by the replication gap the city just measured.',
       },
       {
-        heading: 'What failover loses',
-        body: 'The fork begins at the promoted standby’s flushed LSN because recovery can replay everything durable there before opening for writes. Bytes that the failed primary had flushed after that point but had not delivered are absent from the new history. The city counts both that exact byte interval and the committed write transactions whose commit records fall inside it. Planned switchover closes the interval first, so both counts are zero.',
+        heading: 'A concurrent fork is split-brain',
+        body: 'True split-brain is different: the old primary and the promoted node both keep accepting writes after the same divergence point. Loss is then every transaction committed on whichever side a human rejects, for the full duration of the split—possibly hours—not only the last replication gap. The histories cannot be merged. A human must choose the authoritative history and extract anything salvageable from the loser by hand. Running `pg_rewind` on that loser is destructive rather than merely corrective: it discards work clients were told had committed while both histories were live.',
       },
       {
-        heading: 'Why the old primary cannot just reconnect',
-        body: 'After unplanned failover, the old primary owns WAL beyond the fork that the new primary never saw, while the new primary is writing different WAL on the child timeline. Starting the old primary as a standby would ask recovery to replay two incompatible answers for the same point in history. Timelines do not merge. `pg_rewind` must return the old data directory to the common point, or a fresh base backup must replace it.',
+        heading: 'Fencing prevents the concurrent fork',
+        body: 'Patroni holds a leader lock in the DCS with a time-to-live (`ttl`) and renews it during each HA cycle (`loop_wait`). If the leader cannot renew the lock, Patroni demotes PostgreSQL before the lease expires; only after the lock is free may a candidate acquire it and promote. A watchdog device is the backstop: Patroni arms it before promotion, and if Patroni crashes, stalls, or cannot stop PostgreSQL in time, the watchdog resets the machine instead of letting an unfenced primary keep serving. **Fencing means making the old primary unable to write before another can become primary.** That is why split-brain is not a normal failover outcome and why the city leaves it unreachable.',
+      },
+      {
+        heading: 'What would have to fail',
+        body: 'The old leader would have to lose the DCS yet continue accepting writes until a rival acquired the expired lock, **and** its watchdog would have to fail to stop the machine. In practice that chain comes from an absent watchdog, `ttl`, `loop_wait`, and retry timing that leaves too little real margin to demote, a watchdog device not actually wired to reset the host, or an operator overriding the leader lock or starting PostgreSQL outside Patroni. Clients must then reach both writable nodes for conflicting commits to accumulate. In a correctly configured and tested cluster this requires multiple independent failures. The realistic cause is misconfiguration—especially a fence that was never verified—not bad luck. No percentage is shown because there is no defensible public base rate from which to calculate one.',
       },
     ],
     metrics: [
@@ -456,7 +460,12 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     ],
     see: ['ha.dcs', 'ha.rejoin', 'object.store'],
     refs: {
-      docs: [manual('continuous-archiving.html', '25.3.5 Timelines')],
+      docs: [
+        manual('continuous-archiving.html', '25.3.5 Timelines'),
+        manual('app-pgrewind.html', 'pg_rewind'),
+        { label: 'Patroni watchdog support — split-brain fencing', url: 'https://patroni.readthedocs.io/en/latest/watchdog.html' },
+        { label: 'Patroni FAQ — leader lock, ttl, loop_wait and retry_timeout', url: 'https://patroni.readthedocs.io/en/latest/faq.html' },
+      ],
       suzuki: suzuki(10, 'Online Backup and Point-In-Time Recovery (PITR)'),
       rogov: rogov(R_WAL, 'Write-Ahead Log — recovery'),
     },
@@ -478,7 +487,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Split-brain boundary and simplifications',
-        body: 'This model will not promote any standby while the DCS is unavailable, and a node whose lease expires is demoted before a rival can acquire the lock. It therefore records `splitBrain = false`; it does not simulate a frozen Patroni process, watchdog hardware, DCS quorum members, asymmetric partitions, synchronous-mode rules, candidate scoring, `maximum_lag_on_failover`, or Patroni’s DCS failsafe mode. Real `ttl`, `loop_wait`, retry and consensus timing depend on configuration; the city compresses them to seconds so the lease post can be watched.',
+        body: 'This model will not promote any standby while the DCS is unavailable, and a node whose lease expires is demoted before a rival can acquire the lock. It therefore records `splitBrain = false`; the Timeline switchyard explains the concurrent fork that this fence prevents. The city does not simulate a frozen Patroni process, watchdog devices or reboots, DCS quorum members, asymmetric partitions, synchronous-mode rules, candidate scoring, `maximum_lag_on_failover`, or Patroni’s DCS failsafe mode. Real `ttl`, `loop_wait`, retry and consensus timing depend on configuration; the city compresses them to seconds so the lease post can be watched.',
       },
     ],
     metrics: [
@@ -508,6 +517,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     refs: {
       docs: [
         { label: 'Patroni FAQ — ttl, loop_wait and retry_timeout', url: 'https://patroni.readthedocs.io/en/latest/faq.html' },
+        { label: 'Patroni watchdog support — split-brain fencing', url: 'https://patroni.readthedocs.io/en/latest/watchdog.html' },
         { label: 'Patroni DCS failsafe mode and split-brain prevention', url: 'https://patroni.readthedocs.io/en/latest/dcs_failsafe_mode.html' },
         manual('warm-standby.html', '26.2. Log-Shipping Standby Servers — failover'),
       ],
