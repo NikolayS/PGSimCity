@@ -9,6 +9,44 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.26.0] — 2026-07-31
+
+### Three situations with a correct answer
+
+Roadmap item 10, and it was always going to be last: it needs a cluster that can
+genuinely go wrong, and only v0.25.0 finished making one.
+
+Not points and badges. Each of these has a real answer that operators learn the
+hard way, and a wrong choice that is **survivable, legible and clearly yours**.
+
+**Slot pressure.** `pg_wal` at 416 of 512 MiB, 363 MiB of it retained for a
+lagging standby. Adding capacity is right — the standby catches up and no writes
+are rejected. Dropping the slot frees WAL to 224 MiB immediately and costs an
+8.36 GiB, 22-second rebuild. Both are legitimate; which is right depends on how
+far behind the standby is and how fast the disk is filling.
+
+**Vacuum blockade.** A pinned xmin horizon, dead rows climbing, three autovacuum
+workers reclaiming nothing. Terminating the idle transaction is right, because it
+holds no uncommitted work. Waiting twenty seconds costs 101,567 dead versions and
+1,689 pages — and is still recoverable.
+
+**Failover candidate.** Promoting `standby_a` loses 598.80 KiB and **zero
+acknowledged writes**. Promoting `standby_b` loses 13.26 MiB and **4,284
+acknowledged transactions**, then needs a 6.03-second rewind. The cost of
+choosing wrong is measured in transactions a client was told had committed.
+
+Decisions appear in a non-modal instruments dock — the situation is discovered
+from the world and the readouts, not announced by a dialogue. No score, no
+badges, no countdown. The scaled WAL rate is labelled rather than implied.
+
+All three share the existing scenario rail and `runScenario` spine, and each is
+played **both ways** by a test that also recovers from the wrong branch. A
+scenario that cannot be played by a test cannot be trusted.
+
+Chunk +6.68 kB.
+
+---
+
 ## [0.25.0] — 2026-07-31
 
 ### Failover, switchover, and why the old primary cannot rejoin

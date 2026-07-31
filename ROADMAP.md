@@ -60,7 +60,7 @@ that design question three times, differently. That worked: the 2D trace shipped
 first, and the control center inherited its vocabulary rather than inventing a
 second one.
 
-## 4. Break things from inside — in progress
+## 4. Break things from inside — shipped
 
 The knobs exist in a control rail. In first person they should be **things you
 walk to and operate** — pull the autovacuum yard's switch and then watch bloat
@@ -153,7 +153,7 @@ plan, buffer reads, WAL and commit, narrated by the transaction's own state
 machine rather than a script, with a step mode. Kept here because it was asked
 for and is done.
 
-## 10. Actual game — goals, dynamics, balance
+## 10. Actual game — goals, dynamics, balance — shipped
 
 The reframe the rest points at. Not points and badges: **situations with a
 correct answer you have to find.** The replica is lagging and the disk is
