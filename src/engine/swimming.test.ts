@@ -6,7 +6,7 @@ import { createSim } from '../sim/model'
 import { CITY } from '../world/layout'
 import type { AudioApi } from './audio'
 import { createCollisionWorld } from './collision'
-import { createBufferWater } from './water'
+import { createBufferWater, waterReflectionScale } from './water'
 import { createWalkController } from './walk'
 
 const POOL_HALF = ((CITY.buf.grid - 1) * CITY.buf.pitch + CITY.buf.tile) / 2
@@ -84,6 +84,14 @@ function createWalkHarness(
 }
 
 describe('buffer-pool swimming', () => {
+  it('budgets one rippled planar reflection only on medium and higher tiers', () => {
+    expect(waterReflectionScale('low')).toBe(0)
+    expect(waterReflectionScale('reduced')).toBe(0)
+    expect(waterReflectionScale('medium')).toBe(0.25)
+    expect(waterReflectionScale('high')).toBe(0.5)
+    expect(waterReflectionScale('ultra')).toBe(0.5)
+  })
+
   it('keeps a walker on the deck grounded while crossing the buffer tile field', () => {
     const harness = createWalkHarness()
     const { audio, walk } = harness
@@ -225,10 +233,21 @@ describe('buffer-pool swimming', () => {
     const volume = water.group.getObjectByName('buffer.water.volume') as THREE.Mesh
 
     expect(surface).toBeInstanceOf(THREE.Mesh)
-    expect((surface.material as THREE.MeshBasicMaterial).side).toBe(THREE.DoubleSide)
+    expect((surface as THREE.Mesh & { isReflector?: boolean }).isReflector).toBe(true)
+    const surfaceMaterial = surface.material as THREE.ShaderMaterial
+    expect(surfaceMaterial.side).toBe(THREE.DoubleSide)
+    expect(surfaceMaterial.transparent).toBe(true)
+    expect(surfaceMaterial.depthWrite).toBe(false)
+    expect(surfaceMaterial.uniforms.uTime.value).toBe(0)
+    expect(surfaceMaterial.uniforms.uShallowColor.value).toBeInstanceOf(THREE.Color)
+    expect(surfaceMaterial.uniforms.uDeepColor.value).toBeInstanceOf(THREE.Color)
+    expect(surfaceMaterial.uniforms.uShallowColor.value.getHex()).not.toBe(
+      surfaceMaterial.uniforms.uDeepColor.value.getHex(),
+    )
     expect(new THREE.Box3().setFromObject(volume).min.y).toBeCloseTo(CITY.buf.baseY, 5)
 
     water.update(0.5, true)
+    expect(surfaceMaterial.uniforms.uTime.value).toBeCloseTo(0.5)
     expect((scene.fog as THREE.Fog).far).toBeLessThan(90)
     water.splash(0, 0, 1)
     expect(water.group.children.some((child) => child.name === 'buffer.water.ripple' && child.visible)).toBe(true)

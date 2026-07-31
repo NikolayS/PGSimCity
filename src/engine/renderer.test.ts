@@ -39,6 +39,7 @@ describe('rendering fidelity ladder', () => {
       expect(FIDELITY_PRESETS[level]).toEqual(
         expect.objectContaining({
           environment: false,
+          reflectionScale: 0,
           ambientOcclusion: false,
           aoScale: 0,
           aoSamples: 0,
@@ -54,6 +55,9 @@ describe('rendering fidelity ladder', () => {
     const ultra = FIDELITY_PRESETS.ultra
 
     expect(medium.environment).toBe(true)
+    expect(medium.reflectionScale).toBe(0.25)
+    expect(high.reflectionScale).toBe(0.5)
+    expect(ultra.reflectionScale).toBe(0.5)
     expect(medium.ambientOcclusion).toBe(true)
     expect(medium.aoScale).toBeGreaterThan(0)
     expect(medium.aoSamples).toBeGreaterThan(0)
