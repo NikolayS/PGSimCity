@@ -9,6 +9,76 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.30.0] — 2026-07-31
+
+**The second review round, and it found what the first structurally could not** —
+because two of its four lenses required *running* the app rather than reading it.
+
+### The Machine executed your SQL twice
+
+`EXPLAIN (ANALYZE, BUFFERS)` ran the statement inside a transaction that was
+rolled back, then the statement ran again for the displayed result. `ANALYZE`
+executes — and **PostgreSQL documents that sequence changes are not rolled
+back**. A `nextval()` advanced twice; volatile functions ran twice; delays ran
+twice. Proven through the UI with `CREATE SEQUENCE`.
+
+A submitted statement now executes once and the displayed rows come from that
+execution. Verified the same way: `nextval = 1`, `last_value = 1`.
+
+### Diagnose reached the wrong verdict while showing the evidence against it
+
+Three of eight diagnostic paths. The replication step read the **single-standby
+aggregate** while the grid above it rendered both walsenders, so it concluded
+"the standby is current" with a 17 MiB lag row on screen and `REPLAY LAG 7.42 s`
+in the header. The bloat path gated above a threshold the model cannot reach, so
+following the tool led to *"These tables are not bloated"* — its own headline
+lesson unreachable. The slow-server path required a CPU share the staged storm
+never produces.
+
+The cause is nameable and general: the three-node cluster work reached the model,
+the world and the views projection, and **never reached the branch logic.**
+
+Two tests now stop the class recurring: **every branch gate must be reachable in
+the state its path stages**, and **a branch must read the same source as the view
+beside it.**
+
+### The simulation was importing three.js
+
+`CLAUDE.md` states twice that `src/sim` never imports three.js and that
+simulation and presentation meet only at `SimState`. Neither was true: the model
+took table definitions as input, flow identity, and toast anchors from
+`world/layout.ts`, while world modules imported simulation helpers back. **A
+presentation-layout edit could change simulation behaviour.** The boundary this
+project's honesty argument rests on was circular.
+
+It is now enforced by a test asserting the import graph is acyclic and
+three.js-free, rather than by a sentence that had quietly become false.
+
+### A knob could be wired to nothing and every test passed
+
+`replicaSlowApply` could be disconnected from the model with **591 of 591 tests
+green**, because the broad every-knob test asserted only that a snapshot exists
+and every value is a string. Knob coverage now asserts a measurable output
+responds.
+
+### Prose promised what the model cannot do
+
+The rules named one failure mode — buildings teaching falsehoods more
+persuasively than text teaches truth. A review of the project's *premise* found
+the inverse running throughout: the tour promising join-order costing with **no
+join node in the codebase**, a plate promising that stale statistics misprice
+plans with no path from `ANALYZE` to a plan, a scenario telling the reader to
+watch a latency spike when `SimStats` has **no latency field at all**.
+
+Those claims are corrected or marked absent. Key Design Rule 7 now names both
+directions.
+
+Also fixed: the control center and the 2D flow printed the roughly hundredfold
+stretched model clock as plain milliseconds beside four faithful counters, making
+PostgreSQL look two orders of magnitude slower than it is.
+
+---
+
 ## [0.29.0] — 2026-07-31
 
 **The first release gated by an independent review panel**, and it found things
