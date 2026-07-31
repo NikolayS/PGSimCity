@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { FIDELITY_PRESETS, QUALITY_PRESETS } from './renderer'
+import { LIGHT_SHAFT_PRESETS } from './light-shafts'
 import type { QualitySettings } from '../core/types'
 
 describe('quality degradation ladder', () => {
@@ -46,6 +47,7 @@ describe('rendering fidelity ladder', () => {
           shadowMapSize: 1024,
         }),
       )
+      expect(LIGHT_SHAFT_PRESETS[level].scale).toBe(0)
     }
   })
 

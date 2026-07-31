@@ -21,6 +21,7 @@ import { applyGroundAtmosphere } from '../world/plate-fog'
 import { applySkyAtmosphere } from '../world/sky'
 import type { Bus, QualityLevel, QualitySettings } from '../core/types'
 import { GoldenHourOutputPass } from './color-grade'
+import { LIGHT_SHAFT_PRESETS, LightShaftPass } from './light-shafts'
 import { waterReflectionScale } from './water'
 
 /* ============================================================================
@@ -245,6 +246,8 @@ const AO_SCENE_BOX = new THREE.Box3(new THREE.Vector3(-540, -90, -430), new THRE
  * scene render; screen-space normals are reconstructed from depth instead.
  */
 class ComposerDepthGTAOPass extends GTAOPass {
+  sceneDepthTexture: THREE.DepthTexture | null = null
+
   override render(
     renderer: THREE.WebGLRenderer,
     writeBuffer: THREE.WebGLRenderTarget,
@@ -253,6 +256,7 @@ class ComposerDepthGTAOPass extends GTAOPass {
     maskActive: boolean,
   ): void {
     const depth = readBuffer.depthTexture as THREE.DepthTexture | null
+    this.sceneDepthTexture = depth
     if (depth && this.depthTexture !== depth) this.setGBuffer(depth)
     super.render(renderer, writeBuffer, readBuffer, deltaTime, maskActive)
   }
@@ -533,7 +537,8 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
 
   let composer: EffectComposer | null = null
   let renderPass: RenderPass | null = null
-  let gtaoPass: GTAOPass | null = null
+  let gtaoPass: ComposerDepthGTAOPass | null = null
+  let lightShaftPass: LightShaftPass | null = null
   let bloomPass: UnrealBloomPass | null = null
   let smaaPass: SMAAPass | null = null
   let outputPass: GoldenHourOutputPass | null = null
@@ -581,6 +586,9 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     })
     composer.addPass(gtaoPass)
 
+    lightShaftPass = new LightShaftPass(camera, gtaoPass)
+    composer.addPass(lightShaftPass)
+
     // Half-resolution bloom chain: UnrealBloomPass halves again internally for
     // mip 0, so the blur runs at a quarter of the framebuffer. Bloom is a wide
     // soft signal; nobody can tell, and it is ~4x cheaper.
@@ -607,9 +615,10 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   }
 
   function applyPassToggles(): void {
+    const fidelity = FIDELITY_PRESETS[quality.level]
+    const shaftsEnabled = air.daylight && LIGHT_SHAFT_PRESETS[quality.level].scale > 0
     if (gtaoPass) {
-      const fidelity = FIDELITY_PRESETS[quality.level]
-      configureComposerDepth(fidelity.ambientOcclusion)
+      configureComposerDepth(fidelity.ambientOcclusion || shaftsEnabled)
       gtaoPass.enabled = fidelity.ambientOcclusion
       // AO is a solidity cue, not a new night-time black channel. Keeping the
       // night blend restrained preserves neon value and its bloom threshold.
@@ -618,6 +627,14 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
         gtaoPass.updateGtaoMaterial({ samples: fidelity.aoSamples })
         gtaoPass.updatePdMaterial({ samples: fidelity.aoDenoiseSamples })
       }
+    }
+    if (lightShaftPass) {
+      const x = air.keyPos[0] - air.keyTarget[0]
+      const y = air.keyPos[1] - air.keyTarget[1]
+      const z = air.keyPos[2] - air.keyTarget[2]
+      lightShaftPass.setSunDirection(x, y, z)
+      lightShaftPass.setAtmosphere(air.skyGlow, fog.near)
+      lightShaftPass.setQuality(quality.level, air.daylight)
     }
     if (bloomPass) {
       bloomPass.enabled = quality.bloom && air.bloomEnabled
@@ -630,8 +647,8 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   }
 
   /**
-   * Depth textures are an AO input, not a tax on the composer. Restore the
-   * original depth-renderbuffer targets whenever AO is tiered off.
+   * Depth textures are an AO and shaft-occlusion input, not a tax on the
+   * composer. Restore depth renderbuffers when both effects are tiered off.
    */
   function configureComposerDepth(enabled: boolean): void {
     if (!composer || enabled === composerDepthEnabled) return
@@ -1112,6 +1129,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
 
     if (bloomPass) bloomPass.dispose()
     if (gtaoPass) gtaoPass.dispose()
+    if (lightShaftPass) lightShaftPass.dispose()
     if (smaaPass) smaaPass.dispose()
     if (outputPass) outputPass.dispose()
     if (composer) composer.dispose()
@@ -1119,6 +1137,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     composerDepthEnabled = false
     renderPass = null
     gtaoPass = null
+    lightShaftPass = null
     bloomPass = null
     smaaPass = null
     outputPass = null

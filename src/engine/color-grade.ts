@@ -137,6 +137,18 @@ export function gradeDaylightHex(hex: number, vignetteEdge = 0): number {
   return linearToHex(neutralToneMap(gradeLinear(hexToLinear(hex), vignetteEdge)))
 }
 
+/** Palette readout at the brightest point of the pre-grade shaft composite. */
+export function gradeDaylightHexWithScatter(hex: number, scatterHex: number, strength: number): number {
+  const base = hexToLinear(hex)
+  const scatter = hexToLinear(scatterHex)
+  const lit: Rgb = [
+    base[0] + scatter[0] * strength,
+    base[1] + scatter[1] * strength,
+    base[2] + scatter[2] * strength,
+  ]
+  return linearToHex(neutralToneMap(gradeLinear(lit, 0)))
+}
+
 /** Palette readout through the same output path with the grade disabled. */
 export function ungradedDaylightHex(hex: number): number {
   return linearToHex(neutralToneMap(hexToLinear(hex)))
