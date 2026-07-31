@@ -7,6 +7,7 @@ url="${1:-http://127.0.0.1:5173/}"
 output="${2:-/tmp/pgsimcity-v0.21.0-walkthrough.mp4}"
 port="${CDP_PORT:-9780}"
 seconds="${DEMO_SECONDS:-147}"
+start_seconds="${DEMO_START_SECONDS:-0}"
 minimum_kib=$((2 * 1024 * 1024))
 
 if [[ "${output}" != /* ]]; then
@@ -44,12 +45,13 @@ if [[ -z "${available_kib}" ]] || ((available_kib < minimum_kib)); then
   exit 2
 fi
 
-echo "Capturing ${seconds} deterministic seconds at 1280x720 and 30 fps."
+echo "Capturing ${seconds} deterministic seconds from timeline ${start_seconds}s at 1280x720 and 30 fps."
 echo "Frames stream directly to ffmpeg; no PNG frame directory is created."
 
 CDP_PORT="${port}" \
 CDP_SEQUENCE="${script_dir}/demo-video-sequence.mjs" \
 DEMO_SECONDS="${seconds}" \
+DEMO_START_SECONDS="${start_seconds}" \
 DEMO_OVERWRITE="${DEMO_OVERWRITE:-0}" \
 node "${script_dir}/shoot.mjs" \
   "${url}" "${output}" "${DEMO_WAIT_MS:-30000}" 1280 720

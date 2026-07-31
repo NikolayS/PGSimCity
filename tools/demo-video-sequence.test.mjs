@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { fullReportProblems, measureWallProof } from './demo-video-sequence.mjs'
+import {
+  fullReportProblems,
+  measureWallProof,
+  reservedCaptionPlace,
+} from './demo-video-sequence.mjs'
+
+describe('demo caption layout', () => {
+  it('reserves the top band when the walk-up prompt owns the bottom band', () => {
+    expect(reservedCaptionPlace('bottom', true)).toBe('top')
+    expect(reservedCaptionPlace('top', true)).toBe('top')
+    expect(reservedCaptionPlace('bottom', false)).toBe('bottom')
+  })
+})
 
 describe('demo wall-collision proof', () => {
   it('separates stopped wall-normal travel from lateral sliding', () => {
@@ -41,6 +53,7 @@ describe('demo wall-collision proof', () => {
       },
       door: { inside: true, mapVisible: true, maxOpenness: 1 },
       environment: { themes: [{ mode: 'day' }, { mode: 'night' }] },
+      captions: { checkedFrames: 147 * 30, overlapFrames: 0 },
     })
 
     expect(problems).toEqual(['checkpointer: slid during the final hold'])

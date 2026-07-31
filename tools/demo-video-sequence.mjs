@@ -8,6 +8,10 @@ const FRAME_MS = 1000 / FPS
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
+export function reservedCaptionPlace(requestedPlace, walkUpVisible) {
+  return walkUpVisible ? 'top' : requestedPlace
+}
+
 export function measureWallProof(past, current, approach, wallPlane) {
   const dx = current.x - past.x
   const dz = current.z - past.z
@@ -69,6 +73,11 @@ export function fullReportProblems(report) {
   if (!themes.has('day') || !themes.has('night')) {
     problems.push('day/night environment pass was incomplete')
   }
+  if (!report.captions || report.captions.checkedFrames < 1) {
+    problems.push('caption layout proof missing')
+  } else if (report.captions.overlapFrames > 0) {
+    problems.push(`caption cards overlapped in ${report.captions.overlapFrames} frame(s)`)
+  }
   return problems
 }
 
@@ -77,7 +86,7 @@ export function fullReportProblems(report) {
  * animation frame; replacing requestAnimationFrame here lets that frame enter
  * a caller-driven queue without inventing a second renderer or simulation.
  */
-function installDemo(measureWallProof_) {
+function installDemo(measureWallProof_, reservedCaptionPlace_) {
   const pg = window.PGSIMCITY
   if (!pg?.walk || !pg?.rig || !pg?.controlCenter) {
     throw new Error('PGSimCity debugging surface is incomplete')
@@ -274,6 +283,13 @@ function installDemo(measureWallProof_) {
       themes: [],
       finalQuality: '',
     },
+    captions: {
+      policy: 'reserved-regions',
+      checkedFrames: 0,
+      multipleCardFrames: 0,
+      overlapFrames: 0,
+      firstOverlap: null,
+    },
   }
 
   let activeCollision = null
@@ -283,6 +299,7 @@ function installDemo(measureWallProof_) {
   let currentFrame = 0
   let leverPulled = false
   let traceStarted = false
+  let requestedCaptionPlace = 'bottom'
   const pose = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 }
 
   function setCaption(
@@ -293,6 +310,7 @@ function installDemo(measureWallProof_) {
     side = 'left',
     place = 'bottom',
   ) {
+    requestedCaptionPlace = place
     captionRoot.style.display = ''
     captionRoot.dataset.side = side
     captionRoot.dataset.place = place
@@ -311,6 +329,46 @@ function installDemo(measureWallProof_) {
     if (!node || node.hidden) return false
     const css = getComputedStyle(node)
     return css.display !== 'none' && css.visibility !== 'hidden' && Number(css.opacity) > 0.05
+  }
+
+  function verifyCaptionRegions() {
+    report.captions.checkedFrames++
+    const walkUp = document.querySelector('.walk-up-prompt:not([hidden])')
+    const walkUpVisible = visible(walkUp)
+    captionRoot.dataset.place = reservedCaptionPlace_(
+      requestedCaptionPlace,
+      walkUpVisible,
+    )
+    if (!visible(captionRoot) || !walkUpVisible) return
+
+    report.captions.multipleCardFrames++
+    const demoRect = captionRoot.getBoundingClientRect()
+    const walkUpRect = walkUp.getBoundingClientRect()
+    const overlaps = (
+      demoRect.left < walkUpRect.right
+      && demoRect.right > walkUpRect.left
+      && demoRect.top < walkUpRect.bottom
+      && demoRect.bottom > walkUpRect.top
+    )
+    if (!overlaps) return
+
+    report.captions.overlapFrames++
+    report.captions.firstOverlap ??= {
+      frame: currentFrame,
+      demo: {
+        left: demoRect.left,
+        top: demoRect.top,
+        right: demoRect.right,
+        bottom: demoRect.bottom,
+      },
+      walkUp: {
+        left: walkUpRect.left,
+        top: walkUpRect.top,
+        right: walkUpRect.right,
+        bottom: walkUpRect.bottom,
+      },
+    }
+    throw new Error(`caption cards overlap at frame ${currentFrame}`)
   }
 
   function setFadeForScene() {
@@ -847,6 +905,8 @@ function installDemo(measureWallProof_) {
     if (frame === F(146.9)) {
       report.environment.finalQuality = pg.gfx.quality.level
     }
+
+    verifyCaptionRegions()
   }
 
   window.__PG_DEMO = {
@@ -928,7 +988,9 @@ export async function runSequence({ send, logs, output, width, height }) {
   }
 
   const installed = await send('Runtime.evaluate', {
-    expression: `(${installDemo.toString()})(${measureWallProof.toString()})`,
+    expression:
+      `(${installDemo.toString()})`
+      + `(${measureWallProof.toString()},${reservedCaptionPlace.toString()})`,
     awaitPromise: true,
     returnByValue: true,
   })
@@ -990,6 +1052,12 @@ export async function runSequence({ send, logs, output, width, height }) {
   })
   if (result.exceptionDetails || !result.result.value) {
     throw new Error('demo verification report was not returned')
+  }
+  if (
+    result.result.value.captions?.checkedFrames < 1
+    || result.result.value.captions?.overlapFrames > 0
+  ) {
+    throw new Error('demo caption layout verification failed')
   }
   const reportPath = output.replace(/\.mp4$/i, '') + '.json'
   writeFileSync(reportPath, JSON.stringify(result.result.value, null, 2) + '\n')
