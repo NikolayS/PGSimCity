@@ -121,11 +121,12 @@ describe('WAL workload response', () => {
 
   it('drains wal_buffers after a sustained write load drops to 1 tps', () => {
     const sim = createSim(createBus())
+    sim.setKnob('sharedBuffers', 128)
     sim.setKnob('tps', 1000)
-    sim.setKnob('writeRatio', 0.06)
+    sim.setKnob('writeRatio', 1)
 
     const highLoadStartLsn = sim.state.wal.insertLsn
-    advanceTo(sim, sim.state.t + 180)
+    advanceTo(sim, sim.state.t + 60)
     expect(sim.state.wal.insertLsn - highLoadStartLsn).toBeGreaterThan(
       sim.state.wal.bufferCapacity,
     )
@@ -133,7 +134,7 @@ describe('WAL workload response', () => {
     sim.setKnob('tps', 1)
     advanceTo(sim, sim.state.t + 10)
     let maxBufferBytes = 0
-    const deadline = sim.state.t + 50
+    const deadline = sim.state.t + 10
     while (sim.state.t < deadline) {
       sim.update(1 / 30)
       maxBufferBytes = Math.max(maxBufferBytes, sim.state.wal.bufferBytes)
