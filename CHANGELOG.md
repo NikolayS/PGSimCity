@@ -9,6 +9,36 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.24.0] — 2026-07-31
+
+### Three nodes, each with its own opinion
+
+A primary and two standbys, each owning its buffer pool, its WAL, its data
+directory, its replay position — and its own view of who the leader is. **Nodes
+that share a single global truth cannot disagree**, and disagreement is the whole
+lesson of failover, so this is the groundwork item 3 needs.
+
+Streaming replication is modelled per standby with **received, flushed and
+applied tracked separately** — the distinction `synchronous_commit` levels are
+actually about — plus a replication slot per standby.
+
+The slot lesson works, measured: disconnecting standby B retained **35.96 MiB**
+of WAL on the primary after thirty seconds, and reconnecting drained it to
+84.5 KiB. Slowing B's replay grew its gap from 542 KiB to **30.47 MiB** while A
+stayed healthy, then recovered to 221 KiB. A slot held for a node that is not
+there is one of the most valuable operational lessons available, and it is now
+demonstrable rather than described.
+
+Three knob verdicts added to `KNOB-AUDIT.md`: `standbyBEnabled`,
+`standbyBNetworkLag` and `standbyBSlowApply`, all correct with recovery.
+
+No failover, promotion, election, Patroni or rewind. Leader opinions are
+observations only — nothing acts on them yet. That is item 3.
+
+Chunk +16.51 kB.
+
+---
+
 ## [0.23.0] — 2026-07-31
 
 ### Indirect light, baked
