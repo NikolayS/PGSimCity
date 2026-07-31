@@ -92,6 +92,37 @@ real-PostgreSQL boundary, while the room teaches how this finite model moves.
 Together with the autovacuum lever, it gives first person concrete destinations
 and actions.
 
+## 11. Restore testing — a backup you have never restored is not a backup
+
+The continuity quarter models taking backups, archiving WAL, retention, and
+restoring to a point in time. It does not model **finding out whether any of that
+works**, which is the part organisations actually get wrong.
+
+Backups fail silently. The archive stops and nobody reads the `.ready` count. A
+retention policy quietly expires the backup someone was relying on. Credentials
+rotate and the push starts failing into a log nobody tails. Object storage
+lifecycle rules move objects to a tier the restore path cannot read. **None of
+these are visible until a restore is attempted**, and by then it is an incident.
+
+What this should teach:
+
+- **A restore drill has a cost and a cadence**, and both are decisions. Restoring
+  the full cluster proves the most and costs the most; restoring one table proves
+  less and can run nightly.
+- **What a failed drill looks like**, and that finding out this way is the good
+  outcome. The city already models an archive that can stall, retention that can
+  expire the backup you wanted, and a `pg_rewind` that can fail — those failure
+  modes exist and are currently only reachable deliberately.
+- **What a drill actually proves.** That the backup restores is not that the data
+  is correct; verifying checksums and running a smoke query prove more. Say which
+  claim each level of drill supports.
+- **Recovery time is measured, not assumed.** The city already relates backup age
+  to replay volume. A drill turns that relationship into a number an operator can
+  put in a document and be held to.
+
+This is a natural extension of item 10's scenarios: the drill that has not been
+run is a situation with a correct answer, and the answer is unwelcome.
+
 ## 5. Swimming that feels like swimming — shipped
 
 The buffer-pool water now has translational and rotational drag, buoyancy,
