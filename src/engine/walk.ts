@@ -213,14 +213,19 @@ const POOL_HALF = ((CITY.buf.grid - 1) * CITY.buf.pitch + CITY.buf.tile) / 2
 const POOL_BOTTOM = CITY.buf.baseY
 /** Top of the conceptual water volume: the tallest ordinary usage_count column. */
 const POOL_SURFACE = CITY.buf.baseY + CITY.buf.maxRise + 0.4
-/** Swimming is slower to start and stop than walking. */
+/** Swimming thrust meets hydrodynamic drag at roughly 1.55 m/s. */
 const SWIM_SPEED = 1.55
-const SWIM_ACCEL = 2.35
-const SWIM_VERTICAL_SETTLE = 3.2
-const SWIM_SINK = 0.16
-const SWIM_LOOK_RISE = 1.42
-const SWIM_KEY_RISE = 0.9
-const SWIM_KEY_SINK = 0.72
+const SWIM_THRUST = 2.25
+const SWIM_DRAG_LINEAR = 0.32
+const SWIM_DRAG_QUADRATIC = 0.74
+/** Critically damped surface spring: buoyant, but never a periodic camera bob. */
+const SWIM_BUOYANCY = 1.8
+const SWIM_BUOYANCY_DAMPING = 2.7
+const SWIM_BUOYANCY_DAMPING_REDUCED = 3.6
+const SWIM_BUOYANCY_MAX = 4.6
+const SWIM_LOOK_THRUST = 1.8
+const SWIM_KEY_RISE_THRUST = 2.8
+const SWIM_KEY_DIVE_THRUST = 5.8
 /** Looking through water has rotational drag as well as translational drag. */
 const SWIM_LOOK_SCALE = 0.58
 
@@ -1081,17 +1086,35 @@ export function createWalkController(opts: WalkOptions): WalkController {
       }
     }
 
-    /* --- accelerate ------------------------------------------------------ */
-    const accel = (swimming ? SWIM_ACCEL : grounded ? T.accelGround : T.accelAir) * d
-    let dvx = wx - vel.x
-    let dvz = wz - vel.z
-    const dv = Math.sqrt(dvx * dvx + dvz * dvz)
-    if (dv <= accel || dv < 1e-6) {
-      vel.x = wx
-      vel.z = wz
+    /* --- accelerate / resist -------------------------------------------- */
+    if (swimming) {
+      const speed = Math.hypot(vel.x, vel.z)
+      const drag = Math.exp(-(SWIM_DRAG_LINEAR + SWIM_DRAG_QUADRATIC * speed) * d)
+      vel.x *= drag
+      vel.z *= drag
+      if (targetSpeed > 1e-6) {
+        const thrust = (SWIM_THRUST * inputMagnitude * d) / targetSpeed
+        vel.x += wx * thrust
+        vel.z += wz * thrust
+      }
+      const nextSpeed = Math.hypot(vel.x, vel.z)
+      if (nextSpeed > SWIM_SPEED) {
+        const cap = SWIM_SPEED / nextSpeed
+        vel.x *= cap
+        vel.z *= cap
+      }
     } else {
-      vel.x += (dvx / dv) * accel
-      vel.z += (dvz / dv) * accel
+      const accel = (grounded ? T.accelGround : T.accelAir) * d
+      const dvx = wx - vel.x
+      const dvz = wz - vel.z
+      const dv = Math.sqrt(dvx * dvx + dvz * dvz)
+      if (dv <= accel || dv < 1e-6) {
+        vel.x = wx
+        vel.z = wz
+      } else {
+        vel.x += (dvx / dv) * accel
+        vel.z += (dvz / dv) * accel
+      }
     }
 
     /* --- jump ------------------------------------------------------------ */
@@ -1126,11 +1149,17 @@ export function createWalkController(opts: WalkOptions): WalkController {
     /* --- vertical -------------------------------------------------------- */
     if (swimming) {
       const vy0 = vy
-      const lookRise = Math.max(0, Math.sin(pitch)) * inputMagnitude * SWIM_LOOK_RISE
-      let targetVy = -SWIM_SINK + lookRise
-      if (keys.has('Space') || touchJump) targetVy += SWIM_KEY_RISE
-      if (keys.has('KeyC') || touchCrouch) targetVy -= SWIM_KEY_SINK
-      vy = damp(vy, targetVy, SWIM_VERTICAL_SETTLE, d)
+      let verticalThrust =
+        Math.max(0, Math.sin(pitch)) * inputMagnitude * SWIM_LOOK_THRUST
+      if (keys.has('Space') || touchJump) verticalThrust += SWIM_KEY_RISE_THRUST
+      if (keys.has('KeyC') || touchCrouch) verticalThrust -= SWIM_KEY_DIVE_THRUST
+      const buoyancy = clamp(
+        (poolSurfaceFeet - pos.y) * SWIM_BUOYANCY,
+        -SWIM_BUOYANCY_MAX,
+        SWIM_BUOYANCY_MAX,
+      )
+      const damping = noBob ? SWIM_BUOYANCY_DAMPING_REDUCED : SWIM_BUOYANCY_DAMPING
+      vy += (buoyancy - vy * damping + verticalThrust) * d
       pos.y += (vy0 + vy) * 0.5 * d
       const ascentSpeed = vy > 0 ? vy : 0
       if (pos.y < POOL_BOTTOM) {

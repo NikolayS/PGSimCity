@@ -180,7 +180,17 @@ describe('movement audio', () => {
     expect(context.sourceCount).toBe(4)
 
     const masterFilter = context.nodes[0] as FakeFilter
+    const masterGain = context.nodes[1] as FakeGain
     expect(masterFilter.frequency.value).toBe(620)
+    expect(masterGain.gain.value).toBeLessThan(audio.volume * 0.6)
+    stroke(3.62, false)
+    expect(masterFilter.frequency.value).toBe(5600)
+    expect(masterGain.gain.value).toBeCloseTo(audio.volume)
+
+    audio.disable()
+    expect(masterGain.gain.value).toBe(0)
+    stroke(3.63, true)
+    expect(masterGain.gain.value).toBe(0)
     audio.dispose()
   })
 
