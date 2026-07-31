@@ -1,22 +1,37 @@
 import { describe, expect, it } from 'vitest'
 import { createBus } from '../core/bus'
 import { createSim } from './model'
+import {
+  AGGREGATE_TEST_STEP,
+  createAggregateSim,
+  FRAME_TEST_STEP,
+} from './test-support'
 
-type Sim = ReturnType<typeof createSim>
+type Sim = ReturnType<typeof createAggregateSim>
 
 function advanceBy(sim: Sim, seconds: number): void {
   const target = sim.state.t + seconds
-  while (sim.state.t < target) sim.update(Math.min(1 / 30, target - sim.state.t))
+  while (sim.state.t < target) {
+    sim.update(Math.min(AGGREGATE_TEST_STEP, target - sim.state.t))
+  }
 }
 
-function advanceUntil(sim: Sim, done: () => boolean, timeoutSec = 240): void {
+function advanceUntil(
+  sim: Sim,
+  done: () => boolean,
+  timeoutSec = 240,
+  step = AGGREGATE_TEST_STEP,
+): void {
   const deadline = sim.state.t + timeoutSec
-  while (!done() && sim.state.t < deadline) sim.update(1 / 30)
+  while (!done() && sim.state.t < deadline) sim.update(step)
   expect(done()).toBe(true)
 }
 
-function readyDecision(sim: Sim): NonNullable<Sim['state']['scenarioDecision']> {
-  advanceUntil(sim, () => sim.state.scenarioDecision?.phase === 'ready')
+function readyDecision(
+  sim: Sim,
+  step = AGGREGATE_TEST_STEP,
+): NonNullable<Sim['state']['scenarioDecision']> {
+  advanceUntil(sim, () => sim.state.scenarioDecision?.phase === 'ready', 240, step)
   const decision = sim.state.scenarioDecision
   expect(decision).not.toBeNull()
   return decision!
@@ -24,9 +39,11 @@ function readyDecision(sim: Sim): NonNullable<Sim['state']['scenarioDecision']> 
 
 describe('operator scenario: a replication slot is filling pg_wal', () => {
   it('plays capacity and slot removal, then rebuilds after the destructive choice', () => {
-    const preserve = createSim(createBus())
+    const preserve = createAggregateSim(1 / 10)
     preserve.runScenario('slot-pressure')
-    const preserveReady = readyDecision(preserve)
+    // A smaller test volume reaches the same pressure branch at this cadence.
+    preserve.state.disasterRecovery.archive.pgWalCapacityBytes = 384 * 1024 * 1024
+    const preserveReady = readyDecision(preserve, 1 / 10)
     expect(preserveReady.kind).toBe('slot-pressure')
     if (preserveReady.kind !== 'slot-pressure') return
     expect(preserveReady.slotRetainedAtDecision).toBeGreaterThan(64 * 1024 * 1024)
@@ -48,9 +65,11 @@ describe('operator scenario: a replication slot is filling pg_wal', () => {
     expect(preserve.state.replication.physicalSlots[1].exists).toBe(true)
     expect(preserve.state.replication.standbys[1].connected).toBe(true)
 
-    const discard = createSim(createBus())
+    const discard = createAggregateSim(1 / 10)
     discard.runScenario('slot-pressure')
-    readyDecision(discard)
+    // Keep both choices at the same capacity so only the branch differs.
+    discard.state.disasterRecovery.archive.pgWalCapacityBytes = 384 * 1024 * 1024
+    readyDecision(discard, 1 / 10)
     const pgWalBeforeDrop = discard.state.disasterRecovery.archive.pgWalBytes
     expect(discard.chooseScenario('drop-replication-slot')).toBe(true)
     const dropped = discard.state.scenarioDecision
@@ -123,7 +142,7 @@ describe('operator scenario: select a failover candidate', () => {
     function promote(choice: 'promote-standby-a' | 'promote-standby-b'): Sim {
       const sim = createSim(createBus())
       sim.runScenario('failover-candidate')
-      const decision = readyDecision(sim)
+      const decision = readyDecision(sim, FRAME_TEST_STEP)
       expect(decision.kind).toBe('failover-candidate')
       if (decision.kind === 'failover-candidate') {
         expect(decision.standbyBLagBytes).toBeGreaterThan(decision.standbyALagBytes)

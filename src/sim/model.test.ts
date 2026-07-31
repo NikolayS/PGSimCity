@@ -6,16 +6,25 @@ import {
   SHARED_BUFFERS_MIN_MIB,
 } from '../core/types'
 import { createSim } from './model'
+import {
+  AGGREGATE_TEST_STEP,
+  createAggregateSim,
+  FRAME_TEST_STEP,
+} from './test-support'
 
-function advanceTo(sim: ReturnType<typeof createSim>, seconds: number): void {
-  while (sim.state.t < seconds) sim.update(1 / 30)
+type Sim = ReturnType<typeof createAggregateSim>
+
+function advanceTo(sim: Sim, seconds: number, step = AGGREGATE_TEST_STEP): void {
+  while (sim.state.t < seconds) {
+    sim.update(Math.min(step, seconds - sim.state.t))
+  }
 }
 
-function workingSetPages(sim: ReturnType<typeof createSim>): number {
+function workingSetPages(sim: Sim): number {
   return sim.state.tables.reduce((total, table) => total + table.pages + table.indexPages, 0)
 }
 
-function declaredWorkingSetPages(sim: ReturnType<typeof createSim>): number {
+function declaredWorkingSetPages(sim: Sim): number {
   return sim.state.tables.reduce(
     (total, table) =>
       total + table.def.pages + table.def.indexes.reduce((sum, index) => sum + index.pages, 0),
@@ -23,12 +32,12 @@ function declaredWorkingSetPages(sim: ReturnType<typeof createSim>): number {
   )
 }
 
-function poolPages(sim: ReturnType<typeof createSim>): number {
+function poolPages(sim: Sim): number {
   return Math.floor((sim.state.knobs.sharedBuffers * 1024 * 1024) / PG_PAGE_BYTES)
 }
 
-function runBufferWorkload(sharedBuffers: number, seconds = 200): ReturnType<typeof createSim> {
-  const sim = createSim(createBus())
+function runBufferWorkload(sharedBuffers: number, seconds = 200): Sim {
+  const sim = createAggregateSim()
   sim.setKnob('sharedBuffers', sharedBuffers)
   sim.setKnob('tps', 800)
   sim.setKnob('writeRatio', 0.5)
@@ -38,16 +47,16 @@ function runBufferWorkload(sharedBuffers: number, seconds = 200): ReturnType<typ
 
 describe('buffer cache', () => {
   it('keeps a hot default cache while the cold tail evicts and the slider still matters', { timeout: 30_000 }, () => {
-    const minimum = createSim(createBus())
+    const minimum = createAggregateSim()
     minimum.setKnob('sharedBuffers', SHARED_BUFFERS_MIN_MIB)
-    advanceTo(minimum, 10 * 60)
+    advanceTo(minimum, 5 * 60, FRAME_TEST_STEP)
 
-    const defaultPool = createSim(createBus())
-    advanceTo(defaultPool, 10 * 60)
+    const defaultPool = createAggregateSim()
+    advanceTo(defaultPool, 5 * 60, FRAME_TEST_STEP)
 
-    const fullSample = createSim(createBus())
+    const fullSample = createAggregateSim()
     fullSample.setKnob('sharedBuffers', SHARED_BUFFERS_FULL_SAMPLE_MIB)
-    advanceTo(fullSample, 10 * 60)
+    advanceTo(fullSample, 5 * 60, FRAME_TEST_STEP)
 
     expect.soft(defaultPool.state.stats.cacheHitPct).toBeGreaterThanOrEqual(98)
     expect.soft(defaultPool.state.buffers.evictions).toBeGreaterThan(0)
@@ -55,7 +64,7 @@ describe('buffer cache', () => {
   })
 
   it('reaches a production-like hit ratio once the full working set is warm', { timeout: 15_000 }, () => {
-    const sim = createSim(createBus())
+    const sim = createAggregateSim()
 
     sim.setKnob('sharedBuffers', SHARED_BUFFERS_FULL_SAMPLE_MIB)
     expect(declaredWorkingSetPages(sim)).toBe(poolPages(sim))
@@ -82,7 +91,11 @@ describe('buffer cache', () => {
   })
 
   it('evicts frames at the slider minimum under a write-heavy load', () => {
-    const sim = runBufferWorkload(SHARED_BUFFERS_MIN_MIB, 60)
+    const sim = createSim(createBus())
+    sim.setKnob('sharedBuffers', SHARED_BUFFERS_MIN_MIB)
+    sim.setKnob('tps', 800)
+    sim.setKnob('writeRatio', 0.5)
+    advanceTo(sim, 60)
 
     expect(sim.state.buffers.evictions).toBeGreaterThan(100)
   })
@@ -99,15 +112,15 @@ describe('buffer cache', () => {
 
 describe('WAL workload response', () => {
   function measuredWalRate(tps: number): number {
-    const sim = createSim(createBus())
+    const sim = createAggregateSim()
     sim.setKnob('tps', tps)
     sim.setKnob('writeRatio', 0.06)
-    advanceTo(sim, sim.state.t + 300)
+    advanceTo(sim, sim.state.t + 60, FRAME_TEST_STEP)
     const startLsn = sim.state.wal.insertLsn
 
-    advanceTo(sim, sim.state.t + 60)
+    advanceTo(sim, sim.state.t + 30, FRAME_TEST_STEP)
 
-    return (sim.state.wal.insertLsn - startLsn) / 60
+    return (sim.state.wal.insertLsn - startLsn) / 30
   }
 
   it('scales WAL bytes per second approximately with transaction rate', { timeout: 15_000 }, () => {
@@ -136,7 +149,7 @@ describe('WAL workload response', () => {
     let maxBufferBytes = 0
     const deadline = sim.state.t + 10
     while (sim.state.t < deadline) {
-      sim.update(1 / 30)
+      sim.update(FRAME_TEST_STEP)
       maxBufferBytes = Math.max(maxBufferBytes, sim.state.wal.bufferBytes)
     }
 

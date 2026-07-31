@@ -4,12 +4,17 @@ import type { ComponentDoc, SyncCommit } from '../core/types'
 import { PROJECTIONS } from '../observability/views'
 import { DOCS_STORAGE } from '../ui/docs-storage'
 import { createSim } from './model'
+import { AGGREGATE_TEST_STEP, createAggregateSim } from './test-support'
 
 const MIB = 1024 * 1024
 
-function advanceBy(sim: ReturnType<typeof createSim>, seconds: number): void {
+type Sim = ReturnType<typeof createAggregateSim>
+
+function advanceBy(sim: Sim, seconds: number): void {
   const target = sim.state.t + seconds
-  while (sim.state.t < target) sim.update(Math.min(1 / 30, target - sim.state.t))
+  while (sim.state.t < target) {
+    sim.update(Math.min(AGGREGATE_TEST_STEP, target - sim.state.t))
+  }
 }
 
 function doc(id: string): ComponentDoc {
@@ -18,7 +23,7 @@ function doc(id: string): ComponentDoc {
   return found
 }
 
-function metric(component: ComponentDoc, label: string, sim: ReturnType<typeof createSim>): string {
+function metric(component: ComponentDoc, label: string, sim: Sim): string {
   const found = component.metrics?.find((candidate) => candidate.label === label)
   if (!found) throw new Error(`missing ${component.id} metric ${label}`)
   return found.get(sim.state)
@@ -34,7 +39,7 @@ function measureWalWorkload(
   autovacuum: boolean,
   fullPageWrites = true,
 ): WorkloadReading {
-  const sim = createSim(createBus())
+  const sim = createAggregateSim()
   sim.setKnob('tps', 300)
   sim.setKnob('writeRatio', 0.6)
   sim.setKnob('autovacuum', autovacuum)
@@ -47,7 +52,7 @@ function measureWalWorkload(
   let samples = 0
   const until = sim.state.t + 200
   while (sim.state.t < until) {
-    sim.update(Math.min(1 / 30, until - sim.state.t))
+    sim.update(Math.min(AGGREGATE_TEST_STEP, until - sim.state.t))
     fpiShareTotal += sim.state.wal.fpwBurst
     samples++
   }
@@ -86,7 +91,7 @@ describe('replication state normalization', () => {
   })
 
   it('bounds pg_wal by checkpoint retention when replication is impossible', { timeout: 20_000 }, () => {
-    const sim = createSim(createBus())
+    const sim = createAggregateSim()
     sim.setKnob('tps', 300)
     sim.setKnob('writeRatio', 0.6)
     sim.setKnob('walLevel', 'minimal')
@@ -180,7 +185,7 @@ describe('autovacuum cost balance', () => {
   })
 
   it('caps the vacuum fleet at one quarter of device read capacity', { timeout: 20_000 }, () => {
-    const sim = createSim(createBus())
+    const sim = createAggregateSim()
     sim.setKnob('autovacuum', false)
     sim.setKnob('tps', 500)
     sim.setKnob('writeRatio', 0.8)
@@ -198,7 +203,7 @@ describe('autovacuum cost balance', () => {
     let samples = 0
     const until = sim.state.t + 60
     while (sim.state.t < until) {
-      sim.update(Math.min(1 / 30, until - sim.state.t))
+      sim.update(Math.min(AGGREGATE_TEST_STEP, until - sim.state.t))
       ioReadTotal += sim.state.stats.ioReadPerSec
       samples++
     }
@@ -246,7 +251,7 @@ describe('backend dirty-eviction cost', () => {
     cleanedPerSec: number
     tps: number
   } {
-    const sim = createSim(createBus())
+    const sim = createAggregateSim()
     sim.setKnob('sharedBuffers', 512)
     sim.setKnob('tps', 1500)
     sim.setKnob('writeRatio', 0.8)
@@ -315,12 +320,12 @@ describe('wal_buffers auto-tuning', () => {
 })
 
 describe('replication timing units', () => {
-  function meanReplayLag(sim: ReturnType<typeof createSim>, seconds: number): number {
+  function meanReplayLag(sim: Sim, seconds: number): number {
     let total = 0
     let samples = 0
     const until = sim.state.t + seconds
     while (sim.state.t < until) {
-      sim.update(Math.min(1 / 30, until - sim.state.t))
+      sim.update(Math.min(AGGREGATE_TEST_STEP, until - sim.state.t))
       total += sim.state.replication.lagSec
       samples++
     }
@@ -328,7 +333,7 @@ describe('replication timing units', () => {
   }
 
   it('reports replay_lag in real seconds while packet travel stays visible', { timeout: 15_000 }, () => {
-    const sim = createSim(createBus())
+    const sim = createAggregateSim()
     sim.setKnob('tps', 300)
     sim.setKnob('writeRatio', 0.6)
     sim.setKnob('autovacuum', false)
@@ -347,7 +352,7 @@ describe('replication timing units', () => {
 
 describe('synchronous_commit guarantees', () => {
   function meanCommitWaiters(mode: SyncCommit): number {
-    const sim = createSim(createBus())
+    const sim = createAggregateSim()
     sim.setKnob('tps', 300)
     sim.setKnob('writeRatio', 0.6)
     sim.setKnob('autovacuum', false)
@@ -359,7 +364,7 @@ describe('synchronous_commit guarantees', () => {
     let samples = 0
     const until = sim.state.t + 20
     while (sim.state.t < until) {
-      sim.update(Math.min(1 / 30, until - sim.state.t))
+      sim.update(Math.min(AGGREGATE_TEST_STEP, until - sim.state.t))
       waiters += sim.state.backends.filter((backend) => backend.state === 'commit_wait').length
       samples++
     }
@@ -387,7 +392,7 @@ describe('checkpoint_timeout full-page-image amortisation', () => {
     fpiShare: number
     walBytesPerSec: number
   } {
-    const sim = createSim(createBus())
+    const sim = createAggregateSim()
     sim.setKnob('tps', 300)
     sim.setKnob('writeRatio', 1)
     sim.setKnob('updateRatio', 1)
@@ -404,7 +409,7 @@ describe('checkpoint_timeout full-page-image amortisation', () => {
     let samples = 0
     const until = sim.state.t + 400
     while (sim.state.t < until) {
-      sim.update(Math.min(1 / 30, until - sim.state.t))
+      sim.update(Math.min(AGGREGATE_TEST_STEP, until - sim.state.t))
       fpiShare += sim.state.wal.fpwBurst
       samples++
     }

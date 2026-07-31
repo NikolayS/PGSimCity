@@ -2,12 +2,28 @@ import { describe, expect, it } from 'vitest'
 import { createBus } from '../core/bus'
 import { PROJECTIONS } from '../observability/views'
 import { createSim } from './model'
+import { AGGREGATE_TEST_STEP, createAggregateSim } from './test-support'
 
 const MIB = 1024 * 1024
 
-function advanceBy(sim: ReturnType<typeof createSim>, seconds: number): void {
+type Sim = ReturnType<typeof createSim>
+
+function advanceBy(sim: Sim, seconds: number): void {
   const target = sim.state.t + seconds
-  while (sim.state.t < target) sim.update(Math.min(1 / 30, target - sim.state.t))
+  while (sim.state.t < target) {
+    sim.update(Math.min(AGGREGATE_TEST_STEP, target - sim.state.t))
+  }
+}
+
+function advanceUntil(
+  sim: Sim,
+  done: () => boolean,
+  seconds: number,
+): void {
+  const deadline = sim.state.t + seconds
+  while (!done() && sim.state.t < deadline) {
+    sim.update(Math.min(AGGREGATE_TEST_STEP, deadline - sim.state.t))
+  }
 }
 
 describe('three-node physical cluster', () => {
@@ -38,7 +54,7 @@ describe('three-node physical cluster', () => {
   })
 
   it('lets one standby replay slowly while the other disconnects independently', () => {
-    const sim = createSim(createBus())
+    const sim = createAggregateSim()
     sim.setKnob('tps', 1200)
     sim.setKnob('writeRatio', 0.8)
     sim.setKnob('standbyBSlowApply', true)
@@ -65,7 +81,7 @@ describe('three-node physical cluster', () => {
   })
 
   it('fills the primary WAL volume through a slot for a disconnected standby', { timeout: 20_000 }, () => {
-    const sim = createSim(createBus())
+    const sim = createAggregateSim()
     sim.setKnob('archiveAvailable', true)
     sim.setKnob('replicaEnabled', false)
     sim.setKnob('tps', 5000)
@@ -73,7 +89,7 @@ describe('three-node physical cluster', () => {
 
     const deadline = sim.state.t + 240
     while (!sim.state.disasterRecovery.archive.writesBlocked && sim.state.t < deadline) {
-      sim.update(1 / 30)
+      sim.update(AGGREGATE_TEST_STEP)
     }
 
     const slot = sim.state.replication.physicalSlots[0]
@@ -86,7 +102,14 @@ describe('three-node physical cluster', () => {
 
     const heldAt = slot.restartLsn
     sim.setKnob('replicaEnabled', true)
-    advanceBy(sim, 90)
+    advanceUntil(
+      sim,
+      () => slot.active
+        && slot.restartLsn > heldAt
+        && slot.retainedBytes < 64 * MIB
+        && !sim.state.disasterRecovery.archive.writesBlocked,
+      90,
+    )
 
     expect(slot.active).toBe(true)
     expect(slot.restartLsn).toBeGreaterThan(heldAt)
