@@ -3,7 +3,15 @@ import '../styles/hud.css'
 import { DESTINATIONS, destinationForDistrict } from '../core/destinations'
 import { COLOR, cssColor, onThemeMode, themeMode, toggleThemeMode } from '../core/theme'
 import { clamp, fmtBytes, fmtDuration, fmtNum } from '../core/util'
-import type { Bus, CameraMode, QualityLevel, SimApi, SimState, TraceStop } from '../core/types'
+import type {
+  Bus,
+  CameraMode,
+  QualityLevel,
+  ScenarioChoiceId,
+  SimApi,
+  SimState,
+  TraceStop,
+} from '../core/types'
 import { SCENARIOS } from '../sim/scenarios'
 import { DISTRICT_BOUNDS } from '../world/layout'
 import { MODE_IDS, modeTokens } from './mode-exits'
@@ -246,8 +254,13 @@ function worstStandby(s: SimState): SimState['replication']['standbys'][number] 
 
 function health(s: SimState): Health {
   if (s.disasterRecovery.archive.writesBlocked) return 'crit'
+  const pgWalFill =
+    s.disasterRecovery.archive.pgWalBytes
+    / Math.max(1, s.disasterRecovery.archive.pgWalCapacityBytes)
+  if (pgWalFill >= 0.95) return 'crit'
   if (s.checkpoint.phase !== 'idle' && s.checkpoint.reason === 'wal') return 'crit'
   if (s.locks.length >= 3) return 'crit'
+  if (pgWalFill >= 0.8) return 'warn'
   if (s.stats.cacheHitPct < 50) return 'warn'
   const standby = worstStandby(s)
   if (standby && (standby.lagSec > 5 || lagClimbing(s.stats.history.lag))) return 'warn'
@@ -258,6 +271,11 @@ function health(s: SimState): Health {
 function healthReason(s: SimState, h: Health): string {
   if (s.disasterRecovery.archive.writesBlocked)
     return 'Primary WAL volume reached its scaled safety limit — writes are rejected'
+  const pgWalFill =
+    s.disasterRecovery.archive.pgWalBytes
+    / Math.max(1, s.disasterRecovery.archive.pgWalCapacityBytes)
+  if (pgWalFill >= 0.8)
+    return `Primary pg_wal is ${(pgWalFill * 100).toFixed(0)}% of its scaled safety capacity`
   if (s.checkpoint.phase !== 'idle' && s.checkpoint.reason === 'wal')
     return 'Checkpoint triggered by WAL volume — max_wal_size is being outrun'
   if (s.locks.length >= 3) return `${s.locks.length} backends waiting on a heavyweight lock`
@@ -888,7 +906,7 @@ export function createHud(ctx: UiContext): UiModule {
     nowStop,
   )
 
-  /* Phone only: the scenario rail is thirteen chips long and there is no width
+  /* Phone only: the scenario rail is intentionally longer than the viewport
      for it under the transport, so it collapses behind one labelled control and
      the city keeps the pixels. Hidden on a desktop, where the rail always
      shows. */
@@ -945,7 +963,96 @@ export function createHud(ctx: UiContext): UiModule {
     scnWrap,
     dockSlot,
   )
-  bottomEl.append(transport)
+
+  const decisionTitle = el('strong', { class: 'hud-decision__title' })
+  const decisionState = el('span', { class: 'hud-decision__state' })
+  const decisionFacts = [0, 1, 2].map(() => {
+    const label = el('span', { class: 'hud-decision__fact-label' })
+    const value = el('strong', { class: 'hud-decision__fact-value' })
+    return { root: el('span', { class: 'hud-decision__fact' }, label, value), label, value }
+  })
+  const decisionChoiceUi = [0, 1].map(() => {
+    const label = el('strong', { class: 'hud-decision__choice-label' })
+    const hint = el('span', { class: 'hud-decision__choice-hint' })
+    const root = el(
+      'button',
+      {
+        class: 'pg-btn hud-decision__choice',
+        type: 'button',
+        on: {
+          click: (event) => {
+            const target = event.currentTarget as HTMLButtonElement
+            const choice = target.dataset.scenarioChoice as ScenarioChoiceId | undefined
+            if (choice) sim.chooseScenario(choice)
+            paintScenario()
+          },
+        },
+      },
+      label,
+      hint,
+    )
+    return { root, label, hint }
+  })
+  const decisionChoices = el(
+    'div',
+    { class: 'hud-decision__choices' },
+    ...decisionChoiceUi.map((choice) => choice.root),
+  )
+  const decisionResult = el('p', {
+    class: 'hud-decision__result',
+    'aria-live': 'polite',
+  })
+  const decisionRecover = el('button', {
+    class: 'pg-btn hud-decision__recover',
+    type: 'button',
+    text: 'Recover',
+    on: {
+      click: () => {
+        sim.recoverScenario()
+        paintScenario()
+      },
+    },
+  })
+  const decisionRetry = el('button', {
+    class: 'pg-btn hud-decision__retry',
+    type: 'button',
+    text: 'Run this situation again',
+    on: {
+      click: () => {
+        const id = sim.state.scenario
+        if (!id) return
+        sim.reset()
+        sim.runScenario(id)
+        paintScenario()
+      },
+    },
+  })
+  const decisionActions = el(
+    'div',
+    { class: 'hud-decision__actions' },
+    decisionRecover,
+    decisionRetry,
+  )
+  const decisionRoot = el(
+    'section',
+    {
+      class: 'pg-panel hud-decision',
+      hidden: true,
+      'aria-label': 'Operator decision',
+    },
+    el(
+      'div',
+      { class: 'hud-decision__head' },
+      el('span', { class: 'pg-eyebrow', text: 'Operator instruments' }),
+      decisionTitle,
+      decisionState,
+    ),
+    el('div', { class: 'hud-decision__facts' }, ...decisionFacts.map((fact) => fact.root)),
+    decisionChoices,
+    decisionResult,
+    decisionActions,
+  )
+  bottomEl.append(decisionRoot, transport)
 
   let scenariosOpen = false
 
@@ -1258,6 +1365,7 @@ export function createHud(ctx: UiContext): UiModule {
 
   function toggleScenario(id: string): void {
     sim.runScenario(sim.state.scenario === id ? null : id)
+    setScenariosOpen(false)
   }
 
   function stopScenario(): void {
@@ -1630,7 +1738,171 @@ export function createHud(ctx: UiContext): UiModule {
         ? 'Exit fly mode'
         : cameraPreset === 'plan'
           ? 'Return to the city view'
-          : 'View, display, and destinations'
+        : 'View, display, and destinations'
+  }
+
+  function setDecisionFact(index: number, label: string, value: string): void {
+    const fact = decisionFacts[index]
+    setText(fact.label, label)
+    setText(fact.value, value)
+  }
+
+  function paintDecision(): void {
+    const s = sim.state
+    const decision = s.scenarioDecision
+    const def = s.scenario ? SCENARIOS.find((scenario) => scenario.id === s.scenario) : undefined
+    if (!decision || !def?.decision || decision.phase === 'staging') {
+      decisionRoot.hidden = true
+      return
+    }
+
+    decisionRoot.hidden = false
+    decisionRoot.dataset.kind = decision.kind
+    decisionRoot.dataset.phase = decision.phase
+    setText(
+      decisionState,
+      decision.phase === 'ready'
+        ? decision.kind === 'slot-pressure'
+          ? 'Scaled WAL rate · choose an operation'
+          : 'Choose an operation'
+        : decision.phase === 'recovering'
+          ? 'Operation running'
+          : decision.phase === 'recovered'
+            ? 'Recovery complete'
+            : 'Consequence visible',
+    )
+
+    const showChoices = decision.phase === 'ready' && decision.choice === null
+    decisionChoices.hidden = !showChoices
+    if (showChoices) {
+      for (let i = 0; i < decisionChoiceUi.length; i++) {
+        const choice = def.decision.choices[i]
+        const ui = decisionChoiceUi[i]
+        ui.root.dataset.scenarioChoice = choice.id
+        ui.root.disabled = false
+        setText(ui.label, choice.label)
+        setText(ui.hint, choice.hint)
+      }
+    }
+
+    decisionResult.hidden = decision.choice === null
+    decisionActions.hidden = decision.choice === null
+    decisionRetry.hidden =
+      decision.phase !== 'outcome' && decision.phase !== 'recovered'
+    decisionRecover.hidden = true
+    decisionRecover.disabled = false
+
+    if (decision.kind === 'slot-pressure') {
+      const slot = s.replication.physicalSlots[1]
+      const standby = s.replication.standbys[1]
+      setText(decisionTitle, 'WAL retention and standby continuity')
+      setDecisionFact(
+        0,
+        'pg_wal',
+        `${fmtBytes(s.disasterRecovery.archive.pgWalBytes)} / ${fmtBytes(s.disasterRecovery.archive.pgWalCapacityBytes)}`,
+      )
+      setDecisionFact(
+        1,
+        'standby_b_slot',
+        slot.exists
+          ? `${slot.active ? 'active' : 'inactive'} · ${fmtBytes(slot.retainedBytes)} retained`
+          : 'dropped · no WAL retained',
+      )
+      setDecisionFact(
+        2,
+        'standby_b durable gap',
+        fmtBytes(Math.max(0, s.wal.flushLsn - standby.flushedLsn)),
+      )
+      if (decision.choice === 'add-wal-capacity') {
+        setText(
+          decisionResult,
+          decision.phase === 'recovered'
+            ? `You added ${fmtBytes(decision.addedCapacityBytes)}. standby_b caught up without a rebuild; ${fmtNum(decision.rejectedWrites)} writes were rejected after the decision.`
+            : `You added ${fmtBytes(decision.addedCapacityBytes)}. The slot remains valid while standby_b catches up; the capacity is the cost.`,
+        )
+      } else if (decision.choice === 'drop-replication-slot') {
+        setText(
+          decisionResult,
+          decision.phase === 'recovered'
+            ? `You dropped the slot, then copied a ${fmtBytes(decision.rebuildBytes)} base backup. standby_b can stream again.`
+            : `You dropped standby_b_slot. Retained WAL is recyclable now, but standby_b cannot resume: recovery requires a ${fmtBytes(decision.rebuildBytes)} base backup.`,
+        )
+        decisionRecover.hidden = decision.phase !== 'outcome' && decision.phase !== 'recovering'
+        decisionRecover.disabled = decision.phase === 'recovering'
+        setText(
+          decisionRecover,
+          decision.phase === 'recovering'
+            ? `Rebuilding ${Math.min(100, (decision.rebuildCopiedBytes / Math.max(1, decision.rebuildBytes)) * 100).toFixed(0)}%`
+            : 'Rebuild standby_b',
+        )
+      }
+      return
+    }
+
+    if (decision.kind === 'vacuum-blockade') {
+      let dead = 0
+      let pages = 0
+      for (let i = 0; i < s.tables.length; i++) {
+        dead += s.tables[i].deadTuples
+        pages += s.tables[i].pages
+      }
+      let workers = 0
+      for (let i = 0; i < s.autovac.workers.length; i++) {
+        if (s.autovac.workers[i].active) workers++
+      }
+      setText(decisionTitle, 'xmin horizon and cleanup')
+      setDecisionFact(0, 'oldest snapshot', fmtDuration(s.oldestSnapshotAge))
+      setDecisionFact(1, 'dead row versions', fmtNum(dead))
+      setDecisionFact(2, 'autovacuum', `${workers} workers · ${fmtNum(pages)} pages`)
+      if (decision.choice === 'terminate-transaction') {
+        setText(
+          decisionResult,
+          decision.phase === 'recovered'
+            ? `You terminated one idle transaction. The model aborts no uncommitted row changes; vacuum has reclaimed ${fmtNum(decision.deadTuplesReclaimed)} dead row versions.`
+            : 'You terminated one idle transaction. Its snapshot released immediately; the next vacuum pass can reclaim the accumulated dead row versions.',
+        )
+      } else if (decision.choice === 'wait-for-transaction') {
+        setText(
+          decisionResult,
+          `You kept the idle transaction. Since the decision: +${fmtNum(decision.deadTuplesAdded)} dead row versions, +${fmtNum(decision.pagesAdded)} relation pages, and ${decision.blockedVacuumWorkers} autovacuum workers kept scanning behind the pinned horizon.`,
+        )
+        decisionRecover.hidden = decision.phase !== 'outcome' && decision.phase !== 'recovering'
+        decisionRecover.disabled = decision.phase === 'recovering'
+        setText(
+          decisionRecover,
+          decision.phase === 'recovering' ? 'Vacuum reclaiming dead rows' : 'Terminate it now',
+        )
+      }
+      return
+    }
+
+    setText(decisionTitle, 'Failover candidates by durable LSN')
+    setDecisionFact(0, 'standby_a durable gap', fmtBytes(decision.standbyALagBytes))
+    setDecisionFact(1, 'standby_b durable gap', fmtBytes(decision.standbyBLagBytes))
+    setDecisionFact(
+      2,
+      'write admission',
+      s.highAvailability.acceptingWrites ? 'open' : 'closed during failover',
+    )
+    if (decision.choice) {
+      const chosen = decision.choice === 'promote-standby-a' ? 'standby_a' : 'standby_b'
+      setText(
+        decisionResult,
+        s.highAvailability.transition.status !== 'complete'
+          ? `You selected ${chosen}. The primary is gone; Patroni is waiting for the old leader lease before promotion.`
+          : `You promoted ${chosen}: ${fmtBytes(decision.lossBytes)} and ${fmtNum(decision.lossTransactions)} committed write transactions are absent from the new timeline. Rejoining the former primary requires pg_rewind to copy ${fmtBytes(decision.rejoinBytes)} of changed blocks.`,
+      )
+      if (s.highAvailability.transition.status === 'complete' && s.highAvailability.rejoin.required) {
+        decisionRecover.hidden = false
+        decisionRecover.disabled = decision.phase === 'recovering'
+        setText(
+          decisionRecover,
+          decision.phase === 'recovering'
+            ? `pg_rewind ${(s.highAvailability.rejoin.progress * 100).toFixed(0)}%`
+            : 'Rejoin former primary with pg_rewind',
+        )
+      }
+    }
   }
 
   function paintScenario(): void {
@@ -1653,6 +1925,7 @@ export function createHud(ctx: UiContext): UiModule {
       nowBox.disabled = true
       setText(scnBtn.querySelector<HTMLElement>('.hud-scn__toggle-label')!, 'Scenarios')
       scnBtn.title = 'Show or hide the scenario list'
+      paintDecision()
       return
     }
     setClass(nowBox, 'is-live', true)
@@ -1668,6 +1941,7 @@ export function createHud(ctx: UiContext): UiModule {
       setText(nowTime, `${fmtClock(s.scenarioT)} · running`)
       nowFill.style.width = '100%'
     }
+    paintDecision()
   }
 
   function paintPerf(): void {
@@ -1735,6 +2009,7 @@ export function createHud(ctx: UiContext): UiModule {
     document.body.classList.remove('pg-walk')
     topBar.remove()
     viewPanel.remove()
+    decisionRoot.remove()
     transport.remove()
     compassRoot.remove()
     toastEl.replaceChildren()

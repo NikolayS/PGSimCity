@@ -672,6 +672,8 @@ export interface PhysicalStandbyState {
 export interface PhysicalReplicationSlotState {
   name: 'standby_a_slot' | 'standby_b_slot'
   standbyId: 'standbyA' | 'standbyB'
+  /** False after DROP_REPLICATION_SLOT; the standby then needs a new base backup. */
+  exists: boolean
   active: boolean
   restartLsn: number
   retainedBytes: number
@@ -801,6 +803,67 @@ export interface SimStats {
   }
 }
 
+export type ScenarioDecisionPhase =
+  | 'staging'
+  | 'ready'
+  | 'outcome'
+  | 'recovering'
+  | 'recovered'
+
+export type ScenarioChoiceId =
+  | 'add-wal-capacity'
+  | 'drop-replication-slot'
+  | 'terminate-transaction'
+  | 'wait-for-transaction'
+  | 'promote-standby-a'
+  | 'promote-standby-b'
+
+interface ScenarioDecisionBase {
+  phase: ScenarioDecisionPhase
+  choice: ScenarioChoiceId | null
+  /** Testable judgement for this staged situation; never rendered as a score. */
+  correct: boolean | null
+}
+
+export interface SlotPressureDecisionState extends ScenarioDecisionBase {
+  kind: 'slot-pressure'
+  slotRetainedAtDecision: number
+  capacityAtDecision: number
+  addedCapacityBytes: number
+  rebuildRequired: boolean
+  rebuildBytes: number
+  rebuildCopiedBytes: number
+  rejectedWritesAtDecision: number
+  rejectedWrites: number
+}
+
+export interface VacuumBlockadeDecisionState extends ScenarioDecisionBase {
+  kind: 'vacuum-blockade'
+  deadTuplesAtDecision: number
+  pagesAtDecision: number
+  vacuumRunsAtDecision: number
+  landfillAtDecision: number
+  deadTuplesAdded: number
+  pagesAdded: number
+  blockedVacuumWorkers: number
+  deadTuplesReclaimed: number
+  transactionTerminated: boolean
+}
+
+export interface FailoverCandidateDecisionState extends ScenarioDecisionBase {
+  kind: 'failover-candidate'
+  standbyALagBytes: number
+  standbyBLagBytes: number
+  lossBytes: number
+  lossTransactions: number
+  rejoinBytes: number
+}
+
+export type ScenarioDecisionState =
+  | SlotPressureDecisionState
+  | VacuumBlockadeDecisionState
+  | FailoverCandidateDecisionState
+
 export interface SimState {
   /** simulated seconds since boot */
   t: number
@@ -828,6 +891,8 @@ export interface SimState {
   /** id of the running scenario, if any */
   scenario: string | null
   scenarioT: number
+  /** Model-owned state for one of the three operator judgement scenarios. */
+  scenarioDecision: ScenarioDecisionState | null
   /** postmaster fork animation pulses */
   forkPulse: number
   /** model-owned record of the requested statement trip */
@@ -840,6 +905,10 @@ export interface SimApi {
   update(dt: number): void
   setKnob<K extends keyof Knobs>(key: K, value: Knobs[K], source?: 'user'): void
   runScenario(id: string | null): void
+  /** Apply one of the visible operator choices in an interactive scenario. */
+  chooseScenario(choice: ScenarioChoiceId): boolean
+  /** Repair the survivable consequence of the selected choice. */
+  recoverScenario(): boolean
   request(kind: QueryKind, table: number, opts?: TraceRequestOptions): void
   setTraceMode(mode: TracePlayback): void
   endTrace(): void
@@ -1306,4 +1375,13 @@ export interface ScenarioDef {
   duration: number
   /** narration beats: [atSecond, title, body] */
   beats?: [number, string, string][]
+  /** A non-modal operator decision shown only after its instrument threshold. */
+  decision?: {
+    revealAt: number
+    choices: {
+      id: ScenarioChoiceId
+      label: string
+      hint: string
+    }[]
+  }
 }

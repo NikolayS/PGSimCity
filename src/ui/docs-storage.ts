@@ -816,11 +816,15 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       { label: 'standby_b sent', get: (s) => fmtLsn(s.replication.standbys[1].sentLsn) },
       {
         label: 'standby_a slot',
-        get: (s) => `${s.replication.physicalSlots[0].active ? 'active' : 'inactive'} · ${fmtBytes(s.replication.physicalSlots[0].retainedBytes)} retained`,
+        get: (s) => s.replication.physicalSlots[0].exists
+          ? `${s.replication.physicalSlots[0].active ? 'active' : 'inactive'} · ${fmtBytes(s.replication.physicalSlots[0].retainedBytes)} retained`
+          : 'dropped · standby rebuild required',
       },
       {
         label: 'standby_b slot',
-        get: (s) => `${s.replication.physicalSlots[1].active ? 'active' : 'inactive'} · ${fmtBytes(s.replication.physicalSlots[1].retainedBytes)} retained`,
+        get: (s) => s.replication.physicalSlots[1].exists
+          ? `${s.replication.physicalSlots[1].active ? 'active' : 'inactive'} · ${fmtBytes(s.replication.physicalSlots[1].retainedBytes)} retained`
+          : 'dropped · standby rebuild required',
       },
       {
         label: 'Records in flight',
@@ -2121,7 +2125,9 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         label: 'Physical slot',
-        get: (s) => `${s.replication.physicalSlots[1].active ? 'active' : 'inactive'} · ${fmtBytes(s.replication.physicalSlots[1].retainedBytes)} retained`,
+        get: (s) => s.replication.physicalSlots[1].exists
+          ? `${s.replication.physicalSlots[1].active ? 'active' : 'inactive'} · ${fmtBytes(s.replication.physicalSlots[1].retainedBytes)} retained`
+          : 'dropped · standby rebuild required',
       },
       {
         label: 'Leader opinion',

@@ -503,6 +503,138 @@
   min-height: 52px;
 }
 
+/* Interactive situations stay attached to the operator rail. This is a
+   non-modal instrument surface: the city, inspector and camera remain live. */
+.hud-decision {
+  --decision-color: var(--c-wal);
+  display: grid;
+  grid-template-columns: minmax(190px, 0.7fr) minmax(360px, 1.15fr) minmax(390px, 1.2fr);
+  gap: 10px 16px;
+  align-items: stretch;
+  width: min(1160px, calc(100vw - var(--hud-gap) * 2 - var(--safe-l) - var(--safe-r)));
+  margin: 0 auto 8px;
+  padding: 12px 14px;
+  border-top: 2px solid var(--decision-color);
+  border-radius: var(--r-md);
+  pointer-events: auto;
+}
+.hud-decision[hidden] {
+  display: none;
+}
+.hud-decision [hidden] {
+  display: none;
+}
+.hud-decision[data-kind='slot-pressure'] {
+  --decision-color: var(--c-wal);
+}
+.hud-decision[data-kind='vacuum-blockade'] {
+  --decision-color: var(--c-vacuum);
+}
+.hud-decision[data-kind='failover-candidate'] {
+  --decision-color: var(--c-replication);
+}
+.hud-decision__head {
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  min-width: 0;
+}
+.hud-decision__title {
+  color: var(--ink);
+  font-size: var(--fs-sm);
+  line-height: 1.25;
+}
+.hud-decision__state {
+  color: var(--decision-color);
+  font-family: var(--f-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.hud-decision__facts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  min-width: 0;
+}
+.hud-decision__fact {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.9fr) minmax(0, 1.1fr);
+  align-content: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid color-mix(in srgb, var(--decision-color) 30%, var(--line));
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--decision-color) 7%, transparent);
+}
+.hud-decision__fact-label {
+  overflow: hidden;
+  color: var(--ink-faint);
+  font-family: var(--f-mono);
+  font-size: var(--fs-micro);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hud-decision__fact-value {
+  overflow: hidden;
+  color: var(--ink);
+  font-family: var(--f-mono);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hud-decision__choices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  min-width: 0;
+}
+.hud-decision__choice {
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 10px;
+  text-align: left;
+  white-space: normal;
+}
+.hud-decision__choice:hover {
+  border-color: var(--decision-color);
+  background: color-mix(in srgb, var(--decision-color) 12%, transparent);
+}
+.hud-decision__choice-label {
+  color: var(--ink);
+  font-size: var(--fs-xs);
+}
+.hud-decision__choice-hint {
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+  line-height: 1.35;
+}
+.hud-decision__result {
+  grid-column: 2;
+  align-self: center;
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+.hud-decision__actions {
+  grid-column: 3;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+}
+.hud-decision__recover {
+  border-color: var(--decision-color);
+}
+.hud-decision__retry {
+  color: var(--ink-dim);
+}
+
 .hud-transport__deck {
   display: flex;
   align-items: center;
@@ -1373,7 +1505,7 @@ body.pg-walk.touch-walk-active .hud-walk {
   .hud-scn__toggle[data-mode-exit='scenario'] {
     min-height: var(--tap);
   }
-  /* The rail is a third row, and only when it is asked for. Thirteen chips are
+  /* The rail is a third row, and only when it is asked for. The full chip set is
      worth more than a third of the screen only while you are choosing one. */
   .hud-transport__scn {
     display: none;
@@ -1394,6 +1526,70 @@ body.pg-walk.touch-walk-active .hud-walk {
   .hud-chip {
     min-height: var(--tap);
     padding: 0 12px;
+  }
+
+  .hud-decision {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    width: 100%;
+    margin-bottom: 6px;
+    padding: 9px;
+    border-radius: var(--r-sm);
+  }
+  .hud-decision__head {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 2px 8px;
+  }
+  .hud-decision__head .pg-eyebrow {
+    display: none;
+  }
+  .hud-decision__title {
+    font-size: var(--fs-xs);
+  }
+  .hud-decision__state {
+    align-self: center;
+  }
+  .hud-decision__facts {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 4px;
+  }
+  .hud-decision__fact {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
+    padding: 6px;
+  }
+  .hud-decision__fact-label,
+  .hud-decision__fact-value {
+    font-size: 9px;
+  }
+  .hud-decision__choices {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 5px;
+  }
+  .hud-decision__choice {
+    grid-template-columns: minmax(120px, 0.8fr) minmax(0, 1.2fr);
+    min-height: var(--tap);
+    gap: 8px;
+    padding: 7px 9px;
+  }
+  .hud-decision__choice-hint {
+    align-self: center;
+  }
+  .hud-decision__result,
+  .hud-decision__actions {
+    grid-column: 1;
+  }
+  .hud-decision__result {
+    font-size: var(--fs-micro);
+    line-height: 1.4;
+  }
+  .hud-decision__actions {
+    justify-content: stretch;
+  }
+  .hud-decision__actions .pg-btn {
+    flex: 1 1 0;
+    min-height: var(--tap);
+    white-space: normal;
   }
 
   /* --- toasts ----------------------------------------------------------- */
