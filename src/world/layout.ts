@@ -146,16 +146,14 @@ export const ANCHOR = {
   timelineYard: [344, 0, -44],
   /** The bucket: WAL segment silos, grouped by timeline, plus the .history shelf. */
   objectStore: [396, 0, -80],
-  /** Base backups land here: base.tar, pg_wal.tar, backup_label, backup_manifest. */
+  /** WAL-G backup-push objects in the same object-storage estate. */
   backupVault: [396, 0, 96],
-  /** Runs pg_basebackup against the STANDBY, so the primary never feels it. */
-  backupHost: [312, 0, 236],
 
   // the recovery ground (south-west, a different machine on a different site)
   recoveryGate: [-286, 0, 300],
   /** The empty data directory the base backup is unpacked onto. */
   recoveryPad: [-320, 0, 246],
-  /** restore_command. One winch, one hook, one segment at a time. */
+  /** restore_command: ordered replay; WAL-G may prefetch later objects. */
   restoreWinch: [-262, 0, 214],
   /** recovery_target_time — the dial the whole of PITR turns on. */
   recoveryClock: [-320, 0, 178],
@@ -785,26 +783,23 @@ route('bufmap.in', [
 
 /* --- continuity: the archive estate, the recovery ground, the HA quarter --
  *
- * Three roads matter here and the rest are local moves:
+ * Four roads matter here and the rest are local moves:
  *
  *   wal.archive    the finished segment leaving the site for good
+ *   backup.push    WAL-G from standby_a straight to the S3 backup prefix
  *   restore.haul   the ONE road back — base backup and archived WAL both ride
  *                  it, because they both come out of the same bucket
  *   net.streamB    the second standby's wire, a third duct in the same bank
  *                  as far as z ≈ 150, then peeling west on its own
  * ------------------------------------------------------------------------*/
 
-/* pg_basebackup pulls from the STANDBY — the whole point of the exercise —
- * and the result goes straight out to object storage. */
-route('backup.take', [
+/* WAL-G runs on standby_a and streams the full backup directly into the
+ * base-backup prefix of the object store. There is no repository host. */
+route('backup.push', [
   [ANCHOR.standby[0] + 16, 6, ANCHOR.standby[2] + 8],
   [180, 5, 258],
   [240, 5, 252],
-  [ANCHOR.backupHost[0] - 14, 6, ANCHOR.backupHost[2] + 2],
-], { color: COLOR.storage, speed: 78, size: 1.25, visible: true, roadOpacity: 0.13 })
-
-route('backup.store', [
-  [ANCHOR.backupHost[0] + 8, 6, 232],
+  [300, 6, 232],
   [352, 6, 200],
   [378, 6, 152],
   [ANCHOR.backupVault[0], 6, ANCHOR.backupVault[2] + 16],
@@ -827,15 +822,15 @@ route('restore.haul', [
   [ANCHOR.recoveryGate[0], 3, ANCHOR.recoveryGate[2]],
 ], { color: COLOR.archive, speed: 96, size: 1.2, visible: true, roadOpacity: 0.09 })
 
-/* base.tar onto an empty data directory */
+/* base-backup tar objects onto an empty data directory */
 route('restore.unpack', [
   [ANCHOR.recoveryGate[0], 3, ANCHOR.recoveryGate[2]],
   [-306, 3, 278],
   [ANCHOR.recoveryPad[0] + 4, 4, ANCHOR.recoveryPad[2] + 12],
 ], { color: COLOR.storage, speed: 70, size: 1.3, visible: true, roadOpacity: 0.14 })
 
-/* restore_command: the winch lifts one segment off the haul road and lays it
- * on the belt. One hook, one file — this is why recovery is single-threaded. */
+/* restore_command: the winch lays one segment onto PostgreSQL's ordered replay
+ * belt. WAL-G may already be prefetching later objects concurrently. */
 route('restore.replay', [
   [ANCHOR.recoveryGate[0] + 2, 4, 284],
   [ANCHOR.restoreWinch[0], 8, ANCHOR.restoreWinch[2] + 8],

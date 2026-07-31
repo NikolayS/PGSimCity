@@ -450,7 +450,7 @@ export const SCENARIOS: ScenarioDef[] = [
       synchronousCommit: 'local',
       fullPageWrites: true,
       walLevel: 'replica',
-      archiveAvailable: true,
+      walGArchiveCredentialsValid: true,
       replicaEnabled: true,
       standbyBEnabled: false,
       checkpointTimeout: 15,

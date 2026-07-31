@@ -29,8 +29,9 @@ situations, not wiring previously inert buildings.
 
 The city names the tools and models what they actually do:
 
-- **WAL-G / pgBackRest** for disaster recovery — base backups, retention, the
-  archive command, and restore to a point in time.
+- **WAL-G** for disaster recovery — direct object-storage base backups, WAL
+  archiving, retention, and restore to a point in time. **pgBackRest** is the
+  accurately described alternative.
 - **Patroni** for high availability — the DCS holding the leader lock, leases
   renewing, and a node that loses its lease being demoted.
 

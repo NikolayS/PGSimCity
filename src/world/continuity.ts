@@ -15,7 +15,7 @@ import { ANCHOR, CONTINUITY } from './layout'
  *
  *   ARCHIVE ESTATE   east, downstream of the archiver that already exists: a
  *                    gate you cannot carry anything back through, the TIMELINE
- *                    SWITCHYARD, the bucket, and the backup vault.
+ *                    SWITCHYARD, the bucket, and its base-backup-object annex.
  *
  *   RECOVERY GROUND  south-west, a long haul road away, on its own iron: an
  *                    empty data directory, a winch that lifts one archived segment at
@@ -32,7 +32,7 @@ import { ANCHOR, CONTINUITY } from './layout'
  * timeline ever does.
  *
  * WHAT IS SIMULATED, AND WHAT IS NOT. The model owns archive retries, pg_wal
- * pressure, full backups, pgBackRest retention, and a restore that fetches one
+ * pressure, full backups, WAL-G retention, and a restore that fetches one
  * retained backup before replaying archived WAL to recovery_target_time. The
  * world only projects that state. standby_b is a complete independent physical
  * standby. Three Patroni agents, etcd Raft consensus, the leader-key lease,
@@ -222,7 +222,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
 
   plate('RETENTION / OWNERSHIP BOUNDARY', AG[0] - 1.9, 19.4, AG[2], -Math.PI / 2, 2.1, COLOR.archive, 0.92, gGate)
   plate(
-    'exit code 0 means STORED — anything else and the archiver retries the same file, forever',
+    'wal-g wal-push: exit code 0 means STORED — otherwise the archiver retries the same file, forever',
     AG[0] - 1.9, 11.6, AG[2], -Math.PI / 2, 1.4, COLOR.inkDim, 0.62,
   )
   plate('retry siding', AG[0] - 12, 5.4, AG[2] - 24, 0, 1.6, COLOR.warn, 0.6)
@@ -402,13 +402,13 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   }
   historyTablet.instanceMatrix.needsUpdate = true
 
-  plate('object storage', OS[0], 12.4, OS[2] - yardHalfZ - 6, Math.PI, 3.0, COLOR.archive, 0.9, gStore)
+  plate('S3 OBJECT STORAGE', OS[0], 12.4, OS[2] - yardHalfZ - 6, Math.PI, 3.0, COLOR.archive, 0.9, gStore)
   plate('one silo = one 16 MiB segment · one row = one timeline', OS[0], 9.0, OS[2] - yardHalfZ - 6.4, Math.PI, 1.45, COLOR.inkDim, 0.66)
   plate('latest 8 shown · retained archive never wraps', OS[0], 6.8, OS[2] - yardHalfZ - 6.4, Math.PI, 1.2, COLOR.inkDim, 0.6)
   plate('.history — small, and kept forever', OS[0] - 20, 5.6, OS[2] + 23, 0, 1.4, COLOR.inkDim, 0.66)
 
   /* ---------------------------------------------------------------------
-   * 4. THE BACKUP VAULT, and the host that fills it.
+   * 4. BASE-BACKUP OBJECTS in the same object-storage estate.
    * -------------------------------------------------------------------*/
 
   const gVault = new THREE.Group()
@@ -436,29 +436,10 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   /** How far back you could actually restore to: backup + the WAL after it. */
   const windowBar = lamp(COLOR.storage, 1.3, 1, 0.55, 2.2, BV[0], 0.72, BV[2] + 18, gVault)
 
-  plate('BASE BACKUPS', BV[0], 12.6, BV[2] - 14, Math.PI, 2.8, COLOR.storage, 0.9, gVault)
-  plate('pgBackRest full backups · manifest · archived WAL stored separately', BV[0], 9.4, BV[2] - 14.4, Math.PI, 1.45, COLOR.inkDim, 0.68)
+  plate('BASE-BACKUP OBJECTS', BV[0], 12.6, BV[2] - 14, Math.PI, 2.8, COLOR.storage, 0.9, gVault)
+  plate('wal-g backup-push · compressed objects and metadata · same S3 store', BV[0], 9.4, BV[2] - 14.4, Math.PI, 1.45, COLOR.inkDim, 0.68)
   plate('WAL alone restores nothing — it has to be replayed ONTO one of these', BV[0], 7.4, BV[2] - 14.4, Math.PI, 1.3, COLOR.inkDim, 0.62)
   plate('recovery window', BV[0], 1.6, BV[2] + 22, 0, 1.6, COLOR.storage, 0.7)
-
-  const gHost = new THREE.Group()
-  gHost.name = 'backup.host'
-  group.add(gHost)
-  part(gHost)
-  const BH = ANCHOR.backupHost
-  box([BH[0], 4, BH[2], 18, 8, 14], 'dim')
-  box([BH[0], 11, BH[2], 1.4, 6, 1.4], 'none')
-  const hostLamp = lamp(COLOR.storage, 1.6, 2.6, 1.0, 2.6, BH[0], 14.4, BH[2], gHost)
-  hostLamp.visible = false
-  plate('pgBackRest backup host', BH[0], 10.8, BH[2] - 7.4, Math.PI, 2.2, COLOR.storage, 0.9, gHost)
-  plate(
-    'backup-standby=y · most files come from standby_a; the primary still coordinates start and stop',
-    BH[0], 7.6, BH[2] - 7.8, Math.PI, 1.3, COLOR.inkDim, 0.68,
-  )
-  plate(
-    'WAL-G is named in the inspector; this model follows pgBackRest retention behavior',
-    BH[0], 5.6, BH[2] - 7.8, Math.PI, 1.2, COLOR.inkDim, 0.6,
-  )
 
   /* ---------------------------------------------------------------------
    * 5. THE RECOVERY GROUND.
@@ -506,7 +487,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   )
   drillBoard.visible = true
 
-  // the winch — restore_command, one hook, one file
+  // One hook means ordered PostgreSQL consumption, not serial object GETs.
   const gWinch = new THREE.Group()
   gWinch.name = 'restore.winch'
   group.add(gWinch)
@@ -524,7 +505,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   const hook = lamp(COLOR.wal, 1.5, 2.2, 2.2, 2.2, 0, -3.4, 16, jib)
   hook.visible = false
   plate('restore_command', RW[0], 20.2, RW[2], 0, 2.0, COLOR.wal, 0.9, gWinch)
-  plate('one hook, one segment — this is why recovery is single-threaded', RW[0], 17.4, RW[2] + 0.4, 0, 1.3, COLOR.inkDim, 0.66)
+  plate('ordered replay stream · WAL-G may prefetch later objects concurrently', RW[0], 17.4, RW[2] + 0.4, 0, 1.3, COLOR.inkDim, 0.66)
 
   // the dial: recovery_target_time
   const gClock = new THREE.Group()
@@ -900,7 +881,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
       const a = s.disasterRecovery.archive
       const q = a.queueSegments
       if (a.writesBlocked) return `${q} queued · scaled pg_wal safety limit reached · writes rejected`
-      if (!s.knobs.archiveAvailable) return `${q} queued · archive-push retrying after nonzero exit`
+      if (!s.knobs.walGArchiveCredentialsValid) return `${q} queued · wal-push credentials expired · retrying oldest .ready file`
       if (q > 0) return `${q} queued · ${s.wal.archived} shipped`
       return `clear · ${s.wal.archived} segments shipped`
     },
@@ -927,7 +908,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   ctx.register({
     id: 'object.store',
     name: 'object storage',
-    role: 'the bucket: every archived segment, filed by timeline',
+    role: 'the S3 bucket: WAL-G writes archived WAL and base-backup objects here',
     kind: 'storage',
     district: 'wal',
     object: gStore,
@@ -936,13 +917,13 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     labelAt: [OS[0], 18, OS[2]],
     color: COLOR.archive,
     readout: (s: SimState) =>
-      `${s.wal.archived} segments total · active timeline ${s.highAvailability.timeline.current} · ${fmtBytes(s.wal.archived * s.wal.segmentSize)}`,
+      `${s.wal.archived} WAL objects · ${s.disasterRecovery.backups.length} full backup${s.disasterRecovery.backups.length === 1 ? '' : 's'} · ${s.knobs.walGArchiveCredentialsValid ? 'wal-push authenticated' : 'wal-push credentials expired'}`,
   })
 
   ctx.register({
     id: 'backup.vault',
-    name: 'the backup vault',
-    role: 'base backups — the only thing archived WAL can be replayed onto',
+    name: 'WAL-G base-backup objects',
+    role: 'backup-push objects in S3 — the only thing archived WAL can be replayed onto',
     kind: 'storage',
     district: 'wal',
     object: gVault,
@@ -955,26 +936,6 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
       if (backups.length === 0) return 'empty · archived WAL alone cannot restore the data directory'
       const newest = backups[backups.length - 1]
       return `${backups.length} full backup${backups.length === 1 ? '' : 's'} held · newest ${fmtDuration(s.t - newest.completedAt)} old`
-    },
-  })
-
-  ctx.register({
-    id: 'backup.host',
-    name: 'the backup host',
-    role: 'runs pgBackRest full backup with backup-standby=y',
-    kind: 'process',
-    district: 'replication',
-    object: gHost,
-    tier: 1,
-    focus: { target: [BH[0], 6, BH[2]], distance: 72, dir: [0.4, 0.46, 0.79] },
-    labelAt: [BH[0], 18, BH[2]],
-    color: COLOR.storage,
-    readout: (s: SimState) => {
-      const b = s.disasterRecovery.backup
-      if (b.status === 'copying') return `pgBackRest full backup · ${(b.progress * 100).toFixed(0)}% · ${fmtBytes(b.dataBytes)}`
-      if (b.status === 'waiting_wal') return 'data copied · waiting for required WAL to reach the archive'
-      if (b.status === 'failed') return b.failureReason
-      return 'idle · start a measured full backup from the inspector'
     },
   })
 
@@ -1021,7 +982,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   ctx.register({
     id: 'restore.winch',
     name: 'restore_command',
-    role: 'one hook, one archived segment at a time',
+    role: 'ordered PostgreSQL replay supplied by WAL-G wal-fetch and prefetch',
     kind: 'process',
     district: 'world',
     object: gWinch,
@@ -1031,7 +992,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     color: COLOR.wal,
     readout: (s: SimState) =>
       s.disasterRecovery.restore.status === 'replaying'
-        ? `archive-get fetching segments · ${fmtBytes(s.disasterRecovery.restore.walBytesReplayed)} replayed`
+        ? `wal-g wal-fetch / wal-prefetch · ${fmtBytes(s.disasterRecovery.restore.walBytesReplayed)} replayed in order`
         : 'idle',
   })
 
@@ -1233,7 +1194,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
 
   /** Emission accumulators, one per route. Never reallocated. */
   const emit = {
-    take: 0, store: 0, haul: 0, unpack: 0, replay: 0, apply: 0,
+    backupPush: 0, haul: 0, unpack: 0, replay: 0, apply: 0,
     bStream: 0, bAck: 0, bApply: 0, bBuffer: 0, bIo: 0,
   }
 
@@ -1252,7 +1213,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     /* --- 1. continuous archiving, read off the live WAL --------------------*/
     const archive = sim.disasterRecovery.archive
     queueEma = damp(queueEma, archive.queueSegments, 2.5, dt)
-    const failing = !sim.knobs.archiveAvailable || archive.writesBlocked
+    const failing = !sim.knobs.walGArchiveCredentialsValid || archive.writesBlocked
     const busy = queueEma > 0.6
     gateLamp[0].visible = !busy
     gateLamp[1].visible = busy && !failing
@@ -1323,10 +1284,8 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
 
     /* --- 3. explicit backup and restore operations -------------------------*/
     const backup = sim.disasterRecovery.backup
-    hostLamp.visible = backup.status === 'copying' && Math.sin(clock * 2.2) > -0.2
     if (backup.status === 'copying') {
-      emit.take = pump(emit.take, 6, dt, 'backup.take')
-      emit.store = pump(emit.store, 5, dt, 'backup.store')
+      emit.backupPush = pump(emit.backupPush, 6, dt, 'backup.push')
     }
     const restore = sim.disasterRecovery.restore
     const fetching = restore.status === 'fetching'
@@ -1348,6 +1307,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     signalFlag.visible = fetching || replaying || complete
 
     if (replaying) {
+      emit.haul = pump(emit.haul, 3.5, dt, 'restore.haul')
       emit.replay = pump(emit.replay, 4.5, dt, 'restore.replay')
       emit.apply = pump(emit.apply, 3.5, dt, 'restore.apply')
       jib.rotation.y = Math.sin(clock * 0.9) * 0.7

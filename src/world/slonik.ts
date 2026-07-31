@@ -282,7 +282,6 @@ const CONTINUITY_ANCHORS = [
   'timelineYard',
   'objectStore',
   'backupVault',
-  'backupHost',
   'recoveryGate',
   'recoveryPad',
   'restoreWinch',

@@ -130,14 +130,18 @@ export const DR_BACKUP_BYTES_PER_SEC = 384 * MIB
 export const DR_RESTORE_BYTES_PER_SEC = 640 * MIB
 /** Startup-process replay rate on the separate recovery host. */
 export const DR_WAL_REPLAY_BYTES_PER_SEC = 24 * MIB
-/** Scaled archive-push service time for one completed 16 MiB segment. */
+/** One download worker's scaled base-backup object throughput. */
+const DR_BACKUP_FETCH_BYTES_PER_STREAM_SEC = 64 * MIB
+/** Small WAL-object requests expose latency sooner than large backup objects. */
+const DR_WAL_FETCH_BYTES_PER_STREAM_SEC = 4 * MIB
+/** Scaled wal-push service time for one completed 16 MiB segment. */
 export const DR_ARCHIVE_SEGMENT_SECONDS = 0.75
 /** Teaching-scale pg_wal volume; production capacity is installation-specific. */
 export const DR_PG_WAL_CAPACITY_BYTES = 512 * MIB
 /** Fixed metadata/catalog allowance outside the declared heap and index pages. */
 const DR_DATA_DIRECTORY_OVERHEAD_BYTES = 256 * MIB
 /** Compression is illustrative: data entropy and tool settings decide reality. */
-const DR_REPOSITORY_RATIO = 0.65
+const DR_OBJECT_STORE_RATIO = 0.65
 /** Fixed rings retain timestamps without allocating in the update path. */
 const DR_HISTORY_SLOTS = 4096
 /** Patroni timings are compressed for observation; they are not recommendations. */
@@ -814,7 +818,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       },
     },
     disasterRecovery: {
-      tool: 'pgBackRest',
+      tool: 'WAL-G',
       dataDirectoryBytes: 0,
       archive: {
         queueSegments: 0,
@@ -833,10 +837,11 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         status: 'idle',
         progress: 0,
         startedAt: 0,
+        startTimeline: 1,
         startLsn: 0,
         stopLsn: 0,
         dataBytes: 0,
-        repositoryBytes: 0,
+        objectStoreBytes: 0,
         copiedBytes: 0,
         estimatedDurationSec: 0,
         failureReason: '',
@@ -2106,14 +2111,14 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     }
 
     // The queue is model-owned and unbounded by the 14-slot display window.
-    // PostgreSQL retries the oldest .ready file until archive-push returns 0.
+    // PostgreSQL retries the oldest .ready file until wal-g wal-push returns 0.
     const completedThrough = curSeg - 1
     const queue = Math.max(0, completedThrough - archiveNextSeg + 1)
     wal.archiveQueue = queue
     dr.archive.queueSegments = queue
 
     if (archiverOn() && queue > 0) {
-      if (!K.archiveAvailable) {
+      if (!K.walGArchiveCredentialsValid) {
         archiveRetryT += dt
         if (archiveRetryT >= DR_ARCHIVE_SEGMENT_SECONDS) {
           archiveRetryT -= DR_ARCHIVE_SEGMENT_SECONDS
@@ -2217,21 +2222,36 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     dr.oldestRecoverableTime = dr.backups.length > 0 ? dr.backups[0].completedAt : 0
   }
 
+  function backupFetchBytesPerSec(): number {
+    return Math.min(
+      DR_RESTORE_BYTES_PER_SEC,
+      K.walGDownloadConcurrency * DR_BACKUP_FETCH_BYTES_PER_STREAM_SEC,
+    )
+  }
+
+  function walRecoveryBytesPerSec(): number {
+    return Math.min(
+      DR_WAL_REPLAY_BYTES_PER_SEC,
+      K.walGDownloadConcurrency * DR_WAL_FETCH_BYTES_PER_STREAM_SEC,
+    )
+  }
+
   function completeBaseBackup(): void {
     const op = dr.backup
     const duration = Math.max(0, state.t - op.startedAt)
     dr.backups.push({
       id: backupSeq,
-      label: `F${String(backupSeq).padStart(4, '0')}`,
+      label: `base_${walSegName(Math.floor(op.startLsn / WAL_SEG), op.startTimeline)}`,
       startedAt: op.startedAt,
       completedAt: state.t,
+      startTimeline: op.startTimeline,
       startLsn: op.startLsn,
       stopLsn: op.stopLsn,
       dataBytes: op.dataBytes,
-      repositoryBytes: op.repositoryBytes,
+      objectStoreBytes: op.objectStoreBytes,
       durationSec: duration,
       source: 'standby',
-      tool: 'pgBackRest',
+      tool: 'WAL-G',
     })
     backupSeq++
     applyBackupRetention()
@@ -2239,7 +2259,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     op.progress = 1
     op.copiedBytes = op.dataBytes
     op.failureReason = ''
-    toast('pgBackRest full backup stored; retention expired older backup sets and their PITR WAL', 'good', 6000)
+    toast('WAL-G backup-push stored; scheduled delete retain FULL expired older backups and their PITR WAL', 'good', 6000)
   }
 
   function failBaseBackup(reason: string): void {
@@ -2260,7 +2280,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       failBaseBackup(
         K.walLevel === 'minimal'
           ? 'Full backup refused: wal_level=minimal cannot support the required archive recovery chain'
-          : 'Full backup refused: pgBackRest backup-standby=y needs the configured standby and primary',
+          : 'Full backup refused: this modeled WAL-G backup-push is configured on standby_a, which is unavailable',
       )
       return false
     }
@@ -2269,14 +2289,15 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     op.status = 'copying'
     op.progress = 0
     op.startedAt = state.t
+    op.startTimeline = state.highAvailability.timeline.current
     op.startLsn = wal.insertLsn
     op.stopLsn = 0
     op.dataBytes = dr.dataDirectoryBytes
-    op.repositoryBytes = Math.round(op.dataBytes * DR_REPOSITORY_RATIO)
+    op.objectStoreBytes = Math.round(op.dataBytes * DR_OBJECT_STORE_RATIO)
     op.copiedBytes = 0
     op.estimatedDurationSec = op.dataBytes / DR_BACKUP_BYTES_PER_SEC
     op.failureReason = ''
-    toast('pgBackRest full backup started — most files come from standby_a; the primary still coordinates it', 'info', 6000)
+    toast('WAL-G backup-push started on standby_a — compressed objects stream straight to object storage', 'info', 6000)
     return true
   }
 
@@ -2336,7 +2357,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     }
     if (targetTime < dr.oldestRecoverableTime) {
       return failRestore(
-        `PITR impossible: target is older than the oldest retained full backup; increase repo1-retention-full before the window expires`,
+        'PITR impossible: target is older than the oldest retained full backup; increase the future wal-g delete retain FULL count before the window expires',
       )
     }
 
@@ -2355,7 +2376,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     const targetLsn = lsnAtTime(targetTime)
     if (targetLsn <= 0 || targetLsn > dr.archive.archivedThroughLsn) {
       return failRestore(
-        'PITR impossible: archived WAL does not reach the selected target; repair archive-push and wait for the .ready queue to drain',
+        'PITR impossible: archived WAL does not reach the selected target; repair wal-g wal-push and wait for the .ready queue to drain',
       )
     }
 
@@ -2365,10 +2386,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     restore.backupId = selected.id
     restore.backupAgeSec = Math.max(0, targetTime - selected.completedAt)
     restore.backupBytesRequired = selected.dataBytes
-    restore.walBytesRequired = Math.max(0, targetLsn - selected.stopLsn)
+    restore.walBytesRequired = Math.max(0, targetLsn - selected.startLsn)
     restore.estimatedDurationSec =
-      restore.backupBytesRequired / DR_RESTORE_BYTES_PER_SEC
-      + restore.walBytesRequired / DR_WAL_REPLAY_BYTES_PER_SEC
+      restore.backupBytesRequired / backupFetchBytesPerSec()
+      + restore.walBytesRequired / walRecoveryBytesPerSec()
     toast(
       `PITR started from ${selected.label}: fetch the full backup, then replay archived WAL to recovery_target_time`,
       'info',
@@ -2384,7 +2405,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     const backup = dr.backup
     if (backup.status === 'copying') {
       if (!rep.connected) {
-        failBaseBackup('Full backup failed: the standby disconnected while pgBackRest was copying files')
+        failBaseBackup('Full backup failed: standby_a disconnected while WAL-G was reading its data directory')
       } else {
         backup.copiedBytes = Math.min(
           backup.dataBytes,
@@ -2394,9 +2415,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         if (backup.copiedBytes >= backup.dataBytes) {
           backup.stopLsn = wal.insertLsn
           const requiredArchiveLsn = backupArchiveBoundary(backup.stopLsn)
-          // pgBackRest waits for the backup stop WAL to be archived. Model the
+          // WAL-G waits for the backup stop WAL to be archived. Model the
           // segment switch PostgreSQL requests at backup stop, then let the
-          // ordinary archive-push queue decide when completion is durable.
+          // ordinary wal-push queue decide when completion is durable.
           wal.insertLsn = Math.max(wal.insertLsn, requiredArchiveLsn)
           if (dr.archive.archivedThroughLsn >= requiredArchiveLsn) completeBaseBackup()
           else backup.status = 'waiting_wal'
@@ -2414,7 +2435,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     if (restore.status === 'fetching') {
       restore.backupBytesFetched = Math.min(
         restore.backupBytesRequired,
-        restore.backupBytesFetched + DR_RESTORE_BYTES_PER_SEC * dt,
+        restore.backupBytesFetched + backupFetchBytesPerSec() * dt,
       )
       if (restore.backupBytesFetched >= restore.backupBytesRequired) {
         restore.status = restore.walBytesRequired > 0 ? 'replaying' : 'complete'
@@ -2423,7 +2444,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     if (restore.status === 'replaying') {
       restore.walBytesReplayed = Math.min(
         restore.walBytesRequired,
-        restore.walBytesReplayed + DR_WAL_REPLAY_BYTES_PER_SEC * dt,
+        restore.walBytesReplayed + walRecoveryBytesPerSec() * dt,
       )
       if (restore.walBytesReplayed >= restore.walBytesRequired) restore.status = 'complete'
     }
@@ -6263,14 +6284,17 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
           7000,
         )
         break
-      case 'archiveAvailable':
+      case 'walGArchiveCredentialsValid':
         toast(
-          K.archiveAvailable
-            ? 'Object storage reachable — archive-push resumes with the oldest .ready segment'
-            : 'Object storage unreachable — archive-push returns nonzero and PostgreSQL keeps retrying',
-          K.archiveAvailable ? 'good' : 'warn',
+          K.walGArchiveCredentialsValid
+            ? 'WAL-G object-storage credentials refreshed — wal-push resumes with the oldest .ready segment'
+            : 'WAL-G object-storage credentials expired — wal-push returns nonzero and PostgreSQL keeps retrying',
+          K.walGArchiveCredentialsValid ? 'good' : 'warn',
           6000,
         )
+        break
+      case 'walGDownloadConcurrency':
+        K.walGDownloadConcurrency = clamp(Math.round(K.walGDownloadConcurrency), 1, 16)
         break
       case 'backupRetention':
         K.backupRetention = clamp(Math.round(K.backupRetention), 1, 5)
@@ -6717,10 +6741,11 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     dr.backup.status = 'idle'
     dr.backup.progress = 0
     dr.backup.startedAt = 0
+    dr.backup.startTimeline = 1
     dr.backup.startLsn = 0
     dr.backup.stopLsn = 0
     dr.backup.dataBytes = 0
-    dr.backup.repositoryBytes = 0
+    dr.backup.objectStoreBytes = 0
     dr.backup.copiedBytes = 0
     dr.backup.estimatedDurationSec = 0
     dr.backup.failureReason = ''
