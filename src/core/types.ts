@@ -125,6 +125,14 @@ export interface Knobs {
   backupRetention: number
   /** Seconds before now selected by the recovery_target_time control. */
   recoveryTargetAge: number
+  /** Whether Patroni can reach the DCS that holds the leader lock. */
+  patroniDcsAvailable: boolean
+  /** pg_rewind block-change prerequisite; this model's data checksums are off. */
+  walLogHints: boolean
+  /** Whether the failed primary's data directory still exists and is readable. */
+  oldPrimaryDataIntact: boolean
+  /** Whether WAL back to the divergence point has not been recycled. */
+  rewindWalRetained: boolean
   /** Simulation speed multiplier. */
   timeScale: number
   paused: boolean
@@ -171,6 +179,10 @@ export const DEFAULT_KNOBS: Knobs = {
   archiveAvailable: true,
   backupRetention: 3,
   recoveryTargetAge: 20,
+  patroniDcsAvailable: true,
+  walLogHints: true,
+  oldPrimaryDataIntact: true,
+  rewindWalRetained: true,
   timeScale: 1,
   paused: false,
 }
@@ -543,11 +555,12 @@ export interface ClusterDataDirectoryState {
 export interface ClusterNodeState {
   id: ClusterNodeId
   name: 'primary' | 'standby_a' | 'standby_b'
-  role: 'primary' | 'standby'
+  /** `diverged` is a former primary that cannot follow the new timeline yet. */
+  role: 'primary' | 'standby' | 'diverged'
   online: boolean
   /**
-   * This node's observation, not a cluster-wide truth. Item 3 will decide what
-   * acts on disagreement; this model only stores it.
+   * This node's observation, not a cluster-wide truth. Patroni acts through
+   * the DCS leader lock; a stale opinion alone never authorizes writes.
    */
   leaderOpinion: ClusterNodeId | null
   buffers: BufferPool
@@ -557,6 +570,72 @@ export interface ClusterNodeState {
 
 export interface ClusterState {
   nodes: [ClusterNodeState, ClusterNodeState, ClusterNodeState]
+}
+
+export type HaTransitionKind = 'none' | 'switchover' | 'failover'
+export type HaTransitionStatus = 'idle' | 'waiting' | 'complete' | 'failed'
+export type PgRewindStatus = 'idle' | 'checking' | 'rewinding' | 'complete' | 'failed'
+
+export interface PatroniState {
+  /** This teaching model uses one Patroni-managed leader lock. */
+  leaderLock: ClusterNodeId | null
+  /** Compressed teaching TTL; real values and DCS session semantics vary. */
+  leaseTtlSec: number
+  leaseRemainingSec: number
+  renewEverySec: number
+  demotions: number
+  /**
+   * Always false in this model: lease loss demotes before another promotion,
+   * and promotion is impossible while the DCS is unavailable.
+   */
+  splitBrain: boolean
+}
+
+export interface TimelineForkState {
+  current: number
+  parent: number
+  forkLsn: number
+  /** Last durable byte on the former primary's now-divergent history. */
+  oldHistoryEndLsn: number
+  /** Last byte generated on the promoted node's history. */
+  newHistoryEndLsn: number
+}
+
+export interface HaTransitionState {
+  kind: HaTransitionKind
+  status: HaTransitionStatus
+  source: ClusterNodeId | null
+  target: ClusterNodeId | null
+  startedAt: number
+  waitSec: number
+  lossBytes: number
+  /** Committed write transactions whose commit records did not reach target. */
+  lossTransactions: number
+  failureReason: string
+}
+
+export interface PgRewindState {
+  required: boolean
+  node: ClusterNodeId | null
+  /** Captured at divergence; enabling wal_log_hints afterwards is too late. */
+  blockChangeTrackingAvailable: boolean
+  status: PgRewindStatus
+  progress: number
+  startedAt: number
+  elapsedSec: number
+  estimatedDurationSec: number
+  bytesRewound: number
+  bytesCopied: number
+  failureReason: string
+}
+
+export interface HighAvailabilityState {
+  currentLeader: ClusterNodeId | null
+  acceptingWrites: boolean
+  patroni: PatroniState
+  timeline: TimelineForkState
+  transition: HaTransitionState
+  rejoin: PgRewindState
 }
 
 export type ReplicationProcessState = 'stopped' | 'catchup' | 'streaming'
@@ -651,7 +730,7 @@ export interface PointInTimeRestore {
   estimatedDurationSec: number
   elapsedSec: number
   failureReason: string
-  /** PITR stops at the target in this pass; promotion belongs to HA work. */
+  /** This PITR operation stops at the target; promotion is a separate HA action. */
   promoted: false
 }
 
@@ -742,6 +821,7 @@ export interface SimState {
   tables: TableSim[]
   replication: ReplicationState
   cluster: ClusterState
+  highAvailability: HighAvailabilityState
   disasterRecovery: DisasterRecoveryState
   locks: LockEdge[]
   stats: SimStats
@@ -767,8 +847,14 @@ export interface SimApi {
   startBaseBackup(): boolean
   /** Restore to `targetAgeSec` before now, or the recoveryTargetAge control. */
   startPointInTimeRestore(targetAgeSec?: number): boolean
-  /** Record one node's observation; this does not elect, demote, or promote. */
+  /** Record one node's observation; the DCS leader lock remains authoritative. */
   setLeaderOpinion(node: ClusterNodeId, leader: ClusterNodeId | null): void
+  /** Stop writes, wait for the selected standby, then hand over with no loss. */
+  startSwitchover(target?: 'standbyA' | 'standbyB'): boolean
+  /** Model loss of the current primary and promote a selected durable position. */
+  startFailover(target?: 'standbyA' | 'standbyB'): boolean
+  /** Rewind the former primary to the recorded divergence point. */
+  startPgRewind(): boolean
   reset(): void
 }
 
@@ -1169,7 +1255,13 @@ export interface ComponentDoc {
   /** related GUCs the user can twiddle right there */
   knobs?: (keyof Knobs)[]
   /** explicit operations; unlike knobs these start work rather than set policy. */
-  actions?: ('start-full-backup' | 'start-pitr')[]
+  actions?: (
+    | 'start-full-backup'
+    | 'start-pitr'
+    | 'start-switchover'
+    | 'trigger-failover'
+    | 'start-pg-rewind'
+  )[]
   /** ids of related components, rendered as jump links */
   see?: string[]
   /** source pointers for the curious, e.g. src/backend/postmaster/checkpointer.c */

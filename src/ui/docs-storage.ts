@@ -400,26 +400,164 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     id: 'timeline.yard',
     title: 'Timeline switchyard',
     subtitle: 'WAL history, not a mergeable branch',
-    tldr: 'A recovery can stop without changing timeline; only a later promotion would fork one.',
+    tldr: 'Promotion creates a new WAL history at one exact LSN; the old primary’s later WAL belongs to a different past.',
     sections: [
       {
-        heading: 'Why only one track is live',
-        body: 'PITR replays archived WAL along a timeline and stops at `recovery_target_time`. That stop alone does not create a new timeline. Promotion would end recovery and fork a new timeline with a `.history` file, but promotion and failover are deliberately outside this pass, so the live through-line remains timeline 1 and every siding stays dark.',
+        heading: 'Read the turnout literally',
+        body: 'Before promotion there is one through-line: timeline 1. Promotion writes a timeline-history file and makes timeline 2 at the promoted standby’s durable LSN. The turnout is that divergence point. Timeline 1 can continue on the former primary and timeline 2 can continue on the new primary, but those rails are different histories after the turnout—not one server being “behind” another.',
       },
       {
-        heading: 'Why the history files matter',
-        body: 'A timeline is the identity of a WAL branch after recovery, not a database version and not something that can be merged back. A later restore that follows a child timeline needs its `.history` file to know the parent timeline and fork point. Real retention must preserve those files with the WAL they describe.',
+        heading: 'What failover loses',
+        body: 'The fork begins at the promoted standby’s flushed LSN because recovery can replay everything durable there before opening for writes. Bytes that the failed primary had flushed after that point but had not delivered are absent from the new history. The city counts both that exact byte interval and the committed write transactions whose commit records fall inside it. Planned switchover closes the interval first, so both counts are zero.',
+      },
+      {
+        heading: 'Why the old primary cannot just reconnect',
+        body: 'After unplanned failover, the old primary owns WAL beyond the fork that the new primary never saw, while the new primary is writing different WAL on the child timeline. Starting the old primary as a standby would ask recovery to replay two incompatible answers for the same point in history. Timelines do not merge. `pg_rewind` must return the old data directory to the common point, or a fresh base backup must replace it.',
       },
     ],
     metrics: [
-      { label: 'Live timeline', get: () => '1' },
-      { label: 'Promotions', get: () => 'not modeled this pass' },
+      {
+        label: 'Leader',
+        get: (s) => s.highAvailability.currentLeader ?? 'none',
+      },
+      {
+        label: 'Follower behind',
+        get: (s) =>
+          `standby_b · ${fmtBytes(s.replication.standbys[1].lagBytes)}`,
+      },
+      { label: 'Live timeline', get: (s) => String(s.highAvailability.timeline.current) },
+      {
+        label: 'Divergence point',
+        get: (s) => s.highAvailability.timeline.forkLsn > 0
+          ? fmtLsn(s.highAvailability.timeline.forkLsn)
+          : 'no promotion yet',
+      },
+      {
+        label: 'Loss bytes',
+        get: (s) =>
+          `${s.highAvailability.transition.lossBytes.toLocaleString()} bytes (${fmtBytes(s.highAvailability.transition.lossBytes)})`,
+      },
+      {
+        label: 'Lost transactions',
+        get: (s) => fmtNum(s.highAvailability.transition.lossTransactions),
+      },
+      {
+        label: 'Former history',
+        get: (s) => s.highAvailability.timeline.forkLsn > 0
+          ? fmtLsn(s.highAvailability.timeline.oldHistoryEndLsn)
+          : 'timeline 1 live',
+      },
+      {
+        label: 'New history',
+        get: (s) => s.highAvailability.timeline.forkLsn > 0
+          ? fmtLsn(s.highAvailability.timeline.newHistoryEndLsn)
+          : 'not forked',
+      },
     ],
-    see: ['object.store', 'recovery.clock'],
+    see: ['ha.dcs', 'ha.rejoin', 'object.store'],
     refs: {
       docs: [manual('continuous-archiving.html', '25.3.5 Timelines')],
       suzuki: suzuki(10, 'Online Backup and Point-In-Time Recovery (PITR)'),
       rogov: rogov(R_WAL, 'Write-Ahead Log — recovery'),
+    },
+  },
+
+  {
+    id: 'ha.dcs',
+    title: 'Patroni consensus hall',
+    subtitle: 'DCS leader lock and renewable lease',
+    tldr: 'Patroni coordinates one writable leader through a DCS lock; replication itself does not elect anyone.',
+    sections: [
+      {
+        heading: 'The lock is the authority',
+        body: 'Patroni stores a leader lock in a distributed configuration store (DCS) such as etcd, Consul, ZooKeeper, or the Kubernetes API. The primary renews that lock on every HA cycle. If it cannot renew, its lease drains and Patroni demotes PostgreSQL; a candidate promotes only after atomically acquiring the free lock. The DCS carries coordination state, not table data or WAL.',
+      },
+      {
+        heading: 'Orderly versus unplanned',
+        body: 'A planned switchover first closes write admission, lets accepted work finish, flushes the old primary, and waits until the selected standby has every byte. Only then does the lock and service address move: downtime costs the measured wait, but data loss is zero. Unplanned failover starts with the primary gone. The candidate promotes at whatever durable LSN it already owns, so the byte gap and the committed transactions inside it are lost.',
+      },
+      {
+        heading: 'Split-brain boundary and simplifications',
+        body: 'This model will not promote any standby while the DCS is unavailable, and a node whose lease expires is demoted before a rival can acquire the lock. It therefore records `splitBrain = false`; it does not simulate a frozen Patroni process, watchdog hardware, DCS quorum members, asymmetric partitions, synchronous-mode rules, candidate scoring, `maximum_lag_on_failover`, or Patroni’s DCS failsafe mode. Real `ttl`, `loop_wait`, retry and consensus timing depend on configuration; the city compresses them to seconds so the lease post can be watched.',
+      },
+    ],
+    metrics: [
+      { label: 'Leader lock', get: (s) => s.highAvailability.patroni.leaderLock ?? 'none' },
+      {
+        label: 'Lease remaining',
+        get: (s) => s.highAvailability.patroni.leaderLock
+          ? fmtDuration(s.highAvailability.patroni.leaseRemainingSec)
+          : 'expired',
+      },
+      { label: 'Write admission', get: (s) => s.highAvailability.acceptingWrites ? 'open' : 'closed' },
+      {
+        label: 'Last handover',
+        get: (s) => s.highAvailability.transition.kind === 'none'
+          ? 'none'
+          : `${s.highAvailability.transition.kind} · ${s.highAvailability.transition.status}`,
+      },
+      {
+        label: 'Last loss',
+        get: (s) =>
+          `${s.highAvailability.transition.lossBytes.toLocaleString()} bytes · ${fmtNum(s.highAvailability.transition.lossTransactions)} tx`,
+      },
+    ],
+    knobs: ['patroniDcsAvailable', 'replicaNetworkLag', 'tps', 'writeRatio'],
+    actions: ['start-switchover', 'trigger-failover'],
+    see: ['timeline.yard', 'ha.endpoint', 'ha.rejoin', 'replica.standby'],
+    refs: {
+      docs: [
+        { label: 'Patroni FAQ — ttl, loop_wait and retry_timeout', url: 'https://patroni.readthedocs.io/en/latest/faq.html' },
+        { label: 'Patroni DCS failsafe mode and split-brain prevention', url: 'https://patroni.readthedocs.io/en/latest/dcs_failsafe_mode.html' },
+        manual('warm-standby.html', '26.2. Log-Shipping Standby Servers — failover'),
+      ],
+      source: [
+        { label: 'patroni/ha.py', url: 'https://github.com/patroni/patroni/blob/master/patroni/ha.py', symbol: 'Ha.run_cycle, Ha.demote' },
+      ],
+      rogov: rogov(R_WAL, 'Write-Ahead Log — recovery', 'the nearest honest chapter; Rogov does not cover Patroni or distributed consensus'),
+    },
+  },
+
+  {
+    id: 'ha.rejoin',
+    title: 'pg_rewind rejoin bay',
+    subtitle: 'return a divergent former primary to the common history',
+    tldr: 'Find the fork, undo changed blocks on the old history, then let the node follow the new timeline.',
+    sections: [
+      {
+        heading: 'What pg_rewind repairs',
+        body: '`pg_rewind` compares timeline history, finds the last common checkpoint, identifies data blocks changed on the former primary after divergence, and replaces those blocks from the new primary. It then prepares recovery so the repaired data directory can replay the new timeline. This is usually much smaller than copying a whole base backup, but it is not a merge: changes unique to the old primary are discarded.',
+      },
+      {
+        heading: 'Three ways it can be impossible',
+        body: 'The former primary’s data directory must still exist. Changed blocks must have been detectable: either data checksums were enabled at `initdb` time or `wal_log_hints = on` was already active; this city declares checksums off so the knob is the deciding prerequisite. Finally, the WAL needed to reach the divergence checkpoint must still be available. If any condition fails, use a fresh base backup instead.',
+      },
+      {
+        heading: 'What the clock means',
+        body: 'The city spends two teaching seconds finding the common point and checking prerequisites, then copies the measured divergent byte range at a fixed 8 MiB/s with a four-second minimum. Those values make the operation visible; they are not a production estimate. Real duration depends on database size, changed blocks, storage and network throughput, source load, archive retrieval and the WAL replay that follows.',
+      },
+    ],
+    metrics: [
+      { label: 'Required', get: (s) => s.highAvailability.rejoin.required ? 'yes — histories diverged' : 'no' },
+      { label: 'Status', get: (s) => s.highAvailability.rejoin.status },
+      { label: 'Diverged bytes', get: (s) => fmtBytes(s.highAvailability.rejoin.bytesRewound) },
+      { label: 'Elapsed', get: (s) => fmtDuration(s.highAvailability.rejoin.elapsedSec) },
+      {
+        label: 'Result',
+        get: (s) => s.highAvailability.rejoin.failureReason || (
+          s.highAvailability.rejoin.status === 'complete'
+            ? `following timeline ${s.highAvailability.timeline.current}`
+            : 'not run'
+        ),
+      },
+    ],
+    knobs: ['walLogHints', 'oldPrimaryDataIntact', 'rewindWalRetained'],
+    actions: ['start-pg-rewind'],
+    see: ['timeline.yard', 'ha.dcs', 'backup.host'],
+    refs: {
+      docs: [manual('app-pgrewind.html', 'pg_rewind')],
+      source: [srcFile('src/bin/pg_rewind/pg_rewind.c', 'main')],
+      rogov: rogov(R_WAL, 'Write-Ahead Log — recovery', 'the nearest honest chapter; Rogov does not cover pg_rewind'),
     },
   },
 
@@ -528,7 +666,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Replication is not this',
-        body: 'A replica continuously replays the newest WAL and can take traffic quickly after separate HA work promotes it. This recovery host intentionally walks backward into retained history, so it can escape a destructive transaction that every replica already applied. It protects data history at the cost of recovery time; it does not provide failover, and this pass never promotes it.',
+        body: 'A replica continuously replays the newest WAL and can take traffic quickly after separate HA work promotes it. This recovery host intentionally walks backward into retained history, so it can escape a destructive transaction that every replica already applied. It protects data history at the cost of recovery time; it does not provide failover, and this PITR operation never promotes it.',
       },
     ],
     metrics: [
@@ -564,8 +702,8 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         body: 'A target before the oldest retained full backup fails because retention removed the starting point. A target newer than the archived WAL frontier fails because `archive-push` has not made the required segment available to `restore_command`. The first needs a larger future retention policy; the second needs archive repair and a drained `.ready` queue. Neither is fixed by having a streaming replica.',
       },
       {
-        heading: 'Where this pass stops',
-        body: 'When replay reaches the target, the belt stops. PostgreSQL could pause, shut down, or promote according to recovery settings and operator procedure, but promotion would fork a timeline and belongs to the later HA/failover work. The city records `promoted = false` and does not move any service endpoint.',
+        heading: 'Where this restore stops',
+        body: 'When replay reaches the target, the belt stops. PostgreSQL could pause, shut down, or promote according to recovery settings and operator procedure, but promotion would fork a timeline and is a separate HA action. The city records `promoted = false` for this restore and does not move the service endpoint.',
       },
     ],
     metrics: [
@@ -639,7 +777,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     metrics: [
       { label: 'Replay progress', get: (s) => fmtPct(s.disasterRecovery.restore.walBytesRequired > 0 ? s.disasterRecovery.restore.walBytesReplayed / s.disasterRecovery.restore.walBytesRequired : 0) },
       { label: 'Target LSN', get: (s) => fmtLsn(s.disasterRecovery.restore.targetLsn) },
-      { label: 'Promoted', get: (s) => s.disasterRecovery.restore.promoted ? 'yes' : 'no — outside this pass' },
+      { label: 'Promoted', get: (s) => s.disasterRecovery.restore.promoted ? 'yes' : 'no — separate HA action' },
     ],
     see: ['restore.winch', 'recovery.clock', 'recovery.ground'],
     refs: {
@@ -1969,8 +2107,8 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         body: 'The primary owns `standby_a_slot` and `standby_b_slot`. While a standby is connected, its slot’s `restart_lsn` follows the standby’s durable progress. Disconnect it and the slot remains inactive at that position, forcing the primary to keep every later WAL segment. This city gives the primary WAL volume a scaled 512 MiB safety limit so the failure is observable quickly; real capacity is installation-specific, and real PostgreSQL PANICs on a full filesystem rather than politely rejecting only new writes.',
       },
       {
-        heading: 'Opinion without action',
-        body: 'Every node stores its own answer to “who is leader?” and those answers may disagree. Nothing consumes that answer yet: there is no election, promotion, demotion, service-address move, timeline fork, `pg_rewind`, or Patroni behavior in this item. That omission is deliberate. Roadmap item 3 will make disagreement consequential; this item only removes the impossible global truth that previously prevented disagreement.',
+        heading: 'Opinion becomes action through Patroni',
+        body: 'Every node still stores its own observed leader, but Patroni now acts only through the DCS leader lock. A successful promotion updates the reachable nodes’ opinions and moves the service address. After unplanned failover, the offline former primary keeps its stale opinion and divergent WAL until `pg_rewind` repairs it; that disagreement is evidence of the fork, not authority to accept writes.',
       },
     ],
     metrics: [
@@ -1988,7 +2126,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       {
         label: 'Leader opinion',
         get: (s) => s.cluster.nodes[2].leaderOpinion ?? 'unknown',
-        hint: 'an observation only; no failover action consumes it',
+        hint: 'the DCS leader lock, not this local observation, authorizes writes',
       },
     ],
     knobs: ['standbyBEnabled', 'standbyBNetworkLag', 'standbyBSlowApply'],
@@ -2125,8 +2263,8 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         body: 'This node begins as a physical base backup and replay changes its own pages in WAL order. The model reports the same logical relation size for all three nodes and a different applied frontier; it does not duplicate every table and index counter or model filesystem allocation differences.',
       },
       {
-        heading: 'No promotion here',
-        body: 'Falling behind changes what a read on this data directory can see. It does not promote the node, move a service address, choose a timeline, or make this copy writable. Those actions and their data-loss consequences belong to roadmap item 3.',
+        heading: 'Lag is not promotion',
+        body: 'Falling behind changes what a read on this data directory can see. It does not by itself promote the node or make the copy writable. Patroni must acquire the DCS leader lock and explicitly promote it; if that happens while this node is behind, the missing durable interval on the old primary is exactly the failover loss.',
       },
     ],
     metrics: [

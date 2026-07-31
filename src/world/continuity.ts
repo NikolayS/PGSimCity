@@ -34,9 +34,9 @@ import { ANCHOR, CONTINUITY } from './layout'
  * WHAT IS SIMULATED, AND WHAT IS NOT. The model owns archive retries, pg_wal
  * pressure, full backups, pgBackRest retention, and a restore that fetches one
  * retained backup before replaying archived WAL to recovery_target_time. The
- * world only projects that state. standby_b is now a complete independent
- * physical standby. The remaining HA structures stay inert: no Patroni agent,
- * leader election, promotion, endpoint move, rejoin, or failover is modeled.
+ * world only projects that state. standby_b is a complete independent physical
+ * standby. Patroni's DCS lease, planned and unplanned promotion, the timeline
+ * fork, endpoint move, and pg_rewind rejoin are projected in the HA quarter.
  * ==========================================================================*/
 
 /* --- module scope scratch: update() must never allocate -------------------- */
@@ -248,7 +248,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
    * being written into right now — so the rail, and only the rail, glows. */
   lamp(COLOR.wal, 1.35, Y.x1 - Y.x0, 0.32, 0.55, yardMidX, Y.deckY + 0.16, Y.z - 2.2, gYard)
   lamp(COLOR.wal, 1.35, Y.x1 - Y.x0, 0.32, 0.55, yardMidX, Y.deckY + 0.16, Y.z + 2.2, gYard)
-  plate('timeline 1 · live', Y.x0 + 17, Y.deckY + 3.4, Y.z - 5.2, Math.PI, 2.4, COLOR.wal, 0.95, gYard)
+  plate('timeline 1 · original history', Y.x0 + 20, Y.deckY + 3.4, Y.z - 5.2, Math.PI, 2.2, COLOR.wal, 0.95, gYard)
 
   const deckMat = theme.mat('continuity.deck', {
     color: 0x1a2032,
@@ -264,6 +264,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
    * going anywhere.
    */
   const branchGroup: THREE.Group[] = []
+  const branchLive: THREE.Mesh[] = []
   for (let k = 0; k < CONTINUITY.branches.length; k++) {
     const br = CONTINUITY.branches[k]
     const g = new THREE.Group()
@@ -293,6 +294,9 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     // dead rail: gold, not amber — nothing is being written to this timeline
     lamp(COLOR.archive, 1.0, sideLen, 0.3, 0.5, (x0 + Y.x1) / 2, br.deckY + 0.16, br.z - 2.2, g)
     lamp(COLOR.archive, 1.0, sideLen, 0.3, 0.5, (x0 + Y.x1) / 2, br.deckY + 0.16, br.z + 2.2, g)
+    const liveRail = lamp(COLOR.replication, 1.7, sideLen, 0.42, 0.64, (x0 + Y.x1) / 2, br.deckY + 0.22, br.z, g)
+    liveRail.visible = false
+    branchLive.push(liveRail)
     lamp(COLOR.crit, 1.1, 1.4, 2.4, Y.width - 1, Y.x1, br.deckY + 0.8, br.z, g)
 
     box([br.forkX, Y.deckY + 2.4, Y.z + 3.4, 0.9, 5.4, 0.9], 'none')
@@ -300,6 +304,35 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     plate(historyName(tli), br.forkX, Y.deckY + 5.4, Y.z + 3.9, 0, 1.9, COLOR.archive, 0.95, g)
     plate(`timeline ${tli}`, x0 + 9, br.deckY + 2.6, br.z - 4.2, Math.PI, 1.9, COLOR.archive, 0.8, g)
   }
+
+  const firstFork = CONTINUITY.branches[0].forkX
+  const oldTailLen = Y.x1 - firstFork
+  const oldTail = lamp(
+    COLOR.crit,
+    1.55,
+    oldTailLen,
+    0.48,
+    0.72,
+    firstFork + oldTailLen / 2,
+    Y.deckY + 0.28,
+    Y.z,
+    gYard,
+  )
+  oldTail.name = 'timeline.old-divergent-tail'
+  const forkBeacon = lamp(
+    COLOR.warn,
+    1.8,
+    1.4,
+    6.2,
+    1.4,
+    firstFork,
+    Y.deckY + 3.2,
+    Y.z,
+    gYard,
+  )
+  forkBeacon.name = 'timeline.fork-beacon'
+  oldTail.visible = false
+  forkBeacon.visible = false
 
   box([yardMidX, 5.0, Y.z + 15, 24, 0.9, 0.7], 'none')
   box([yardMidX - 11, 2.5, Y.z + 15, 0.8, 5, 0.8], 'none')
@@ -464,9 +497,9 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   plate('recovery.signal', RP[0] - 16, 7.8, RP[2] - 10.2, 0, 1.5, COLOR.warn, 0.8)
   plate('restored data directory', RP[0], 1.8, RP[2] + 18, 0, 1.8, COLOR.bufClean, 0.75)
 
-  /** Promotion is deliberately outside this disaster-recovery pass. */
+  /** PITR stopping does not itself promote; HA is operated separately. */
   const drillBoard = plate(
-    'PITR STOPS AT recovery_target_time · no promotion or failover in this pass',
+    'PITR STOPS AT recovery_target_time · HA promotion is a separate operation',
     RP[0], 12, RP[2] + 17, 0, 1.5, COLOR.warn, 0.85,
   )
   drillBoard.visible = true
@@ -533,10 +566,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   plate('stop line', RR[0] - 12, 3.6, RR[2] + 6, 0, 1.4, COLOR.crit, 0.75)
 
   /* ---------------------------------------------------------------------
-   * 6. THREE NODES BESIDE INERT FUTURE HA SCAFFOLD.
-   *
-   * standby_b is live and independent in this pass. The service endpoint,
-   * DCS, leases, promotion, rewind, and failover structures remain inert.
+   * 6. HIGH AVAILABILITY: service endpoint, Patroni lease, and rejoin.
    * -------------------------------------------------------------------*/
 
   const gEndpoint = new THREE.Group()
@@ -561,10 +591,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   epArrow.add(arrowHead)
 
   plate('SERVICE ADDRESS', EP[0], 16.8, EP[2] - 1.7, Math.PI, 2.4, COLOR.client, 0.92, gEndpoint)
-  plate(
-    'future high-availability scaffold · inactive in this disaster-recovery pass',
-    EP[0], 13.8, EP[2] - 1.7, Math.PI, 1.3, COLOR.inkDim, 0.7,
-  )
+  plate('points to the Patroni leader · dark means no writable endpoint', EP[0], 13.8, EP[2] - 1.7, Math.PI, 1.3, COLOR.inkDim, 0.7)
 
   const gDcs = new THREE.Group()
   gDcs.name = 'ha.dcs'
@@ -583,22 +610,21 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   gDcs.add(lockRing)
   const lockBody = lamp(COLOR.ok, 1.4, 4.4, 3.2, 2.4, DC[0], 12.6, DC[2], gDcs)
 
-  plate('DCS · FUTURE HA SCAFFOLD', DC[0], 18.8, DC[2], 0, 2.4, COLOR.ink, 0.9, gDcs)
+  plate('PATRONI DCS · LEADER LOCK', DC[0], 18.8, DC[2], 0, 2.4, COLOR.ink, 0.9, gDcs)
   plate(
-    'no leader lock, lease, election or failover is modelled in this pass',
+    'one renewable lease · lose it and Patroni demotes · coordination, not user data',
     DC[0], 16.2, DC[2] + 0.4, 0, 1.25, COLOR.inkDim, 0.68,
   )
-  plate('disaster recovery is not automatic failover', DC[0], 8.2, DC[2] - 10.4, Math.PI, 1.25, COLOR.inkDim, 0.7)
+  plate('switchover waits · failover loses the missing interval', DC[0], 8.2, DC[2] - 10.4, Math.PI, 1.25, COLOR.inkDim, 0.7)
 
   const LEASE_AT: readonly (readonly [number, number, number])[] = [ANCHOR.leaseNode1, ANCHOR.leaseNode2, ANCHOR.leaseNode3]
-  const LEASE_TITLE = ['node 1 · primary', 'node 2 · standby_a', 'node 3 · standby_b']
+  const LEASE_TITLE = ['node 1 · original primary', 'node 2 · standby_a', 'node 3 · standby_b']
   for (let i = 0; i < N_LEASE; i++) {
     const a = LEASE_AT[i]
     box([a[0], 4.5, a[2], 1.1, 9, 1.1], 'none')
     plate(LEASE_TITLE[i], a[0], 12.6, a[2], 0, 1.7, i === 0 ? COLOR.ok : COLOR.replication, 0.9)
   }
-  plate('independent replay · no promotion model', ANCHOR.leaseNode3[0], 10.6, ANCHOR.leaseNode3[2] + 0.4, 0, 1.25, COLOR.replication, 0.85)
-  plate('inactive · no failover candidate model', ANCHOR.leaseNode2[0], 10.6, ANCHOR.leaseNode2[2] + 0.4, 0, 1.25, COLOR.inkDim, 0.75)
+  plate('blue follower · green leader · red divergent', DC[0], 12.8, DC[2] - 10.4, Math.PI, 1.1, COLOR.replication, 0.85)
 
   /** 0..2 are the role lamps; 3..5 the lease bars that drain and are renewed. */
   const leaseMesh = neonBank('ha.leases', unitBox, N_LEASE * 2, gDcs)
@@ -634,13 +660,17 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   plate('pg_basebackup -R', RJ[0] + 11, 10.6, RJ[2], 0, 1.8, COLOR.storage, 0.9, gRejoin)
   plate('REJOIN BAY', RJ[0], 8.0, RJ[2] - 10.5, 0, 2.0, COLOR.ink, 0.9, gRejoin)
   plate(
-    'future high-availability scaffold · no demotion or rejoin is modelled in this pass',
+    'find the fork · discard the old tail · follow the new timeline',
     RJ[0], 5.6, RJ[2] - 10.5, 0, 1.2, COLOR.inkDim, 0.72,
   )
   plate(
-    'disaster recovery restores a separate cluster; it does not rejoin a failed primary',
+    'needs the old data directory + checksums or wal_log_hints + retained WAL',
     RJ[0], 3.6, RJ[2] - 10.5, 0, 1.2, COLOR.inkDim, 0.72,
   )
+  const rewindBar = lamp(COLOR.warn, 1.6, 1, 0.65, 4, RJ[0] - 11, 7.4, RJ[2], gRejoin)
+  const rewindFailure = lamp(COLOR.crit, 1.8, 2.2, 2.2, 2.2, RJ[0] - 11, 4.6, RJ[2], gRejoin)
+  rewindBar.visible = false
+  rewindFailure.visible = false
 
   /* node 3: a complete independent physical standby */
   const gStandbyB = new THREE.Group()
@@ -777,12 +807,9 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   let queueEma = 0
   let prevArchived = -1
 
-  // These structures are already built for a later roadmap item. They remain
-  // visible, registered, and collidable, but every behavioural indicator is
-  // dark: no Patroni state or failover model belongs to this DR pass.
-  epArrow.visible = false
-  lockRing.visible = false
-  lockBody.visible = false
+  epArrow.visible = true
+  lockRing.visible = true
+  lockBody.visible = true
 
   /* ---------------------------------------------------------------------
    * 9. Registration.
@@ -820,7 +847,11 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     focus: { target: [yardMidX, 10, Y.z - 4], distance: 152, dir: [-0.34, 0.56, 0.76] },
     labelAt: [yardMidX, 26, Y.z],
     color: COLOR.archive,
-    readout: () => 'timeline 1 live · PITR stops at its target · no promotion in this pass',
+    readout: (s: SimState) => {
+      const timeline = s.highAvailability.timeline
+      if (timeline.forkLsn <= 0) return 'timeline 1 live · no promotion yet'
+      return `timeline ${timeline.current} live · fork ${fmtLsn(timeline.forkLsn)} · old history ends ${fmtLsn(timeline.oldHistoryEndLsn)}`
+    },
   })
 
   ctx.register({
@@ -835,7 +866,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     labelAt: [OS[0], 18, OS[2]],
     color: COLOR.archive,
     readout: (s: SimState) =>
-      `${s.wal.archived} segments · timeline 1 · ${fmtBytes(s.wal.archived * s.wal.segmentSize)}`,
+      `${s.wal.archived} segments total · active timeline ${s.highAvailability.timeline.current} · ${fmtBytes(s.wal.archived * s.wal.segmentSize)}`,
   })
 
   ctx.register({
@@ -955,8 +986,8 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
 
   ctx.register({
     id: 'ha.endpoint',
-    name: 'future service address scaffold',
-    role: 'inert future HA structure — no service switching is modelled in this pass',
+    name: 'service address',
+    role: 'the client endpoint pointing to the current Patroni leader',
     kind: 'network',
     district: 'clients',
     object: gEndpoint,
@@ -964,25 +995,37 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     focus: { target: [EP[0], 8, EP[2]], distance: 80, dir: [0.16, 0.42, -0.89] },
     labelAt: [EP[0], 22, EP[2]],
     color: COLOR.client,
+    readout: (s: SimState) =>
+      s.highAvailability.currentLeader
+        ? `routes writes to ${s.highAvailability.currentLeader} · timeline ${s.highAvailability.timeline.current}`
+        : 'dark · no node owns the leader lock',
   })
 
   ctx.register({
     id: 'ha.dcs',
-    name: 'future DCS scaffold',
-    role: 'inert future HA structure — no leader lock, lease, or election is modelled',
+    name: 'Patroni consensus hall',
+    role: 'DCS leader lock and renewable lease',
     kind: 'network',
     district: 'replication',
     object: gDcs,
     tier: 0,
     focus: { target: [DC[0], 8, DC[2]], distance: 98, dir: [-0.2, 0.48, 0.85] },
     labelAt: [DC[0], 24, DC[2]],
-    color: COLOR.ink,
+    color: COLOR.ok,
+    readout: (s: SimState) => {
+      const patroni = s.highAvailability.patroni
+      if (!s.knobs.patroniDcsAvailable) {
+        return `DCS unavailable · ${patroni.leaseRemainingSec.toFixed(1)} s until demotion`
+      }
+      if (!patroni.leaderLock) return 'DCS reachable · leader lock free · writes closed'
+      return `${patroni.leaderLock} holds the leader lock · ${patroni.leaseRemainingSec.toFixed(1)} s lease`
+    },
   })
 
   ctx.register({
     id: 'ha.rejoin',
-    name: 'future rejoin scaffold',
-    role: 'inert future HA structure — no demotion, pg_rewind, or rebuild is modelled',
+    name: 'pg_rewind rejoin bay',
+    role: 'returns a divergent former primary to the common timeline',
     kind: 'concept',
     district: 'replication',
     object: gRejoin,
@@ -990,12 +1033,22 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     focus: { target: [RJ[0], 6, RJ[2]], distance: 64, dir: [-0.3, 0.5, -0.81] },
     labelAt: [RJ[0], 16, RJ[2]],
     color: COLOR.warn,
+    readout: (s: SimState) => {
+      const rewind = s.highAvailability.rejoin
+      if (rewind.status === 'failed') return rewind.failureReason
+      if (rewind.status === 'checking') return `checking prerequisites · ${rewind.elapsedSec.toFixed(1)} s elapsed`
+      if (rewind.status === 'rewinding') return `rewinding ${fmtBytes(rewind.bytesCopied)} / ${fmtBytes(rewind.bytesRewound)}`
+      if (rewind.status === 'complete') return `complete in ${rewind.elapsedSec.toFixed(1)} s · following timeline ${s.highAvailability.timeline.current}`
+      return rewind.required
+        ? `former primary diverged by ${fmtBytes(rewind.bytesRewound)} · cannot rejoin directly`
+        : 'no divergent node waiting'
+    },
   })
 
   ctx.register({
     id: 'standby.b',
     name: 'standby_b',
-    role: 'independent physical standby — no promotion or failover behavior',
+    role: 'independent physical standby and failover candidate',
     kind: 'storage',
     district: 'replication',
     object: gStandbyB,
@@ -1135,15 +1188,33 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     prevArchived = sim.wal.archived
     while (shipped-- > 0) ctx.flow({ route: 'archive.ship', count: 1, kind: 'archive', color: COLOR.archive, size: 1.3 })
 
-    /* Row 0 is the only live timeline. PITR never promotes in this pass. */
-    const liveFill = Math.min(sim.wal.archived, S.cols)
+    const timeline = sim.highAvailability.timeline
+    const activeRow = Math.min(S.rows - 1, Math.max(0, timeline.current - 1))
+    const forked = timeline.forkLsn > 0
+    const liveFill = Math.min(
+      S.cols,
+      forked
+        ? Math.max(1, Math.ceil(
+          Math.max(0, timeline.newHistoryEndLsn - timeline.forkLsn)
+          / sim.wal.segmentSize,
+        ))
+        : sim.wal.archived,
+    )
     for (let r = 0; r < S.rows; r++) {
-      const exists = r === 0
-      const fill = r === 0 ? liveFill : 0
+      const exists = r === 0 || (forked && r === activeRow)
+      const fill = r === 0 && forked ? S.cols : r === activeRow ? liveFill : 0
       for (let c = 0; c < S.cols; c++) {
         const lit = exists && c < fill
-        const newest = r === 0 && liveFill > 0 && c === liveFill - 1
-        _c.setHex(!lit ? OFF : newest ? mixHex(COLOR.wal, 0xffffff, 0.45) : r === 0 ? COLOR.wal : COLOR.archive)
+        const newest = r === activeRow && liveFill > 0 && c === liveFill - 1
+        _c.setHex(
+          !lit
+            ? OFF
+            : newest
+              ? mixHex(COLOR.wal, 0xffffff, 0.45)
+              : r === activeRow
+                ? COLOR.wal
+                : COLOR.archive,
+        )
         if (lit) _c.multiplyScalar(1.25)
         siloCap.setColorAt(r * S.cols + c, _c)
       }
@@ -1151,10 +1222,14 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     if (siloCap.instanceColor) siloCap.instanceColor.needsUpdate = true
 
     for (let k = 0; k < N_HISTORY; k++) {
-      historyTablet.setColorAt(k, _c.setHex(OFF))
-      branchGroup[k].visible = false
+      const exists = forked && k < timeline.current - 1
+      historyTablet.setColorAt(k, _c.setHex(exists ? COLOR.archive : OFF))
+      branchGroup[k].visible = exists
+      branchLive[k].visible = exists && k === activeRow - 1
     }
     if (historyTablet.instanceColor) historyTablet.instanceColor.needsUpdate = true
+    oldTail.visible = forked
+    forkBeacon.visible = forked && Math.sin(clock * 4) > -0.4
 
     /* --- 2. the vault and the recovery window -----------------------------*/
     const backupsHeld = sim.disasterRecovery.backups.length
@@ -1254,6 +1329,75 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
       tileB.setColorAt(i, _c)
     }
     if (tileB.instanceColor) tileB.instanceColor.needsUpdate = true
+
+    /* --- 5. Patroni lease, endpoint, roles, and pg_rewind ----------------*/
+    const ha = sim.highAvailability
+    const leader = ha.currentLeader
+    epArrow.visible = leader !== null
+    if (leader) {
+      let targetX: number = ANCHOR.postmaster[0]
+      let targetZ: number = ANCHOR.postmaster[2]
+      if (leader === 'standbyA') {
+        targetX = ANCHOR.standby[0]
+        targetZ = ANCHOR.standby[2]
+      } else if (leader === 'standbyB') {
+        targetX = ANCHOR.standbyB[0]
+        targetZ = ANCHOR.standbyB[2]
+      }
+      const bearing = Math.atan2(targetX - EP[0], targetZ - EP[2])
+      epArrow.rotation.y = damp(epArrow.rotation.y, bearing, 4, dt)
+    }
+
+    const dcsLive = sim.knobs.patroniDcsAvailable
+    lockRing.visible = ha.patroni.leaderLock !== null
+      && (dcsLive || Math.sin(clock * 5) > 0)
+    lockBody.visible = lockRing.visible
+    const leaderIndex =
+      leader === 'primary' ? 0
+      : leader === 'standbyA' ? 1
+      : leader === 'standbyB' ? 2
+      : -1
+    for (let i = 0; i < N_LEASE; i++) {
+      const node = sim.cluster.nodes[i]
+      const roleColor =
+        node.role === 'primary'
+          ? COLOR.ok
+          : node.role === 'diverged'
+            ? COLOR.crit
+            : COLOR.replication
+      leaseMesh.setColorAt(i, _c.setHex(node.online || node.role === 'diverged' ? roleColor : OFF).multiplyScalar(1.35))
+
+      const leaseFraction = i === leaderIndex
+        ? clamp01(ha.patroni.leaseRemainingSec / ha.patroni.leaseTtlSec)
+        : 0
+      const a = LEASE_AT[i]
+      _p.set(a[0], 1 + leaseFraction * 4, a[2] + 1.1)
+      _sc.set(1.6, Math.max(0.08, leaseFraction * 8), 0.4)
+      _m.compose(_p, _qi, _sc)
+      leaseMesh.setMatrixAt(i + N_LEASE, _m)
+      leaseMesh.setColorAt(
+        i + N_LEASE,
+        _c.setHex(
+          leaseFraction <= 0
+            ? OFF
+            : dcsLive
+              ? COLOR.ok
+              : COLOR.warn,
+        ).multiplyScalar(1.45),
+      )
+    }
+    leaseMesh.instanceMatrix.needsUpdate = true
+    if (leaseMesh.instanceColor) leaseMesh.instanceColor.needsUpdate = true
+
+    const rewind = ha.rejoin
+    const rewindActive = rewind.status === 'checking'
+      || rewind.status === 'rewinding'
+      || rewind.status === 'complete'
+    rewindBar.visible = rewindActive
+    rewindBar.scale.x = Math.max(0.2, rewind.progress * 20)
+    rewindBar.position.x = RJ[0] - 21 + rewindBar.scale.x / 2
+    rewindFailure.visible = rewind.status === 'failed'
+      && Math.sin(clock * 5) > -0.25
   }
 
   function setDetail(level: 0 | 1 | 2): void {

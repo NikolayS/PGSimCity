@@ -57,12 +57,13 @@ describe('continuity and three-node projection', () => {
     else Reflect.deleteProperty(globalThis, 'document')
   })
 
-  it('registers a complete standby_b while emitting no Patroni or failover traffic', () => {
+  it('projects Patroni leases, a promoted leader, and the visible timeline fork', () => {
     const bus = createBus()
+    const flows: FlowRequest[] = []
+    bus.on('flow', (request) => flows.push(request))
     const sim = createSim(bus)
     const theme = createTheme()
     const defs: ComponentDef[] = []
-    const flows: FlowRequest[] = []
     const ctx: WorldContext = {
       scene: new THREE.Scene(),
       camera: new THREE.PerspectiveCamera(),
@@ -106,7 +107,7 @@ describe('continuity and three-node projection', () => {
     expect(
       defs
         .filter((def) => def.id.startsWith('ha.'))
-        .every((def) => def.readout === undefined),
+        .every((def) => def.readout !== undefined),
     ).toBe(true)
     expect(
       defs
@@ -127,10 +128,32 @@ describe('continuity and three-node projection', () => {
     expect(flows.some((flow) => flow.route === 'replicaB.apply')).toBe(true)
     expect(flows.some((flow) => flow.route === 'replicaB.buffer')).toBe(true)
     expect(flows.some((flow) => flow.route === 'replicaB.io')).toBe(true)
-    expect(
-      flows.some((flow) =>
-        flow.route.startsWith('ha.')),
-    ).toBe(false)
+    expect(flows.some((flow) => flow.route.startsWith('ha.lease'))).toBe(true)
+
+    const firstBranch = continuity.group.getObjectByName('timeline.branch.0')
+    const oldTail = continuity.group.getObjectByName('timeline.old-divergent-tail')
+    const forkBeacon = continuity.group.getObjectByName('timeline.fork-beacon')
+    expect(firstBranch?.visible).toBe(false)
+    expect(oldTail?.visible).toBe(false)
+    expect(forkBeacon?.visible).toBe(false)
+
+    sim.setKnob('synchronousCommit', 'local')
+    sim.setKnob('tps', 2_000)
+    sim.setKnob('writeRatio', 1)
+    sim.setKnob('replicaNetworkLag', 400)
+    for (let i = 0; i < 1_050; i++) sim.update(1 / 30)
+    expect(sim.startFailover()).toBe(true)
+    for (let i = 0; i < 300; i++) {
+      sim.update(1 / 30)
+      continuity.update(1 / 30, sim.state, sim.state.t)
+      if (sim.state.highAvailability.transition.status === 'complete') break
+    }
+
+    expect(sim.state.highAvailability.transition.status).toBe('complete')
+    expect(firstBranch?.visible).toBe(true)
+    expect(oldTail?.visible).toBe(true)
+    expect(defs.find((def) => def.id === 'timeline.yard')?.readout?.(sim.state))
+      .toContain('fork')
 
     continuity.dispose?.()
     theme.dispose()
