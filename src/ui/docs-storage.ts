@@ -674,24 +674,23 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
     ],
     metrics: [
-      { label: 'Sent LSN', get: (s) => fmtLsn(s.replication.sentLsn) },
+      { label: 'standby_a sent', get: (s) => fmtLsn(s.replication.standbys[0].sentLsn) },
+      { label: 'standby_b sent', get: (s) => fmtLsn(s.replication.standbys[1].sentLsn) },
       {
-        label: 'Behind the primary',
-        get: (s) =>
-          !s.replication.enabled || !s.replication.connected
-            ? 'no standby'
-            : fmtBytes(Math.max(0, s.wal.insertLsn - s.replication.sentLsn)),
-        hint: 'WAL generated but not yet handed to the wire',
+        label: 'standby_a slot',
+        get: (s) => `${s.replication.physicalSlots[0].active ? 'active' : 'inactive'} · ${fmtBytes(s.replication.physicalSlots[0].retainedBytes)} retained`,
       },
       {
-        label: 'Slot state',
-        get: (s) =>
-          !s.replication.enabled ? 'no standby' : s.replication.connected ? `streaming (${s.replication.mode})` : 'disconnected — holding WAL',
+        label: 'standby_b slot',
+        get: (s) => `${s.replication.physicalSlots[1].active ? 'active' : 'inactive'} · ${fmtBytes(s.replication.physicalSlots[1].retainedBytes)} retained`,
       },
-      { label: 'Records in flight', get: (s) => fmtNum(s.replication.inFlight) },
+      {
+        label: 'Records in flight',
+        get: (s) => fmtNum(s.replication.standbys[0].inFlight + s.replication.standbys[1].inFlight),
+      },
     ],
-    knobs: ['replicaEnabled', 'replicaNetworkLag', 'synchronousCommit', 'walLevel'],
-    see: ['net.wire', 'walreceiver', 'wal.vault', 'logical.decoder'],
+    knobs: ['replicaEnabled', 'standbyBEnabled', 'replicaNetworkLag', 'standbyBNetworkLag', 'synchronousCommit', 'walLevel'],
+    see: ['net.wire', 'walreceiver', 'standby.b.receiver', 'wal.vault', 'logical.decoder'],
     source: ['src/backend/replication/walsender.c', 'src/backend/replication/slot.c'],
     refs: {
       docs: [
@@ -1730,6 +1729,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     ],
     metrics: [
       { label: 'Link', get: (s) => (s.replication.connected ? 'streaming' : s.replication.enabled ? 'reconnecting' : 'no standby') },
+      { label: 'Received', get: (s) => fmtLsn(s.replication.standbys[0].receivedLsn) },
       { label: 'Written', get: (s) => fmtLsn(s.replication.writeLsn) },
       { label: 'Flushed', get: (s) => fmtLsn(s.replication.flushLsn), hint: 'durable on the standby — what synchronous_commit=on waits for, once this standby is in synchronous_standby_names' },
       {
@@ -1948,6 +1948,194 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       source: [srcFile('src/backend/backup/basebackup.c', 'SendBaseBackup')],
       suzuki: suzuki(10, 'Online Backup and Point-In-Time Recovery (PITR) (§10.1 Base Backup)'),
     },
+  },
+
+  {
+    id: 'standby.b',
+    title: 'standby_b — an independent node',
+    subtitle: 'the second physical standby',
+    tldr: 'Its own server state, not a second drawing of standby_a: its own buffer pool, WAL, data directory, replay position, slot, and leader opinion.',
+    sections: [
+      {
+        heading: 'Three servers, not one shared truth',
+        body: 'The primary, `standby_a`, and `standby_b` each own a separate buffer pool (`shared_buffers`), `pg_wal`, and data directory. Each standby has its own primary-side walsender, network stream, walreceiver, and startup process. A fast standby cannot advance the slow one’s applied LSN, and disconnecting one does not disconnect the other. The city keeps the primary’s existing full-detail structures and samples the same 1,024 representative buffer frames on each standby; it does not emulate three operating systems, storage controllers, or PostgreSQL postmasters.',
+      },
+      {
+        heading: 'Received, flushed, and applied are different facts',
+        body: '`received_lsn` here is the furthest byte delivered to that node’s walreceiver. `flush_lsn` is durable in that standby’s own `pg_wal`. `applied_lsn` is the last record its startup process has replayed into data pages, so only applied data is visible to reads. The model also retains `written_lsn` between receive and flush. Timing and packet travel are visually stretched 6×, while every displayed duration is converted back to configured time; replay throughput is a bounded teaching rate, not a benchmark of any hardware.',
+      },
+      {
+        heading: 'Two physical slots, two independent disk clocks',
+        body: 'The primary owns `standby_a_slot` and `standby_b_slot`. While a standby is connected, its slot’s `restart_lsn` follows the standby’s durable progress. Disconnect it and the slot remains inactive at that position, forcing the primary to keep every later WAL segment. This city gives the primary WAL volume a scaled 512 MiB safety limit so the failure is observable quickly; real capacity is installation-specific, and real PostgreSQL PANICs on a full filesystem rather than politely rejecting only new writes.',
+      },
+      {
+        heading: 'Opinion without action',
+        body: 'Every node stores its own answer to “who is leader?” and those answers may disagree. Nothing consumes that answer yet: there is no election, promotion, demotion, service-address move, timeline fork, `pg_rewind`, or Patroni behavior in this item. That omission is deliberate. Roadmap item 3 will make disagreement consequential; this item only removes the impossible global truth that previously prevented disagreement.',
+      },
+    ],
+    metrics: [
+      { label: 'Received', get: (s) => fmtLsn(s.replication.standbys[1].receivedLsn) },
+      { label: 'Flushed', get: (s) => fmtLsn(s.replication.standbys[1].flushedLsn) },
+      { label: 'Applied', get: (s) => fmtLsn(s.replication.standbys[1].appliedLsn) },
+      {
+        label: 'Lag',
+        get: (s) => `${fmtBytes(s.replication.standbys[1].lagBytes)} · ${fmtDuration(s.replication.standbys[1].lagSec)}`,
+      },
+      {
+        label: 'Physical slot',
+        get: (s) => `${s.replication.physicalSlots[1].active ? 'active' : 'inactive'} · ${fmtBytes(s.replication.physicalSlots[1].retainedBytes)} retained`,
+      },
+      {
+        label: 'Leader opinion',
+        get: (s) => s.cluster.nodes[2].leaderOpinion ?? 'unknown',
+        hint: 'an observation only; no failover action consumes it',
+      },
+    ],
+    knobs: ['standbyBEnabled', 'standbyBNetworkLag', 'standbyBSlowApply'],
+    see: ['standby.b.receiver', 'standby.b.wal', 'standby.b.startup', 'standby.b.buffers', 'standby.b.storage', 'replica.standby'],
+    source: [
+      'src/backend/replication/walsender.c',
+      'src/backend/replication/walreceiver.c',
+      'src/backend/access/transam/xlogrecovery.c',
+    ],
+    refs: {
+      docs: [
+        manual('warm-standby.html', '26.2. Log-Shipping Standby Servers'),
+        manual('view-pg-replication-slots.html', 'pg_replication_slots'),
+      ],
+      source: [
+        srcFile('src/backend/replication/walsender.c', 'WalSndLoop'),
+        srcFile('src/backend/replication/walreceiver.c', 'WalReceiverMain'),
+        srcFile('src/backend/access/transam/xlogrecovery.c', 'PerformWalRecovery'),
+      ],
+      suzuki: suzuki(11, 'Streaming Replication'),
+      rogov: rogov(R_WAL, 'Write-Ahead Log — recovery and checkpoint mechanics', 'the nearest honest chapter; Rogov does not cover replication'),
+    },
+  },
+
+  {
+    id: 'standby.b.receiver',
+    title: 'standby_b walreceiver',
+    subtitle: 'background process on standby_b',
+    tldr: 'Receives standby_b’s stream and writes it into standby_b’s own pg_wal.',
+    sections: [
+      {
+        heading: 'An independent receiver',
+        body: 'This is not standby_a’s receiver mirrored across the city. It has its own connection, received and written positions, status replies, and failure state. Turning off `standby_b connected` stops this process alone while its physical slot remains on the primary.',
+      },
+      {
+        heading: 'The model boundary',
+        body: 'The city separates socket receipt, `write()` progress, and `fsync()` progress with bounded rates so their ordering is visible. It does not model kernel page-cache size, WAL receiver wakeups, partial system calls, compression, SSL, or network bandwidth; configured one-way delay and the resulting acknowledgement path are the teaching inputs.',
+      },
+    ],
+    metrics: [
+      { label: 'Process', get: (s) => s.replication.standbys[1].walReceiver },
+      { label: 'Received', get: (s) => fmtLsn(s.replication.standbys[1].receivedLsn) },
+      { label: 'Written', get: (s) => fmtLsn(s.replication.standbys[1].writtenLsn) },
+      { label: 'In flight', get: (s) => fmtNum(s.replication.standbys[1].inFlight) },
+    ],
+    knobs: ['standbyBEnabled', 'standbyBNetworkLag'],
+    see: ['standby.b.wal', 'standby.b.startup', 'walsender'],
+  },
+
+  {
+    id: 'standby.b.wal',
+    title: 'standby_b write-ahead log',
+    subtitle: 'a separate pg_wal directory',
+    tldr: 'Durable received WAL on standby_b, distinct from both the primary and standby_a.',
+    sections: [
+      {
+        heading: 'What lives here',
+        body: 'The walreceiver writes physical records into this node’s own 16 MiB segment files. A record can be durable here while the startup process has not applied it yet; that is the flush-to-apply gap. Slowing replay therefore grows standby_b’s own WAL working set without making standby_a lag.',
+      },
+      {
+        heading: 'What the primary slot protects',
+        body: 'The physical slot lives on the primary, not here. It protects the primary’s copy of WAL until standby_b confirms durable progress. Once this node disconnects, its local files stop moving while the primary’s retained WAL grows from the frozen `restart_lsn`.',
+      },
+    ],
+    metrics: [
+      { label: 'Flushed', get: (s) => fmtLsn(s.replication.standbys[1].flushedLsn) },
+      { label: 'Applied', get: (s) => fmtLsn(s.replication.standbys[1].appliedLsn) },
+      { label: 'pg_wal', get: (s) => fmtBytes(s.cluster.nodes[2].wal.diskBytes) },
+    ],
+    knobs: ['standbyBEnabled', 'standbyBSlowApply'],
+    see: ['standby.b.receiver', 'standby.b.startup', 'wal.vault'],
+  },
+
+  {
+    id: 'standby.b.startup',
+    title: 'standby_b startup process',
+    subtitle: 'single ordered WAL replay',
+    tldr: 'Applies standby_b’s durable WAL without advancing standby_a.',
+    sections: [
+      {
+        heading: 'One replay cursor per standby',
+        body: 'Each standby startup process advances only its own applied LSN and data pages. With `standby_b slow replay` on, receive and flush can remain close to the primary while this cursor falls behind. That is why a row in `pg_stat_replication` belongs to one standby rather than to “the cluster”.',
+      },
+      {
+        heading: 'Scaled replay',
+        body: 'Healthy replay is capped at a visible teaching rate and slow replay at 35% of the current WAL production rate, with a small floor so recovery can continue after writes stop. PostgreSQL replay speed depends on record mix, storage, prefetch, CPU, and conflicts; the direction and independent queues are the lesson, not the absolute MiB/s.',
+      },
+    ],
+    metrics: [
+      { label: 'Process', get: (s) => s.replication.standbys[1].startupProcess },
+      { label: 'Applied', get: (s) => fmtLsn(s.replication.standbys[1].appliedLsn) },
+      {
+        label: 'Waiting',
+        get: (s) => fmtBytes(Math.max(0, s.replication.standbys[1].flushedLsn - s.replication.standbys[1].appliedLsn)),
+      },
+    ],
+    knobs: ['standbyBSlowApply', 'standbyBEnabled'],
+    see: ['standby.b.wal', 'standby.b.buffers', 'startup.proc'],
+  },
+
+  {
+    id: 'standby.b.buffers',
+    title: 'standby_b buffer pool',
+    subtitle: 'standby_b shared_buffers',
+    tldr: 'A separate 1,024-frame representative cache warmed by standby_b replay.',
+    sections: [
+      {
+        heading: 'Independent cache contents',
+        body: 'Replay touches this node’s buffer frames only. The sample uses the same fixed upper bound as the primary plaza and standby_a, but the valid, dirty, usage, relation, block, and last-touch arrays are separate objects. A tile lit here says standby_b replay touched it; it says nothing about residency on either other node.',
+      },
+      {
+        heading: 'Restartpoint simplification',
+        body: 'The model cleans a small bounded number of replay-dirtied sample frames per tick to represent standby restartpoint writeback. It does not run a second full checkpointer state machine or model standby-local read traffic. Real standby buffer contents and restartpoint timing are workload- and hardware-dependent.',
+      },
+    ],
+    metrics: [
+      { label: 'Sample frames', get: (s) => fmtNum(s.cluster.nodes[2].buffers.sampleFrames) },
+      { label: 'Used', get: (s) => fmtNum(s.cluster.nodes[2].buffers.usedCount) },
+      { label: 'Dirty', get: (s) => fmtNum(s.cluster.nodes[2].buffers.dirtyCount) },
+      { label: 'Replay activity', get: (s) => fmtPct(s.replication.standbys[1].applyActivity, 0) },
+    ],
+    knobs: ['sharedBuffers', 'standbyBSlowApply'],
+    see: ['standby.b.startup', 'standby.b.storage', 'replica.buffers'],
+  },
+
+  {
+    id: 'standby.b.storage',
+    title: 'standby_b data directory',
+    subtitle: 'a separate physical copy',
+    tldr: 'Its files are current through standby_b’s applied LSN, not through either other node’s opinion.',
+    sections: [
+      {
+        heading: 'A separate directory',
+        body: 'This node begins as a physical base backup and replay changes its own pages in WAL order. The model reports the same logical relation size for all three nodes and a different applied frontier; it does not duplicate every table and index counter or model filesystem allocation differences.',
+      },
+      {
+        heading: 'No promotion here',
+        body: 'Falling behind changes what a read on this data directory can see. It does not promote the node, move a service address, choose a timeline, or make this copy writable. Those actions and their data-loss consequences belong to roadmap item 3.',
+      },
+    ],
+    metrics: [
+      { label: 'Size', get: (s) => fmtBytes(s.cluster.nodes[2].dataDirectory.bytes) },
+      { label: 'Applied through', get: (s) => fmtLsn(s.cluster.nodes[2].dataDirectory.appliedLsn) },
+      { label: 'Primary at', get: (s) => fmtLsn(s.cluster.nodes[0].dataDirectory.appliedLsn) },
+    ],
+    knobs: ['standbyBEnabled', 'standbyBSlowApply'],
+    see: ['standby.b', 'standby.b.buffers', 'storage.datadir'],
   },
 
   {

@@ -56,10 +56,15 @@ import {
 import type {
   BackendSim,
   BackendState,
+  BufferPool,
   Bus,
+  ClusterNodeId,
+  ClusterNodeWalState,
   FlowKind,
   FlowRequest,
   Knobs,
+  PhysicalReplicationSlotState,
+  PhysicalStandbyState,
   PlanNode,
   QueryKind,
   SampleFrames,
@@ -156,6 +161,40 @@ function sampledBufferFrames(logicalMib: number): SampleFrames {
   const logicalPages = Math.floor((logicalMib * MIB) / PAGE)
   const scaled = Math.round((logicalPages / FULL_SAMPLE_PAGES) * N_BUFFERS)
   return asSampleFrames(clamp(scaled, 32, N_BUFFERS))
+}
+
+function createBufferPoolState(sharedBuffersMiB: number, hitRatio: number): BufferPool {
+  return {
+    sampleFrames: sampledBufferFrames(sharedBuffersMiB),
+    valid: new Uint8Array(N_BUFFERS),
+    dirty: new Uint8Array(N_BUFFERS),
+    pinned: new Uint8Array(N_BUFFERS),
+    usage: new Uint8Array(N_BUFFERS),
+    rel: new Uint8Array(N_BUFFERS),
+    lastTouch: new Float32Array(N_BUFFERS),
+    blk: new Uint32Array(N_BUFFERS),
+    clockHand: 0,
+    hits: 0,
+    misses: 0,
+    evictions: asSampleFrames(0),
+    dirtyEvictions: 0,
+    hitRatio,
+    dirtyCount: asSampleFrames(0),
+    pinnedCount: asSampleFrames(0),
+    usedCount: asSampleFrames(0),
+  }
+}
+
+function createClusterWalState(lsn: number): ClusterNodeWalState {
+  return {
+    receivedLsn: lsn,
+    writtenLsn: lsn,
+    flushedLsn: lsn,
+    appliedLsn: lsn,
+    segmentSize: WAL_SEG,
+    segmentCount: N_WAL_SEG_SLOTS,
+    diskBytes: N_WAL_SEG_SLOTS * WAL_SEG,
+  }
 }
 
 function isRunningState(state: BackendState): boolean {
@@ -440,6 +479,75 @@ export function createSim(bus: Bus): SimApi {
     mvcc: createRepresentativeRow(99999, def.pages > 1 ? 1 : 0),
   }))
 
+  const initialLsn = 0x1a000000
+  const primaryBuffers = createBufferPoolState(DEFAULT_KNOBS.sharedBuffers, 0.98)
+  const standbyABuffers = createBufferPoolState(DEFAULT_KNOBS.sharedBuffers, 0.96)
+  const standbyBBuffers = createBufferPoolState(DEFAULT_KNOBS.sharedBuffers, 0.96)
+  const primaryNodeWal = createClusterWalState(initialLsn)
+  const standbyANodeWal = createClusterWalState(initialLsn)
+  const standbyBNodeWal = createClusterWalState(initialLsn)
+  const primaryDataDirectory = { bytes: 0, appliedLsn: initialLsn }
+  const standbyADataDirectory = { bytes: 0, appliedLsn: initialLsn }
+  const standbyBDataDirectory = { bytes: 0, appliedLsn: initialLsn }
+  const standbyA: PhysicalStandbyState = {
+    nodeId: 'standbyA',
+    applicationName: 'standby_a',
+    enabled: true,
+    connected: true,
+    mode: 'async',
+    sentLsn: initialLsn,
+    receivedLsn: initialLsn,
+    writtenLsn: initialLsn,
+    flushedLsn: initialLsn,
+    appliedLsn: initialLsn,
+    lagBytes: 0,
+    lagSec: 0,
+    networkLagMs: DEFAULT_KNOBS.replicaNetworkLag,
+    applyActivity: 0,
+    inFlight: 0,
+    walSender: 'streaming',
+    walReceiver: 'streaming',
+    startupProcess: 'streaming',
+    acknowledgedFlushLsn: initialLsn,
+    acknowledgedApplyLsn: initialLsn,
+  }
+  const standbyB: PhysicalStandbyState = {
+    nodeId: 'standbyB',
+    applicationName: 'standby_b',
+    enabled: true,
+    connected: true,
+    mode: 'async',
+    sentLsn: initialLsn,
+    receivedLsn: initialLsn,
+    writtenLsn: initialLsn,
+    flushedLsn: initialLsn,
+    appliedLsn: initialLsn,
+    lagBytes: 0,
+    lagSec: 0,
+    networkLagMs: DEFAULT_KNOBS.standbyBNetworkLag,
+    applyActivity: 0,
+    inFlight: 0,
+    walSender: 'streaming',
+    walReceiver: 'streaming',
+    startupProcess: 'streaming',
+    acknowledgedFlushLsn: initialLsn,
+    acknowledgedApplyLsn: initialLsn,
+  }
+  const standbyASlot: PhysicalReplicationSlotState = {
+    name: 'standby_a_slot',
+    standbyId: 'standbyA',
+    active: true,
+    restartLsn: initialLsn,
+    retainedBytes: 0,
+  }
+  const standbyBSlot: PhysicalReplicationSlotState = {
+    name: 'standby_b_slot',
+    standbyId: 'standbyB',
+    active: true,
+    restartLsn: initialLsn,
+    retainedBytes: 0,
+  }
+
   const state: SimState = {
     t: 0,
     realT: 0,
@@ -449,29 +557,11 @@ export function createSim(bus: Bus): SimApi {
     oldestSnapshotAge: 0,
     maxConnections: N_BACKEND_SLOTS,
     backends,
-    buffers: {
-      sampleFrames: sampledBufferFrames(DEFAULT_KNOBS.sharedBuffers),
-      valid: new Uint8Array(N_BUFFERS),
-      dirty: new Uint8Array(N_BUFFERS),
-      pinned: new Uint8Array(N_BUFFERS),
-      usage: new Uint8Array(N_BUFFERS),
-      rel: new Uint8Array(N_BUFFERS),
-      lastTouch: new Float32Array(N_BUFFERS),
-      blk: new Uint32Array(N_BUFFERS),
-      clockHand: 0,
-      hits: 0,
-      misses: 0,
-      evictions: asSampleFrames(0),
-      dirtyEvictions: 0,
-      hitRatio: 0.98,
-      dirtyCount: asSampleFrames(0),
-      pinnedCount: asSampleFrames(0),
-      usedCount: asSampleFrames(0),
-    },
+    buffers: primaryBuffers,
     wal: {
-      insertLsn: 0x1a000000,
-      writeLsn: 0x1a000000,
-      flushLsn: 0x1a000000,
+      insertLsn: initialLsn,
+      writeLsn: initialLsn,
+      flushLsn: initialLsn,
       bufferBytes: 0,
       bufferCapacity: walBufferCapacity(DEFAULT_KNOBS.sharedBuffers),
       segmentSize: WAL_SEG,
@@ -492,8 +582,8 @@ export function createSim(bus: Bus): SimApi {
       lastDuration: 0,
       reason: 'time',
       count: 0,
-      redoLsn: 0x1a000000,
-      completedRedoLsn: 0x1a000000,
+      redoLsn: initialLsn,
+      completedRedoLsn: initialLsn,
     },
     bgwriter: {
       enabled: true,
@@ -514,25 +604,61 @@ export function createSim(bus: Bus): SimApi {
       enabled: true,
       connected: true,
       mode: 'async',
-      sentLsn: 0x1a000000,
-      writeLsn: 0x1a000000,
-      flushLsn: 0x1a000000,
-      replayLsn: 0x1a000000,
+      sentLsn: initialLsn,
+      writeLsn: initialLsn,
+      flushLsn: initialLsn,
+      replayLsn: initialLsn,
       lagBytes: 0,
       lagSec: 0,
       networkLagMs: DEFAULT_KNOBS.replicaNetworkLag,
       applyActivity: 0,
       logicalEnabled: false,
-      logicalSlotLsn: 0x1a000000,
+      logicalSlotLsn: initialLsn,
       logicalChangesPerSec: 0,
       inFlight: 0,
+      standbys: [standbyA, standbyB],
+      physicalSlots: [standbyASlot, standbyBSlot],
+    },
+    cluster: {
+      nodes: [
+        {
+          id: 'primary',
+          name: 'primary',
+          role: 'primary',
+          online: true,
+          leaderOpinion: 'primary',
+          buffers: primaryBuffers,
+          wal: primaryNodeWal,
+          dataDirectory: primaryDataDirectory,
+        },
+        {
+          id: 'standbyA',
+          name: 'standby_a',
+          role: 'standby',
+          online: true,
+          leaderOpinion: 'primary',
+          buffers: standbyABuffers,
+          wal: standbyANodeWal,
+          dataDirectory: standbyADataDirectory,
+        },
+        {
+          id: 'standbyB',
+          name: 'standby_b',
+          role: 'standby',
+          online: true,
+          leaderOpinion: 'primary',
+          buffers: standbyBBuffers,
+          wal: standbyBNodeWal,
+          dataDirectory: standbyBDataDirectory,
+        },
+      ],
     },
     disasterRecovery: {
       tool: 'pgBackRest',
       dataDirectoryBytes: 0,
       archive: {
         queueSegments: 0,
-        archivedThroughLsn: 0x1a000000,
+        archivedThroughLsn: initialLsn,
         archivedThroughTime: 0,
         failedAttempts: 0,
         pgWalBytes: N_WAL_SEG_SLOTS * WAL_SEG,
@@ -633,13 +759,6 @@ export function createSim(bus: Bus): SimApi {
   const av = state.autovac
   const rep = state.replication
   const dr = state.disasterRecovery
-  type RuntimeReplication = typeof rep & {
-    ackedFlushLsn: number
-    ackedApplyLsn: number
-  }
-  const runtimeRep = rep as RuntimeReplication
-  runtimeRep.ackedFlushLsn = rep.flushLsn
-  runtimeRep.ackedApplyLsn = rep.replayLsn
   const stats = state.stats
   type RuntimeStats = typeof stats & {
     queueDepth: number
@@ -846,31 +965,59 @@ export function createSim(bus: Bus): SimApi {
   /* ---- wire (replication packets in flight) ---------------------------- */
 
   const WIRE = 96
-  const wireLsn = new Float64Array(WIRE)
-  const wireAt = new Float64Array(WIRE)
-  let wireHead = 0
-  let wireTail = 0
-  let wireCount = 0
-
-  /**
-   * Standby apply acknowledgements travel back to the primary. A replay LSN is
-   * not enough to release SyncRep waiters until the primary has received it.
-   */
   const ACKW = 32
-  const ackLsn = new Float64Array(ACKW)
-  const ackAt = new Float64Array(ACKW)
-  let ackHead = 0
-  let ackTail = 0
-  let ackCount = 0
-  let ackSentLsn = wal.flushLsn
-  let ackedApplyLsn = wal.flushLsn
-  const flushAckLsn = new Float64Array(ACKW)
-  const flushAckAt = new Float64Array(ACKW)
-  let flushAckHead = 0
-  let flushAckTail = 0
-  let flushAckCount = 0
-  let flushAckSentLsn = wal.flushLsn
-  let ackedFlushLsn = wal.flushLsn
+  interface RuntimePhysicalReplication {
+    wireLsn: Float64Array
+    wireAt: Float64Array
+    wireHead: number
+    wireTail: number
+    wireCount: number
+    applyAckLsn: Float64Array
+    applyAckAt: Float64Array
+    applyAckHead: number
+    applyAckTail: number
+    applyAckCount: number
+    applyAckSentLsn: number
+    flushAckLsn: Float64Array
+    flushAckAt: Float64Array
+    flushAckHead: number
+    flushAckTail: number
+    flushAckCount: number
+    flushAckSentLsn: number
+    previousLagBytes: number
+    previousLagSec: number
+    bufferPageCursor: number
+    readT: number
+    rejoining: boolean
+  }
+  const createPhysicalRuntime = (): RuntimePhysicalReplication => ({
+    wireLsn: new Float64Array(WIRE),
+    wireAt: new Float64Array(WIRE),
+    wireHead: 0,
+    wireTail: 0,
+    wireCount: 0,
+    applyAckLsn: new Float64Array(ACKW),
+    applyAckAt: new Float64Array(ACKW),
+    applyAckHead: 0,
+    applyAckTail: 0,
+    applyAckCount: 0,
+    applyAckSentLsn: wal.flushLsn,
+    flushAckLsn: new Float64Array(ACKW),
+    flushAckAt: new Float64Array(ACKW),
+    flushAckHead: 0,
+    flushAckTail: 0,
+    flushAckCount: 0,
+    flushAckSentLsn: wal.flushLsn,
+    previousLagBytes: 0,
+    previousLagSec: 0,
+    bufferPageCursor: 0,
+    readT: 0,
+    rejoining: false,
+  })
+  const physicalRuntime: [RuntimePhysicalReplication, RuntimePhysicalReplication] = [
+    createPhysicalRuntime(),
+    createPhysicalRuntime(),
+  ]
 
   /**
    * LagTrackerWrite/LagTrackerRead: primary flush positions paired with the
@@ -882,8 +1029,6 @@ export function createSim(bus: Bus): SimApi {
   const lagSampleAt = new Float64Array(LAG_SAMPLES)
   let lagSampleHead = 0
   let lagSampleCount = 1
-  let previousLagBytes = 0
-  let previousLagSec = 0
   lagSampleLsn[0] = wal.flushLsn
   lagSampleAt[0] = state.t
 
@@ -921,19 +1066,22 @@ export function createSim(bus: Bus): SimApi {
     return lagSampleAt[prev]
   }
 
-  function updateReplayLag(): void {
-    const measured = rep.replayLsn >= wal.flushLsn
+  function updateReplayLag(
+    standby: PhysicalStandbyState,
+    runtime: RuntimePhysicalReplication,
+  ): void {
+    const measured = standby.appliedLsn >= wal.flushLsn
       ? 0
-      : Math.min(999, Math.max(0, state.t - flushTimeOf(rep.replayLsn)))
+      : Math.min(999, Math.max(0, state.t - flushTimeOf(standby.appliedLsn)))
     // Interpolation and tick ordering can add a fraction of a second while the
     // byte gap is already closing. Do not let that sampling jitter recreate the
     // old, glaring inverse response.
     const reported = measured / NET_PACKET_STRETCH
-    rep.lagSec = rep.lagBytes < previousLagBytes
-      ? Math.min(previousLagSec, reported)
+    standby.lagSec = standby.lagBytes < runtime.previousLagBytes
+      ? Math.min(runtime.previousLagSec, reported)
       : reported
-    previousLagBytes = rep.lagBytes
-    previousLagSec = rep.lagSec
+    runtime.previousLagBytes = standby.lagBytes
+    runtime.previousLagSec = standby.lagSec
   }
 
   /* ---- accumulators ---------------------------------------------------- */
@@ -1031,7 +1179,6 @@ export function createSim(bus: Bus): SimApi {
   let bgwriterAllocations = 0
   let bgwriterAllocationEstimate = 0
   let logicalAcc = 0
-  let replicaReadT = 0
   let statT = 0
   let degradeWarnT = -100
   let refuseWarnT = -100
@@ -1561,6 +1708,18 @@ export function createSim(bus: Bus): SimApi {
       }
       if (pinPos[s] >= n) pinPos[s] = 0
     }
+    for (let ni = 1; ni < state.cluster.nodes.length; ni++) {
+      const standbyPool = state.cluster.nodes[ni].buffers
+      if (size < standbyPool.sampleFrames) {
+        for (let b = size; b < standbyPool.sampleFrames; b++) {
+          standbyPool.valid[b] = 0
+          standbyPool.dirty[b] = 0
+          standbyPool.usage[b] = 0
+        }
+      }
+      standbyPool.sampleFrames = size
+      if (standbyPool.clockHand >= size) standbyPool.clockHand = 0
+    }
   }
 
   /** Pin decay + the counters the 3D grid reads. Cheap: 1024 slots. */
@@ -1747,9 +1906,14 @@ export function createSim(bus: Bus): SimApi {
       }
     }
 
-    // walsender has shipped everything below sentLsn
-    if (rep.connected) {
-      const sentSeg = Math.floor(rep.sentLsn / WAL_SEG)
+    // A visible segment is streamed once both physical walsenders passed it.
+    if (rep.standbys[0].connected || rep.standbys[1].connected) {
+      let sent = Number.POSITIVE_INFINITY
+      for (let i = 0; i < 2; i++) {
+        const standby = rep.standbys[i]
+        if (standby.connected) sent = Math.min(sent, standby.sentLsn)
+      }
+      const sentSeg = Math.floor(sent / WAL_SEG)
       for (let i = 0; i < N_WAL_SEG_SLOTS; i++) {
         const s = segments[i]
         if (s.state === 'full' && s.id < sentSeg) s.state = 'streamed'
@@ -1809,9 +1973,22 @@ export function createSim(bus: Bus): SimApi {
     // through the write phase and steps down exactly once, at the end.
     const sinceRedo = Math.max(0, wal.insertLsn - ckpt.completedRedoLsn)
     let slotHold = 0
-    if (rep.connected) {
-      const restart = rep.logicalEnabled ? Math.min(rep.flushLsn, rep.logicalSlotLsn) : rep.flushLsn
-      slotHold = Math.max(0, wal.insertLsn - restart)
+    for (let i = 0; i < 2; i++) {
+      const standby = rep.standbys[i]
+      const slot = rep.physicalSlots[i]
+      if (K.walLevel === 'minimal') {
+        slot.active = false
+        slot.restartLsn = wal.insertLsn
+        slot.retainedBytes = 0
+        continue
+      }
+      slot.active = standby.enabled && standby.connected
+      if (slot.active) slot.restartLsn = Math.max(slot.restartLsn, standby.flushedLsn)
+      slot.retainedBytes = Math.max(0, wal.insertLsn - slot.restartLsn)
+      slotHold = Math.max(slotHold, slot.retainedBytes)
+    }
+    if (rep.logicalEnabled) {
+      slotHold = Math.max(slotHold, wal.insertLsn - rep.logicalSlotLsn)
     }
     const archiveHold = Math.max(0, wal.insertLsn - archiveNextSeg * WAL_SEG)
     wal.segmentCount = clamp(
@@ -1829,11 +2006,10 @@ export function createSim(bus: Bus): SimApi {
       )
     } else if (
       dr.archive.writesBlocked
-      && K.archiveAvailable
       && dr.archive.pgWalBytes <= dr.archive.pgWalCapacityBytes * 0.75
     ) {
       dr.archive.writesBlocked = false
-      toast('Archive caught up below the scaled safety limit — writes admitted again', 'good', 5000)
+      toast('Primary pg_wal fell below the scaled safety limit — writes admitted again', 'good', 5000)
     }
   }
 
@@ -2884,167 +3060,315 @@ export function createSim(bus: Bus): SimApi {
    * REPLICATION
    * ====================================================================*/
 
-  function tickReplication(dt: number): void {
-    rep.enabled = K.replicaEnabled
-    rep.networkLagMs = K.replicaNetworkLag
-    // This scale model names its connected standby in
-    // synchronous_standby_names: on waits for remote flush, remote_apply for
-    // replay. local and off never put the standby in the commit path.
-    rep.mode =
-      K.synchronousCommit === 'on' || K.synchronousCommit === 'remote_apply'
-        ? 'sync'
-        : 'async'
+  const streamRoutes = ['net.stream', 'net.streamB'] as const
+  const ackRoutes = ['net.ack', 'net.ackB'] as const
+  const receiveRoutes = ['replica.apply', 'replicaB.apply'] as const
+  const bufferRoutes = ['replica.buffer', 'replicaB.buffer'] as const
+  const ioRoutes = ['replica.io', 'replicaB.io'] as const
 
-    if (!rep.enabled || K.walLevel === 'minimal') {
-      if (rep.connected) {
-        rep.connected = false
-        wireCount = 0
-        wireHead = 0
-        wireTail = 0
-        ackCount = 0
-        ackHead = 0
-        ackTail = 0
-        ackSentLsn = wal.flushLsn
-        ackedApplyLsn = wal.flushLsn
-        flushAckCount = 0
-        flushAckHead = 0
-        flushAckTail = 0
-        flushAckSentLsn = wal.flushLsn
-        ackedFlushLsn = wal.flushLsn
-        runtimeRep.ackedFlushLsn = ackedFlushLsn
-        runtimeRep.ackedApplyLsn = ackedApplyLsn
+  function resetPhysicalRuntime(runtime: RuntimePhysicalReplication, lsn: number): void {
+    runtime.wireHead = runtime.wireTail = runtime.wireCount = 0
+    runtime.applyAckHead = runtime.applyAckTail = runtime.applyAckCount = 0
+    runtime.flushAckHead = runtime.flushAckTail = runtime.flushAckCount = 0
+    runtime.applyAckSentLsn = lsn
+    runtime.flushAckSentLsn = lsn
+    runtime.previousLagBytes = 0
+    runtime.previousLagSec = 0
+    runtime.bufferPageCursor = 0
+    runtime.readT = 0
+    runtime.rejoining = false
+  }
+
+  function tickStandbyBuffers(index: 0 | 1, fromLsn: number, toLsn: number, dt: number): void {
+    const pool = state.cluster.nodes[index + 1].buffers
+    const runtime = physicalRuntime[index]
+    const pageDelta = Math.max(0, Math.floor((toLsn - fromLsn) / PAGE))
+    const touches = Math.min(12, pageDelta)
+    for (let i = 0; i < touches; i++) {
+      const b = (runtime.bufferPageCursor * 131 + index * 67) % pool.sampleFrames
+      runtime.bufferPageCursor++
+      if (!pool.valid[b]) {
+        pool.valid[b] = 1
+        pool.usedCount = asSampleFrames(pool.usedCount + 1)
+        pool.misses++
+      } else {
+        pool.hits++
+      }
+      if (!pool.dirty[b]) pool.dirtyCount = asSampleFrames(pool.dirtyCount + 1)
+      pool.dirty[b] = 1
+      pool.usage[b] = Math.min(5, pool.usage[b] + 1)
+      pool.rel[b] = (runtime.bufferPageCursor + index) % N_TABLES
+      pool.blk[b] = Math.floor(toLsn / PAGE)
+      pool.lastTouch[b] = state.t
+    }
+    const seen = pool.hits + pool.misses
+    if (seen > 0) pool.hitRatio = pool.hits / seen
+    /* Recovery restartpoints make replayed pages durable independently on
+     * each standby. This compact cleaner represents that writeback, not the
+     * primary's checkpointer or buffer pool. */
+    let cleanBudget = Math.min(3, Math.ceil(dt * 30))
+    while (cleanBudget-- > 0 && pool.dirtyCount > 0) {
+      const b = pool.clockHand
+      pool.clockHand = pool.clockHand + 1 >= pool.sampleFrames ? 0 : pool.clockHand + 1
+      if (!pool.dirty[b]) continue
+      pool.dirty[b] = 0
+      pool.dirtyCount = asSampleFrames(pool.dirtyCount - 1)
+    }
+  }
+
+  function tickPhysicalStandby(index: 0 | 1, dt: number): void {
+    const standby = rep.standbys[index]
+    const runtime = physicalRuntime[index]
+    const enabled = index === 0 ? K.replicaEnabled : K.standbyBEnabled
+    const slowApply = index === 0 ? K.replicaSlowApply : K.standbyBSlowApply
+    const networkLagMs = index === 0 ? K.replicaNetworkLag : K.standbyBNetworkLag
+    /* synchronous_standby_names names standby_a independently of each
+     * transaction's synchronous_commit setting. standby_b remains async. */
+    const sync = index === 0
+
+    standby.enabled = enabled
+    standby.networkLagMs = networkLagMs
+    standby.mode = sync ? 'sync' : 'async'
+
+    if (!enabled || K.walLevel === 'minimal') {
+      if (standby.connected) {
+        standby.connected = false
+        resetPhysicalRuntime(runtime, standby.appliedLsn)
         toast(
           K.walLevel === 'minimal'
-            ? 'wal_level=minimal — a standby cannot be fed from this WAL'
-            : 'Standby disconnected',
+            ? 'wal_level=minimal — physical standbys cannot be fed from this WAL'
+            : `${standby.applicationName} disconnected — its physical slot still retains WAL`,
           'warn',
         )
       }
-      rep.inFlight = 0
-      rep.applyActivity = damp(rep.applyActivity, 0, 3, dt)
-      rep.sentLsn = wal.flushLsn
-      rep.writeLsn = wal.flushLsn
-      rep.flushLsn = wal.flushLsn
-      rep.replayLsn = wal.flushLsn
-      rep.lagBytes = 0
-      rep.lagSec = 0
-      previousLagBytes = 0
-      previousLagSec = 0
-      rep.logicalEnabled = false
-      rep.logicalSlotLsn = wal.insertLsn
-      rep.logicalChangesPerSec = damp(rep.logicalChangesPerSec, 0, 3, dt)
-      syncHorizonPin()
+      standby.inFlight = 0
+      standby.applyActivity = damp(standby.applyActivity, 0, 3, dt)
+      standby.walSender = 'stopped'
+      standby.walReceiver = 'stopped'
+      standby.startupProcess = 'stopped'
+      if (K.walLevel === 'minimal') {
+        standby.sentLsn = standby.receivedLsn = standby.writtenLsn = wal.flushLsn
+        standby.flushedLsn = standby.appliedLsn = wal.flushLsn
+        standby.lagBytes = 0
+        standby.lagSec = 0
+        runtime.previousLagBytes = 0
+        runtime.previousLagSec = 0
+      }
       return
     }
-    if (!rep.connected) {
-      rep.connected = true
-      // A reconnecting standby resumes from where it stopped; if that WAL is
-      // gone it would need a base backup. We fast-forward instead of lying.
-      const behind = wal.flushLsn - rep.replayLsn
-      if (behind > 4 * WAL_SEG) {
-        rep.sentLsn = rep.writeLsn = rep.flushLsn = rep.replayLsn = wal.flushLsn
-        ackCount = ackHead = ackTail = 0
-        ackSentLsn = ackedApplyLsn = rep.replayLsn
-        flushAckCount = flushAckHead = flushAckTail = 0
-        flushAckSentLsn = ackedFlushLsn = rep.flushLsn
-        runtimeRep.ackedFlushLsn = ackedFlushLsn
-        runtimeRep.ackedApplyLsn = ackedApplyLsn
-        toast('Standby resynchronised (required WAL had been recycled)', 'info')
-      }
-    }
-    rep.logicalEnabled = K.walLevel === 'logical' && rep.enabled && rep.connected
-    syncHorizonPin()
 
-    // walsender: push flushed WAL onto the wire in packets
-    const delay = (K.replicaNetworkLag * NET_PACKET_STRETCH) / 1000
-    if (wal.flushLsn > rep.sentLsn && wireCount < WIRE) {
-      const chunk = Math.min(wal.flushLsn - rep.sentLsn, Math.max(16 * 1024, wal.bytesPerSec * dt * 4))
-      rep.sentLsn = Math.floor(rep.sentLsn + chunk)
-      wireLsn[wireHead] = rep.sentLsn
-      wireAt[wireHead] = state.t + delay
-      wireHead = (wireHead + 1) % WIRE
-      wireCount++
+    if (!standby.connected) {
+      standby.connected = true
+      resetPhysicalRuntime(runtime, standby.appliedLsn)
+      runtime.rejoining = true
+    }
+    const delay = (networkLagMs * NET_PACKET_STRETCH) / 1000
+    if (runtime.rejoining && wal.flushLsn - standby.sentLsn < 64 * 1024) {
+      runtime.rejoining = false
+    }
+    const catchingUp = runtime.rejoining || wal.flushLsn - standby.sentLsn > 256 * 1024
+    standby.walSender = catchingUp ? 'catchup' : 'streaming'
+    standby.walReceiver = catchingUp ? 'catchup' : 'streaming'
+    standby.startupProcess = catchingUp ? 'catchup' : 'streaming'
+
+    // One primary-side walsender and one packet queue per standby.
+    if (wal.flushLsn > standby.sentLsn && runtime.wireCount < WIRE) {
+      const chunk = Math.min(
+        wal.flushLsn - standby.sentLsn,
+        Math.max(
+          16 * 1024,
+          runtime.rejoining ? 24 * MIB * dt : 0,
+          wal.bytesPerSec * dt * 4,
+        ),
+      )
+      standby.sentLsn = Math.floor(standby.sentLsn + chunk)
+      runtime.wireLsn[runtime.wireHead] = standby.sentLsn
+      runtime.wireAt[runtime.wireHead] = state.t + delay
+      runtime.wireHead = (runtime.wireHead + 1) % WIRE
+      runtime.wireCount++
       flow('wal.stream', 1, 'stream', 1.2)
-      flow('net.stream', 1, 'stream', 1.4)
+      flow(streamRoutes[index], 1, 'stream', 1.4)
     }
 
-    // arrivals at the standby: walreceiver writes, then flushes
-    while (wireCount > 0 && wireAt[wireTail] <= state.t) {
-      rep.writeLsn = Math.max(rep.writeLsn, wireLsn[wireTail])
-      wireTail = (wireTail + 1) % WIRE
-      wireCount--
-      flow('replica.apply', 1, 'stream', 1.1)
+    while (
+      runtime.wireCount > 0
+      && runtime.wireAt[runtime.wireTail] <= state.t
+    ) {
+      standby.receivedLsn = Math.max(
+        standby.receivedLsn,
+        runtime.wireLsn[runtime.wireTail],
+      )
+      runtime.wireTail = (runtime.wireTail + 1) % WIRE
+      runtime.wireCount--
+      flow(receiveRoutes[index], 1, 'stream', 1.1)
     }
-    rep.inFlight = wireCount
+    standby.inFlight = runtime.wireCount
 
-    if (rep.flushLsn < rep.writeLsn) {
-      const rate = Math.max(8 * 1024 * 1024, wal.bytesPerSec * 6)
-      rep.flushLsn = Math.floor(Math.min(rep.writeLsn, rep.flushLsn + rate * dt))
+    /* The walreceiver accepts bytes, writes its own pg_wal, then fsyncs it.
+     * Small rolling gaps keep the three positions legible under sustained
+     * traffic; an idle stream still converges exactly. */
+    const receiveBusy = standby.receivedLsn < standby.sentLsn || wal.bytesPerSec > 64 * 1024
+    const displayGap = index === 0 ? 0 : 32 * 1024
+    const writeLimit = receiveBusy
+      ? Math.max(standby.writtenLsn, standby.receivedLsn - displayGap)
+      : standby.receivedLsn
+    if (standby.writtenLsn < writeLimit) {
+      const rate = Math.max(8 * MIB, wal.bytesPerSec * 5)
+      standby.writtenLsn = Math.floor(
+        Math.min(writeLimit, standby.writtenLsn + rate * dt),
+      )
+    }
+    const flushLimit = receiveBusy
+      ? Math.max(standby.flushedLsn, standby.writtenLsn - displayGap)
+      : standby.writtenLsn
+    if (standby.flushedLsn < flushLimit) {
+      const rate = Math.max(8 * MIB, wal.bytesPerSec * 4)
+      standby.flushedLsn = Math.floor(
+        Math.min(flushLimit, standby.flushedLsn + rate * dt),
+      )
     }
 
-    // A synchronous_commit=on waiter needs the standby's flush watermark after
-    // the status reply has crossed back to the primary.
-    if (rep.flushLsn > flushAckSentLsn && flushAckCount < ACKW) {
-      flushAckSentLsn = rep.flushLsn
-      flushAckLsn[flushAckHead] = rep.flushLsn
-      flushAckAt[flushAckHead] = state.t + delay
-      flushAckHead = (flushAckHead + 1) % ACKW
-      flushAckCount++
+    if (
+      standby.flushedLsn > runtime.flushAckSentLsn
+      && runtime.flushAckCount < ACKW
+    ) {
+      runtime.flushAckSentLsn = standby.flushedLsn
+      runtime.flushAckLsn[runtime.flushAckHead] = standby.flushedLsn
+      runtime.flushAckAt[runtime.flushAckHead] = state.t + delay
+      runtime.flushAckHead = (runtime.flushAckHead + 1) % ACKW
+      runtime.flushAckCount++
     }
-    while (flushAckCount > 0 && flushAckAt[flushAckTail] <= state.t) {
-      ackedFlushLsn = Math.max(ackedFlushLsn, flushAckLsn[flushAckTail])
-      runtimeRep.ackedFlushLsn = ackedFlushLsn
-      flushAckTail = (flushAckTail + 1) % ACKW
-      flushAckCount--
+    while (
+      runtime.flushAckCount > 0
+      && runtime.flushAckAt[runtime.flushAckTail] <= state.t
+    ) {
+      standby.acknowledgedFlushLsn = Math.max(
+        standby.acknowledgedFlushLsn,
+        runtime.flushAckLsn[runtime.flushAckTail],
+      )
+      runtime.flushAckTail = (runtime.flushAckTail + 1) % ACKW
+      runtime.flushAckCount--
     }
 
-    // Startup process: single-threaded replay of a WAL stream that sixteen
-    // backends produced in parallel. Sequential replay is fast — until the
-    // primary out-produces one CPU, and then the gap only ever grows.
-    const applyRate = K.replicaSlowApply
+    const applyRate = slowApply
       ? Math.max(24 * 1024, wal.bytesPerSec * 0.35)
-      : Math.max(24 * 1024 * 1024, wal.bytesPerSec * 4)
-    if (rep.replayLsn < rep.flushLsn) {
-      rep.replayLsn = Math.floor(Math.min(rep.flushLsn, rep.replayLsn + applyRate * dt))
-      rep.applyActivity = damp(rep.applyActivity, 1, 6, dt)
-      flow('replica.buffer', 1, 'stream', 1.0)
-      if (++sRepIo >= 6) { sRepIo = 0; flow('replica.io', 1, 'page_write', 1.0) }
+      : Math.max(24 * MIB, wal.bytesPerSec * 4)
+    const beforeApply = standby.appliedLsn
+    if (standby.appliedLsn < standby.flushedLsn) {
+      standby.appliedLsn = Math.floor(
+        Math.min(standby.flushedLsn, standby.appliedLsn + applyRate * dt),
+      )
+      standby.applyActivity = damp(standby.applyActivity, 1, 6, dt)
+      tickStandbyBuffers(index, beforeApply, standby.appliedLsn, dt)
+      flow(bufferRoutes[index], 1, 'stream', 1.0)
+      if (++sRepIo >= 6) {
+        sRepIo = 0
+        flow(ioRoutes[index], 1, 'page_write', 1.0)
+      }
     } else {
-      rep.applyActivity = damp(rep.applyActivity, 0.08, 3, dt)
+      standby.applyActivity = damp(standby.applyActivity, 0.08, 3, dt)
     }
 
-    // WalRcvForceReply reports replay progress immediately, but the report
-    // still crosses the network. The primary releases remote_apply waiters only
-    // after this watermark arrives, so the minimum price is one round trip.
-    if (rep.replayLsn > ackSentLsn && ackCount < ACKW) {
-      ackSentLsn = rep.replayLsn
-      ackLsn[ackHead] = rep.replayLsn
-      ackAt[ackHead] = state.t + delay + REPLICA_APPLY_ACK_DELAY
-      ackHead = (ackHead + 1) % ACKW
-      ackCount++
-      flow('net.ack', 1, 'ack', 1.0)
+    if (
+      standby.appliedLsn > runtime.applyAckSentLsn
+      && runtime.applyAckCount < ACKW
+    ) {
+      runtime.applyAckSentLsn = standby.appliedLsn
+      runtime.applyAckLsn[runtime.applyAckHead] = standby.appliedLsn
+      runtime.applyAckAt[runtime.applyAckHead] =
+        state.t + delay + REPLICA_APPLY_ACK_DELAY
+      runtime.applyAckHead = (runtime.applyAckHead + 1) % ACKW
+      runtime.applyAckCount++
+      flow(ackRoutes[index], 1, 'ack', 1.0)
     }
-    while (ackCount > 0 && ackAt[ackTail] <= state.t) {
-      ackedApplyLsn = Math.max(ackedApplyLsn, ackLsn[ackTail])
-      runtimeRep.ackedApplyLsn = ackedApplyLsn
-      ackTail = (ackTail + 1) % ACKW
-      ackCount--
+    while (
+      runtime.applyAckCount > 0
+      && runtime.applyAckAt[runtime.applyAckTail] <= state.t
+    ) {
+      standby.acknowledgedApplyLsn = Math.max(
+        standby.acknowledgedApplyLsn,
+        runtime.applyAckLsn[runtime.applyAckTail],
+      )
+      runtime.applyAckTail = (runtime.applyAckTail + 1) % ACKW
+      runtime.applyAckCount--
     }
 
-    rep.lagBytes = Math.max(0, wal.flushLsn - rep.replayLsn)
-    updateReplayLag()
-
-    // hot standby serving read-only queries
-    replicaReadT += dt
-    if (replicaReadT > 0.4) {
-      replicaReadT = 0
+    standby.lagBytes = Math.max(0, wal.flushLsn - standby.appliedLsn)
+    updateReplayLag(standby, runtime)
+    runtime.readT += dt
+    if (index === 0 && runtime.readT > 0.4) {
+      runtime.readT = 0
       flow('replica.read', 1, 'query', 1.0)
     }
+  }
 
-    // logical decoding reassembles committed transactions from the same WAL
+  function syncClusterProjection(): void {
+    primaryNodeWal.receivedLsn = wal.insertLsn
+    primaryNodeWal.writtenLsn = wal.writeLsn
+    primaryNodeWal.flushedLsn = wal.flushLsn
+    primaryNodeWal.appliedLsn = wal.insertLsn
+    primaryNodeWal.segmentCount = wal.segmentCount
+    primaryNodeWal.diskBytes = wal.segmentCount * WAL_SEG
+    primaryDataDirectory.bytes = dr.dataDirectoryBytes
+    primaryDataDirectory.appliedLsn = wal.insertLsn
+
+    for (let i = 0 as 0 | 1; i < 2; i = (i + 1) as 0 | 1) {
+      const standby = rep.standbys[i]
+      const node = state.cluster.nodes[i + 1]
+      node.online = standby.enabled
+      node.wal.receivedLsn = standby.receivedLsn
+      node.wal.writtenLsn = standby.writtenLsn
+      node.wal.flushedLsn = standby.flushedLsn
+      node.wal.appliedLsn = standby.appliedLsn
+      node.wal.segmentCount = Math.max(
+        N_WAL_SEG_SLOTS,
+        Math.ceil(Math.max(0, standby.receivedLsn - standby.appliedLsn) / WAL_SEG) + 3,
+      )
+      node.wal.diskBytes = node.wal.segmentCount * WAL_SEG
+      node.dataDirectory.bytes = dr.dataDirectoryBytes
+      node.dataDirectory.appliedLsn = standby.appliedLsn
+    }
+  }
+
+  function syncLegacyReplication(): void {
+    const first = rep.standbys[0]
+    rep.enabled = first.enabled
+    rep.connected = first.connected
+    rep.mode = first.mode
+    rep.networkLagMs = first.networkLagMs
+    rep.applyActivity = first.applyActivity
+    rep.inFlight = first.inFlight
+    if (first.enabled && first.connected && K.walLevel !== 'minimal') {
+      rep.sentLsn = first.sentLsn
+      rep.writeLsn = first.writtenLsn
+      rep.flushLsn = first.flushedLsn
+      rep.replayLsn = first.appliedLsn
+      rep.lagBytes = first.lagBytes
+      rep.lagSec = first.lagSec
+    } else {
+      /* Existing single-standby surfaces historically use zero/primary when
+       * absent. Canonical frozen positions remain in standbys[0] and its slot. */
+      rep.sentLsn = rep.writeLsn = rep.flushLsn = rep.replayLsn = wal.flushLsn
+      rep.lagBytes = 0
+      rep.lagSec = 0
+    }
+  }
+
+  function tickReplication(dt: number): void {
+    tickPhysicalStandby(0, dt)
+    tickPhysicalStandby(1, dt)
+    syncLegacyReplication()
+
+    rep.logicalEnabled =
+      K.walLevel === 'logical'
+      && rep.standbys[0].enabled
+      && rep.standbys[0].connected
     if (rep.logicalEnabled) {
       rep.logicalSlotLsn = Math.floor(
-        Math.min(wal.flushLsn, rep.logicalSlotLsn + Math.max(2 * 1024 * 1024, wal.bytesPerSec * 1.4) * dt),
+        Math.min(
+          wal.flushLsn,
+          rep.logicalSlotLsn + Math.max(2 * MIB, wal.bytesPerSec * 1.4) * dt,
+        ),
       )
       const changes = stats.tps * K.writeRatio * 1.4
       rep.logicalChangesPerSec = damp(rep.logicalChangesPerSec, changes, 2, dt)
@@ -3057,6 +3381,8 @@ export function createSim(bus: Bus): SimApi {
       rep.logicalSlotLsn = wal.insertLsn
       rep.logicalChangesPerSec = damp(rep.logicalChangesPerSec, 0, 3, dt)
     }
+    syncHorizonPin()
+    syncClusterProjection()
   }
 
   /* ======================================================================
@@ -3912,7 +4238,9 @@ export function createSim(bus: Bus): SimApi {
             done = b.stateT >= 0.012
           } else if ((sc === 'on' || sc === 'remote_apply') && rep.enabled) {
             const acknowledged =
-              sc === 'on' ? ackedFlushLsn : ackedApplyLsn
+              sc === 'on'
+                ? rep.standbys[0].acknowledgedFlushLsn
+                : rep.standbys[0].acknowledgedApplyLsn
             done = wal.flushLsn >= x.commitLsn && acknowledged >= x.commitLsn
             if (!rep.connected && state.t - degradeWarnT > 20) {
               degradeWarnT = state.t
@@ -4099,7 +4427,7 @@ export function createSim(bus: Bus): SimApi {
       pushHistory(h.hit, stats.cacheHitPct)
       pushHistory(h.wal, wal.bytesPerSec)
       pushHistory(h.dirty, buf.dirtyCount)
-      pushHistory(h.lag, rep.lagSec)
+      pushHistory(h.lag, Math.max(rep.standbys[0].lagSec, rep.standbys[1].lagSec))
     }
 
     statT += dt
@@ -4263,6 +4591,7 @@ export function createSim(bus: Bus): SimApi {
         if (!K.lockContention) releaseLock()
         break
       case 'replicaEnabled':
+      case 'standbyBEnabled':
       case 'walLevel':
         rep.logicalEnabled =
           K.walLevel === 'logical'
@@ -4452,6 +4781,26 @@ export function createSim(bus: Bus): SimApi {
     buf.dirtyCount = asSampleFrames(0)
     buf.pinnedCount = asSampleFrames(0)
     buf.usedCount = asSampleFrames(0)
+    for (let ni = 1; ni < state.cluster.nodes.length; ni++) {
+      const standbyPool = state.cluster.nodes[ni].buffers
+      standbyPool.sampleFrames = sampledBufferFrames(K.sharedBuffers)
+      standbyPool.valid.fill(0)
+      standbyPool.dirty.fill(0)
+      standbyPool.pinned.fill(0)
+      standbyPool.usage.fill(0)
+      standbyPool.rel.fill(255)
+      standbyPool.blk.fill(0)
+      standbyPool.lastTouch.fill(-99)
+      standbyPool.clockHand = 0
+      standbyPool.hits = 0
+      standbyPool.misses = 0
+      standbyPool.evictions = asSampleFrames(0)
+      standbyPool.dirtyEvictions = 0
+      standbyPool.hitRatio = 0.96
+      standbyPool.dirtyCount = asSampleFrames(0)
+      standbyPool.pinnedCount = asSampleFrames(0)
+      standbyPool.usedCount = asSampleFrames(0)
+    }
 
     const lsn0 = 0x1a000000
     wal.insertLsn = wal.writeLsn = wal.flushLsn = lsn0
@@ -4610,31 +4959,51 @@ export function createSim(bus: Bus): SimApi {
     dr.backup.failureReason = ''
     resetRestore(0)
 
-    rep.enabled = K.replicaEnabled
-    rep.connected = K.replicaEnabled
-    rep.mode = 'async'
-    rep.sentLsn = rep.writeLsn = rep.flushLsn = rep.replayLsn = lsn0
-    rep.lagBytes = 0
-    rep.lagSec = 0
-    rep.networkLagMs = K.replicaNetworkLag
-    rep.applyActivity = 0
+    for (let i = 0 as 0 | 1; i < 2; i = (i + 1) as 0 | 1) {
+      const standby = rep.standbys[i]
+      const enabled = i === 0 ? K.replicaEnabled : K.standbyBEnabled
+      standby.enabled = enabled
+      standby.connected = enabled
+      standby.mode = 'async'
+      standby.sentLsn = standby.receivedLsn = standby.writtenLsn = lsn0
+      standby.flushedLsn = standby.appliedLsn = lsn0
+      standby.lagBytes = 0
+      standby.lagSec = 0
+      standby.networkLagMs = i === 0 ? K.replicaNetworkLag : K.standbyBNetworkLag
+      standby.applyActivity = 0
+      standby.inFlight = 0
+      standby.walSender = enabled ? 'streaming' : 'stopped'
+      standby.walReceiver = enabled ? 'streaming' : 'stopped'
+      standby.startupProcess = enabled ? 'streaming' : 'stopped'
+      standby.acknowledgedFlushLsn = lsn0
+      standby.acknowledgedApplyLsn = lsn0
+      const slot = rep.physicalSlots[i]
+      slot.active = enabled
+      slot.restartLsn = lsn0
+      slot.retainedBytes = 0
+      resetPhysicalRuntime(physicalRuntime[i], lsn0)
+    }
+    syncLegacyReplication()
     rep.logicalEnabled = K.walLevel === 'logical' && rep.enabled && rep.connected
     rep.logicalSlotLsn = lsn0
     rep.logicalChangesPerSec = 0
-    rep.inFlight = 0
-    wireHead = wireTail = wireCount = 0
-    ackHead = ackTail = ackCount = 0
-    ackSentLsn = ackedApplyLsn = lsn0
-    flushAckHead = flushAckTail = flushAckCount = 0
-    flushAckSentLsn = ackedFlushLsn = lsn0
-    runtimeRep.ackedFlushLsn = ackedFlushLsn
-    runtimeRep.ackedApplyLsn = ackedApplyLsn
     lagSampleHead = 0
     lagSampleCount = 1
     lagSampleLsn[0] = lsn0
     lagSampleAt[0] = state.t
-    previousLagBytes = 0
-    previousLagSec = 0
+    for (let i = 0; i < state.cluster.nodes.length; i++) {
+      const node = state.cluster.nodes[i]
+      node.online = i === 0 || rep.standbys[i - 1].enabled
+      node.leaderOpinion = 'primary'
+      node.wal.receivedLsn = lsn0
+      node.wal.writtenLsn = lsn0
+      node.wal.flushedLsn = lsn0
+      node.wal.appliedLsn = lsn0
+      node.wal.segmentCount = N_WAL_SEG_SLOTS
+      node.wal.diskBytes = N_WAL_SEG_SLOTS * WAL_SEG
+      node.dataDirectory.bytes = dr.dataDirectoryBytes
+      node.dataDirectory.appliedLsn = lsn0
+    }
 
     stats.tps = 0
     stats.commits = 0
@@ -4704,6 +5073,15 @@ export function createSim(bus: Bus): SimApi {
     bus.emit('sim:reset', {})
   }
 
+  function setLeaderOpinion(nodeId: ClusterNodeId, leader: ClusterNodeId | null): void {
+    for (let i = 0; i < state.cluster.nodes.length; i++) {
+      const node = state.cluster.nodes[i]
+      if (node.id !== nodeId) continue
+      node.leaderOpinion = leader
+      return
+    }
+  }
+
   /* ---- bus plumbing: tolerate a UI that drives us through events -------- */
 
   bus.on('knob', (p) => {
@@ -4732,6 +5110,7 @@ export function createSim(bus: Bus): SimApi {
     endTrace,
     startBaseBackup,
     startPointInTimeRestore,
+    setLeaderOpinion,
     reset,
   }
 }

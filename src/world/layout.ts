@@ -189,6 +189,10 @@ export const ANCHOR = {
   standbyBDeck: [-112, 3, 288],
   /** Node 3's walreceiver, where its own wire makes landfall. */
   standbyBRecv: [-112, 0, 216],
+  /** Node 3's own pg_wal, between its walreceiver and startup process. */
+  standbyBWal: [-126, 0, 240],
+  /** Node 3's own data directory, below its buffer-pool deck. */
+  standbyBStorage: [-112, -34, 310],
 
   // the query lab floats above the backend row
   planner: [0, 66, -130],
@@ -864,14 +868,25 @@ route('net.ackB', [
   [ANCHOR.walSender[0] - 11, 7.0, ANCHOR.walSender[2] + 8],
 ], { color: COLOR.ok, speed: 130, size: 0.95 })
 
-/* Node 3 replays like any standby — just fifteen minutes later. */
+/* Node 3 has the same received → flushed → applied pipeline as standby_a. */
 route('replicaB.apply', [
   [ANCHOR.standbyBRecv[0], 8, ANCHOR.standbyBRecv[2]],
+  [ANCHOR.standbyBWal[0], 8, ANCHOR.standbyBWal[2]],
   [ANCHOR.standbyB[0], 9, ANCHOR.standbyB[2] - 14],
+  [ANCHOR.standbyB[0], 8, ANCHOR.standbyB[2]],
+], { color: COLOR.replication, speed: 76, size: 1.1 })
+
+route('replicaB.buffer', [
   [ANCHOR.standbyB[0], 8, ANCHOR.standbyB[2]],
   [ANCHOR.standbyBDeck[0], 6, ANCHOR.standbyBDeck[2] - 8],
   [ANCHOR.standbyBDeck[0], 5, ANCHOR.standbyBDeck[2]],
 ], { color: COLOR.replication, speed: 76, size: 1.1 })
+
+route('replicaB.io', [
+  [ANCHOR.standbyBDeck[0], 4, ANCHOR.standbyBDeck[2] + 8],
+  [ANCHOR.standbyBStorage[0], -18, ANCHOR.standbyBStorage[2] - 4],
+  [ANCHOR.standbyBStorage[0], -32, ANCHOR.standbyBStorage[2]],
+], { color: COLOR.storage, speed: 70, size: 1.0 })
 
 /* Lease renewals. Patroni's agents talk to the DCS and to nothing else — so
  * these roads deliberately share no metal with the replication wire. */
@@ -954,7 +969,7 @@ export const DISTRICT_BOUNDS: Record<string, Bounds> = {
   wal: { x: [108, 268], z: [-92, 120] },
   storage: { x: [-156, 156], z: [-116, 116] },
   maintenance: { x: [-256, -108], z: [-70, 110] },
-  replication: { x: [40, 280], z: [150, 350] },
+  replication: { x: [-150, 280], z: [150, 350] },
   planner: { x: [-70, 70], z: [-170, -90] },
   world: { x: [-400, 400], z: [-400, 400] },
 } as const satisfies Record<string, { x: readonly [number, number] | number[]; z: readonly [number, number] | number[] }>

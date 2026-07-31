@@ -7,7 +7,8 @@ convincingly.
 
 Original scope: the 23 fields of `Knobs` in `src/core/types.ts:75`. The
 disaster-recovery addendum below audits the three controls added by roadmap
-item 1, bringing the current contract to 26 fields. Method: read every
+item 1, and the three-node addendum audits the three controls added by roadmap
+item 2, bringing the current contract to 29 fields. Method: read every
 consumer, then drive the model directly — `createSim()` with a stub bus,
 `setKnob()`, `update(1/30)`, seeded RNG, 300–400 s of warm-up before every
 reading, and an explicit down-sweep afterwards to test recovery. Every number
@@ -896,6 +897,32 @@ further back toward the backup needs less WAL and is faster. Waiting longer
 after a backup while targeting the newest archived point does the opposite:
 the measured selected-backup age rose from 19.0 s to 57.6 s, replay bytes from
 41.0 MiB to 88.9 MiB, and estimated recovery from 14.96 s to 16.95 s.
+
+---
+
+## Three-node replication control addendum — roadmap item 2
+
+Measured with the same seeded direct-model method. `standby_a` retains the
+original `replica*` controls for compatibility; these three controls operate
+only on `standby_b`. Each sweep held `standby_a` connected and verified that its
+positions did not follow `standby_b`'s failure. All three recover symmetrically:
+no deletion or other irreversible operation is hidden behind a toggle.
+
+| # | Knob | Real setting | Verdict | Measured response and recovery |
+|---|---|---|---|---|
+| 27 | `standbyBEnabled` | standby_b streaming connection, not a GUC | **CORRECT** | Off froze standby_b’s durable position at `0/1BACBBE0`, left standby_a connected, made `standby_b_slot.active = false`, and retained 35.96 MiB on the primary after 30 s. Re-enabling and reducing load to 1 tps advanced the slot and recovered to 84.5 KiB retained / 84.4 KiB replay gap after 60 s. The slot surviving disconnection is the intentional asymmetry between connection state and retention state. |
+| 28 | `standbyBNetworkLag` | one-way delay to standby_b, not a GUC | **CORRECT** | At 0 / 100 / 400 ms one way, replay lag measured 0.020 / 0.128 / 0.438 s, the byte gap 64.0 KiB / 385 KiB / 1.75 MiB, and packets in flight 0 / 3 / 18. Returning 400 → 55 ms recovered to 0.073 s, 326 KiB, and 3 packets after 45 s. The 6× packet-animation stretch is converted back out of reported time. |
+| 29 | `standbyBSlowApply` | standby_b replay capacity, not a GUC | **CORRECT** | At 1,200 offered tps / 80% writes, standby_b’s gap moved 542 KiB → 30.47 MiB / 5.20 s over 45 s while received and flushed stayed current. Turning slow replay off recovered to 221 KiB / 0.081 s after 45 s. standby_a remained on its independent healthy replay cursor. |
+
+The physical-slot failure was also driven to the scaled disk boundary. With
+`standby_a` disconnected, 5,000 offered tps and 100% writes, its frozen slot
+retained 448.33 MiB and primary `pg_wal` reached the model's 512 MiB safety
+limit after 106.8 s. Writes then stopped; 66,209 represented writes were
+rejected over the next 5 s while reads and recovery work remained available.
+Reconnecting the standby and dropping load to 1 tps reduced retention to
+115.9 KiB, primary `pg_wal` to 224 MiB, and reopened writes after 90 s.
+Production capacity and time-to-fill depend on WAL rate and filesystem size;
+real PostgreSQL PANICs when the filesystem fills.
 
 ---
 

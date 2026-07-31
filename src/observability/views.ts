@@ -119,7 +119,10 @@ interface ActRow {
  * post into a monitoring query that then silently matches nothing.
  */
 function actOf(b: BackendSim, s: SimState): { state: string; wet: string; we: string; tone: Tone } {
-  const syncRep = s.replication.mode === 'sync' && s.replication.enabled
+  const syncRep =
+    s.replication.mode === 'sync'
+    && s.replication.enabled
+    && (s.knobs.synchronousCommit === 'on' || s.knobs.synchronousCommit === 'remote_apply')
   switch (b.state) {
     case 'idle':
       return { state: 'idle', wet: 'Client', we: 'ClientRead', tone: 'dim' }
@@ -248,9 +251,11 @@ function activityRows(s: SimState, c: Collector, opts: { aux: boolean }): ActRow
       tone: 'accent',
     })
   }
-  if (s.replication.enabled && s.replication.connected) {
+  for (let i = 0; i < s.replication.standbys.length; i++) {
+    const standby = s.replication.standbys[i]
+    if (!standby.enabled || !standby.connected) continue
     out.push({
-      pid: PID.walsender,
+      pid: PID.walsender + i,
       backendType: 'walsender',
       state: 'active',
       wet: 'Activity',
@@ -258,7 +263,7 @@ function activityRows(s: SimState, c: Collector, opts: { aux: boolean }): ActRow
       xactAge: -1,
       xid: '',
       xmin: '',
-      query: `START_REPLICATION ${fmtLsn(s.replication.sentLsn)} TIMELINE 1`,
+      query: `START_REPLICATION SLOT "${s.replication.physicalSlots[i].name}" PHYSICAL ${fmtLsn(standby.sentLsn)} TIMELINE 1`,
       tone: 'dim',
     })
   }
@@ -743,8 +748,8 @@ function bar(v: number, max: number, width = 22): string {
  * -------------------------------------------------------------------------*/
 
 const replication: ProjectionFn = (s) => {
-  const r = s.replication
-  if (!r.enabled || !r.connected) {
+  const standbys = s.replication.standbys
+  if (!standbys.some((standby) => standby.enabled && standby.connected)) {
     return {
       cols: [{ key: 'x', label: 'pg_stat_replication' }],
       rows: [],
@@ -758,6 +763,34 @@ const replication: ProjectionFn = (s) => {
     const g = gap(l)
     return { v: fmtLsn(l), tone: (g > warnAt * 4 ? 'crit' : g > warnAt ? 'warn' : 'ok') as Tone }
   }
+  const rows: Row[] = []
+  for (const standby of standbys) {
+    if (!standby.enabled || !standby.connected) continue
+    rows.push({
+      key: standby.nodeId,
+      tone: standby.lagSec > 8 ? 'crit' : standby.lagSec > 2 ? 'warn' : '',
+      cells: {
+        application_name: standby.applicationName,
+        state: { v: standby.walSender, tone: standby.walSender === 'streaming' ? 'ok' : 'warn' },
+        sent_lsn: cell(standby.sentLsn, 256 * 1024),
+        write_lsn: cell(standby.writtenLsn, 256 * 1024),
+        flush_lsn: cell(standby.flushedLsn, 512 * 1024),
+        replay_lsn: cell(standby.appliedLsn, 512 * 1024),
+        behind: {
+          v: fmtBytes(standby.lagBytes),
+          tone: standby.lagBytes > 4e6 ? 'crit' : standby.lagBytes > 1e6 ? 'warn' : 'ok',
+        },
+        replay_lag: {
+          v: `${standby.lagSec.toFixed(2)} s`,
+          tone: standby.lagSec > 8 ? 'crit' : standby.lagSec > 2 ? 'warn' : 'ok',
+        },
+        sync_state: {
+          v: standby.mode === 'sync' ? 'sync' : 'async',
+          tone: standby.mode === 'sync' ? 'accent' : 'dim',
+        },
+      },
+    })
+  }
   return {
     cols: [
       { key: 'application_name', label: 'application_name' },
@@ -770,25 +803,9 @@ const replication: ProjectionFn = (s) => {
       { key: 'replay_lag', label: 'replay_lag', num: true },
       { key: 'sync_state', label: 'sync_state' },
     ],
-    rows: [
-      {
-        key: 'standby1',
-        tone: r.lagSec > 8 ? 'crit' : r.lagSec > 2 ? 'warn' : '',
-        cells: {
-          application_name: 'standby1',
-          state: { v: 'streaming', tone: 'ok' },
-          sent_lsn: cell(r.sentLsn, 256 * 1024),
-          write_lsn: cell(r.writeLsn, 256 * 1024),
-          flush_lsn: cell(r.flushLsn, 512 * 1024),
-          replay_lsn: cell(r.replayLsn, 512 * 1024),
-          behind: { v: fmtBytes(r.lagBytes), tone: r.lagBytes > 4e6 ? 'crit' : r.lagBytes > 1e6 ? 'warn' : 'ok' },
-          replay_lag: { v: `${r.lagSec.toFixed(2)} s`, tone: r.lagSec > 8 ? 'crit' : r.lagSec > 2 ? 'warn' : 'ok' },
-          sync_state: { v: r.mode === 'sync' ? 'sync' : 'async', tone: r.mode === 'sync' ? 'accent' : 'dim' },
-        },
-      },
-    ],
+    rows,
     caption:
-      'Read this left to right. sent → write → flush → replay is a pipeline, and the first place the numbers stop tracking the primary is the component that is behind. "primary − replay" is pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn); it is what your read replica\'s users actually experience.',
+      'Each row is a separate walsender and a separate standby opinion. Read sent → write → flush → replay left to right: write means walreceiver has received and written the bytes, flush means its own pg_wal is durable, and replay means the startup process has applied them. "primary − replay" is what that standby’s readers experience.',
   }
 }
 
@@ -963,39 +980,60 @@ const settings: ProjectionFn = (s) => {
 }
 
 const slots: ProjectionFn = (s) => {
-  if (!s.replication.logicalEnabled) {
+  if (s.knobs.walLevel === 'minimal') {
     return {
       cols: [{ key: 'x', label: 'pg_replication_slots' }],
       rows: [],
-      empty:
-        'No slots. Set wal_level = logical to create one — and then remember that a slot nobody consumes retains WAL forever, which is the most reliable way to fill a production disk.',
+      empty: 'No slots: wal_level = minimal cannot support physical or logical replication.',
     }
   }
-  const behind = s.wal.insertLsn - s.replication.logicalSlotLsn
+  const rows: Row[] = []
+  for (const slot of s.replication.physicalSlots) {
+    const behind = slot.retainedBytes
+    rows.push({
+      key: slot.name,
+      cells: {
+        slot_name: slot.name,
+        slot_type: 'physical',
+        active: { v: slot.active ? 't' : 'f', tone: slot.active ? 'ok' : 'crit' },
+        restart_lsn: { v: fmtLsn(slot.restartLsn), tone: slot.active ? 'accent' : 'warn' },
+        confirmed_flush_lsn: NULLC,
+        retained: {
+          v: fmtBytes(behind),
+          tone: behind > 256 * 1024 * 1024 ? 'crit' : behind > 16 * 1024 * 1024 ? 'warn' : 'dim',
+        },
+        wal_status: { v: 'reserved', tone: slot.active ? 'ok' : 'warn' },
+      },
+    })
+  }
+  if (s.replication.logicalEnabled) {
+    const behind = s.wal.insertLsn - s.replication.logicalSlotLsn
+    rows.push({
+      key: 'sub',
+      cells: {
+        slot_name: 'pgsimcity_sub',
+        slot_type: 'logical',
+        active: { v: 't', tone: 'ok' },
+        restart_lsn: NULLC,
+        confirmed_flush_lsn: { v: fmtLsn(s.replication.logicalSlotLsn), tone: 'accent' },
+        retained: { v: fmtBytes(Math.max(0, behind)), tone: behind > 4e6 ? 'warn' : 'dim' },
+        wal_status: { v: 'reserved', tone: 'ok' },
+      },
+    })
+  }
   return {
     cols: [
       { key: 'slot_name', label: 'slot_name' },
       { key: 'slot_type', label: 'slot_type' },
       { key: 'active', label: 'active' },
+      { key: 'restart_lsn', label: 'restart_lsn' },
       { key: 'confirmed_flush_lsn', label: 'confirmed_flush_lsn' },
       { key: 'retained', label: 'WAL retained', num: true },
       { key: 'wal_status', label: 'wal_status' },
     ],
-    rows: [
-      {
-        key: 'sub',
-        cells: {
-          slot_name: 'pgsimcity_sub',
-          slot_type: 'logical',
-          active: { v: 't', tone: 'ok' },
-          confirmed_flush_lsn: { v: fmtLsn(s.replication.logicalSlotLsn), tone: 'accent' },
-          retained: { v: fmtBytes(Math.max(0, behind)), tone: behind > 4e6 ? 'warn' : 'dim' },
-          wal_status: { v: 'reserved', tone: 'ok' },
-        },
-      },
-    ],
+    rows,
     caption:
-      'WAL retained is not a column — it is pg_current_wal_lsn() minus confirmed_flush_lsn, which is what the slot is actually costing you. wal_status goes reserved → extended → unreserved → lost as a slot falls behind max_slot_wal_keep_size. The model always keeps its subscriber fed, so you will not see it decay here — that is the one failure this model will not show you.',
+      'WAL retained is derived: primary insert LSN minus restart_lsn for each physical slot, or confirmed_flush_lsn for a logical slot. An inactive physical slot stays here and keeps restart_lsn fixed; its retained bytes can fill the primary WAL volume. The model does not configure max_slot_wal_keep_size, so physical slots remain reserved rather than being invalidated.',
   }
 }
 
