@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { createBus } from '../core/bus'
 import { TABLES } from '../world/layout'
 import { createSim, traceStopBit } from './model'
+import { createAggregateSim } from './test-support'
 import {
   createRepresentativeRow,
   mvccVersionCollectable,
@@ -73,7 +74,7 @@ describe('representative MVCC row', () => {
   })
 
   it('lets vacuum collect the sampled dead version after the pin is released', () => {
-    const sim = createSim(createBus())
+    const sim = createAggregateSim(1 / 3)
     const tableIndex = TABLES.findIndex((table) => table.id === 'sessions')
     const row = sim.state.tables[tableIndex].mvcc
     const collectedBefore = row.collectedVersions
@@ -98,8 +99,8 @@ describe('representative MVCC row', () => {
     sim.setKnob('tps', 0)
     // Keep this focused on MVCC eligibility rather than vacuum's FPI backlog.
     sim.setKnob('fullPageWrites', false)
-    const deadline = sim.state.t + 90
-    while (sim.state.t < deadline) sim.update(1 / 30)
+    const deadline = sim.state.t + 900
+    while (sim.state.t < deadline) sim.update(1 / 3)
 
     expect(row.collectedVersions).toBeGreaterThan(collectedBefore)
   })

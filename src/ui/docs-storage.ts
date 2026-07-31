@@ -1576,7 +1576,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Where this model cheats',
-        body: 'The naptime here is 12 seconds, not 60, and this city has exactly one database — otherwise the yard would sit empty for the length of a visit. The threshold formula, the shared cost budget and the phase order are the real ones; only the clock is compressed.',
+        body: 'The naptime here is 12 seconds, not 60, and this city has exactly one database — otherwise the yard would sit empty for the length of a visit. The threshold formula and phase order follow PostgreSQL. The city does not implement cost points, delay intervals, or the shared worker budget; it approximates their effect by pacing each worker against an equal share of one quarter of the modeled device throughput.',
       },
     ],
     metrics: [

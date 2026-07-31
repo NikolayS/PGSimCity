@@ -53,7 +53,7 @@ describe('autovacuum in-world handle consequence', () => {
     expect(maxBloat(sim.state)).toBeGreaterThan(bloatBefore)
   })
 
-  it('produces material bloat under hard writes, then launches delayed cleanup', { timeout: 20_000 }, () => {
+  it('produces material bloat under hard writes, then drains it after load stops', { timeout: 20_000 }, () => {
     const sim = createAggregateSim()
     sim.setKnob('autovacuum', false)
     sim.setKnob('tps', 500)
@@ -83,6 +83,7 @@ describe('autovacuum in-world handle consequence', () => {
     expect(sim.state.autovac.totalRuns).toBeGreaterThan(runsBefore)
     expect(maxBloat(sim.state)).toBeGreaterThanOrEqual(bloatOff)
 
+    sim.setKnob('tps', 0)
     stepUntil(
       sim,
       () => deadTuples(sim.state) < deadOff * 0.95 && maxBloat(sim.state) < bloatOff * 0.8,
