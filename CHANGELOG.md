@@ -9,6 +9,39 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.27.0] — 2026-07-31
+
+### Swimming that feels like swimming
+
+The swim volume, the surface and the splash all existed, and it still felt like
+walking in a different pose. The roadmap named the four missing parts; these are
+they.
+
+**Drag** gives momentum, so speed builds and decays instead of switching on and
+off. **Buoyancy** surfaces you passively rather than holding you wherever the
+controller left you.
+
+**Muffling** was simply absent — the audio engine had no notion of being
+underwater at all. The low-pass now moves from 5,600 Hz to 620 Hz and ducks
+output to 48%, which is the strongest submersion cue available and it cost
+almost nothing. Muted audio stays silent.
+
+**Something moving past you**: 192 softly textured motes in an 18 m
+camera-following field.
+
+`prefers-reduced-motion` freezes mote drift, surface motion and ripple expansion,
+and damps buoyancy so swimming still works without oscillation. No camera bob was
+added — buoyant bobbing in a first-person view makes people ill.
+
+The buffer tiles beneath keep their colours and their readability: depth testing
+and normal blending, no tile material touched. This is the one item on the
+roadmap with no teaching content, so delight was the bar — but delight does not
+get to degrade the thing that teaches.
+
+Chunk +1.94 kB. One submerged-only draw call.
+
+---
+
 ## [0.26.0] — 2026-07-31
 
 ### Three situations with a correct answer

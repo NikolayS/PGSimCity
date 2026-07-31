@@ -101,7 +101,7 @@ sequential scan differ in the world because the planner chose differently.
 It also gives first person a destination. Today you can explore the city and
 there is nothing in it to do.
 
-## 5. Swimming that feels like swimming
+## 5. Swimming that feels like swimming — shipped
 
 The swim volume, the surface and the splash all exist; it still does not feel
 like water. Sound is not the fix on its own — the missing parts are drag,
