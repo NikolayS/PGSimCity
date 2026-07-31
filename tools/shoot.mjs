@@ -3,6 +3,8 @@
 // Named *-keep so the scratchpad sweep does not delete it.
 import { spawn } from 'node:child_process'
 import { writeFileSync, mkdirSync, rmdirSync, readdirSync, statSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { acquireCdpProfile } from './cdp-profile.mjs'
 import { createCdpRunCleanup, installProcessCleanup } from './cdp-run.mjs'
 
@@ -67,6 +69,7 @@ const LOG_URLS = (process.env.CDP_LOG_URLS || '').split(',').filter(Boolean)
 const ALLOW_ANALYTICS = process.env.CDP_ALLOW_ANALYTICS === '1'
 const REDUCED_MOTION = process.env.CDP_REDUCED_MOTION === '1'
 const MOBILE = process.env.CDP_MOBILE === '1'
+const SEQUENCE = process.env.CDP_SEQUENCE || ''
 const profile = acquireCdpProfile({
   explicitProfile: process.env.CDP_PROFILE,
   port: PORT,
@@ -189,6 +192,29 @@ if (PRE) {
     logs.push(`[PRE] ${result.result.value ?? result.result.description ?? result.result.type}`)
   } catch (e) { logs.push('[PRE-FAIL] ' + e.message) }
   await sleep(9000)
+}
+
+if (SEQUENCE) {
+  try {
+    const moduleUrl = pathToFileURL(resolve(SEQUENCE)).href
+    const sequence = await import(moduleUrl)
+    if (typeof sequence.runSequence !== 'function') {
+      throw new Error(`${SEQUENCE} does not export runSequence()`)
+    }
+    await sequence.runSequence({
+      send,
+      logs,
+      output: OUT,
+      width: W,
+      height: H,
+      url: URL_,
+    })
+    console.log('=== CONSOLE (' + logs.length + ') ===\n' + logs.slice(0, 40).join('\n'))
+  } finally {
+    await run.cleanup()
+    removeProcessCleanup()
+  }
+  process.exit(0)
 }
 
 writeFileSync(OUT, Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).data, 'base64'))
