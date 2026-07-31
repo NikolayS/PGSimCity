@@ -127,10 +127,12 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
     body.pg-demo-capture .hud-toast {
       display: none !important;
     }
+    body.pg-demo-cinematic #hud-top,
     body.pg-demo-cinematic #hud-left,
     body.pg-demo-cinematic #hud-right,
     body.pg-demo-cinematic #hud-bottom,
-    body.pg-demo-cinematic #compass {
+    body.pg-demo-cinematic #compass,
+    body.pg-demo-cinematic #labels-root {
       display: none !important;
     }
     #pg-demo-caption {
@@ -472,6 +474,13 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
     document.body.classList.add('pg-demo-cinematic')
   }
 
+  function startOrbitFocus(target, distance, dir) {
+    if (pg.controlCenter.inside) pg.controlCenter.leave()
+    if (pg.walk.enabled) pg.bus.emit('camera:mode', { mode: 'orbit' })
+    pg.rig.focusOn({ target, distance, dir }, { instant: true })
+    document.body.classList.add('pg-demo-cinematic')
+  }
+
   function visibleLabels() {
     return [...document.querySelectorAll('#labels-root .lbl')].filter(visible)
   }
@@ -543,9 +552,9 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
   report.environment.themes.push({ frame: 0, mode: 'day' })
   scene(0, 7)
   setCaption(
-    'PGSIMCITY · v0.21.0',
+    'PGSIMCITY · v0.23.0',
     'GOLDEN HOUR · RELEASE WALKTHROUGH',
-    'Low sun · long shadows · sky · fixed 1/30 s simulation steps',
+    'Scattering sky · raking sun · fixed 1/30 s simulation steps',
     'DETERMINISTIC',
   )
   pg.rig.flyPath(
@@ -767,39 +776,77 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
       document.querySelector('.control-center__run')?.click()
       traceStarted = true
     } else if (frame === F(117)) {
-      scene(117, 12)
+      scene(117, 6)
       pg.controlCenter.leave()
       pg.setThemeMode('day', { persist: false })
-      pg.gfx.setQuality('high')
+      pg.gfx.setQuality('reduced')
       report.environment.themes.push({ frame, mode: 'day' })
       captionRoot.style.display = ''
       setCaption(
-        '05 / ENVIRONMENT · DAY',
-        'MATERIAL GROUND • VISIBLE WEATHER',
-        'Procedural ground texture, cloud cover, and the day palette’s value hierarchy.',
-        'DAY',
+        '05 / ENVIRONMENT · INDIRECT LIGHT',
+        'UNDER THE BUFFER-POOL OVERHANG',
+        'Direct sun cannot reach here; green and cyan surfaces colour the filled shadow.',
+        'BOUNCE',
+        'left',
+        'top',
+      )
+      startOrbitFocus([0, -42, 0], 92, [0.8, 0.16, 1])
+    } else if (frame === F(123)) {
+      scene(123, 6)
+      pg.gfx.setQuality('medium')
+      setCaption(
+        '05 / ENVIRONMENT · LIGHT SHAFTS',
+        'MOVE PAST A PARTIAL OCCLUDER',
+        'Air contrast appears along the building edge as the low sun clears it.',
+        'REAL DEPTH',
+        'left',
+        'top',
       )
       startOrbitPath(
         [
-          [-330, 118, -310],
-          [-245, 78, -105],
-          [-105, 62, 115],
+          [115, 3, 100],
+          [102, 5, 105],
+          [90, 7, 110],
         ],
         [
-          [-20, 5, -120],
-          [-15, 7, -15],
-          [-35, 6, 85],
+          [-515, 148, -662],
+          [-518, 134, -656],
+          [-520, 120, -650],
         ],
-        12,
+        6,
       )
     } else if (frame === F(129)) {
-      scene(129, 18)
+      scene(129, 6)
+      setCaption(
+        '05 / ENVIRONMENT · WATER + SKY',
+        'THE SKYLINE MOVES IN THE BUFFER POOL',
+        'A blurred reflection carries the city; the warm horizon deepens toward a cool scattering sky.',
+        'DAY',
+        'left',
+        'top',
+      )
+      startOrbitPath(
+        [
+          [-9, 18, 74],
+          [0, 17.8, 74.5],
+          [9, 18, 74],
+        ],
+        [
+          [0, 8.8, 0],
+          [0, 8.8, 0],
+          [0, 8.8, 0],
+        ],
+        6,
+      )
+    } else if (frame === F(135)) {
+      scene(135, 12)
+      pg.gfx.setQuality('reduced')
       pg.setThemeMode('night', { persist: false })
       report.environment.themes.push({ frame, mode: 'night' })
       setCaption(
         '05 / ENVIRONMENT · NIGHT',
         'MATTE STRUCTURE • NEON MEANING',
-        'The same city after dark: semantic light, textured ground, clouds still present.',
+        'The same responsive surfaces after dark: semantic light remains the strongest signal.',
         'NIGHT',
       )
       startOrbitPath(
@@ -815,7 +862,7 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
           [30, 7, 115],
           [-5, 8, 80],
         ],
-        18,
+        12,
       )
     }
 
