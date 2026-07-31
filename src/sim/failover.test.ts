@@ -94,6 +94,34 @@ describe('Patroni switchover and failover', () => {
     expect(sim.state.stats.commits).toBeGreaterThan(commitsAfterDrain)
   })
 
+  it('models one Patroni agent per node over a three-member Raft DCS', () => {
+    const sim = createSim(createBus())
+    const { patroni } = sim.state.highAvailability
+
+    expect(patroni.agents.map((agent) => agent.nodeId)).toEqual([
+      'primary',
+      'standbyA',
+      'standbyB',
+    ])
+    expect(patroni.dcs.algorithm).toBe('Raft')
+    expect(patroni.dcs.majority).toBe(2)
+    expect(patroni.dcs.canCommit).toBe(true)
+    expect(patroni.dcs.members.map((member) => member.id)).toEqual([
+      'etcd1',
+      'etcd2',
+      'etcd3',
+    ])
+    expect(patroni.dcs.leaderKey).toMatchObject({
+      value: 'primary',
+      leaseValid: true,
+      ttlSec: 4,
+      compareAndSwapCount: 1,
+      lastOperation: 'renew',
+    })
+    expect(patroni.agents.every((agent) => agent.observedLeaderKey === 'primary'))
+      .toBe(true)
+  })
+
   it('waits for a planned switchover and loses no WAL or transactions', () => {
     const sim = createSim(createBus())
     warmLag(sim, 300)
@@ -207,35 +235,92 @@ describe('Patroni switchover and failover', () => {
     expect(sim.state.highAvailability.transition.lossTransactions).toBe(0)
   })
 
-  it('demotes a leader whose Patroni lease expires without promoting a rival', () => {
+  it('isolates one node while Raft consensus commits a standby acquisition', () => {
     const sim = createSim(createBus())
 
-    sim.setKnob('patroniDcsAvailable', false)
-    advanceBy(sim, sim.state.highAvailability.patroni.leaseTtlSec + 1)
+    sim.setKnob('haPartition', 'isolate_node')
+    advanceBy(sim, sim.state.highAvailability.patroni.dcs.leaderKey.ttlSec + 1)
+
+    const ha = sim.state.highAvailability
+    expect(ha.currentLeader).toBe('standbyA')
+    expect(ha.patroni.dcs.canCommit).toBe(true)
+    expect(ha.patroni.dcs.leaderMember).toBe('etcd2')
+    expect(ha.patroni.dcs.leaderKey.value).toBe('standbyA')
+    expect(ha.patroni.dcs.leaderKey.leaseValid).toBe(true)
+    expect(ha.patroni.dcs.leaderKey.compareAndSwapCount).toBe(2)
+    expect(ha.patroni.agents[0]).toMatchObject({
+      canReachConsensus: false,
+      observedLeaderKey: null,
+      lastDcsResult: 'unreachable',
+    })
+    expect(ha.patroni.agents[1].observedLeaderKey).toBe('standbyA')
+    expect(ha.patroni.agents[2].observedLeaderKey).toBe('standbyA')
+    expect(ha.patroni.demotions).toBe(1)
+    expect(ha.patroni.splitBrain).toBe(false)
+    expect(sim.state.cluster.nodes.filter((node) => node.role === 'primary')).toHaveLength(1)
+    expect(ha.acceptingWrites).toBe(true)
+  })
+
+  it('cannot commit through the primary-side DCS minority', () => {
+    const sim = createSim(createBus())
+    const initialCommit = sim.state.highAvailability.patroni.dcs.commitIndex
+
+    sim.setKnob('haPartition', 'isolate_dcs_majority')
+    advanceBy(sim, sim.state.highAvailability.patroni.dcs.leaderKey.ttlSec + 1)
+
+    const { patroni } = sim.state.highAvailability
+    expect(patroni.dcs.canCommit).toBe(true)
+    expect(patroni.dcs.leaderMember).toBe('etcd2')
+    expect(patroni.dcs.term).toBeGreaterThan(1)
+    expect(patroni.dcs.commitIndex).toBeGreaterThan(initialCommit)
+    expect(patroni.dcs.leaderKey.value).toBe('standbyA')
+    expect(patroni.agents[0].reachableDcsMembers).toEqual([true, false, false])
+    expect(patroni.agents[0]).toMatchObject({
+      canReachConsensus: false,
+      observedLeaderKey: null,
+      lastDcsResult: 'no_consensus',
+    })
+    expect(patroni.dcs.members[0].commitIndex).toBeLessThan(patroni.dcs.commitIndex)
+    expect(patroni.dcs.members[0].appliedLeaderKey).toBe('primary')
+    expect(patroni.splitBrain).toBe(false)
+  })
+
+  it('loses availability when no DCS side has a majority', () => {
+    const sim = createSim(createBus())
+    const initialCommit = sim.state.highAvailability.patroni.dcs.commitIndex
+
+    sim.setKnob('haPartition', 'split_dcs')
+    advanceBy(sim, sim.state.highAvailability.patroni.dcs.leaderKey.ttlSec + 1)
 
     const ha = sim.state.highAvailability
     expect(ha.currentLeader).toBeNull()
-    expect(ha.patroni.leaderLock).toBeNull()
-    expect(ha.patroni.demotions).toBe(1)
+    expect(ha.acceptingWrites).toBe(false)
+    expect(ha.patroni.dcs.canCommit).toBe(false)
+    expect(ha.patroni.dcs.leaderMember).toBeNull()
+    expect(ha.patroni.dcs.commitIndex).toBe(initialCommit)
+    expect(ha.patroni.dcs.leaderKey.value).toBe('primary')
+    expect(ha.patroni.dcs.leaderKey.leaseValid).toBe(false)
+    expect(ha.patroni.agents.every((agent) => agent.observedLeaderKey === null))
+      .toBe(true)
+    expect(ha.patroni.agents.every((agent) => !agent.canReachConsensus)).toBe(true)
     expect(ha.patroni.splitBrain).toBe(false)
     expect(sim.state.cluster.nodes.filter((node) => node.role === 'primary')).toHaveLength(0)
-    expect(ha.acceptingWrites).toBe(false)
   })
 
-  it('renews the same leader lease when DCS access returns before ttl', () => {
+  it('renews the same leader lease when consensus access returns before ttl', () => {
     const sim = createSim(createBus())
-    const ttl = sim.state.highAvailability.patroni.leaseTtlSec
+    const ttl = sim.state.highAvailability.patroni.dcs.leaderKey.ttlSec
 
-    sim.setKnob('patroniDcsAvailable', false)
+    sim.setKnob('haPartition', 'split_dcs')
     advanceBy(sim, 2)
-    expect(sim.state.highAvailability.patroni.leaseRemainingSec)
+    expect(sim.state.highAvailability.patroni.dcs.leaderKey.leaseRemainingSec)
       .toBeLessThan(ttl - 1.9)
     expect(sim.state.highAvailability.currentLeader).toBe('primary')
 
-    sim.setKnob('patroniDcsAvailable', true)
+    sim.setKnob('haPartition', 'healthy')
     advanceBy(sim, 1.1)
     expect(sim.state.highAvailability.currentLeader).toBe('primary')
-    expect(sim.state.highAvailability.patroni.leaseRemainingSec)
+    expect(sim.state.highAvailability.patroni.dcs.leaderKey.leaseRemainingSec)
       .toBeGreaterThan(ttl - 0.2)
     expect(sim.state.highAvailability.acceptingWrites).toBe(true)
   })

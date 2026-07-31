@@ -135,7 +135,8 @@ export const ANCHOR = {
    * makes them worth anything. The archive estate is east, downstream of the
    * archiver that already exists. The recovery ground is south-west, on its
    * own iron, a long haul road away — restoring is not a local operation.
-   * The HA quarter is due south, between the two standbys.
+   * HA coordination spans the three failure-domain platforms; it is not a
+   * fourth central machine between the standbys.
    * --------------------------------------------------------------------- */
 
   // the archive estate (east, outside the server): WAL-G's object storage
@@ -161,9 +162,9 @@ export const ANCHOR = {
   /** The startup process replaying, with a stop line painted across the belt. */
   recoveryReplay: [-372, 0, 208],
 
-  // the HA quarter (south): three nodes, one lock, one service address
+  // high availability: three failure domains, one Raft-committed leader key
   /**
-   * The rejoin bay. A node that has lost the leader lock cannot simply follow
+   * The rejoin bay. A node that has lost the leader key cannot simply follow
    * the winner: after an UNPLANNED failover its own pg_wal has diverged, so it
    * must be rewound (pg_rewind) or rebuilt (pg_basebackup) first. Two gates,
    * one siding, and the prerequisite list on a board.
@@ -178,13 +179,21 @@ export const ANCHOR = {
    * z = -284 .. -268 clear.
    */
   endpoint: [0, 0, -276],
-  /** The DCS. Holds the leader lock and the lease clock — and no user data. */
-  consensus: [0, 0, 250],
-  /** The three lease posts, one per node, on a triangle around the hall. */
-  leaseNode1: [0, 0, 224],
-  leaseNode2: [22, 0, 264],
-  leaseNode3: [-22, 0, 264],
-  /** Node 3: the second streaming standby. Mirrors the standby across x. */
+  /** Label anchor for the Raft links; consensus itself is not a central node. */
+  consensus: [0, 0, 150],
+  /** Raised platforms make the independent failure domains legible. */
+  haPrimarySite: [0, 0, -215],
+  haStandbyASite: [170, 0, 260],
+  haStandbyBSite: [-170, 0, 262],
+  /** One local Patroni process beside each PostgreSQL node. */
+  patroniNode1: [-50, 0, -200],
+  patroniNode2: [140, 0, 224],
+  patroniNode3: [-140, 0, 226],
+  /** One etcd member on each failure-domain platform. */
+  leaseNode1: [50, 0, -200],
+  leaseNode2: [200, 0, 224],
+  leaseNode3: [-200, 0, 226],
+  /** Node 3: the second streaming standby, on the western platform. */
   standbyB: [-112, 0, 262],
   standbyBDeck: [-112, 3, 288],
   /** Node 3's walreceiver, where its own wire makes landfall. */
@@ -888,25 +897,37 @@ route('replicaB.io', [
   [ANCHOR.standbyBStorage[0], -32, ANCHOR.standbyBStorage[2]],
 ], { color: COLOR.storage, speed: 70, size: 1.0 })
 
-/* Lease renewals. Patroni's agents talk to the DCS and to nothing else — so
- * these roads deliberately share no metal with the replication wire. */
+/* Each Patroni agent talks to its local etcd endpoint. Raft peer links are
+ * separate from physical replication: they carry coordination, never WAL. */
 route('ha.lease1', [
-  [0, 6, 128],
-  [0, 5, 176],
-  [ANCHOR.leaseNode1[0] - 4, 5, ANCHOR.leaseNode1[2] - 6],
+  [ANCHOR.patroniNode1[0], 6, ANCHOR.patroniNode1[2]],
+  [ANCHOR.leaseNode1[0], 6, ANCHOR.leaseNode1[2]],
 ], { color: COLOR.inkDim, speed: 120, size: 0.85, visible: true, roadOpacity: 0.1 })
 
 route('ha.lease2', [
-  [ANCHOR.standby[0] - 14, 6, ANCHOR.standby[2] + 6],
-  [64, 4, 262],
-  [ANCHOR.leaseNode2[0] + 3, 5, ANCHOR.leaseNode2[2]],
+  [ANCHOR.patroniNode2[0], 6, ANCHOR.patroniNode2[2]],
+  [ANCHOR.leaseNode2[0], 6, ANCHOR.leaseNode2[2]],
 ], { color: COLOR.inkDim, speed: 120, size: 0.85, visible: true, roadOpacity: 0.1 })
 
 route('ha.lease3', [
-  [ANCHOR.standbyB[0] + 14, 6, ANCHOR.standbyB[2] + 4],
-  [-60, 4, 266],
-  [ANCHOR.leaseNode3[0] - 3, 5, ANCHOR.leaseNode3[2]],
+  [ANCHOR.patroniNode3[0], 6, ANCHOR.patroniNode3[2]],
+  [ANCHOR.leaseNode3[0], 6, ANCHOR.leaseNode3[2]],
 ], { color: COLOR.inkDim, speed: 120, size: 0.85, visible: true, roadOpacity: 0.1 })
+
+route('ha.raft12', [
+  [ANCHOR.leaseNode1[0], 8, ANCHOR.leaseNode1[2]],
+  [ANCHOR.leaseNode2[0], 8, ANCHOR.leaseNode2[2]],
+], { color: COLOR.ok, speed: 150, size: 1.2, visible: true, roadOpacity: 0.16 })
+
+route('ha.raft13', [
+  [ANCHOR.leaseNode1[0], 8, ANCHOR.leaseNode1[2]],
+  [ANCHOR.leaseNode3[0], 8, ANCHOR.leaseNode3[2]],
+], { color: COLOR.ok, speed: 150, size: 1.2, visible: true, roadOpacity: 0.16 })
+
+route('ha.raft23', [
+  [ANCHOR.leaseNode2[0], 8, ANCHOR.leaseNode2[2]],
+  [ANCHOR.leaseNode3[0], 8, ANCHOR.leaseNode3[2]],
+], { color: COLOR.ok, speed: 150, size: 1.2, visible: true, roadOpacity: 0.16 })
 
 /* --- exports ------------------------------------------------------------- */
 
@@ -969,7 +990,8 @@ export const DISTRICT_BOUNDS: Record<string, Bounds> = {
   wal: { x: [108, 268], z: [-92, 120] },
   storage: { x: [-156, 156], z: [-116, 116] },
   maintenance: { x: [-256, -108], z: [-70, 110] },
-  replication: { x: [-150, 280], z: [150, 350] },
+  /* standby_a owns this district apron; standby_b has its own western site. */
+  replication: { x: [40, 280], z: [150, 350] },
   planner: { x: [-70, 70], z: [-170, -90] },
   world: { x: [-400, 400], z: [-400, 400] },
 } as const satisfies Record<string, { x: readonly [number, number] | number[]; z: readonly [number, number] | number[] }>

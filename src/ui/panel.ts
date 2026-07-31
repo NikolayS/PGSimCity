@@ -427,7 +427,9 @@ export function createInspector(ctx: UiContext): UiModule {
         button.disabled =
           active
           || ha.currentLeader !== 'primary'
-          || !s.knobs.patroniDcsAvailable
+          || !ha.patroni.dcs.canCommit
+          || !ha.patroni.agents[0].canReachConsensus
+          || !ha.patroni.agents[1].canReachConsensus
           || !s.replication.standbys[0].connected
         setText(
           button,
@@ -441,7 +443,7 @@ export function createInspector(ctx: UiContext): UiModule {
           hint,
           transition.kind === 'switchover' && transition.status === 'complete'
             ? `${transition.waitSec.toFixed(1)} s wait · zero bytes · zero transactions lost`
-            : 'Stops write admission, waits for standby_a to flush every byte, then transfers the Patroni leader lock.',
+            : 'Stops write admission, waits for standby_a to flush every byte, then compare-and-swaps the Patroni leader key.',
         )
         return
       }
@@ -451,12 +453,13 @@ export function createInspector(ctx: UiContext): UiModule {
         button.disabled =
           active
           || ha.currentLeader !== 'primary'
-          || !s.knobs.patroniDcsAvailable
+          || !ha.patroni.dcs.canCommit
+          || !ha.patroni.agents[1].canReachConsensus
           || !s.replication.standbys[0].connected
         setText(
           button,
           active && transition.kind === 'failover'
-            ? `Lease expires in ${ha.patroni.leaseRemainingSec.toFixed(1)} s`
+            ? `Lease TTL expires in ${ha.patroni.dcs.leaderKey.leaseRemainingSec.toFixed(1)} s`
             : transition.kind === 'failover' && transition.status === 'complete'
               ? 'Failover complete'
               : 'Unplanned failover → standby_a',

@@ -478,30 +478,49 @@ export const DOCS_STORAGE: ComponentDoc[] = [
 
   {
     id: 'ha.dcs',
-    title: 'Patroni consensus hall',
-    subtitle: 'DCS leader lock and renewable lease',
-    tldr: 'Patroni coordinates one writable leader through a DCS lock; replication itself does not elect anyone.',
+    title: 'Patroni agents and etcd consensus',
+    subtitle: 'Raft, the leader key, and its renewable lease',
+    tldr: 'Raft consensus gives every Patroni agent one linearizable answer about the leader key; a majority is how etcd commits that answer.',
     sections: [
       {
-        heading: 'The lock is the authority',
-        body: 'Patroni stores a leader lock in a distributed configuration store (DCS) such as etcd, Consul, ZooKeeper, or the Kubernetes API. The primary renews that lock on every HA cycle. If it cannot renew, its lease drains and Patroni demotes PostgreSQL; a candidate promotes only after atomically acquiring the free lock. The DCS carries coordination state, not table data or WAL.',
+        heading: 'Consensus makes the key authoritative',
+        body: 'One Patroni agent runs beside every PostgreSQL node. Each agent watches its local server and uses etcd’s Raft consensus for the leader key. Raft commits one ordered value in a term, so a candidate can acquire the key only through a successful compare-and-swap; the attached lease has a TTL and the holder renews it on each HA cycle. A majority is the mechanism Raft needs to commit, not a separate cluster-wide vote by Patroni. The DCS carries coordination state, not table data or WAL.',
       },
       {
         heading: 'Orderly versus unplanned',
-        body: 'A planned switchover first closes write admission, lets accepted work finish, flushes the old primary, and waits until the selected standby has every byte. Only then does the lock and service address move: downtime costs the measured wait, but data loss is zero. Unplanned failover starts with the primary gone. The candidate promotes at whatever durable LSN it already owns, so the byte gap and the committed transactions inside it are lost.',
+        body: 'A planned switchover first closes write admission, lets accepted work finish, flushes the old primary, and waits until the selected standby has every byte. Only then does a compare-and-swap move the leader key and service address: downtime costs the measured wait, but data loss is zero. Unplanned failover starts with the primary gone. After the old lease expires, the candidate promotes at whatever durable LSN it already owns, so the byte gap and the committed transactions inside it are lost.',
       },
       {
-        heading: 'Split-brain boundary and simplifications',
-        body: 'This model will not promote any standby while the DCS is unavailable, and a node whose lease expires is demoted before a rival can acquire the lock. It therefore records `splitBrain = false`; the Timeline switchyard explains the concurrent fork that this fence prevents. The city does not simulate a frozen Patroni process, watchdog devices or reboots, DCS quorum members, asymmetric partitions, synchronous-mode rules, candidate scoring, `maximum_lag_on_failover`, or Patroni’s DCS failsafe mode. Real `ttl`, `loop_wait`, retry and consensus timing depend on configuration; the city compresses them to seconds so the lease post can be watched.',
+        heading: 'A minority cannot commit',
+        body: 'A partitioned minority is not outvoted: it cannot commit at all. Its compare-and-swap and lease renewal cannot enter the Raft log, so an isolated candidate never observes itself holding the leader key; an isolated holder demotes PostgreSQL when its last observed lease reaches its TTL. If no side has a majority, every agent clears its expired view and the cluster has no writable leader. This preserves `splitBrain = false` by giving up availability; the Timeline switchyard explains the concurrent fork that this fence prevents.',
+      },
+      {
+        heading: 'Timing and election simplifications',
+        body: 'The city runs all three Patroni HA cycles on one compressed teaching clock and deterministically chooses standby_a when a partition requires promotion. It models three etcd members, terms, commit indexes, the leader-key compare-and-swap, lease TTL, and the three stated network cuts; it does not model packet retry schedules, randomized Raft election timeouts, candidate scoring, `maximum_lag_on_failover`, synchronous-mode rules, watchdog hardware, a frozen Patroni process, or Patroni’s DCS failsafe mode. Real `ttl`, `loop_wait`, retry and consensus timing depend on configuration; the city compresses them to seconds so the lease can be watched.',
       },
     ],
     metrics: [
-      { label: 'Leader lock', get: (s) => s.highAvailability.patroni.leaderLock ?? 'none' },
       {
-        label: 'Lease remaining',
-        get: (s) => s.highAvailability.patroni.leaderLock
-          ? fmtDuration(s.highAvailability.patroni.leaseRemainingSec)
+        label: 'Leader key',
+        get: (s) => s.highAvailability.patroni.dcs.leaderKey.leaseValid
+          ? s.highAvailability.patroni.dcs.leaderKey.value ?? 'none'
+          : 'no valid lease',
+      },
+      {
+        label: 'Lease TTL remaining',
+        get: (s) => s.highAvailability.patroni.dcs.leaderKey.leaseValid
+          ? fmtDuration(s.highAvailability.patroni.dcs.leaderKey.leaseRemainingSec)
           : 'expired',
+      },
+      {
+        label: 'Raft position',
+        get: (s) => `term ${s.highAvailability.patroni.dcs.term} · commit ${s.highAvailability.patroni.dcs.commitIndex}`,
+      },
+      {
+        label: 'Consensus',
+        get: (s) => s.highAvailability.patroni.dcs.canCommit
+          ? 'can commit · majority connected'
+          : 'cannot commit · no majority',
       },
       { label: 'Write admission', get: (s) => s.highAvailability.acceptingWrites ? 'open' : 'closed' },
       {
@@ -516,7 +535,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
           `${s.highAvailability.transition.lossBytes.toLocaleString()} bytes · ${fmtNum(s.highAvailability.transition.lossTransactions)} tx`,
       },
     ],
-    knobs: ['patroniDcsAvailable', 'replicaNetworkLag', 'tps', 'writeRatio'],
+    knobs: ['haPartition', 'replicaNetworkLag', 'tps', 'writeRatio'],
     actions: ['start-switchover', 'trigger-failover'],
     see: ['timeline.yard', 'ha.endpoint', 'ha.rejoin', 'replica.standby'],
     refs: {
@@ -524,6 +543,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         { label: 'Patroni FAQ — ttl, loop_wait and retry_timeout', url: 'https://patroni.readthedocs.io/en/latest/faq.html' },
         { label: 'Patroni watchdog support — split-brain fencing', url: 'https://patroni.readthedocs.io/en/latest/watchdog.html' },
         { label: 'Patroni DCS failsafe mode and split-brain prevention', url: 'https://patroni.readthedocs.io/en/latest/dcs_failsafe_mode.html' },
+        { label: 'etcd — how Raft works', url: 'https://etcd.io/docs/v3.6/learning/how-to-deal-with-membership/' },
         manual('warm-standby.html', '26.2. Log-Shipping Standby Servers — failover'),
       ],
       source: [
@@ -2155,7 +2175,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Opinion becomes action through Patroni',
-        body: 'Every node still stores its own observed leader, but Patroni now acts only through the DCS leader lock. A successful promotion updates the reachable nodes’ opinions and moves the service address. After unplanned failover, the offline former primary keeps its stale opinion and divergent WAL until `pg_rewind` repairs it; that disagreement is evidence of the fork, not authority to accept writes.',
+        body: 'Every node still stores its own observed leader, but its local Patroni agent acts only through the linearizable DCS leader key. A committed compare-and-swap updates the reachable agents’ opinions and moves the service address. After unplanned failover, the offline former primary keeps its stale opinion and divergent WAL until `pg_rewind` repairs it; that disagreement is evidence of the fork, not authority to accept writes.',
       },
     ],
     metrics: [
@@ -2175,7 +2195,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       {
         label: 'Leader opinion',
         get: (s) => s.cluster.nodes[2].leaderOpinion ?? 'unknown',
-        hint: 'the DCS leader lock, not this local observation, authorizes writes',
+        hint: 'the linearizable DCS leader key, not this local observation, authorizes writes',
       },
     ],
     knobs: ['standbyBEnabled', 'standbyBNetworkLag', 'standbyBSlowApply'],
@@ -2313,7 +2333,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Lag is not promotion',
-        body: 'Falling behind changes what a read on this data directory can see. It does not by itself promote the node or make the copy writable. Patroni must acquire the DCS leader lock and explicitly promote it; if that happens while this node is behind, the missing durable interval on the old primary is exactly the failover loss.',
+        body: 'Falling behind changes what a read on this data directory can see. It does not by itself promote the node or make the copy writable. The local Patroni agent must commit a compare-and-swap that acquires the DCS leader key and then explicitly promote PostgreSQL; if that happens while this node is behind, the missing durable interval on the old primary is exactly the failover loss.',
       },
     ],
     metrics: [

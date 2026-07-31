@@ -683,9 +683,90 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       currentLeader: 'primary',
       acceptingWrites: true,
       patroni: {
-        leaderLock: 'primary',
-        leaseTtlSec: HA_LEASE_TTL_SECONDS,
-        leaseRemainingSec: HA_LEASE_TTL_SECONDS,
+        agents: [
+          {
+            nodeId: 'primary',
+            reachableDcsMembers: [true, true, true],
+            canReachConsensus: true,
+            observedLeaderKey: 'primary',
+            observedTerm: 1,
+            leaseRemainingSec: HA_LEASE_TTL_SECONDS,
+            lastDcsResult: 'compare_and_swap_committed',
+            demotions: 0,
+          },
+          {
+            nodeId: 'standbyA',
+            reachableDcsMembers: [true, true, true],
+            canReachConsensus: true,
+            observedLeaderKey: 'primary',
+            observedTerm: 1,
+            leaseRemainingSec: HA_LEASE_TTL_SECONDS,
+            lastDcsResult: 'observed',
+            demotions: 0,
+          },
+          {
+            nodeId: 'standbyB',
+            reachableDcsMembers: [true, true, true],
+            canReachConsensus: true,
+            observedLeaderKey: 'primary',
+            observedTerm: 1,
+            leaseRemainingSec: HA_LEASE_TTL_SECONDS,
+            lastDcsResult: 'observed',
+            demotions: 0,
+          },
+        ],
+        dcs: {
+          algorithm: 'Raft',
+          members: [
+            {
+              id: 'etcd1',
+              failureDomain: 'primary',
+              role: 'leader',
+              reachableMembers: [true, true, true],
+              inCommitMajority: true,
+              term: 1,
+              commitIndex: 1,
+              appliedLeaderKey: 'primary',
+              appliedRevision: 1,
+            },
+            {
+              id: 'etcd2',
+              failureDomain: 'standbyA',
+              role: 'follower',
+              reachableMembers: [true, true, true],
+              inCommitMajority: true,
+              term: 1,
+              commitIndex: 1,
+              appliedLeaderKey: 'primary',
+              appliedRevision: 1,
+            },
+            {
+              id: 'etcd3',
+              failureDomain: 'standbyB',
+              role: 'follower',
+              reachableMembers: [true, true, true],
+              inCommitMajority: true,
+              term: 1,
+              commitIndex: 1,
+              appliedLeaderKey: 'primary',
+              appliedRevision: 1,
+            },
+          ],
+          majority: 2,
+          leaderMember: 'etcd1',
+          term: 1,
+          commitIndex: 1,
+          canCommit: true,
+          leaderKey: {
+            value: 'primary',
+            leaseValid: true,
+            ttlSec: HA_LEASE_TTL_SECONDS,
+            leaseRemainingSec: HA_LEASE_TTL_SECONDS,
+            revision: 1,
+            compareAndSwapCount: 1,
+            lastOperation: 'compare-and-swap',
+          },
+        },
         renewEverySec: HA_LEASE_RENEW_SECONDS,
         demotions: 0,
         splitBrain: false,
@@ -3691,16 +3772,25 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     stopPrimaryAndStreams()
   }
 
+  function patroniAgent(nodeId: ClusterNodeId) {
+    return ha.patroni.agents[clusterNodeIndex(nodeId)]
+  }
+
+  function canCommitFor(nodeId: ClusterNodeId): boolean {
+    return ha.patroni.dcs.canCommit && patroniAgent(nodeId).canReachConsensus
+  }
+
   function startSwitchover(target: 'standbyA' | 'standbyB' = 'standbyA'): boolean {
     if (
       ha.transition.status === 'waiting'
       || ha.currentLeader !== 'primary'
-      || !K.patroniDcsAvailable
+      || !canCommitFor('primary')
+      || !canCommitFor(target)
       || !eligiblePromotionTarget(target)
     ) {
       toast(
-        !K.patroniDcsAvailable
-          ? 'Switchover refused: Patroni cannot transfer the leader lock while the DCS is unavailable'
+        !canCommitFor('primary') || !canCommitFor(target)
+          ? 'Switchover refused: both Patroni agents need Raft consensus to compare-and-swap the leader key'
           : 'Switchover refused: reset the drill and choose a connected physical standby',
         'warn',
         6500,
@@ -3717,7 +3807,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     )
     bus.emit('narrate', {
       title: 'Planned switchover',
-      body: `Write admission is closed. Patroni will not move the leader lock until ${standbyForNode(target).applicationName} has flushed every byte. The wait is the cost; loss must remain zero.`,
+      body: `Write admission is closed. Patroni will not compare-and-swap the leader key until ${standbyForNode(target).applicationName} has flushed every byte. The wait is the cost; loss must remain zero.`,
       seconds: 8,
     })
     bus.emit('focus', { id: 'ha.dcs' })
@@ -3739,10 +3829,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         K.walLevel !== 'minimal'
         && standby.enabled
         && state.cluster.nodes[clusterNodeIndex(target)].online
-      if (!K.patroniDcsAvailable || !eligible) {
+      if (!canCommitFor(target) || !eligible) {
         toast(
-          !K.patroniDcsAvailable
-            ? 'Failover refused: no standby can acquire a leader lock while the DCS is unavailable'
+          !canCommitFor(target)
+            ? 'Failover refused: the candidate cannot commit a leader-key compare-and-swap through Raft'
             : 'Failover refused: choose an online physical standby',
           'warn',
           6500,
@@ -3760,19 +3850,22 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         body: `${standby.applicationName} can preserve only the WAL durable at its flush LSN. Patroni promotes after the old leader lease is gone; the gap to the former primary becomes the lost tail of timeline ${ha.timeline.current}.`,
         seconds: 9,
       })
-      if (!ha.currentLeader || ha.patroni.leaseRemainingSec <= 0) completePromotion(true)
+      if (
+        !ha.currentLeader
+        || ha.patroni.dcs.leaderKey.leaseRemainingSec <= 0
+      ) completePromotion(true)
       return true
     }
 
     if (
       transition.status === 'waiting'
       || ha.currentLeader !== 'primary'
-      || !K.patroniDcsAvailable
+      || !canCommitFor(target)
       || !eligiblePromotionTarget(target)
     ) {
       toast(
-        !K.patroniDcsAvailable
-          ? 'Failover refused: no standby can acquire a leader lock while the DCS is unavailable'
+        !canCommitFor(target)
+          ? 'Failover refused: the candidate cannot commit a leader-key compare-and-swap through Raft'
           : 'Failover refused: reset the drill and choose a connected physical standby',
         'warn',
         6500,
@@ -3783,7 +3876,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     resetTransition('failover', 'primary', target)
     stopPrimaryAndStreams()
     toast(
-      `Primary gone: Patroni is waiting ${ha.patroni.leaseRemainingSec.toFixed(1)} s for its DCS lease to expire`,
+      `Primary gone: Patroni is waiting ${ha.patroni.dcs.leaderKey.leaseRemainingSec.toFixed(1)} s for its leader-key lease to expire`,
       'warn',
       6500,
     )
@@ -3831,11 +3924,16 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     return false
   }
 
-  function completePromotion(unplanned: boolean): void {
+  function completePromotion(unplanned: boolean, sourceRemainsOnline = false): void {
     const transition = ha.transition
     const sourceId = transition.source
     const targetId = transition.target
     if (!sourceId || !targetId || targetId === 'primary') return
+    if (!commitLeaderKeyCompareAndSwap(unplanned ? null : sourceId, targetId)) {
+      transition.status = 'failed'
+      transition.failureReason = 'Raft could not commit the leader-key compare-and-swap'
+      return
+    }
     const target = standbyForNode(targetId)
     const forkLsn = unplanned ? target.flushedLsn : wal.flushLsn
     const oldEnd = unplanned ? ha.timeline.oldHistoryEndLsn : forkLsn
@@ -3856,7 +3954,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     const source = state.cluster.nodes[clusterNodeIndex(sourceId)]
     const promoted = state.cluster.nodes[clusterNodeIndex(targetId)]
     source.role = unplanned ? 'diverged' : 'standby'
-    source.online = !unplanned
+    source.online = sourceRemainsOnline || !unplanned
     source.leaderOpinion = unplanned ? sourceId : targetId
     promoted.role = 'primary'
     promoted.online = true
@@ -3868,8 +3966,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     }
 
     ha.currentLeader = targetId
-    ha.patroni.leaderLock = targetId
-    ha.patroni.leaseRemainingSec = ha.patroni.leaseTtlSec
     patroniRenewT = 0
     resetActiveWalAt(forkLsn)
 
@@ -3930,69 +4026,317 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         ? reinitializeNode
           ? `Timeline ${ha.timeline.current} forked from timeline ${ha.timeline.parent} at ${fmtLsn(forkLsn)}. The former primary needs pg_rewind, and ${state.cluster.nodes[clusterNodeIndex(reinitializeNode)].name} replayed beyond the fork, so PostgreSQL refuses the new timeline until Patroni rewinds or reinitialises that follower. No healthy standby remains.`
           : `Timeline ${ha.timeline.current} forked from timeline ${ha.timeline.parent} at ${fmtLsn(forkLsn)}. The old history continues for ${transition.lossBytes} bytes that the new primary never received: ${transition.lossTransactions} committed write transactions are lost. The former primary cannot follow this new history until pg_rewind discards its divergent tail.`
-        : `Patroni waited ${transition.waitSec.toFixed(1)} seconds for the standby, then moved the leader lock and service address. Zero bytes and zero transactions were lost.`,
+        : `Patroni waited ${transition.waitSec.toFixed(1)} seconds for the standby, then compare-and-swapped the leader key and moved the service address. Zero bytes and zero transactions were lost.`,
       seconds: 12,
     })
     bus.emit('focus', { id: 'timeline.yard' })
     bus.emit('select', { id: 'timeline.yard' })
   }
 
-  function demoteExpiredLeader(): void {
+  function setLinks(
+    links: [boolean, boolean, boolean],
+    first: boolean,
+    second: boolean,
+    third: boolean,
+  ): void {
+    links[0] = first
+    links[1] = second
+    links[2] = third
+  }
+
+  function selectRaftLeader(next: 'etcd1' | 'etcd2' | 'etcd3' | null): void {
+    const dcs = ha.patroni.dcs
+    if (dcs.leaderMember !== next) dcs.term++
+    dcs.leaderMember = next
+    for (let i = 0; i < dcs.members.length; i++) {
+      const member = dcs.members[i]
+      member.role = next === null ? 'candidate' : member.id === next ? 'leader' : 'follower'
+      if (member.inCommitMajority) member.term = dcs.term
+    }
+  }
+
+  function configureHaPartition(): void {
+    const agents = ha.patroni.agents
+    const members = ha.patroni.dcs.members
+    const mode = K.haPartition
+
+    if (mode === 'healthy') {
+      for (let i = 0; i < 3; i++) {
+        setLinks(agents[i].reachableDcsMembers, true, true, true)
+        agents[i].canReachConsensus = true
+        setLinks(members[i].reachableMembers, true, true, true)
+        members[i].inCommitMajority = true
+      }
+      ha.patroni.dcs.canCommit = true
+      selectRaftLeader(ha.patroni.dcs.leaderMember ?? 'etcd1')
+      return
+    }
+
+    if (mode === 'isolate_node') {
+      setLinks(agents[0].reachableDcsMembers, false, false, false)
+      agents[0].canReachConsensus = false
+      for (let i = 1; i < 3; i++) {
+        setLinks(agents[i].reachableDcsMembers, false, true, true)
+        agents[i].canReachConsensus = true
+      }
+      setLinks(members[0].reachableMembers, true, false, false)
+      setLinks(members[1].reachableMembers, false, true, true)
+      setLinks(members[2].reachableMembers, false, true, true)
+      members[0].inCommitMajority = false
+      members[1].inCommitMajority = true
+      members[2].inCommitMajority = true
+      ha.patroni.dcs.canCommit = true
+      selectRaftLeader('etcd2')
+      return
+    }
+
+    if (mode === 'isolate_dcs_majority') {
+      setLinks(agents[0].reachableDcsMembers, true, false, false)
+      agents[0].canReachConsensus = false
+      for (let i = 1; i < 3; i++) {
+        setLinks(agents[i].reachableDcsMembers, false, true, true)
+        agents[i].canReachConsensus = true
+      }
+      setLinks(members[0].reachableMembers, true, false, false)
+      setLinks(members[1].reachableMembers, false, true, true)
+      setLinks(members[2].reachableMembers, false, true, true)
+      members[0].inCommitMajority = false
+      members[1].inCommitMajority = true
+      members[2].inCommitMajority = true
+      ha.patroni.dcs.canCommit = true
+      selectRaftLeader('etcd2')
+      return
+    }
+
+    setLinks(agents[0].reachableDcsMembers, true, false, false)
+    setLinks(agents[1].reachableDcsMembers, false, true, false)
+    setLinks(agents[2].reachableDcsMembers, false, false, true)
+    for (let i = 0; i < 3; i++) agents[i].canReachConsensus = false
+    setLinks(members[0].reachableMembers, true, false, false)
+    setLinks(members[1].reachableMembers, false, true, false)
+    setLinks(members[2].reachableMembers, false, false, true)
+    for (let i = 0; i < 3; i++) members[i].inCommitMajority = false
+    ha.patroni.dcs.canCommit = false
+    selectRaftLeader(null)
+  }
+
+  function applyCommittedDcsEntry(): void {
+    const dcs = ha.patroni.dcs
+    for (let i = 0; i < dcs.members.length; i++) {
+      const member = dcs.members[i]
+      if (!member.inCommitMajority) continue
+      member.term = dcs.term
+      member.commitIndex = dcs.commitIndex
+      member.appliedLeaderKey = dcs.leaderKey.value
+      member.appliedRevision = dcs.leaderKey.revision
+    }
+  }
+
+  function flowRaftCommit(): void {
+    const dcs = ha.patroni.dcs
+    const leader = dcs.leaderMember
+    if (leader === 'etcd1') {
+      if (dcs.members[0].reachableMembers[1]) flow('ha.raft12', 1, 'stat', 0.72)
+      if (dcs.members[0].reachableMembers[2]) flow('ha.raft13', 1, 'stat', 0.72)
+    } else if (leader === 'etcd2') {
+      if (dcs.members[1].reachableMembers[0]) flow('ha.raft12', 1, 'stat', 0.72)
+      if (dcs.members[1].reachableMembers[2]) flow('ha.raft23', 1, 'stat', 0.72)
+    } else if (leader === 'etcd3') {
+      if (dcs.members[2].reachableMembers[0]) flow('ha.raft13', 1, 'stat', 0.72)
+      if (dcs.members[2].reachableMembers[1]) flow('ha.raft23', 1, 'stat', 0.72)
+    }
+  }
+
+  function observeCommittedLeaderKey(result: 'observed' | 'renewed'): void {
+    const dcs = ha.patroni.dcs
+    const visibleValue = dcs.leaderKey.leaseValid ? dcs.leaderKey.value : null
+    for (let i = 0; i < ha.patroni.agents.length; i++) {
+      const agent = ha.patroni.agents[i]
+      if (!agent.canReachConsensus) continue
+      agent.observedLeaderKey = visibleValue
+      agent.observedTerm = dcs.term
+      agent.leaseRemainingSec = dcs.leaderKey.leaseRemainingSec
+      agent.lastDcsResult = result === 'renewed' && agent.nodeId === visibleValue
+        ? 'renewed'
+        : 'observed'
+    }
+  }
+
+  function recordFailedDcsViews(): void {
+    for (let i = 0; i < ha.patroni.agents.length; i++) {
+      const agent = ha.patroni.agents[i]
+      if (agent.canReachConsensus) continue
+      const links = agent.reachableDcsMembers
+      agent.lastDcsResult = links[0] || links[1] || links[2]
+        ? 'no_consensus'
+        : 'unreachable'
+      if (agent.leaseRemainingSec <= 0) agent.observedLeaderKey = null
+    }
+  }
+
+  function commitLeaderKeyCompareAndSwap(
+    expected: ClusterNodeId | null,
+    target: ClusterNodeId,
+  ): boolean {
+    const dcs = ha.patroni.dcs
+    const key = dcs.leaderKey
+    const current = key.leaseValid ? key.value : null
+    if (!canCommitFor(target) || current !== expected) return false
+    dcs.commitIndex++
+    key.value = target
+    key.leaseValid = true
+    key.leaseRemainingSec = key.ttlSec
+    key.revision++
+    key.compareAndSwapCount++
+    key.lastOperation = 'compare-and-swap'
+    applyCommittedDcsEntry()
+    flowRaftCommit()
+    observeCommittedLeaderKey('observed')
+    const targetAgent = patroniAgent(target)
+    targetAgent.lastDcsResult = 'compare_and_swap_committed'
+    return true
+  }
+
+  function commitLeaderKeyRenewal(leaderId: ClusterNodeId): void {
+    const dcs = ha.patroni.dcs
+    const key = dcs.leaderKey
+    if (
+      !canCommitFor(leaderId)
+      || !key.leaseValid
+      || key.value !== leaderId
+    ) return
+    dcs.commitIndex++
+    key.leaseRemainingSec = key.ttlSec
+    key.lastOperation = 'renew'
+    applyCommittedDcsEntry()
+    flowRaftCommit()
+    observeCommittedLeaderKey('renewed')
+    const route = leaderId === 'primary'
+      ? 'ha.lease1'
+      : leaderId === 'standbyA'
+        ? 'ha.lease2'
+        : 'ha.lease3'
+    flow(route, 1, 'stat', 0.9)
+  }
+
+  function commitLeaderLeaseExpiry(): void {
+    const dcs = ha.patroni.dcs
+    const key = dcs.leaderKey
+    key.leaseValid = false
+    key.leaseRemainingSec = 0
+    key.lastOperation = 'lease-expired'
+    if (!dcs.canCommit || key.value === null) return
+    dcs.commitIndex++
+    key.value = null
+    key.revision++
+    applyCommittedDcsEntry()
+    flowRaftCommit()
+    observeCommittedLeaderKey('observed')
+  }
+
+  function demoteExpiredLeader(): ClusterNodeId | null {
     const leaderId = ha.currentLeader
-    if (!leaderId) return
+    if (!leaderId) return null
     const leader = state.cluster.nodes[clusterNodeIndex(leaderId)]
+    const agent = patroniAgent(leaderId)
     leader.role = 'standby'
     leader.leaderOpinion = null
+    agent.observedLeaderKey = null
+    agent.leaseRemainingSec = 0
+    agent.demotions++
     ha.currentLeader = null
-    ha.patroni.leaderLock = null
     ha.patroni.demotions++
     ha.acceptingWrites = false
     pendingTx = 0
     toast(
-      'Patroni lease expired: the node demoted itself; the DCS is unavailable, so no rival can promote',
+      'Patroni lease TTL expired: the node demoted itself; only a committed leader-key compare-and-swap can promote a rival',
       'warn',
       7500,
     )
+    return leaderId
+  }
+
+  function promoteAfterPartition(sourceId: ClusterNodeId): void {
+    if (sourceId !== 'primary' || !canCommitFor('standbyA')) return
+    const target = standbyForNode('standbyA')
+    if (!target.enabled || !state.cluster.nodes[1].online) return
+    resetTransition('failover', sourceId, 'standbyA')
+    ha.transition.startedAt = state.t - ha.patroni.dcs.leaderKey.ttlSec
+    stopPrimaryAndStreams()
+    completePromotion(true, K.haPartition === 'isolate_dcs_majority')
+  }
+
+  function resumePrimaryAfterConsensusPause(): void {
+    if (
+      K.haPartition !== 'healthy'
+      || ha.currentLeader !== null
+      || ha.transition.status === 'waiting'
+      || ha.rejoin.required
+      || !state.cluster.nodes[0].online
+      || !commitLeaderKeyCompareAndSwap(null, 'primary')
+    ) return
+    const primary = state.cluster.nodes[0]
+    primary.role = 'primary'
+    primary.leaderOpinion = 'primary'
+    for (let i = 1; i < state.cluster.nodes.length; i++) {
+      state.cluster.nodes[i].role = 'standby'
+      state.cluster.nodes[i].leaderOpinion = 'primary'
+    }
+    ha.currentLeader = 'primary'
+    ha.acceptingWrites = true
   }
 
   function tickPatroni(dt: number): void {
-    const leaderId = ha.currentLeader
-    if (!leaderId) return
-    const leaderOnline = state.cluster.nodes[clusterNodeIndex(leaderId)].online
-    if (K.patroniDcsAvailable && leaderOnline) {
-      patroniRenewT += dt
-      ha.patroni.leaseRemainingSec = Math.max(
-        0,
-        ha.patroni.leaseRemainingSec - dt,
-      )
-      if (patroniRenewT >= ha.patroni.renewEverySec) {
-        patroniRenewT -= ha.patroni.renewEverySec
-        ha.patroni.leaseRemainingSec = ha.patroni.leaseTtlSec
-        for (let i = 0; i < 3; i++) {
-          const node = state.cluster.nodes[i]
-          if (node.online) {
-            const route = i === 0 ? 'ha.lease1' : i === 1 ? 'ha.lease2' : 'ha.lease3'
-            flow(route, 1, 'stat', 0.9)
-          }
-        }
+    const dcs = ha.patroni.dcs
+    const key = dcs.leaderKey
+    if (key.leaseValid) {
+      key.leaseRemainingSec = Math.max(0, key.leaseRemainingSec - dt)
+    }
+    for (let i = 0; i < ha.patroni.agents.length; i++) {
+      const agent = ha.patroni.agents[i]
+      if (agent.observedLeaderKey !== null) {
+        agent.leaseRemainingSec = Math.max(0, agent.leaseRemainingSec - dt)
       }
-      return
     }
 
-    ha.patroni.leaseRemainingSec = Math.max(
-      0,
-      ha.patroni.leaseRemainingSec - dt,
-    )
-    if (ha.patroni.leaseRemainingSec > 0) return
-    ha.patroni.leaderLock = null
-    if (
-      ha.transition.kind === 'failover'
-      && ha.transition.status === 'waiting'
-      && K.patroniDcsAvailable
-    ) {
-      completePromotion(true)
+    patroniRenewT += dt
+    if (patroniRenewT >= ha.patroni.renewEverySec) {
+      patroniRenewT -= ha.patroni.renewEverySec
+      const leaderId = ha.currentLeader
+      const leaderOnline = leaderId !== null
+        && state.cluster.nodes[clusterNodeIndex(leaderId)].online
+      if (leaderId && leaderOnline) commitLeaderKeyRenewal(leaderId)
+      else observeCommittedLeaderKey('observed')
+      recordFailedDcsViews()
+    }
+
+    if (key.leaseValid && key.leaseRemainingSec <= 0) {
+      commitLeaderLeaseExpiry()
+    } else if (!key.leaseValid && key.value !== null && dcs.canCommit) {
+      commitLeaderLeaseExpiry()
+    }
+
+    const leaderId = ha.currentLeader
+    if (leaderId) {
+      const agent = patroniAgent(leaderId)
+      if (agent.leaseRemainingSec <= 0 || !key.leaseValid) {
+        const expired = demoteExpiredLeader()
+        if (
+          ha.transition.kind === 'failover'
+          && ha.transition.status === 'waiting'
+          && ha.transition.target
+          && ha.transition.target !== 'primary'
+        ) {
+          completePromotion(true)
+        } else if (
+          expired
+          && (K.haPartition === 'isolate_node' || K.haPartition === 'isolate_dcs_majority')
+        ) {
+          promoteAfterPartition(expired)
+        }
+      }
     } else {
-      demoteExpiredLeader()
+      resumePrimaryAfterConsensusPause()
     }
   }
 
@@ -5810,12 +6154,17 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       case 'recoveryTargetAge':
         K.recoveryTargetAge = clamp(Math.round(K.recoveryTargetAge), 0, 300)
         break
-      case 'patroniDcsAvailable':
+      case 'haPartition':
+        configureHaPartition()
         toast(
-          K.patroniDcsAvailable
-            ? 'Patroni can reach the DCS again; no node promotes until it acquires the leader lock'
-            : `DCS unavailable: the leader lease is draining from ${ha.patroni.leaseRemainingSec.toFixed(1)} s`,
-          K.patroniDcsAvailable ? 'good' : 'warn',
+          K.haPartition === 'healthy'
+            ? 'Network healed: Patroni can use Raft consensus for a linearizable leader-key operation again'
+            : K.haPartition === 'isolate_node'
+              ? `Primary node isolated: its ${ha.patroni.agents[0].leaseRemainingSec.toFixed(1)} s lease deadline is draining`
+              : K.haPartition === 'isolate_dcs_majority'
+                ? 'Primary reaches only an etcd minority; that side cannot commit a leader-key operation'
+                : 'Every etcd member is isolated: no side has the majority needed to commit',
+          K.haPartition === 'healthy' ? 'good' : 'warn',
           6500,
         )
         break
@@ -5955,12 +6304,39 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     state.locks.length = 0
     ha.currentLeader = 'primary'
     ha.acceptingWrites = true
-    ha.patroni.leaderLock = 'primary'
-    ha.patroni.leaseTtlSec = HA_LEASE_TTL_SECONDS
-    ha.patroni.leaseRemainingSec = HA_LEASE_TTL_SECONDS
     ha.patroni.renewEverySec = HA_LEASE_RENEW_SECONDS
     ha.patroni.demotions = 0
     ha.patroni.splitBrain = false
+    const dcs = ha.patroni.dcs
+    dcs.leaderMember = 'etcd1'
+    dcs.term = 1
+    dcs.commitIndex = 1
+    dcs.canCommit = true
+    dcs.leaderKey.value = 'primary'
+    dcs.leaderKey.leaseValid = true
+    dcs.leaderKey.ttlSec = HA_LEASE_TTL_SECONDS
+    dcs.leaderKey.leaseRemainingSec = HA_LEASE_TTL_SECONDS
+    dcs.leaderKey.revision = 1
+    dcs.leaderKey.compareAndSwapCount = 1
+    dcs.leaderKey.lastOperation = 'compare-and-swap'
+    for (let i = 0; i < 3; i++) {
+      const agent = ha.patroni.agents[i]
+      setLinks(agent.reachableDcsMembers, true, true, true)
+      agent.canReachConsensus = true
+      agent.observedLeaderKey = 'primary'
+      agent.observedTerm = 1
+      agent.leaseRemainingSec = HA_LEASE_TTL_SECONDS
+      agent.lastDcsResult = i === 0 ? 'compare_and_swap_committed' : 'observed'
+      agent.demotions = 0
+      const member = dcs.members[i]
+      setLinks(member.reachableMembers, true, true, true)
+      member.inCommitMajority = true
+      member.role = i === 0 ? 'leader' : 'follower'
+      member.term = 1
+      member.commitIndex = 1
+      member.appliedLeaderKey = 'primary'
+      member.appliedRevision = 1
+    }
     ha.timeline.current = 1
     ha.timeline.parent = 0
     ha.timeline.forkLsn = 0

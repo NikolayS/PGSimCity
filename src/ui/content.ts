@@ -346,11 +346,17 @@ export const KNOB_META: KnobMeta[] = [
     hint: 'Choose a point before now. PITR fetches the newest retained full backup old enough for that target, then replays archived WAL forward.',
   },
   {
-    key: 'patroniDcsAvailable',
-    label: 'Patroni DCS available',
+    key: 'haPartition',
+    label: 'HA network partition',
     group: 'replication',
-    kind: 'toggle',
-    hint: 'The DCS holds Patroni’s leader lock. If it becomes unreachable, the lease drains and the current leader demotes; no standby may promote without acquiring that lock.',
+    kind: 'select',
+    options: [
+      { value: 'healthy', label: 'healthy — all connected' },
+      { value: 'isolate_node', label: 'isolate primary node' },
+      { value: 'isolate_dcs_majority', label: 'primary with DCS minority' },
+      { value: 'split_dcs', label: 'split DCS — no majority' },
+    ],
+    hint: 'Raft consensus keeps the leader key linearizable. A majority is the commit mechanism; a minority cannot commit a compare-and-swap or renew the lease.',
     danger: true,
   },
   {

@@ -939,7 +939,7 @@ not an instantaneous boolean response.
 
 | # | Knob | Real setting | Verdict | Measured response and recovery |
 |---|---|---|---|---|
-| 30 | `patroniDcsAvailable` | DCS reachability, not a GUC | **CORRECT** | Off drained the 4.0 s leader lease to 2.0 s after 2.0 s; restoring access renewed it to 3.9 s after the next 1.0 s HA cycle with the same primary and open writes. Leaving it off past 4.0 s demoted the primary, cleared the leader lock, closed writes, and left zero primary roles / `splitBrain = false`. That expiry is intentionally asymmetric: DCS reachability returning does not silently promote a node in this compact model; an operator runs a handover drill or resets it. |
+| 30 | `patroniDcsAvailable` | Former binary DCS-reachability switch | **RETIRED** | Replaced by verdict 34. One cluster-wide boolean could not represent three Patroni agents, an etcd member set, Raft terms and commits, or asymmetric partitions; keeping it would preserve the defect this audit is meant to catch. |
 | 31 | `walLogHints` | `wal_log_hints` (data checksums are declared off) | **CORRECT** | On before divergence let `pg_rewind` repair a 6,707,050-byte divergent tail in 6.03 s. Off before divergence failed after the 2.0 s prerequisite pass with “data checksums are off and wal_log_hints was not enabled before divergence.” Turning it on afterwards still failed: past hint records cannot be created retroactively. Recovery correctly requires a fresh divergence whose prerequisite was already enabled (or a rebuild). |
 | 32 | `oldPrimaryDataIntact` | incident condition, not a GUC | **CORRECT** | Off made `pg_rewind` spend 2.0 s checking and then fail because the former primary data directory was missing or unreadable. Restoring that condition and retrying completed the same measured rewind. The failed attempt does not alter the divergent node. |
 | 33 | `rewindWalRetained` | required divergence WAL availability, not a GUC | **CORRECT** | Off made the 2.0 s check fail with the explicit recycled-WAL reason; on plus retry completed. This control represents availability from retained `pg_wal` or an accessible archive, not a promise that changing a PostgreSQL setting resurrects deleted WAL. |
@@ -955,6 +955,27 @@ standby and recorded exactly zero bytes and zero transactions lost. Sixty
 seconds after that handover, the demoted primary had advanced from LSN
 551,833,503 to 724,759,874 — 172,926,371 bytes — and matched the current
 leader instead of freezing.
+
+---
+
+## Patroni and etcd consensus addendum
+
+The replacement control was swept from a freshly seeded model for 5.0 teaching
+seconds per partition, longer than the compressed 4.0 s lease TTL. The baseline
+was Raft term 1 / commit 14 after warm-up. “Grant” below means a leader-key value
+with a valid lease, not a stale applied value on an isolated etcd member. The
+city models consensus first: a majority is the mechanism Raft uses to commit
+the lease expiry and compare-and-swap, and no minority operation is treated as
+a vote that merely lost.
+
+| # | Knob | Real setting | Verdict | Measured response and recovery |
+|---|---|---|---|---|
+| 34 | `haPartition` | Network reachability among three Patroni agents and three etcd Raft members, not a GUC | **CORRECT** | `isolate_node` removed the whole primary site from the network, elected etcd-2 on the surviving two-member side, demoted the unreachable primary at TTL, and committed standby_a’s compare-and-swap at term 2 / commit 17. Only etcd-2/3 advanced, and agent views became `null / standbyA / standbyA`; the DCS grant was `standbyA`, with exactly one PostgreSQL primary and `splitBrain = false`. `isolate_dcs_majority` produced the same safe etcd-2/3 commit path, but the primary-side agent could still reach stale etcd-1: it reported `no_consensus`, cleared its view at TTL, and never observed itself reacquiring. etcd-1 stayed at commit 14 with applied value `primary`, while standby_a held the only valid grant. `split_dcs` left every member alone, so commit stayed exactly 14, the persisted key value remained `primary` but its lease became invalid, all three agent views became `null`, writes closed, and all three PostgreSQL roles were standby with `splitBrain = false`. Healing for 1.1 s restored all agent views: the two majority-side failovers retained standby_a and reached commit 19, while the no-majority case committed expiry then a primary compare-and-swap and renewal at term 3 / commit 17. |
+
+The deterministic candidate choice, shared compressed HA-cycle clock, 4.0 s
+TTL, and 1.0 s renewal interval are teaching scale. Production `ttl`,
+`loop_wait`, retry behavior, Raft election timeouts, candidate scoring, and
+network timing depend on Patroni and etcd configuration.
 
 ---
 
