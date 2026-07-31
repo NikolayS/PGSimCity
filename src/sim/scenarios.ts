@@ -534,7 +534,7 @@ export const SCENARIOS: ScenarioDef[] = [
       standbyBEnabled: true,
       standbyBNetworkLag: 900,
       standbyBSlowApply: true,
-      patroniDcsAvailable: true,
+      haPartition: 'healthy',
       walLogHints: true,
       checkpointTimeout: 120,
       maxWalSize: 768,

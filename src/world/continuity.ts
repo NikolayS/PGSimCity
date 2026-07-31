@@ -35,8 +35,9 @@ import { ANCHOR, CONTINUITY } from './layout'
  * pressure, full backups, pgBackRest retention, and a restore that fetches one
  * retained backup before replaying archived WAL to recovery_target_time. The
  * world only projects that state. standby_b is a complete independent physical
- * standby. Patroni's DCS lease, planned and unplanned promotion, the timeline
- * fork, endpoint move, and pg_rewind rejoin are projected in the HA quarter.
+ * standby. Three Patroni agents, etcd Raft consensus, the leader-key lease,
+ * planned and unplanned promotion, the timeline fork, endpoint move, and
+ * pg_rewind rejoin are projected across the failure-domain platforms.
  * ==========================================================================*/
 
 /* --- module scope scratch: update() must never allocate -------------------- */
@@ -47,6 +48,7 @@ const _qi = new THREE.Quaternion()
 const _m = new THREE.Matrix4()
 const _c = new THREE.Color()
 const _axisX = new THREE.Vector3(1, 0, 0)
+const _axisY = new THREE.Vector3(0, 1, 0)
 
 /** cx, cy, cz, w, h, d */
 type Box = [number, number, number, number, number, number]
@@ -598,50 +600,113 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   group.add(gDcs)
   part(gDcs)
   const DC = ANCHOR.consensus
-  box([DC[0], 5, DC[2], 26, 10, 20], 'dim')
-  box([DC[0], 10.6, DC[2], 28, 0.9, 22], 'none')
+  const SITE_AT = [ANCHOR.haPrimarySite, ANCHOR.haStandbyASite, ANCHOR.haStandbyBSite] as const
+  const AGENT_AT = [ANCHOR.patroniNode1, ANCHOR.patroniNode2, ANCHOR.patroniNode3] as const
+  const MEMBER_AT = [ANCHOR.leaseNode1, ANCHOR.leaseNode2, ANCHOR.leaseNode3] as const
+  const SITE_TITLE = [
+    'FAILURE DOMAIN 1 · PRIMARY NODE',
+    'FAILURE DOMAIN 2 · STANDBY_A',
+    'FAILURE DOMAIN 3 · STANDBY_B',
+  ]
+  const MEMBER_TITLE = ['etcd-1', 'etcd-2', 'etcd-3']
+  const PLATFORM_W = [124, 116, 116] as const
+  const PLATFORM_D = [78, 142, 142] as const
 
-  const ringGeo = new THREE.TorusGeometry(2.6, 0.55, 8, 20)
-  geos.push(ringGeo)
-  const lockRing = new THREE.Mesh(ringGeo, theme.neon(COLOR.ok, 1.7))
-  lockRing.position.set(DC[0], 14.6, DC[2])
-  lockRing.rotation.x = Math.PI / 2
-  lockRing.raycast = () => {}
-  gDcs.add(lockRing)
-  const lockBody = lamp(COLOR.ok, 1.4, 4.4, 3.2, 2.4, DC[0], 12.6, DC[2], gDcs)
+  const sitePlatformMat = theme.mat('continuity.ha-site', {
+    color: 0x0b1525,
+    roughness: 0.96,
+    metalness: 0.08,
+    emissive: 0x071424,
+    emissiveIntensity: 0.82,
+  })
+  const sitePlatform = new THREE.InstancedMesh(unitBox, sitePlatformMat, N_LEASE)
+  sitePlatform.name = 'ha.failure-domain-platforms'
+  sitePlatform.frustumCulled = false
+  sitePlatform.raycast = () => {}
+  gDcs.add(sitePlatform)
+  instanced.push(sitePlatform)
 
-  plate('PATRONI DCS · LEADER LOCK', DC[0], 18.8, DC[2], 0, 2.4, COLOR.ink, 0.9, gDcs)
-  plate(
-    'one renewable lease · lose it and Patroni demotes · coordination, not user data',
-    DC[0], 16.2, DC[2] + 0.4, 0, 1.25, COLOR.inkDim, 0.68,
-  )
-  plate('switchover waits · failover loses the missing interval', DC[0], 8.2, DC[2] - 10.4, Math.PI, 1.25, COLOR.inkDim, 0.7)
-
-  const LEASE_AT: readonly (readonly [number, number, number])[] = [ANCHOR.leaseNode1, ANCHOR.leaseNode2, ANCHOR.leaseNode3]
-  const LEASE_TITLE = ['node 1 · original primary', 'node 2 · standby_a', 'node 3 · standby_b']
   for (let i = 0; i < N_LEASE; i++) {
-    const a = LEASE_AT[i]
-    box([a[0], 4.5, a[2], 1.1, 9, 1.1], 'none')
-    plate(LEASE_TITLE[i], a[0], 12.6, a[2], 0, 1.7, i === 0 ? COLOR.ok : COLOR.replication, 0.9)
-  }
-  plate('blue follower · green leader · red divergent', DC[0], 12.8, DC[2] - 10.4, Math.PI, 1.1, COLOR.replication, 0.85)
+    const site = SITE_AT[i]
+    const platformW = PLATFORM_W[i]
+    const platformD = PLATFORM_D[i]
+    /* Thin enough to stay out of collision, dark enough to split the shared ground. */
+    const platformBox: Box = [site[0], 0.74, site[2], platformW, 0.18, platformD]
+    pushEdges(goldEdges, platformBox)
+    _p.set(platformBox[0], platformBox[1], platformBox[2])
+    _sc.set(platformBox[3], platformBox[4], platformBox[5])
+    _m.compose(_p, _qi, _sc)
+    sitePlatform.setMatrixAt(i, _m)
+    plate(SITE_TITLE[i], site[0], 2.4, site[2] - platformD / 2 + 3, Math.PI, 1.55, COLOR.archive, 0.92, gDcs)
+    plate('PostgreSQL · Patroni agent · one etcd member', site[0], 2.2, site[2] + platformD / 2 - 3, 0, 1.05, COLOR.inkDim, 0.78, gDcs)
 
-  /** 0..2 are the role lamps; 3..5 the lease bars that drain and are renewed. */
-  const leaseMesh = neonBank('ha.leases', unitBox, N_LEASE * 2, gDcs)
-  for (let i = 0; i < N_LEASE * 2; i++) {
-    const a = LEASE_AT[i % N_LEASE]
-    if (i < N_LEASE) {
-      _p.set(a[0], 9.7, a[2])
-      _sc.set(2.4, 1.1, 2.4)
-    } else {
-      _p.set(a[0], 5, a[2] + 1.1)
-      _sc.set(1.6, 8, 0.4)
-    }
+    const agent = AGENT_AT[i]
+    box([agent[0], 7.2, agent[2], 14, 14.4, 14], 'dim')
+    plate('PATRONI', agent[0], 16.2, agent[2], 0, 1.8, COLOR.replication, 0.94, gDcs)
+
+    const member = MEMBER_AT[i]
+    box([member[0], 8.2, member[2], 16, 16.4, 16], 'dim')
+    box([member[0], 17, member[2], 19, 1.1, 19], 'gold')
+    plate(MEMBER_TITLE[i], member[0], 21, member[2], 0, 1.9, COLOR.ok, 0.94, gDcs)
+  }
+  sitePlatform.instanceMatrix.needsUpdate = true
+
+  plate('RAFT CONSENSUS', DC[0], 20, DC[2], 0, 2.8, COLOR.ok, 0.96, gDcs)
+  plate('one linearizable leader key · compare-and-swap + lease TTL', DC[0], 16.7, DC[2], 0, 1.5, COLOR.ink, 0.82, gDcs)
+  plate('majority is the commit mechanism · a minority cannot commit', DC[0], 14.1, DC[2], 0, 1.35, COLOR.warn, 0.86, gDcs)
+
+  const agentMesh = neonBank('ha.patroni-agents', unitBox, N_LEASE, gDcs)
+  const memberMesh = neonBank('ha.etcd-members', unitBox, N_LEASE, gDcs)
+  const leaseMesh = neonBank('ha.agent-leases', unitBox, N_LEASE, gDcs)
+  const keyMesh = neonBank('ha.committed-key', unitBox, N_LEASE, gDcs)
+  for (let i = 0; i < N_LEASE; i++) {
+    const agent = AGENT_AT[i]
+    _p.set(agent[0], 9, agent[2])
+    _sc.set(7, 2.2, 7)
+    _m.compose(_p, _qi, _sc)
+    agentMesh.setMatrixAt(i, _m)
+    agentMesh.setColorAt(i, _c.setHex(OFF))
+
+    const member = MEMBER_AT[i]
+    _p.set(member[0], 11, member[2])
+    _sc.set(8, 2.2, 8)
+    _m.compose(_p, _qi, _sc)
+    memberMesh.setMatrixAt(i, _m)
+    memberMesh.setColorAt(i, _c.setHex(OFF))
+    _p.set(member[0], 16.4, member[2])
+    _sc.set(11, 0.8, 11)
+    _m.compose(_p, _qi, _sc)
+    keyMesh.setMatrixAt(i, _m)
+    keyMesh.setColorAt(i, _c.setHex(OFF))
+
+    _p.set(agent[0] + 9, 5.2, agent[2])
+    _sc.set(1.1, 9.2, 2.5)
     _m.compose(_p, _qi, _sc)
     leaseMesh.setMatrixAt(i, _m)
     leaseMesh.setColorAt(i, _c.setHex(OFF))
   }
+  agentMesh.instanceMatrix.needsUpdate = true
+  memberMesh.instanceMatrix.needsUpdate = true
+  keyMesh.instanceMatrix.needsUpdate = true
   leaseMesh.instanceMatrix.needsUpdate = true
+
+  const raftLinks = neonBank('ha.raft-links', unitBox, N_LEASE, gDcs)
+  const LINK_FROM = [0, 1, 2] as const
+  const LINK_TO = [1, 2, 0] as const
+  const linkRotation = new THREE.Quaternion()
+  for (let i = 0; i < N_LEASE; i++) {
+    const from = MEMBER_AT[LINK_FROM[i]]
+    const to = MEMBER_AT[LINK_TO[i]]
+    const dx = to[0] - from[0]
+    const dz = to[2] - from[2]
+    _p.set((from[0] + to[0]) / 2, 8, (from[2] + to[2]) / 2)
+    _sc.set(Math.hypot(dx, dz), 0.8, 0.8)
+    linkRotation.setFromAxisAngle(_axisY, -Math.atan2(dz, dx))
+    _m.compose(_p, linkRotation, _sc)
+    raftLinks.setMatrixAt(i, _m)
+    raftLinks.setColorAt(i, _c.setHex(COLOR.inkDim))
+  }
+  raftLinks.instanceMatrix.needsUpdate = true
 
   /* the rejoin bay — pg_rewind or a rebuild, and there is no third option */
   const gRejoin = new THREE.Group()
@@ -815,8 +880,6 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   let prevArchived = -1
 
   epArrow.visible = true
-  lockRing.visible = true
-  lockBody.visible = true
 
   /* ---------------------------------------------------------------------
    * 9. Registration.
@@ -1005,27 +1068,25 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     readout: (s: SimState) =>
       s.highAvailability.currentLeader
         ? `routes writes to ${s.highAvailability.currentLeader} · timeline ${s.highAvailability.timeline.current}`
-        : 'dark · no node owns the leader lock',
+        : 'dark · no node holds a valid leader-key lease',
   })
 
   ctx.register({
     id: 'ha.dcs',
-    name: 'Patroni consensus hall',
-    role: 'DCS leader lock and renewable lease',
+    name: 'Patroni agents and etcd consensus',
+    role: 'Raft commits one linearizable leader key through a majority',
     kind: 'network',
     district: 'replication',
     object: gDcs,
     tier: 0,
-    focus: { target: [DC[0], 8, DC[2]], distance: 98, dir: [-0.2, 0.48, 0.85] },
+    focus: { target: [DC[0], 8, 25], distance: 880, dir: [0, 0.995, 0.1] },
     labelAt: [DC[0], 24, DC[2]],
     color: COLOR.ok,
     readout: (s: SimState) => {
-      const patroni = s.highAvailability.patroni
-      if (!s.knobs.patroniDcsAvailable) {
-        return `DCS unavailable · ${patroni.leaseRemainingSec.toFixed(1)} s until demotion`
-      }
-      if (!patroni.leaderLock) return 'DCS reachable · leader lock free · writes closed'
-      return `${patroni.leaderLock} holds the leader lock · ${patroni.leaseRemainingSec.toFixed(1)} s lease`
+      const dcs = s.highAvailability.patroni.dcs
+      const key = dcs.leaderKey
+      const grant = key.leaseValid && key.value ? key.value : 'none'
+      return `Raft term ${dcs.term} · commit ${dcs.commitIndex} · leader key ${grant} · ${dcs.canCommit ? 'majority can commit' : 'no majority'}`
     },
   })
 
@@ -1368,45 +1429,89 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
       epArrow.rotation.y = damp(epArrow.rotation.y, bearing, 4, dt)
     }
 
-    const dcsLive = sim.knobs.patroniDcsAvailable
-    lockRing.visible = ha.patroni.leaderLock !== null
-      && (dcsLive || Math.sin(clock * 5) > 0)
-    lockBody.visible = lockRing.visible
-    const leaderIndex =
-      leader === 'primary' ? 0
-      : leader === 'standbyA' ? 1
-      : leader === 'standbyB' ? 2
-      : -1
+    const dcs = ha.patroni.dcs
+    const key = dcs.leaderKey
     for (let i = 0; i < N_LEASE; i++) {
       const node = sim.cluster.nodes[i]
+      const agent = ha.patroni.agents[i]
+      const member = dcs.members[i]
       const roleColor =
         node.role === 'primary'
           ? COLOR.ok
           : node.role === 'diverged'
             ? COLOR.crit
             : COLOR.replication
-      leaseMesh.setColorAt(i, _c.setHex(node.online || node.role === 'diverged' ? roleColor : OFF).multiplyScalar(1.35))
+      agentMesh.setColorAt(
+        i,
+        _c.setHex(
+          !node.online && node.role !== 'diverged'
+            ? OFF
+            : agent.canReachConsensus
+              ? roleColor
+              : COLOR.warn,
+        ).multiplyScalar(1.35),
+      )
 
-      const leaseFraction = i === leaderIndex
-        ? clamp01(ha.patroni.leaseRemainingSec / ha.patroni.leaseTtlSec)
+      memberMesh.setColorAt(
+        i,
+        _c.setHex(
+          member.role === 'leader'
+            ? COLOR.ok
+            : member.inCommitMajority
+              ? COLOR.replication
+              : dcs.canCommit
+                ? COLOR.warn
+                : COLOR.crit,
+        ).multiplyScalar(member.inCommitMajority ? 1.4 : 1.05),
+      )
+      const keyCurrent = key.leaseValid
+        && member.inCommitMajority
+        && member.appliedRevision === key.revision
+        && member.appliedLeaderKey === key.value
+      keyMesh.setColorAt(
+        i,
+        _c.setHex(
+          member.appliedLeaderKey === null
+            ? OFF
+            : keyCurrent
+              ? COLOR.ok
+              : COLOR.warn,
+        ).multiplyScalar(keyCurrent ? 1.5 : 0.95),
+      )
+
+      const leaseFraction = agent.observedLeaderKey === agent.nodeId
+        ? clamp01(agent.leaseRemainingSec / key.ttlSec)
         : 0
-      const a = LEASE_AT[i]
-      _p.set(a[0], 1 + leaseFraction * 4, a[2] + 1.1)
-      _sc.set(1.6, Math.max(0.08, leaseFraction * 8), 0.4)
+      const a = AGENT_AT[i]
+      _p.set(a[0] + 9, 0.9 + leaseFraction * 4.6, a[2])
+      _sc.set(1.1, Math.max(0.08, leaseFraction * 9.2), 2.5)
       _m.compose(_p, _qi, _sc)
-      leaseMesh.setMatrixAt(i + N_LEASE, _m)
+      leaseMesh.setMatrixAt(i, _m)
       leaseMesh.setColorAt(
-        i + N_LEASE,
+        i,
         _c.setHex(
           leaseFraction <= 0
             ? OFF
-            : dcsLive
+            : agent.canReachConsensus
               ? COLOR.ok
               : COLOR.warn,
         ).multiplyScalar(1.45),
       )
     }
+    for (let i = 0; i < N_LEASE; i++) {
+      const from = LINK_FROM[i]
+      const to = LINK_TO[i]
+      raftLinks.setColorAt(
+        i,
+        _c.setHex(dcs.members[from].reachableMembers[to] ? COLOR.ok : COLOR.crit)
+          .multiplyScalar(dcs.members[from].reachableMembers[to] ? 0.8 : 1.2),
+      )
+    }
     leaseMesh.instanceMatrix.needsUpdate = true
+    if (agentMesh.instanceColor) agentMesh.instanceColor.needsUpdate = true
+    if (memberMesh.instanceColor) memberMesh.instanceColor.needsUpdate = true
+    if (keyMesh.instanceColor) keyMesh.instanceColor.needsUpdate = true
+    if (raftLinks.instanceColor) raftLinks.instanceColor.needsUpdate = true
     if (leaseMesh.instanceColor) leaseMesh.instanceColor.needsUpdate = true
 
     const rewind = ha.rejoin

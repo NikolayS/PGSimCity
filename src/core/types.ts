@@ -75,6 +75,11 @@ export interface TableDef {
 
 export type SyncCommit = 'off' | 'local' | 'on' | 'remote_apply'
 export type WalLevel = 'minimal' | 'replica' | 'logical'
+export type HaPartition =
+  | 'healthy'
+  | 'isolate_node'
+  | 'isolate_dcs_majority'
+  | 'split_dcs'
 
 export interface Knobs {
   /** Target transactions/sec offered by clients. */
@@ -127,8 +132,8 @@ export interface Knobs {
   backupRetention: number
   /** Seconds before now selected by the recovery_target_time control. */
   recoveryTargetAge: number
-  /** Whether Patroni can reach the DCS that holds the leader lock. */
-  patroniDcsAvailable: boolean
+  /** Which network topology separates Patroni agents and etcd members. */
+  haPartition: HaPartition
   /** pg_rewind block-change prerequisite; this model's data checksums are off. */
   walLogHints: boolean
   /** Whether the failed primary's data directory still exists and is readable. */
@@ -182,7 +187,7 @@ export const DEFAULT_KNOBS: Knobs = {
   archiveAvailable: true,
   backupRetention: 3,
   recoveryTargetAge: 20,
-  patroniDcsAvailable: true,
+  haPartition: 'healthy',
   walLogHints: true,
   oldPrimaryDataIntact: true,
   rewindWalRetained: true,
@@ -563,7 +568,7 @@ export interface ClusterNodeState {
   online: boolean
   /**
    * This node's observation, not a cluster-wide truth. Patroni acts through
-   * the DCS leader lock; a stale opinion alone never authorizes writes.
+   * the linearizable DCS leader key; a stale opinion never authorizes writes.
    */
   leaderOpinion: ClusterNodeId | null
   buffers: BufferPool
@@ -579,17 +584,77 @@ export type HaTransitionKind = 'none' | 'switchover' | 'failover'
 export type HaTransitionStatus = 'idle' | 'waiting' | 'complete' | 'failed'
 export type PgRewindStatus = 'idle' | 'checking' | 'rewinding' | 'complete' | 'failed'
 
-export interface PatroniState {
-  /** This teaching model uses one Patroni-managed leader lock. */
-  leaderLock: ClusterNodeId | null
-  /** Compressed teaching TTL; real values and DCS session semantics vary. */
-  leaseTtlSec: number
+export type EtcdMemberId = 'etcd1' | 'etcd2' | 'etcd3'
+export type EtcdMemberRole = 'leader' | 'follower' | 'candidate'
+export type PatroniDcsResult =
+  | 'observed'
+  | 'renewed'
+  | 'compare_and_swap_committed'
+  | 'unreachable'
+  | 'no_consensus'
+
+export interface PatroniAgentState {
+  nodeId: ClusterNodeId
+  /** This agent's network paths to etcd-1, etcd-2, and etcd-3. */
+  reachableDcsMembers: [boolean, boolean, boolean]
+  /** A linearizable operation can reach the current Raft commit majority. */
+  canReachConsensus: boolean
+  /** Last linearizable view; stale minority reads never update this field. */
+  observedLeaderKey: ClusterNodeId | null
+  observedTerm: number
+  /** Local safety deadline for the last observed lease. */
   leaseRemainingSec: number
+  lastDcsResult: PatroniDcsResult
+  demotions: number
+}
+
+export interface EtcdMemberState {
+  id: EtcdMemberId
+  failureDomain: ClusterNodeId
+  role: EtcdMemberRole
+  /** Network paths to etcd-1, etcd-2, and etcd-3, including itself. */
+  reachableMembers: [boolean, boolean, boolean]
+  inCommitMajority: boolean
+  term: number
+  commitIndex: number
+  appliedLeaderKey: ClusterNodeId | null
+  appliedRevision: number
+}
+
+export interface LeaderKeyState {
+  /** Value in the latest committed Raft log entry. */
+  value: ClusterNodeId | null
+  /** False when its attached lease TTL has elapsed. */
+  leaseValid: boolean
+  ttlSec: number
+  leaseRemainingSec: number
+  revision: number
+  compareAndSwapCount: number
+  lastOperation: 'compare-and-swap' | 'renew' | 'lease-expired'
+}
+
+export interface DcsConsensusState {
+  algorithm: 'Raft'
+  members: [EtcdMemberState, EtcdMemberState, EtcdMemberState]
+  majority: 2
+  leaderMember: EtcdMemberId | null
+  term: number
+  commitIndex: number
+  /** Whether a connected component currently has the majority needed to commit. */
+  canCommit: boolean
+  leaderKey: LeaderKeyState
+}
+
+export interface PatroniState {
+  /** One independently observing Patroni process beside each PostgreSQL node. */
+  agents: [PatroniAgentState, PatroniAgentState, PatroniAgentState]
+  /** etcd members committing one linearizable leader key through Raft. */
+  dcs: DcsConsensusState
   renewEverySec: number
   demotions: number
   /**
-   * Always false in this model: lease loss demotes before another promotion,
-   * and promotion is impossible while the DCS is unavailable.
+   * Always false: a CAS can commit only on the Raft majority side, and an
+   * isolated holder demotes when its last observed lease reaches its TTL.
    */
   splitBrain: boolean
 }
@@ -924,7 +989,7 @@ export interface SimApi {
   startBaseBackup(): boolean
   /** Restore to `targetAgeSec` before now, or the recoveryTargetAge control. */
   startPointInTimeRestore(targetAgeSec?: number): boolean
-  /** Record one node's observation; the DCS leader lock remains authoritative. */
+  /** Record one node's observation; the DCS leader key remains authoritative. */
   setLeaderOpinion(node: ClusterNodeId, leader: ClusterNodeId | null): void
   /** Stop writes, wait for the selected standby, then hand over with no loss. */
   startSwitchover(target?: 'standbyA' | 'standbyB'): boolean
