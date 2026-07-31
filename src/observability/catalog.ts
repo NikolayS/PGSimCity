@@ -1,8 +1,8 @@
 /* ============================================================================
  * THE INSTRUMENT CATALOG
  *
- * Every name in this file was checked against postgresql.org/docs/current
- * (PostgreSQL 18.4) while it was being written. The rule is absolute: if a
+ * Every name in this file targets the PostgreSQL 18 major line and was checked
+ * against its manual; default-value claims use the reviewed 18.3 release. If a
  * column, view, function or enum value appears here, it exists. Where a name
  * changed between releases the change is recorded in `version`, because a
  * reader on 15 who copies an 18 query and gets "column does not exist" has been
@@ -145,7 +145,7 @@ export const CATALOG: CatalogEntry[] = [
     kind: 'view',
     since: 17,
     subsystem: 'checkpoint',
-    what: 'Why checkpoints happen, how many pages they write, and how long they take.',
+    what: 'How checkpoints were initiated, how many pages they write, and how long they take. num_requested does not encode the request cause.',
     columns: [
       'num_timed', 'num_requested', 'num_done', 'restartpoints_timed', 'restartpoints_req',
       'restartpoints_done', 'write_time', 'sync_time', 'buffers_written', 'slru_written',
@@ -207,14 +207,14 @@ export const CATALOG: CatalogEntry[] = [
       'pid', 'usesysid', 'usename', 'application_name', 'client_addr', 'client_hostname',
       'client_port', 'backend_start', 'backend_xmin', 'state', 'sent_lsn', 'write_lsn',
       'flush_lsn', 'replay_lsn', 'write_lag', 'flush_lag', 'replay_lag', 'sync_priority',
-      'sync_state',
+      'sync_state', 'reply_time',
     ],
     docs: `${M}#MONITORING-PG-STAT-REPLICATION-VIEW`,
-    coverage: 'live',
+    coverage: 'partial',
     coverageNote:
-      'The model runs a real streaming standby with four separate LSN positions, a wire with latency, and a single-threaded replay process. Every position and lag shown here is produced by it.',
+      'The model produces four separate LSN positions and derives a current primary-to-replay byte gap. PostgreSQL lag intervals measure recent commit-delay impact and have idle-to-NULL behavior the model does not reproduce, so they are blank. reply_time is also blank because the model does not timestamp status replies.',
     version:
-      'write_lag, flush_lag and replay_lag arrived in 10. Before that you had to compute lag yourself from the LSNs.',
+      'write_lag, flush_lag, replay_lag and reply_time arrived in 10. The lag intervals are not current LSN gaps converted to time.',
     projection: 'replication',
     city: 'walsender',
   },
@@ -347,7 +347,7 @@ export const CATALOG: CatalogEntry[] = [
     docs: 'https://www.postgresql.org/docs/current/view-pg-replication-slots.html',
     coverage: 'partial',
     coverageNote:
-      'Diagnose creates a logical slot when wal_level = logical and advances its confirmed_flush_lsn. This projection reports every slot as reserved. The wider operator model can lose a physical standby slot under retention pressure, but that state is not yet exposed in this result grid.',
+      'Diagnose creates a logical slot when wal_level = logical. The model keeps one logical-consumer position and projects it as both restart_lsn and confirmed_flush_lsn; real PostgreSQL tracks them separately, and WAL retention starts at restart_lsn. This projection reports every slot as reserved. The wider operator model can lose a physical standby slot under retention pressure, but that state is not yet exposed in this result grid.',
     version:
       'wal_status and safe_wal_size arrived in 13 and are the columns to alert on: reserved → extended → unreserved → lost. inactive_since arrived in 17.',
     projection: 'slots',

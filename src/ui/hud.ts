@@ -1804,8 +1804,7 @@ export function createHud(ctx: UiContext): UiModule {
 
     if (decision.kind === 'slot-pressure') {
       const slot = s.replication.physicalSlots[1]
-      const standby = s.replication.standbys[1]
-      setText(decisionTitle, 'WAL retention and standby continuity')
+      setText(decisionTitle, 'Required standby: investigate, then contain')
       setDecisionFact(
         0,
         'pg_wal',
@@ -1820,22 +1819,22 @@ export function createHud(ctx: UiContext): UiModule {
       )
       setDecisionFact(
         2,
-        'standby_b durable gap',
-        fmtBytes(Math.max(0, s.wal.flushLsn - standby.flushedLsn)),
+        'recovery intent',
+        'resume from this slot · rebuild not approved',
       )
       if (decision.choice === 'add-wal-capacity') {
         setText(
           decisionResult,
           decision.phase === 'recovered'
-            ? `You added ${fmtBytes(decision.addedCapacityBytes)}. standby_b caught up without a rebuild; ${fmtNum(decision.rejectedWrites)} writes were rejected after the decision.`
-            : `You added ${fmtBytes(decision.addedCapacityBytes)}. The slot remains valid while standby_b catches up; the capacity is the cost.`,
+            ? `After confirming ownership, continuity and sufficient headroom, you added ${fmtBytes(decision.addedCapacityBytes)}. standby_b caught up without a rebuild; ${fmtNum(decision.rejectedWrites)} writes were rejected after the decision.`
+            : `The scenario has validated ${fmtBytes(decision.addedCapacityBytes)} against its WAL rate and catch-up plan. The slot remains valid while standby_b catches up; capacity is temporary containment, not the root-cause fix.`,
         )
       } else if (decision.choice === 'drop-replication-slot') {
         setText(
           decisionResult,
           decision.phase === 'recovered'
             ? `You dropped the slot, then copied a ${fmtBytes(decision.rebuildBytes)} base backup. standby_b can stream again.`
-            : `You dropped standby_b_slot. Retained WAL is recyclable now, but standby_b cannot resume: recovery requires a ${fmtBytes(decision.rebuildBytes)} base backup.`,
+            : `You dropped standby_b_slot despite the stated no-rebuild continuity requirement. Retained WAL is recyclable, but standby_b cannot resume from it; recovery now requires a ${fmtBytes(decision.rebuildBytes)} base backup.`,
         )
         decisionRecover.hidden = decision.phase !== 'outcome' && decision.phase !== 'recovering'
         decisionRecover.disabled = decision.phase === 'recovering'
@@ -1860,7 +1859,7 @@ export function createHud(ctx: UiContext): UiModule {
       for (let i = 0; i < s.autovac.workers.length; i++) {
         if (s.autovac.workers[i].active) workers++
       }
-      setText(decisionTitle, 'xmin horizon and cleanup')
+      setText(decisionTitle, 'Verified abandoned transaction and cleanup')
       setDecisionFact(0, 'oldest snapshot', fmtDuration(s.oldestSnapshotAge))
       setDecisionFact(1, 'dead row versions', fmtNum(dead))
       setDecisionFact(2, 'autovacuum', `${workers} workers · ${fmtNum(pages)} pages`)
@@ -1886,7 +1885,7 @@ export function createHud(ctx: UiContext): UiModule {
       return
     }
 
-    setText(decisionTitle, 'Failover candidates by durable LSN')
+    setText(decisionTitle, 'Fenced, eligible candidates by durable LSN')
     setDecisionFact(0, 'standby_a durable gap', fmtBytes(decision.standbyALagBytes))
     setDecisionFact(1, 'standby_b durable gap', fmtBytes(decision.standbyBLagBytes))
     setDecisionFact(

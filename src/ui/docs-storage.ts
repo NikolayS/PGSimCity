@@ -161,7 +161,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What you would see in production',
-        body: 'Turning `synchronous_commit` off typically transforms commit latency on write-heavy OLTP, because commits stop paying storage latency. The price is precise and worth stating plainly: after a power loss or OS crash you lose the last fraction of a second of *committed* transactions. Nothing is corrupted — the database is consistent, it is simply slightly older than the acknowledgements your application already sent. That is a business decision, not a technical one, and it can be made per transaction because `synchronous_commit` is settable inside a session.',
+        body: 'Turning `synchronous_commit` off can reduce commit latency on write-heavy OLTP because commits stop waiting for local WAL durability. The price is precise: after a PostgreSQL server crash, operating-system crash or power failure, the last fraction of a second of *acknowledged* transactions may be lost. Nothing is corrupted — recovery produces a consistent database that may be older than acknowledgements the application already received. That is a business decision, and it can be made per transaction because `synchronous_commit` is settable inside a session.',
       },
       {
         heading: 'The knob that matters',
@@ -215,7 +215,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Every way this directory fills up',
-        body: 'There are three classic causes and they all look identical from the outside — `pg_wal` grows without bound. A failing `archive_command` means segments cannot be marked done, so none of them can be recycled. A **replication slot** whose consumer went away holds `restart_lsn` fixed forever, and the server will not remove WAL a slot still claims to need. And a write rate far above what checkpoints can absorb pushes WAL past `max_wal_size`, because that limit is soft: Postgres will exceed it rather than stall your writes.',
+        body: 'There are three classic causes and they look similar from the outside — `pg_wal` grows. A failing `archive_command` prevents archived segments from being recycled. A **replication slot** whose consumer went away holds `restart_lsn` until the slot advances, is dropped, expires or is invalidated under configured retention limits. A write rate far above what checkpoints can absorb can also push WAL past `max_wal_size`, because that target is soft. Check the archive and slot views rather than inferring the cause from directory size alone.',
       },
       {
         heading: 'What you would see in production',
@@ -852,15 +852,15 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Replication slots',
-        body: 'Without a slot, the primary has no idea what a disconnected standby still needs, so a standby that is down for longer than your WAL retention comes back to `requested WAL segment has already been removed` and must be rebuilt. A **replication slot** fixes that by storing the consumer’s position durably on the primary: `restart_lsn` for physical slots, `confirmed_flush_lsn` for logical ones. No WAL from that position onwards is ever recycled. That is the entire point of a slot, and also its entire danger.',
+        body: 'Without a slot, the primary has no durable record of what a disconnected consumer still needs, so one that is down beyond available WAL may require a rebuild. For both physical and logical slots, `restart_lsn` is the oldest WAL that might still be required and therefore governs retention. A logical slot’s separate `confirmed_flush_lsn` records how far its consumer has acknowledged receiving decoded data; it can be ahead of `restart_lsn` and must not be used to estimate retained WAL. See `pg_replication_slots` before deciding that a slot is safe to remove.',
       },
       {
         heading: 'How a slot takes down a primary',
-        body: 'A slot does not expire. A standby that was decommissioned without dropping its slot, a subscriber that crashed, a CDC pipeline someone turned off for the weekend — each pins `restart_lsn` and `pg_wal` grows at your full WAL rate until the volume is full and the primary PANICs. Set `max_slot_wal_keep_size` (PostgreSQL 13 and later) so that an abandoned slot is marked `lost` and the WAL is freed; losing one replica beats losing the primary. Monitor `pg_replication_slots` for `active = false` with a growing lag.',
+        body: 'By default, inactive permanent slots do not expire: in PostgreSQL 18.3, `idle_replication_slot_timeout` defaults to zero (disabled). PostgreSQL 18 can invalidate an inactive slot when that timeout is configured, and `max_slot_wal_keep_size` can make a slot unusable once required WAL exceeds the limit. Without either guard, an abandoned consumer can pin `restart_lsn` while `pg_wal` grows toward a full volume. Monitor `active`, `restart_lsn`, `wal_status`, `safe_wal_size`, `invalidation_reason` and slot ownership; do not treat every inactive slot as abandoned.',
       },
       {
         heading: 'What you would see in production',
-        body: 'In `pg_stat_replication` the interesting columns are the four LSNs and their three lag intervals. `sent_lsn` far ahead of `write_lsn` means the network is the constraint. `flush_lsn` close behind `write_lsn` but `replay_lsn` far behind means the standby receives fine and cannot apply fast enough. `state = catchup` rather than `streaming` means it is still reading history. And if the row disappears entirely, the standby is gone and — if it had a slot — your disk clock has started.',
+        body: 'In `pg_stat_replication`, compare the four LSNs as stage boundaries. A gap from primary WAL to `sent_lsn` means backlog at or before transmission; inspect the walsender, WAL availability and the link. A `sent_lsn` to `write_lsn` gap focuses attention between sender and walreceiver, while `flush_lsn` close to `write_lsn` with `replay_lsn` behind focuses on apply. These gaps localise investigation but do not prove a root cause. If the row disappears, the walsender is gone and any surviving slot may begin retaining WAL.',
       },
     ],
     metrics: [
@@ -890,6 +890,8 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       docs: [
         manual('warm-standby.html', '26.2. Log-Shipping Standby Servers'),
         manual('monitoring-stats.html', '27.2. The Cumulative Statistics System — pg_stat_replication'),
+        manual('view-pg-replication-slots.html', 'pg_replication_slots'),
+        manual('runtime-config-replication.html', 'Replication configuration — slot retention and timeout'),
       ],
       source: [
         srcFile('src/backend/replication/walsender.c', 'XLogSendPhysical, WalSndLoop'),
@@ -928,14 +930,14 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         get: (s) => (s.knobs.walLevel === 'logical' ? (s.replication.logicalEnabled ? 'active' : 'idle') : 'off — wal_level is not logical'),
       },
       { label: 'Changes / s', get: (s) => fmtNum(s.replication.logicalEnabled ? s.replication.logicalChangesPerSec : 0) },
-      { label: 'Slot position', get: (s) => (s.replication.logicalEnabled ? fmtLsn(s.replication.logicalSlotLsn) : '—') },
+      { label: 'Confirmed flush (model)', get: (s) => (s.replication.logicalEnabled ? fmtLsn(s.replication.logicalSlotLsn) : '—'), hint: 'the model collapses logical restart_lsn to this same position; real slots expose both' },
       {
         label: 'WAL held by the slot',
         get: (s) =>
           !s.replication.logicalEnabled
             ? 'nothing — no slot exists'
             : fmtBytes(Math.max(0, s.wal.insertLsn - s.replication.logicalSlotLsn)),
-        hint: 'cannot be recycled until the consumer confirms it',
+        hint: 'model estimate from a collapsed slot position; real retention is measured from restart_lsn',
       },
     ],
     knobs: ['walLevel', 'writeRatio', 'updateRatio', 'tps'],
@@ -1022,7 +1024,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'MVCC: row versions, not rows',
-        body: 'Each tuple carries a 23-byte header, and the two fields that matter are `xmin` (the transaction that created this version) and `xmax` (the transaction that deleted or superseded it). Nothing is ever modified in place: an UPDATE writes a **new version** elsewhere and stamps `xmax` on the old one; a DELETE only stamps `xmax`. Your snapshot then decides which versions you can see, by comparing those xids against the transactions that were running when your statement began. This is why a table with 1 million rows can physically contain 40 million tuples, and why "rows" and "row versions" must never be used as synonyms when you are debugging.',
+        body: 'Each tuple carries a 23-byte header, including `xmin` (the transaction that created this version) and `xmax` (the transaction that deleted or superseded it). An UPDATE does not overwrite the old tuple’s user-column values: it writes a **new version** and modifies the old tuple header, including `xmax`, in place; DELETE likewise changes the existing header. Hint bits and page metadata are also updated in place. Your snapshot decides which versions you can see. This is why a table with 1 million logical rows can physically contain many more tuple versions, and why "rows" and "row versions" are not synonyms when debugging.',
       },
       {
         heading: 'HOT updates and page pruning',
@@ -1030,7 +1032,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What bloat physically is',
-        body: 'Bloat is dead tuples and empty line pointers occupying pages that the table still owns. It hurts in a specific way: a sequential scan reads dead space at full price, the cache holds pages that are mostly corpses, and every index over the table gets bigger too. Vacuum makes that space reusable by future inserts, but the file keeps its size — so bloat that has already happened is a permanent tax on scan cost until you rewrite the table. Note also that a line pointer cannot be freed until every index entry referencing it is gone, which is why vacuum has to visit indexes before it can finish with the heap.',
+        body: 'Bloat is dead tuples and empty line pointers occupying pages that the table still owns. It hurts because a sequential scan reads dead space and the cache holds pages with fewer useful rows. A HOT update creates no new index entries; a non-HOT update creates new entries, but reuse and cleanup mean no single update guarantees that every index file grows. Over time, non-HOT churn can still bloat heap and indexes and enlarge the working set. Vacuum makes internal space reusable, while rewriting tools are needed when returning most of that allocation matters.',
       },
       {
         heading: 'In the real thing',
@@ -1233,7 +1235,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Why vacuum matters here',
-        body: 'Removing dead tuples is only half of vacuum’s job. The other half is **recording the resulting free space in the FSM**, because space that nothing knows about is space that nothing uses. Skip that step and inserts keep extending the file even though the existing pages are half empty. This is the mechanical reason autovacuum failure shows up as a table that grows without the row count growing: the free space exists, it just is not on the map.',
+        body: 'Vacuum is important because it scans broadly, removes eligible dead tuples and records the resulting reusable space in the FSM. It is not the map’s only writer: ordinary backends also update FSM information during insertion and relation-extension paths. The distinction matters operationally — vacuum discovers reusable space comprehensively, while foreground updates are opportunistic hints. If cleanup cannot remove dead versions, inserts may extend the relation even though obsolete tuples still occupy existing pages.',
       },
       {
         heading: 'Deliberately approximate',
@@ -1252,7 +1254,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       { label: 'Dead row versions', get: (s) => fmtNum(sumTables(s, (t) => t.deadTuples)) },
       { label: 'Inserts served', get: (s) => fmtNum(sumTables(s, (t) => t.inserts)) },
-      { label: 'Since last vacuum', get: (s) => fmtDuration(sinceVacuum(s)), hint: 'the FSM is only refreshed by vacuum' },
+      { label: 'Since last vacuum', get: (s) => fmtDuration(sinceVacuum(s)), hint: 'vacuum refreshes the map comprehensively; foreground backends update it too' },
     ],
     knobs: ['autovacuum', 'autovacuumScaleFactor', 'updateRatio', 'longRunningXact'],
     see: ['storage.table', 'autovac.worker', 'landfill', 'storage.vm'],
@@ -1444,7 +1446,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Time-triggered or WAL-triggered',
-        body: "A checkpoint starts when `checkpoint_timeout` elapses (PostgreSQL's default is 5 minutes), when WAL since the last one approaches `max_wal_size` (default 1 GiB), or when something demands one — a manual `CHECKPOINT`, a shutdown, the start of a base backup. PGSimCity uses 60 seconds instead of PostgreSQL's 5-minute default so the cycle is visible; only the checkpoint clock is compressed. The distinction matters enormously: `checkpoint_completion_target` spreads the write phase over a fraction of the *expected interval*, so time-triggered checkpoints are gentle and WAL-triggered ones are not, because they arrive early and unexpectedly. Compare `num_timed` against `num_requested` in `pg_stat_checkpointer` (these counters lived in `pg_stat_bgwriter` before PostgreSQL 17). If requested checkpoints dominate, `max_wal_size` is too small for your write rate.",
+        body: "A checkpoint starts when `checkpoint_timeout` elapses, when WAL volume approaches the moving `max_wal_size` threshold, or when something requests one — including explicit `CHECKPOINT`, base-backup activity and shutdown. PGSimCity uses 60 seconds instead of PostgreSQL's 5-minute default so the cycle is visible; only the checkpoint clock is compressed. `pg_stat_checkpointer.num_timed` counts timer checkpoints; `num_requested` aggregates requested checkpoints and does **not** identify their cause. If requests are frequent, correlate their rate with WAL volume, PostgreSQL checkpoint messages and maintenance or backup activity before changing `max_wal_size`. In this city the model records its own reason separately, so a scenario can know that WAL pressure caused a request even though the real counter alone cannot.",
       },
       {
         heading: 'Where the latency spike comes from',
@@ -1452,7 +1454,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'How to tune it',
-        body: 'Turn on `log_checkpoints` (on by default since PostgreSQL 15) and read the lines: they give you buffers written, the time split between write and sync, and the reason. Then raise `max_wal_size` until checkpoints are time-triggered rather than requested; that costs disk in `pg_wal` and buys smooth writes. Then lengthen `checkpoint_timeout` — 15 to 30 minutes is common on busy systems — which reduces full-page-write volume substantially but lengthens crash recovery, so decide it against your actual RTO. Leave `checkpoint_completion_target` at 0.9 (its default since PostgreSQL 14); tuning it below that only helps if you want checkpoints to finish early for some external reason.',
+        body: 'Read PostgreSQL checkpoint messages and correlate them with WAL generation, `num_requested`, explicit maintenance and backup activity. If WAL pressure is the verified cause, raise `max_wal_size` against measured peak WAL rate and available disk; if explicit requests are the cause, changing it will not help. Lengthening `checkpoint_timeout` can reduce full-page-image frequency but may lengthen crash recovery, so decide it against the actual RTO. Leave `checkpoint_completion_target` at 0.9 unless measurements establish a reason to finish writes earlier.',
       },
     ],
     metrics: [
@@ -1465,7 +1467,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
             : `${fmtNum(s.checkpoint.buffersWritten)} / ${fmtNum(s.checkpoint.buffersToWrite)} sampled frames`,
       },
       { label: 'Last duration', get: (s) => fmtDuration(s.checkpoint.lastDuration) },
-      { label: 'Triggered by', get: (s) => s.checkpoint.reason, hint: 'time = healthy, wal = max_wal_size too small' },
+      { label: 'Model trigger', get: (s) => s.checkpoint.reason, hint: 'the model knows its cause; PostgreSQL num_requested alone does not' },
       { label: 'Redo point', get: (s) => fmtLsn(s.checkpoint.completedRedoLsn), hint: 'recovery would start here' },
     ],
     knobs: ['checkpointTimeout', 'maxWalSize', 'checkpointCompletionTarget', 'fullPageWrites', 'sharedBuffers'],
@@ -1482,7 +1484,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       ],
       source: [
         srcFile('src/backend/postmaster/checkpointer.c', 'CheckpointerMain, CheckpointWriteDelay, IsCheckpointOnSchedule, AbsorbSyncRequests'),
-        srcFile('src/backend/access/transam/xlog.c', 'CreateCheckPoint, CheckPointGuts'),
+        srcFile('src/backend/access/transam/xlog.c', 'CalculateCheckpointSegments, CreateCheckPoint, CheckPointGuts'),
       ],
       suzuki: suzuki(9, 'Write Ahead Logging (WAL) (§9.7 Checkpoint Processing)'),
       rogov: rogov(R_WAL, 'Write-Ahead Log — checkpoints'),
@@ -1691,7 +1693,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'VACUUM FULL and the alternatives',
-        body: '`VACUUM FULL` rewrites the entire table into a fresh relfilenode, tightly packed, and rebuilds every index. It gives the space back completely, and it holds an `ACCESS EXCLUSIVE` lock for the whole rewrite — reads and writes both blocked, for as long as it takes to copy the table — while needing enough free disk for a second copy. `pg_repack` and `pg_squeeze` do the same job online: each builds a tightly packed shadow copy while the table stays writable — `pg_repack` captures the concurrent changes with triggers, `pg_squeeze` decodes them out of the WAL through a replication slot, so it needs `wal_level = logical` — and swaps the copy in at the end under a brief exclusive lock. They are extensions, they need that free space too, and they are the right tool when downtime is not available.',
+        body: '`VACUUM FULL` rewrites the entire table into a fresh relfilenode and rebuilds every index while holding `ACCESS EXCLUSIVE` for the whole rewrite. `pg_repack` builds a shadow copy while the table remains usable, but it is not lock-free: it takes brief `ACCESS EXCLUSIVE` locks during setup and the final swap and holds `SHARE UPDATE EXCLUSIVE` through much of the copy. `pg_squeeze` decodes concurrent changes from WAL through a replication slot, so it needs `wal_level = logical`. These extensions shorten blocking windows rather than eliminate them, and still need room for another copy.',
       },
       {
         heading: 'What you would see in production',
@@ -1721,6 +1723,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       docs: [
         manual('sql-vacuum.html', 'VACUUM — VACUUM FULL'),
         manual('pgstattuple.html', 'F.33. pgstattuple'),
+        { label: 'pg_repack documentation — locking and operation', url: 'https://reorg.github.io/pg_repack/' },
       ],
       source: [
         srcFile('src/backend/access/heap/vacuumlazy.c', 'lazy_truncate_heap'),
@@ -1846,8 +1849,8 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         body: 'Streaming replication uses the ordinary Postgres port and protocol, opened with a special `replication` connection option. The walsender pushes WAL as it is generated, wrapped in `CopyData` messages, and the standby answers with feedback: the LSNs it has written, flushed and applied. Feedback goes out every `wal_receiver_status_interval` (10 seconds by default), or immediately when the sender asks. `wal_sender_timeout` decides how long silence is tolerated before the connection is torn down and retried.',
       },
       {
-        heading: 'Asynchronous costs nothing',
-        body: 'By default the primary never waits. A commit is durable locally, the client gets its answer, and the WAL reaches the standby whenever it reaches it. Network latency then shows up purely as **lag** — the standby is some milliseconds or seconds behind — and the practical consequence is bounded data loss on failover, not slow commits. Measure it as `pg_current_wal_lsn() - replay_lsn` in bytes, and as `replay_lag` in time.',
+        heading: 'Asynchronous replication stays off the commit path',
+        body: 'By default the primary does not wait for a standby. A commit is durable locally and WAL travels asynchronously, so failover can lose the byte gap that had not reached the promoted node. Measure current backlog with LSN differences such as `pg_current_wal_lsn() - replay_lsn`. PostgreSQL’s `write_lag`, `flush_lag` and `replay_lag` intervals instead estimate recent commit-delay impact at those stages; they are not a conversion of the current byte gap, a catch-up forecast or a reliable current-staleness clock, and may retain a value before becoming NULL when idle.',
       },
       {
         heading: 'What synchronous_standby_names really does',
@@ -1855,7 +1858,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'The availability trap',
-        body: 'Synchronous replication is a durability feature that reduces availability. If the only synchronous standby stops responding, commits **hang** — not fail, hang — until it returns or you edit `synchronous_standby_names` and reload. That is the correct behaviour for its contract, and it surprises everyone once. Configure a quorum instead of a single name: `ANY 1 (s1, s2)` keeps the guarantee while tolerating the loss of either standby, and is the shape almost everyone actually wants.',
+        body: 'Synchronous replication is a durability feature that reduces availability. If the only synchronous standby stops responding, commits wait until it returns or the configuration changes. PostgreSQL’s `ANY 1 (s1, s2)` is **quorum-based synchronous replication**: a commit needs one eligible standby acknowledgement. It is not a leader-election or consensus quorum and does not make PostgreSQL a consensus system. That commit quorum is separate from the DCS voting majority used by etcd and from Patroni’s ownership of the DCS leader lock.',
       },
     ],
     metrics: [
@@ -2017,11 +2020,11 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     id: 'replica.standby',
     title: 'Physical standby',
     subtitle: 'a second cluster replaying the first',
-    tldr: 'A byte-identical copy kept current by WAL replay, readable while it replays.',
+    tldr: 'A block-level replay of the WAL-logged cluster, readable while recovery continues.',
     sections: [
       {
         heading: 'What "physical" means',
-        body: 'The standby is the same cluster at the block level: same relfilenodes, same page contents, same everything, because it is built from a base backup and then advanced by the same WAL records the primary wrote. You do not choose what to replicate — you get every database, table, index and sequence, plus every DDL change, automatically. That completeness is exactly what makes it the right tool for high availability and the wrong tool for "replicate these three tables into the analytics system".',
+        body: 'A physical standby starts from a base backup and replays WAL at the block level for the whole WAL-logged cluster rather than selected logical tables. It is not byte-for-byte identical to the primary: unlogged-table contents are not replicated, temporary objects are local, and WAL files, control state, runtime statistics, configuration and other host-local files differ. Relation blocks affected by replay normally converge through the same WAL history, which is the useful high-availability contrast with selective logical replication.',
       },
       {
         heading: 'Read-only, with a catch',
@@ -2029,7 +2032,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'The four LSNs',
-        body: '`pg_stat_replication` on the primary gives you `sent_lsn`, `write_lsn`, `flush_lsn` and `replay_lsn`, and the gaps between them localise any problem immediately. Primary ahead of `sent` means the walsender cannot keep up or the link is saturated. `sent` ahead of `write` is network. `write` ahead of `flush` is standby disk. `flush` far ahead of `replay` is replay speed — the most common case, and the only one where adding network bandwidth changes nothing. The `write_lag`, `flush_lag` and `replay_lag` columns give the same story in time rather than bytes.',
+        body: '`pg_stat_replication` exposes `sent_lsn`, `write_lsn`, `flush_lsn` and `replay_lsn`; byte gaps localise the stage where backlog has accumulated, but not a root cause by themselves. A primary-to-sent gap points at or before WAL transmission, including walsender scheduling, WAL availability/read throughput or the link. Later gaps focus investigation on receipt, durable write or replay. The lag interval columns measure recent commit-delay impact at their stages; they are neither current byte gaps expressed as time nor catch-up predictions, and may become NULL on an idle system.',
       },
       {
         heading: 'Failover',
@@ -2041,7 +2044,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       { label: 'sent → write', get: (s) => fmtBytes(Math.max(0, s.replication.sentLsn - s.replication.writeLsn)), hint: 'network' },
       { label: 'write → flush', get: (s) => fmtBytes(Math.max(0, s.replication.writeLsn - s.replication.flushLsn)), hint: 'standby disk' },
       { label: 'flush → replay', get: (s) => fmtBytes(Math.max(0, s.replication.flushLsn - s.replication.replayLsn)), hint: 'replay speed' },
-      { label: 'Replay lag', get: (s) => (!s.replication.enabled || !s.replication.connected ? '—' : fmtDuration(s.replication.lagSec)) },
+      { label: 'Model replay delay', get: (s) => (!s.replication.enabled || !s.replication.connected ? '—' : fmtDuration(s.replication.lagSec)), hint: 'simulation gauge; not pg_stat_replication.replay_lag' },
     ],
     knobs: ['replicaEnabled', 'replicaSlowApply', 'replicaNetworkLag', 'synchronousCommit'],
     see: ['startup.proc', 'replica.client', 'walsender', 'replica.buffers'],
@@ -2054,6 +2057,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       docs: [
         manual('warm-standby.html', '26.2. Log-Shipping Standby Servers'),
         manual('hot-standby.html', '26.4. Hot Standby'),
+        manual('sql-createtable.html#SQL-CREATETABLE-UNLOGGED', 'CREATE TABLE — UNLOGGED'),
       ],
       source: [
         srcFile('src/backend/access/transam/xlogrecovery.c', 'PerformWalRecovery'),
@@ -2117,11 +2121,11 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     id: 'replica.storage',
     title: 'Standby data directory',
     subtitle: 'a physical copy of the primary data directory',
-    tldr: 'The same files, the same block numbers, a few WAL records behind.',
+    tldr: 'WAL-replayed relation blocks plus standby-local WAL, control, runtime and configuration state.',
     sections: [
       {
         heading: 'A copy, not a rebuild',
-        body: 'The standby’s data directory starts life as a `pg_basebackup` of the primary and stays a block-level copy forever after. Relation files carry the same relfilenodes, block 4271 of `orders` holds the same tuples in the same line pointers, and the free space and visibility maps are copies too. The only structural difference is a `standby.signal` file, which is what tells the server on startup that it should enter recovery and stay there.',
+        body: 'The standby’s data directory starts from `pg_basebackup`, and recovery applies WAL-logged block changes to its relation files. `standby.signal` tells startup to enter standby recovery, but it is not the only difference from the primary: the standby owns different WAL files, `pg_control` state, runtime statistics and configuration; temporary objects are local, and unlogged relations are not maintained as replicated table contents. Physical replication means whole-cluster WAL replay, not byte identity of two directories.',
       },
       {
         heading: 'Why you cannot just cp the directory',
@@ -2406,7 +2410,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     id: 'subscriber',
     title: 'Logical subscriber',
     subtitle: 'a separate, writable database',
-    tldr: 'Applies decoded row changes from a publisher — selective, cross-version, and not a replica.',
+    tldr: 'A logical replica: selective and cross-version, but not a physical standby or block-level copy.',
     sections: [
       {
         heading: 'How it works',
@@ -2414,7 +2418,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What it can do that physical replication cannot',
-        body: 'Replicate a subset of tables, or a subset of rows and columns. Replicate **between major versions**, which makes it the standard near-zero-downtime upgrade path (and PostgreSQL 17 added `pg_createsubscriber` to build one from an existing physical standby instead of copying everything again). Replicate into a database that has its own extra tables, its own indexes, and its own writes. Consolidate several publishers into one subscriber. None of that is possible with a byte-identical copy.',
+        body: 'Replicate a subset of tables, rows or columns. Replicate **between major versions**, which supports near-zero-downtime upgrades (PostgreSQL 17 added `pg_createsubscriber` to build one from an existing physical standby). A logical replica can have extra tables, different indexes and local writes, or consolidate several publishers. Those are differences from a physical standby, not reasons to say it is not a replica.',
       },
       {
         heading: 'What it cannot do',
@@ -2431,14 +2435,14 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         get: (s) => (s.knobs.walLevel !== 'logical' ? 'impossible — wal_level is not logical' : s.replication.logicalEnabled ? 'streaming' : 'idle'),
       },
       { label: 'Changes / s', get: (s) => fmtNum(s.replication.logicalEnabled ? s.replication.logicalChangesPerSec : 0), hint: 'row-level operations applied' },
-      { label: 'Confirmed to', get: (s) => (s.replication.logicalEnabled ? fmtLsn(s.replication.logicalSlotLsn) : '—') },
+      { label: 'Confirmed to', get: (s) => (s.replication.logicalEnabled ? fmtLsn(s.replication.logicalSlotLsn) : '—'), hint: 'confirmed_flush_lsn; real retention can begin earlier at restart_lsn' },
       {
         label: 'WAL retained for it',
         get: (s) =>
           !s.replication.logicalEnabled
             ? 'nothing — no subscription exists'
             : fmtBytes(Math.max(0, s.wal.insertLsn - s.replication.logicalSlotLsn)),
-        hint: 'the publisher cannot recycle this until the subscriber confirms',
+        hint: 'model estimate from a collapsed slot position; query restart_lsn for real retained WAL',
       },
     ],
     knobs: ['walLevel', 'writeRatio', 'updateRatio', 'replicaNetworkLag'],
