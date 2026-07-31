@@ -153,6 +153,20 @@ export const PALETTES: Record<ThemeMode, Record<ColorKey, number>> = {
   day: DAY_PALETTE,
 }
 
+/** Palette slots encoded into the baked indirect-light transport byte. */
+export const BOUNCE_PALETTE_KEYS = [
+  'wal',
+  'bufDirty',
+  'vacuum',
+  'checkpoint',
+  'bgwriter',
+  'replication',
+  'storage',
+  'index',
+  'lock',
+  'shmem',
+] as const satisfies readonly ColorKey[]
+
 /* ---------------------------------------------------------------------------
  * Atmosphere: everything the renderer owns that is not a material.
  * -------------------------------------------------------------------------*/

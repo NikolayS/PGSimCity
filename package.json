@@ -26,6 +26,7 @@
   ],
   "scripts": {
     "dev": "vite",
+    "bake:light": "node tools/bake-indirect.mjs",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

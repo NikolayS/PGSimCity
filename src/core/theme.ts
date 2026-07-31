@@ -6,6 +6,7 @@ import {
   DEFAULT_MODE,
   PALETTES,
   THEME_STORAGE_KEY,
+  BOUNCE_PALETTE_KEYS,
   dayAccent,
   dayEmissive,
   dayInk,
@@ -295,6 +296,109 @@ const VCOLOR_ANCHOR = '#include <color_fragment>'
 const SURFACE_ANCHOR = '#include <roughnessmap_fragment>'
 const SURFACE_VERT_ANCHOR = '#include <worldpos_vertex>'
 const SURFACE_NORMAL_ANCHOR = '#include <normal_fragment_maps>'
+const BAKED_NORMAL_VERT_ANCHOR = '#include <normal_vertex>'
+const BAKED_LIGHT_ANCHOR = '#include <lights_fragment_end>'
+
+const BAKED_VERT_ATTRIBUTES = /* glsl */ `
+#ifdef USE_INSTANCING
+attribute vec3 pgBakeSkyA;
+attribute vec3 pgBakeSkyB;
+attribute vec3 pgBakeTransferA;
+attribute vec3 pgBakeTransferB;
+#else
+attribute float pgBakeSky;
+attribute float pgBakeTransfer;
+#endif
+varying vec3 pgBakedIndirect;
+`
+
+function linearChannel(byte: number): number {
+  const value = byte / 255
+  return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4)
+}
+
+function glslColor(hex: number): string {
+  return [
+    linearChannel((hex >> 16) & 255),
+    linearChannel((hex >> 8) & 255),
+    linearChannel(hex & 255),
+  ].map((value) => value.toFixed(6)).join(', ')
+}
+
+function bakedVertexDecls(target: ThemeMode): string {
+  const palette = BOUNCE_PALETTE_KEYS
+    .map(
+      (key, index) =>
+        `\tif ( source < ${index + 0.5} ) return vec3( ${glslColor(PALETTES[target][key])} );`,
+    )
+    .join('\n')
+  const sky = target === 'day' ? '0.550000, 0.720000, 1.000000' : '0.018000, 0.032000, 0.070000'
+  const bounce = target === 'day' ? '3.000000' : '0.180000'
+  return /* glsl */ `
+${BAKED_VERT_ATTRIBUTES}
+const vec3 pgBakeSkyColor = vec3( ${sky} );
+const float pgBakeBounceGain = ${bounce};
+
+vec3 pgBakedPalette( float source ) {
+${palette}
+	return vec3( ${glslColor(PALETTES[target].shmem)} );
+}
+
+vec3 pgBakedTransport( float sky, float packed ) {
+	float byteValue = floor( packed * 255.0 + 0.5 );
+	float source = floor( byteValue / 16.0 );
+	float weight = mod( byteValue, 16.0 ) * ( 0.08 / 15.0 );
+	return pgBakeSkyColor * sky + pgBakedPalette( source ) * weight * pgBakeBounceGain;
+}
+`
+}
+
+const BAKED_VERT = /* glsl */ `
+{
+	#ifdef USE_INSTANCING
+		vec3 pgN = normalize( ( vec4( transformedNormal, 0.0 ) * viewMatrix ).xyz );
+		vec3 pgA = abs( pgN );
+		float pgSky;
+		float pgTransfer;
+		if ( pgA.x >= pgA.y && pgA.x >= pgA.z ) {
+			if ( pgN.x >= 0.0 ) {
+				pgSky = pgBakeSkyA.x;
+				pgTransfer = pgBakeTransferA.x;
+			} else {
+				pgSky = pgBakeSkyA.y;
+				pgTransfer = pgBakeTransferA.y;
+			}
+		} else if ( pgA.y >= pgA.z ) {
+			if ( pgN.y >= 0.0 ) {
+				pgSky = pgBakeSkyA.z;
+				pgTransfer = pgBakeTransferA.z;
+			} else {
+				pgSky = pgBakeSkyB.x;
+				pgTransfer = pgBakeTransferB.x;
+			}
+		} else if ( pgN.z >= 0.0 ) {
+			pgSky = pgBakeSkyB.y;
+			pgTransfer = pgBakeTransferB.y;
+		} else {
+			pgSky = pgBakeSkyB.z;
+			pgTransfer = pgBakeTransferB.z;
+		}
+		pgBakedIndirect = pgBakedTransport( pgSky, pgTransfer );
+	#else
+		pgBakedIndirect = pgBakedTransport( pgBakeSky, pgBakeTransfer );
+	#endif
+}
+`
+
+const BAKED_FRAG_DECLS = /* glsl */ `
+varying vec3 pgBakedIndirect;
+`
+
+const BAKED_LIGHT = /* glsl */ `
+// Transport is irradiance, not albedo or self-light; the physical material still
+// owns the diffuse response and GTAO can still darken the combined indirect term.
+irradiance += pgBakedIndirect;
+`
 
 const SURFACE_VARYINGS = /* glsl */ `
 varying vec3 pgWorld;
@@ -473,13 +577,18 @@ function patchThemeShader(shader: ThemeShaderSource, surface: boolean): void {
   // shader, so meaning — every basic, line and ShaderMaterial in the city —
   // cannot receive this even by accident.
   if (surface && f.indexOf(SURFACE_ANCHOR) >= 0) {
-    f = SURFACE_FRAG_DECLS + f.replace(SURFACE_ANCHOR, SURFACE_ANCHOR + '\n' + SURFACE_FRAG)
+    f = BAKED_FRAG_DECLS + SURFACE_FRAG_DECLS + f
+      .replace(SURFACE_ANCHOR, SURFACE_ANCHOR + '\n' + SURFACE_FRAG)
+      .replace(BAKED_LIGHT_ANCHOR, BAKED_LIGHT + '\n' + BAKED_LIGHT_ANCHOR)
     if (f.indexOf(SURFACE_NORMAL_ANCHOR) >= 0) {
       f = f.replace(SURFACE_NORMAL_ANCHOR, SURFACE_NORMAL_ANCHOR + '\n' + SURFACE_NORMAL_FRAG)
     }
     shader.vertexShader =
+      bakedVertexDecls(mode) +
       SURFACE_VARYINGS +
-      shader.vertexShader.replace(SURFACE_VERT_ANCHOR, SURFACE_VERT_ANCHOR + '\n' + SURFACE_VERT)
+      shader.vertexShader
+        .replace(BAKED_NORMAL_VERT_ANCHOR, BAKED_NORMAL_VERT_ANCHOR + '\n' + BAKED_VERT)
+        .replace(SURFACE_VERT_ANCHOR, SURFACE_VERT_ANCHOR + '\n' + SURFACE_VERT)
   }
   shader.fragmentShader = f
 }
@@ -522,6 +631,7 @@ function isStandard(m: THREE.Material): m is THREE.MeshStandardMaterial {
 function installThemeShader(m: THREE.Material, target: ThemeMode, surface: boolean): void {
   if ((m as THREE.ShaderMaterial).isShaderMaterial === true) return
   const ud = m.userData as ThemeUserData
+  ud.pgSurface = surface
   const hook = surface ? themeHook : themeHookPlain
   if (m.onBeforeCompile !== hook) {
     m.onBeforeCompile = hook
@@ -707,6 +817,8 @@ interface ThemeUserData {
   pgTheme?: boolean
   /** Which (mode, surface) program variant is currently compiled in. */
   pgProgram?: number
+  /** Stable bake eligibility, including explicit `surface: false`. */
+  pgSurface?: boolean
   pgNight?: CapturedNight
   /** Exact daylight albedo for semantic zone surfaces. */
   pgDayColor?: number
