@@ -9,6 +9,49 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.22.0] — 2026-07-31
+
+Three absences closed, all of them things the renderer simply did not do.
+
+### Surfaces respond to the light
+
+v0.21.0 put the sun at 8.4°, and the procedural textures were **albedo only** —
+no normal or roughness map anywhere in the project. Every surface answered that
+raking light exactly as a painted plane would, which is why the city still read
+flat after the light was right. Dramatic lighting on unresponsive surfaces is
+half a feature.
+
+Normals and roughness are now derived from the same noise the albedo already
+used: **64 KiB** of storage including mips, 1.84 kB of bundle. Box edges are
+chamfered so they catch a highlight without reading as rounded — 117,856 added
+triangles on `high` and `ultra`, none below.
+
+### Water reflects
+
+Nothing in the scene reflected anything: no `Reflector`, and the water had no
+reflect or refract term. Water now takes a planar reflection at quarter to half
+resolution, blurred from **1.3 to 5.2 texels over 26 to 240 m** at roughness
+0.74, so it reads wet rather than mirrored — a mirror-sharp surface looks like a
+bug.
+
+It stays transparent enough that the buffer pool tiles beneath remain legible.
+That deck is a data display before it is a scene, and legibility wins.
+
+### The sky is scattering, not a ramp
+
+It was a gradient dome with a sun drawn into it. It is now Rayleigh and Mie
+scattering, which at a low sun produces the warm horizon band and deepening
+zenith that a hand-tuned ramp only approximates. Because the environment map is
+prefiltered from the sky, **every glossy surface improved with it for free**.
+
+`low` and `reduced` keep the gradient deliberately. Night and the starfield are
+unchanged, and all 45 semantic colour pairs still pass the distance threshold.
+
+Cost: one extra quarter-to-half resolution pass for reflections, none for
+scattering. Chunk 1,262.80 → 1,273.80 kB.
+
+---
+
 ## [0.21.0] — 2026-07-30
 
 ### Daylight commits to an hour
