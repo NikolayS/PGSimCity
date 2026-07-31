@@ -208,6 +208,41 @@ silently replace another worktree's version of a file.
 - Capture before/after evidence for visible fixes. Let software rendering
   settle, inspect console exceptions, and report what the image actually shows.
 
+### Review before every release
+
+**A release is not cut until an independent review panel has read it.** Not the
+agent that wrote the code, and not only the orchestrator who specified it — a
+team of veteran reviewers with distinct lenses, run across models.
+
+Why this rule exists: twenty-one releases shipped in a single session, most of
+them written by one agent to another's specification, with no independent expert
+ever reading the result. The orchestrator's own PostgreSQL terminology was
+corrected by the project owner in that window. Self-review by the author, or by
+the author's specifier, does not find the errors that matter — a green suite
+proves the code does what it was told, never that what it was told is true.
+
+**The panel:**
+
+- **At least three lenses, working independently**, not three copies of "review
+  this". Typical division: the simulation's PostgreSQL fidelity; the operational
+  claims (HA, replication, backup, recovery); and the user-facing prose plus the
+  reader's actual experience.
+- **Across models.** Opus and GPT reviewing the same surface independently.
+  Agreement between them is strong evidence; disagreement is the most
+  interesting finding available and must be resolved, not averaged.
+- **Adversarial framing.** Reviewers are asked what is *wrong*, ranked by how
+  badly it would mislead a reader — not asked whether the work is good.
+- **Prior audits are claims, not ground truth.** `KNOB-AUDIT.md` and every
+  earlier review were produced by a single agent and must be re-verifiable.
+
+**Reviewers do not fix.** They report with file, line, the claim, and what is
+actually true, citing the PostgreSQL documentation or Rogov by chapter. Fixes are
+separate work, so that finding and defending are never the same act.
+
+**Blocking findings block the release.** A falsehood about PostgreSQL is always
+blocking; this project's entire value is that its claims are true. Non-blocking
+findings that are deliberately left must be stated in the release notes.
+
 ### Review and delivery
 
 - CI must be green before review.
