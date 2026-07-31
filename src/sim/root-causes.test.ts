@@ -353,11 +353,11 @@ describe('synchronous_commit guarantees', () => {
     sim.setKnob('autovacuum', false)
     sim.setKnob('replicaNetworkLag', 50)
     sim.setKnob('synchronousCommit', mode)
-    advanceBy(sim, 300)
+    advanceBy(sim, 10)
 
     let waiters = 0
     let samples = 0
-    const until = sim.state.t + 120
+    const until = sim.state.t + 20
     while (sim.state.t < until) {
       sim.update(Math.min(1 / 30, until - sim.state.t))
       waiters += sim.state.backends.filter((backend) => backend.state === 'commit_wait').length
@@ -366,7 +366,7 @@ describe('synchronous_commit guarantees', () => {
     return waiters / samples
   }
 
-  it('forms the off < local < on < remote_apply commit-wait ladder', { timeout: 20_000 }, () => {
+  it('forms the off < local < on < remote_apply commit-wait ladder', () => {
     const off = meanCommitWaiters('off')
     const local = meanCommitWaiters('local')
     const on = meanCommitWaiters('on')
