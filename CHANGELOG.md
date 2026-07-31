@@ -9,6 +9,49 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.25.0] — 2026-07-31
+
+### Failover, switchover, and why the old primary cannot rejoin
+
+This is what the continuity work was for. Roadmap item 3.
+
+**A planned switchover costs time and loses nothing.** It closes write admission,
+lets accepted work finish, flushes the old primary, and waits until the chosen
+standby holds every byte. Only then does the leader lock and the service address
+move. The wait is the price; the loss is zero, and both are shown.
+
+**An unplanned failover starts with the primary already gone.** The candidate
+promotes at whatever durable LSN it happens to own, so the byte gap — and the
+committed transactions inside it — are lost. How much depends on how far behind
+that standby was, which is the entire argument for watching replication lag.
+
+### The timeline forks
+
+Promotion increments the timeline. Timeline 2 diverges from timeline 1 at the
+standby's durable LSN, the old primary is marked **diverged**, and its
+incompatible tail is shown. **Two histories, not one history where somebody is
+behind** — the concept most readers miss, and now a thing you can look at. The
+`timelineYard` has stood empty since the continuity quarter was built.
+
+### `pg_rewind` takes time and can fail
+
+It repaired a **6,707,050 byte** divergence in 6.03 s. It also fails, after a
+visible check, when the data directory is gone, when block-change tracking was
+absent before divergence, or when the required WAL has been recycled — following
+PostgreSQL's documented prerequisites. A rewind that always succeeds instantly
+teaches the opposite of the lesson.
+
+### Patroni
+
+The DCS lock and its renewable lease are modelled. Losing the lease demotes the
+leader, and promotion without the DCS is forbidden — which is what prevents
+split-brain. Quorum membership, asymmetric partitions, watchdog failure and DCS
+failsafe mode are **explicitly excluded and disclosed** rather than implied.
+
+Knob verdicts 30–33 added to `KNOB-AUDIT.md`. Chunk +12.79 kB.
+
+---
+
 ## [0.24.0] — 2026-07-31
 
 ### Three nodes, each with its own opinion
