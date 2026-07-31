@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createBus } from '../core/bus'
+import { createCollector } from '../observability/collector'
+import { PROJECTIONS } from '../observability/views'
 import { createSim } from './model'
 
 function advanceBy(sim: ReturnType<typeof createSim>, seconds: number): void {
@@ -58,6 +60,40 @@ function runFailover(networkLagMs: number): {
 }
 
 describe('Patroni switchover and failover', () => {
+  it('parks commits on SyncRep when the configured synchronous standby disconnects', () => {
+    const sim = createSim(createBus())
+    sim.setKnob('tps', 600)
+    sim.setKnob('writeRatio', 1)
+    sim.setKnob('synchronousCommit', 'on')
+    advanceBy(sim, 15)
+
+    sim.setKnob('replicaEnabled', false)
+    advanceBy(sim, 8)
+    const commitsAfterDrain = sim.state.stats.commits
+    advanceBy(sim, 10)
+
+    const waiters = sim.state.backends.filter(
+      (backend) => backend.state === 'commit_wait',
+    )
+    const activity = PROJECTIONS.activity(
+      sim.state,
+      createCollector(sim),
+      'total',
+    )
+    const waitEvents = activity.rows.map((row) => {
+      const cell = row.cells.wait_event
+      return typeof cell === 'string' ? cell : cell.v
+    })
+
+    expect.soft(sim.state.stats.commits).toBe(commitsAfterDrain)
+    expect.soft(waiters).toHaveLength(sim.state.maxConnections)
+    expect.soft(waitEvents).toContain('SyncRep')
+
+    sim.setKnob('synchronousStandbyNames', false)
+    advanceBy(sim, 8)
+    expect(sim.state.stats.commits).toBeGreaterThan(commitsAfterDrain)
+  })
+
   it('waits for a planned switchover and loses no WAL or transactions', () => {
     const sim = createSim(createBus())
     warmLag(sim, 300)
@@ -81,6 +117,22 @@ describe('Patroni switchover and failover', () => {
       'primary',
       'standby',
     ])
+  })
+
+  it('keeps the demoted primary following after a planned switchover', () => {
+    const sim = createSim(createBus())
+    warmLag(sim, 300)
+    expect(sim.startSwitchover('standbyA')).toBe(true)
+    advanceUntil(sim, () => sim.state.highAvailability.transition.status === 'complete')
+    const appliedAtPromotion = sim.state.cluster.nodes[0].wal.appliedLsn
+
+    advanceBy(sim, 60)
+
+    const oldPrimary = sim.state.cluster.nodes[0]
+    expect(oldPrimary.role).toBe('standby')
+    expect(oldPrimary.online).toBe(true)
+    expect(oldPrimary.wal.appliedLsn).toBeGreaterThan(appliedAtPromotion)
+    expect(oldPrimary.wal.appliedLsn).toBeLessThanOrEqual(sim.state.wal.insertLsn)
   })
 
   it('reports more bytes and transactions lost from a more-lagged failover', () => {
@@ -108,6 +160,51 @@ describe('Patroni switchover and failover', () => {
     expect(sim.state.replication.standbys[1].mode).toBe('sync')
     expect(sim.state.replication.standbys[1].connected).toBe(true)
     expect(sim.state.stats.commits).toBeGreaterThan(committedAtPromotion)
+  })
+
+  it('prices synchronous commit from the current follower after promotion', () => {
+    function firstCommitWaitEstimate(networkLagMs: number): number {
+      const sim = createSim(createBus())
+      sim.setKnob('tps', 300)
+      sim.setKnob('writeRatio', 1)
+      advanceBy(sim, 10)
+      expect(sim.startSwitchover('standbyA')).toBe(true)
+      advanceUntil(sim, () => sim.state.highAvailability.transition.status === 'complete')
+
+      sim.setKnob('tps', 0)
+      advanceBy(sim, 4)
+      sim.setKnob('standbyBNetworkLag', networkLagMs)
+      sim.setKnob('synchronousCommit', 'remote_apply')
+      sim.setKnob('tps', 200)
+      advanceUntil(
+        sim,
+        () => sim.state.backends.some((backend) => backend.state === 'commit_wait'),
+      )
+      const waiter = sim.state.backends.find(
+        (backend) => backend.state === 'commit_wait',
+      )
+      expect(waiter).toBeDefined()
+      return waiter?.stateDur ?? 0
+    }
+
+    const nearby = firstCommitWaitEstimate(20)
+    const distant = firstCommitWaitEstimate(400)
+
+    expect(distant - nearby).toBeGreaterThan(0.7)
+  })
+
+  it('does not acknowledge writes that a synchronous failover target lacks', () => {
+    const sim = createSim(createBus())
+    sim.setKnob('tps', 2_000)
+    sim.setKnob('writeRatio', 1)
+    sim.setKnob('replicaNetworkLag', 400)
+    sim.setKnob('synchronousCommit', 'on')
+    advanceBy(sim, 35)
+
+    expect(sim.startFailover('standbyA')).toBe(true)
+    advanceUntil(sim, () => sim.state.highAvailability.transition.status === 'complete')
+
+    expect(sim.state.highAvailability.transition.lossTransactions).toBe(0)
   })
 
   it('demotes a leader whose Patroni lease expires without promoting a rival', () => {
@@ -148,6 +245,7 @@ describe('pg_rewind after a timeline fork', () => {
   function failedOver(walLogHints = true): ReturnType<typeof createSim> {
     const sim = createSim(createBus())
     sim.setKnob('walLogHints', walLogHints)
+    sim.setKnob('standbyBEnabled', false)
     warmLag(sim, 400)
     sim.startFailover('standbyA')
     advanceUntil(sim, () => sim.state.highAvailability.transition.status === 'complete')

@@ -9,7 +9,8 @@ Original scope: the 23 fields of `Knobs` in `src/core/types.ts:75`. The
 disaster-recovery addendum below audits the three controls added by roadmap
 item 1, and the three-node addendum audits the three controls added by roadmap
 item 2. The failover addendum audits four controls added by roadmap item 3,
-bringing the current contract to 33 fields. Method: read every
+and the synchronous-replication availability fix adds one control, bringing the
+current contract to 34 fields. Method: read every
 consumer, then drive the model directly — `createSim()` with a stub bus,
 `setKnob()`, `update(1/30)`, seeded RNG, 300–400 s of warm-up before every
 reading, and an explicit down-sweep afterwards to test recovery. Every number
@@ -942,6 +943,7 @@ not an instantaneous boolean response.
 | 31 | `walLogHints` | `wal_log_hints` (data checksums are declared off) | **CORRECT** | On before divergence let `pg_rewind` repair a 6,707,050-byte divergent tail in 6.03 s. Off before divergence failed after the 2.0 s prerequisite pass with “data checksums are off and wal_log_hints was not enabled before divergence.” Turning it on afterwards still failed: past hint records cannot be created retroactively. Recovery correctly requires a fresh divergence whose prerequisite was already enabled (or a rebuild). |
 | 32 | `oldPrimaryDataIntact` | incident condition, not a GUC | **CORRECT** | Off made `pg_rewind` spend 2.0 s checking and then fail because the former primary data directory was missing or unreadable. Restoring that condition and retrying completed the same measured rewind. The failed attempt does not alter the divergent node. |
 | 33 | `rewindWalRetained` | required divergence WAL availability, not a GUC | **CORRECT** | Off made the 2.0 s check fail with the explicit recycled-WAL reason; on plus retry completed. This control represents availability from retained `pg_wal` or an accessible archive, not a promise that changing a PostgreSQL setting resurrects deleted WAL. |
+| 34 | `synchronousStandbyNames` | `synchronous_standby_names` empty or naming the active follower | **CORRECT** | With the named follower connected, the fixed probe delivered 259.52 tps. Disconnecting it delivered exactly 0 commits in 60 s, parked all 16 backends on `IPC / SyncRep`, and preserved the last acknowledged LSN. Clearing the name and reloading released the waiters and resumed 415.90 tps with local durability only. This boolean deliberately models the two operational states, not PostgreSQL's priority/quorum grammar. |
 
 The promotion itself was swept at two different one-way lags under the same
 workload. At 40 ms, timeline 2 forked at `0/20B4FE66`; the former primary ended
@@ -949,14 +951,17 @@ at `0/20BC016D`, so **459,527 bytes and 171 committed write transactions** were
 lost. At 400 ms, the fork was `0/2055AA03` against that same former-primary end:
 **6,707,050 bytes and 2,622 transactions** were lost. The direction is strict
 for both units. A planned switchover from the 300 ms case waited 2.67 s for the
-standby and recorded exactly zero bytes and zero transactions lost.
+standby and recorded exactly zero bytes and zero transactions lost. Sixty
+seconds after that handover, the demoted primary had advanced from LSN
+551,833,503 to 724,759,874 — 172,926,371 bytes — and matched the current
+leader instead of freezing.
 
 ---
 
 ## Operator-scenario addendum — roadmap item 10
 
-No new `Knobs` field was added for the three operator situations, so the
-contract remains at verdict 33. Adding storage, dropping a replication slot,
+The three operator situations add no further `Knobs` fields, so the contract
+ends at verdict 34. Adding storage, dropping a replication slot,
 terminating a backend, promoting a named node, rebuilding a standby and running
 `pg_rewind` are operations with consequences, not configuration policy. They
 therefore use the existing model state and operation APIs rather than disguising
@@ -974,7 +979,7 @@ discloses that scale.
 | Old snapshot pins xmin | Terminate the session | One idle transaction was aborted; this scenario models 0 uncommitted row changes in it. The horizon released and vacuum began reclaiming dead row versions. | The next vacuum pass reclaimed space without restarting the cluster. |
 | Old snapshot pins xmin | Wait 20 more seconds | 101,567 additional dead row versions and 1,689 heap pages (13.20 MiB) accumulated while all 3 autovacuum workers remained occupied behind the old horizon. | Terminating the same session later released xmin; vacuum then reclaimed space. |
 | Choose a failover candidate | Promote standby_a | The later durable candidate lost 598.80 KiB of WAL that contained 0 acknowledged write transactions. | The former primary remained a recoverable divergent node. |
-| Choose a failover candidate | Promote standby_b | The lagging candidate lost 13.26 MiB and 4,284 acknowledged write transactions; those numbers became permanent at the timeline fork. | `pg_rewind` copied 13.26 MiB in 6.03 teaching seconds and returned the former primary as a standby; it did not resurrect the lost transactions. |
+| Choose a failover candidate | Promote standby_b | The lagging candidate lost 13.26 MiB and 4,284 acknowledged write transactions. standby_a had already replayed 12.67 MiB past the fork, so PostgreSQL rejected the new timeline and the promotion left zero healthy standbys. | The former primary required 13.26 MiB of `pg_rewind` work and standby_a required an 8.31 GiB reinitialisation; the scenario reports 8,932,239,474 recovery bytes in total and does not pretend either repair resurrects the lost transactions. |
 
 These are not symmetric “play styles.” In the staged slot incident, adding
 capacity preserves a viable standby for a 512 MiB cost, while dropping the slot
@@ -982,7 +987,10 @@ trades that cost for an 8.36 GiB rebuild. In the xmin incident,
 `pg_stat_activity` shows that the holder is idle, so waiting protects no running
 query. In the failover incident, standby_a has the later durable LSN and
 synchronous acknowledgement history; choosing standby_b discards acknowledged
-commits.
+commits and invalidates standby_a as a follower. This follows the PostgreSQL
+manual's High Availability timeline rules and the minimum-recovery-point check
+in `checkTimeLineSwitch()` / `rescanLatestTimeLine()`; Patroni makes the same
+rewind-or-reinitialise decision for every node ahead of the selected leader.
 
 ---
 

@@ -97,6 +97,8 @@ export interface Knobs {
   /** pages per bgwriter round */
   bgwriterLruMaxpages: number
   synchronousCommit: SyncCommit
+  /** True when synchronous_standby_names names the active follower. */
+  synchronousStandbyNames: boolean
   walLevel: WalLevel
   fullPageWrites: boolean
   autovacuum: boolean
@@ -158,6 +160,7 @@ export const DEFAULT_KNOBS: Knobs = {
   bgwriterEnabled: true,
   bgwriterLruMaxpages: 100,
   synchronousCommit: 'on',
+  synchronousStandbyNames: true,
   walLevel: 'replica',
   fullPageWrites: true,
   autovacuum: true,
@@ -617,6 +620,11 @@ export interface HaTransitionState {
 export interface PgRewindState {
   required: boolean
   node: ClusterNodeId | null
+  /** A follower ahead of the fork cannot enter the new timeline directly. */
+  reinitializeRequired: boolean
+  reinitializeNode: ClusterNodeId | null
+  reinitializeBytes: number
+  reinitializeCopiedBytes: number
   /** Captured at divergence; enabling wal_log_hints afterwards is too late. */
   blockChangeTrackingAvailable: boolean
   status: PgRewindStatus
