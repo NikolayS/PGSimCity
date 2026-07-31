@@ -14,7 +14,7 @@
  * ==========================================================================*/
 
 import { PG_PAGE_BYTES, poolBytes, poolPages } from '../core/types'
-import type { BackendSim, SimState, VacPhase } from '../core/types'
+import type { BackendSim, PhysicalStandbyState, SimState, TableSim, VacPhase } from '../core/types'
 import { N_TABLES } from '../world/layout'
 import { fmtBytes, fmtLsn, fmtNum } from '../core/util'
 import type { Collector } from './collector'
@@ -51,6 +51,23 @@ export interface Projection {
 }
 
 export type ProjectionFn = (s: SimState, c: Collector, mode: Mode) => Projection
+
+export type ProjectionSource =
+  | 'activity.rows'
+  | 'activity.xmin_rows'
+  | 'database.counters'
+  | 'tables.rows'
+  | 'bgwriter.counters'
+  | 'checkpointer.counters'
+  | 'wal.counters'
+  | 'wal.positions'
+  | 'io.rows'
+  | 'buffercache.rows'
+  | 'replication.standbys'
+  | 'vacuum.progress_rows'
+  | 'locks.rows'
+  | 'settings.rows'
+  | 'slots.rows'
 
 const NULLC: Cell = { v: 'null', tone: 'dim' }
 
@@ -429,6 +446,11 @@ const database: ProjectionFn = (s, c, mode) => {
  * pg_stat_all_tables
  * -------------------------------------------------------------------------*/
 
+export function tableDeadRatio(table: TableSim): number {
+  const tuples = table.liveTuples + table.deadTuples
+  return tuples > 0 ? table.deadTuples / tuples : 0
+}
+
 const tables: ProjectionFn = (s) => ({
   cols: [
     { key: 'relname', label: 'relname' },
@@ -446,7 +468,7 @@ const tables: ProjectionFn = (s) => ({
   rows: [...s.tables]
     .sort((a, b) => b.deadTuples - a.deadTuples)
     .map<Row>((t) => {
-      const dead = t.liveTuples + t.deadTuples > 0 ? t.deadTuples / (t.liveTuples + t.deadTuples) : 0
+      const dead = tableDeadRatio(t)
       return {
         key: t.def.id,
         tone: dead > 0.25 ? 'crit' : dead > 0.12 ? 'warn' : '',
@@ -747,9 +769,13 @@ function bar(v: number, max: number, width = 22): string {
  * pg_stat_replication
  * -------------------------------------------------------------------------*/
 
+export function replicationRows(state: SimState): PhysicalStandbyState[] {
+  return state.replication.standbys.filter((standby) => standby.enabled && standby.connected)
+}
+
 const replication: ProjectionFn = (s) => {
-  const standbys = s.replication.standbys
-  if (!standbys.some((standby) => standby.enabled && standby.connected)) {
+  const standbys = replicationRows(s)
+  if (standbys.length === 0) {
     return {
       cols: [{ key: 'x', label: 'pg_stat_replication' }],
       rows: [],
@@ -765,7 +791,6 @@ const replication: ProjectionFn = (s) => {
   }
   const rows: Row[] = []
   for (const standby of standbys) {
-    if (!standby.enabled || !standby.connected) continue
     rows.push({
       key: standby.nodeId,
       tone: standby.lagSec > 8 ? 'crit' : standby.lagSec > 2 ? 'warn' : '',
@@ -1055,6 +1080,25 @@ export const PROJECTIONS: Record<string, ProjectionFn> = {
   locks,
   settings,
   slots,
+}
+
+export const PROJECTION_SOURCES: Record<string, ProjectionSource> = {
+  activity: 'activity.rows',
+  activity_agg: 'activity.rows',
+  activity_xmin: 'activity.xmin_rows',
+  database: 'database.counters',
+  tables: 'tables.rows',
+  bgwriter: 'bgwriter.counters',
+  checkpointer: 'checkpointer.counters',
+  wal: 'wal.counters',
+  wal_lsn: 'wal.positions',
+  io: 'io.rows',
+  buffercache: 'buffercache.rows',
+  replication: 'replication.standbys',
+  progress_vacuum: 'vacuum.progress_rows',
+  locks: 'locks.rows',
+  settings: 'settings.rows',
+  slots: 'slots.rows',
 }
 
 /** Guard: the model only knows about the five tables the city ships. */

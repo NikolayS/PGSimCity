@@ -63,7 +63,7 @@ const coll = createCollector(sim)
  * "checkpoint storm" would leave the abandoned snapshot still open — a second
  * illness the second diagnosis never mentions. Reset to stock first, then apply.
  */
-function stage(scenarioId: string | null): void {
+function stage(scenarioId: string | null, stageKnobs: Partial<Knobs> = {}): void {
   if (!scenarioId) return
   const def = SCENARIOS.find((s) => s.id === scenarioId)
   if (!def) return
@@ -72,6 +72,9 @@ function stage(scenarioId: string | null): void {
     sim.setKnob(k as keyof Knobs, v as Knobs[keyof Knobs])
   }
   for (const [k, v] of Object.entries(def.knobs)) {
+    if (v !== undefined) sim.setKnob(k as keyof Knobs, v as Knobs[keyof Knobs])
+  }
+  for (const [k, v] of Object.entries(stageKnobs)) {
     if (v !== undefined) sim.setKnob(k as keyof Knobs, v as Knobs[keyof Knobs])
   }
 }
@@ -296,9 +299,9 @@ function openFlow(): void {
 }
 
 function openSymptom(s: Symptom): void {
-  stage(s.scenario)
+  stage(s.scenario, s.stageKnobs)
   coll.reset()
-  warm(90)
+  warm(s.warmSeconds ?? 90)
   screen = { kind: 'console', symptom: s, nodeId: s.entry, trail: [] }
   analytics.track(ANALYTICS_EVENTS.panelOpened, {
     panel: 'observability',

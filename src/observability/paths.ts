@@ -21,6 +21,8 @@ import type { Knobs, SimState } from '../core/types'
 import { fmtBytes } from '../core/util'
 import type { Collector } from './collector'
 import type { Subsystem } from './catalog'
+import { replicationRows, tableDeadRatio } from './views'
+import type { ProjectionSource } from './views'
 
 const MIB = 1024 * 1024
 
@@ -31,6 +33,8 @@ const MIB = 1024 * 1024
 export interface Branch {
   /** the condition, in plain language */
   label: string
+  /** exact live-row family read by both this predicate and its adjacent view */
+  source: ProjectionSource
   /** true right now? */
   test: (s: SimState, c: Collector) => boolean
   /** step id or verdict id */
@@ -133,6 +137,10 @@ export interface Symptom {
   sub: string
   /** scenario id to stage in the model, or null */
   scenario: string | null
+  /** diagnostic-only knob refinement applied after the shared scenario */
+  stageKnobs?: Partial<Knobs>
+  /** model seconds needed for this staged lesson's long-window readings */
+  warmSeconds?: number
   entry: string
   accent: Subsystem
 }
@@ -187,6 +195,30 @@ export function waits(s: SimState): Waits {
 }
 
 const share = (part: number, whole: number) => (whole > 0 ? part / whole : 0)
+
+/** The model's scaled relations make xmin trouble visible around 2–3% dead. */
+export const DIAGNOSTIC_BLOAT_RATIO = 0.02
+
+function collectorCacheHitPct(c: Collector): number {
+  const seen = c.total.blksHit + c.total.blksRead
+  return seen > 0 ? (c.total.blksHit / seen) * 100 : 0
+}
+
+function worstReplayStandby(s: SimState) {
+  return replicationRows(s).sort(
+    (a, b) => b.flushedLsn - b.appliedLsn - (a.flushedLsn - a.appliedLsn),
+  )[0]
+}
+
+function worstSenderStandby(s: SimState) {
+  return replicationRows(s).sort(
+    (a, b) => s.wal.writeLsn - b.sentLsn - (s.wal.writeLsn - a.sentLsn),
+  )[0]
+}
+
+function worstLagStandby(s: SimState) {
+  return replicationRows(s).sort((a, b) => b.lagBytes - a.lagBytes)[0]
+}
 
 export function forcedShare(c: Collector): number {
   const t = c.total.ckptTimed + c.total.ckptRequested
@@ -356,6 +388,12 @@ const KB = {
     kind: 'toggle',
     help: 'Replay is single-threaded. This models a standby whose one redo process cannot keep up.',
   },
+  standbyBSlowApply: {
+    key: 'standbyBSlowApply',
+    guc: 'standby_b replay cannot keep up',
+    kind: 'toggle',
+    help: 'Replay is independent per standby. This controls the lagging standby_b row.',
+  },
   replicaNetworkLag: {
     key: 'replicaNetworkLag',
     guc: 'network one-way delay',
@@ -365,6 +403,16 @@ const KB = {
     step: 5,
     unit: 'ms',
     help: 'Delays every position equally. It is not what people usually mean by replication lag.',
+  },
+  standbyBNetworkLag: {
+    key: 'standbyBNetworkLag',
+    guc: 'standby_b network one-way delay',
+    kind: 'range',
+    min: 0,
+    max: 200,
+    step: 5,
+    unit: 'ms',
+    help: 'Controls standby_b independently; compare its row with standby_a before blaming a shared link.',
   },
   tps: {
     key: 'tps',
@@ -452,6 +500,8 @@ export const SYMPTOMS: Symptom[] = [
     complaint: 'Nothing is wrong. Show me what normal looks like.',
     sub: 'Learn the healthy readings so an unhealthy one registers.',
     scenario: 'steady-state',
+    stageKnobs: { seqScanRatio: 0, sharedBuffers: SHARED_BUFFERS_FULL_SAMPLE_MIB },
+    warmSeconds: 300,
     entry: 'normal.1',
     accent: 'storage',
   },
@@ -481,16 +531,17 @@ const STEPS: Step[] = [
     note:
       'wait_event_type and wait_event arrived in 9.6. On 9.5 and older, pg_stat_activity had a single boolean `waiting` column that told you a backend was stuck on a heavyweight lock and nothing else — which is why so much old advice assumes every wait is a lock.',
     branches: [
-      { label: 'Most of them are waiting on `Lock`.', next: 'lock.1', test: (s) => share(waits(s).lock, waits(s).total) > 0.25 },
-      { label: 'Most of them are waiting on `IO`.', next: 'io.1', test: (s) => share(waits(s).io, waits(s).total) > 0.3 },
-      { label: 'They are waiting to commit — `IO / WalSync` or `IPC / SyncRep`.', next: 'commit.1', test: (s) => share(waits(s).commit, waits(s).total) > 0.25 },
-      { label: 'Sessions are sitting in `idle in transaction`.', next: 'bloat.2', test: (s) => waits(s).idleTx > 0 },
       {
-        label: 'Everything is `active`, nothing is waiting, and every connection slot is busy.',
+        label: 'Every connection slot is busy; new work is queueing outside PostgreSQL.',
+        source: 'activity.rows',
         next: 'v.saturation',
-        test: (s) => s.stats.activeBackends >= s.maxConnections - 1 && share(waits(s).cpu, waits(s).total) > 0.4,
+        test: (s) => waits(s).total >= s.maxConnections - 1,
       },
-      { label: 'Hardly anything is running at all.', next: 'v.idle', test: (s) => waits(s).total - waits(s).idle < 3 },
+      { label: 'Most of them are waiting on `Lock`.', source: 'activity.rows', next: 'lock.1', test: (s) => share(waits(s).lock, waits(s).total) > 0.25 },
+      { label: 'Most of them are waiting on `IO`.', source: 'activity.rows', next: 'io.1', test: (s) => share(waits(s).io, waits(s).total) > 0.3 },
+      { label: 'They are waiting to commit — `IO / WalSync` or `IPC / SyncRep`.', source: 'activity.rows', next: 'commit.1', test: (s) => share(waits(s).commit, waits(s).total) > 0.25 },
+      { label: 'Sessions are sitting in `idle in transaction`.', source: 'activity.rows', next: 'bloat.2', test: (s) => waits(s).idleTx > 0 },
+      { label: 'Hardly anything is running at all.', source: 'activity.rows', next: 'v.idle', test: (s) => waits(s).total - waits(s).idle < 3 },
     ],
   },
 
@@ -511,8 +562,8 @@ const STEPS: Step[] = [
     note:
       'pg_stat_checkpointer is new in PostgreSQL 17. On 16 and older these two counters live in pg_stat_bgwriter and are called `checkpoints_timed` and `checkpoints_req` — same numbers, older home. Most tuning guides still name the old columns.',
     branches: [
-      { label: '`num_requested` is a serious share; investigate the request sources.', next: 'stall.2', test: (_s, c) => c.total.ckptDone > 0 && forcedShare(c) > 0.2 },
-      { label: 'Almost every checkpoint is timed.', next: 'v.ckpt_ok', test: (_s, c) => c.total.ckptDone > 0 && forcedShare(c) <= 0.2 },
+      { label: '`num_requested` is a serious share; investigate the request sources.', source: 'checkpointer.counters', next: 'stall.2', test: (_s, c) => c.total.ckptDone > 0 && forcedShare(c) > 0.2 },
+      { label: 'Almost every checkpoint is timed.', source: 'checkpointer.counters', next: 'v.ckpt_ok', test: (_s, c) => c.total.ckptDone > 0 && forcedShare(c) <= 0.2 },
     ],
   },
   {
@@ -530,8 +581,8 @@ const STEPS: Step[] = [
     note:
       'A full-page image can omit the unused page hole, and wal_compression can compress it, so even BLCKSZ is not its recorded size. BLCKSZ is build-time configurable. PostgreSQL 18 reports WAL I/O in pg_stat_io with object = \'wal\'.',
     branches: [
-      { label: 'In this model, wal_fpi and wal_bytes rise together after requested checkpoints.', next: 'v.ckpt_storm', test: (_s, c) => c.total.walBytes > 0 && c.total.walFpi > 0 },
-      { label: 'WAL bytes rise without a modeled FPI burst.', next: 'v.wal_volume', test: (_s, c) => c.total.walBytes > 0 && c.total.walFpi <= 0 },
+      { label: 'In this model, wal_fpi and wal_bytes rise together after requested checkpoints.', source: 'wal.counters', next: 'v.ckpt_storm', test: (_s, c) => c.total.walBytes > 0 && c.total.walFpi > 0 },
+      { label: 'WAL bytes rise without a modeled FPI burst.', source: 'wal.counters', next: 'v.wal_volume', test: (_s, c) => c.total.walBytes > 0 && c.total.walFpi <= 0 },
     ],
   },
 
@@ -555,9 +606,37 @@ const STEPS: Step[] = [
     look:
       '`n_live_tup` and `n_dead_tup` are estimated counts: use their change as vacuum-pressure evidence, not as a physical-bloat measurement or a monotonic truth counter. HOT versus non-HOT updates describes index-maintenance work, not whether cleanup keeps up. Sample heap, index and total bytes over time; a low dead estimate does not exclude old reusable space, index bloat or TOAST growth. When a costly page scan is justified, pgstattuple can confirm tuple and free-space occupancy.',
     branches: [
-      { label: 'Estimated dead-tuple pressure is climbing although autovacuum ran recently.', next: 'bloat.2', test: (s) => s.tables.some((t) => t.bloat > 0.12 && s.t - t.lastVacuum < 90) },
-      { label: 'autovacuum has never run on it.', next: 'v.av_off', test: (s) => !s.knobs.autovacuum },
-      { label: 'The current dead-tuple estimate is low; check physical size trends.', next: 'v.no_bloat', test: (s) => s.tables.every((t) => t.bloat < 0.12) },
+      {
+        label: 'Estimated dead-tuple pressure exceeds this model’s alert threshold, and `last_autovacuum` has a value.',
+        source: 'tables.rows',
+        next: 'bloat.2',
+        test: (s) => s.tables.some((t) => tableDeadRatio(t) >= DIAGNOSTIC_BLOAT_RATIO && t.lastVacuum > 0),
+      },
+      {
+        label: 'Dead tuples exceed the alert threshold, but `last_autovacuum` is null.',
+        source: 'tables.rows',
+        next: 'bloat.autovacuum',
+        test: (s) => s.tables.some((t) => tableDeadRatio(t) >= DIAGNOSTIC_BLOAT_RATIO && t.lastVacuum === 0),
+      },
+      { label: 'The current dead-tuple estimate is low; check physical size trends.', source: 'tables.rows', next: 'v.no_bloat', test: (s) => s.tables.every((t) => tableDeadRatio(t) < DIAGNOSTIC_BLOAT_RATIO) },
+    ],
+  },
+  {
+    id: 'bloat.autovacuum',
+    kind: 'step',
+    title: 'Is routine autovacuum enabled?',
+    why: '`last_autovacuum` being null says that no pass has completed since statistics were reset; it does not say why. Read the setting before blaming the launcher.',
+    instrument: 'pg_settings',
+    projection: 'settings',
+    city: 'autovac.launcher',
+    sql: `SELECT name, setting, unit, source
+  FROM pg_settings
+ WHERE name = 'autovacuum';`,
+    look:
+      '`last_autovacuum` and `autovacuum_count` are history. The `autovacuum` setting tells you whether routine workers may launch now. A null timestamp with the setting on can simply mean that no pass has completed yet — continue to the xmin horizon instead of diagnosing a disabled launcher.',
+    branches: [
+      { label: '`autovacuum` is on; find what is preventing cleanup.', source: 'settings.rows', next: 'bloat.2', test: (s) => s.knobs.autovacuum },
+      { label: '`autovacuum` is off.', source: 'settings.rows', next: 'v.av_off', test: (s) => !s.knobs.autovacuum },
     ],
   },
   {
@@ -593,8 +672,8 @@ SELECT pid, application_name, state, backend_xmin,
     note:
       'An idle transaction is not automatically a snapshot pin. Under READ COMMITTED each command gets a new snapshot, so inspect backend_xmin and transaction IDs rather than generalizing the modeled REPEATABLE READ case.',
     branches: [
-      { label: 'There is a session in `idle in transaction` with an ancient xact_age.', next: 'bloat.3', test: (s) => s.knobs.longRunningXact || s.oldestSnapshotAge > 25 },
-      { label: 'Nothing here is old.', next: 'v.av_tuning', test: (s) => !s.knobs.longRunningXact && s.oldestSnapshotAge <= 25 },
+      { label: 'There is a session in `idle in transaction` with an ancient xact_age.', source: 'activity.xmin_rows', next: 'bloat.3', test: (s) => s.knobs.longRunningXact },
+      { label: 'Nothing here is old.', source: 'activity.xmin_rows', next: 'v.av_tuning', test: (s) => !s.knobs.longRunningXact },
     ],
   },
   {
@@ -616,8 +695,8 @@ SELECT pid, application_name, state, backend_xmin,
     note:
       'PostgreSQL 17 replaced max_dead_tuples and num_dead_tuples in this view with max_dead_tuple_bytes, dead_tuple_bytes and num_dead_item_ids, and added indexes_total and indexes_processed. delay_time arrived in 18.',
     branches: [
-      { label: 'It scans the whole heap and removes nothing.', next: 'v.xmin', test: (s) => s.knobs.longRunningXact },
-      { label: 'It is removing rows, just not fast enough.', next: 'v.av_tuning', test: (s) => !s.knobs.longRunningXact },
+      { label: 'The progress row still shows 0 removed.', source: 'vacuum.progress_rows', next: 'v.xmin', test: (s) => s.autovac.workers.some((w) => w.active && w.phase !== 'analyze' && w.deadCollected === 0) },
+      { label: 'It is removing rows, just not fast enough.', source: 'vacuum.progress_rows', next: 'v.av_tuning', test: (s) => s.autovac.workers.some((w) => w.active && !w.stalledByHorizon && w.deadCollected > 0) },
     ],
   },
 
@@ -641,9 +720,9 @@ SELECT pid, application_name, state, backend_xmin,
     note:
       'PostgreSQL 18 adds pg_stat_get_backend_io(pid) for one backend; join it laterally to pg_stat_activity when PID/query attribution is needed. It still does not identify a relation. Before 18, pg_stat_io can only supply backend-type aggregates.',
     branches: [
-      { label: 'The city’s separate representative sample has a high client-backend write share.', next: 'v.backend_writes', test: (_s, c) => backendWriteShare(c) > 0.25 },
-      { label: 'Reads dominate and the hit ratio is poor.', next: 'io.2', test: (s) => s.stats.cacheHitPct < 92 },
-      { label: 'Reads are mostly hits and writes are spread sensibly.', next: 'v.io_ok', test: (s, c) => s.stats.cacheHitPct >= 92 && backendWriteShare(c) <= 0.25 },
+      { label: 'The city’s separate representative sample has a high client-backend write share.', source: 'io.rows', next: 'v.backend_writes', test: (_s, c) => backendWriteShare(c) > 0.25 },
+      { label: 'Reads dominate and the hit ratio is poor.', source: 'io.rows', next: 'io.2', test: (_s, c) => collectorCacheHitPct(c) < 92 },
+      { label: 'Reads are mostly hits and writes are spread sensibly.', source: 'io.rows', next: 'v.io_ok', test: (_s, c) => collectorCacheHitPct(c) >= 92 && backendWriteShare(c) <= 0.25 },
     ],
   },
   {
@@ -662,8 +741,8 @@ SELECT * FROM pg_buffercache_usage_counts();`,
     note:
       'pg_buffercache_usage_counts() and pg_buffercache_summary() arrived in 16 and are cheaper than scanning the full view. The pg_buffercache view and functions do not acquire buffer-manager locks, so their values can be slightly inconsistent under concurrent activity.',
     branches: [
-      { label: 'Almost everything sits at usage_count 0.', next: 'v.small_pool', test: (s) => coldShare(s) > 0.55 },
-      { label: 'The pool is holding a real working set.', next: 'v.io_ok', test: (s) => coldShare(s) <= 0.55 },
+      { label: 'Almost everything sits at usage_count 0.', source: 'buffercache.rows', next: 'v.small_pool', test: (s) => coldShare(s) > 0.55 },
+      { label: 'The pool is holding a real working set.', source: 'buffercache.rows', next: 'v.io_ok', test: (s) => coldShare(s) <= 0.55 },
     ],
   },
 
@@ -697,8 +776,8 @@ SELECT w.*, b.state AS blocker_state,
     note:
       'pg_blocking_pids() encodes wait-queue and conflict rules that are difficult to reproduce with a pg_locks self-join. A zero blocker PID can represent a prepared transaction, whose pg_locks.pid is null; inspect pg_prepared_xacts in that case.',
     branches: [
-      { label: 'One pid is blocking everyone else.', next: 'v.lock_holder', test: (s) => s.locks.length > 0 },
-      { label: 'Nothing is blocked.', next: 'v.no_locks', test: (s) => s.locks.length === 0 },
+      { label: 'One pid is blocking everyone else.', source: 'locks.rows', next: 'v.lock_holder', test: (s) => s.locks.length > 0 },
+      { label: 'Nothing is blocked.', source: 'locks.rows', next: 'v.no_locks', test: (s) => s.locks.length === 0 },
     ],
   },
 
@@ -721,9 +800,33 @@ SELECT w.*, b.state AS blocker_state,
     note:
       'write_lag, flush_lag and replay_lag arrived in 10. An empty pg_stat_replication on a primary you believe has a standby is not "zero lag" — it means the walsender is gone.',
     branches: [
-      { label: 'Received and flushed are fine; only replay is sliding.', next: 'v.replay', test: (s) => s.replication.flushLsn - s.replication.replayLsn > 256 * 1024 },
-      { label: 'Even sent_lsn is far behind the primary.', next: 'v.network', test: (s) => s.wal.writeLsn - s.replication.sentLsn > 512 * 1024 },
-      { label: 'All four are within a few kilobytes of the primary.', next: 'v.rep_ok', test: (s) => s.replication.lagBytes < 512 * 1024 },
+      {
+        label: 'Received and flushed are fine; only replay is sliding.',
+        source: 'replication.standbys',
+        next: 'v.replay',
+        test: (s) => replicationRows(s).some(
+          (standby) => standby.flushedLsn - standby.appliedLsn > 256 * 1024,
+        ),
+      },
+      {
+        label: 'Even sent_lsn is far behind the primary.',
+        source: 'replication.standbys',
+        next: 'v.network',
+        test: (s) => replicationRows(s).some((standby) => s.wal.writeLsn - standby.sentLsn > 512 * 1024),
+      },
+      {
+        label: 'Every connected standby has all four positions within a few kilobytes of the primary.',
+        source: 'replication.standbys',
+        next: 'v.rep_ok',
+        test: (s) => {
+          const standbys = replicationRows(s)
+          return standbys.length > 0 && standbys.every((standby) =>
+            s.wal.writeLsn - standby.sentLsn < 512 * 1024
+            && s.wal.writeLsn - standby.writtenLsn < 512 * 1024
+            && s.wal.writeLsn - standby.flushedLsn < 512 * 1024
+            && s.wal.writeLsn - standby.appliedLsn < 512 * 1024)
+        },
+      },
     ],
   },
 
@@ -746,9 +849,9 @@ SELECT w.*, b.state AS blocker_state,
     note:
       'The name of the local flush wait changed. PostgreSQL 17 started generating the wait event list from a table and normalised the capitalisation on the way through, so this event is `WALSync` on 16 and older and `WalSync` from 17 on. A monitoring query that greps for the old spelling on a new server matches nothing at all, and reports a healthy zero while doing it.',
     branches: [
-      { label: 'They are waiting on `IPC / SyncRep`.', next: 'v.sync_remote', test: (s) => s.knobs.synchronousStandbyNames && (s.knobs.synchronousCommit === 'remote_write' || s.knobs.synchronousCommit === 'on' || s.knobs.synchronousCommit === 'remote_apply') && waits(s).commit > 0 },
-      { label: 'They are waiting on `IO / WalSync`.', next: 'v.sync_local', test: (s) => (!s.knobs.synchronousStandbyNames || s.knobs.synchronousCommit === 'local' || s.knobs.synchronousCommit === 'off') && waits(s).commit > 0 },
-      { label: 'Nobody is waiting to commit.', next: 'v.commit_ok', test: (s) => waits(s).commit === 0 },
+      { label: 'They are waiting on `IPC / SyncRep`.', source: 'activity.rows', next: 'v.sync_remote', test: (s) => s.knobs.synchronousStandbyNames && (s.knobs.synchronousCommit === 'remote_write' || s.knobs.synchronousCommit === 'on' || s.knobs.synchronousCommit === 'remote_apply') && waits(s).commit > 0 },
+      { label: 'They are waiting on `IO / WalSync`.', source: 'activity.rows', next: 'v.sync_local', test: (s) => (!s.knobs.synchronousStandbyNames || s.knobs.synchronousCommit === 'local' || s.knobs.synchronousCommit === 'off') && waits(s).commit > 0 },
+      { label: 'Nobody is waiting to commit.', source: 'activity.rows', next: 'v.commit_ok', test: (s) => waits(s).commit === 0 },
     ],
   },
 
@@ -770,7 +873,7 @@ SELECT w.*, b.state AS blocker_state,
       'These are totals since `stats_reset`, not rates. The raw number is almost never what you want — take two samples a minute apart and subtract. Switch the toggle above the table to per-second and watch every figure change meaning. A healthy OLTP hit ratio is 99%-ish; anything with a serious seq-scan component will read lower and that is not automatically wrong.',
     note:
       'Since PostgreSQL 15 these counters live in shared memory rather than being shipped to a collector process over UDP, which is why they no longer get lost under load and why a restart no longer resets them.',
-    branches: [{ label: 'Next: who is connected, and what are they doing?', next: 'normal.2', test: () => true }],
+    branches: [{ label: 'Next: who is connected, and what are they doing?', source: 'database.counters', next: 'normal.2', test: () => true }],
   },
   {
     id: 'normal.2',
@@ -787,7 +890,7 @@ SELECT w.*, b.state AS blocker_state,
  ORDER BY pid;`,
     look:
       'Note the background processes: the checkpointer parked on `Activity / CheckpointerMain`, the background writer on `BgwriterHibernate` when it has nothing to clean. Those are not stuck — an Activity wait is a process asleep on its own main loop, and it is the single most common false alarm in Postgres monitoring.',
-    branches: [{ label: 'Next: is the write path keeping up?', next: 'normal.3', test: () => true }],
+    branches: [{ label: 'Next: is the write path keeping up?', source: 'activity.rows', next: 'normal.3', test: () => true }],
   },
   {
     id: 'normal.3',
@@ -805,7 +908,7 @@ SELECT buffers_clean, buffers_alloc FROM pg_stat_bgwriter;`,
       'A low num_requested rate means few checkpoints were requested during this window; it does not reveal why any request occurred. Correlate requests with WAL volume, checkpoint messages, backups and explicit maintenance. buffers_clean should be non-zero but modest — the background writer is meant to clean a short way ahead of the clock hand, not to empty the pool.',
     note:
       'PostgreSQL 17 split pg_stat_checkpointer out of pg_stat_bgwriter. If you are on 16 or older, read checkpoints_timed and checkpoints_req from pg_stat_bgwriter instead.',
-    branches: [{ label: 'Next: is the standby keeping up?', next: 'normal.4', test: () => true }],
+    branches: [{ label: 'Next: is the standby keeping up?', source: 'checkpointer.counters', next: 'normal.4', test: () => true }],
   },
   {
     id: 'normal.4',
@@ -821,7 +924,7 @@ SELECT buffers_clean, buffers_alloc FROM pg_stat_bgwriter;`,
   FROM pg_stat_replication;`,
     look:
       'Alert on `pg_current_wal_lsn() - replay_lsn` in bytes for current backlog. Graph replay_lag too, but read it as PostgreSQL defines it: an estimate of recent commit-delay impact at replay, not current staleness, byte lag converted to time or a catch-up forecast. It may retain a recent value and then become NULL on an idle system.',
-    branches: [{ label: 'That is the baseline. Now go break something.', next: 'v.baseline', test: () => true }],
+    branches: [{ label: 'That is the baseline. Now go break something.', source: 'replication.standbys', next: 'v.baseline', test: () => true }],
   },
 ]
 
@@ -935,8 +1038,8 @@ const VERDICTS: Verdict[] = [
         return { ok: false, reading: `a snapshot is still open, ${s.oldestSnapshotAge.toFixed(0)} s old — the horizon has not moved` }
       const worst = [...s.tables].sort((a, b) => b.bloat - a.bloat)[0]
       return {
-        ok: worst.bloat < 0.12,
-        reading: `horizon released · worst table ${worst.def.name} is ${(worst.bloat * 100).toFixed(0)}% dead and ${worst.bloat < 0.12 ? 'has been collected' : 'is still being worked off'}`,
+        ok: tableDeadRatio(worst) < DIAGNOSTIC_BLOAT_RATIO,
+        reading: `horizon released · worst table ${worst.def.name} is ${(tableDeadRatio(worst) * 100).toFixed(0)}% dead and ${tableDeadRatio(worst) < DIAGNOSTIC_BLOAT_RATIO ? 'has been collected' : 'is still being worked off'}`,
       }
     },
     city: 'proc.array',
@@ -968,8 +1071,8 @@ const VERDICTS: Verdict[] = [
       if (!s.knobs.autovacuum) return { ok: false, reading: 'routine autovacuum is still off — this model has no anti-wraparound override' }
       const worst = [...s.tables].sort((a, b) => b.bloat - a.bloat)[0]
       return {
-        ok: worst.bloat < 0.12,
-        reading: `autovacuum on · worst table ${worst.def.name} is ${(worst.bloat * 100).toFixed(0)}% dead`,
+        ok: tableDeadRatio(worst) < DIAGNOSTIC_BLOAT_RATIO,
+        reading: `autovacuum on · worst table ${worst.def.name} is ${(tableDeadRatio(worst) * 100).toFixed(0)}% dead`,
       }
     },
     city: 'autovac.launcher',
@@ -1002,8 +1105,8 @@ const VERDICTS: Verdict[] = [
     resolved: (s) => {
       const worst = [...s.tables].sort((a, b) => b.bloat - a.bloat)[0]
       return {
-        ok: worst.bloat < 0.12,
-        reading: `scale factor ${s.knobs.autovacuumScaleFactor.toFixed(2)} · worst table ${worst.def.name} is ${(worst.bloat * 100).toFixed(0)}% dead`,
+        ok: tableDeadRatio(worst) < DIAGNOSTIC_BLOAT_RATIO,
+        reading: `scale factor ${s.knobs.autovacuumScaleFactor.toFixed(2)} · worst table ${worst.def.name} is ${(tableDeadRatio(worst) * 100).toFixed(0)}% dead`,
       }
     },
     city: 'autovac.launcher',
@@ -1184,30 +1287,37 @@ const VERDICTS: Verdict[] = [
   {
     id: 'v.replay',
     kind: 'verdict',
-    title: 'The standby is receiving fine. It cannot replay fast enough.',
+    title: 'A standby is receiving fine. It cannot replay fast enough.',
     because:
       'sent_lsn, write_lsn and flush_lsn are all tracking the primary — the network is fine and the standby\'s disk is fine. Only replay_lsn is sliding backwards.',
     mechanism:
       'Core PostgreSQL 18 uses one startup process for ordered WAL replay; recovery prefetch improves I/O but is not general parallel redo. Lag grows while sustained generation exceeds replay capacity. The standby can catch up while the primary keeps writing whenever replay capacity exceeds the incoming rate. A read there reflects replay_lsn, and the connection itself does not advertise staleness.',
-    evidence: (s) => [
-      { label: 'flush − replay', value: fmtBytes(s.replication.flushLsn - s.replication.replayLsn), tone: 'crit' },
-      { label: 'model replay delay', value: `${s.replication.lagSec.toFixed(1)} s`, tone: 'crit' },
-      { label: 'primary WAL rate', value: `${fmtBytes(s.wal.bytesPerSec)}/s` },
-    ],
+    evidence: (s) => {
+      const standby = worstReplayStandby(s)
+      if (!standby) return [{ label: 'pg_stat_replication', value: 'no connected rows', tone: 'crit' }]
+      return [
+        { label: 'standby', value: standby.applicationName, tone: 'crit' },
+        { label: 'flush − replay', value: fmtBytes(standby.flushedLsn - standby.appliedLsn), tone: 'crit' },
+        { label: 'model replay delay', value: `${standby.lagSec.toFixed(1)} s`, tone: 'crit' },
+        { label: 'primary WAL rate', value: `${fmtBytes(s.wal.bytesPerSec)}/s` },
+      ]
+    },
     fix:
       'Reduce the WAL the primary produces, or accept the lag and route reads that need currency to the primary. Track pg_current_wal_lsn() minus replay_lsn in bytes and alert on it. And set max_slot_wal_keep_size, because a slot for a standby that falls far enough behind will otherwise consume the primary\'s whole volume.',
-    knobs: [KB.replicaSlowApply, KB.replicaNetworkLag],
+    knobs: [KB.replicaSlowApply, KB.standbyBSlowApply, KB.replicaNetworkLag, KB.standbyBNetworkLag],
     confirm: {
       projection: 'replication',
       instrument: 'pg_stat_replication',
       sql: `SELECT replay_lag, pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn) FROM pg_stat_replication;`,
     },
     resolved: (s) => {
-      if (!s.replication.enabled || !s.replication.connected)
-        return { ok: false, reading: 'pg_stat_replication is empty — the walsender is gone, which is worse than lag, not better' }
+      const standbys = replicationRows(s)
+      if (standbys.length === 0)
+        return { ok: false, reading: 'pg_stat_replication is empty — no walsender is connected, which is worse than lag' }
+      const standby = worstReplayStandby(s)!
       return {
-        ok: s.replication.lagSec <= 2,
-        reading: `model replay delay ${s.replication.lagSec.toFixed(2)} s · current byte backlog ${fmtBytes(s.replication.lagBytes)}`,
+        ok: standbys.every((row) => row.lagSec <= 2 && row.lagBytes < 512 * 1024),
+        reading: `${standby.applicationName} has the worst replay delay at ${standby.lagSec.toFixed(2)} s · current byte backlog ${fmtBytes(standby.lagBytes)}`,
       }
     },
     city: 'replica.standby',
@@ -1223,13 +1333,18 @@ const VERDICTS: Verdict[] = [
     because: 'sent_lsn is behind the primary’s current WAL position. That localises the bottleneck to the sender side or link, but does not identify the network as the root cause by itself.',
     mechanism:
       'Inspect walsender scheduling and CPU pressure, WAL availability and read throughput, sender-side limits, and link throughput or congestion. High latency alone need not create a persistent byte backlog when throughput is sufficient. A primary-to-sent gap rules attention toward or before transmission; it does not prove which component caused it.',
-    evidence: (s) => [
-      { label: 'primary − sent', value: fmtBytes(s.wal.writeLsn - s.replication.sentLsn), tone: 'crit' },
-      { label: 'one-way delay', value: `${s.replication.networkLagMs} ms`, tone: 'warn' },
-      { label: 'records in flight', value: String(s.replication.inFlight) },
-    ],
+    evidence: (s) => {
+      const standby = worstSenderStandby(s)
+      if (!standby) return [{ label: 'pg_stat_replication', value: 'no connected rows', tone: 'crit' }]
+      return [
+        { label: 'standby', value: standby.applicationName, tone: 'crit' },
+        { label: 'primary − sent', value: fmtBytes(s.wal.writeLsn - standby.sentLsn), tone: 'crit' },
+        { label: 'one-way delay', value: `${standby.networkLagMs} ms`, tone: 'warn' },
+        { label: 'records in flight', value: String(standby.inFlight) },
+      ]
+    },
     fix: 'Inspect the walsender and link together. Fix sender scheduling or WAL-read constraints when they are responsible; fix link throughput or congestion when the transport is responsible. Use byte-rate evidence rather than latency alone.',
-    knobs: [KB.replicaNetworkLag],
+    knobs: [KB.replicaNetworkLag, KB.standbyBNetworkLag],
     confirm: {
       projection: 'replication',
       instrument: 'pg_stat_replication',
@@ -1238,12 +1353,14 @@ const VERDICTS: Verdict[] = [
   FROM pg_stat_replication;`,
     },
     resolved: (s) => {
-      if (!s.replication.enabled || !s.replication.connected)
+      const standbys = replicationRows(s)
+      if (standbys.length === 0)
         return { ok: false, reading: 'pg_stat_replication is empty — no walsender is connected at all' }
-      const behind = s.wal.writeLsn - s.replication.sentLsn
+      const standby = worstSenderStandby(s)!
+      const behind = s.wal.writeLsn - standby.sentLsn
       return {
-        ok: behind < 256 * 1024,
-        reading: `primary − sent_lsn is ${fmtBytes(Math.max(0, behind))} at ${s.replication.networkLagMs} ms one way`,
+        ok: standbys.every((row) => s.wal.writeLsn - row.sentLsn < 256 * 1024),
+        reading: `${standby.applicationName} has the worst primary − sent_lsn gap at ${fmtBytes(Math.max(0, behind))}, with ${standby.networkLagMs} ms one way`,
       }
     },
     city: 'net.wire',
@@ -1252,27 +1369,32 @@ const VERDICTS: Verdict[] = [
   {
     id: 'v.rep_ok',
     kind: 'verdict',
-    title: 'The standby is current.',
-    because: 'All four modeled positions are within a few kilobytes of the primary and the current modeled replay delay is small.',
+    title: 'Every connected standby is current.',
+    because: 'Every pg_stat_replication row has all four modeled positions within a few kilobytes of the primary, and each modeled replay delay is small.',
     mechanism:
       'This is what healthy looks like, and it is worth knowing precisely, because the failure mode is silent. Nothing errors when a replica falls behind: it keeps answering queries, with older data.',
-    evidence: (s) => [
-      { label: 'primary − replay', value: fmtBytes(s.replication.lagBytes), tone: 'ok' },
-      { label: 'model replay delay', value: `${s.replication.lagSec.toFixed(2)} s`, tone: 'ok' },
-      { label: 'sync_state', value: s.replication.mode === 'sync' ? 'sync' : 'async' },
-    ],
+    evidence: (s) => {
+      const standby = worstLagStandby(s)
+      if (!standby) return [{ label: 'pg_stat_replication', value: 'no connected rows', tone: 'crit' }]
+      return [
+        { label: 'worst standby', value: standby.applicationName, tone: 'ok' },
+        { label: 'primary − replay', value: fmtBytes(standby.lagBytes), tone: 'ok' },
+        { label: 'model replay delay', value: `${standby.lagSec.toFixed(2)} s`, tone: 'ok' },
+        { label: 'connected rows', value: String(replicationRows(s).length) },
+      ]
+    },
     fix:
       'Set up the alert while it is healthy. Check pg_replication_slots for ownership, restart_lsn, wal_status and safe_wal_size; inactive permanent slots retain WAL by default, while configured timeout or max_slot_wal_keep_size can invalidate them.',
-    knobs: [KB.replicaSlowApply],
+    knobs: [KB.replicaSlowApply, KB.standbyBSlowApply],
     city: 'walsender',
     reading: [DOC('warm-standby.html', 'Log-Shipping Standby Servers')],
   },
   {
     id: 'v.saturation',
     kind: 'verdict',
-    title: 'You are out of connections, not out of capacity.',
+    title: 'Every connection slot is occupied, and new work is queueing.',
     because:
-      'Every slot is busy and running, nothing is waiting on a lock or on I/O, and throughput has flattened while latency keeps climbing. New work is queuing outside the database.',
+      'All server connection slots are in use and throughput is far below the offered load. The wait rows still matter — here many occupied sessions are waiting on I/O — but they do not make another server slot available. New work is queueing outside PostgreSQL.',
     mechanism:
       'Postgres is not threaded: the postmaster forks an entire OS process per connection, each with its own memory and its own entry in the shared ProcArray. Taking a snapshot means scanning that array, so every additional connection makes every transaction in the system slightly slower — including the ones that were already fast. The cost is superlinear and it is invisible in any single query\'s timing.',
     evidence: (s) => [
