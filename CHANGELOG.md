@@ -9,6 +9,40 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.23.0] — 2026-07-31
+
+### Indirect light, baked
+
+Direct lighting was right after v0.22.0 and shadow was still flat dark. There was
+no skylight fill, no bounce, and no colour carried from one surface to another —
+GTAO approximates the darkening screen-space, but it knows nothing about geometry
+beyond the depth buffer and nothing at all about colour.
+
+The city is almost entirely static, which is exactly the condition under which
+baking pays. Indirect light is now precomputed across **140 meshes, 3,038
+instances and 10,809 vertices**, serialised and checked in, so a reader never
+computes it: a 58 KB payload installed in **7–24 ms** in a fresh browser.
+
+Under an overhang the surface bounce is unmistakable; on a building side it is
+subtle. Deep recesses and contacts stay dark, which is the point.
+
+**The cost is real and worth stating plainly**: the chunk grows 89.57 kB raw and
+22.54 kB gzipped — about 7% and 5.3%. That is the largest single increase this
+project has taken, and it buys the one thing shader work cannot fake.
+
+### Light shafts where the city blocks the sun
+
+At 8.4° the sun rakes between buildings, which is the geometry that produces
+shafts. They are generated from **real occlusion** rather than painted where they
+would look good, so they remain information about the space — where the sun
+reaches and where the city stops it — rather than decoration. That distinction is
+the house rule and it is not negotiable.
+
+Three draws at 320×190 through 512×304 depending on tier. `low` and `reduced` get
+none. Chunk +7.46 kB raw, +1.91 kB gzip.
+
+---
+
 ## [0.22.0] — 2026-07-31
 
 Three absences closed, all of them things the renderer simply did not do.
