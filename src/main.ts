@@ -6,7 +6,13 @@ import './styles/ui.css'
 import { startAnalytics } from './core/analytics'
 import { createBus } from './core/bus'
 import { Registry } from './core/registry'
-import { createTheme, setThemeMode, themeMode } from './core/theme'
+import {
+  atmosphere,
+  createTheme,
+  setThemeClockMinutes,
+  setThemeMode,
+  themeMode,
+} from './core/theme'
 import {
   createFrameTimebase,
   MAX_VISUAL_DELTA_SECONDS,
@@ -470,6 +476,8 @@ async function boot(): Promise<void> {
     audio,
     water,
     setThemeMode,
+    setThemeClockMinutes,
+    themeAtmosphere: atmosphere,
     themeMode,
   }
   Object.assign(window as unknown as Record<string, unknown>, { PGSIMCITY: handle, PGCITY: handle })

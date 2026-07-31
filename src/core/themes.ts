@@ -1,7 +1,7 @@
 import type { ColorKey } from './types'
 
 /* ============================================================================
- * PGSimCity — THE TWO PALETTES, AND THE ARITHMETIC BETWEEN THEM.
+ * PGSimCity — THE CURATED PALETTES, AND THE ARITHMETIC BETWEEN THEM.
  *
  * The city ships two rendering models, not one palette with the lights turned
  * up. They differ in what carries meaning:
@@ -28,9 +28,10 @@ import type { ColorKey } from './types'
  * module-evaluation time, before any district has been built.
  * ==========================================================================*/
 
-export type ThemeMode = 'night' | 'day'
+export type CuratedThemeMode = 'night' | 'day'
+export type ThemeMode = CuratedThemeMode | 'clock'
 
-export const THEME_MODES: readonly ThemeMode[] = ['night', 'day']
+export const THEME_MODES: readonly ThemeMode[] = ['night', 'day', 'clock']
 
 /* Day is the default. Most people meet this city for the first time on
  * unknown hardware, and a sunlit model reads as a place immediately, where the
@@ -148,7 +149,7 @@ export const DAY_PALETTE: Record<ColorKey, number> = {
   inkDim: 0x5d6b7a,
 }
 
-export const PALETTES: Record<ThemeMode, Record<ColorKey, number>> = {
+export const PALETTES: Record<CuratedThemeMode, Record<ColorKey, number>> = {
   night: NIGHT_PALETTE,
   day: DAY_PALETTE,
 }
@@ -166,6 +167,19 @@ export const BOUNCE_PALETTE_KEYS = [
   'lock',
   'shmem',
 ] as const satisfies readonly ColorKey[]
+
+/** Linear sky irradiance decoded through the baked visibility field. */
+export const BAKED_SKY_COLOR: Record<CuratedThemeMode, readonly [number, number, number]> = {
+  /* Night needs a real matte floor. Visibility still carries the occlusion, so
+   * recesses remain darker without turning structure into self-light. */
+  night: [0.24, 0.38, 0.68],
+  day: [0.55, 0.72, 1],
+}
+
+export const BAKED_BOUNCE_GAIN: Record<CuratedThemeMode, number> = {
+  night: 0.18,
+  day: 3,
+}
 
 /* ---------------------------------------------------------------------------
  * Atmosphere: everything the renderer owns that is not a material.
@@ -235,7 +249,7 @@ export interface Atmosphere {
   toon: boolean
 }
 
-export const ATMOSPHERE: Record<ThemeMode, Atmosphere> = {
+export const ATMOSPHERE: Record<CuratedThemeMode, Atmosphere> = {
   night: {
     toneMapping: 'aces',
     exposure: 1.06,
@@ -247,7 +261,7 @@ export const ATMOSPHERE: Record<ThemeMode, Atmosphere> = {
     plateFogScale: 0.32,
     hemiSky: 0x2a4a7a,
     hemiGround: 0x05070c,
-    hemiIntensity: 0.55,
+    hemiIntensity: 0.78,
     keyColor: 0xa8c8ff,
     keyIntensity: 1.15,
     keyPos: [322, 374, -196],
@@ -257,12 +271,12 @@ export const ATMOSPHERE: Record<ThemeMode, Atmosphere> = {
     shadowIntensity: 1,
     shadows: false,
     fillColor: 0x4a6fa5,
-    fillIntensity: 0.35,
+    fillIntensity: 0.48,
     fillPos: [-320, 168, 296],
     walGlow: 40,
     yardGlow: 26,
-    noBloomHemi: 0.78,
-    noBloomFill: 0.46,
+    noBloomHemi: 1.02,
+    noBloomFill: 0.62,
     noBloomWalGlow: 66,
     noBloomYardGlow: 44,
     bloomEnabled: true,
@@ -419,6 +433,123 @@ export function mix(a: number, b: number, t: number): number {
 }
 
 /* ---------------------------------------------------------------------------
+ * LOCAL-CLOCK LIGHT.
+ *
+ * There is deliberately no latitude, season or geolocation input. The path is
+ * an art-directed twelve-hour day: sunrise at 06:00, a 62° noon sun, sunset at
+ * 18:00, and a civil-twilight blend around both boundaries. It follows the
+ * reader's local wall clock, not an astronomical claim about their sky.
+ * -------------------------------------------------------------------------*/
+
+export const CLOCK_SUNRISE_MINUTES = 6 * 60
+export const CLOCK_SUNSET_MINUTES = 18 * 60
+
+export interface ClockSun {
+  /** Wrapped local minutes in [0, 1440). */
+  minutes: number
+  elevationDeg: number
+  /** Clockwise from north: east at sunrise, south at noon, west at sunset. */
+  azimuthDeg: number
+  /** Smooth night-to-day mix; the transition spans civil twilight. */
+  daylight: number
+}
+
+function smoothstep(edge0: number, edge1: number, value: number): number {
+  const t = clamp01((value - edge0) / (edge1 - edge0))
+  return t * t * (3 - 2 * t)
+}
+
+function wrapMinutes(minutes: number): number {
+  if (!Number.isFinite(minutes)) return 0
+  return ((minutes % 1440) + 1440) % 1440
+}
+
+export function clockSunAt(minutes: number): ClockSun {
+  const local = wrapMinutes(minutes)
+  const phase = ((local - CLOCK_SUNRISE_MINUTES) / 1440) * Math.PI * 2
+  const elevationDeg = 62 * Math.sin(phase)
+  return {
+    minutes: local,
+    elevationDeg,
+    azimuthDeg: ((90 + (local - CLOCK_SUNRISE_MINUTES) / 4) % 360 + 360) % 360,
+    daylight: smoothstep(-6, 8, elevationDeg),
+  }
+}
+
+const lerp = (a: number, b: number, t: number): number => a + (b - a) * t
+
+function mixPosition(
+  a: readonly [number, number, number],
+  b: readonly [number, number, number],
+  t: number,
+): readonly [number, number, number] {
+  return [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)]
+}
+
+/** A fresh value is produced only on mode entry and the once-per-minute tick. */
+export function clockAtmosphereAt(minutes: number): Atmosphere {
+  const sun = clockSunAt(minutes)
+  const t = sun.daylight
+  const night = ATMOSPHERE.night
+  const day = ATMOSPHERE.day
+  const dayModel = t >= 0.5
+  const elevation = Math.max(2, sun.elevationDeg) * (Math.PI / 180)
+  const azimuth = sun.azimuthDeg * (Math.PI / 180)
+  const target = day.keyTarget
+  const distance = 900
+  const horizontal = Math.cos(elevation) * distance
+  const solarPosition = [
+    target[0] + Math.sin(azimuth) * horizontal,
+    target[1] + Math.sin(elevation) * distance,
+    target[2] - Math.cos(azimuth) * horizontal,
+  ] as const
+  const noon = smoothstep(8, 38, sun.elevationDeg)
+  const solarKey = mix(day.keyColor, 0xfff3dc, noon)
+  const solarIntensity = lerp(1.9, 2.65, Math.max(0, Math.sin(elevation)))
+
+  return {
+    toneMapping: dayModel ? day.toneMapping : night.toneMapping,
+    exposure: lerp(night.exposure, day.exposure, t),
+    fogNearScale: lerp(night.fogNearScale, day.fogNearScale, t),
+    fogFarScale: lerp(night.fogFarScale, day.fogFarScale, t),
+    fogColor: mix(night.fogColor, day.fogColor, t),
+    plateFogScale: lerp(night.plateFogScale, day.plateFogScale, t),
+    hemiSky: mix(night.hemiSky, day.hemiSky, t),
+    hemiGround: mix(night.hemiGround, day.hemiGround, t),
+    hemiIntensity: lerp(night.hemiIntensity, day.hemiIntensity, t),
+    keyColor: mix(night.keyColor, solarKey, t),
+    keyIntensity: lerp(night.keyIntensity, solarIntensity, t),
+    keyPos: mixPosition(night.keyPos, solarPosition, t),
+    keyTarget: mixPosition(night.keyTarget, day.keyTarget, t),
+    shadowBias: lerp(night.shadowBias, day.shadowBias, t),
+    shadowNormalBias: lerp(night.shadowNormalBias, day.shadowNormalBias, t),
+    shadowIntensity: lerp(night.shadowIntensity, day.shadowIntensity, t),
+    shadows: dayModel,
+    fillColor: mix(night.fillColor, day.fillColor, t),
+    fillIntensity: lerp(night.fillIntensity, day.fillIntensity, t),
+    fillPos: mixPosition(night.fillPos, day.fillPos, t),
+    walGlow: lerp(night.walGlow, day.walGlow, t),
+    yardGlow: lerp(night.yardGlow, day.yardGlow, t),
+    noBloomHemi: lerp(night.noBloomHemi, day.noBloomHemi, t),
+    noBloomFill: lerp(night.noBloomFill, day.noBloomFill, t),
+    noBloomWalGlow: lerp(night.noBloomWalGlow, day.noBloomWalGlow, t),
+    noBloomYardGlow: lerp(night.noBloomYardGlow, day.noBloomYardGlow, t),
+    bloomEnabled: !dayModel,
+    bloomStrength: lerp(night.bloomStrength, day.bloomStrength, t),
+    bloomRadius: lerp(night.bloomRadius, day.bloomRadius, t),
+    bloomThreshold: lerp(night.bloomThreshold, day.bloomThreshold, t),
+    skyZenith: mix(night.skyZenith, day.skyZenith, t),
+    skyHorizon: mix(night.skyHorizon, day.skyHorizon, t),
+    skyHaze: mix(night.skyHaze, day.skyHaze, t),
+    skyGlow: mix(night.skyGlow, day.skyGlow, t),
+    daylight: dayModel,
+    stars: !dayModel,
+    clouds: dayModel,
+    toon: dayModel,
+  }
+}
+
+/* ---------------------------------------------------------------------------
  * NIGHT → DAY translation.
  *
  * Thirteen world modules paint with several hundred ad-hoc hex literals that no
@@ -441,10 +572,14 @@ export function isNeutralExtreme(hex: number): boolean {
 }
 
 const exact = new Map<number, number>()
+const paletteKeyForNight = new Map<number, ColorKey>()
 for (const key of Object.keys(NIGHT_PALETTE) as ColorKey[]) {
   // Later keys must not clobber earlier ones: crit and bufDirty are distinct
   // meanings that happen to be one channel apart at night.
-  if (!exact.has(NIGHT_PALETTE[key])) exact.set(NIGHT_PALETTE[key], DAY_PALETTE[key])
+  if (!exact.has(NIGHT_PALETTE[key])) {
+    exact.set(NIGHT_PALETTE[key], DAY_PALETTE[key])
+    paletteKeyForNight.set(NIGHT_PALETTE[key], key)
+  }
 }
 
 /*
@@ -469,6 +604,43 @@ for (const [night, day] of DERIVED) if (!exact.has(night)) exact.set(night, day)
 export function exactDay(hex: number): number {
   const hit = exact.get(hex)
   return hit === undefined ? -1 : hit
+}
+
+const BOUNCE_KEYS = new Set<ColorKey>(BOUNCE_PALETTE_KEYS)
+const CLOCK_HUE_BEND: Partial<Record<ColorKey, number>> = {
+  /* These three routes prevent the warm meanings crossing while their night
+   * and day lightness order reverses. Endpoints remain the curated colours. */
+  wal: 8,
+  bufDirty: -4,
+  lock: 4,
+}
+
+function clockSemanticColor(key: ColorKey, daylight: number): number {
+  const t = clamp01(daylight)
+  const [nightHue, nightSat, nightLight] = hslOf(NIGHT_PALETTE[key])
+  const [dayHue, daySat, dayLight] = hslOf(DAY_PALETTE[key])
+  const shortestHue = ((dayHue - nightHue + 540) % 360) - 180
+  const bend = (CLOCK_HUE_BEND[key] ?? 0) * Math.sin(Math.PI * t)
+  return hexOfHsl(
+    nightHue + shortestHue * t + bend,
+    lerp(nightSat, daySat, t),
+    lerp(nightLight, dayLight, t),
+  )
+}
+
+export function clockPaletteForDaylight(daylight: number): Record<ColorKey, number> {
+  const t = clamp01(daylight)
+  const out = {} as Record<ColorKey, number>
+  for (const key of Object.keys(NIGHT_PALETTE) as ColorKey[]) {
+    out[key] = BOUNCE_KEYS.has(key)
+      ? clockSemanticColor(key, t)
+      : mix(NIGHT_PALETTE[key], DAY_PALETTE[key], t)
+  }
+  return out
+}
+
+export function clockPaletteAt(minutes: number): Record<ColorKey, number> {
+  return clockPaletteForDaylight(clockSunAt(minutes).daylight)
 }
 
 /* ---------------------------------------------------------------------------
@@ -588,6 +760,30 @@ export function daySurface(hex: number, key?: string): number {
   return hexOfHsl(h, Math.max(0.25, Math.min(0.8, s * 0.85)), Math.max(0.34, Math.min(0.62, 0.26 + l * 0.4)))
 }
 
+/** Matte night albedo: still dark navy, but no longer near-black paint. */
+export function nightSurface(hex: number): number {
+  if (isNeutralExtreme(hex)) return hex
+  const [h, s, l] = hslOf(hex)
+  if (l >= 0.34) return hex
+  return hexOfHsl(h, s, Math.min(0.4, 0.06 + l * 1.15))
+}
+
+export function clockSurface(hex: number, daylight: number, key?: string): number {
+  const day = daySurface(hex, key)
+  /* The curated golden-hour preset draws pale stone against a still brighter
+   * sky. Clock mode must travel continuously from night, where structure is
+   * brighter than the void; a brighter high-noon stone keeps that ordering
+   * through twilight instead of crossing through equal luminance. The smooth
+   * white lift is reflected light, never emissive, and returns to zero at both
+   * curated endpoints. */
+  const noon = hslOf(hex)[2] < 0.34 ? mix(day, 0xffffff, 0.4) : day
+  const t = clamp01(daylight)
+  const base = mix(nightSurface(hex), noon, t)
+  return hslOf(hex)[2] < 0.34
+    ? mix(base, 0xffffff, Math.sin(Math.PI * t) * 0.5)
+    : base
+}
+
 /**
  * Meaning — anything painted with `neon()`, and every accent the generic walk
  * finds. Bloom is off, so the value on screen IS the value picked here: it has
@@ -599,6 +795,13 @@ export function dayAccent(hex: number): number {
   if (hit !== undefined) return hit
   const [h, s, l] = hslOf(hex)
   return hexOfHsl(h, Math.max(0.42, Math.min(0.95, s * 0.9 + 0.1)), Math.max(0.3, Math.min(0.56, 0.3 + l * 0.34)))
+}
+
+export function clockAccent(hex: number, daylight: number): number {
+  const t = clamp01(daylight)
+  const key = paletteKeyForNight.get(hex)
+  if (key !== undefined && BOUNCE_KEYS.has(key)) return clockSemanticColor(key, t)
+  return mix(hex, dayAccent(hex), t)
 }
 
 /**
@@ -615,8 +818,16 @@ export function dayInk(hex: number): number {
   return hexOfHsl(h, Math.min(s, 0.6) * 0.85, 0.12 + l * 0.08)
 }
 
+export function clockInk(hex: number, daylight: number): number {
+  return mix(hex, dayInk(hex), clamp01(daylight))
+}
+
 export function dayInkOpacity(opacity: number): number {
   return Math.min(1, opacity * 1.8 + 0.28)
+}
+
+export function clockInkOpacity(opacity: number, daylight: number): number {
+  return lerp(opacity, dayInkOpacity(opacity), clamp01(daylight))
 }
 
 /**
@@ -632,7 +843,15 @@ export function dayEmissive(hex: number): number {
   return dayAccent(hex)
 }
 
+export function clockEmissive(hex: number, daylight: number): number {
+  return mix(hex, dayEmissive(hex), clamp01(daylight))
+}
+
 /** Neon intensity is a bloom lever at night; in daylight it is nearly flat. */
 export function dayNeonIntensity(intensity: number): number {
   return Math.max(0.98, Math.min(1.18, 1.0 + (intensity - 1) * 0.1))
+}
+
+export function clockNeonIntensity(intensity: number, daylight: number): number {
+  return lerp(intensity, dayNeonIntensity(intensity), clamp01(daylight))
 }

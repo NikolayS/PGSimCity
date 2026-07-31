@@ -1,9 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import type * as THREE from 'three'
+import * as THREE from 'three'
 
-import { createTheme, setBloomAvailable, setThemeMode, themeMode } from './theme'
-import { NIGHT_PALETTE } from './themes'
-import type { ThemeMode } from './themes'
+import {
+  COLOR,
+  atmosphere,
+  createTheme,
+  setBloomAvailable,
+  setThemeClockMinutes,
+  setThemeMode,
+  themeMode,
+} from './theme'
+import { BAKED_SKY_COLOR, NIGHT_PALETTE } from './themes'
+import type { CuratedThemeMode, ThemeMode } from './themes'
 
 const READABLE_LUMINANCE = 0.24
 
@@ -108,6 +116,73 @@ function inMode<T>(mode: ThemeMode, fn: () => T): T {
   }
 }
 
+const MIN_MATTE_BACKGROUND_SEPARATION = 0.006
+const WALL_SKY_ACCESS = 0.58
+
+function currentMatteBackgroundSeparation(theme: ReturnType<typeof createTheme>): number {
+  const material = theme.mat('wal.struct.contrast', {
+    color: 0x2a3752,
+    roughness: 0.72,
+    metalness: 0.3,
+    emissive: 0x070c16,
+  })
+  const shader = compile(material, true)
+  const match = /const vec3 pgBakeSkyColor = vec3\( ([^)]+) \);/.exec(shader.vertexShader)
+  expect(match).not.toBeNull()
+  const channels = match![1].split(',').map(Number)
+  expect(channels).toHaveLength(3)
+
+  const air = atmosphere()
+  const irradiance = new THREE.Color(air.hemiSky)
+    .add(new THREE.Color(air.hemiGround))
+    .multiplyScalar(air.hemiIntensity * 0.5)
+    .add(new THREE.Color(channels[0], channels[1], channels[2]).multiplyScalar(WALL_SKY_ACCESS))
+  const surface = material.color.clone().multiply(irradiance)
+    .add(material.emissive.clone().multiplyScalar(material.emissiveIntensity))
+  const background = new THREE.Color(COLOR.bg)
+  return Math.abs(luminance(surface) - luminance(background))
+}
+
+function matteBackgroundSeparation(
+  theme: ReturnType<typeof createTheme>,
+  target: CuratedThemeMode,
+): number {
+  return inMode(target, () => currentMatteBackgroundSeparation(theme))
+}
+
+describe('matte structure against its background', () => {
+  it.each(['night', 'day'] as const)('keeps %s structure visibly separate', (target) => {
+    const theme = createTheme()
+    const separation = matteBackgroundSeparation(theme, target)
+
+    expect(
+      separation,
+      `${target} matte/background luminance separation ${separation.toFixed(6)}`,
+    ).toBeGreaterThanOrEqual(MIN_MATTE_BACKGROUND_SEPARATION)
+
+    theme.dispose()
+  })
+
+  it('keeps structure separate at every dark sample on the local-clock path', () => {
+    const before = themeMode()
+    const theme = createTheme()
+    setThemeMode('clock', { persist: false })
+    try {
+      for (let minutes = 0; minutes < 1440; minutes += 10) {
+        setThemeClockMinutes(minutes)
+        const separation = currentMatteBackgroundSeparation(theme)
+        expect(
+          separation,
+          `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')} matte/background separation ${separation.toFixed(6)}`,
+        ).toBeGreaterThanOrEqual(MIN_MATTE_BACKGROUND_SEPARATION)
+      }
+    } finally {
+      theme.dispose()
+      setThemeMode(before, { persist: false })
+    }
+  })
+})
+
 describe('the masonry surface term', () => {
   let theme: ReturnType<typeof createTheme>
 
@@ -153,8 +228,8 @@ describe('the masonry surface term', () => {
     const night = inMode('night', () =>
       compile(theme.mat('storage.baked.night', { color: 0x1a2333 }), true),
     )
-    expect(day.vertexShader).toContain('const vec3 pgBakeSkyColor = vec3( 0.550000')
-    expect(night.vertexShader).toContain('const vec3 pgBakeSkyColor = vec3( 0.018000')
+    expect(day.vertexShader).toContain(`const vec3 pgBakeSkyColor = vec3( ${BAKED_SKY_COLOR.day[0].toFixed(6)}`)
+    expect(night.vertexShader).toContain(`const vec3 pgBakeSkyColor = vec3( ${BAKED_SKY_COLOR.night[0].toFixed(6)}`)
     expect(day.vertexShader).not.toBe(night.vertexShader)
   })
 

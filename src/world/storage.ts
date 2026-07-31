@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { COLOR, DAY_PALETTE, mixHex, themeMode } from '../core/theme'
+import { COLOR, DAY_PALETTE, atmosphere, mixHex } from '../core/theme'
 import { N_VAC_WORKERS } from '../core/types'
 import type { FlowRequest, SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, fmtBytes, fmtNum, fmtPct, makeRng } from '../core/util'
@@ -2221,7 +2221,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     updateToast(d, sim, t)
     updateOsCache(d, sim, t)
 
-    const day = themeMode() === 'day'
+    const day = atmosphere().daylight
     pitLight.intensity = day ? 420 : 2000 + clamp01(sim.stats.ioReadPerSec / 300) * 1800
     rackLight.intensity = day ? 120 : 900
     pitFill.intensity = day ? 680 : 5200

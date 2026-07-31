@@ -1,14 +1,47 @@
 import { describe, expect, it } from 'vitest'
 import {
   ATMOSPHERE,
+  CLOCK_SUNRISE_MINUTES,
+  CLOCK_SUNSET_MINUTES,
   DAY_PALETTE,
   NIGHT_PALETTE,
+  clockAtmosphereAt,
+  clockSunAt,
   dayEmissive,
   dayInkOpacity,
   daySurface,
   exactDay,
   hslOf,
 } from './themes'
+
+describe('approximate local-clock sun path', () => {
+  it('moves from early light through a high noon sun and back to night', () => {
+    const dawn = clockSunAt(6 * 60 + 38)
+    const noon = clockSunAt(12 * 60)
+    const evening = clockSunAt(17 * 60 + 30)
+    const late = clockSunAt(22 * 60)
+
+    expect(dawn.elevationDeg).toBeGreaterThan(8)
+    expect(dawn.elevationDeg).toBeLessThan(15)
+    expect(noon.elevationDeg).toBeGreaterThan(60)
+    expect(evening.elevationDeg).toBeGreaterThan(0)
+    expect(evening.elevationDeg).toBeLessThan(dawn.elevationDeg)
+    expect(late.elevationDeg).toBeLessThan(0)
+    expect(clockAtmosphereAt(22 * 60).daylight).toBe(false)
+  })
+
+  it('uses explicit six-to-six boundaries with a smooth civil-twilight handoff', () => {
+    expect(CLOCK_SUNRISE_MINUTES).toBe(360)
+    expect(CLOCK_SUNSET_MINUTES).toBe(1080)
+    expect(clockSunAt(330).daylight).toBe(0)
+    expect(clockSunAt(360).daylight).toBeGreaterThan(0)
+    expect(clockSunAt(360).daylight).toBeLessThan(1)
+    expect(clockSunAt(390).daylight).toBe(1)
+    expect(clockSunAt(1050).daylight).toBe(1)
+    expect(clockSunAt(1080).daylight).toBeGreaterThan(0)
+    expect(clockSunAt(1110).daylight).toBe(0)
+  })
+})
 
 describe('daylight rendering contract', () => {
   it('keeps night untouched and gives daylight the sun-only effects', () => {
