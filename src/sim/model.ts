@@ -1306,10 +1306,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
    */
   let ioLoad = 1
   /**
-   * What a backend actually feels. The `syncing` term is what makes
-   * "writes every dirty page, then fsyncs — the latency spike you feel" true:
-   * the fsync phase is a stall, not a progress bar, so it is added here at tick
-   * resolution rather than at the 250 ms stats cadence, which would smear it.
+   * Representative storage pressure charged to model phase duration. The
+   * `syncing` term makes checkpoint sync stall model work at tick resolution
+   * rather than at the 250 ms stats cadence, which would smear it. There is no
+   * latency series or production-time calibration.
    *
    * checkpoint_completion_target exists *solely* because an unspread checkpoint
    * is a recognisable I/O latency event. Before this coupling, ckpt.phase was
@@ -4707,10 +4707,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
               : name === 'documents'
                 ? "search @@ plainto_tsquery('english', $1)"
                 : 'updated_at > $1'
-        const s = pn('Seq Scan', `on ${name}  (Filter: ${filter}, Rows Removed by Filter: ${Math.round(live * 0.94)})`, rows, seqCost, [])
+        const s = pn('Seq Scan', `on ${name}  (Filter: ${filter}; row figures are display-only)`, rows, seqCost, [])
         if (name === 'events') {
-          const so = pn('Sort', `(Sort Key: created_at DESC, Sort Method: top-N heapsort, Memory: ${Math.round(28 + sortMemoryRoll * 60)}kB)`, rows, seqCost * 1.1, [s])
-          return pn('Limit', `(rows=${Math.round(rows)})`, rows, seqCost * 1.12, [so])
+          const so = pn('Sort', `(Sort Key: created_at DESC; no work_mem or spill model; display seed ${Math.round(28 + sortMemoryRoll * 60)})`, rows, seqCost * 1.1, [s])
+          return pn('Limit', `(display rows=${Math.round(rows)})`, rows, seqCost * 1.12, [so])
         }
         return s
       }
@@ -4718,16 +4718,16 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         // cost_seqscan() divides only CPU cost across parallel participants;
         // the operating system's read-ahead already amortizes the disk run.
         const parallelSeqCost = diskRunCost + cpuRunCost / 3
-        const ps = pn('Parallel Seq Scan', `on ${name}  (rows=${Math.round(live / 3)})`, live / 3, parallelSeqCost, [])
-        const pa = pn('Partial HashAggregate', '(Group Key: status)', 12, parallelSeqCost + 80, [ps])
+        const ps = pn('Parallel Seq Scan', `on ${name}  (illustrative shape; no parallel workers modeled)`, live / 3, parallelSeqCost, [])
+        const pa = pn('Partial HashAggregate', '(Group Key: status; no hash-memory model)', 12, parallelSeqCost + 80, [ps])
         if (rng() < 0.5) {
-          const gather = pn('Gather', '(Workers Planned: 2, Workers Launched: 2)', 36, parallelSeqCost + 140, [pa])
-          return pn('Finalize HashAggregate', '(Group Key: status)', 12, parallelSeqCost + 190, [gather])
+          const gather = pn('Gather', '(illustrative shape; no workers launched)', 36, parallelSeqCost + 140, [pa])
+          return pn('Finalize HashAggregate', '(Group Key: status; no hash-memory model)', 12, parallelSeqCost + 190, [gather])
         }
         // create_gather_merge_path() rejects a subpath without matching pathkeys.
         const sortMemory = Math.round(180 + rng() * 900)
-        const sort = pn('Sort', `(Sort Key: status, Memory: ${sortMemory}kB)`, 12, parallelSeqCost + 120, [pa])
-        const gatherMerge = pn('Gather Merge', '(Workers Planned: 2, Workers Launched: 2)', 36, parallelSeqCost + 180, [sort])
+        const sort = pn('Sort', `(Sort Key: status; no memory/spill model; display seed ${sortMemory})`, 12, parallelSeqCost + 120, [pa])
+        const gatherMerge = pn('Gather Merge', '(illustrative shape; no workers launched)', 36, parallelSeqCost + 180, [sort])
         return pn('Finalize GroupAggregate', '(Group Key: status)', 12, parallelSeqCost + 230, [gatherMerge])
       }
       case 'insert': {
@@ -5683,7 +5683,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       forkBackend()
       return
     }
-    // At max_connections the queue IS the story: latency, not throughput. The
+    // At max_connections the request queue is the story; the model has no
+    // latency series. The
     // old cap was `maxConnections * batchSize * 2`, and batchSize was the
     // controller's output — so the backlog grew the ceiling with it, the queue
     // could never get deep, and the "too many clients" toast fired on a

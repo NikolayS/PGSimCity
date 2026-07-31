@@ -12,17 +12,14 @@ import { OPACITY_TIER } from './storage'
  * A translucent volume 66 m above the backend row, hidden until you select a
  * backend. Then it unfolds that one process's statement:
  *
- *   SQL ─▶ parse ─▶ rewrite ─▶ PLAN (three candidates, one price each)
- *                                   └─ cheapest wins ─▶ execute ─▶ plan tree
+ *   fixed statement kind ─▶ teaching stages ─▶ fixed plan template
+ *                                               └─ execute ─▶ plan tree
  *
- * The costing bay is the point of the district. Postgres does not "decide to
- * use the index": it prices every strategy it can think of from *statistics* —
- * how many live rows, how many pages, how selective the predicate looks — and
- * runs the cheapest estimate. Bad statistics, bad price, bad plan. So each
- * candidate carries its number on its face, the winner lights, and the
- * pg_statistic plate that fed all three sits directly above them.
+ * The costing bay illustrates a PostgreSQL concept. It is deliberately not a
+ * causal part of this model: buildPlan() has already selected a fixed template
+ * from QueryKind, and the three card prices are fitted around that result.
  *
- * The tree on the right is the winner, running. Children hang below their
+ * The tree on the right is the model template running. Children hang below their
  * parent because that is how EXPLAIN prints it; rows climb *up* the struts
  * because that is how execution actually goes — a node pulls tuples from its
  * children, one at a time, and hands them to its parent.
@@ -521,7 +518,7 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
    * ===================================================================*/
 
   const STAGE_NAME = ['parse', 'rewrite', 'plan', 'execute']
-  const STAGE_SUB = ['text -> parse tree', 'views & rules expand', 'price every path', 'run the winner']
+  const STAGE_SUB = ['fixed grammar', 'not modeled', 'illustrative costs', 'run template']
   const STAGE_ID = ['planner.parser', 'planner.rewriter', 'planner.planner', 'planner.executor']
 
   const stageGroups: THREE.Group[] = []
@@ -564,7 +561,7 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
   const statsPlate = batch(gPlan, matCard, [
     [(CARD_X[0] + CARD_X[2]) / 2, CARD_Y + 13.6, PLANE_Z - 0.9, 62, 8, 1.0],
   ], true)
-  text.alloc(30, (CARD_X[0] + CARD_X[2]) / 2, CARD_Y + 15.8, 1.3, COLOR.index, 'center', 1.1, 'pg_statistic -> estimates')
+  text.alloc(40, (CARD_X[0] + CARD_X[2]) / 2, CARD_Y + 15.8, 1.3, COLOR.index, 'center', 1.1, 'illustrative PostgreSQL costs')
   const TX_STATS = text.alloc(58, (CARD_X[0] + CARD_X[2]) / 2, CARD_Y + 13.3, 1.05, COLOR.ink, 'center', 0.95)
   const TX_STATS2 = text.alloc(58, (CARD_X[0] + CARD_X[2]) / 2, CARD_Y + 11.3, 0.92, COLOR.inkDim, 'center', 0.8)
 
@@ -574,8 +571,8 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
     [CARD_X[2], CARD_Y, PLANE_Z - 0.9, CARD_W, CARD_H, 1.0],
   ], true)
 
-  /* Per card: head rail, cost bar, foot rail, and the feed from the stats
-   * plate above — because that is where the number came from. */
+  /* Per card: head rail, display-only cost bar, foot rail, and a decorative
+   * feed from the teaching plate above. None are model inputs. */
   const cardNeonSpecs: BoxSpec[] = []
   for (let i = 0; i < 3; i++) {
     cardNeonSpecs.push([CARD_X[i], CARD_Y + CARD_H / 2 - 0.1, PLANE_Z - 0.3, CARD_W - 1, 0.16, 0.4])
@@ -597,7 +594,7 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
   }
 
   text.alloc(50, (CARD_X[0] + CARD_X[2]) / 2, CARD_Y - CARD_H / 2 - 2.8, 1.2, COLOR.index, 'center', 1.0,
-    'the cheapest ESTIMATE wins - estimates come from stats')
+    'illustrative only - not model inputs')
 
   /* =====================================================================
    * 4. THE PLAN TREE.
@@ -656,7 +653,7 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
     TX_NODE_B.push(text.alloc(26, 0, -400, 0.9, COLOR.inkDim, 'center', 0.9))
   }
 
-  text.alloc(26, TREE_CX, TREE_Y0 + TREE_H + 8.0, 1.5, COLOR.index, 'center', 1.05, 'the winning plan')
+  text.alloc(30, TREE_CX, TREE_Y0 + TREE_H + 8.0, 1.5, COLOR.index, 'center', 1.05, 'the model plan template')
   text.alloc(40, TREE_CX, TREE_Y0 + TREE_H + 6.0, 0.95, COLOR.inkDim, 'center', 0.8, 'rows are pulled upward, one at a time')
   const TX_TREESUM = text.alloc(48, TREE_CX, TREE_Y0 - 3.4, 1.05, COLOR.ink, 'center', 0.95)
   const TX_NODEDETAIL = text.alloc(66, TREE_CX, TREE_Y0 - 5.6, 0.95, COLOR.index, 'center', 0.9)
@@ -689,7 +686,7 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
   ctx.register({
     id: 'planner.lab',
     name: 'the query lab',
-    role: 'how one statement becomes a plan',
+    role: 'fixed model stages and plan templates',
     kind: 'concept',
     district: 'planner',
     object: group,
@@ -707,7 +704,7 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
   ctx.register({
     id: 'planner.parser',
     name: 'parser',
-    role: 'SQL text becomes a parse tree',
+    role: 'PostgreSQL stage · fixed grammar here',
     kind: 'concept',
     district: 'planner',
     object: stageGroups[0],
@@ -716,13 +713,13 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
     labelAt: [ST_X[0], ST_Y + 7.5, PLANE_Z],
     color: COLOR.index,
     readout: (s: SimState) =>
-      selBackend(s)?.state === 'parse' ? 'parsing…' : 'syntax only — no catalogue lookups yet',
+      selBackend(s)?.state === 'parse' ? 'fixed statement classification…' : 'no SQL parser or catalogue lookup',
   })
 
   ctx.register({
     id: 'planner.rewriter',
     name: 'rewriter',
-    role: 'views and rules expand the tree',
+    role: 'PostgreSQL stage · not simulated here',
     kind: 'concept',
     district: 'planner',
     object: stageGroups[1],
@@ -730,13 +727,13 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
     focus: { target: [ST_X[1], ST_Y, LZ], distance: 54, dir: [0.05, 0.22, 0.97] },
     labelAt: [ST_X[1], ST_Y + 7.5, PLANE_Z],
     color: COLOR.index,
-    readout: () => 'a view is a rewrite rule, not a table',
+    readout: () => 'no modeled views, rules, or rewrite tree',
   })
 
   ctx.register({
     id: 'planner.planner',
     name: 'planner',
-    role: 'prices every path and takes the cheapest',
+    role: 'illustrates costing · template already selected',
     kind: 'concept',
     district: 'planner',
     object: stageGroups[2],
@@ -747,14 +744,14 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
     readout: (s: SimState) => {
       const b = selBackend(s)
       if (!b || !b.plan) return 'no statement in flight'
-      return `chose ${b.plan.label} · estimated cost ${b.plan.cost.toFixed(2)}`
+      return `model template ${b.plan.label} · display cost ${b.plan.cost.toFixed(2)}`
     },
   })
 
   ctx.register({
     id: 'planner.executor',
     name: 'executor',
-    role: 'runs the winning plan, pulling rows',
+    role: 'runs the fixed model template, pulling rows',
     kind: 'concept',
     district: 'planner',
     object: stageGroups[3],
@@ -772,7 +769,7 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
   ctx.register({
     id: 'planner.plantree',
     name: 'plan tree',
-    role: 'the plan as the executor walks it',
+    role: 'the model template as the executor walks it',
     kind: 'concept',
     district: 'planner',
     object: gTree,
@@ -783,7 +780,7 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
     readout: (s: SimState) => {
       const b = selBackend(s)
       if (!b || !b.plan) return 'no plan'
-      return `${nodeCount} node${nodeCount === 1 ? '' : 's'} · ${fmtNum(b.plan.rows)} rows est · cost ${b.plan.cost.toFixed(2)}`
+      return `${nodeCount} node${nodeCount === 1 ? '' : 's'} · display rows ${fmtNum(b.plan.rows)} · display cost ${b.plan.cost.toFixed(2)}`
     },
   })
 
@@ -946,7 +943,8 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
   }
 
   /* =====================================================================
-   * The costing bay: three priced candidates for the same statement.
+   * The teaching bay: three illustrative alternatives shown after the fixed
+   * model template is selected. These cards are not causal model inputs.
    * ===================================================================*/
 
   const CAND_NAME = ['Seq Scan', 'Index Scan', 'Bitmap Heap Scan']
@@ -968,14 +966,14 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
     candRows = rows
     candWinner = win
 
-    // The same arithmetic the model costs with — pages, live rows, row count —
-    // so the numbers on the cards and the numbers in the tree agree.
+    // Display arithmetic only. buildPlan() already chose the template from
+    // QueryKind; these values cannot change the query kind or plan shape.
     candCost[0] = tbl.pages * 1.0 + tbl.liveTuples * 0.01
     candCost[1] = 0.42 + rows * 0.25
     candCost[2] = 22.2 + rows * 0.32
     if (plan && win >= 0) {
-      // The winner is what actually ran, so it must also be the cheapest number
-      // on the board — otherwise the picture would contradict the plan.
+      // Fit the display cards around the template that already ran. This is an
+      // illustration, not cost-based selection.
       candCost[win] = Math.min(candCost[win], plan.cost)
       for (let i = 0; i < 3; i++) {
         if (i !== win && candCost[i] <= candCost[win]) candCost[i] = candCost[win] * (1.6 + i * 0.9)
@@ -996,7 +994,7 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
       TX_STATS2,
       win < 0
         ? 'this statement writes rows - there is no access path to choose'
-        : `${fmtNum(tbl.deadTuples)} dead rows - stale stats here would misprice every card`,
+        : `${fmtNum(tbl.deadTuples)} dead rows shown - no ANALYZE or stats-to-plan path`,
     )
   }
 
@@ -1120,7 +1118,7 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
       _c.setHex(isWin ? COLOR.ok : COLOR.inkDim).multiplyScalar(isWin ? 1.0 + pulse : 0.22)
       cardNeon.setColorAt(i * 4, _c)
       cardNeon.setColorAt(i * 4 + 2, _c)
-      // the statistics feed: the numbers arriving from the plate above
+      // decorative teaching feed; the cards are not model inputs
       const feed = priced ? clamp01(1.4 - Math.abs(costT * 2.2 - 0.5 - i * 0.35)) : 0
       _c.setHex(COLOR.index).multiplyScalar(0.1 + feed * 1.5)
       cardNeon.setColorAt(i * 4 + 3, _c)
@@ -1211,7 +1209,7 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
         const isWin = priced && i === candWinner
         text.set(
           TX_CARD[i][4],
-          !priced || !locked ? '' : isWin ? 'CHOSEN' : `${(candCost[i] / Math.max(0.01, candCost[candWinner])).toFixed(1)}x dearer`,
+          !priced || !locked ? '' : isWin ? 'MODEL TEMPLATE' : `${(candCost[i] / Math.max(0.01, candCost[candWinner])).toFixed(1)}x display`,
         )
         text.setColor(TX_CARD[i][4], isWin ? COLOR.ok : COLOR.crit, isWin ? 1.2 : 0.55)
         text.setColor(TX_CARD[i][1], isWin ? COLOR.ok : COLOR.warn, isWin ? 1.25 : 0.75)
@@ -1228,7 +1226,7 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
       text.set(
         TX_TREESUM,
         plan
-          ? `${nodeCount} nodes | total cost ${plan.cost.toFixed(2)} | ${fmtNum(plan.rows)} rows estimated`
+          ? `${nodeCount} nodes | display cost ${plan.cost.toFixed(2)} | ${fmtNum(plan.rows)} display rows`
           : b
             ? 'waiting for a statement'
             : '',

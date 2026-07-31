@@ -10,7 +10,8 @@ import {
   SHARED_BUFFERS_MAX_MIB,
   SHARED_BUFFERS_MIN_MIB,
 } from '../src/core/types'
-import { createSim, traceStopBit } from '../src/sim/model'
+import { traceStopBit } from '../src/core/model-helpers'
+import { createSim } from '../src/sim/model'
 import { recordRepresentativeUpdate } from '../src/sim/mvcc'
 import { createAnatomy } from '../src/ui/anatomy'
 import { knobMeta } from '../src/ui/content'

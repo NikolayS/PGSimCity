@@ -945,7 +945,7 @@ const locks: ProjectionFn = (s) => {
       { key: 'relation', label: 'relation' },
       { key: 'mode', label: 'mode' },
       { key: 'granted', label: 'granted' },
-      { key: 'wait_age', label: 'now() − waitstart' },
+      { key: 'wait_age', label: 'model wait age' },
       { key: 'blocked_by', label: 'blocked_by' },
     ],
     rows,

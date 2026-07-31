@@ -17,8 +17,8 @@ import {
  * version lying where it fell. Everything that turns that laziness back into a
  * server which keeps running happens out here, west of the excavation:
  *
- *   CHECKPOINTER   walks the whole buffer pool, writes every dirty page, then
- *                  fsyncs — the moment your p99 remembers it exists.
+ *   CHECKPOINTER   walks the whole buffer pool, writes dirty pages, then
+ *                  fsyncs; the city shows the phases and I/O, not latency.
  *   BGWRITER       trickles out the pages the clock hand is about to hand over,
  *                  so neither the checkpointer nor a user's backend has to.
  *   AUTOVACUUM     a launcher watching dead-tuple thresholds, and workers that
@@ -1293,7 +1293,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   ctx.register({
     id: 'checkpointer',
     name: 'checkpointer',
-    role: 'writes every dirty page, then fsyncs — the latency spike you feel',
+    role: 'writes sampled dirty pages, then fsyncs · no latency metric',
     kind: 'process',
     district: 'maintenance',
     object: gCkpt,
@@ -1381,7 +1381,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   ctx.register({
     id: 'landfill',
     name: 'removed dead tuples',
-    role: 'temporary teaching pile — reusable space returns to each relation’s _fsm fork',
+    role: 'cumulative removed tuples · aggregate spare capacity only',
     kind: 'storage',
     district: 'maintenance',
     object: gLand,
@@ -1392,14 +1392,14 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     readout: (s: SimState) => {
       let dead = 0
       for (let i = 0; i < s.tables.length; i++) dead += s.tables[i].deadTuples
-      return `${fmtNum(s.autovac.landfill)} tuple bodies removed · ${fmtNum(dead)} still dead · space returns to _fsm`
+      return `${fmtNum(s.autovac.landfill)} tuple bodies removed · ${fmtNum(dead)} still dead · aggregate spare capacity only`
     },
   })
 
   ctx.register({
     id: 'logger',
     name: 'logging collector',
-    role: 'the only reason an incident is diagnosable afterwards',
+    role: 'illustrative log traffic · no searchable log model',
     kind: 'process',
     district: 'maintenance',
     object: gLog,
@@ -1408,7 +1408,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     labelAt: [GX, 18, GZ],
     color: COLOR.ink,
     readout: (s: SimState) =>
-      `${logRate.toFixed(1)} entries/s · ${logSlow} slow · ${s.locks.length} lock waits · ${fmtNum(s.checkpoint.count)} checkpoints`,
+      `illustrative ${logRate.toFixed(1)} entries/s · derived from ${s.locks.length} waits and ${fmtNum(s.checkpoint.count)} checkpoints`,
   })
 
   ctx.register({

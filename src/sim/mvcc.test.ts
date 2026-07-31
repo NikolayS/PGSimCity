@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import { createBus } from '../core/bus'
 import { TABLES } from '../core/catalog'
-import { createSim, traceStopBit } from './model'
+import { traceStopBit } from '../core/model-helpers'
+import { createSim } from './model'
 import { createAggregateSim } from './test-support'
 import {
   createRepresentativeRow,

@@ -20,14 +20,14 @@ export const TRACE_COPY: Record<TraceStop, StopCopy> = {
   connect: {
     title: 'A backend takes the query',
     line: (trace) => `One PostgreSQL backend accepts this statement for ${tableName(trace)}.`,
-    hint: 'One connection is served by one backend process.',
+    hint: 'Fixed slot only; process startup and memory are absent.',
   },
   parse_plan: {
-    title: 'Parse and choose a plan',
+    title: 'Select a model plan template',
     line: (trace) => trace.lastPlanLabel
-      ? `${trace.lastPlanLabel}: ${trace.lastPlanRows} estimated rows at cost ${trace.lastPlanCost}.`
-      : 'PostgreSQL checks the SQL, rewrites it, and chooses an execution plan.',
-    hint: 'The plan is a tree of physical operations.',
+      ? `${trace.lastPlanLabel}: ${trace.lastPlanRows} display rows at display cost ${trace.lastPlanCost}.`
+      : 'The fixed statement kind selects a model plan template.',
+    hint: 'The city does not parse, rewrite, or cost alternative plans.',
   },
   fetch: {
     title: 'Fetch the needed pages',
@@ -39,8 +39,8 @@ export const TRACE_COPY: Record<TraceStop, StopCopy> = {
     title: 'Execute the plan',
     line: (trace) => trace.lastPlanLabel
       ? `${trace.lastPlanLabel} is running against ${tableName(trace)}.`
-      : `The executor applies the chosen operations to ${tableName(trace)}.`,
-    hint: 'CPU work and sorts happen inside this backend.',
+      : `The executor applies the fixed model operations to ${tableName(trace)}.`,
+    hint: 'CPU and sort are teaching phases; work_mem is not modeled.',
   },
   wal: {
     title: 'Write the change to WAL',

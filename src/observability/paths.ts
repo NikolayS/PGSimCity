@@ -450,7 +450,7 @@ export const SYMPTOMS: Symptom[] = [
   {
     id: 'stall',
     complaint: 'Writes stall every few minutes.',
-    sub: 'Latency is fine, then a spike, then fine again.',
+    sub: 'A PostgreSQL latency complaint; the city will test checkpoint and I/O counters, not latency.',
     scenario: 'checkpoint-storm',
     entry: 'stall.1',
     accent: 'checkpoint',
@@ -796,7 +796,7 @@ SELECT w.*, b.state AS blocker_state,
        write_lag, flush_lag, replay_lag
   FROM pg_stat_replication;`,
     look:
-      'It is a pipeline: the walsender **sends**, the standby **writes** it, **flushes** it to its own disk, and only then does the startup process **replay** it. Walk left to right and stop at the first position that is not tracking the primary. That column is the component that is behind.',
+      'In PostgreSQL this is a pipeline: the walsender **sends**, the standby **writes**, **flushes**, then **replays**. The city represents only those ordered LSN frontiers and acknowledgement queues; it has no receiver files, fsync call or page replay. Walk left to right and stop at the first modeled position not tracking the primary.',
     note:
       'write_lag, flush_lag and replay_lag arrived in 10. An empty pg_stat_replication on a primary you believe has a standby is not "zero lag" — it means the walsender is gone.',
     branches: [
@@ -914,7 +914,7 @@ SELECT buffers_clean, buffers_alloc FROM pg_stat_bgwriter;`,
     id: 'normal.4',
     kind: 'step',
     title: 'And finally: is the copy of your data current?',
-    why: 'Replication lag is silent. Nothing errors, nothing logs, and the replica keeps answering queries with older data.',
+    why: 'On PostgreSQL, replication lag can be silent while a replica keeps answering with older data. The city does not execute those reads; it can only compare its replay frontier with the primary LSN.',
     instrument: 'pg_stat_replication',
     projection: 'replication',
     city: 'walsender',
@@ -940,7 +940,7 @@ const VERDICTS: Verdict[] = [
     because:
       'PGSimCity records max_wal_size pressure as the request cause here. PostgreSQL’s num_requested, wal_fpi and wal_bytes counters alone neither establish that cause nor attribute a byte share to FPIs.',
     mechanism:
-      'After a checkpoint establishes a redo point, the first modification of a page can log a full-page image. The image may omit the page hole and wal_compression may compress it, so wal_fpi cannot be converted into bytes. Time-aligned count and byte rates can establish correlation; WAL-record analysis is required for byte attribution.',
+      'After a checkpoint establishes a redo point, the first modification of a page can log a full-page image. The image may omit the page hole and wal_compression may compress it, so wal_fpi cannot be converted into bytes. Time-aligned count and byte rates can establish correlation; WAL-record analysis is required for byte attribution. The model has no latency series; periodic query-latency spikes are a possible PostgreSQL consequence, not an outcome measured here.',
     evidence: (_s, c) => [
       { label: 'num_timed', value: String(Math.round(c.total.ckptTimed)) },
       { label: 'num_requested', value: String(Math.round(c.total.ckptRequested)), tone: 'crit' },
@@ -1002,7 +1002,7 @@ const VERDICTS: Verdict[] = [
       { label: 'buffers_written', value: String(Math.round(c.total.ckptBuffers)) },
     ],
     fix:
-      'If writes still stall periodically, the next suspects are the fsync burst at the end of each checkpoint (watch sync_time), and autovacuum arriving on a large table. Try the "reads got slow" path — a stall that correlates with I/O rather than with the clock is a different animal.',
+      'On PostgreSQL, if writes still stall periodically, next inspect checkpoint sync_time and autovacuum activity against an external latency trace. The city has no sync-time or latency series; its next path can only compare modeled I/O and counter pressure.',
     knobs: [KB.checkpointTimeout],
     city: 'checkpointer',
     reading: [DOC('wal-configuration.html', 'WAL Configuration')],
@@ -1118,7 +1118,7 @@ const VERDICTS: Verdict[] = [
     title: 'Current estimates show low dead-tuple pressure; physical bloat is unmeasured.',
     because: 'The modeled dead-tuple fraction is low. On PostgreSQL, n_live_tup and n_dead_tup are estimates and do not measure reusable heap space, index bloat or TOAST growth.',
     mechanism:
-      'A relation can have a low current dead-tuple estimate and still contain reusable space from earlier churn; its indexes or TOAST relation can also be the growth. Conversely, dead tuples can occupy reusable space without requiring a physical shrink.',
+      'A relation can have a low current dead-tuple estimate and still contain reusable space from earlier churn; its indexes or TOAST relation can also be the growth. Conversely, dead tuples can occupy reusable space without requiring a physical shrink. The city can distinguish modeled live-row, heap-page and aggregate index growth, but it has no TOAST relation or chunk state.',
     evidence: (s) => s.tables.slice(0, 3).map((t) => ({ label: t.def.name, value: `${(t.bloat * 100).toFixed(1)}% dead`, tone: 'ok' as const })),
     fix:
       'Graph pg_relation_size(), pg_indexes_size() and pg_total_relation_size() alongside row counts. If the physical question justifies a page scan, use pgstattuple or an equivalent inspection tool; do not declare “no bloat” from n_dead_tup alone.',
@@ -1133,7 +1133,7 @@ const VERDICTS: Verdict[] = [
     because:
       'The city’s representative sample—not the blank pg_stat_io write cells above—attributes a large write share to client backends. On PostgreSQL, that proves who performed writes, not which query, relation or unique causal chain produced them.',
     mechanism:
-      'A client backend may write buffers during allocation pressure, relation extension and other write paths. Those writes can contribute latency, but establish the workload and context from rates, checkpointer/background-writer behavior, per-backend I/O and query evidence before assigning a remedy.',
+      'A client backend may write buffers during allocation pressure, relation extension and other write paths. The city charges its modeled dirty-victim write to the backend and exposes sampled backend-write counts, but the model has no latency series or p99. Establish the workload and context from rates, checkpointer/background-writer behavior, per-backend I/O and query evidence before assigning a remedy.',
     evidence: (s, c) => {
       const now = recentBackendWriteShare(c)
       return [
@@ -1232,10 +1232,10 @@ const VERDICTS: Verdict[] = [
     because:
       'Every blocked backend points at the same pid, and that pid is not running a query — it is in `idle in transaction`. The statement that took the lock finished in a millisecond. The lock outlives it, because a lock is held until the transaction ends.',
     mechanism:
-      'Locks queue in order, and this is the detail that surprises people: a blocked ACCESS EXCLUSIVE request also blocks every **later** request, including harmless SELECTs that would never have conflicted with each other. One waiter poisons the whole queue behind it. Meanwhile every blocked session is still holding a connection, so once they exhaust the pool, traffic that never touches this table starts failing too. One lock becomes a total outage.',
+      'The city models one scripted ACCESS EXCLUSIVE holder and attaches every affected statement directly to it. It does not model lock modes, queue fairness or one waiter blocking later compatible requests. The evidence below establishes direct waiters and occupied slots only; PostgreSQL’s more complex queue-order cascade is not demonstrated here.',
     evidence: (s) => [
       { label: 'waiters', value: String(s.locks.length), tone: 'crit' },
-      { label: 'oldest wait', value: `${Math.max(0, ...s.locks.map((l) => l.ageSec)).toFixed(0)} s`, tone: 'crit' },
+      { label: 'oldest wait', value: `${Math.max(0, ...s.locks.map((l) => l.ageSec)).toFixed(0)} model s`, tone: 'crit' },
       { label: 'mode', value: 'AccessExclusiveLock', tone: 'crit' },
       { label: 'connections in use', value: `${s.stats.activeBackends} of ${s.maxConnections}` },
     ],
@@ -1259,8 +1259,8 @@ const VERDICTS: Verdict[] = [
       ok: s.locks.length === 0,
       reading:
         s.locks.length === 0
-          ? 'pg_locks has no ungranted rows — the queue has drained and every waiter got its lock'
-          : `${s.locks.length} session${s.locks.length === 1 ? '' : 's'} still queued behind the holder, oldest ${Math.max(0, ...s.locks.map((l) => l.ageSec)).toFixed(0)} s`,
+          ? 'the model has no direct waiters — its scripted holder path has cleared'
+          : `${s.locks.length} modeled session${s.locks.length === 1 ? '' : 's'} still waiting directly on the holder, oldest ${Math.max(0, ...s.locks.map((l) => l.ageSec)).toFixed(0)} model s`,
     }),
     city: 'lock.manager',
     reading: [
@@ -1291,7 +1291,7 @@ const VERDICTS: Verdict[] = [
     because:
       'sent_lsn, write_lsn and flush_lsn are all tracking the primary — the network is fine and the standby\'s disk is fine. Only replay_lsn is sliding backwards.',
     mechanism:
-      'Core PostgreSQL 18 uses one startup process for ordered WAL replay; recovery prefetch improves I/O but is not general parallel redo. Lag grows while sustained generation exceeds replay capacity. The standby can catch up while the primary keeps writing whenever replay capacity exceeds the incoming rate. A read there reflects replay_lsn, and the connection itself does not advertise staleness.',
+      'Core PostgreSQL 18 uses one startup process for ordered WAL replay; recovery prefetch improves I/O but is not general parallel redo. Lag grows while sustained generation exceeds replay capacity, and the standby can catch up while the primary keeps writing whenever replay capacity exceeds the incoming rate. The city models that as one bounded applied-LSN rate per standby. A PostgreSQL read there would reflect replay_lsn, but the city has no replica query or row result.',
     evidence: (s) => {
       const standby = worstReplayStandby(s)
       if (!standby) return [{ label: 'pg_stat_replication', value: 'no connected rows', tone: 'crit' }]
@@ -1394,9 +1394,9 @@ const VERDICTS: Verdict[] = [
     kind: 'verdict',
     title: 'Every connection slot is occupied, and new work is queueing.',
     because:
-      'All server connection slots are in use and throughput is far below the offered load. The wait rows still matter — here many occupied sessions are waiting on I/O — but they do not make another server slot available. New work is queueing outside PostgreSQL.',
+      'All server connection slots are in use and throughput is far below the offered load. The wait rows still matter — here many occupied sessions are waiting on I/O — but they do not make another server slot available. New work is queueing outside PostgreSQL. The model has no latency series, so it cannot show response time climbing.',
     mechanism:
-      'Postgres is not threaded: the postmaster forks an entire OS process per connection, each with its own memory and its own entry in the shared ProcArray. Taking a snapshot means scanning that array, so every additional connection makes every transaction in the system slightly slower — including the ones that were already fast. The cost is superlinear and it is invisible in any single query\'s timing.',
+      'The city models sixteen backend slots, a fixed fork cadence and queued demand. PostgreSQL also pays per-process memory, authentication, snapshot and scheduling costs, but the city does not charge ProcArray scans or context switching and cannot demonstrate a superlinear connection cost.',
     evidence: (s) => [
       { label: 'backends', value: `${s.stats.activeBackends} of ${s.maxConnections}`, tone: 'crit' },
       { label: 'achieved tps', value: s.stats.tps.toFixed(0) },
@@ -1446,7 +1446,7 @@ const VERDICTS: Verdict[] = [
     because:
       'Backends are stacked on `IO / WalSync`. Each one is waiting until flush_lsn passes its own commit LSN, which is exactly what synchronous_commit = on promises.',
     mechanism:
-      'Watch them release together: one fsync satisfies every backend queued behind it. That is group commit, and it is why throughput does not collapse under a high commit rate even though every commit waits. What you are paying is latency per transaction, not bandwidth.',
+      'Watch modeled `commit_wait` backends release together when one flush advances past their commit LSNs. That is the city’s group-commit mechanism. It increases stretched model trip duration, but the city does not expose a production latency distribution.',
     evidence: (s) => [
       { label: 'synchronous_commit', value: s.knobs.synchronousCommit },
       { label: 'waiting to commit', value: String(waits(s).commit), tone: 'warn' },
@@ -1513,7 +1513,7 @@ const VERDICTS: Verdict[] = [
       { label: 'WAL rate', value: `${fmtBytes(s.wal.bytesPerSec)}/s` },
     ],
     fix:
-      'Try switching synchronous_commit to remote_apply and watch the commit_wait queue appear — it is the cheapest way to feel what durability costs.',
+      'Try switching synchronous_commit to remote_apply and watch the modeled commit_wait queue and stretched trip duration change. This demonstrates the dependency, not production commit latency.',
     knobs: [KB.synchronousCommit],
     city: 'walwriter',
     reading: [DOC('runtime-config-wal.html', 'Write Ahead Log settings')],

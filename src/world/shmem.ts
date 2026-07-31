@@ -1130,7 +1130,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
   ctx.register({
     id: 'shmem.deck',
     name: 'Shared memory',
-    role: 'one segment, mapped by every process',
+    role: 'architectural shared-segment illustration · no process mappings',
     kind: 'memory',
     district: 'shmem',
     object: deck,
@@ -1174,7 +1174,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
   ctx.register({
     id: 'proc.array',
     name: 'ProcArray',
-    role: 'one PGPROC slot per backend',
+    role: 'one displayed slot per backend · no snapshot-scan cost',
     kind: 'memory',
     district: 'shmem',
     object: procGroup,
@@ -1200,7 +1200,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
   ctx.register({
     id: 'lock.manager',
     name: 'Lock manager',
-    role: '16 hash partitions of the lock table',
+    role: 'architectural partitions · scripted direct waiters only',
     kind: 'memory',
     district: 'shmem',
     object: lockGroup,
@@ -1213,14 +1213,14 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
   ctx.register({
     id: 'clog.slru',
     name: 'pg_xact (CLOG)',
-    role: 'SLRU cache of commit status bits',
+    role: 'architectural SLRU illustration · no cache model',
     kind: 'memory',
     district: 'shmem',
     object: clogGroup,
     tier: 1,
     color: COLOR.ok,
     focus: { target: [ANCHOR.clogSlru[0], MOUNT_Y + 5, ANCHOR.clogSlru[2]], distance: 34, dir: [-0.66, 0.5, 0.56] },
-    readout: (s) => `${fmtNum(s.stats.commits)} commits · ${fmtNum(s.stats.rollbacks)} rollbacks`,
+    readout: (s) => `${fmtNum(s.stats.commits)} commits · ${fmtNum(s.stats.rollbacks)} rollbacks · no SLRU hits or reads`,
   })
 
   ctx.register({

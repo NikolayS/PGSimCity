@@ -841,7 +841,7 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
   ctx.register({
     id: 'conn.conduits',
     name: 'Connections',
-    role: 'one duct, one socket, one backend process — held open for the session',
+    role: 'one modeled slot per duct · socket and process costs are absent',
     kind: 'network',
     district: 'clients',
     object: manifoldGroup,
@@ -862,7 +862,7 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
   ctx.register({
     id: 'postmaster',
     name: 'Postmaster',
-    role: 'the only process that never touches your data',
+    role: 'PostgreSQL supervisor metaphor · model tracks admission only',
     kind: 'process',
     district: 'clients',
     object: pm,
@@ -876,7 +876,7 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
   ctx.register({
     id: 'conn.gate',
     name: 'Connection gate',
-    role: 'authentication — pg_hba.conf, one verdict per connection',
+    role: 'fixed slot-capacity gate · authentication is not modeled',
     kind: 'network',
     district: 'clients',
     object: gate,

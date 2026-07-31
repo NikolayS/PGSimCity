@@ -8,6 +8,7 @@ import type {
   TraceStop,
 } from '../core/types'
 import { traceStopBit } from '../core/model-helpers'
+import { formatModelMilliseconds } from '../core/trace-presentation'
 import { fmtBytes } from '../core/util'
 import { sqlFor } from '../sim/model'
 import { TRACE_COPY } from '../ui/trace-copy'
@@ -49,7 +50,7 @@ export const FLOW_PATH: readonly FlowSegment[] = [
   {
     stop: 'parse_plan',
     label: 'Parse → plan',
-    detail: 'SQL becomes a plan tree',
+    detail: 'fixed statement kind selects a plan template',
   },
   {
     stop: 'fetch',
@@ -342,15 +343,15 @@ function planTree(plan: PlanSnapshot | PlanNode): HTMLElement {
     {
       class: `flow-plan__node${plan.activity > 0.14 ? ' is-active' : ''}`,
       role: 'treeitem',
-      'aria-label': `${plan.label}, ${plan.rows} rows, cost ${plan.cost}, ${plan.actualMs.toFixed(1)} milliseconds`,
+      'aria-label': `${plan.label}, ${plan.rows} display rows, display cost ${plan.cost}, ${formatModelMilliseconds(plan.actualMs, 1)}`,
     },
     el(
       'div',
       { class: 'flow-plan__row' },
       el('strong', { text: plan.label }),
-      el('span', { text: `${plan.rows} rows` }),
-      el('span', { text: `cost ${plan.cost}` }),
-      el('span', { text: `${plan.actualMs.toFixed(1)} ms` }),
+      el('span', { text: `${plan.rows} display rows` }),
+      el('span', { text: `display cost ${plan.cost}` }),
+      el('span', { text: formatModelMilliseconds(plan.actualMs, 1) }),
     ),
     el('code', { text: plan.detail }),
   )
@@ -363,7 +364,7 @@ function planTree(plan: PlanSnapshot | PlanNode): HTMLElement {
       ),
     )
   }
-  return el('ul', { class: 'flow-plan', role: 'tree', 'aria-label': 'Execution plan' }, item)
+  return el('ul', { class: 'flow-plan', role: 'tree', 'aria-label': 'Fixed model plan template' }, item)
 }
 
 function makeLane(
@@ -391,11 +392,11 @@ function makeLane(
   const wal = metric('WAL bytes')
   const rows = metric('Rows sent')
   const xid = metric('xid')
-  const total = metric('Total time')
+  const total = metric('Model time')
   const plan = el(
     'div',
     { class: 'flow-plan-wrap' },
-    el('p', { class: 'flow-empty', text: 'The model will put the execution plan tree here.' }),
+    el('p', { class: 'flow-empty', text: 'The model will put its fixed plan template here.' }),
   )
   const narrativeTitle = el('strong')
   const narrativeLine = el('span')
@@ -447,14 +448,14 @@ function makeLane(
       el(
         'section',
         { class: 'flow-time' },
-        el('h3', { text: 'Time by stop' }),
+        el('h3', { text: 'Model time by stop' }),
         el('div', { class: 'flow-time__axis' }, el('span', { text: '0' }), timeAxisEnd),
         el('div', { class: 'flow-time__bars' }, ...timeStops.map((stop) => stop.timeBar)),
       ),
       el(
         'section',
         { class: 'flow-plan-section' },
-        el('h3', { text: 'Live plan tree' }),
+        el('h3', { text: 'Model plan template' }),
         plan,
       ),
     ),
@@ -924,7 +925,7 @@ export function createFlow2dView(
             ? 'Not visited'
             : elapsed === null
               ? 'Duration not known'
-              : `${(elapsed * 1000).toFixed(0)} milliseconds`
+              : formatModelMilliseconds(elapsed * 1000)
         }. ${segment.detail}`,
       )
       if (status === 'current') stage.root.setAttribute('aria-current', 'step')
@@ -953,7 +954,7 @@ export function createFlow2dView(
     )
     setText(
       elements.metrics.total,
-      trace ? `${(trace.lastTripSec * 1000).toFixed(0)} ms` : '—',
+      trace ? formatModelMilliseconds(trace.lastTripSec * 1000) : '—',
     )
 
     const plan = planForLane(index)
@@ -965,7 +966,7 @@ export function createFlow2dView(
           class: 'flow-empty',
           text: trace?.stop === 'done'
             ? 'No plan was captured for this trip.'
-            : 'The model will put the execution plan tree here.',
+            : 'The model will put its fixed plan template here.',
         }),
       )
     }
@@ -984,7 +985,7 @@ export function createFlow2dView(
     )
     const max = Math.max(0.001, totals[0], totals[1])
     for (const index of [0, 1] as const) {
-      setText(laneEls[index].timeAxisEnd, `${(max * 1000).toFixed(0)} ms`)
+      setText(laneEls[index].timeAxisEnd, formatModelMilliseconds(max * 1000))
       for (let i = 0; i < FLOW_PATH.length; i++) {
         const segment = FLOW_PATH[i]
         const duration = durationFor(index, segment.stop)
@@ -993,8 +994,8 @@ export function createFlow2dView(
         stop.timeBar.hidden =
           segment.skipOnRead && !isWrite(selected.kind)
           || duration <= 0
-        setText(stop.timeLabel, `${segment.label} ${(duration * 1000).toFixed(0)} ms`)
-        stop.timeBar.title = `${segment.label}: ${(duration * 1000).toFixed(0)} ms`
+        setText(stop.timeLabel, `${segment.label} ${formatModelMilliseconds(duration * 1000)}`)
+        stop.timeBar.title = `${segment.label}: ${formatModelMilliseconds(duration * 1000)}`
       }
     }
   }

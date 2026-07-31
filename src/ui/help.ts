@@ -99,8 +99,8 @@ interface LegendRow {
 /** Every colour in the city that carries meaning, and the meaning. */
 const LEGEND: LegendRow[] = [
   { key: 'client', name: 'Client', what: 'Application connections and the rows travelling back to them' },
-  { key: 'postmaster', name: 'Postmaster', what: 'The supervisor process, and every fork it performs' },
-  { key: 'backend', name: 'Backend', what: 'One OS process per connection — your query runs in here' },
+  { key: 'postmaster', name: 'Postmaster', what: 'A supervisor metaphor; the model tracks slot admission, not fork cost' },
+  { key: 'backend', name: 'Backend', what: 'One activity slot per connection; OS process and private-memory costs are absent' },
   { key: 'shmem', name: 'Shared memory', what: 'Structures every backend can see: ProcArray, locks, CLOG' },
   { key: 'bufClean', name: 'Clean page', what: 'A buffer that matches what is on disk — free to evict' },
   { key: 'bufDirty', name: 'Dirty page', what: 'Modified in memory only. Somebody must write it out' },
@@ -108,13 +108,13 @@ const LEGEND: LegendRow[] = [
   { key: 'wal', name: 'WAL', what: 'Write-ahead log records: the durability contract' },
   { key: 'archive', name: 'Archive', what: 'Completed WAL segments shipped to archive storage' },
   { key: 'storage', name: 'Storage', what: 'Heap files, the data directory, and physical disk I/O' },
-  { key: 'index', name: 'Index', what: 'B-tree and GIN structures, and index-only lookups' },
-  { key: 'toast', name: 'TOAST', what: 'Oversized values pushed out of the main heap' },
+  { key: 'index', name: 'Index', what: 'Illustrative B-tree and GIN shapes; index kinds and index-only scans are not modeled' },
+  { key: 'toast', name: 'TOAST', what: 'Illustrative out-of-line storage; no chunks or TOAST reads are modeled' },
   { key: 'vacuum', name: 'Vacuum', what: 'Autovacuum workers and the dead tuples they collect' },
   { key: 'checkpoint', name: 'Checkpoint', what: 'The checkpointer flushing dirty pages to disk' },
   { key: 'bgwriter', name: 'bgwriter', what: 'Background cleaning ahead of the clock sweep' },
   { key: 'replication', name: 'Replication', what: 'WAL on the wire, and the standby replaying it' },
-  { key: 'lock', name: 'Lock', what: 'A heavyweight lock, and the queue of backends waiting on it' },
+  { key: 'lock', name: 'Lock', what: 'One scripted holder and its direct waiters; lock modes and queue fairness are absent' },
 ]
 
 const READING: { h: string; p: string }[] = [
@@ -124,7 +124,7 @@ const READING: { h: string; p: string }[] = [
   },
   {
     h: 'The pit',
-    p: 'The ground is cut away beneath the plaza. That excavation is the data directory: heap files, indexes, TOAST and the disks. Every trip down there is a page that was not in cache.',
+    p: 'The ground is cut away beneath the plaza. That excavation illustrates the data directory: heap files, indexes, TOAST and disks. A trip down marks a <code>shared_buffers</code> miss; the OS-cache branch is illustrative and does not prove device I/O.',
   },
   {
     h: 'The WAL district',
@@ -136,7 +136,7 @@ const READING: { h: string; p: string }[] = [
   },
   {
     h: 'The standby',
-    p: 'South of the city, two TCP connections carry WAL to two standby clusters. Each standby replays its own stream in order; when one cannot keep up, that gap is its replication lag.',
+    p: 'South of the city, two modeled queues carry WAL positions to two independent replay pipelines. The city tracks sent, written, flushed and applied LSNs, but not TCP sockets, replica pages or query results.',
   },
 ]
 

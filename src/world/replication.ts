@@ -1188,7 +1188,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
   ctx.register({
     id: 'net.wire',
     name: 'the wire',
-    role: 'one TCP connection carrying the log to the standby',
+    role: 'modeled WAL and acknowledgement queue · no socket transport',
     kind: 'network',
     district: 'replication',
     object: gWire,
@@ -1206,7 +1206,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
   ctx.register({
     id: 'walreceiver',
     name: 'walreceiver',
-    role: 'writes and flushes arriving WAL to the standby’s own pg_wal',
+    role: 'advances modeled receive, write and flush LSNs',
     kind: 'process',
     district: 'replication',
     object: gRecv,
@@ -1224,7 +1224,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
   ctx.register({
     id: 'startup.proc',
     name: 'startup process',
-    role: 'the single process that replays WAL, forever',
+    role: 'single modeled replay-rate pipeline · no WAL-record contents',
     kind: 'process',
     district: 'replication',
     object: gStartup,
@@ -1241,7 +1241,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
   ctx.register({
     id: 'replica.standby',
     name: 'standby_a',
-    role: 'one of two physical standbys, replaying independently',
+    role: 'one of two independent LSN pipelines · no replica rows',
     kind: 'storage',
     district: 'replication',
     object: gStandby,
@@ -1283,7 +1283,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
   ctx.register({
     id: 'replica.storage',
     name: 'standby_a data directory',
-    role: 'standby_a’s own data files, separate from its own pg_wal',
+    role: 'aggregate size and applied LSN · no copied files or pages',
     kind: 'storage',
     district: 'replication',
     object: gStore,
@@ -1297,7 +1297,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
   ctx.register({
     id: 'replica.client',
     name: 'read-only client',
-    role: 'queries the standby — and can pin the primary’s xmin',
+    role: 'illustrative reads · model tracks only replay frontier and xmin pin',
     kind: 'client',
     district: 'replication',
     object: gClient,
@@ -1311,15 +1311,15 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
       }
       const pin = s.knobs.standbyLongQuery
       return pin
-        ? `hot_standby_feedback — pinning primary xmin ${s.xminHorizon}`
-        : `reads see ${fmtLsn(s.replication.replayLsn)} — ${s.replication.lagSec.toFixed(1)} s old`
+        ? `illustrative read pins primary xmin ${s.xminHorizon} through feedback`
+        : `visibility frontier ${fmtLsn(s.replication.replayLsn)} · no replica query results modeled`
     },
   })
 
   ctx.register({
     id: 'subscriber',
     name: 'logical subscriber',
-    role: 'applies decoded row changes, not blocks',
+    role: 'illustrative row-change rate · no decoded rows or subscriber state',
     kind: 'client',
     district: 'replication',
     object: gSub,
@@ -1329,7 +1329,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     color: COLOR.toast,
     readout: (s: SimState) =>
       s.replication.logicalEnabled
-        ? `${s.replication.logicalChangesPerSec.toFixed(0)} row changes/s · slot ${fmtLsn(s.replication.logicalSlotLsn)}`
+        ? `${s.replication.logicalChangesPerSec.toFixed(0)} derived changes/s · slot ${fmtLsn(s.replication.logicalSlotLsn)}`
         : 'idle — requires wal_level = logical',
   })
 
@@ -1747,7 +1747,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
       )
       text.set(
         TX_SUB,
-        rep.logicalEnabled ? `${rep.logicalChangesPerSec.toFixed(0)} row changes/s` : 'no subscription active',
+        rep.logicalEnabled ? `${rep.logicalChangesPerSec.toFixed(0)} derived changes/s · no rows` : 'illustrative route inactive',
       )
     }
   }
