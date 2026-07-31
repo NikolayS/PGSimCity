@@ -6,15 +6,19 @@ import { clamp, clamp01, damp, fmtBytes, fmtLsn, lerp, makeRng } from '../core/u
 import { ANCHOR, CITY, TABLES, routeLength, routePoint, routeTangent } from './layout'
 
 export function standbyReadout(s: SimState): string {
-  const r = s.replication
+  const r = s.replication.standbys[0]
+  const opinion = s.cluster.nodes[1].leaderOpinion ?? 'unknown'
   if (!r.enabled) return 'offline'
-  if (!r.connected) return 'disconnected — falling further behind'
-  return `${fmtBytes(r.lagBytes)} behind · ${r.lagSec.toFixed(1)} s`
+  if (!r.connected) {
+    return `disconnected · sees ${opinion} as leader · slot holds ${fmtBytes(s.replication.physicalSlots[0].retainedBytes)}`
+  }
+  return `${fmtBytes(r.lagBytes)} behind · ${r.lagSec.toFixed(1)} s · sees ${opinion} as leader`
 }
 
 export function lsnRulerReadout(s: SimState): string {
-  return `primary flush ${fmtLsn(s.wal.flushLsn)} · replay ${fmtLsn(s.replication.replayLsn)} · lag ${fmtBytes(
-    s.replication.lagBytes,
+  const standby = s.replication.standbys[0]
+  return `primary flush ${fmtLsn(s.wal.flushLsn)} · standby_a applied ${fmtLsn(standby.appliedLsn)} · lag ${fmtBytes(
+    standby.lagBytes,
   )}`
 }
 
@@ -1233,8 +1237,8 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
 
   ctx.register({
     id: 'replica.standby',
-    name: 'Standby',
-    role: 'a second cluster, replaying',
+    name: 'standby_a',
+    role: 'one of two physical standbys, replaying independently',
     kind: 'storage',
     district: 'replication',
     object: gStandby,
@@ -1261,7 +1265,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
 
   ctx.register({
     id: 'replica.buffers',
-    name: 'standby shared_buffers',
+    name: 'standby_a buffer pool (shared_buffers)',
     role: 'a representative sample of the cache filled by the primary’s write set',
     kind: 'memory',
     district: 'replication',
@@ -1270,13 +1274,13 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     focus: { target: [BX, 5, BZ], distance: 66, dir: [-0.32, 0.66, 0.68] },
     labelAt: [BX, 14, BZ],
     color: COLOR.bufClean,
-    readout: (s: SimState) => `${N_RTILE} sampled frames · replay activity ${(s.replication.applyActivity * 100).toFixed(0)}%`,
+    readout: (s: SimState) => `${s.cluster.nodes[1].buffers.usedCount} / ${s.cluster.nodes[1].buffers.sampleFrames} sampled frames used · replay activity ${(s.replication.standbys[0].applyActivity * 100).toFixed(0)}%`,
   })
 
   ctx.register({
     id: 'replica.storage',
-    name: 'Standby data directory',
-    role: 'the standby’s own data files and pg_wal',
+    name: 'standby_a data directory',
+    role: 'standby_a’s own data files, separate from its own pg_wal',
     kind: 'storage',
     district: 'replication',
     object: gStore,
@@ -1284,7 +1288,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     focus: { target: [BX, 5, YARD_Z], distance: 62, dir: [-0.4, 0.48, 0.78] },
     labelAt: [BX, 15, YARD_Z],
     color: COLOR.storage,
-    readout: (s: SimState) => `applied to disk up to ${fmtLsn(s.replication.replayLsn)}`,
+    readout: (s: SimState) => `${fmtBytes(s.cluster.nodes[1].dataDirectory.bytes)} · applied through ${fmtLsn(s.cluster.nodes[1].dataDirectory.appliedLsn)}`,
   })
 
   ctx.register({

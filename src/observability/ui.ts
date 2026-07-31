@@ -227,7 +227,9 @@ export const VITALS: Vital[] = [
     label: 'replay lag',
     color: 'var(--c-replication)',
     read: (sim) => {
-      const v = sim.state.replication.lagSec
+      const a = sim.state.replication.standbys[0]
+      const b = sim.state.replication.standbys[1]
+      const v = Math.max(a.connected ? a.lagSec : 0, b.connected ? b.lagSec : 0)
       return { v: `${v.toFixed(2)} s`, tone: v > 8 ? 'crit' : v > 2 ? 'warn' : 'ok' }
     },
     history: (sim) => sim.state.stats.history.lag,

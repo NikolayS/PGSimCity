@@ -164,18 +164,23 @@ describe('cross-surface scale agreement', () => {
 
   it('uses the standby flush position for disconnected physical-slot retention', () => {
     const sim = createSim(createBus())
-    sim.state.replication.connected = false
+    sim.state.replication.standbys[0].connected = false
     sim.state.wal.insertLsn = 30_000
-    sim.state.replication.flushLsn = 8_000
-    sim.state.replication.replayLsn = 2_000
+    sim.state.replication.physicalSlots[0].restartLsn = 8_000
+    sim.state.replication.physicalSlots[0].retainedBytes = 22_000
+    sim.state.replication.physicalSlots[1].retainedBytes = 0
 
-    expect(walsenderReadout(sim.state)).toContain(`physical slot holding ${fmtBytes(22_000)}`)
+    expect(walsenderReadout(sim.state)).toContain(`largest slot hold ${fmtBytes(22_000)}`)
   })
 
   it('renders replication lag from the same byte and time values', () => {
     const sim = createSim(createBus())
+    const standby = sim.state.replication.standbys[0]
     sim.state.replication.lagBytes = 1_234_567
     sim.state.replication.lagSec = 3.25
+    standby.lagBytes = sim.state.replication.lagBytes
+    standby.lagSec = sim.state.replication.lagSec
+    standby.appliedLsn = sim.state.wal.writeLsn - standby.lagBytes
     const collector = createCollector(sim)
     const bytes = fmtBytes(sim.state.replication.lagBytes)
     const replication = PROJECTIONS.replication(sim.state, collector, 'total')
@@ -184,7 +189,7 @@ describe('cross-surface scale agreement', () => {
     expect(metric('startup.proc', 'Behind by', sim.state)).toContain(bytes)
     expect(standbyReadout(sim.state)).toContain(bytes)
     expect(lsnRulerReadout(sim.state)).toContain(bytes)
-    expect(text(row(replication, 'standby1').behind)).toBe(bytes)
+    expect(text(row(replication, 'standbyA').behind)).toBe(bytes)
   })
 
   it('uses running statements, not occupied slots, for every active-backend label', () => {

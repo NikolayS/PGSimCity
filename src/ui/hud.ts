@@ -125,7 +125,7 @@ const VITALS: VitalDef[] = [
     label: 'Repl lag',
     focus: 'replica.standby',
     color: cssColor('replication'),
-    hint: 'How far behind the standby has replayed. This is the number your read replica users actually feel.',
+    hint: 'The larger replay lag of standby_a and standby_b. Each node has its own received, flushed, and applied position.',
   },
 ]
 
@@ -236,22 +236,35 @@ function lagClimbing(lag: readonly number[]): boolean {
   return lag[n - 1] - lag[n - 9] > 0.4 && lag[n - 1] > 1
 }
 
+function worstStandby(s: SimState): SimState['replication']['standbys'][number] | undefined {
+  const a = s.replication.standbys[0]
+  const b = s.replication.standbys[1]
+  if (!a.connected) return b.connected ? b : undefined
+  if (!b.connected) return a
+  return b.lagSec > a.lagSec ? b : a
+}
+
 function health(s: SimState): Health {
+  if (s.disasterRecovery.archive.writesBlocked) return 'crit'
   if (s.checkpoint.phase !== 'idle' && s.checkpoint.reason === 'wal') return 'crit'
   if (s.locks.length >= 3) return 'crit'
   if (s.stats.cacheHitPct < 50) return 'warn'
-  if (s.replication.enabled && (s.replication.lagSec > 5 || lagClimbing(s.stats.history.lag))) return 'warn'
+  const standby = worstStandby(s)
+  if (standby && (standby.lagSec > 5 || lagClimbing(s.stats.history.lag))) return 'warn'
   if (s.buffers.sampleFrames > 0 && s.buffers.dirtyCount / s.buffers.sampleFrames > 0.7) return 'warn'
   return 'ok'
 }
 
 function healthReason(s: SimState, h: Health): string {
+  if (s.disasterRecovery.archive.writesBlocked)
+    return 'Primary WAL volume reached its scaled safety limit — writes are rejected'
   if (s.checkpoint.phase !== 'idle' && s.checkpoint.reason === 'wal')
     return 'Checkpoint triggered by WAL volume — max_wal_size is being outrun'
   if (s.locks.length >= 3) return `${s.locks.length} backends waiting on a heavyweight lock`
   if (s.stats.cacheHitPct < 50) return `Cache hit ratio ${s.stats.cacheHitPct.toFixed(1)}% — most reads are going to storage`
-  if (s.replication.enabled && s.replication.lagSec > 5) return `Standby is ${s.replication.lagSec.toFixed(1)}s behind`
-  if (s.replication.enabled && lagClimbing(s.stats.history.lag)) return 'Replication lag is climbing'
+  const standby = worstStandby(s)
+  if (standby && standby.lagSec > 5) return `${standby.applicationName} is ${standby.lagSec.toFixed(1)}s behind`
+  if (standby && lagClimbing(s.stats.history.lag)) return 'Replication lag is climbing'
   if (h === 'warn') return 'Most sampled buffer frames are dirty'
   return 'Nothing dramatic is happening'
 }
@@ -284,8 +297,9 @@ export function vitalValue(key: VitalKey, s: SimState): { text: string; state: S
       return { text: fmtNum(d), state: r > 0.75 ? 'crit' : r > 0.5 ? 'warn' : '' }
     }
     case 'lag': {
-      if (!s.replication.enabled || !s.replication.connected) return { text: '—', state: '' }
-      const v = s.replication.lagSec
+      const standby = worstStandby(s)
+      if (!standby) return { text: '—', state: '' }
+      const v = standby.lagSec
       return { text: `${v.toFixed(1)}s`, state: v > 20 ? 'crit' : v > 5 ? 'warn' : '' }
     }
   }

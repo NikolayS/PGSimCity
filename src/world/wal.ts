@@ -40,13 +40,15 @@ const MB = 1024 * 1024
 
 export function walsenderReadout(s: SimState): string {
   const r = s.replication
-  const consumers = (r.enabled ? 1 : 0) + (r.logicalEnabled ? 1 : 0)
-  if (!r.connected) {
-    return `${consumers} consumer bay${consumers === 1 ? '' : 's'} · disconnected · physical slot holding ${fmtBytes(
-      Math.max(0, s.wal.insertLsn - r.flushLsn),
-    )}`
-  }
-  return `${consumers} consumer bay${consumers === 1 ? '' : 's'} · sent ${fmtLsn(r.sentLsn)} · lag ${fmtBytes(r.lagBytes)}`
+  const connected =
+    (r.standbys[0].connected ? 1 : 0)
+    + (r.standbys[1].connected ? 1 : 0)
+  const held = Math.max(
+    r.physicalSlots[0].retainedBytes,
+    r.physicalSlots[1].retainedBytes,
+  )
+  const opinion = s.cluster.nodes[0].leaderOpinion ?? 'unknown'
+  return `2 physical walsenders · ${connected} connected · largest slot hold ${fmtBytes(held)} · primary sees ${opinion} as leader`
 }
 
 /** cx, cy, cz, w, h, d — for cylinders w/d are diameters. */
@@ -953,14 +955,14 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
   const sendDetailMesh = batch(gSender, unitBox, matDeep, sendDetail)
 
   // One termination bay per consumer. The cabinet is shared architecture, but
-  // a physical standby and a logical subscriber each own a walsender and slot.
-  const consumerBays = new THREE.InstancedMesh(unitBox, neonWhite, 2)
+  // standby_a, standby_b and the logical subscriber each own a walsender/slot.
+  const consumerBays = new THREE.InstancedMesh(unitBox, neonWhite, 3)
   const consumerRatchetGeo = own(new THREE.TorusGeometry(1.2, 0.22, 6, 18))
-  const consumerRatchets = new THREE.InstancedMesh(consumerRatchetGeo, neonWhite, 2)
+  const consumerRatchets = new THREE.InstancedMesh(consumerRatchetGeo, neonWhite, 3)
   _c.setRGB(0, 0, 0)
-  for (let i = 0; i < 2; i++) {
-    const x = WS[0] + (i === 0 ? -3.4 : 3.4)
-    setBox(consumerBays, i, [x, 5.6, WS[2] + 7.15, 5.4, 3.2, 0.8])
+  for (let i = 0; i < 3; i++) {
+    const x = WS[0] + (i - 1) * 4
+    setBox(consumerBays, i, [x, 5.6, WS[2] + 7.15, 3.5, 3.2, 0.8])
     _p.set(x, 5.6, WS[2] + 7.7)
     _e.set(Math.PI / 2, 0, 0)
     _q.setFromEuler(_e)
@@ -1041,8 +1043,9 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
   const IX_SLOTWARN = 6
 
   signs.plate('walsender', WS[0], 4.9, WS[2] + 10.1, 'south', 1.1, COLOR.replication, 1.0)
-  signs.plate('physical', WS[0] - 3.4, 7.8, WS[2] + 7.8, 'south', 0.52, COLOR.replication, 0.64)
-  signs.plate('logical', WS[0] + 3.4, 7.8, WS[2] + 7.8, 'south', 0.52, COLOR.toast, 0.64)
+  signs.plate('standby_a', WS[0] - 4, 7.8, WS[2] + 7.8, 'south', 0.43, COLOR.replication, 0.64)
+  signs.plate('standby_b', WS[0], 7.8, WS[2] + 7.8, 'south', 0.43, COLOR.replication, 0.64)
+  signs.plate('logical', WS[0] + 4, 7.8, WS[2] + 7.8, 'south', 0.43, COLOR.toast, 0.64)
   const [SGN_SLOT] = signs.plate('replication slot', SIGX, 14.4, SIGZ, 'west', 1.1, COLOR.replication, 0.7)
 
   /* =======================================================================
@@ -1754,13 +1757,16 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
     }
     streamPulse = Math.max(0, streamPulse - dt * 2.2)
 
-    const connected = rep.connected && rep.enabled
-    _c.setHex(COLOR.replication).multiplyScalar(rep.enabled ? (connected ? 1.35 : 0.35) : 0.035)
+    const connected = rep.standbys[0].connected || rep.standbys[1].connected
+    _c.setHex(COLOR.replication).multiplyScalar(rep.standbys[0].enabled ? (rep.standbys[0].connected ? 1.35 : 0.35) : 0.035)
     consumerBays.setColorAt(0, _c)
     consumerRatchets.setColorAt(0, _c)
-    _c.setHex(COLOR.toast).multiplyScalar(rep.logicalEnabled ? 1.25 : 0.035)
+    _c.setHex(COLOR.replication).multiplyScalar(rep.standbys[1].enabled ? (rep.standbys[1].connected ? 1.35 : 0.35) : 0.035)
     consumerBays.setColorAt(1, _c)
     consumerRatchets.setColorAt(1, _c)
+    _c.setHex(COLOR.toast).multiplyScalar(rep.logicalEnabled ? 1.25 : 0.035)
+    consumerBays.setColorAt(2, _c)
+    consumerRatchets.setColorAt(2, _c)
     consumerBays.instanceColor!.needsUpdate = true
     consumerRatchets.instanceColor!.needsUpdate = true
 
@@ -1774,7 +1780,11 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
     spoolTeeth.instanceColor!.needsUpdate = true
 
     // The ratchet marks the slot position; retained bytes light pg_wal itself.
-    const lagFrac = clamp01(Math.sqrt(rep.lagBytes / (192 * MB)))
+    const largestSlotHold = Math.max(
+      rep.physicalSlots[0].retainedBytes,
+      rep.physicalSlots[1].retainedBytes,
+    )
+    const lagFrac = clamp01(Math.sqrt(largestSlotHold / (192 * MB)))
     setTRS(spoolWind, 0, SPX, SPY, SPZ, 2.1, 2.0, 2.1, spoolAxis)
     spoolWind.instanceMatrix.needsUpdate = true
     const spoolCrit = clamp01((lagFrac - 0.72) / 0.28)

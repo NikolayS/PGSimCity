@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { COLOR, mixHex } from '../core/theme'
 import type { SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
-import { clamp, clamp01, damp, fmtBytes, fmtDuration } from '../core/util'
+import { clamp, clamp01, damp, fmtBytes, fmtDuration, fmtLsn } from '../core/util'
 import { ANCHOR, CONTINUITY } from './layout'
 
 /* ============================================================================
@@ -34,9 +34,9 @@ import { ANCHOR, CONTINUITY } from './layout'
  * WHAT IS SIMULATED, AND WHAT IS NOT. The model owns archive retries, pg_wal
  * pressure, full backups, pgBackRest retention, and a restore that fetches one
  * retained backup before replaying archived WAL to recovery_target_time. The
- * world only projects that state. HA buildings already laid out south of this
- * quarter stay inert: no Patroni agent, leader election, promotion, endpoint
- * move, rejoin, or failover is modeled in this pass.
+ * world only projects that state. standby_b is now a complete independent
+ * physical standby. The remaining HA structures stay inert: no Patroni agent,
+ * leader election, promotion, endpoint move, rejoin, or failover is modeled.
  * ==========================================================================*/
 
 /* --- module scope scratch: update() must never allocate -------------------- */
@@ -54,8 +54,9 @@ type Box = [number, number, number, number, number, number]
 const N_VAULT = CONTINUITY.backupSlots
 const N_SILO = CONTINUITY.silo.rows * CONTINUITY.silo.cols
 const N_LEASE = 3
-const BUF_B = 6
+const BUF_B = 32
 const N_TILE_B = BUF_B * BUF_B
+const N_WAL_B = 8
 const N_HISTORY = CONTINUITY.branches.length
 /** Dark. Used for every unlit instance colour in the quarter. */
 const OFF = 0x0a1120
@@ -532,11 +533,10 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   plate('stop line', RR[0] - 12, 3.6, RR[2] + 6, 0, 1.4, COLOR.crit, 0.75)
 
   /* ---------------------------------------------------------------------
-   * 6. INERT FUTURE HA SCAFFOLD.
+   * 6. THREE NODES BESIDE INERT FUTURE HA SCAFFOLD.
    *
-   * These buildings predate this feature. They remain standing, registered,
-   * and collidable, but this disaster-recovery pass gives them no state,
-   * traffic, lease, promotion, delayed replay, or failover behaviour.
+   * standby_b is live and independent in this pass. The service endpoint,
+   * DCS, leases, promotion, rewind, and failover structures remain inert.
    * -------------------------------------------------------------------*/
 
   const gEndpoint = new THREE.Group()
@@ -597,7 +597,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     box([a[0], 4.5, a[2], 1.1, 9, 1.1], 'none')
     plate(LEASE_TITLE[i], a[0], 12.6, a[2], 0, 1.7, i === 0 ? COLOR.ok : COLOR.replication, 0.9)
   }
-  plate('inactive · no delayed replay model', ANCHOR.leaseNode3[0], 10.6, ANCHOR.leaseNode3[2] + 0.4, 0, 1.25, COLOR.warn, 0.85)
+  plate('independent replay · no promotion model', ANCHOR.leaseNode3[0], 10.6, ANCHOR.leaseNode3[2] + 0.4, 0, 1.25, COLOR.replication, 0.85)
   plate('inactive · no failover candidate model', ANCHOR.leaseNode2[0], 10.6, ANCHOR.leaseNode2[2] + 0.4, 0, 1.25, COLOR.inkDim, 0.75)
 
   /** 0..2 are the role lamps; 3..5 the lease bars that drain and are renewed. */
@@ -642,39 +642,89 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     RJ[0], 3.6, RJ[2] - 10.5, 0, 1.2, COLOR.inkDim, 0.72,
   )
 
-  /* node 3: the second standby, fifteen minutes in the past on purpose */
+  /* node 3: a complete independent physical standby */
   const gStandbyB = new THREE.Group()
   gStandbyB.name = 'standby.b'
   group.add(gStandbyB)
-  part(gStandbyB)
   const SB = ANCHOR.standbyB
   const SBR = ANCHOR.standbyBRecv
+  const SBW = ANCHOR.standbyBWal
   const SBD = ANCHOR.standbyBDeck
+  const SBS = ANCHOR.standbyBStorage
+
+  const gBReceiver = new THREE.Group()
+  gBReceiver.name = 'standby.b.receiver'
+  gStandbyB.add(gBReceiver)
+  part(gBReceiver)
   box([SBR[0], 4, SBR[2], 12, 8, 9], 'dim')
+  box([SBR[0], 8.5, SBR[2], 14, 1, 11], 'none')
+
+  const gBWal = new THREE.Group()
+  gBWal.name = 'standby.b.wal'
+  gStandbyB.add(gBWal)
+  part(gBWal)
+  box([SBW[0], 1.1, SBW[2], 24, 2.2, 8], 'dim')
+  const walB = neonBank('standby.b.wal.segments', unitBox, N_WAL_B, gBWal)
+  for (let i = 0; i < N_WAL_B; i++) {
+    _p.set(SBW[0] - 9.8 + i * 2.8, 2.6, SBW[2])
+    _sc.set(2.1, 2.3, 5.4)
+    _m.compose(_p, _qi, _sc)
+    walB.setMatrixAt(i, _m)
+    walB.setColorAt(i, _c.setHex(OFF))
+  }
+  walB.instanceMatrix.needsUpdate = true
+
+  const gBStartup = new THREE.Group()
+  gBStartup.name = 'standby.b.startup'
+  gStandbyB.add(gBStartup)
+  part(gBStartup)
   box([SB[0], 4, SB[2], 10, 8, 8], 'dim')
+  box([SB[0], 8.5, SB[2], 12, 1, 10], 'none')
+
+  const gBBuffers = new THREE.Group()
+  gBBuffers.name = 'standby.b.buffers'
+  gStandbyB.add(gBBuffers)
+  part(gBBuffers)
   box([SBD[0], SBD[1] - 0.5, SBD[2], 32, 1.0, 24], 'dim')
   box([SBD[0], 6, SBD[2] - 15, 30, 8, 0.7], 'dim')
 
-  const tileB = neonBank('standby.b.buffers', unitBox, N_TILE_B, gStandbyB)
+  const tileB = neonBank('standby.b.buffers.tiles', unitBox, N_TILE_B, gBBuffers)
   for (let i = 0; i < N_TILE_B; i++) {
     const col = i % BUF_B
     const row = Math.floor(i / BUF_B)
-    _p.set(SBD[0] + (col - (BUF_B - 1) / 2) * 3.4, SBD[1] + 0.35, SBD[2] + (row - (BUF_B - 1) / 2) * 3.4)
-    _sc.set(2.7, 0.35, 2.7)
+    _p.set(
+      SBD[0] + (col - (BUF_B - 1) / 2) * 0.72,
+      SBD[1] + 0.35,
+      SBD[2] + (row - (BUF_B - 1) / 2) * 0.67,
+    )
+    _sc.set(0.54, 0.35, 0.5)
     _m.compose(_p, _qi, _sc)
     tileB.setMatrixAt(i, _m)
     tileB.setColorAt(i, _c.setHex(OFF))
   }
   tileB.instanceMatrix.needsUpdate = true
 
+  const gBStorage = new THREE.Group()
+  gBStorage.name = 'standby.b.storage'
+  gStandbyB.add(gBStorage)
+  part(gBStorage)
+  box([SBS[0], SBS[1], SBS[2], 34, 1, 26], 'dim')
+  box([SBS[0] - 16.5, SBS[1] + 5, SBS[2], 1, 10, 26], 'dim')
+  box([SBS[0] + 16.5, SBS[1] + 5, SBS[2], 1, 10, 26], 'dim')
+  box([SBS[0], SBS[1] + 5, SBS[2] + 12.5, 34, 10, 1], 'dim')
+
   plate('standby_b', SB[0], 10.8, SB[2] - 4.4, Math.PI, 2.2, COLOR.replication, 0.92, gStandbyB)
-  plate('walreceiver', SBR[0], 10.6, SBR[2] - 5, Math.PI, 1.6, COLOR.replication, 0.8)
-  plate('a TIME-DELAYED standby', SBD[0], 8.8, SBD[2] - 15.5, Math.PI, 2.0, COLOR.warn, 0.9, gStandbyB)
+  plate('walreceiver', SBR[0], 10.6, SBR[2] - 5, Math.PI, 1.6, COLOR.replication, 0.8, gBReceiver)
+  plate('own pg_wal', SBW[0], 6.4, SBW[2] - 4.5, Math.PI, 1.45, COLOR.wal, 0.82, gBWal)
+  plate('startup process', SB[0], 8.6, SB[2] + 4.5, 0, 1.45, COLOR.replication, 0.82, gBStartup)
+  plate('standby_b buffer pool', SBD[0], 8.8, SBD[2] - 15.5, Math.PI, 2.0, COLOR.replication, 0.9, gBBuffers)
   plate(
-    'future high-availability scaffold · no delayed replay is modelled in this disaster-recovery pass',
+    'received · flushed · applied independently',
     SBD[0], 6.4, SBD[2] - 15.5, Math.PI, 1.2, COLOR.inkDim, 0.72,
+    gBBuffers,
   )
-  const syncPlate = plate("synchronous_standby_names = ''", SBD[0], 4.4, SBD[2] - 15.5, Math.PI, 1.2, COLOR.inkDim, 0.72)
+  plate("synchronous_standby_names = 'standby_a'", SBD[0], 4.4, SBD[2] - 15.5, Math.PI, 1.2, COLOR.inkDim, 0.72, gBBuffers)
+  plate('standby_b data directory', SBS[0], SBS[1] + 11.5, SBS[2] + 13, 0, 1.6, COLOR.storage, 0.9, gBStorage)
 
   /* ---------------------------------------------------------------------
    * 7. Bake the structure and the outlines.
@@ -733,7 +783,6 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   epArrow.visible = false
   lockRing.visible = false
   lockBody.visible = false
-  syncPlate.visible = false
 
   /* ---------------------------------------------------------------------
    * 9. Registration.
@@ -945,8 +994,8 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
 
   ctx.register({
     id: 'standby.b',
-    name: 'future standby_b scaffold',
-    role: 'inert future HA structure — no second-standby traffic or delayed replay is modelled',
+    name: 'standby_b',
+    role: 'independent physical standby — no promotion or failover behavior',
     kind: 'storage',
     district: 'replication',
     object: gStandbyB,
@@ -954,6 +1003,99 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     focus: { target: [SB[0], 6, SB[2] + 20], distance: 132, dir: [-0.5, 0.46, 0.73] },
     labelAt: [SB[0], 20, SB[2]],
     color: COLOR.replication,
+    readout: (s: SimState) => {
+      const standby = s.replication.standbys[1]
+      const opinion = s.cluster.nodes[2].leaderOpinion ?? 'unknown'
+      if (!standby.connected) {
+        return `disconnected · sees ${opinion} as leader · slot holds ${fmtBytes(s.replication.physicalSlots[1].retainedBytes)}`
+      }
+      return `applied ${fmtLsn(standby.appliedLsn)} · ${standby.lagSec.toFixed(1)} s behind · sees ${opinion} as leader`
+    },
+  })
+
+  ctx.register({
+    id: 'standby.b.receiver',
+    name: 'standby_b walreceiver',
+    role: 'receives one physical WAL stream into standby_b’s own pg_wal',
+    kind: 'process',
+    district: 'replication',
+    object: gBReceiver,
+    tier: 1,
+    focus: { target: [SBR[0], 6, SBR[2]], distance: 54, dir: [-0.45, 0.46, -0.77] },
+    labelAt: [SBR[0], 15, SBR[2]],
+    color: COLOR.replication,
+    readout: (s: SimState) => {
+      const standby = s.replication.standbys[1]
+      return standby.connected
+        ? `received ${fmtLsn(standby.receivedLsn)} · written ${fmtLsn(standby.writtenLsn)}`
+        : 'stopped · physical slot remains on the primary'
+    },
+  })
+
+  ctx.register({
+    id: 'standby.b.wal',
+    name: 'standby_b write-ahead log',
+    role: 'standby_b’s own received and flushed WAL files',
+    kind: 'storage',
+    district: 'replication',
+    object: gBWal,
+    tier: 1,
+    focus: { target: [SBW[0], 4, SBW[2]], distance: 60, dir: [-0.48, 0.5, -0.72] },
+    labelAt: [SBW[0], 12, SBW[2]],
+    color: COLOR.wal,
+    readout: (s: SimState) => {
+      const standby = s.replication.standbys[1]
+      return `flushed ${fmtLsn(standby.flushedLsn)} · ${fmtBytes(s.cluster.nodes[2].wal.diskBytes)} in pg_wal`
+    },
+  })
+
+  ctx.register({
+    id: 'standby.b.startup',
+    name: 'standby_b startup process',
+    role: 'applies standby_b’s flushed WAL in order',
+    kind: 'process',
+    district: 'replication',
+    object: gBStartup,
+    tier: 1,
+    focus: { target: [SB[0], 6, SB[2]], distance: 54, dir: [-0.46, 0.48, -0.75] },
+    labelAt: [SB[0], 15, SB[2]],
+    color: COLOR.replication,
+    readout: (s: SimState) => {
+      const standby = s.replication.standbys[1]
+      return `applied ${fmtLsn(standby.appliedLsn)} · waiting ${fmtBytes(Math.max(0, standby.flushedLsn - standby.appliedLsn))}`
+    },
+  })
+
+  ctx.register({
+    id: 'standby.b.buffers',
+    name: 'standby_b buffer pool (shared_buffers)',
+    role: 'standby_b’s independent representative buffer-frame sample',
+    kind: 'memory',
+    district: 'replication',
+    object: gBBuffers,
+    tier: 1,
+    focus: { target: [SBD[0], 5, SBD[2]], distance: 74, dir: [-0.4, 0.58, 0.72] },
+    labelAt: [SBD[0], 16, SBD[2]],
+    color: COLOR.replication,
+    readout: (s: SimState) => {
+      const pool = s.cluster.nodes[2].buffers
+      return `${pool.usedCount} / ${pool.sampleFrames} sampled frames used · replay activity ${(s.replication.standbys[1].applyActivity * 100).toFixed(0)}%`
+    },
+  })
+
+  ctx.register({
+    id: 'standby.b.storage',
+    name: 'standby_b data directory',
+    role: 'standby_b’s own data files, current only through applied LSN',
+    kind: 'storage',
+    district: 'replication',
+    object: gBStorage,
+    tier: 1,
+    focus: { target: [SBS[0], SBS[1] + 5, SBS[2]], distance: 72, dir: [-0.42, 0.54, 0.73] },
+    labelAt: [SBS[0], SBS[1] + 17, SBS[2]],
+    color: COLOR.storage,
+    readout: (s: SimState) =>
+      `${fmtBytes(s.cluster.nodes[2].dataDirectory.bytes)} · applied through ${fmtLsn(s.cluster.nodes[2].dataDirectory.appliedLsn)}`,
   })
 
   /* ---------------------------------------------------------------------
@@ -963,6 +1105,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   /** Emission accumulators, one per route. Never reallocated. */
   const emit = {
     take: 0, store: 0, haul: 0, unpack: 0, replay: 0, apply: 0,
+    bStream: 0, bAck: 0, bApply: 0, bBuffer: 0, bIo: 0,
   }
 
   function pump(acc: number, perSec: number, dt: number, route: string): number {
@@ -1066,6 +1209,51 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     replayHand.rotation.y = damp(replayHand.rotation.y, -1.1 + restore.progress * 3.2, 4, dt)
     targetHand.rotation.y = damp(targetHand.rotation.y, -1.1 + clamp(sim.knobs.recoveryTargetAge / 300, 0, 1) * 3.2, 4, dt)
     stopLine.visible = replaying || complete
+
+    /* --- 4. standby_b: independent receive, flush, apply and storage -------*/
+    const standbyB = sim.replication.standbys[1]
+    const poolB = sim.cluster.nodes[2].buffers
+    if (standbyB.connected) {
+      emit.bStream = pump(emit.bStream, 5, dt, 'net.streamB')
+      emit.bAck = pump(emit.bAck, 2.5, dt, 'net.ackB')
+      emit.bApply = pump(emit.bApply, 3.5, dt, 'replicaB.apply')
+      emit.bBuffer = pump(emit.bBuffer, 2.5, dt, 'replicaB.buffer')
+      emit.bIo = pump(emit.bIo, 1.4, dt, 'replicaB.io')
+    }
+    const pendingSegments = Math.min(
+      N_WAL_B,
+      Math.max(
+        1,
+        Math.ceil(
+          Math.max(0, standbyB.receivedLsn - standbyB.appliedLsn)
+          / sim.cluster.nodes[2].wal.segmentSize,
+        ),
+      ),
+    )
+    for (let i = 0; i < N_WAL_B; i++) {
+      const pending = i < pendingSegments
+      _c.setHex(
+        !standbyB.connected
+          ? i === 0 ? COLOR.warn : OFF
+          : pending ? COLOR.wal : COLOR.replication,
+      )
+      _c.multiplyScalar(pending ? 1.35 : 0.42)
+      walB.setColorAt(i, _c)
+    }
+    if (walB.instanceColor) walB.instanceColor.needsUpdate = true
+
+    for (let i = 0; i < N_TILE_B; i++) {
+      if (!poolB.valid[i]) {
+        _c.setHex(OFF)
+      } else if (poolB.dirty[i]) {
+        _c.setHex(COLOR.bufDirty).multiplyScalar(1.15)
+      } else {
+        const age = Math.max(0, sim.t - poolB.lastTouch[i])
+        _c.setHex(COLOR.bufClean).multiplyScalar(0.32 + Math.max(0, 1 - age / 8) * 0.8)
+      }
+      tileB.setColorAt(i, _c)
+    }
+    if (tileB.instanceColor) tileB.instanceColor.needsUpdate = true
   }
 
   function setDetail(level: 0 | 1 | 2): void {

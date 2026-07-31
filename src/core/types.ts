@@ -107,10 +107,16 @@ export interface Knobs {
   /** Take a heavyweight lock that blocks writers on one table. */
   lockContention: boolean
   replicaEnabled: boolean
-  /** ms of one-way network delay to the standby. */
+  /** ms of one-way network delay to standby_a. */
   replicaNetworkLag: number
-  /** Standby applies WAL slower than it arrives. */
+  /** standby_a applies WAL slower than it arrives. */
   replicaSlowApply: boolean
+  /** Whether standby_b is streaming from the primary. */
+  standbyBEnabled: boolean
+  /** ms of one-way network delay to standby_b. */
+  standbyBNetworkLag: number
+  /** standby_b applies WAL slower than it arrives. */
+  standbyBSlowApply: boolean
   /** A long-running standby read reports xmin through hot_standby_feedback. */
   standbyLongQuery: boolean
   /** The remote archive repository is reachable by archive_command. */
@@ -158,6 +164,9 @@ export const DEFAULT_KNOBS: Knobs = {
   replicaEnabled: true,
   replicaNetworkLag: 30,
   replicaSlowApply: false,
+  standbyBEnabled: true,
+  standbyBNetworkLag: 55,
+  standbyBSlowApply: false,
   standbyLongQuery: false,
   archiveAvailable: true,
   backupRetention: 3,
@@ -482,6 +491,10 @@ export interface TableSim {
 }
 
 export interface ReplicationState {
+  /**
+   * Compatibility projection of standby_a for older teaching surfaces.
+   * `standbys` is canonical; these fields are copied from its first entry.
+   */
   enabled: boolean
   connected: boolean
   mode: 'async' | 'sync'
@@ -499,6 +512,90 @@ export interface ReplicationState {
   logicalChangesPerSec: number
   /** number of WAL records in flight on the wire */
   inFlight: number
+  /** The two independent physical streams fed by separate walsenders. */
+  standbys: [PhysicalStandbyState, PhysicalStandbyState]
+  /** Physical slots survive connection loss and retain primary WAL. */
+  physicalSlots: [PhysicalReplicationSlotState, PhysicalReplicationSlotState]
+}
+
+export type ClusterNodeId = 'primary' | 'standbyA' | 'standbyB'
+
+export interface ClusterNodeWalState {
+  /** Furthest byte accepted by this node. On the primary this is insert_lsn. */
+  receivedLsn: number
+  /** Furthest byte written into this node's pg_wal files. */
+  writtenLsn: number
+  /** Furthest byte made durable in this node's pg_wal files. */
+  flushedLsn: number
+  /** Furthest byte whose records have changed data pages on this node. */
+  appliedLsn: number
+  segmentSize: number
+  segmentCount: number
+  diskBytes: number
+}
+
+export interface ClusterDataDirectoryState {
+  bytes: number
+  /** Primary pages are current; standby pages are current only through this LSN. */
+  appliedLsn: number
+}
+
+export interface ClusterNodeState {
+  id: ClusterNodeId
+  name: 'primary' | 'standby_a' | 'standby_b'
+  role: 'primary' | 'standby'
+  online: boolean
+  /**
+   * This node's observation, not a cluster-wide truth. Item 3 will decide what
+   * acts on disagreement; this model only stores it.
+   */
+  leaderOpinion: ClusterNodeId | null
+  buffers: BufferPool
+  wal: ClusterNodeWalState
+  dataDirectory: ClusterDataDirectoryState
+}
+
+export interface ClusterState {
+  nodes: [ClusterNodeState, ClusterNodeState, ClusterNodeState]
+}
+
+export type ReplicationProcessState = 'stopped' | 'catchup' | 'streaming'
+
+export interface PhysicalStandbyState {
+  nodeId: 'standbyA' | 'standbyB'
+  applicationName: 'standby_a' | 'standby_b'
+  enabled: boolean
+  connected: boolean
+  mode: 'async' | 'sync'
+  /** Primary-side walsender progress. */
+  sentLsn: number
+  /** Bytes delivered to walreceiver, before its local write catches up. */
+  receivedLsn: number
+  /** Bytes written to the standby's own pg_wal. */
+  writtenLsn: number
+  /** Bytes fsynced in the standby's own pg_wal. */
+  flushedLsn: number
+  /** Bytes replayed by the standby startup process. */
+  appliedLsn: number
+  lagBytes: number
+  lagSec: number
+  networkLagMs: number
+  applyActivity: number
+  inFlight: number
+  walSender: ReplicationProcessState
+  walReceiver: ReplicationProcessState
+  startupProcess: ReplicationProcessState
+  /** Primary has received this standby's durable/apply acknowledgements. */
+  acknowledgedFlushLsn: number
+  acknowledgedApplyLsn: number
+}
+
+export interface PhysicalReplicationSlotState {
+  name: 'standby_a_slot' | 'standby_b_slot'
+  standbyId: 'standbyA' | 'standbyB'
+  active: boolean
+  restartLsn: number
+  retainedBytes: number
 }
 
 export type BaseBackupStatus = 'idle' | 'copying' | 'waiting_wal' | 'failed'
@@ -644,6 +741,7 @@ export interface SimState {
   autovac: AutovacState
   tables: TableSim[]
   replication: ReplicationState
+  cluster: ClusterState
   disasterRecovery: DisasterRecoveryState
   locks: LockEdge[]
   stats: SimStats
@@ -669,6 +767,8 @@ export interface SimApi {
   startBaseBackup(): boolean
   /** Restore to `targetAgeSec` before now, or the recoveryTargetAge control. */
   startPointInTimeRestore(targetAgeSec?: number): boolean
+  /** Record one node's observation; this does not elect, demote, or promote. */
+  setLeaderOpinion(node: ClusterNodeId, leader: ClusterNodeId | null): void
   reset(): void
 }
 

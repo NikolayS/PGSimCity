@@ -36,7 +36,7 @@ function fakeCanvas(): HTMLCanvasElement {
   return canvas
 }
 
-describe('continuity DR-only projection', () => {
+describe('continuity and three-node projection', () => {
   const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document')
 
   beforeAll(() => {
@@ -57,7 +57,7 @@ describe('continuity DR-only projection', () => {
     else Reflect.deleteProperty(globalThis, 'document')
   })
 
-  it('registers DR mechanisms and emits no Patroni, failover, or second-standby traffic', () => {
+  it('registers a complete standby_b while emitting no Patroni or failover traffic', () => {
     const bus = createBus()
     const sim = createSim(bus)
     const theme = createTheme()
@@ -97,11 +97,21 @@ describe('continuity DR-only projection', () => {
       'ha.dcs',
       'ha.rejoin',
       'standby.b',
+      'standby.b.receiver',
+      'standby.b.wal',
+      'standby.b.startup',
+      'standby.b.buffers',
+      'standby.b.storage',
     ])
     expect(
       defs
-        .filter((def) => def.id.startsWith('ha.') || def.id === 'standby.b')
+        .filter((def) => def.id.startsWith('ha.'))
         .every((def) => def.readout === undefined),
+    ).toBe(true)
+    expect(
+      defs
+        .filter((def) => def.id.startsWith('standby.b'))
+        .every((def) => def.readout !== undefined),
     ).toBe(true)
 
     sim.startBaseBackup()
@@ -112,12 +122,14 @@ describe('continuity DR-only projection', () => {
 
     expect(flows.some((flow) => flow.route === 'backup.take')).toBe(true)
     expect(flows.some((flow) => flow.route === 'backup.store')).toBe(true)
+    expect(flows.some((flow) => flow.route === 'net.streamB')).toBe(true)
+    expect(flows.some((flow) => flow.route === 'net.ackB')).toBe(true)
+    expect(flows.some((flow) => flow.route === 'replicaB.apply')).toBe(true)
+    expect(flows.some((flow) => flow.route === 'replicaB.buffer')).toBe(true)
+    expect(flows.some((flow) => flow.route === 'replicaB.io')).toBe(true)
     expect(
       flows.some((flow) =>
-        flow.route.startsWith('ha.')
-        || flow.route === 'net.streamB'
-        || flow.route === 'net.ackB'
-        || flow.route === 'replicaB.apply'),
+        flow.route.startsWith('ha.')),
     ).toBe(false)
 
     continuity.dispose?.()
