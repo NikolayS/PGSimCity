@@ -26,7 +26,7 @@ Much of the scaffolding is already standing. `archiveGate`, `timelineYard`,
 already makes this a three-node cluster. **They are buildings without
 behaviour.** The work is giving them mechanisms that can fail.
 
-## 1. A real cluster, with real tools
+## 1. A real cluster, with real tools — shipped
 
 Name the tools and model what they actually do:
 
@@ -40,13 +40,13 @@ Name the tools and model what they actually do:
 The lesson these carry that nothing else in the project does: **backups and
 replication are different things, and one is not a substitute for the other.**
 
-## 2. Three nodes, properly
+## 2. Three nodes, properly — shipped
 
 A primary and two standbys, each with its own buffer pool, its own WAL, its own
 data directory, and its own opinion about who the leader is. `standbyB` exists;
 the second standby needs the same completeness as the first.
 
-## 3. Failover and switchover
+## 3. Failover and switchover — shipped
 
 The payoff of 1 and 2, and the reason to build them. A planned switchover is
 orderly. An unplanned failover is not, and the difference is the whole lesson:
