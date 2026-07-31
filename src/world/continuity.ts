@@ -637,23 +637,25 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     _sc.set(platformBox[3], platformBox[4], platformBox[5])
     _m.compose(_p, _qi, _sc)
     sitePlatform.setMatrixAt(i, _m)
-    plate(SITE_TITLE[i], site[0], 2.4, site[2] - platformD / 2 + 3, Math.PI, 1.55, COLOR.archive, 0.92, gDcs)
-    plate('PostgreSQL · Patroni agent · one etcd member', site[0], 2.2, site[2] + platformD / 2 - 3, 0, 1.05, COLOR.inkDim, 0.78, gDcs)
+    const titleX = i === 0 ? site[0] - 36 : site[0]
+    const titleY = i === 0 ? 21 : 2.4
+    plate(SITE_TITLE[i], titleX, titleY, site[2] - platformD / 2 + 3, Math.PI, 1.55, 0xffffff, 0.92, gDcs)
+    plate('PostgreSQL · Patroni agent · one etcd member', site[0], 2.2, site[2] + platformD / 2 - 3, 0, 1.05, 0xffffff, 0.78, gDcs)
 
     const agent = AGENT_AT[i]
     box([agent[0], 7.2, agent[2], 14, 14.4, 14], 'dim')
-    plate('PATRONI', agent[0], 16.2, agent[2], 0, 1.8, COLOR.replication, 0.94, gDcs)
+    plate('PATRONI', agent[0], 16.2, agent[2] + 7.2, 0, 1.8, COLOR.replication, 0.94, gDcs)
 
     const member = MEMBER_AT[i]
     box([member[0], 8.2, member[2], 16, 16.4, 16], 'dim')
     box([member[0], 17, member[2], 19, 1.1, 19], 'gold')
-    plate(MEMBER_TITLE[i], member[0], 21, member[2], 0, 1.9, COLOR.ok, 0.94, gDcs)
+    plate(MEMBER_TITLE[i], member[0], 21, member[2] + 9.7, 0, 1.9, COLOR.ok, 0.94, gDcs)
   }
   sitePlatform.instanceMatrix.needsUpdate = true
 
-  plate('RAFT CONSENSUS', DC[0], 20, DC[2], 0, 2.8, COLOR.ok, 0.96, gDcs)
-  plate('one linearizable leader key · compare-and-swap + lease TTL', DC[0], 16.7, DC[2], 0, 1.5, COLOR.ink, 0.82, gDcs)
-  plate('majority is the commit mechanism · a minority cannot commit', DC[0], 14.1, DC[2], 0, 1.35, COLOR.warn, 0.86, gDcs)
+  plate('RAFT CONSENSUS', DC[0], 42, DC[2], 0, 2.8, COLOR.ok, 0.96, gDcs)
+  plate('one linearizable leader key · compare-and-swap + lease TTL', DC[0], 37.5, DC[2], 0, 1.5, 0xffffff, 0.82, gDcs)
+  plate('majority is the commit mechanism · a minority cannot commit', DC[0], 33.5, DC[2], 0, 1.35, 0xffffff, 0.86, gDcs)
 
   const agentMesh = neonBank('ha.patroni-agents', unitBox, N_LEASE, gDcs)
   const memberMesh = neonBank('ha.etcd-members', unitBox, N_LEASE, gDcs)
@@ -1079,7 +1081,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     district: 'replication',
     object: gDcs,
     tier: 0,
-    focus: { target: [DC[0], 8, 25], distance: 880, dir: [0, 0.995, 0.1] },
+    focus: { target: [DC[0], 8, DC[2]], distance: 480, dir: [0, 0.6, 0.8] },
     labelAt: [DC[0], 24, DC[2]],
     color: COLOR.ok,
     readout: (s: SimState) => {
