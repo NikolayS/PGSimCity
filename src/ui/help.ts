@@ -13,7 +13,7 @@ import type { UiContext, UiModule } from './uikit'
 /* ============================================================================
  * PGSimCity — HELP OVERLAY
  *
- * One modal: the complete input map, the colour legend, and four sentences on
+ * One modal: the city control map, the colour legend, and short reading notes on
  * how to read the city. It is opened by the HUD (the `?` key or the toolbar
  * button) over the loose bus channel 'ui:help', and closes on Escape — which
  * arrives as 'ui:escape' with a mutable { handled } payload so the HUD knows
@@ -30,50 +30,64 @@ interface LooseBus {
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
-interface KeyRow {
+export interface KeyRow {
+  id: string
   keys: string[]
   /** joiner shown between keys: ' ' for a sequence, 'or', '+' … */
   join?: string
   what: string
 }
 
-const CAMERA_KEYS: KeyRow[] = [
-  { keys: ['LMB drag'], what: 'Pan — grab the ground and move it' },
-  { keys: ['RMB drag'], what: 'Orbit around the city' },
-  { keys: ['MMB drag', 'Ctrl+LMB'], join: 'or', what: 'Pan and orbit, for model-viewer habits' },
-  { keys: ['Wheel'], what: 'Zoom' },
-  { keys: ['1 finger'], what: 'Pan the map' },
-  { keys: ['2 fingers'], what: 'Pinch to zoom · twist to turn · drag up or down to tilt' },
-  { keys: ['Left thumb'], what: 'Walk — a small stick push walks; a full push runs' },
-  { keys: ['Right thumb'], what: 'Look — drag while the left thumb keeps moving' },
-  { keys: ['Jump', 'Crouch'], what: 'Jump / toggle crouch · while swimming, hold to rise / dive' },
-  { keys: ['Click'], what: 'Select a building — in fly mode, capture the mouse' },
-  { keys: ['W', 'A', 'S', 'D'], what: 'Fly — arrow keys work too' },
-  { keys: ['Space', 'E'], join: 'or', what: 'Rise' },
-  { keys: ['C', 'Q'], join: 'or', what: 'Descend' },
-  { keys: ['Shift'], what: 'Boost' },
-  { keys: ['Alt'], what: 'Precision — slow, fine movement' },
-  { keys: ['PgUp', 'PgDn'], what: 'Change altitude' },
-  { keys: ['Esc'], what: 'Leave pointer lock' },
+export const CAMERA_KEYS: KeyRow[] = [
+  { id: 'pan', keys: ['LMB drag', 'MMB drag'], join: 'or', what: 'Pan — grab the ground and move it' },
+  {
+    id: 'orbit',
+    keys: ['Shift+LMB drag', 'Ctrl/Cmd+LMB drag'],
+    join: 'or',
+    what: 'Orbit around the city',
+  },
+  {
+    id: 'context-menu',
+    keys: ['RMB', 'Touch long-press'],
+    join: 'or',
+    what: 'Open the context menu without moving the camera',
+  },
+  { id: 'wheel', keys: ['Wheel'], what: 'Zoom in orbit · change movement speed in fly mode' },
+  { id: 'touch-pan', keys: ['1 finger'], what: 'Pan the map' },
+  { id: 'touch-orbit', keys: ['2 fingers'], what: 'Pinch to zoom · twist to turn · drag up or down to tilt' },
+  { id: 'touch-move', keys: ['Left thumb'], what: 'Walk — a small stick push walks; a full push runs' },
+  { id: 'touch-look', keys: ['Right thumb'], what: 'Look — drag while the left thumb keeps moving' },
+  { id: 'touch-vertical', keys: ['Jump', 'Crouch'], what: 'Jump / toggle crouch · while swimming, hold to rise / dive' },
+  { id: 'click', keys: ['Click'], what: 'Select a building · in fly or walk mode, capture the mouse' },
+  { id: 'move', keys: ['W', 'A', 'S', 'D'], what: 'Move in orbit, fly, or walk · arrow keys work too' },
+  { id: 'rise', keys: ['Space'], what: 'Rise in fly mode · jump or swim upward in walk mode' },
+  { id: 'operate', keys: ['E'], what: 'Rise in fly mode · operate a nearby lever, door, or console in walk mode' },
+  { id: 'descend', keys: ['C', 'Q'], join: 'or', what: 'Descend in fly mode · C crouches or dives in walk mode' },
+  { id: 'boost', keys: ['Shift'], what: 'Boost in orbit or fly mode · run in walk mode' },
+  { id: 'precision', keys: ['Alt'], what: 'Precision — slow movement in orbit or fly mode' },
+  { id: 'altitude', keys: ['PgUp', 'PgDn'], what: 'Change altitude in orbit or fly mode' },
+  { id: 'pointer-lock-exit', keys: ['Esc'], what: 'Leave pointer lock' },
 ]
 
-const APP_KEYS: KeyRow[] = [
-  { keys: ['K', 'P'], join: 'or', what: 'Pause / resume the simulation' },
-  { keys: [',', '.'], what: 'Slower / faster (0.1× – 5×)' },
-  { keys: ['T'], what: 'Guided tour' },
-  { keys: ['R'], what: 'Reset — restart with default settings' },
-  { keys: ['F'], what: 'Toggle fly / orbit camera · desktop; touch uses Walk mode' },
-  { keys: ['G'], what: 'Get down — walk the city on foot, 1.7 m tall' },
-  { keys: ['Walk button'], what: 'Touch equivalent of G; Exit walk returns to the map' },
-  { keys: ['H'], what: 'Establishing shot of the whole city · View menu' },
-  { keys: ['O'], what: 'Overview — straight down on the plate · View menu' },
-  { keys: ['/', 'Ctrl K'], join: 'or', what: 'Command palette' },
-  { keys: ['?'], what: 'This panel' },
-  { keys: ['L'], what: 'Toggle floating labels · View menu' },
-  { keys: ['N'], what: 'Daylight / night · theme control beside Sound' },
-  { keys: ['M'], what: 'Sound on / off — audio starts off and remembers your choice' },
-  { keys: ['Esc'], what: 'Close the topmost overlay' },
-  { keys: ['1', '…', '8'], what: 'Jump to a district · View menu on phones' },
+export const APP_KEYS: KeyRow[] = [
+  { id: 'pause', keys: ['K', 'P'], join: 'or', what: 'Pause / resume the simulation' },
+  { id: 'playback-rate', keys: [',', '.'], what: 'Slower / faster (0.1× – 5×)' },
+  { id: 'tour', keys: ['T'], what: 'Guided tour' },
+  { id: 'reset', keys: ['R'], what: 'Reset — restart with default settings' },
+  { id: 'fly', keys: ['F'], what: 'Toggle fly / orbit camera · desktop; touch uses Walk mode' },
+  { id: 'walk', keys: ['G'], what: 'Get down — walk the city on foot, 1.7 m tall' },
+  { id: 'walk-button', keys: ['Walk button'], what: 'Touch equivalent of G; Exit walk returns to the map' },
+  { id: 'home', keys: ['H'], what: 'Establishing shot of the whole city · View menu' },
+  { id: 'default-home', keys: ['Home'], what: 'Default establishing shot' },
+  { id: 'overview', keys: ['O'], what: 'Overview — straight down on the plate · View menu' },
+  { id: 'trace', keys: ['Enter'], what: 'Open Run a Query' },
+  { id: 'palette', keys: ['/', 'Ctrl/Cmd+K'], join: 'or', what: 'Command palette' },
+  { id: 'help', keys: ['?'], what: 'This panel' },
+  { id: 'labels', keys: ['L'], what: 'Toggle floating labels · View menu' },
+  { id: 'theme', keys: ['N'], what: 'Daylight / night · theme control beside Sound' },
+  { id: 'sound', keys: ['M'], what: 'Sound on / off — audio starts off and remembers your choice' },
+  { id: 'escape', keys: ['Esc'], what: 'Close the topmost overlay' },
+  { id: 'districts', keys: ['1', '…', '8'], what: 'Jump to a district · View menu on phones' },
 ]
 
 interface LegendRow {
@@ -122,7 +136,7 @@ const READING: { h: string; p: string }[] = [
   },
   {
     h: 'The standby',
-    p: 'South of the city, one TCP connection carries WAL to a second cluster where a single process replays it in order. When it cannot keep up, that gap is your replication lag.',
+    p: 'South of the city, two TCP connections carry WAL to two standby clusters. Each standby replays its own stream in order; when one cannot keep up, that gap is its replication lag.',
   },
 ]
 
@@ -158,7 +172,7 @@ export function createHelp(ctx: UiContext): UiModule {
         'dl',
         { class: 'help-keymap' },
         ...rows.flatMap((r) => [
-          el('dt', {}, keyChips(r)),
+          el('dt', { data: { helpAction: r.id } }, keyChips(r)),
           el('dd', { class: 'help-what', text: r.what }),
         ]),
       ),
@@ -269,8 +283,8 @@ export function createHelp(ctx: UiContext): UiModule {
       class: 'help-disclaimer',
       html:
         '<strong>How much to trust this.</strong> PGSimCity is still 0.x: early and moving. It is a model, not an emulator: ' +
-        'no PostgreSQL source code runs here, and the numbers are scaled so a human can watch them. Three specialist review rounds ' +
-        'with independent attempts to refute each finding, a separate geometry audit, and 210 tests provide evidence, not a guarantee. ' +
+        'no PostgreSQL source code runs in the 3D city, and the numbers are scaled so a human can watch them. Three specialist review rounds ' +
+        'with independent attempts to refute each finding, a separate geometry audit, and the deterministic test suite provide evidence, not a guarantee. ' +
         'Mistakes have been found and fixed throughout. ' +
         "Touch controls have been verified only in Chrome's mobile emulation. " +
         '<a href="https://github.com/NikolayS/PGSimCity#how-much-to-trust-this" target="_blank" rel="noopener">See exactly what was checked.</a>' +
@@ -337,7 +351,7 @@ export function createHelp(ctx: UiContext): UiModule {
         'div',
         { class: 'help-head__title' },
         el('h2', { class: 'pg-title', id: 'help-title', text: 'Controls & legend' }),
-        el('p', { class: 'pg-sub', text: 'Everything you can press, and what every colour in the city means' }),
+        el('p', { class: 'pg-sub', text: 'The city controls, and what every colour in the city means' }),
         helpNav,
       ),
       closeBtn,

@@ -68,7 +68,7 @@ export const KNOB_GROUPS: { id: KnobGroup; label: string; hint: string }[] = [
   { id: 'wal', label: 'Write-ahead log', hint: 'Durability, and what it costs' },
   { id: 'checkpoint', label: 'Checkpoints', hint: 'Getting dirty pages onto disk' },
   { id: 'vacuum', label: 'Autovacuum', hint: 'Reclaiming dead rows' },
-  { id: 'replication', label: 'Replication', hint: 'Keeping a second copy' },
+  { id: 'replication', label: 'Replication', hint: 'Keeping standby copies' },
   { id: 'recovery', label: 'Disaster recovery', hint: 'Backups, archive health, retention and PITR' },
   { id: 'chaos', label: 'Break something', hint: 'The failure modes worth recognising' },
   { id: 'sim', label: 'Playback', hint: 'Simulation controls' },

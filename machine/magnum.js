@@ -31,6 +31,10 @@ import {
   nudgeViewingRate,
   viewingElapsed,
 } from './playback.js'
+import {
+  handleBoardInstruction,
+  handleTerminalInstruction,
+} from './instructions.js'
 
 const canvas = document.querySelector('#machine')
 const architecturePane = document.querySelector('.architecture-pane')
@@ -2517,19 +2521,11 @@ architectureScroll.addEventListener('pointercancel', onBoardPointerCancel)
 architectureScroll.addEventListener('wheel', onBoardWheel, { passive: false })
 canvas.addEventListener('click', onCanvasClick)
 canvas.addEventListener('keydown', (event) => {
-  if (event.code === 'Space') {
-    event.preventDefault()
-    togglePaused()
-  } else if (event.key === ',' || event.key === '<') {
-    event.preventDefault()
-    nudgeMachineRate(-1)
-  } else if (event.key === '.' || event.key === '>') {
-    event.preventDefault()
-    nudgeMachineRate(1)
-  } else if (event.key.toLowerCase() === 'r') {
-    event.preventDefault()
-    setTime(0)
-  }
+  handleBoardInstruction(event, {
+    togglePaused,
+    nudgeRate: nudgeMachineRate,
+    reset: () => setTime(0),
+  })
 })
 machineToggle.addEventListener('click', togglePaused)
 machineReset.addEventListener('click', () => setTime(0))
@@ -2552,10 +2548,10 @@ terminalForm.addEventListener('submit', (event) => {
 })
 terminalInput.addEventListener('input', resizeTerminalInput)
 terminalInput.addEventListener('keydown', (event) => {
-  if (event.key === 'Enter' && !event.shiftKey) {
-    event.preventDefault()
-    void submitCommand(terminalInput.value)
-  } else if (event.key === 'ArrowUp' && !event.shiftKey) {
+  if (handleTerminalInstruction(event, { submit: () => { void submitCommand(terminalInput.value) } })) {
+    return
+  }
+  if (event.key === 'ArrowUp' && !event.shiftKey) {
     event.preventDefault()
     recallHistory(-1)
   } else if (event.key === 'ArrowDown' && !event.shiftKey) {

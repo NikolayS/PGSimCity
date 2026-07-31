@@ -20,31 +20,28 @@ run. That makes the name functional rather than decorative — SimCity was a
 management game, and the thing that made it teach was that you could get it
 wrong.
 
-Much of the scaffolding is already standing. `archiveGate`, `timelineYard`,
-`objectStore`, `backupVault`, `recoveryPad`, `restoreWinch`, `consensus` and
-`leaseNode1..3` were all built as part of the continuity quarter, and `standbyB`
-already makes this a three-node cluster. **They are buildings without
-behaviour.** The work is giving them mechanisms that can fail.
+The continuity quarter now has working base backups, WAL archive and retention,
+point-in-time recovery, two independently lagging standbys, leader leases,
+failover, rewind and rejoin. The remaining city work is depth and new operator
+situations, not wiring previously inert buildings.
 
 ## 1. A real cluster, with real tools — shipped
 
-Name the tools and model what they actually do:
+The city names the tools and models what they actually do:
 
 - **WAL-G / pgBackRest** for disaster recovery — base backups, retention, the
-  archive command, restore to a point in time. The archive gate, object store,
-  backup vault and restore winch already exist as structures.
+  archive command, and restore to a point in time.
 - **Patroni** for high availability — the DCS holding the leader lock, leases
-  renewing, a node that loses its lease being demoted. The consensus hall and
-  three lease posts are already on the plate.
+  renewing, and a node that loses its lease being demoted.
 
 The lesson these carry that nothing else in the project does: **backups and
 replication are different things, and one is not a substitute for the other.**
 
 ## 2. Three nodes, properly — shipped
 
-A primary and two standbys, each with its own buffer pool, its own WAL, its own
-data directory, and its own opinion about who the leader is. `standbyB` exists;
-the second standby needs the same completeness as the first.
+A primary and two standbys now each have their own buffer state, WAL positions,
+data-directory state, replay rate and leader view. The two replication links can
+lag and fail independently.
 
 ## 3. Failover and switchover — shipped
 
@@ -62,28 +59,25 @@ second one.
 
 ## 4. Break things from inside — shipped
 
-The knobs exist in a control rail. In first person they should be **things you
-walk to and operate** — pull the autovacuum yard's switch and then watch bloat
-climb for the rest of your visit. Consequence at a distance, discovered rather
-than described.
+The control rail exposes every model knob. In first person, the autovacuum yard
+now has a lever you can walk to and operate, then watch bloat climb for the rest
+of your visit. Consequence at a distance is discovered rather than described.
 
 This is the single change that most turns observation into understanding, and it
 costs less than any other item here because the simulation already models every
 consequence.
 
-The dependency is item 8, and it is sharp: **a lever in the world is far more
-persuasive than a slider in a panel.** Eleven knobs currently respond wrongly, so
-each knob's consequence chain has to be verified — moves, right direction,
-sensible amount, recovers on reset — before it earns a handle. A handle on a
-broken knob is a machine for teaching a falsehood convincingly.
+**A lever in the world is far more persuasive than a slider in a panel.** That
+is why only the audited autovacuum consequence chain has earned a physical
+handle so far. Each future handle must still prove that the mechanism moves in
+the right direction, by a sensible amount, and recovers on reset.
 
 ## 4b. The control center in the postmaster tower — shipped
 
-A room you enter, in first person, inside the postmaster tower — the supervisor
-process that owns the cluster is the city hall, and it already stands at the head
-of the central avenue with a door defined. Inside: a **map of this city**, a psql
-prompt, and your statement tracing across both the map and the districts visible
-through the windows.
+A room you enter, in first person, now exists inside the postmaster tower. Its
+operable door opens onto a **map of this city**, a psql-like prompt, and a
+statement tracing across both the map and the districts visible through the
+windows.
 
 An earlier version of this item was "install the 2D machine room in the city".
 That was wrong, and the reason is worth keeping: **the city's topology is already
@@ -92,20 +86,18 @@ about how PostgreSQL is organised. A second, differently-shaped diagram inside i
 would teach that the layout is arbitrary and undercut the premise. The map must
 be the city.
 
-Most of the machinery exists — `sim.request()`, `setTraceMode()` with step
-playback, `SimState.trace`, and the v0.7.0 narration. This gives it a home, a
-front door and a prompt. The open question is whether the statement is really
-planned by PGlite, loaded lazily on entering, so that an index scan and a
-sequential scan differ in the world because the planner chose differently.
-
-It also gives first person a destination. Today you can explore the city and
-there is nothing in it to do.
+The prompt deliberately uses the same six deterministic model statements as the
+city trace. It does not load PGlite: the separate Query flow and Machine own the
+real-PostgreSQL boundary, while the room teaches how this finite model moves.
+Together with the autovacuum lever, it gives first person concrete destinations
+and actions.
 
 ## 5. Swimming that feels like swimming — shipped
 
-The swim volume, the surface and the splash all exist; it still does not feel
-like water. Sound is not the fix on its own — the missing parts are drag,
-buoyancy, muffling under the surface, and something to see moving past you.
+The buffer-pool water now has translational and rotational drag, buoyancy,
+surface transitions and splashes, an underwater veil and muffled audio, and a
+particulate field that gives movement parallax. Keyboard and touch controls can
+rise and dive while swimming.
 
 ## 6. First-person physics — shipped
 
@@ -130,8 +122,10 @@ prototyping the question before the feature.
 
 ## 8. Better simulation of problems — shipped
 
-v0.13.0 and v0.16.0. A measured audit of all 23 knobs (`KNOB-AUDIT.md`) graded
-ten wrong, and eight of those traced to six shared root causes. All are fixed.
+v0.13.0 and v0.16.0. A measured audit of the original 23 knobs
+(`KNOB-AUDIT.md`) graded ten wrong, and eight of those traced to six shared root
+causes. All are fixed. Later disaster-recovery, node and failover addenda bring
+the current control surface to 33 knobs and record their own verdicts there.
 
 The two that mattered most: **turning autovacuum off was rewarded with roughly 2x
 throughput**, because vacuum charged a full-page image for every page it touched
@@ -161,8 +155,9 @@ filling — do you drop the slot or add capacity? A long transaction is blocking
 cleanup — do you kill it? Every one of these has a real answer that operators
 learn the hard way, and this is a place to learn it where nothing is lost.
 
-Balance is the hard part and the reason to build it last: the failure must be
-survivable, legible, and clearly your own fault.
+The shipped operator scenarios keep failures survivable, legible, and
+recoverable. Expanding their range without weakening that balance remains the
+hard part.
 
 ---
 
@@ -173,7 +168,7 @@ one screen. PGlite supplies what only a real server can — the parse, the plan,
 the catalogs, the results. The model supplies the interior and everything
 concurrent, which a single connection cannot produce.
 
-**Now:** the layout that was specified from the start, and structure rather than
+**Shipped foundation:** the layout that was specified from the start, and structure rather than
 arrangement — one shared memory segment visibly containing the buffer pool,
 wal_buffers, the ProcArray and the lock table, with backend private memory
 visibly outside it, the postmaster and its fork, the client, and layers from
@@ -202,8 +197,10 @@ value of this view is the experiment, not the playthrough.
 
 # Both
 
-- **Documentation that describes behaviour the app no longer has.** Caught three
-  times. The durable fix is a test that drives each documented instruction.
+- **Documentation instruction contract — shipped.** The city keyboard map,
+  README keyboard/control-surface walkthroughs, and Machine footer keys are
+  driven through production handlers. Visual interpretation, touch hardware and
+  free-form explanatory prose still require editorial and browser review.
 - **Contextual links** — one per mechanism, in the same register as the citations
   around it, tagged for attribution.
 - **A corrections pipeline** — an issue template for "this does not match

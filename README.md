@@ -18,20 +18,23 @@ approved by Electronic Arts Inc. SimCity is a trademark of Electronic Arts Inc.
 This project contains no SimCity code, assets, artwork, logos, characters,
 audio, or game content.
 
-![A daylight view into PGSimCity's storage excavation: the shared buffers plaza spans the pit above teal storage machinery, with backend towers behind and the checkpointer and WAL districts on either side.](docs/screenshot.png)
+![PGSimCity at golden hour: the reflective shared-buffers pool and backend avenue sit at the centre of the Slonik-shaped plate, surrounded by the WAL, maintenance, standby, recovery, and continuity districts under a scattering sky.](docs/screenshot.png)
 
 ---
 
 > ### How much to trust this
 >
-> PGSimCity is still **0.x**: early and moving. It is a *model* of PostgreSQL, not an emulator:
-> no PostgreSQL source code runs here, and the numbers are scaled so a human can watch them.
+> PGSimCity is still **0.x**: early and moving. The 3D city is a *model* of
+> PostgreSQL, not an emulator: no PostgreSQL source code runs in that city, and
+> the numbers are scaled so a human can watch them. The opt-in Query flow and
+> [Machine](machine/) can run PGlite, a real in-memory PostgreSQL compiled to
+> WebAssembly.
 >
 > Three specialist review rounds checked PostgreSQL correctness against `postgresql.org/docs`
 > and the source rather than memory; every finding was independently checked by a reviewer tasked
 > with refuting it. A separate audit treated buildings, adjacencies, and animations as claims.
 >
-> The suite has **234 tests**; CI fails the build on a red test. They pin the WAL trigger point as
+> The deterministic suite fails CI on a red test. Its checks pin the WAL trigger point as
 > `max_wal_size / (1 + checkpoint_completion_target)` at every call site, cache hit ratio as
 > `blks_hit / (blks_hit + blks_read)`, and the clock-sweep `usage_count` cap at 5.
 >
@@ -54,8 +57,8 @@ audio, or game content.
 | **Storage** (below) | Heap files as fields of 8 KiB pages, B-trees as actual trees, TOAST, the FSM and visibility map, the OS page cache and the disks |
 | **WAL district** (east) | walwriter → `pg_wal` segments → archiver → walsender |
 | **Maintenance yard** (west) | Checkpointer, background writer, autovacuum launcher and its workers |
-| **Standby** (south) | walreceiver, the startup process replaying WAL, and the lag between them |
-| **Continuity quarter** (outer east and south) | WAL archive, base backups, point-in-time recovery, a second delayed standby, leader lease and rejoin machinery |
+| **Standbys** (south) | Two independent walreceivers, startup processes replaying WAL, and the lag on each stream |
+| **Continuity quarter** (outer east and south) | WAL archive, base backups, point-in-time recovery, delayed replay, leader lease and rejoin machinery |
 | **Query lab** (above the backends) | Select a backend and its statement unfolds: parse → rewrite → plan → execute |
 
 Colour is semantic everywhere and never decorative: **WAL is amber**, **dirty
@@ -88,12 +91,16 @@ are pink**, **the background writer is teal**, **replication is orange**,
   `replay_lsn` pull apart on the standby.
 - Press **`G`** and walk through the city at eye level. A buffer frame that read
   as one tile from the establishing shot becomes a structure above your head.
+  Press **`E`** at the autovacuum lever or the postmaster door to operate it;
+  the control center inside can trace one of six statements across a map of the city.
+- Try an operator scenario, wait for its decision, and choose a response. Slot
+  pressure, failover, and recovery make the consequence visible and offer a safe reset.
 
 ---
 
 ## Controls
 
-Press **`?`** in the city for the complete input map and colour legend.
+Press **`?`** in the city for the city control map and colour legend.
 
 ### Camera
 
@@ -109,7 +116,7 @@ Press **`?`** in the city for the complete input map and colour legend.
 | First-person touch | Left thumb moves · right thumb looks · buttons jump and crouch (rise and dive while swimming) |
 | Click | Select a building · in fly or walk mode, capture the mouse for looking |
 | `W` `A` `S` `D` or the arrow keys | Move |
-| `Space` or `E` · `C` or `Q` | Rise · descend in fly mode; `Space` jumps and `C` crouches in walk mode |
+| `Space` or `E` · `C` or `Q` | Rise · descend in fly mode; in walk mode, `Space` jumps, `E` operates nearby levers, doors, or consoles, and `C` crouches |
 | `PageUp` / `PageDown` | Change altitude in orbit or fly mode |
 | `Shift` · `Alt` | Boost · precision in orbit or fly mode; `Shift` runs in walk mode |
 | `Esc` | Leave pointer lock |
@@ -123,9 +130,9 @@ Press **`?`** in the city for the complete input map and colour legend.
 | `H` | Back to the establishing shot |
 | `Home` | Back to the default establishing shot |
 | `O` | Straight-down overview of the whole plate |
-| `T` | Guided tour — the whole city in 14 chapters |
+| `T` | Guided tour — the core query and maintenance path in 14 chapters |
 | `Enter` | Open Run a Query |
-| `/` or `Ctrl`/`Cmd`-`K` | Command palette — search every component, setting and scenario |
+| `/` or `Ctrl/Cmd+K` | Command palette — search every component, setting and scenario |
 | `?` | Keyboard map and colour legend |
 | `L` | Toggle the floating labels |
 | `N` | Toggle daylight / night |
@@ -148,6 +155,7 @@ src/
   engine/         renderer, camera, flows, labels, picking, collision and audio
   ui/             controls, inspector, tour, search and written explanations
   observability/  a separate diagnostic interface over the same simulation
+machine/           a separate psql workbench and 2D architecture board
 ```
 
 Three rules hold it together:
@@ -163,8 +171,8 @@ Three rules hold it together:
 
 Stack: [three.js](https://threejs.org) r185, TypeScript, Vite. three.js is the
 3D application's only bundled runtime dependency. The separate 2D Query flow
-may lazy-load PGlite after reader opt-in. There is no framework, and Plausible
-analytics is the sole external service.
+and Machine may lazy-load PGlite after reader opt-in. There is no framework,
+and Plausible analytics is the sole external service.
 
 `window.PGSIMCITY` in the browser console includes `sim`, `registry`, `bus`,
 `rig`, `gfx` and `flows` if you would rather drive the city from the outside.
@@ -172,14 +180,14 @@ For the accuracy boundary and review status, see
 [How much to trust this](#how-much-to-trust-this) above. Each inspector names
 material simplifications at the point where they matter.
 
-### A possible future
+### Real PostgreSQL beside the model
 
 The [accuracy boundary described above](#how-much-to-trust-this) makes internals
 such as the clock sweep's frame-by-frame victim choice observable. The separate
-Query flow offers an opt-in PGlite mode: real PostgreSQL supplies parsing, plans,
-catalogs, buffer counters, errors and results, while its plan drives the closest
-modelled interior path. The page labels the two sources separately because
-PostgreSQL exposes the former and not the latter.
+Query flow and the [Machine](machine/) offer opt-in PGlite modes: real PostgreSQL
+supplies parsing, plans, catalogs, buffer counters, errors and results, while the
+visual model supplies the otherwise hidden interior. Each surface labels those
+sources separately because PostgreSQL exposes the former and not the latter.
 
 ---
 
@@ -200,17 +208,18 @@ npm run preview  # http://localhost:4173
 ```
 
 There is no application server. The result is a static bundle. The 3D city and
-Diagnose surface make only the analytics requests described below. Query flow
-may, after an explicit click, load the same-origin PGlite JavaScript, data and
-WebAssembly assets and run an in-memory PostgreSQL in the browser. The modelled
-query flow continues to work when analytics or PGlite is blocked.
+Diagnose model path make only the analytics requests described below. Query flow
+and the Machine may, after an explicit click or first submitted query, load the
+same-origin PGlite JavaScript, data and WebAssembly assets and run an in-memory
+PostgreSQL in the browser. Their model paths continue to work when analytics or
+PGlite is blocked.
 
 **Analytics and privacy.** PGSimCity uses
 [Plausible](https://plausible.io/) for aggregate, cookie-free analytics on the
-city and observability pages. It records pageviews, unique visitors, referring
-sites, bounce rate, visit duration and interactions such as starting the tour,
-changing playback, opening a panel, tracing a statement, selecting a building
-or following an outbound link. PGSimCity sends no names, email addresses,
+city, observability, and Machine pages. It records pageviews, unique visitors,
+referring sites, bounce rate, visit duration and interactions such as starting
+the tour, changing playback, opening a panel, tracing a statement, selecting a
+building or following an outbound link. PGSimCity sends no names, email addresses,
 free-form input, browser fingerprint or application-supplied personal data, and
 creates no analytics cookies, analytics local storage, advertising identifier
 or session recording. Blocking `plausible.io` stops measurement without

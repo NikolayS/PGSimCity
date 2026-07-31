@@ -871,6 +871,7 @@ export function createHud(ctx: UiContext): UiModule {
       {
         class: 'pg-chip hud-chip',
         type: 'button',
+        data: { scenario: s.id },
         title: s.blurb,
         'aria-pressed': 'false',
         on: { click: () => toggleScenario(s.id) },

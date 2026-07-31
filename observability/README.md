@@ -21,8 +21,9 @@ what it means. It cannot show you a `flush_lsn` that is falling behind right now
 
 PGSimCity has a server — `src/sim/model.ts`, a real PostgreSQL model with a
 clock sweep, three WAL positions, WAL-triggered checkpoints, an xmin horizon and
-a single-threaded standby. That is the one asset this project holds that no
-other Postgres learning resource has, and this page is built to spend it.
+two independently single-threaded standbys. That is the one asset this project
+holds that no other Postgres learning resource has, and this page is built to
+spend it.
 
 ## What is on the page
 
@@ -175,17 +176,19 @@ the mechanism, via `../#/c/<component-id>`.
   table caption says so.
 * There is no `autovacuum worker` row in `pg_stat_io` because the model does not
   attribute vacuum's own I/O separately. On a real server there would be one.
-* `pg_replication_slots` never decays to `unreserved` or `lost` — the model
-  always keeps its subscriber fed. That is the one failure this page cannot
-  demonstrate, and the caption admits it.
+* The Diagnose projection of `pg_replication_slots` does not expose
+  `wal_status = 'unreserved'` or `'lost'`. The wider model can now drop a
+  physical standby slot under retention pressure and show its rebuild, but that
+  operator scenario is not yet a complaint path or result row on this page.
 * The page shares a JavaScript chunk with the city that still carries part of
   three.js, because `src/sim/model.ts` imports `src/world/layout.ts` for its
   table definitions. Moving those definitions to a renderer-free module would
   shrink this page; that change is outside this feature's files.
-* The eight complaints cover the failures this model can actually produce. The
-  ones it cannot — transaction ID wraparound, a lost replication slot, a bad
-  plan after a missing ANALYZE, temp file spill — are absent rather than faked,
-  and they are the obvious next paths if the model grows to support them.
+* The eight complaints cover failures this interface can currently diagnose.
+  Transaction ID wraparound, slot loss, a bad plan after missing ANALYZE, and
+  temp-file spill are absent rather than faked. Slot loss now exists in the
+  wider operator model; the other three still need model support before they can
+  become honest Diagnose paths.
 
 ## Layout note, recorded because it was a real bug
 

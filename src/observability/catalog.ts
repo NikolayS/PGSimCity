@@ -347,7 +347,7 @@ export const CATALOG: CatalogEntry[] = [
     docs: 'https://www.postgresql.org/docs/current/view-pg-replication-slots.html',
     coverage: 'partial',
     coverageNote:
-      'The model creates a logical slot when wal_level = logical and advances its confirmed_flush_lsn. It never lets a slot go stale, so you cannot watch wal_status decay here — that is the one failure this model will not show you.',
+      'Diagnose creates a logical slot when wal_level = logical and advances its confirmed_flush_lsn. This projection reports every slot as reserved. The wider operator model can lose a physical standby slot under retention pressure, but that state is not yet exposed in this result grid.',
     version:
       'wal_status and safe_wal_size arrived in 13 and are the columns to alert on: reserved → extended → unreserved → lost. inactive_since arrived in 17.',
     projection: 'slots',

@@ -227,6 +227,7 @@ export function createKnobControl(ctx: UiContext, meta: KnobMeta): KnobControl {
   const row = el('div', { class: 'pg-field__row pgc-knob__row' }, label, value)
   const root = el('div', { class: `pg-field pgc-knob${meta.danger ? ' is-danger' : ''}` }, row)
   root.dataset.kind = meta.kind
+  root.dataset.knob = String(meta.key)
   if (meta.guc && !labelIsGuc) root.append(el('div', { class: 'pg-field__guc pgc-guc', text: meta.guc }))
 
   /* --- the control itself ------------------------------------------------ */
