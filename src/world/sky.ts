@@ -12,15 +12,22 @@ import type { QualityLevel, ThemeApi } from '../core/types'
  * to the camera every frame so the atmosphere stays at infinity.
  *
  * Both shaders end with three's own tonemapping + colorspace chunks so they sit
- * in exactly the same colour pipeline as the city. The sun's soft rim is drawn
- * into the sky rather than sent through the bloom pass; daylight therefore
- * keeps bloom free for semantic night lighting.
+ * in exactly the same colour pipeline as the city. The solar disc is the only
+ * HDR part of the dome; its colour and horizon dimming come from the same
+ * atmospheric extinction as the surrounding scattering.
  * ==========================================================================*/
 
 const SKY_RADIUS = 1800
 const STAR_RADIUS = 1720
 const N_STARS = 1400
 const CLOUD_RADIUS = 1500
+
+/** 2.8× the real 0.53° sun: compact, but legible at both supported viewports. */
+export const SUN_ANGULAR_DIAMETER_DEG = 1.5
+const SUN_ANGULAR_RADIUS_RAD = THREE.MathUtils.degToRad(SUN_ANGULAR_DIAMETER_DEG / 2)
+const SUN_DISC_OUTER_COS = Math.cos(SUN_ANGULAR_RADIUS_RAD)
+const SUN_DISC_INNER_COS = Math.cos(SUN_ANGULAR_RADIUS_RAD * 0.82)
+const SUN_RADIANCE = 8
 
 /*
  * Preetham's analytic daylight model. Rayleigh gives wavelength-dependent sky
@@ -33,6 +40,33 @@ const SCATTERING = {
   mieDirectionalG: 0.95,
 } as const
 const TOTAL_RAYLEIGH = [5.804542996261093e-6, 1.3562911419845635e-5, 3.0265902468824876e-5] as const
+const MIE_CONST = [1.8399918514433978e14, 2.7798023919660528e14, 4.0790479543861094e14] as const
+
+const BETA_R = TOTAL_RAYLEIGH.map((channel) => channel * SCATTERING.rayleigh)
+const mieC = 0.2 * SCATTERING.turbidity * 1e-17
+const BETA_M = MIE_CONST.map((channel) => 0.434 * mieC * channel * SCATTERING.mieCoefficient)
+
+/** CPU mirror of the shader's wavelength-dependent optical extinction. */
+export function solarTransmittance(elevationDeg: number): readonly [number, number, number] {
+  const elevation = THREE.MathUtils.degToRad(elevationDeg)
+  const zenithAngle = Math.acos(Math.max(0, Math.sin(elevation)))
+  const inverse = 1 / (
+    Math.cos(zenithAngle)
+    + 0.15 * Math.pow(93.885 - THREE.MathUtils.radToDeg(zenithAngle), -1.253)
+  )
+  const channel = (i: number): number =>
+    Math.exp(-(BETA_R[i] * 8.4e3 * inverse + BETA_M[i] * 1.25e3 * inverse))
+  return [channel(0), channel(1), channel(2)]
+}
+
+/** Fraction of the apparent disc geometrically above the mathematical horizon. */
+export function sunDiscHorizonFraction(elevationDeg: number): number {
+  const radius = SUN_ANGULAR_DIAMETER_DEG / 2
+  if (elevationDeg >= radius) return 1
+  if (elevationDeg <= -radius) return 0
+  const offset = elevationDeg / radius
+  return (Math.acos(-offset) + offset * Math.sqrt(1 - offset * offset)) / Math.PI
+}
 
 export interface DayScatteringPhase {
   rayleigh: number
@@ -238,6 +272,7 @@ uniform vec3 uSunDirection;
 uniform vec2 uSunFlat;
 uniform float uDaylight;
 uniform float uScattering;
+uniform float uSunVisible;
 varying vec3 vDir;
 varying vec3 vBetaR;
 varying vec3 vBetaM;
@@ -260,6 +295,17 @@ float hgPhase( float cosTheta ) {
   return ONE_OVER_FOURPI * ( 1.0 - g2 ) * inverse;
 }
 
+vec3 atmosphereExtinction( float elevation ) {
+  float zenithAngle = acos( max( 0.0, elevation ) );
+  float inverse = 1.0 / (
+    cos( zenithAngle )
+    + 0.15 * pow( 93.885 - zenithAngle * 180.0 / SKY_PI, -1.253 )
+  );
+  float sR = RAYLEIGH_ZENITH_LENGTH * inverse;
+  float sM = MIE_ZENITH_LENGTH * inverse;
+  return exp( -( vBetaR * sR + vBetaM * sM ) );
+}
+
 void main() {
   vec3 d = normalize( vDir );
   float h = d.y;
@@ -270,14 +316,7 @@ void main() {
       // The finite ground plate exposes a little dome below the mathematical
       // horizon. Continue the tangent atmosphere there, then meet scene fog.
       vec3 scatterDirection = normalize( vec3( d.x, max( d.y, 0.015 ), d.z ) );
-      float zenithAngle = acos( max( 0.0, scatterDirection.y ) );
-      float inverse = 1.0 / (
-        cos( zenithAngle )
-        + 0.15 * pow( 93.885 - zenithAngle * 180.0 / SKY_PI, -1.253 )
-      );
-      float sR = RAYLEIGH_ZENITH_LENGTH * inverse;
-      float sM = MIE_ZENITH_LENGTH * inverse;
-      vec3 extinction = exp( -( vBetaR * sR + vBetaM * sM ) );
+      vec3 extinction = atmosphereExtinction( scatterDirection.y );
 
       float cosTheta = dot( scatterDirection, uSunDirection );
       vec3 betaRTheta = vBetaR * rayleighPhase( cosTheta );
@@ -288,14 +327,10 @@ void main() {
       inscatter *= mix( vec3( 1.0 ), pow( scatter * extinction, vec3( 0.5 ) ), lowSun );
 
       vec3 direct = vec3( 0.1 ) * extinction;
-      float disc = smoothstep( 0.9999567, 0.9999767, cosTheta );
-      direct += vSunE * 19000.0 * extinction * disc;
       col = ( inscatter + direct ) * 0.018 + vec3( 0.0, 0.0003, 0.00075 );
-      // Analytic scattering is HDR. Compress it before the application's shared
-      // output transform so the solar disc stays white without flattening its
-      // much broader aerosol halo.
+      // Compress the broad atmosphere before the application's shared output
+      // transform. The compact solar radiance is added below in HDR.
       col = col / ( vec3( 1.0 ) + col );
-      col = mix( col, vec3( 0.98, 0.68, 0.36 ), disc * 0.86 );
       col = mix( col, uHaze, smoothstep( ${g(DAY.hazeFrom)}, ${g(DAY.hazeTo)}, h ) );
       // The atmosphere is a backdrop, not a semantic light source.
       col = min( col, vec3( 0.98 ) );
@@ -310,12 +345,6 @@ void main() {
       float toward = max( 0.0, dot( fxz / max( length( fxz ), 1e-4 ), uSunFlat ) );
       float low = exp( - abs( h - ${g(DAY.glowCentre)} ) * ${g(DAY.glowFalloff)} );
       col = mix( col, uGlow, low * toward * toward * toward * ${g(DAY.glowWeight)} );
-
-      float sunDot = dot( d, uSunDirection );
-      float halo = smoothstep( 0.99756, 0.99970, sunDot );
-      float disc = smoothstep( 0.99951, 0.99978, sunDot );
-      col += vec3( 1.0, 0.52, 0.18 ) * halo * 0.12;
-      col = mix( col, vec3( 1.0, 0.68, 0.30 ), disc * 0.94 );
     }
   } else {
     // The established night gradient and restrained eastern warmth.
@@ -326,6 +355,15 @@ void main() {
     col += uGlow * band * pow( east, 2.4 );
     col *= mix( 0.18, 1.0, smoothstep( -0.30, -0.01, h ) );
   }
+
+  // The horizon clips the disc itself, so a centre one radius below it leaves
+  // no bright sliver behind. Extinction supplies both reddening and dimming;
+  // there is no separately art-directed sunset tint.
+  float sunDot = dot( d, uSunDirection );
+  float disc = smoothstep( ${sci(SUN_DISC_OUTER_COS)}, ${sci(SUN_DISC_INNER_COS)}, sunDot );
+  float aboveHorizon = step( 0.0, h );
+  vec3 sunTransmittance = atmosphereExtinction( uSunDirection.y );
+  col += sunTransmittance * ${g(SUN_RADIANCE)} * disc * aboveHorizon * uSunVisible;
 
   gl_FragColor = vec4( col, 1.0 );
   #include <tonemapping_fragment>
@@ -519,9 +557,9 @@ export function applySkyAtmosphere(sky: THREE.Object3D, air: Atmosphere, quality
     haze?.setHex(air.skyHaze)
     glow?.setHex(air.skyGlow)
     const sun = uniforms.uSunDirection?.value as THREE.Vector3 | undefined
-    const x = air.keyPos[0] - air.keyTarget[0]
-    const y = air.keyPos[1] - air.keyTarget[1]
-    const z = air.keyPos[2] - air.keyTarget[2]
+    const x = air.sunDirection[0]
+    const y = air.sunDirection[1]
+    const z = air.sunDirection[2]
     if (sun) {
       const invLength = 1 / Math.hypot(x, y, z)
       sun.set(x * invLength, y * invLength, z * invLength)
@@ -535,6 +573,9 @@ export function applySkyAtmosphere(sky: THREE.Object3D, air: Atmosphere, quality
     }
     if (uniforms.uDaylight) uniforms.uDaylight.value = air.daylight ? 1 : 0
     if (uniforms.uScattering) uniforms.uScattering.value = skyScatteringEnabled(air, quality) ? 1 : 0
+    if (uniforms.uSunVisible) {
+      uniforms.uSunVisible.value = sunDiscHorizonFraction(air.sunElevationDeg) > 0 ? 1 : 0
+    }
   }
 
   const clouds = sky.getObjectByName('sky.clouds') as
@@ -546,9 +587,9 @@ export function applySkyAtmosphere(sky: THREE.Object3D, air: Atmosphere, quality
     cloudHaze?.setHex(air.skyHaze)
     const cloudSun = clouds.material.uniforms.uSunDirection?.value as THREE.Vector3 | undefined
     if (cloudSun) {
-      const x = air.keyPos[0] - air.keyTarget[0]
-      const y = air.keyPos[1] - air.keyTarget[1]
-      const z = air.keyPos[2] - air.keyTarget[2]
+      const x = air.sunDirection[0]
+      const y = air.sunDirection[1]
+      const z = air.sunDirection[2]
       const invLength = 1 / Math.hypot(x, y, z)
       cloudSun.set(x * invLength, y * invLength, z * invLength)
     }
@@ -585,6 +626,7 @@ export function createSky(theme: ThemeApi): THREE.Object3D {
       uSunFlat: { value: new THREE.Vector2(0, -1) },
       uDaylight: { value: 0 },
       uScattering: { value: 0 },
+      uSunVisible: { value: 0 },
     },
     vertexShader: skyVert,
     fragmentShader: skyFrag,

@@ -2,10 +2,12 @@ import * as THREE from 'three'
 import { describe, expect, it } from 'vitest'
 
 import { ATMOSPHERE } from '../core/theme'
+import { clockAtmosphereAt } from '../core/themes'
 import type { ThemeApi } from '../core/types'
 import {
   ESTABLISHING_BAND,
   SLONIK_LINK_OPACITY,
+  SUN_ANGULAR_DIAMETER_DEG,
   applySkyAtmosphere,
   cloudAngularWidths,
   cloudElevations,
@@ -13,6 +15,8 @@ import {
   dayScatteringPhase,
   dayHazeMix,
   daySkyRamp,
+  solarTransmittance,
+  sunDiscHorizonFraction,
   skyScatteringEnabled,
 } from './sky'
 
@@ -38,6 +42,24 @@ function shows(obj: THREE.Object3D | undefined): boolean {
 }
 
 describe('day sky', () => {
+  it('draws a deliberately legible sun that reddens, dims, and sets at the horizon', () => {
+    expect(SUN_ANGULAR_DIAMETER_DEG).toBe(1.5)
+
+    const noon = solarTransmittance(62)
+    const golden = solarTransmittance(8.4)
+    const horizon = solarTransmittance(0.5)
+    expect(golden[0]).toBeLessThan(noon[0])
+    expect(horizon[0]).toBeLessThan(golden[0])
+    expect(golden[2] / golden[0]).toBeLessThan(noon[2] / noon[0])
+    expect(horizon[2] / horizon[0]).toBeLessThan(golden[2] / golden[0])
+
+    const radius = SUN_ANGULAR_DIAMETER_DEG / 2
+    expect(sunDiscHorizonFraction(radius)).toBe(1)
+    expect(sunDiscHorizonFraction(0)).toBeCloseTo(0.5, 12)
+    expect(sunDiscHorizonFraction(-radius)).toBe(0)
+    expect(sunDiscHorizonFraction(-radius - 0.01)).toBe(0)
+  })
+
   it('uses forward Mie and wavelength-sensitive Rayleigh scattering only on upper day tiers', () => {
     const towardSun = dayScatteringPhase(0.995)
     const acrossSun = dayScatteringPhase(0)
@@ -65,9 +87,7 @@ describe('day sky', () => {
     const dome = sky.getObjectByName('sky.dome') as THREE.Mesh
     const material = dome.material as THREE.ShaderMaterial
     const actual = material.uniforms.uSunDirection.value as THREE.Vector3
-    const expected = new THREE.Vector3(...ATMOSPHERE.day.keyPos)
-      .sub(new THREE.Vector3(...ATMOSPHERE.day.keyTarget))
-      .normalize()
+    const expected = new THREE.Vector3(...ATMOSPHERE.day.sunDirection).normalize()
 
     expect(actual.dot(expected)).toBeGreaterThan(0.999999)
     expect(material.uniforms.uDaylight.value).toBe(1)
@@ -83,6 +103,23 @@ describe('day sky', () => {
     expect(cloudSun.dot(expected)).toBeGreaterThan(0.999999)
     expect(clouds.material.uniforms.uCloudLight.value).toBeInstanceOf(THREE.Color)
     expect(clouds.material.uniforms.uCloudShade.value).toBeInstanceOf(THREE.Color)
+
+    ;(sky.userData.dispose as () => void)()
+  })
+
+  it('uses the true local-clock solar direction and removes the disc once it has set', () => {
+    const sky = createSky({} as ThemeApi)
+    const dome = sky.getObjectByName('sky.dome') as THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>
+
+    const beforeSunset = clockAtmosphereAt(17 * 60 + 55)
+    applySkyAtmosphere(sky, beforeSunset, 'high')
+    const actual = dome.material.uniforms.uSunDirection.value as THREE.Vector3
+    expect(actual.dot(new THREE.Vector3(...beforeSunset.sunDirection).normalize())).toBeGreaterThan(0.999999)
+    expect(dome.material.uniforms.uSunVisible.value).toBe(1)
+
+    const afterSunset = clockAtmosphereAt(18 * 60 + 5)
+    applySkyAtmosphere(sky, afterSunset, 'high')
+    expect(dome.material.uniforms.uSunVisible.value).toBe(0)
 
     ;(sky.userData.dispose as () => void)()
   })

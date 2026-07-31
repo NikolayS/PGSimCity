@@ -214,6 +214,9 @@ export interface Atmosphere {
   keyIntensity: number
   keyPos: readonly [number, number, number]
   keyTarget: readonly [number, number, number]
+  /** True apparent solar direction. Kept separate from the twilight-blended key. */
+  sunDirection: readonly [number, number, number]
+  sunElevationDeg: number
   shadowBias: number
   shadowNormalBias: number
   /** 0..1 — how much direct light a cast shadow removes. */
@@ -266,6 +269,8 @@ export const ATMOSPHERE: Record<CuratedThemeMode, Atmosphere> = {
     keyIntensity: 1.15,
     keyPos: [322, 374, -196],
     keyTarget: [0, 0, -35],
+    sunDirection: [0, -1, 0],
+    sunElevationDeg: -90,
     shadowBias: -0.0006,
     shadowNormalBias: 0.6,
     shadowIntensity: 1,
@@ -328,6 +333,8 @@ export const ATMOSPHERE: Record<CuratedThemeMode, Atmosphere> = {
      */
     keyPos: [-520, 120, -650],
     keyTarget: [0, 0, -20],
+    sunDirection: [-520, 120, -630],
+    sunElevationDeg: 8.4,
     shadowBias: -0.0004,
     shadowNormalBias: 0.2,
     shadowIntensity: 0.84,
@@ -476,6 +483,16 @@ export function clockSunAt(minutes: number): ClockSun {
   }
 }
 
+/** A cubemap recapture is six sky renders; the clock can afford one per quarter hour. */
+export const CLOCK_ENVIRONMENT_REFRESH_MINUTES = 15
+
+/** Deep night is one stable environment; twilight and day advance in bounded buckets. */
+export function clockEnvironmentKeyAt(minutes: number): string {
+  const sun = clockSunAt(minutes)
+  if (sun.daylight === 0) return 'night'
+  return String(Math.floor(sun.minutes / CLOCK_ENVIRONMENT_REFRESH_MINUTES))
+}
+
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t
 
 function mixPosition(
@@ -493,19 +510,25 @@ export function clockAtmosphereAt(minutes: number): Atmosphere {
   const night = ATMOSPHERE.night
   const day = ATMOSPHERE.day
   const dayModel = t >= 0.5
-  const elevation = Math.max(2, sun.elevationDeg) * (Math.PI / 180)
+  const solarElevation = sun.elevationDeg * (Math.PI / 180)
+  const keyElevation = Math.max(2, sun.elevationDeg) * (Math.PI / 180)
   const azimuth = sun.azimuthDeg * (Math.PI / 180)
   const target = day.keyTarget
   const distance = 900
-  const horizontal = Math.cos(elevation) * distance
+  const horizontal = Math.cos(keyElevation) * distance
+  const sunDirection = [
+    Math.sin(azimuth) * Math.cos(solarElevation),
+    Math.sin(solarElevation),
+    -Math.cos(azimuth) * Math.cos(solarElevation),
+  ] as const
   const solarPosition = [
     target[0] + Math.sin(azimuth) * horizontal,
-    target[1] + Math.sin(elevation) * distance,
+    target[1] + Math.sin(keyElevation) * distance,
     target[2] - Math.cos(azimuth) * horizontal,
   ] as const
   const noon = smoothstep(8, 38, sun.elevationDeg)
   const solarKey = mix(day.keyColor, 0xfff3dc, noon)
-  const solarIntensity = lerp(1.9, 2.65, Math.max(0, Math.sin(elevation)))
+  const solarIntensity = lerp(1.9, 2.65, Math.max(0, Math.sin(keyElevation)))
 
   return {
     toneMapping: dayModel ? day.toneMapping : night.toneMapping,
@@ -521,6 +544,8 @@ export function clockAtmosphereAt(minutes: number): Atmosphere {
     keyIntensity: lerp(night.keyIntensity, solarIntensity, t),
     keyPos: mixPosition(night.keyPos, solarPosition, t),
     keyTarget: mixPosition(night.keyTarget, day.keyTarget, t),
+    sunDirection,
+    sunElevationDeg: sun.elevationDeg,
     shadowBias: lerp(night.shadowBias, day.shadowBias, t),
     shadowNormalBias: lerp(night.shadowNormalBias, day.shadowNormalBias, t),
     shadowIntensity: lerp(night.shadowIntensity, day.shadowIntensity, t),

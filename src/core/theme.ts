@@ -11,6 +11,7 @@ import {
   BOUNCE_PALETTE_KEYS,
   clockAccent,
   clockAtmosphereAt,
+  clockEnvironmentKeyAt,
   clockEmissive,
   clockInk,
   clockInkOpacity,
@@ -133,6 +134,11 @@ export function themeMode(): ThemeMode {
 /** Light rig, tone mapping, fog and sky for the current mode. */
 export function atmosphere(): Atmosphere {
   return airFor(mode)
+}
+
+/** Cache identity for the expensive prefiltered sky environment. */
+export function themeEnvironmentKey(): string {
+  return mode === 'clock' ? `clock:${clockEnvironmentKeyAt(clockMinutes)}` : mode
 }
 
 /** Daylight blend in [0, 1], including the local-clock twilight continuum. */
