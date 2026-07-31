@@ -11,6 +11,7 @@ import {
   SHARED_BUFFERS_MIN_MIB,
 } from '../src/core/types'
 import { createSim, traceStopBit } from '../src/sim/model'
+import { recordRepresentativeUpdate } from '../src/sim/mvcc'
 import { createAnatomy } from '../src/ui/anatomy'
 import { knobMeta } from '../src/ui/content'
 import { createControls, createKnobControl } from '../src/ui/controls'
@@ -177,6 +178,54 @@ describe('page anatomy MVCC story', () => {
     expect(cutoff?.textContent).toContain(
       ctx.sim.state.xminHorizon.toLocaleString(),
     )
+    anatomy.dispose()
+  })
+
+  it('keeps a HOT successor under the root index TID and shows both tuple flags', () => {
+    const ctx = context()
+    const sessions = ctx.sim.state.tables.findIndex(
+      (table) => table.def.id === 'sessions',
+    )
+    const row = ctx.sim.state.tables[sessions].mvcc
+    const initialXid = row.versions[row.versions.length - 1].xmin
+    recordRepresentativeUpdate(row, initialXid + 1, 1, true)
+    recordRepresentativeUpdate(row, initialXid + 2, 2, true)
+
+    const anatomy = createAnatomy(ctx)
+    ctx.bus.emit('anatomy:open', { view: 'page', id: 'storage.table.sessions' })
+    const intermediate = row.versions.find((version) => version.hot && version.nextHot)!
+    const button = document.querySelector<HTMLButtonElement>(
+      `[data-mvcc-revision="${intermediate.revision}"]`,
+    )!
+    button.click()
+
+    expect(document.querySelector('.an-hot-chain__index')?.textContent).toContain(
+      `(${intermediate.indexBlock},${intermediate.indexOffset})`,
+    )
+    const flags = document.querySelector('.an-tuple-field--t_infomask2')?.textContent ?? ''
+    expect(flags).toContain('HOT_UPDATED')
+    expect(flags).toContain('HEAP_ONLY_TUPLE')
+    anatomy.dispose()
+  })
+
+  it('draws tuple bodies only for body-bearing line pointers', () => {
+    const ctx = context()
+    const table = ctx.sim.state.tables.find((candidate) => candidate.def.id === 'sessions')!
+    table.updates = 100
+    table.hotUpdates = 100
+    table.liveTuples = Math.floor(table.pages * table.def.tuplesPerPage * 0.7)
+    table.deadTuples = Math.floor(table.liveTuples * 0.2)
+    table.bloat = table.deadTuples / (table.liveTuples + table.deadTuples)
+
+    const anatomy = createAnatomy(ctx)
+    ctx.bus.emit('anatomy:open', { view: 'page', id: 'storage.table.sessions' })
+    const pointers = document.querySelectorAll('.an-pointer').length
+    const bodyless = document.querySelectorAll('.an-pointer--redirect').length
+      + document.querySelectorAll('.an-pointer--unused').length
+    const bodies = document.querySelectorAll('.an-tuple-block').length
+
+    expect(bodyless).toBeGreaterThan(0)
+    expect(bodies).toBe(pointers - bodyless)
     anatomy.dispose()
   })
 })

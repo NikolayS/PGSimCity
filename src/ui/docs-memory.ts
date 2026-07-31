@@ -770,7 +770,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What the horizon is',
         body:
-          'Take the `xmin` of every snapshot held by a backend in your database and keep the oldest — that number is the horizon. Replication slots, and any standby sending `hot_standby_feedback`, feed their xmins in too, and those hold the horizon back in every database. A dead row version can be removed only once the transaction that deleted it has committed *and* its xid has fallen behind the horizon — otherwise somebody could still legitimately need to see the old version. This is not a per-table or per-session rule: one session pins the line for every table in its own database, and the shared catalogs are pinned by the oldest snapshot anywhere in the cluster.',
+          'Vacuum derives cleanup cutoffs from several candidates, including active snapshot xmins, assigned transaction XIDs, prepared transactions, replication-slot xmins and standby feedback. A dead row version can be removed only once its deleting transaction committed and no relevant cutoff says somebody could still need it. This is not a per-table rule: one old candidate can retain versions across a database, while catalog cutoffs can have cluster-wide reach.',
       },
       {
         heading: 'The most destructive mistake in Postgres',
@@ -780,12 +780,12 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'The five things that pin it',
         body:
-          'In practice the culprit is always one of: a long-running query; a session `idle in transaction`; a replication slot with an old `xmin` or `catalog_xmin`, including a logical slot for a subscriber that stopped consuming; an abandoned prepared transaction from a two-phase commit that never resolved; or a standby with `hot_standby_feedback = on` running a long query, which pushes its horizon back to the primary. Check them in that order.',
+          'Common causes are a long-running snapshot or assigned XID; an idle transaction that actually retains one of those; a replication slot with an old `xmin` or `catalog_xmin`; an abandoned prepared transaction; or standby feedback carrying an old xmin. Under READ COMMITTED, merely being idle in a transaction does not necessarily retain the previous command’s snapshot, so inspect the reported XIDs/xmins instead of classifying by state alone.',
       },
       {
         heading: 'How to find the culprit',
         body:
-          'Start with `SELECT pid, state, backend_xid, backend_xmin, xact_start, now() - xact_start AS age, left(query, 80) FROM pg_stat_activity WHERE backend_xmin IS NOT NULL ORDER BY xact_start;` — the oldest `xact_start` is usually it. Then `SELECT slot_name, active, xmin, catalog_xmin, restart_lsn FROM pg_replication_slots;` and `SELECT * FROM pg_prepared_xacts;`. Confirm the damage with `n_dead_tup` and `last_autovacuum` in `pg_stat_user_tables`. Verbose vacuum output states it outright when it cannot clean: it reports dead row versions that cannot be removed yet, and the oldest xmin holding them back.',
+          'Start with `pg_stat_activity` rows where either `backend_xmin` or `backend_xid` is non-null. Then inspect `pg_prepared_xacts`, slot `xmin`/`catalog_xmin`, and `pg_stat_replication.backend_xmin` for standby feedback. Treat `n_dead_tup` as estimated pressure and compare physical size trends. Verbose vacuum output can report row versions that are dead but not yet removable and the cutoff it used.',
       },
       {
         heading: 'What to do about it',
@@ -1134,7 +1134,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'Where the locks start',
         body:
-          'Analysis is also where the statement first touches the catalogs and therefore where the first table locks are taken, typically `ACCESS SHARE` for a `SELECT`. This matters operationally: a session sitting in a transaction that merely *parsed* a statement against a table already holds a lock on it, and a pending `ACCESS EXCLUSIVE` request from DDL will queue behind it and block everything after that.',
+          'Analysis and name resolution are where the statement first opens its referenced relations and takes the required table locks, typically `ACCESS SHARE` for a `SELECT`. Raw parsing alone only produces a syntax tree; it does not resolve a table name or acquire that relation lock. This matters operationally: a session sitting in a transaction after analysis can retain the lock, and a pending `ACCESS EXCLUSIVE` request from DDL will queue behind it and can make later requests queue too.',
       },
       {
         heading: 'What you would see in production',
@@ -1222,7 +1222,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'The cost model',
         body:
-          'Costs are in arbitrary units anchored by definition: `seq_page_cost` is 1.0, one sequential page read. `random_page_cost` defaults to 4.0, which encodes the seek penalty of a spinning disk; on SSD or NVMe something between 1.1 and 2.0 is far more truthful and is the single most valuable cost setting to change. CPU work is charged with `cpu_tuple_cost` (0.01), `cpu_index_tuple_cost` (0.005) and `cpu_operator_cost` (0.0025). `effective_cache_size` allocates nothing — it tells the planner how much of the data is likely to be in cache between the buffer pool and the OS, which makes repeated index access look as cheap as it really is. Set it to something like half to three quarters of system RAM.',
+          'Costs are relative estimates in arbitrary units; by convention `seq_page_cost` is 1.0 and the other constants are compared with it. `random_page_cost` defaults to 4.0, a value that combines the higher cost of non-sequential access with an assumption that many random reads are cached. The truthful value depends on the workload, storage, cache residency and the other cost constants, so there is no universal SSD or NVMe recipe. CPU work is represented by `cpu_tuple_cost` (0.01), `cpu_index_tuple_cost` (0.005) and `cpu_operator_cost` (0.0025). `effective_cache_size` allocates nothing — it is an estimate of cache available to a representative query across PostgreSQL and the operating system, not a prescribed fraction of system RAM. Calibrate these workload and cache assumptions together against a representative workload.',
       },
       {
         heading: 'Statistics and selectivity',
@@ -1237,7 +1237,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What to do about it',
         body:
-          'First check the estimates, with `EXPLAIN (ANALYZE, BUFFERS)`, and find the *lowest* node where estimated and actual rows diverge — everything above it is a consequence, not a cause. Then fix the input: `ANALYZE` the table if it is stale, raise `default_statistics_target` or the per-column target for skewed columns, and use `CREATE STATISTICS` for correlated column groups or expressions. Add an expression index when indexed access is useful, not merely to obtain expression statistics. Fix the constants too — an honest `random_page_cost` and `effective_cache_size` correct a whole class of "why is it not using my index" complaints. Use `enable_seqscan = off` only as a diagnostic; never leave it that way in production.',
+          'First check the estimates, with `EXPLAIN (ANALYZE, BUFFERS)`, and find the *lowest* node where estimated and actual rows diverge — everything above it is a consequence, not a cause. Then fix the input: `ANALYZE` the table if it is stale, raise `default_statistics_target` or the per-column target for skewed columns, and use `CREATE STATISTICS` for correlated column groups or expressions. Add an expression index when indexed access is useful, not merely to obtain expression statistics. If estimates are sound but representative plans still price I/O incorrectly, calibrate `random_page_cost`, `seq_page_cost`, the CPU constants and `effective_cache_size` as a set from measured workload evidence. Use `enable_seqscan = off` only as a diagnostic; never leave it that way in production.',
       },
     ],
     metrics: [
@@ -1341,7 +1341,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'The shape',
         body:
-          'A plan is a tree printed with indentation: a node is fed by the nodes indented under it. So the first line is the *last* thing that happens, and execution really starts at the deepest, most indented scan. Read it inside-out. Costs are shown as `cost=startup..total` and they are cumulative — a node total includes all its children — so subtract to see what a node cost by itself.',
+          'A plan is a tree printed with indentation: a node is fed by the nodes indented under it. So the first line is the *last* thing that happens, and execution really starts at the deepest, most indented scan. Read it inside-out. Costs are shown as `cost=startup..total` and are inclusive estimates in arbitrary units. You cannot safely isolate a node’s own cost by subtracting its children: nodes can have multiple inputs, execute a child repeatedly, rescan it, or divide work across parallel participants. Use costs to compare candidate plans; use actual time, loops and buffers to understand an observed execution.',
       },
       {
         heading: 'The first thing to check, always',

@@ -73,7 +73,7 @@ export interface TableDef {
  * Knobs — user-facing GUCs and workload dials.
  * -------------------------------------------------------------------------*/
 
-export type SyncCommit = 'off' | 'local' | 'on' | 'remote_apply'
+export type SyncCommit = 'off' | 'local' | 'remote_write' | 'on' | 'remote_apply'
 export type WalLevel = 'minimal' | 'replica' | 'logical'
 export type HaPartition =
   | 'healthy'
@@ -462,6 +462,9 @@ export interface MvccTupleVersion {
   /** Representative TID, not bytes decoded from a real block. */
   block: number
   offset: number
+  /** Heap TID stored by the index entry for this version's HOT chain. */
+  indexBlock: number
+  indexOffset: number
   /** Model-owned t_ctid target; self for the current version. */
   ctidBlock: number
   ctidOffset: number
@@ -740,7 +743,8 @@ export interface PhysicalStandbyState {
   walSender: ReplicationProcessState
   walReceiver: ReplicationProcessState
   startupProcess: ReplicationProcessState
-  /** Primary has received this standby's durable/apply acknowledgements. */
+  /** Primary has received this standby's write/durable/apply acknowledgements. */
+  acknowledgedWriteLsn: number
   acknowledgedFlushLsn: number
   acknowledgedApplyLsn: number
 }

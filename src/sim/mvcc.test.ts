@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { createBus } from '../core/bus'
-import { TABLES } from '../world/layout'
+import { TABLES } from '../core/catalog'
 import { createSim, traceStopBit } from './model'
 import { createAggregateSim } from './test-support'
 import {
@@ -42,6 +42,31 @@ describe('representative MVCC row', () => {
     expect(mvccVersionCollectable(replaced, 100)).toBe(false)
     expect(mvccVersionCollectable(replaced, 101)).toBe(false)
     expect(mvccVersionCollectable(replaced, 102)).toBe(true)
+  })
+
+  it('keeps HOT successors under the root index TID until a non-HOT update adds an entry', () => {
+    const row = createRepresentativeRow(100, 7)
+
+    recordRepresentativeUpdate(row, 101, 1, true)
+    recordRepresentativeUpdate(row, 102, 2, true)
+    recordRepresentativeUpdate(row, 103, 3, false)
+
+    expect(row.versions[1]).toMatchObject({
+      hot: true,
+      nextHot: true,
+      indexBlock: 7,
+      indexOffset: 1,
+    })
+    expect(row.versions[2]).toMatchObject({
+      hot: true,
+      indexBlock: 7,
+      indexOffset: 1,
+    })
+    expect(row.versions[3]).toMatchObject({
+      hot: false,
+      indexBlock: 8,
+      indexOffset: 1,
+    })
   })
 
   it('is driven by committed UPDATE trips and the long-running transaction knob', () => {

@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import { createBus } from '../core/bus'
 import type { QueryKind, TraceRecord, TraceStop } from '../core/types'
-import { createSim, traceStopBit } from '../sim/model'
+import { createSim, sqlFor, traceStopBit } from '../sim/model'
+import { TABLES } from '../world/layout'
 import { installTestDom } from '../../test/dom'
 import {
   FLOW_CHOICES,
@@ -52,6 +53,22 @@ describe('2D query lifecycle state', () => {
     expect(new Set(FLOW_CHOICES.map((choice) => choice.tableId))).toEqual(
       new Set(['accounts', 'sessions', 'orders']),
     )
+  })
+
+  it('uses model SQL that resolves against the adjacent seeded schema', () => {
+    const statements = FLOW_CHOICES.map((choice) => {
+      const table = TABLES.findIndex((candidate) => candidate.id === choice.tableId)
+      return sqlFor(choice.kind, table)
+    })
+
+    expect(statements).toEqual([
+      'SELECT * FROM accounts WHERE id = $1',
+      'SELECT * FROM sessions WHERE expires_at > $1',
+      'SELECT status, count(*), sum(total) FROM orders GROUP BY 1',
+      'INSERT INTO orders (id, account_id, status, total, created_at) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+      'UPDATE sessions SET last_seen_at = now(), expires_at = $1 WHERE id = ANY ($2)',
+      'DELETE FROM sessions WHERE expires_at < now()',
+    ])
   })
 
   it('uses model trace bits for progress and strikes read-only write stops', () => {
@@ -125,6 +142,20 @@ describe('2D query lifecycle state', () => {
       { synchronousCommit: 'on', sharedBuffers: 2048 },
       { synchronousCommit: 'on', sharedBuffers: 128 },
     ])
+  })
+
+  it('round-trips PostgreSQL remote_write durability comparisons', () => {
+    const parsed = parseFlowQuery(
+      '?view=flow&statement=update&setting=synchronous_commit&a=remote_write&b=on',
+    )
+
+    expect(parsed).toEqual({
+      statement: 'update',
+      setting: 'synchronous_commit',
+      a: 'remote_write',
+      b: 'on',
+    })
+    expect(parseFlowQuery(serializeFlowQuery(parsed))).toEqual(parsed)
   })
 
   it('falls back to the useful write comparison for invalid URL state', () => {

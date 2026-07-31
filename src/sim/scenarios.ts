@@ -256,7 +256,7 @@ export const SCENARIOS: ScenarioDef[] = [
   {
     id: 'wal-flood',
     name: 'The commit trade-off',
-    blurb: 'synchronous_commit: off, local, on, remote_apply — durability priced in milliseconds.',
+    blurb: 'synchronous_commit: off, local, remote_write, on, remote_apply — durability priced in milliseconds.',
     icon: '◇',
     focus: 'walwriter',
     duration: 135,

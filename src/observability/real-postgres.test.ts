@@ -128,4 +128,35 @@ describe.sequential('PGlite source', () => {
     })
     expect(missing.error?.message).toContain('table_that_does_not_exist')
   })
+
+  it('executes a submitted statement exactly once', async () => {
+    const sequenceName = 'review2_execution_proof'
+    await source.query(`CREATE SEQUENCE ${sequenceName}`)
+
+    const next = await source.query(
+      `SELECT nextval('${sequenceName}') AS next_value`,
+    )
+    const last = await source.query(
+      `SELECT last_value FROM ${sequenceName}`,
+    )
+
+    expect(Number(next.results[0]?.rows[0]?.next_value)).toBe(1)
+    expect(Number(last.results[0]?.rows[0]?.last_value)).toBe(1)
+  })
+
+  it('uses the analyzed DML execution for both its result count and visible state', async () => {
+    await source.query('CREATE TABLE review2_dml_proof (value integer NOT NULL)')
+
+    const insert = await source.query('INSERT INTO review2_dml_proof VALUES (1)')
+    const update = await source.query(
+      'UPDATE review2_dml_proof SET value = value + 1',
+    )
+    const state = await source.query('SELECT value FROM review2_dml_proof')
+
+    expect(insert.error).toBeNull()
+    expect(insert.results[0]?.affectedRows).toBe(1)
+    expect(update.error).toBeNull()
+    expect(update.results[0]?.affectedRows).toBe(1)
+    expect(state.results[0]?.rows).toEqual([{ value: 2 }])
+  })
 })

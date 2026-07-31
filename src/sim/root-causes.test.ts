@@ -422,14 +422,16 @@ describe('synchronous_commit guarantees', () => {
     return waiters / samples
   }
 
-  it('forms the off < local < on < remote_apply commit-wait ladder', () => {
+  it('forms the off < local < remote_write < on < remote_apply commit-wait ladder', () => {
     const off = meanCommitWaiters('off')
     const local = meanCommitWaiters('local')
+    const remoteWrite = meanCommitWaiters('remote_write')
     const on = meanCommitWaiters('on')
     const remoteApply = meanCommitWaiters('remote_apply')
 
     expect.soft(local, `off=${off}; local=${local}`).toBeGreaterThan(off)
-    expect.soft(on, `local=${local}; on=${on}`).toBeGreaterThan(local)
+    expect.soft(remoteWrite, `local=${local}; remote_write=${remoteWrite}`).toBeGreaterThan(local)
+    expect.soft(on, `remote_write=${remoteWrite}; on=${on}`).toBeGreaterThan(remoteWrite)
     expect(
       remoteApply,
       `on=${on}; remote_apply=${remoteApply}`,

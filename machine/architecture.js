@@ -99,12 +99,42 @@ function finiteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }
 
-function resultRows(report) {
+function modifiesRows(plan) {
+  if (!plan?.root) return false
+  const pending = [plan.root]
+  while (pending.length > 0) {
+    const node = pending.pop()
+    if (['insert', 'update', 'delete', 'merge'].includes(node?.operation?.toLowerCase())) {
+      return true
+    }
+    pending.push(...(node?.children ?? []))
+  }
+  return false
+}
+
+function resultMeasurement(report) {
+  const result = report.results?.at(-1)
+  if (modifiesRows(report.plan)) {
+    return {
+      count: finiteNumber(result?.affectedRows),
+      stageLabel: 'row affected',
+      receiptLabel: 'ROWS AFFECTED',
+    }
+  }
+  if ((result?.fields?.length ?? 0) > 0) {
+    return {
+      count: result.rows?.length ?? 0,
+      stageLabel: 'result row',
+      receiptLabel: 'RESULT ROWS',
+    }
+  }
   const actualRows = finiteNumber(report.plan?.root?.actualRows)
   const actualLoops = Math.max(1, finiteNumber(report.plan?.root?.actualLoops))
-  if (report.plan) return actualRows * actualLoops
-  const result = report.results?.at(-1)
-  return finiteNumber(result?.affectedRows) || result?.rows?.length || 0
+  return {
+    count: actualRows * actualLoops,
+    stageLabel: 'plan-root tuple',
+    receiptLabel: 'PLAN-ROOT TUPLES',
+  }
 }
 
 function measuredPacing(plan) {
@@ -127,7 +157,8 @@ export function createStatementReplay(report) {
   const sharedHits = finiteNumber(plan?.buffers?.sharedHits)
   const sharedReads = finiteNumber(plan?.buffers?.sharedReads)
   const pacing = measuredPacing(plan)
-  const rows = resultRows(report)
+  const rowMeasurement = resultMeasurement(report)
+  const rows = rowMeasurement.count
   const stages = STATEMENT_STAGE_SPECS.map((spec) => {
     const skipped = (spec.id === 'kernel' || spec.id === 'disk') && sharedReads === 0
     let durationMs = spec.durationMs
@@ -151,7 +182,7 @@ export function createStatementReplay(report) {
         ? 'skipped · 0 shared reads'
         : `${sharedReads} shared reads · route modelled`
     } else if (spec.id === 'return') {
-      measurement = `${rows} row${rows === 1 ? '' : 's'}`
+      measurement = `${rows} ${rowMeasurement.stageLabel}${rows === 1 ? '' : 's'}`
     }
     return Object.freeze({
       ...spec,
@@ -176,6 +207,7 @@ export function createStatementReplay(report) {
           planningTimeMs: finiteNumber(plan.planningTimeMs),
           executionTimeMs: finiteNumber(plan.executionTimeMs),
           rows,
+          rowLabel: rowMeasurement.receiptLabel,
           planNode: String(plan.root?.nodeType ?? 'Plan'),
         })
       : null,

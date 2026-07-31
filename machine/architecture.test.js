@@ -92,8 +92,37 @@ describe('Magnum statement replay', () => {
       planningTimeMs: 0.35,
       executionTimeMs: 1.8,
       rows: 1,
+      rowLabel: 'RESULT ROWS',
       planNode: 'Index Scan',
     })
+  })
+
+  it('uses the command result count for DML rather than ModifyTable output tuples', () => {
+    const replay = createStatementReplay({
+      ...REPORT,
+      sql: 'UPDATE accounts SET balance = balance + 1 WHERE id = 42;',
+      results: [{
+        source: 'postgres',
+        fields: [],
+        rows: [],
+        affectedRows: 1,
+      }],
+      plan: {
+        ...REPORT.plan,
+        root: {
+          nodeType: 'ModifyTable',
+          operation: 'Update',
+          actualRows: 0,
+          actualLoops: 1,
+        },
+      },
+    })
+
+    expect(replay.receipt.rows).toBe(1)
+    expect(replay.receipt.rowLabel).toBe('ROWS AFFECTED')
+    expect(replay.stages.find((stage) => stage.id === 'return')?.measurement).toBe(
+      '1 row affected',
+    )
   })
 
   it('skips the kernel and disk leg when PostgreSQL reports no shared reads', () => {

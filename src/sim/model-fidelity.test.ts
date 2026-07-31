@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { createBus } from '../core/bus'
 import type { PlanNode, QueryKind } from '../core/types'
-import { TABLES } from '../world/layout'
+import { TABLES } from '../core/catalog'
 import { createSim } from './model'
 import { AGGREGATE_TEST_STEP, createAggregateSim } from './test-support'
 

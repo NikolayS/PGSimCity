@@ -53,6 +53,9 @@ import {
   N_WAL_SEG_SLOTS,
   SHARED_BUFFERS_FULL_SAMPLE_MIB,
 } from '../core/types'
+import { N_TABLES, TABLES } from '../core/catalog'
+import { traceStopBit, walTriggerBytes } from '../core/model-helpers'
+import { rid } from '../core/route-ids'
 import type {
   BackendSim,
   BackendState,
@@ -80,7 +83,6 @@ import type {
   VacWorker,
   WalSegment,
 } from '../core/types'
-import { ANCHOR, N_TABLES, TABLES, rid } from '../world/layout'
 import {
   clamp,
   clamp01,
@@ -102,6 +104,8 @@ import {
   refreshRepresentativeRow,
   releaseRepresentativeSnapshot,
 } from './mvcc'
+
+export { traceStopBit, walTriggerBytes } from '../core/model-helpers'
 
 /* --------------------------------------------------------------------------
  * Constants
@@ -285,22 +289,10 @@ const BGW_DELAY = 0.2
 const BGW_SCAN_WHOLE_POOL_SECONDS = 120
 /** Packet-flight animation only; replication timings are converted back out. */
 const NET_PACKET_STRETCH = 6
+/** The write acknowledgement precedes the standby's durable flush acknowledgement. */
+const REPLICA_WRITE_ACK_DELAY_FRACTION = 0.65
 /** Startup-process replay work after the standby has flushed a commit record. */
 const REPLICA_APPLY_ACK_DELAY = 0.12
-
-export function traceStopBit(stop: TraceStop): number {
-  switch (stop) {
-    case 'connect': return 1 << 0
-    case 'parse_plan': return 1 << 1
-    case 'fetch': return 1 << 2
-    case 'work': return 1 << 3
-    case 'wal': return 1 << 4
-    case 'commit': return 1 << 5
-    case 'send': return 1 << 6
-    case 'done': return 1 << 7
-    case 'blocked': return 1 << 8
-  }
-}
 
 export function sqlFor(kind: QueryKind, ti: number): string {
   const n = TABLES[ti].name
@@ -308,21 +300,32 @@ export function sqlFor(kind: QueryKind, ti: number): string {
     case 'select_idx':
       return `SELECT * FROM ${n} WHERE id = $1`
     case 'select_seq':
-      return n === 'events'
-        ? `SELECT * FROM events WHERE payload @> $1 ORDER BY created_at DESC LIMIT 50`
-        : `SELECT * FROM ${n} WHERE updated_at > $1`
+      if (n === 'events') return `SELECT * FROM events WHERE payload @> $1 ORDER BY created_at DESC LIMIT 50`
+      if (n === 'sessions') return `SELECT * FROM sessions WHERE expires_at > $1`
+      if (n === 'orders') return `SELECT * FROM orders WHERE created_at > $1`
+      if (n === 'documents') return `SELECT * FROM documents WHERE search @@ plainto_tsquery('english', $1)`
+      return `SELECT * FROM accounts WHERE updated_at > $1`
     case 'aggregate':
-      return `SELECT status, count(*), sum(amount) FROM ${n} GROUP BY 1`
+      if (n === 'orders') return `SELECT status, count(*), sum(total) FROM orders GROUP BY 1`
+      if (n === 'accounts') return `SELECT owner, count(*), sum(balance) FROM accounts GROUP BY 1`
+      if (n === 'events') return `SELECT kind, count(*) FROM events GROUP BY 1`
+      return `SELECT account_id, count(*) FROM ${n} GROUP BY 1`
     case 'insert':
-      return n === 'events'
-        ? `INSERT INTO events (created_at, kind, payload) VALUES ($1, $2, $3)`
-        : `INSERT INTO ${n} (…) VALUES ($1, $2, $3) RETURNING id`
+      if (n === 'accounts') return `INSERT INTO accounts (id, owner, balance, updated_at) VALUES ($1, $2, $3, $4) RETURNING id`
+      if (n === 'orders') return `INSERT INTO orders (id, account_id, status, total, created_at) VALUES ($1, $2, $3, $4, $5) RETURNING id`
+      if (n === 'events') return `INSERT INTO events (id, account_id, kind, payload, created_at) VALUES ($1, $2, $3, $4, $5) RETURNING id`
+      if (n === 'sessions') return `INSERT INTO sessions (id, account_id, expires_at, last_seen_at, metadata) VALUES ($1, $2, $3, $4, $5) RETURNING id`
+      return `INSERT INTO documents (id, account_id, title, body) VALUES ($1, $2, $3, $4) RETURNING id`
     case 'update':
-      return n === 'accounts'
-        ? `UPDATE accounts SET balance = balance + $1 WHERE id = $2`
-        : `UPDATE ${n} SET updated_at = now(), status = $1 WHERE id = ANY ($2)`
+      if (n === 'accounts') return `UPDATE accounts SET balance = balance + $1 WHERE id = $2`
+      if (n === 'orders') return `UPDATE orders SET status = $1 WHERE id = ANY ($2)`
+      if (n === 'events') return `UPDATE events SET created_at = $1 WHERE id = ANY ($2)`
+      if (n === 'sessions') return `UPDATE sessions SET last_seen_at = now(), expires_at = $1 WHERE id = ANY ($2)`
+      return `UPDATE documents SET body = $1 WHERE id = ANY ($2)`
     case 'delete':
-      return `DELETE FROM ${n} WHERE expires_at < now()`
+      if (n === 'sessions') return `DELETE FROM sessions WHERE expires_at < now()`
+      if (n === 'accounts') return `DELETE FROM accounts WHERE updated_at < $1`
+      return `DELETE FROM ${n} WHERE id < $1`
   }
 }
 /**
@@ -351,9 +354,6 @@ const VACUUM_PAGES_PER_WORKER_SEC =
  * at the full max_wal_size is what made pg_wal peak at (1 + target) times the
  * number the user set.
  */
-export const walTriggerBytes = (k: Knobs): number =>
-  (k.maxWalSize * 1024 * 1024) / (1 + k.checkpointCompletionTarget)
-
 /* --------------------------------------------------------------------------
  * Internal per-backend bookkeeping the UI never sees.
  * ------------------------------------------------------------------------*/
@@ -542,6 +542,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     walSender: 'streaming',
     walReceiver: 'streaming',
     startupProcess: 'streaming',
+    acknowledgedWriteLsn: initialLsn,
     acknowledgedFlushLsn: initialLsn,
     acknowledgedApplyLsn: initialLsn,
   }
@@ -564,6 +565,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     walSender: 'streaming',
     walReceiver: 'streaming',
     startupProcess: 'streaming',
+    acknowledgedWriteLsn: initialLsn,
     acknowledgedFlushLsn: initialLsn,
     acknowledgedApplyLsn: initialLsn,
   }
@@ -1146,6 +1148,12 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     applyAckTail: number
     applyAckCount: number
     applyAckSentLsn: number
+    writeAckLsn: Float64Array
+    writeAckAt: Float64Array
+    writeAckHead: number
+    writeAckTail: number
+    writeAckCount: number
+    writeAckSentLsn: number
     flushAckLsn: Float64Array
     flushAckAt: Float64Array
     flushAckHead: number
@@ -1170,6 +1178,12 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     applyAckTail: 0,
     applyAckCount: 0,
     applyAckSentLsn: wal.flushLsn,
+    writeAckLsn: new Float64Array(ACKW),
+    writeAckAt: new Float64Array(ACKW),
+    writeAckHead: 0,
+    writeAckTail: 0,
+    writeAckCount: 0,
+    writeAckSentLsn: wal.flushLsn,
     flushAckLsn: new Float64Array(ACKW),
     flushAckAt: new Float64Array(ACKW),
     flushAckHead: 0,
@@ -2494,10 +2508,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     // exactly once and then stops.
     ckptScan = 0
     bus.emit('checkpoint:start', { reason })
-    bus.emit('fx:pulse', {
-      at: [ANCHOR.checkpointer[0], ANCHOR.checkpointer[1] + 12, ANCHOR.checkpointer[2]],
-      radius: 40,
-    })
     if (reason === 'wal') {
       toast('Checkpoint triggered by max_wal_size — not by the timer', 'warn', 5000)
     }
@@ -3291,10 +3301,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
           b.sql = `LOCK TABLE ${TABLES[lockTable].name} IN ACCESS EXCLUSIVE MODE`
           b.plan = null
           toast(`ACCESS EXCLUSIVE lock held on ${TABLES[lockTable].name}`, 'warn', 5000)
-          bus.emit('fx:pulse', {
-            at: [ANCHOR.lockManager[0], ANCHOR.lockManager[1] + 8, ANCHOR.lockManager[2]],
-            radius: 26,
-          })
           break
         }
       }
@@ -3354,8 +3360,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   function resetPhysicalRuntime(runtime: RuntimePhysicalReplication, lsn: number): void {
     runtime.wireHead = runtime.wireTail = runtime.wireCount = 0
     runtime.applyAckHead = runtime.applyAckTail = runtime.applyAckCount = 0
+    runtime.writeAckHead = runtime.writeAckTail = runtime.writeAckCount = 0
     runtime.flushAckHead = runtime.flushAckTail = runtime.flushAckCount = 0
     runtime.applyAckSentLsn = lsn
+    runtime.writeAckSentLsn = lsn
     runtime.flushAckSentLsn = lsn
     runtime.previousLagBytes = 0
     runtime.previousLagSec = 0
@@ -3539,6 +3547,28 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       standby.writtenLsn = Math.floor(
         Math.min(writeLimit, standby.writtenLsn + rate * dt),
       )
+    }
+    if (
+      standby.writtenLsn > runtime.writeAckSentLsn
+      && runtime.writeAckCount < ACKW
+    ) {
+      runtime.writeAckSentLsn = standby.writtenLsn
+      runtime.writeAckLsn[runtime.writeAckHead] = standby.writtenLsn
+      runtime.writeAckAt[runtime.writeAckHead] =
+        state.t + delay * REPLICA_WRITE_ACK_DELAY_FRACTION
+      runtime.writeAckHead = (runtime.writeAckHead + 1) % ACKW
+      runtime.writeAckCount++
+    }
+    while (
+      runtime.writeAckCount > 0
+      && runtime.writeAckAt[runtime.writeAckTail] <= state.t
+    ) {
+      standby.acknowledgedWriteLsn = Math.max(
+        standby.acknowledgedWriteLsn,
+        runtime.writeAckLsn[runtime.writeAckTail],
+      )
+      runtime.writeAckTail = (runtime.writeAckTail + 1) % ACKW
+      runtime.writeAckCount--
     }
     const flushLimit = receiveBusy
       ? Math.max(standby.flushedLsn, standby.writtenLsn - displayGap)
@@ -4030,6 +4060,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     standby.writtenLsn = Math.min(standby.writtenLsn, forkLsn)
     standby.flushedLsn = Math.min(standby.flushedLsn, forkLsn)
     standby.appliedLsn = Math.min(standby.appliedLsn, forkLsn)
+    standby.acknowledgedWriteLsn = standby.writtenLsn
     standby.acknowledgedFlushLsn = standby.flushedLsn
     standby.acknowledgedApplyLsn = standby.appliedLsn
     resetPhysicalRuntime(physicalRuntime[index], standby.appliedLsn)
@@ -4084,7 +4115,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
     target.sentLsn = target.receivedLsn = target.writtenLsn = forkLsn
     target.flushedLsn = target.appliedLsn = forkLsn
-    target.acknowledgedFlushLsn = target.acknowledgedApplyLsn = forkLsn
+    target.acknowledgedWriteLsn = target.acknowledgedFlushLsn =
+      target.acknowledgedApplyLsn = forkLsn
     resetPhysicalRuntime(
       physicalRuntime[targetId === 'standbyA' ? 0 : 1],
       forkLsn,
@@ -4583,7 +4615,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
     standby.sentLsn = standby.receivedLsn = standby.writtenLsn = lsn
     standby.flushedLsn = standby.appliedLsn = lsn
-    standby.acknowledgedFlushLsn = standby.acknowledgedApplyLsn = lsn
+    standby.acknowledgedWriteLsn = standby.acknowledgedFlushLsn =
+      standby.acknowledgedApplyLsn = lsn
     standby.connected = standby.enabled
     standby.inFlight = 0
     standby.walSender = standby.enabled ? 'streaming' : 'stopped'
@@ -4665,7 +4698,15 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         // rather than chance, now decides whether the Sort exists.
         const retiredShapeRoll = rng()
         const sortMemoryRoll = retiredShapeRoll < 0.45 ? rng() : retiredShapeRoll
-        const filter = name === 'events' ? 'payload @> $1' : 'updated_at > $1'
+        const filter = name === 'events'
+          ? 'payload @> $1'
+          : name === 'sessions'
+            ? 'expires_at > $1'
+            : name === 'orders'
+              ? 'created_at > $1'
+              : name === 'documents'
+                ? "search @@ plainto_tsquery('english', $1)"
+                : 'updated_at > $1'
         const s = pn('Seq Scan', `on ${name}  (Filter: ${filter}, Rows Removed by Filter: ${Math.round(live * 0.94)})`, rows, seqCost, [])
         if (name === 'events') {
           const so = pn('Sort', `(Sort Key: created_at DESC, Sort Method: top-N heapsort, Memory: ${Math.round(28 + sortMemoryRoll * 60)}kB)`, rows, seqCost * 1.1, [s])
@@ -5539,12 +5580,13 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
             // Crash here and you lose the last few hundred ms of transactions.
             done = b.stateT >= 0.012
           } else if (
-            (sc === 'on' || sc === 'remote_apply')
+            (sc === 'remote_write' || sc === 'on' || sc === 'remote_apply')
             && K.synchronousStandbyNames
           ) {
             const syncStandby = synchronousStandby()
-            const acknowledged =
-              sc === 'on'
+            const acknowledged = sc === 'remote_write'
+              ? syncStandby.acknowledgedWriteLsn
+              : sc === 'on'
                 ? syncStandby.acknowledgedFlushLsn
                 : syncStandby.acknowledgedApplyLsn
             done = wal.flushLsn >= x.commitLsn && acknowledged >= x.commitLsn
@@ -5606,6 +5648,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         return 0.012
       case 'local':
         return fsync
+      case 'remote_write':
+        return fsync + remoteWait * REPLICA_WRITE_ACK_DELAY_FRACTION
       case 'on':
         return fsync + remoteWait
       case 'remote_apply':
@@ -5829,6 +5873,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     standby.writtenLsn = lsn
     standby.flushedLsn = lsn
     standby.appliedLsn = lsn
+    standby.acknowledgedWriteLsn = lsn
     standby.acknowledgedFlushLsn = lsn
     standby.acknowledgedApplyLsn = lsn
     standby.lagBytes = 0
@@ -6268,7 +6313,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       case 'synchronousCommit':
         if (K.synchronousCommit === 'off') toast("synchronous_commit=off — commits no longer wait for fsync", 'warn', 5000)
         else if (
-          (K.synchronousCommit === 'on' || K.synchronousCommit === 'remote_apply')
+          (K.synchronousCommit === 'remote_write'
+            || K.synchronousCommit === 'on'
+            || K.synchronousCommit === 'remote_apply')
           && K.synchronousStandbyNames
           && !synchronousStandby().connected
         ) {
@@ -6767,6 +6814,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       standby.walSender = enabled ? 'streaming' : 'stopped'
       standby.walReceiver = enabled ? 'streaming' : 'stopped'
       standby.startupProcess = enabled ? 'streaming' : 'stopped'
+      standby.acknowledgedWriteLsn = lsn0
       standby.acknowledgedFlushLsn = lsn0
       standby.acknowledgedApplyLsn = lsn0
       const slot = rep.physicalSlots[i]

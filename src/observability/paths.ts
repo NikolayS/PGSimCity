@@ -234,10 +234,6 @@ function ckptResolved(c: Collector): Resolution {
   }
 }
 
-export function fpiShare(c: Collector): number {
-  return c.total.walBytes > 0 ? (c.total.walFpi * 8192) / c.total.walBytes : 0
-}
-
 export function backendWriteShare(c: Collector): number {
   const t = c.total.backendWrites + c.total.ckptBuffers + c.total.bgwClean
   return t > 0 ? c.total.backendWrites / t : 0
@@ -351,7 +347,7 @@ const KB = {
     key: 'synchronousCommit',
     guc: 'synchronous_commit',
     kind: 'choice',
-    choices: ['off', 'local', 'on', 'remote_apply'],
+    choices: ['off', 'local', 'remote_write', 'on', 'remote_apply'],
     help: 'A per-session setting. Money commits with remote_apply; telemetry commits with off.',
   },
   replicaSlowApply: {
@@ -522,20 +518,20 @@ const STEPS: Step[] = [
   {
     id: 'stall.2',
     kind: 'step',
-    title: 'Does WAL volume explain the requests in this incident?',
-    why: 'This model records WAL pressure as its request source. On a real server, use WAL volume and checkpoint messages to establish that cause before asking whether full-page images amplify it.',
+    title: 'How do WAL bytes and FPI counts move around the requests?',
+    why: 'This model records WAL pressure as its request source. On a real server, compare time-aligned rates and checkpoint messages without turning an FPI count into bytes.',
     instrument: 'pg_stat_wal',
     projection: 'wal',
     city: 'wal.vault',
     sql: `SELECT wal_records, wal_fpi, wal_bytes, wal_buffers_full
   FROM pg_stat_wal;`,
     look:
-      '`wal_fpi` counts full-page images. The first time a page is modified after a checkpoint stamps its redo point, its entire 8 kB image goes into the WAL — so if FPI is a large share of wal_bytes, the checkpoints are generating the WAL that is triggering the next checkpoint.',
+      '`wal_fpi` is a count and `wal_bytes` is a byte total; the count cannot be converted into an FPI byte share. Compare their rates before and after checkpoints. If byte attribution matters, inspect WAL records with a WAL-analysis tool instead of multiplying the count by a page size.',
     note:
-      'pg_stat_wal arrived in 14. PostgreSQL 18 removed wal_write, wal_sync, wal_write_time and wal_sync_time from it; WAL I/O now shows up in pg_stat_io with object = \'wal\'.',
+      'A full-page image can omit the unused page hole, and wal_compression can compress it, so even BLCKSZ is not its recorded size. BLCKSZ is build-time configurable. PostgreSQL 18 reports WAL I/O in pg_stat_io with object = \'wal\'.',
     branches: [
-      { label: 'Full-page images are a large share of the bytes.', next: 'v.ckpt_storm', test: (_s, c) => c.total.walBytes > 0 && fpiShare(c) > 0.25 },
-      { label: 'WAL volume is high, but FPI is not what is driving it.', next: 'v.wal_volume', test: (_s, c) => c.total.walBytes > 0 && fpiShare(c) <= 0.25 },
+      { label: 'In this model, wal_fpi and wal_bytes rise together after requested checkpoints.', next: 'v.ckpt_storm', test: (_s, c) => c.total.walBytes > 0 && c.total.walFpi > 0 },
+      { label: 'WAL bytes rise without a modeled FPI burst.', next: 'v.wal_volume', test: (_s, c) => c.total.walBytes > 0 && c.total.walFpi <= 0 },
     ],
   },
 
@@ -543,22 +539,25 @@ const STEPS: Step[] = [
   {
     id: 'bloat.1',
     kind: 'step',
-    title: 'Which table, and how dead is it?',
-    why: 'Start with the fact rather than the theory: find the table whose dead row versions are growing, and check whether autovacuum has been there at all.',
+    title: 'Which table shows dead-tuple pressure or physical growth?',
+    why: 'Start with two different signals: estimated dead-row pressure from pg_stat_all_tables, and measured heap/index/TOAST size trends. Neither substitutes for the other.',
     instrument: 'pg_stat_all_tables',
     projection: 'tables',
     city: 'storage.datadir',
     sql: `SELECT relname, n_live_tup, n_dead_tup,
        n_tup_upd, n_tup_hot_upd,
-       last_autovacuum, autovacuum_count
+       last_autovacuum, autovacuum_count,
+       pg_relation_size(relid) AS heap_bytes,
+       pg_indexes_size(relid) AS index_bytes,
+       pg_total_relation_size(relid) AS total_bytes
   FROM pg_stat_all_tables
  ORDER BY n_dead_tup DESC;`,
     look:
-      'Compare `n_tup_hot_upd` with `n_tup_upd`. A HOT update keeps the new row version on the same page and touches no index, and Postgres can prune those during ordinary page access without vacuum at all. A table where the two numbers diverge is a table that depends on vacuum — and will bloat the moment vacuum cannot keep up. The healthy table at the bottom of the list is worth as much as the sick one at the top: `events` is insert-only, so it has no dead rows to collect and vacuum has nothing to do on it. Bloat is a property of your write pattern before it is a property of your vacuum settings.',
+      '`n_live_tup` and `n_dead_tup` are estimated counts: use their change as vacuum-pressure evidence, not as a physical-bloat measurement or a monotonic truth counter. HOT versus non-HOT updates describes index-maintenance work, not whether cleanup keeps up. Sample heap, index and total bytes over time; a low dead estimate does not exclude old reusable space, index bloat or TOAST growth. When a costly page scan is justified, pgstattuple can confirm tuple and free-space occupancy.',
     branches: [
-      { label: 'Dead tuples are climbing although autovacuum ran recently.', next: 'bloat.2', test: (s) => s.tables.some((t) => t.bloat > 0.12 && s.t - t.lastVacuum < 90) },
+      { label: 'Estimated dead-tuple pressure is climbing although autovacuum ran recently.', next: 'bloat.2', test: (s) => s.tables.some((t) => t.bloat > 0.12 && s.t - t.lastVacuum < 90) },
       { label: 'autovacuum has never run on it.', next: 'v.av_off', test: (s) => !s.knobs.autovacuum },
-      { label: 'Dead tuples are under control.', next: 'v.no_bloat', test: (s) => s.tables.every((t) => t.bloat < 0.12) },
+      { label: 'The current dead-tuple estimate is low; check physical size trends.', next: 'v.no_bloat', test: (s) => s.tables.every((t) => t.bloat < 0.12) },
     ],
   },
   {
@@ -572,12 +571,27 @@ const STEPS: Step[] = [
     sql: `SELECT pid, state, backend_xid, backend_xmin,
        now() - xact_start AS xact_age, query
   FROM pg_stat_activity
- WHERE backend_xmin IS NOT NULL
- ORDER BY age(backend_xmin) DESC;`,
+ WHERE backend_xmin IS NOT NULL OR backend_xid IS NOT NULL
+ ORDER BY GREATEST(age(backend_xmin), age(backend_xid)) DESC NULLS LAST;
+
+SELECT gid, prepared, owner, database, transaction,
+       age(transaction) AS xid_age
+  FROM pg_prepared_xacts
+ ORDER BY age(transaction) DESC;
+
+SELECT slot_name, slot_type, active, xmin, catalog_xmin,
+       age(xmin) AS xmin_age, age(catalog_xmin) AS catalog_xmin_age
+  FROM pg_replication_slots
+ WHERE xmin IS NOT NULL OR catalog_xmin IS NOT NULL;
+
+SELECT pid, application_name, state, backend_xmin,
+       age(backend_xmin) AS feedback_xmin_age
+  FROM pg_stat_replication
+ WHERE backend_xmin IS NOT NULL;`,
     look:
-      'The oldest `backend_xmin` in this list **is** the horizon. Note that `backend_xid` can be null while `backend_xmin` is not: a read-only transaction never consumes a transaction id, but it still holds a snapshot — and the snapshot is what blocks cleanup. Sorting by xact_age finds the session; sorting by age(backend_xmin) finds the damage.',
+      'Compare every candidate: active backend_xmin values, old assigned backend_xid values, prepared transactions, replication-slot xmin/catalog_xmin values, and standby feedback reported by walsenders. The oldest relevant value can constrain cleanup; no single pg_stat_activity list is the global horizon.',
     note:
-      'Two other things pin the horizon and are not in this list: a replication slot with an old `xmin` (check pg_replication_slots) and a long query on a hot standby with hot_standby_feedback on. Same mechanism, same damage, different view.',
+      'An idle transaction is not automatically a snapshot pin. Under READ COMMITTED each command gets a new snapshot, so inspect backend_xmin and transaction IDs rather than generalizing the modeled REPEATABLE READ case.',
     branches: [
       { label: 'There is a session in `idle in transaction` with an ancient xact_age.', next: 'bloat.3', test: (s) => s.knobs.longRunningXact || s.oldestSnapshotAge > 25 },
       { label: 'Nothing here is old.', next: 'v.av_tuning', test: (s) => !s.knobs.longRunningXact && s.oldestSnapshotAge <= 25 },
@@ -611,22 +625,23 @@ const STEPS: Step[] = [
   {
     id: 'io.1',
     kind: 'step',
-    title: 'Who is actually doing the I/O?',
-    why: 'Every I/O problem has a culprit process, and until PostgreSQL 16 you essentially could not name it. This is the view that changed that, and it is the first place to look now.',
+    title: 'Which backend type and context account for the I/O?',
+    why: 'pg_stat_io is cluster-wide and groups work by backend type, object and context. It narrows the mechanism; it does not name a PID, relation or query.',
     instrument: 'pg_stat_io',
     projection: 'io',
     city: 'shared.buffers',
     sql: `SELECT backend_type, object, context,
-       reads, hits, writes, evictions
+       reads, read_bytes, hits,
+       writes, write_bytes, writebacks, evictions
   FROM pg_stat_io
  WHERE object = 'relation'
    AND context = 'normal';`,
     look:
-      'Reads on the `client backend` row are normal — that is queries fetching pages. **Writes** on that row are not. A user query only writes a page when the frame it wanted was dirty and it had to clean it first, which means somebody\'s SELECT is paying for somebody else\'s UPDATE. Compare that number with the checkpointer\'s and the background writer\'s.',
+      'Client-backend writes prove that client backends wrote relation buffers; they do not identify one causal chain or one remedy. Compare rates and bytes by backend type and context, then correlate workload, checkpointer/background-writer activity and individual backends before changing memory.',
     note:
-      'pg_stat_io is new in 16. Before that the nearest signal is `buffers_backend` in pg_stat_bgwriter, which tells you backends wrote pages but not which object, context or operation. PostgreSQL 18 replaced op_bytes with per-operation read_bytes, write_bytes and extend_bytes.',
+      'PostgreSQL 18 adds pg_stat_get_backend_io(pid) for one backend; join it laterally to pg_stat_activity when PID/query attribution is needed. It still does not identify a relation. Before 18, pg_stat_io can only supply backend-type aggregates.',
     branches: [
-      { label: '`client backend` writes are a large share of all writes.', next: 'v.backend_writes', test: (_s, c) => backendWriteShare(c) > 0.25 },
+      { label: 'The city’s separate representative sample has a high client-backend write share.', next: 'v.backend_writes', test: (_s, c) => backendWriteShare(c) > 0.25 },
       { label: 'Reads dominate and the hit ratio is poor.', next: 'io.2', test: (s) => s.stats.cacheHitPct < 92 },
       { label: 'Reads are mostly hits and writes are spread sensibly.', next: 'v.io_ok', test: (s, c) => s.stats.cacheHitPct >= 92 && backendWriteShare(c) <= 0.25 },
     ],
@@ -634,8 +649,8 @@ const STEPS: Step[] = [
   {
     id: 'io.2',
     kind: 'step',
-    title: 'Is the pool large enough to hold anything?',
-    why: 'A low hit ratio has two very different causes — a pool too small for the working set, or a workload that sweeps data nothing can cache. The clock-sweep usage counts tell them apart.',
+    title: 'Is the buffer sample showing churn or reuse?',
+    why: 'A usage-count histogram characterizes current residency and churn. It cannot by itself distinguish a pool that is too small from a one-pass or bulk-read workload with little reusable data.',
     instrument: 'pg_buffercache',
     projection: 'buffercache',
     city: 'shared.buffers',
@@ -643,9 +658,9 @@ const STEPS: Step[] = [
 
 SELECT * FROM pg_buffercache_usage_counts();`,
     look:
-      'Postgres has no LRU list. The clock sweep walks the pool decrementing `usagecount`, and the first frame it finds at zero is the victim. If nearly every buffer sits at 0, nothing survives long enough to be counted as useful twice — the pool is being churned, not used.',
+      'Postgres has no LRU list. The clock sweep decrements usage counts and reuses a frame at zero. Many zero-use buffers demonstrate churn, but cannot distinguish capacity pressure from a scan or bulk-read workload that would have low reuse at any pool size. Correlate query shapes, relation sizes and repeated access.',
     note:
-      'pg_buffercache_usage_counts() and pg_buffercache_summary() arrived in 16 and are far cheaper than scanning the pg_buffercache view, which takes a lock on every buffer header. Do not put the view itself in a polling loop.',
+      'pg_buffercache_usage_counts() and pg_buffercache_summary() arrived in 16 and are cheaper than scanning the full view. The pg_buffercache view and functions do not acquire buffer-manager locks, so their values can be slightly inconsistent under concurrent activity.',
     branches: [
       { label: 'Almost everything sits at usage_count 0.', next: 'v.small_pool', test: (s) => coldShare(s) > 0.55 },
       { label: 'The pool is holding a real working set.', next: 'v.io_ok', test: (s) => coldShare(s) <= 0.55 },
@@ -661,19 +676,26 @@ SELECT * FROM pg_buffercache_usage_counts();`,
     instrument: 'pg_blocking_pids',
     projection: 'locks',
     city: 'lock.manager',
-    sql: `SELECT a.pid, a.state, l.locktype,
-       l.relation::regclass AS relation, l.mode, l.granted,
-       now() - l.waitstart AS wait_age,
-       pg_blocking_pids(a.pid) AS blocked_by
-  FROM pg_locks l
-  JOIN pg_stat_activity a USING (pid)
- WHERE NOT l.granted
-    OR l.pid IN (SELECT unnest(pg_blocking_pids(w.pid))
-                   FROM pg_stat_activity w);`,
+    sql: `WITH waiters AS (
+  SELECT a.pid AS waiter_pid, a.state AS waiter_state,
+         a.query AS waiter_query, l.locktype,
+         l.relation::regclass AS waited_relation,
+         l.mode AS waited_mode, l.waitstart,
+         unnest(pg_blocking_pids(a.pid)) AS blocker_pid
+    FROM pg_locks l
+    JOIN pg_stat_activity a USING (pid)
+   WHERE NOT l.granted
+)
+SELECT w.*, b.state AS blocker_state,
+       b.xact_start AS blocker_xact_start,
+       b.query AS blocker_query
+  FROM waiters w
+  LEFT JOIN pg_stat_activity b ON b.pid = w.blocker_pid
+ ORDER BY w.waitstart;`,
     look:
-      'One pid appears in every `blocked_by` array and is itself blocked by nobody. That is your holder — and look at its state. It is not running a query; it finished the statement and left the transaction open. Cancelling the waiters achieves nothing at all.',
+      'Each row shows a waiter and the lock it requested, then the blocker PID and activity independently. It does not claim which of the blocker’s locks conflicts with that request. A recurring blocker PID is a lead; inspect its transaction state and full lock set before acting.',
     note:
-      'pg_blocking_pids() arrived in 9.6 and replaced a decade of hand-written self-joins on pg_locks. It briefly takes the lock manager\'s shared state, so it is a diagnostic tool, not a dashboard metric. `waitstart` arrived in 14.',
+      'pg_blocking_pids() encodes wait-queue and conflict rules that are difficult to reproduce with a pg_locks self-join. A zero blocker PID can represent a prepared transaction, whose pg_locks.pid is null; inspect pg_prepared_xacts in that case.',
     branches: [
       { label: 'One pid is blocking everyone else.', next: 'v.lock_holder', test: (s) => s.locks.length > 0 },
       { label: 'Nothing is blocked.', next: 'v.no_locks', test: (s) => s.locks.length === 0 },
@@ -724,7 +746,7 @@ SELECT * FROM pg_buffercache_usage_counts();`,
     note:
       'The name of the local flush wait changed. PostgreSQL 17 started generating the wait event list from a table and normalised the capitalisation on the way through, so this event is `WALSync` on 16 and older and `WalSync` from 17 on. A monitoring query that greps for the old spelling on a new server matches nothing at all, and reports a healthy zero while doing it.',
     branches: [
-      { label: 'They are waiting on `IPC / SyncRep`.', next: 'v.sync_remote', test: (s) => s.knobs.synchronousStandbyNames && (s.knobs.synchronousCommit === 'on' || s.knobs.synchronousCommit === 'remote_apply') && waits(s).commit > 0 },
+      { label: 'They are waiting on `IPC / SyncRep`.', next: 'v.sync_remote', test: (s) => s.knobs.synchronousStandbyNames && (s.knobs.synchronousCommit === 'remote_write' || s.knobs.synchronousCommit === 'on' || s.knobs.synchronousCommit === 'remote_apply') && waits(s).commit > 0 },
       { label: 'They are waiting on `IO / WalSync`.', next: 'v.sync_local', test: (s) => (!s.knobs.synchronousStandbyNames || s.knobs.synchronousCommit === 'local' || s.knobs.synchronousCommit === 'off') && waits(s).commit > 0 },
       { label: 'Nobody is waiting to commit.', next: 'v.commit_ok', test: (s) => waits(s).commit === 0 },
     ],
@@ -811,16 +833,17 @@ const VERDICTS: Verdict[] = [
   {
     id: 'v.ckpt_storm',
     kind: 'verdict',
-    title: 'This modeled incident is WAL-triggered, and full-page writes feed it.',
+    title: 'The model records WAL pressure and a post-checkpoint FPI burst.',
     because:
-      'PGSimCity records max_wal_size pressure as the request cause here. In PostgreSQL, num_requested alone would not establish that cause; checkpoint messages and correlated WAL volume do. Each checkpoint stamps a new redo point, after which a page may owe a full 8 KiB image on its first change.',
+      'PGSimCity records max_wal_size pressure as the request cause here. PostgreSQL’s num_requested, wal_fpi and wal_bytes counters alone neither establish that cause nor attribute a byte share to FPIs.',
     mechanism:
-      'Checkpoint → full-page writes → more WAL → max_wal_size crossed sooner → the next checkpoint starts early. It is a feedback loop, and it is self-sustaining once it starts. What your users see is not an error: it is a periodic latency spike that your application team will confidently attribute to the network, because the database never logs anything.',
+      'After a checkpoint establishes a redo point, the first modification of a page can log a full-page image. The image may omit the page hole and wal_compression may compress it, so wal_fpi cannot be converted into bytes. Time-aligned count and byte rates can establish correlation; WAL-record analysis is required for byte attribution.',
     evidence: (_s, c) => [
       { label: 'num_timed', value: String(Math.round(c.total.ckptTimed)) },
       { label: 'num_requested', value: String(Math.round(c.total.ckptRequested)), tone: 'crit' },
       { label: 'requested share', value: `${(forcedShare(c) * 100).toFixed(0)}%`, tone: 'crit' },
-      { label: 'full-page images', value: `${(fpiShare(c) * 100).toFixed(0)}% of wal_bytes`, tone: 'warn' },
+      { label: 'wal_fpi rate', value: `${c.rate.walFpi.toFixed(1)}/s`, tone: 'warn' },
+      { label: 'wal_bytes rate', value: `${fmtBytes(c.rate.walBytes)}/s`, tone: 'warn' },
     ],
     fix:
       'Because this model exposes WAL pressure as the cause, raise max_wal_size against its measured peak WAL rate and headroom, then verify the pressure stops. On a real server, first exclude explicit CHECKPOINT, backup and shutdown requests; changing max_wal_size cannot fix those. checkpoint_timeout also trades full-page-image frequency against crash-recovery work.',
@@ -886,7 +909,7 @@ const VERDICTS: Verdict[] = [
     kind: 'verdict',
     title: 'One abandoned transaction is holding the xmin horizon, and vacuum cannot remove anything.',
     because:
-      'A session is sitting in `idle in transaction` with an old snapshot. Vacuum may only remove a row version that is invisible to every open snapshot, so every dead row created since that BEGIN has to stay — across the entire database, not just this table.',
+      'In this modeled REPEATABLE READ incident, a session is idle in a transaction with an old active snapshot. Production diagnosis must also compare old backend XIDs, prepared transactions, slots and standby feedback before naming the cluster-wide constraint.',
     mechanism:
       'This is the cruel part: autovacuum keeps running. It dispatches workers, they travel to the table, they scan the whole heap, they burn the I/O — and they collect nothing. Page pruning respects the same horizon, so even the HOT path stops helping and tables that never bloat start bloating. Your monitoring says vacuum is healthy. Your table says otherwise.',
     evidence: (s) => [
@@ -989,13 +1012,13 @@ const VERDICTS: Verdict[] = [
   {
     id: 'v.no_bloat',
     kind: 'verdict',
-    title: 'These tables are not bloated. The growth is something else.',
-    because: 'Dead tuples are a small fraction of live tuples on every relation, and autovacuum is keeping up.',
+    title: 'Current estimates show low dead-tuple pressure; physical bloat is unmeasured.',
+    because: 'The modeled dead-tuple fraction is low. On PostgreSQL, n_live_tup and n_dead_tup are estimates and do not measure reusable heap space, index bloat or TOAST growth.',
     mechanism:
-      'A table can grow for reasons that are not bloat: it can simply be accumulating rows, its indexes can be growing faster than the heap, or its TOAST sidecar can be doing the growing while the main relation stays flat.',
+      'A relation can have a low current dead-tuple estimate and still contain reusable space from earlier churn; its indexes or TOAST relation can also be the growth. Conversely, dead tuples can occupy reusable space without requiring a physical shrink.',
     evidence: (s) => s.tables.slice(0, 3).map((t) => ({ label: t.def.name, value: `${(t.bloat * 100).toFixed(1)}% dead`, tone: 'ok' as const })),
     fix:
-      'Compare pg_relation_size() with pg_total_relation_size() to see whether the indexes or the TOAST table are the growth, and check n_ins_since_vacuum — an append-only table needs vacuum for freezing even though it never has dead rows.',
+      'Graph pg_relation_size(), pg_indexes_size() and pg_total_relation_size() alongside row counts. If the physical question justifies a page scan, use pgstattuple or an equivalent inspection tool; do not declare “no bloat” from n_dead_tup alone.',
     knobs: [KB.autovacuumScaleFactor],
     city: 'storage.datadir',
     reading: [DOC('routine-vacuuming.html', 'Routine Vacuuming')],
@@ -1003,11 +1026,11 @@ const VERDICTS: Verdict[] = [
   {
     id: 'v.backend_writes',
     kind: 'verdict',
-    title: 'Your user queries are doing their own write I/O.',
+    title: 'The model sample attributes many writes to client backends; the cause is unresolved.',
     because:
-      'A large share of all page writes are charged to `client backend`. That happens in exactly one situation: a backend needed a free frame, the clock sweep handed it a dirty one, and the backend had to write that page out before it could start its own read.',
+      'The city’s representative sample—not the blank pg_stat_io write cells above—attributes a large write share to client backends. On PostgreSQL, that proves who performed writes, not which query, relation or unique causal chain produced them.',
     mechanism:
-      'This is the symptom nobody recognises, because throughput barely moves — the same pages get written either way. What changes is **who waits**. A synchronous write in the middle of a user query is a latency spike, and it lands on random unlucky transactions rather than on a background process, which is why it shows up in your p99 and nowhere else.',
+      'A client backend may write buffers during allocation pressure, relation extension and other write paths. Those writes can contribute latency, but establish the workload and context from rates, checkpointer/background-writer behavior, per-backend I/O and query evidence before assigning a remedy.',
     evidence: (s, c) => {
       const now = recentBackendWriteShare(c)
       return [
@@ -1022,7 +1045,7 @@ const VERDICTS: Verdict[] = [
       ]
     },
     fix:
-      'Fix the pool first. The background writer only cleans a short window ahead of the clock hand, so it cannot rescue a pool that is being churned end to end — raise shared_buffers and the backend writes fall away on their own. Then raise bgwriter_lru_maxpages and lower bgwriter_delay, which is nearly free and moves the remaining writes onto a background process. Watch the two share figures above as you turn the dial: the cumulative one barely twitches and the two-second one moves at once, which is the whole reason nobody should ever alert on a raw pg_stat_* counter.',
+      'First compare write rates and bytes across contexts, inspect checkpointer/background-writer capacity, and on PostgreSQL 18 join pg_stat_get_backend_io(pid) to pg_stat_activity. Test shared_buffers or background-writer changes only after workload reuse and allocation pressure support them, then compare before/after rates rather than cumulative totals.',
     knobs: [KB.sharedBuffers, KB.bgwriterLruMaxpages, KB.bgwriterEnabled],
     confirm: {
       projection: 'io',
@@ -1055,9 +1078,9 @@ const VERDICTS: Verdict[] = [
   {
     id: 'v.small_pool',
     kind: 'verdict',
-    title: 'shared_buffers is too small for this working set.',
+    title: 'The buffer sample shows churn; pool size is not yet proven.',
     because:
-      'Almost every resident buffer sits at usage_count 0 — nothing survives long enough to be used twice. The clock sweep never stops, and every miss asks the operating system for a page; PostgreSQL statistics cannot distinguish an OS-cache hit from physical device I/O.',
+      'Almost every sampled resident buffer sits at usage_count 0. That establishes low reuse in the sample, but a one-pass or bulk-read workload can produce the same histogram even when a larger pool would not help.',
     mechanism:
       'Postgres has no LRU list. The sweep walks the pool decrementing usage counts and takes the first frame at zero. That is cheap and needs no global lock, and it works beautifully — right up until there is nothing in the pool worth keeping, at which point the sweep degenerates into an expensive way of evicting pages you are about to need again.',
     evidence: (s) => [
@@ -1067,7 +1090,7 @@ const VERDICTS: Verdict[] = [
       { label: 'reads/sec', value: s.stats.ioReadPerSec.toFixed(0) },
     ],
     fix:
-      'Raise shared_buffers and watch the hit ratio, the usage-count distribution and the read rate all move together. 25% of RAM is the usual starting point. The interesting part is that the curve is not linear — it is flat, then a cliff, then flat again, and the cliff is where your working set stops fitting.',
+      'Identify one-pass and bulk-read queries, compare relation and reusable working-set sizes, and measure repeated-access hit/read rates. Only then test a shared_buffers change with before/after rates; a larger pool cannot create reuse that the workload does not have.',
     knobs: [KB.sharedBuffers],
     confirm: {
       projection: 'buffercache',
@@ -1084,8 +1107,8 @@ const VERDICTS: Verdict[] = [
   {
     id: 'v.io_ok',
     kind: 'verdict',
-    title: 'The buffer pool is healthy. Your I/O is going somewhere else.',
-    because: 'Reads are mostly hits, the usage-count distribution shows a real working set, and writes are spread across the background processes the way they should be.',
+    title: 'This sample shows reuse; it does not close the I/O investigation.',
+    because: 'Reads are mostly hits and the usage-count sample contains reused buffers. The sample does not prove optimal sizing, necessary reads, physical device I/O or correct write attribution.',
     mechanism:
       'A high hit ratio does not mean zero I/O or prove that the remaining reads are necessary. PostgreSQL 18 gives sequential scans of relations larger than a quarter of shared_buffers a bulk-read ring that starts at 256 KiB, grows with io_combine_limit × effective_io_concurrency and is capped. The ring limits cache pollution; it does not guarantee zero displacement or prove physical device reads. The current city model uses a historical fixed 32-frame approximation, so its sampled cache cannot validate PostgreSQL 18’s ring size.',
     evidence: (s) => [
@@ -1331,7 +1354,7 @@ const VERDICTS: Verdict[] = [
     kind: 'verdict',
     title: 'Every commit is waiting for a standby to answer.',
     because:
-      'The wait is `IPC / SyncRep`, not `IO / WalSync`. These backends are not waiting for a disk — they are waiting for a network round trip, the standby\'s fsync, and at remote_apply the standby\'s replay as well.',
+      'The wait is `IPC / SyncRep`, not `IO / WalSync`. It includes a network round trip and the acknowledgement selected by synchronous_commit: standby write for remote_write, durable standby flush for on, or replay for remote_apply.',
     mechanism:
       'This is the one everybody gets wrong in the other direction: synchronous_commit = on guarantees a **local** flush only. If the primary\'s disk survives but the machine does not, the standby may never have seen that commit. Synchronous replication requires synchronous_standby_names, and once you have it, every commit costs a full round trip.',
     evidence: (s) => [
@@ -1341,7 +1364,7 @@ const VERDICTS: Verdict[] = [
       { label: 'model replay delay', value: `${s.replication.lagSec.toFixed(2)} s` },
     ],
     fix:
-      'Confirm you meant to buy this. At remote_apply, measure commit latency and the standby’s apply path directly. PostgreSQL replay_lag estimates recent commit-delay impact; it is not a current staleness or catch-up timer. If remote durability is not required, `local` gives local durability without the round trip.',
+      'Confirm the guarantee you meant to buy. remote_write is cheaper but does not survive standby operating-system or power failure; on waits for its durable flush; remote_apply also waits for visibility. Measure commit latency and the selected standby stage directly. If remote durability is not required, local avoids the round trip.',
     knobs: [KB.synchronousCommit, KB.replicaNetworkLag],
     confirm: {
       projection: 'wal_lsn',

@@ -107,6 +107,10 @@ interface PGliteResult {
   fields: { name: string; dataTypeID: number }[]
 }
 
+interface PGliteDescription {
+  resultFields: { name: string; dataTypeID: number }[]
+}
+
 interface PostgresErrorLike {
   message?: unknown
   severity?: unknown
@@ -181,31 +185,89 @@ function mayHavePlan(sql: string): boolean {
   return /^(?:select|with|values|table|insert|update|delete|merge)\b/u.test(withoutLeadingComments)
 }
 
-async function explain(
+function modifyingOperation(plan: RealPlan): string | null {
+  const pending = [plan.root]
+  while (pending.length > 0) {
+    const node = pending.pop()!
+    const operation = node.operation?.toLowerCase() ?? ''
+    if (['insert', 'update', 'delete', 'merge'].includes(operation)) return operation
+    pending.push(...node.children)
+  }
+  return null
+}
+
+function canMaterialize(description: PGliteDescription): boolean {
+  const names = new Set<string>()
+  for (const field of description.resultFields) {
+    if (names.has(field.name) || field.dataTypeID === 2278) return false
+    names.add(field.name)
+  }
+  return true
+}
+
+const withoutFinalSemicolon = (sql: string): string => sql.trim().replace(/;\s*$/u, '')
+
+let captureSequence = 0
+
+async function executeAnalyzed(
   db: PGlite,
   sql: string,
   parsePlan: (value: unknown) => RealPlan,
-): Promise<RealPlan | null> {
+): Promise<{ plan: RealPlan; results: RealResultSet[] } | null> {
   if (!mayHavePlan(sql)) return null
-  let transactionOpen = false
+
+  let preview: RealPlan
+  let description: PGliteDescription
   try {
-    await db.exec('BEGIN')
-    transactionOpen = true
-    const explained = await db.query<Record<string, unknown>>(
-      `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${sql}`,
+    const previewResult = await db.query<Record<string, unknown>>(
+      `EXPLAIN (FORMAT JSON) ${sql}`,
     )
-    await db.exec('ROLLBACK')
-    transactionOpen = false
-    return parsePlan(explained.rows[0]?.['QUERY PLAN'])
+    preview = parsePlan(previewResult.rows[0]?.['QUERY PLAN'])
+    description = await db.describeQuery(sql) as PGliteDescription
   } catch {
-    if (transactionOpen) {
-      try {
-        await db.exec('ROLLBACK')
-      } catch {
-        /* PostgreSQL already ended the failed transaction. */
-      }
-    }
+    /* Multi-statement and non-EXPLAINable input falls back to one direct execution. */
     return null
+  }
+
+  /* A temp table cannot represent duplicate names or PostgreSQL's void pseudo-type. */
+  if (!canMaterialize(description)) return null
+
+  captureSequence += 1
+  const captureName = `pgsimcity_capture_${captureSequence}`
+  const quotedCapture = `"${captureName}"`
+  const statement = withoutFinalSemicolon(sql)
+  const operation = modifyingOperation(preview)
+  const returnsRows = description.resultFields.length > 0
+  const measuredStatement = operation
+    ? `CREATE TEMP TABLE ${quotedCapture} AS
+       WITH "pgsimcity_statement" AS (
+         ${statement}${returnsRows ? '' : ' RETURNING 1 AS "pgsimcity_affected"'}
+       )
+       TABLE "pgsimcity_statement"`
+    : `CREATE TEMP TABLE ${quotedCapture} AS ${statement}`
+
+  try {
+    const explained = await db.query<Record<string, unknown>>(
+      `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${measuredStatement}`,
+    )
+    const plan = parsePlan(explained.rows[0]?.['QUERY PLAN'])
+    const captured = await db.query<Record<string, unknown>>(`TABLE ${quotedCapture}`)
+    const affectedRows = operation ? captured.rows.length : captured.affectedRows ?? null
+    const result = returnsRows || !operation
+      ? { ...toResult(captured), affectedRows }
+      : {
+          source: 'postgres' as const,
+          fields: [],
+          rows: [],
+          affectedRows,
+        }
+    return { plan, results: [result] }
+  } finally {
+    try {
+      await db.exec(`DROP TABLE IF EXISTS ${quotedCapture}`)
+    } catch {
+      /* A failed statement may already have aborted an explicit user transaction. */
+    }
   }
 }
 
@@ -222,15 +284,16 @@ export async function createPgliteSource(
   return {
     serverVersion,
     async query(sql: string): Promise<RealQueryReport> {
-      const plan = await explain(db, sql, parsePlan)
       try {
-        const results = await db.exec(sql) as PGliteResult[]
+        const analyzed = await executeAnalyzed(db, sql, parsePlan)
+        const results = analyzed?.results
+          ?? (await db.exec(sql) as PGliteResult[]).map(toResult)
         return {
           source: 'postgres',
           sql,
           serverVersion,
-          results: results.map(toResult),
-          plan,
+          results,
+          plan: analyzed?.plan ?? null,
           error: null,
         }
       } catch (error) {
