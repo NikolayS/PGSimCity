@@ -5,15 +5,21 @@ import { createTheme } from '../core/theme'
 import type { ComponentDef, FlowRequest, QualitySettings, WorldContext } from '../core/types'
 import { createSim } from '../sim/model'
 import { createContinuity } from './continuity'
+import { ANCHOR } from './layout'
 
 function fakeCanvas(): HTMLCanvasElement {
   const gradient = { addColorStop: () => undefined }
+  let canvas: HTMLCanvasElement
   const context = new Proxy(
     {
       canvas: undefined as unknown,
       createLinearGradient: () => gradient,
       createRadialGradient: () => gradient,
       measureText: (value: string) => ({ width: value.length * 12 }),
+      fillText: (value: string) => {
+        canvas.dataset.plateText = value
+        canvas.dataset.plateColor = String(context.fillStyle)
+      },
     },
     {
       get(target, property) {
@@ -26,14 +32,23 @@ function fakeCanvas(): HTMLCanvasElement {
       },
     },
   ) as unknown as CanvasRenderingContext2D
-  const canvas = {
+  canvas = {
     width: 1,
     height: 1,
     style: {},
+    dataset: {},
     getContext: (kind: string) => (kind === '2d' ? context : null),
   } as unknown as HTMLCanvasElement
   ;(context as unknown as { canvas: HTMLCanvasElement }).canvas = canvas
   return canvas
+}
+
+function plateText(object: THREE.Object3D): string | undefined {
+  if (!(object instanceof THREE.Mesh)) return undefined
+  const material = Array.isArray(object.material) ? object.material[0] : object.material
+  if (!(material instanceof THREE.MeshBasicMaterial)) return undefined
+  const image = material.map?.image as HTMLCanvasElement | undefined
+  return image?.dataset.plateText
 }
 
 describe('continuity and three-node projection', () => {
@@ -114,6 +129,128 @@ describe('continuity and three-node projection', () => {
         .filter((def) => def.id.startsWith('standby.b'))
         .every((def) => def.readout !== undefined),
     ).toBe(true)
+
+    const dcs = defs.find((def) => def.id === 'ha.dcs')
+    expect(dcs).toBeDefined()
+    const focus = dcs!.focus
+    const focusDir = new THREE.Vector3(...(focus.dir ?? [0, 0.5, 1])).normalize()
+    expect(focus.distance).toBeLessThan(700)
+    expect(focusDir.y).toBeGreaterThan(0.25)
+    expect(focusDir.y).toBeLessThan(0.75)
+
+    const focusCamera = new THREE.PerspectiveCamera(52, 1400 / 900, 0.5, 4_000)
+    focusCamera.position
+      .set(...focus.target)
+      .addScaledVector(focusDir, focus.distance)
+    focusCamera.lookAt(...focus.target)
+    focusCamera.updateMatrixWorld()
+    for (const member of [ANCHOR.leaseNode1, ANCHOR.leaseNode2, ANCHOR.leaseNode3]) {
+      const projected = new THREE.Vector3(...member).project(focusCamera)
+      expect(Math.abs(projected.x)).toBeLessThan(0.92)
+      expect(Math.abs(projected.y)).toBeLessThan(0.85)
+      expect(Math.abs(projected.z)).toBeLessThan(1)
+    }
+    const platformFrames = [
+      [ANCHOR.haPrimarySite, 124, 78],
+      [ANCHOR.haStandbyASite, 116, 142],
+      [ANCHOR.haStandbyBSite, 116, 142],
+    ] as const
+    let minFrameX = Infinity
+    let maxFrameX = -Infinity
+    let minFrameY = Infinity
+    let maxFrameY = -Infinity
+    for (const [site, width, depth] of platformFrames) {
+      for (const dx of [-width / 2, width / 2]) {
+        for (const dz of [-depth / 2, depth / 2]) {
+          const projected = new THREE.Vector3(site[0] + dx, 0.9, site[2] + dz)
+            .project(focusCamera)
+          expect(Math.abs(projected.x)).toBeLessThan(0.92)
+          expect(Math.abs(projected.y)).toBeLessThan(0.78)
+          minFrameX = Math.min(minFrameX, projected.x)
+          maxFrameX = Math.max(maxFrameX, projected.x)
+          minFrameY = Math.min(minFrameY, projected.y)
+          maxFrameY = Math.max(maxFrameY, projected.y)
+        }
+      }
+    }
+    expect(maxFrameX - minFrameX).toBeGreaterThan(1.5)
+    expect(maxFrameY - minFrameY).toBeGreaterThan(1)
+
+    const plateMeshes = new Map<string, THREE.Mesh[]>()
+    dcs!.object.traverse((object) => {
+      const text = plateText(object)
+      if (!text) return
+      const matches = plateMeshes.get(text) ?? []
+      matches.push(object as THREE.Mesh)
+      plateMeshes.set(text, matches)
+    })
+
+    const siteTitles = [
+      'FAILURE DOMAIN 1 · PRIMARY NODE',
+      'FAILURE DOMAIN 2 · STANDBY_A',
+      'FAILURE DOMAIN 3 · STANDBY_B',
+    ] as const
+    const siteAt = [ANCHOR.haPrimarySite, ANCHOR.haStandbyASite, ANCHOR.haStandbyBSite] as const
+    const agentAt = [ANCHOR.patroniNode1, ANCHOR.patroniNode2, ANCHOR.patroniNode3] as const
+    const memberAt = [ANCHOR.leaseNode1, ANCHOR.leaseNode2, ANCHOR.leaseNode3] as const
+    const platformW = [124, 116, 116] as const
+    for (let i = 0; i < siteTitles.length; i++) {
+      const title = plateMeshes.get(siteTitles[i])
+      expect(title).toHaveLength(1)
+      expect(title![0].scale.x).toBeLessThan(platformW[i] - 6)
+      expect(Math.abs(title![0].position.x - siteAt[i][0]) + title![0].scale.x / 2)
+        .toBeLessThan(platformW[i] / 2)
+      const material = title![0].material as THREE.MeshBasicMaterial
+      const canvas = material.map!.image as HTMLCanvasElement
+      expect(canvas.dataset.plateColor).toBe('#ffffff')
+    }
+    const primaryTitle = plateMeshes.get(siteTitles[0])![0]
+    expect(Math.abs(primaryTitle.position.x - ANCHOR.endpoint[0]) - primaryTitle.scale.x / 2)
+      .toBeGreaterThan(15)
+    expect(primaryTitle.position.y - primaryTitle.scale.y / 2).toBeGreaterThan(17)
+
+    const siteDescriptions = plateMeshes.get('PostgreSQL · Patroni agent · one etcd member')
+    expect(siteDescriptions).toHaveLength(3)
+    for (let i = 0; i < siteDescriptions!.length; i++) {
+      expect(Math.abs(siteDescriptions![i].position.x - siteAt[i][0]) + siteDescriptions![i].scale.x / 2)
+        .toBeLessThan(platformW[i] / 2)
+      const material = siteDescriptions![i].material as THREE.MeshBasicMaterial
+      const canvas = material.map!.image as HTMLCanvasElement
+      expect(canvas.dataset.plateColor).toBe('#ffffff')
+    }
+
+    const patroniPlates = plateMeshes.get('PATRONI')
+    expect(patroniPlates).toHaveLength(3)
+    for (let i = 0; i < patroniPlates!.length; i++) {
+      expect(patroniPlates![i].position.z - agentAt[i][2]).toBeGreaterThan(7)
+      expect(Math.abs(patroniPlates![i].position.x - agentAt[i][0]) + patroniPlates![i].scale.x / 2)
+        .toBeLessThan(7)
+    }
+
+    for (let i = 0; i < memberAt.length; i++) {
+      const memberPlate = plateMeshes.get(`etcd-${i + 1}`)
+      expect(memberPlate).toHaveLength(1)
+      expect(memberPlate![0].position.z - memberAt[i][2]).toBeGreaterThan(9.5)
+      expect(Math.abs(memberPlate![0].position.x - memberAt[i][0]) + memberPlate![0].scale.x / 2)
+        .toBeLessThan(9.5)
+    }
+
+    for (const text of [
+      'RAFT CONSENSUS',
+      'one linearizable leader key · compare-and-swap + lease TTL',
+      'majority is the commit mechanism · a minority cannot commit',
+    ]) {
+      const consensusPlate = plateMeshes.get(text)
+      expect(consensusPlate).toHaveLength(1)
+      expect(consensusPlate![0].position.y - consensusPlate![0].scale.y / 2)
+        .toBeGreaterThan(32)
+      if (text !== 'RAFT CONSENSUS') {
+        const material = consensusPlate![0].material as THREE.MeshBasicMaterial
+        const canvas = material.map!.image as HTMLCanvasElement
+        expect(canvas.dataset.plateColor).toBe('#ffffff')
+      }
+    }
+    expect([...plateMeshes.values()].reduce((count, meshes) => count + meshes.length, 0)).toBe(15)
 
     sim.startBaseBackup()
     for (let i = 0; i < 900; i++) {
