@@ -4,6 +4,7 @@ import { BUILD_LABEL } from '../src/core/build'
 import { createBus } from '../src/core/bus'
 import { DESTINATIONS } from '../src/core/destinations'
 import { setThemeMode, storedThemeMode, themeMode } from '../src/core/theme'
+import { DEFAULT_MODE, THEME_STORAGE_KEY } from '../src/core/themes'
 import {
   DEFAULT_KNOBS,
   SHARED_BUFFERS_MAX_MIB,
@@ -202,7 +203,19 @@ describe('theme toggle entry point', () => {
     expect(document.documentElement.dataset.theme).toBe('day')
     expect(storedThemeMode()).toBe('day')
     expect(button!.textContent).toContain('Day')
+
+    button!.dispatchEvent(new Event('click'))
+
+    expect(themeMode()).toBe('clock')
+    expect(storedThemeMode()).toBe('clock')
+    expect(button!.textContent).toContain('Local time')
+    expect(button!.title).toContain('no location used')
     hud.dispose()
+  })
+
+  it('falls back safely when the stored theme is unknown', () => {
+    window.localStorage.setItem(THEME_STORAGE_KEY, 'future-theme')
+    expect(storedThemeMode()).toBe(DEFAULT_MODE)
   })
 
   it('exposes working touch routes for labels and camera presets', () => {

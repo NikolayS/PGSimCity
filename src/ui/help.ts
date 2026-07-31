@@ -84,7 +84,7 @@ export const APP_KEYS: KeyRow[] = [
   { id: 'palette', keys: ['/', 'Ctrl/Cmd+K'], join: 'or', what: 'Command palette' },
   { id: 'help', keys: ['?'], what: 'This panel' },
   { id: 'labels', keys: ['L'], what: 'Toggle floating labels · View menu' },
-  { id: 'theme', keys: ['N'], what: 'Daylight / night · theme control beside Sound' },
+  { id: 'theme', keys: ['N'], what: 'Night / golden hour / approximate local-time light · beside Sound' },
   { id: 'sound', keys: ['M'], what: 'Sound on / off — audio starts off and remembers your choice' },
   { id: 'escape', keys: ['Esc'], what: 'Close the topmost overlay' },
   { id: 'districts', keys: ['1', '…', '8'], what: 'Jump to a district · View menu on phones' },

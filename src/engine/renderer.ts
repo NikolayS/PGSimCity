@@ -12,6 +12,7 @@ import {
   onThemeMode,
   paintSceneMaterial,
   setBloomAvailable,
+  startThemeClock,
   themeMode,
 } from '../core/theme'
 import type { Atmosphere, ThemeMode } from '../core/theme'
@@ -680,7 +681,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     yardGlow.intensity = noBloom ? air.noBloomYardGlow : air.yardGlow
   }
 
-  /* ---- day / night ------------------------------------------------------*/
+  /* ---- light modes ------------------------------------------------------*/
 
   function paintObject(obj: THREE.Object3D, target: ThemeMode): void {
     const flags = obj.userData as {
@@ -688,7 +689,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
       pgNoShadow?: boolean
       pgShadowReceiver?: boolean
     }
-    if (flags.pgDayOnly) obj.visible = target === 'day'
+    if (flags.pgDayOnly) obj.visible = air.daylight
 
     // The sky owns custom shader uniforms; district material translation must
     // never reinterpret its colors. applySkyAtmosphere handles every child.
@@ -709,7 +710,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
       return sm.isMeshStandardMaterial === true && !sm.transparent && sm.opacity >= 0.99
     })
     const count = (mesh as THREE.InstancedMesh).isInstancedMesh === true ? (mesh as THREE.InstancedMesh).count : 1
-    const day = target === 'day' && air.shadows
+    const day = air.daylight && air.shadows
     // Large state fields (notably the 1,024 buffer frames) carry meaning through
     // colour. Letting every cell cast turns the zone into a dark checkerboard
     // and spends the shadow budget on noise instead of architectural massing.
@@ -771,6 +772,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   }
 
   const offTheme = onThemeMode(applyThemeMode)
+  const offClock = startThemeClock()
 
   /** Bloom runs at half the composer's device resolution; call after setSize. */
   function sizeBloom(): void {
@@ -1115,6 +1117,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
 
   function dispose(): void {
     offTheme()
+    offClock()
     window.removeEventListener('resize', onWindowResize)
     dom.removeEventListener('webglcontextlost', onContextLost)
     dom.removeEventListener('webglcontextrestored', onContextRestored)

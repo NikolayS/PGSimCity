@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { COLOR, onThemeMode, themeMode } from '../core/theme'
+import { COLOR, atmosphere, onThemeMode } from '../core/theme'
 import { BUF_GRID, N_BACKEND_SLOTS, N_BUFFERS, poolBytes } from '../core/types'
 import type { SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, fmtBytes, fmtLsn, fmtNum, fmtPct, makeRng } from '../core/util'
@@ -660,7 +660,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
   let shadowQuality = ctx.quality.level
   const applyTileShadowTier = (): void => {
     shadowTilesActive =
-      themeMode() === 'day' && (shadowQuality === 'high' || shadowQuality === 'ultra')
+      atmosphere().daylight && (shadowQuality === 'high' || shadowQuality === 'ultra')
     tileShadows.visible = shadowTilesActive
     rakeShadows.visible = shadowTilesActive
   }
@@ -1895,7 +1895,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
 
       // Haze follows the amount of work happening in the plaza.
       const load = clamp01(sim.stats.activeBackends / 8) * 0.5 + clamp01(sim.buffers.dirtyCount / 260) * 0.5
-      const day = themeMode() === 'day'
+      const day = atmosphere().daylight
       mHaze.opacity = day ? 0 : 0.16 + load * 0.26
       plazaLight.intensity = day ? 0 : 3400 + load * 2600
     },

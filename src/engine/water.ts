@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { Reflector } from 'three/examples/jsm/objects/Reflector.js'
-import { themeMode } from '../core/theme'
+import { atmosphere } from '../core/theme'
 import type { QualityLevel, QualitySettings } from '../core/types'
 import { damp, makeRng } from '../core/util'
 import { CITY } from '../world/layout'
@@ -223,7 +223,7 @@ export function createBufferWater(
     const scale = waterReflectionScale(quality.level)
     const enabled =
       scale > 0 &&
-      themeMode() === 'day' &&
+      atmosphere().daylight &&
       camera.position.y > SURFACE_Y + 0.05
     surfaceMaterial.uniforms.uReflectionStrength.value = enabled ? 0.9 : 0
     if (!enabled) return

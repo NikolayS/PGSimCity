@@ -3,10 +3,21 @@ import { pairBoxGeometries } from './beveled-box'
 import type { ColorKey, MatOpts, NeonOpts, TextTexOpts, ThemeApi } from './types'
 import {
   ATMOSPHERE,
+  BAKED_BOUNCE_GAIN,
+  BAKED_SKY_COLOR,
   DEFAULT_MODE,
   PALETTES,
   THEME_STORAGE_KEY,
   BOUNCE_PALETTE_KEYS,
+  clockAccent,
+  clockAtmosphereAt,
+  clockEmissive,
+  clockInk,
+  clockInkOpacity,
+  clockNeonIntensity,
+  clockPaletteForDaylight,
+  clockSunAt,
+  clockSurface,
   dayAccent,
   dayEmissive,
   dayInk,
@@ -15,14 +26,15 @@ import {
   daySurface,
   isNeutralExtreme,
   mix,
+  nightSurface,
 } from './themes'
-import type { Atmosphere, ThemeMode } from './themes'
+import type { Atmosphere, CuratedThemeMode, ThemeMode } from './themes'
 
 export type { Atmosphere, ThemeMode } from './themes'
 export { ATMOSPHERE, DAY_PALETTE, NIGHT_PALETTE, PALETTES } from './themes'
 
 /**
- * PGSimCity palette — LIVE. Two modes share one object.
+ * PGSimCity palette — LIVE. Three modes share one object.
  *
  * NIGHT (the authoring baseline): the renderer uses ACESFilmic tone mapping and
  * the bloom pass runs with a high threshold, so *only* surfaces whose output
@@ -33,6 +45,9 @@ export { ATMOSPHERE, DAY_PALETTE, NIGHT_PALETTE, PALETTES } from './themes'
  * pale stone under a stepped toon ramp lit by a low warm sun; `neon()` becomes a
  * flat poster fill that carries meaning without any glow, because bloom is off;
  * `line()` becomes the cartoon's ink. Nothing in src/world has to know.
+ *
+ * LOCAL TIME: the same night-to-day translations follow an approximate local
+ * clock sun path. It deliberately has no geolocation, latitude or season.
  *
  * IMPORTANT: this object is MUTATED IN PLACE by setThemeMode(). It always
  * *starts* on the night palette, even when the viewer's stored preference is
@@ -57,7 +72,7 @@ function readStoredMode(): ThemeMode {
   try {
     if (typeof window === 'undefined') return DEFAULT_MODE
     const v = window.localStorage.getItem(THEME_STORAGE_KEY)
-    if (v === 'day' || v === 'night') return v
+    if (v === 'day' || v === 'night' || v === 'clock') return v
   } catch {
     // Private browsing and file:// both throw on localStorage. Not fatal.
   }
@@ -76,6 +91,32 @@ function writeStoredMode(m: ThemeMode): void {
 /** Always night at import — see the note on COLOR. */
 let mode: ThemeMode = 'night'
 
+function localMinutes(now: Date): number {
+  return now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60
+}
+
+let clockMinutes = localMinutes(new Date())
+let clockSun = clockSunAt(clockMinutes)
+let clockAir = clockAtmosphereAt(clockMinutes)
+let clockPalette = clockPaletteForDaylight(clockSun.daylight)
+let clockPinned = false
+
+function airFor(target: ThemeMode): Atmosphere {
+  return target === 'clock' ? clockAir : ATMOSPHERE[target]
+}
+
+function daylightFor(target: ThemeMode): number {
+  return target === 'clock' ? clockSun.daylight : target === 'day' ? 1 : 0
+}
+
+function curatedFor(target: ThemeMode): CuratedThemeMode {
+  return airFor(target).toon ? 'day' : 'night'
+}
+
+function paletteFor(target: ThemeMode): Record<ColorKey, number> {
+  return target === 'clock' ? clockPalette : PALETTES[target]
+}
+
 /** Whether night-mode semantic materials can rely on a bloom pass. */
 let bloomAvailable = true
 
@@ -91,7 +132,12 @@ export function themeMode(): ThemeMode {
 
 /** Light rig, tone mapping, fog and sky for the current mode. */
 export function atmosphere(): Atmosphere {
-  return ATMOSPHERE[mode]
+  return airFor(mode)
+}
+
+/** Daylight blend in [0, 1], including the local-clock twilight continuum. */
+export function themeDaylight(): number {
+  return daylightFor(mode)
 }
 
 type ModeListener = (m: ThemeMode) => void
@@ -122,21 +168,55 @@ export function setBloomAvailable(available: boolean): boolean {
 }
 
 function applyPalette(m: ThemeMode): void {
-  const p = PALETTES[m]
+  const p = paletteFor(m)
   for (const key of Object.keys(p) as ColorKey[]) COLOR[key] = p[key]
 }
 
 function applyDocument(m: ThemeMode): void {
   if (typeof document === 'undefined') return
   const root = document.documentElement
-  root.dataset.theme = m
+  const visual = curatedFor(m)
+  root.dataset.theme = visual
+  root.dataset.themeMode = m
   // A colour-scheme hint is what makes native form controls, scrollbars and the
   // browser's own overscroll background follow the city instead of fighting it.
-  root.style.colorScheme = m === 'day' ? 'light' : 'dark'
+  root.style.colorScheme = visual === 'day' ? 'light' : 'dark'
+}
+
+function updateClock(minutes: number, notify: boolean): void {
+  clockMinutes = ((minutes % 1440) + 1440) % 1440
+  clockSun = clockSunAt(clockMinutes)
+  clockAir = clockAtmosphereAt(clockMinutes)
+  clockPalette = clockPaletteForDaylight(clockSun.daylight)
+  if (mode !== 'clock' || !notify) return
+  applyPalette(mode)
+  applyDocument(mode)
+  for (const c of caches) c.repaint(mode)
+  for (const fn of listeners) fn(mode)
+}
+
+/** Deterministic clock staging for tests and the browser debugging surface. */
+export function setThemeClockMinutes(minutes: number): void {
+  clockPinned = true
+  updateClock(minutes, true)
+}
+
+export function refreshThemeClock(now = new Date()): void {
+  clockPinned = false
+  updateClock(localMinutes(now), true)
+}
+
+/** Live clock costs one update per minute and no work in the frame loop. */
+export function startThemeClock(): () => void {
+  if (typeof window === 'undefined') return () => {}
+  const timer = window.setInterval(() => {
+    if (!clockPinned) refreshThemeClock()
+  }, 60_000)
+  return () => window.clearInterval(timer)
 }
 
 /**
- * Switch the whole city between night and day.
+ * Switch the whole city among night, golden hour and local-clock light.
  *
  * No geometry is rebuilt and nothing is reloaded: the palette object is mutated
  * in place, every cached material is repainted from the value it was authored
@@ -144,6 +224,10 @@ function applyDocument(m: ThemeMode): void {
  * rig, the tone mapping curve and the bloom settings. One frame, whole city.
  */
 export function setThemeMode(next: ThemeMode, opts: { persist?: boolean } = {}): ThemeMode {
+  if (next === 'clock' && next !== mode) {
+    clockPinned = false
+    updateClock(localMinutes(new Date()), false)
+  }
   if (next === mode) return mode
   mode = next
   applyPalette(mode)
@@ -155,7 +239,7 @@ export function setThemeMode(next: ThemeMode, opts: { persist?: boolean } = {}):
 }
 
 export function toggleThemeMode(): ThemeMode {
-  return setThemeMode(mode === 'day' ? 'night' : 'day')
+  return setThemeMode(mode === 'night' ? 'day' : mode === 'day' ? 'clock' : 'night')
 }
 
 /**
@@ -326,14 +410,15 @@ function glslColor(hex: number): string {
 }
 
 function bakedVertexDecls(target: ThemeMode): string {
+  const curated = curatedFor(target)
   const palette = BOUNCE_PALETTE_KEYS
     .map(
       (key, index) =>
-        `\tif ( source < ${index + 0.5} ) return vec3( ${glslColor(PALETTES[target][key])} );`,
+        `\tif ( source < ${index + 0.5} ) return vec3( ${glslColor(PALETTES[curated][key])} );`,
     )
     .join('\n')
-  const sky = target === 'day' ? '0.550000, 0.720000, 1.000000' : '0.018000, 0.032000, 0.070000'
-  const bounce = target === 'day' ? '3.000000' : '0.180000'
+  const sky = BAKED_SKY_COLOR[curated].map((value) => value.toFixed(6)).join(', ')
+  const bounce = BAKED_BOUNCE_GAIN[curated].toFixed(6)
   return /* glsl */ `
 ${BAKED_VERT_ATTRIBUTES}
 const vec3 pgBakeSkyColor = vec3( ${sky} );
@@ -341,7 +426,7 @@ const float pgBakeBounceGain = ${bounce};
 
 vec3 pgBakedPalette( float source ) {
 ${palette}
-	return vec3( ${glslColor(PALETTES[target].shmem)} );
+	return vec3( ${glslColor(PALETTES[curated].shmem)} );
 }
 
 vec3 pgBakedTransport( float sky, float packed ) {
@@ -567,7 +652,7 @@ export interface ThemeShaderSource {
  */
 function patchThemeShader(shader: ThemeShaderSource, surface: boolean): void {
   let f = shader.fragmentShader
-  if (ATMOSPHERE[mode].toon) {
+  if (airFor(mode).toon) {
     if (f.indexOf(TOON_ANCHOR) >= 0) f = f.replace(TOON_ANCHOR, TOON_ANCHOR + '\n' + TOON_GLSL)
     // The replacement is inert unless the material declares vertex colours: the
     // body it substitutes carries the same #if guards as the chunk it replaces.
@@ -608,11 +693,11 @@ function themeHookPlain(shader: ThemeShaderSource): void {
 }
 
 function themeCacheKey(): string {
-  return ATMOSPHERE[mode].toon ? 'pg-day-s' : 'pg-night-s'
+  return airFor(mode).toon ? 'pg-day-s' : 'pg-night-s'
 }
 
 function themeCacheKeyPlain(): string {
-  return ATMOSPHERE[mode].toon ? 'pg-day' : 'pg-night'
+  return airFor(mode).toon ? 'pg-day' : 'pg-night'
 }
 
 function isStandard(m: THREE.Material): m is THREE.MeshStandardMaterial {
@@ -641,7 +726,7 @@ function installThemeShader(m: THREE.Material, target: ThemeMode, surface: boole
   /* The compiled variant is (mode, surface), so the gate has to track both. A
    * gate that watched the toon flag alone would leave a material that changed
    * variant running its previous program until the next mode toggle. */
-  const want = (ATMOSPHERE[target].toon ? 2 : 0) + (surface ? 1 : 0)
+  const want = (airFor(target).toon ? 2 : 0) + (surface ? 1 : 0)
   if (ud.pgProgram === want) return
   ud.pgProgram = want
   m.needsUpdate = true
@@ -672,7 +757,11 @@ export function mixHex(a: number, b: number, t: number): number {
  * re-derive, and that surface follows the switch too.
  */
 export function modeColor(nightHex: number): number {
-  return mode === 'day' ? dayAccent(nightHex) : nightHex
+  return mode === 'day'
+    ? dayAccent(nightHex)
+    : mode === 'clock'
+      ? clockAccent(nightHex, clockSun.daylight)
+      : nightHex
 }
 
 const HEX6 = /^#([0-9a-f]{6})$/i
@@ -689,6 +778,15 @@ function dayCssColor(css: string): string {
   const hex = parseInt(m[1], 16)
   if (isNeutralExtreme(hex)) return css
   return '#' + mix(dayAccent(hex), 0x0e141c, 0.35).toString(16).padStart(6, '0')
+}
+
+function clockCssColor(css: string, daylight: number): string {
+  const m = HEX6.exec(css.trim())
+  if (!m) return css
+  const night = parseInt(m[1], 16)
+  if (isNeutralExtreme(night)) return css
+  const day = parseInt(dayCssColor(css).slice(1), 16)
+  return '#' + mix(night, day, daylight).toString(16).padStart(6, '0')
 }
 
 /* ============================================================================
@@ -712,16 +810,17 @@ interface MatSpec {
 }
 
 function paintMat(m: THREE.MeshStandardMaterial, s: MatSpec, target: ThemeMode): void {
-  if (target === 'day') {
-    m.color.setHex(daySurface(s.color, s.key))
+  const daylight = daylightFor(target)
+  if (daylight > 0) {
+    m.color.setHex(target === 'day' ? daySurface(s.color, s.key) : clockSurface(s.color, daylight, s.key))
     // A cel-shaded surface is matte by definition; what little variation is left
     // drives the size of the single highlight, so roughness is compressed rather
     // than flattened. Metal has no place in a cartoon and is nearly removed.
-    m.roughness = Math.min(1, s.roughness * 0.55 + 0.42)
-    m.metalness = s.metalness * 0.25
-    m.emissive.setHex(dayEmissive(s.emissive))
+    m.roughness = THREE.MathUtils.lerp(s.roughness, Math.min(1, s.roughness * 0.55 + 0.42), daylight)
+    m.metalness = THREE.MathUtils.lerp(s.metalness, s.metalness * 0.25, daylight)
+    m.emissive.setHex(target === 'day' ? dayEmissive(s.emissive) : clockEmissive(s.emissive, daylight))
   } else {
-    m.color.setHex(s.color)
+    m.color.setHex(s.surface ? nightSurface(s.color) : s.color)
     m.roughness = s.roughness
     m.metalness = s.metalness
     m.emissive.setHex(s.emissive)
@@ -764,10 +863,19 @@ function paintNightNeonColor(color: THREE.Color, hex: number, intensity: number)
 }
 
 function paintNeon(m: THREE.MeshBasicMaterial, s: NeonSpec, target: ThemeMode): void {
-  if (target === 'day') {
-    m.color.setHex(dayAccent(s.color)).multiplyScalar(dayNeonIntensity(s.intensity))
+  const daylight = daylightFor(target)
+  if (airFor(target).daylight) {
+    const color = target === 'day' ? dayAccent(s.color) : clockAccent(s.color, daylight)
+    const intensity = target === 'day'
+      ? dayNeonIntensity(s.intensity)
+      : clockNeonIntensity(s.intensity, daylight)
+    m.color.setHex(color).multiplyScalar(intensity)
   } else {
-    paintNightNeonColor(m.color, s.color, s.intensity)
+    paintNightNeonColor(
+      m.color,
+      target === 'clock' ? clockAccent(s.color, daylight) : s.color,
+      target === 'clock' ? clockNeonIntensity(s.intensity, daylight) : s.intensity,
+    )
   }
   installThemeShader(m, target, false)
 }
@@ -778,8 +886,17 @@ interface LineSpec {
 }
 
 function paintLine(m: THREE.LineBasicMaterial, s: LineSpec, target: ThemeMode): void {
-  const hex = target === 'day' ? dayInk(s.color) : s.color
-  const o = target === 'day' ? dayInkOpacity(s.opacity) : s.opacity
+  const daylight = daylightFor(target)
+  const hex = target === 'day'
+    ? dayInk(s.color)
+    : target === 'clock'
+      ? clockInk(s.color, daylight)
+      : s.color
+  const o = target === 'day'
+    ? dayInkOpacity(s.opacity)
+    : target === 'clock'
+      ? clockInkOpacity(s.opacity, daylight)
+      : s.opacity
   m.color.setHex(hex)
   m.opacity = o
   const wantsTransparent = o < 1
@@ -865,6 +982,7 @@ export function paintSceneMaterial(m: THREE.Material, target: ThemeMode): void {
   const shader = m as THREE.ShaderMaterial
   const std = m as THREE.MeshStandardMaterial
   const basic = m as THREE.MeshBasicMaterial
+  const daylight = daylightFor(target)
 
   if (shader.isShaderMaterial === true && shader.uniforms) {
     const cols = colorUniforms(shader)
@@ -879,7 +997,13 @@ export function paintSceneMaterial(m: THREE.Material, target: ThemeMode): void {
         for (const name of Object.keys(cols)) {
           const src = snap[name]
           if (src === undefined) continue
-          cols[name].setHex(target === 'day' ? dayAccent(src) : src)
+          cols[name].setHex(
+            target === 'day'
+              ? dayAccent(src)
+              : target === 'clock'
+                ? clockAccent(src, daylight)
+                : src,
+          )
         }
       }
     }
@@ -911,8 +1035,8 @@ export function paintSceneMaterial(m: THREE.Material, target: ThemeMode): void {
   if (first) night.blending = m.blending
   if (night.blending === THREE.AdditiveBlending) {
     if (first) night.opacity = m.opacity
-    if (night.opacity !== undefined) m.opacity = target === 'day' ? night.opacity * 0.1 : night.opacity
-    const blending = target === 'day' ? THREE.NormalBlending : THREE.AdditiveBlending
+    if (night.opacity !== undefined) m.opacity = THREE.MathUtils.lerp(night.opacity, night.opacity * 0.1, daylight)
+    const blending = airFor(target).daylight ? THREE.NormalBlending : THREE.AdditiveBlending
     if (m.blending !== blending) {
       m.blending = blending
       m.needsUpdate = true
@@ -922,7 +1046,8 @@ export function paintSceneMaterial(m: THREE.Material, target: ThemeMode): void {
   const lit = isStandard(m)
   // Only lit structure is masonry. An unlit basic material is either meaning or
   // a decal, and a module can opt out of the term explicitly.
-  installThemeShader(m, target, lit && ud.pgNoSurface !== true && basic.vertexColors !== true)
+  const surface = lit && ud.pgNoSurface !== true && basic.vertexColors !== true
+  installThemeShader(m, target, surface)
 
   const hasColor = (basic.color as THREE.Color | undefined) !== undefined
   // vertexColors means `color` is a per-instance multiplier; leave it white.
@@ -938,10 +1063,21 @@ export function paintSceneMaterial(m: THREE.Material, target: ThemeMode): void {
        * repaint so meaning survives when bloom is unavailable. */
       if (target === 'day') {
         basic.color.setHex(ud.pgDayColor ?? (lit ? daySurface(src, m.name) : dayAccent(src)))
+      } else if (target === 'clock') {
+        const translated = ud.pgDayColor === undefined
+          ? lit
+            ? clockSurface(src, daylight, m.name)
+            : clockAccent(src, daylight)
+          : mix(src, ud.pgDayColor, daylight)
+        if (basic.isMeshBasicMaterial === true && basic.toneMapped === false && !airFor(target).daylight) {
+          paintNightNeonColor(basic.color, translated, 1)
+        } else {
+          basic.color.setHex(translated)
+        }
       } else if (basic.isMeshBasicMaterial === true && basic.toneMapped === false) {
         paintNightNeonColor(basic.color, src, 1)
       } else {
-        basic.color.setHex(src)
+        basic.color.setHex(surface ? nightSurface(src) : src)
       }
     }
   }
@@ -953,13 +1089,23 @@ export function paintSceneMaterial(m: THREE.Material, target: ThemeMode): void {
       night.metalness = std.metalness
     }
     if (night.emissive !== undefined) {
-      std.emissive.setHex(target === 'day' ? dayEmissive(night.emissive) : night.emissive)
+      std.emissive.setHex(
+        target === 'day'
+          ? dayEmissive(night.emissive)
+          : target === 'clock'
+            ? clockEmissive(night.emissive, daylight)
+            : night.emissive,
+      )
     }
     if (night.roughness !== undefined) {
-      std.roughness = target === 'day' ? Math.min(1, night.roughness * 0.55 + 0.42) : night.roughness
+      std.roughness = THREE.MathUtils.lerp(
+        night.roughness,
+        Math.min(1, night.roughness * 0.55 + 0.42),
+        daylight,
+      )
     }
     if (night.metalness !== undefined) {
-      std.metalness = target === 'day' ? night.metalness * 0.25 : night.metalness
+      std.metalness = THREE.MathUtils.lerp(night.metalness, night.metalness * 0.25, daylight)
     }
   }
 }
@@ -1105,14 +1251,22 @@ export function createTheme(): ThemeApi {
     const ctx = cv.getContext('2d')!
     ctx.clearRect(0, 0, cv.width, cv.height)
     if (opts.bg) {
-      ctx.fillStyle = target === 'day' ? dayCssColor(opts.bg) : opts.bg
+      ctx.fillStyle = target === 'day'
+        ? dayCssColor(opts.bg)
+        : target === 'clock'
+          ? clockCssColor(opts.bg, daylightFor(target))
+          : opts.bg
       ctx.fillRect(0, 0, cv.width, cv.height)
     }
     ctx.font = font
     ctx.textAlign = opts.align ?? 'center'
     ctx.textBaseline = 'middle'
     const ink = opts.color ?? '#dbe7ff'
-    ctx.fillStyle = target === 'day' ? dayCssColor(ink) : ink
+    ctx.fillStyle = target === 'day'
+      ? dayCssColor(ink)
+      : target === 'clock'
+        ? clockCssColor(ink, daylightFor(target))
+        : ink
     if ('letterSpacing' in ctx && opts.letterSpacing) {
       ;(ctx as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = opts.letterSpacing
     }

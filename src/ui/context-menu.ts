@@ -63,7 +63,7 @@ const LABEL: Record<ContextActionId, string> = {
   'directory-layout': 'Open directory layout',
   'reset-camera': 'Reset camera',
   overhead: 'Overhead view',
-  'toggle-theme': 'Toggle day / night',
+  'toggle-theme': 'Cycle light mode',
   'toggle-labels': 'Toggle labels',
   'first-person': 'Walk in first person',
 }

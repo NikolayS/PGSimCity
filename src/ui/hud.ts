@@ -1389,7 +1389,7 @@ export function createHud(ctx: UiContext): UiModule {
   }
 
   /**
-   * N — daylight or night, for the whole city and the whole console at once.
+   * N — night, curated golden hour, or local-clock light for the whole city.
    *
    * core/theme.ts does the work (palette, every cached material, the toon ramp)
    * and remembers the choice; the renderer answers the same notification with
@@ -1401,7 +1401,11 @@ export function createHud(ctx: UiContext): UiModule {
     const next = toggleThemeMode()
     emitLoose(bus, 'theme:mode', { mode: next })
     bus.emit('toast', {
-      text: next === 'day' ? 'Daylight — golden hour' : 'Night — the city lit by its own data',
+      text: next === 'day'
+        ? 'Daylight — golden hour'
+        : next === 'clock'
+          ? 'Local time — approximate sun path, no location used'
+          : 'Night — the city lit by its own data',
       kind: 'info',
       ms: 1800,
     })
@@ -1708,14 +1712,19 @@ export function createHud(ctx: UiContext): UiModule {
   function paintTheme(mode = themeMode()): void {
     if (themeIcon.dataset.mode !== mode) {
       themeIcon.dataset.mode = mode
-      themeIcon.replaceChildren(icon(mode === 'day' ? 'sun' : 'moon', 15))
+      themeIcon.replaceChildren(icon(mode === 'day' ? 'sun' : mode === 'clock' ? 'clock' : 'moon', 15))
     }
-    const day = mode === 'day'
-    setText(themeLabel, day ? 'Day' : 'Night')
-    setClass(themeBtn, 'is-active', day)
-    themeBtn.setAttribute('aria-pressed', String(day))
-    themeBtn.setAttribute('aria-label', day ? 'Day theme; switch to night' : 'Night theme; switch to daylight')
-    themeBtn.title = day ? 'Daylight theme — switch to night  (N)' : 'Night theme — switch to daylight  (N)'
+    const label = mode === 'day' ? 'Day' : mode === 'clock' ? 'Local time' : 'Night'
+    const next = mode === 'night' ? 'daylight' : mode === 'day' ? 'local-time light' : 'night'
+    setText(themeLabel, label)
+    setClass(themeBtn, 'is-active', mode !== 'night')
+    themeBtn.setAttribute('aria-pressed', String(mode !== 'night'))
+    themeBtn.setAttribute('aria-label', `${label} theme; switch to ${next}`)
+    themeBtn.title = mode === 'clock'
+      ? 'Local-time light — approximate 06:00 sunrise / 18:00 sunset; no location used — switch to night  (N)'
+      : mode === 'day'
+        ? 'Daylight theme — switch to local-time light  (N)'
+        : 'Night theme — switch to daylight  (N)'
   }
 
   let lastScenario: string | null | undefined

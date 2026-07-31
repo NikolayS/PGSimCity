@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { destinationForDistrict } from '../core/destinations'
-import { ATMOSPHERE, COLOR, DAY_PALETTE, mixHex, themeMode } from '../core/theme'
+import { ATMOSPHERE, COLOR, DAY_PALETTE, atmosphere, mixHex } from '../core/theme'
 import { clamp01, fmtBytes, fmtNum } from '../core/util'
 import { ANCHOR, CITY, DISTRICT_BOUNDS } from './layout'
 import { plateFogK } from './plate-fog'
@@ -1169,11 +1169,12 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
 
   function update(dt: number, _sim: SimState, _t: number): void {
     syncConeLayer()
-    const nextSurfaceDetail = groundSurfaceDetail(themeMode(), quality.level)
+    const daylight = atmosphere().daylight
+    const nextSurfaceDetail = groundSurfaceDetail(daylight ? 'day' : 'night', quality.level)
     if (nextSurfaceDetail !== surfaceDetail) {
       surfaceDetail = nextSurfaceDetail
       uSurfaceDetail.value = surfaceDetail
-      uSurfaceResponse.value = themeMode() === 'day' && surfaceDetail > 1 ? 1 : 0
+      uSurfaceResponse.value = daylight && surfaceDetail > 1 ? 1 : 0
     }
     // Ambient, not simulated: the survey sweep keeps running while the
     // simulation is paused so the model never looks dead. The mast lights do

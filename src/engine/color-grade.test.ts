@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import { DAY_PALETTE } from '../core/themes'
+import {
+  BOUNCE_PALETTE_KEYS,
+  DAY_PALETTE,
+  clockAtmosphereAt,
+  clockPaletteAt,
+} from '../core/themes'
 import {
   GOLDEN_HOUR_GRADE,
   gradeDaylightHex,
@@ -78,5 +83,27 @@ describe('golden-hour colour grade', () => {
     const luma = (hex: number): number =>
       0.2126 * ((hex >> 16) & 255) + 0.7152 * ((hex >> 8) & 255) + 0.0722 * (hex & 255)
     expect(luma(corner)).toBeLessThan(luma(center))
+  })
+})
+
+describe('local-clock colour separation', () => {
+  it('keeps all ten semantic colours distinct across the complete sun path', () => {
+    for (let minutes = 0; minutes < 1440; minutes += 10) {
+      const palette = clockPaletteAt(minutes)
+      const daylight = clockAtmosphereAt(minutes).daylight
+      const colors = BOUNCE_PALETTE_KEYS.map((key) =>
+        daylight ? gradeDaylightHex(palette[key]) : palette[key],
+      )
+
+      for (let i = 0; i < colors.length; i++) {
+        for (let j = i + 1; j < colors.length; j++) {
+          const distance = perceptualColorDistance(colors[i], colors[j])
+          expect(
+            distance,
+            `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')} ${BOUNCE_PALETTE_KEYS[i]} vs ${BOUNCE_PALETTE_KEYS[j]}`,
+          ).toBeGreaterThanOrEqual(0.038)
+        }
+      }
+    }
   })
 })

@@ -135,7 +135,7 @@ Press **`?`** in the city for the city control map and colour legend.
 | `/` or `Ctrl/Cmd+K` | Command palette — search every component, setting and scenario |
 | `?` | Keyboard map and colour legend |
 | `L` | Toggle the floating labels |
-| `N` | Toggle daylight / night |
+| `N` | Cycle night / golden hour / approximate local-time light |
 | `M` | Toggle sound |
 | `K` or `P` | Pause / resume |
 | `,` `.` | Slower / faster (0.1× – 5×) |
@@ -167,7 +167,9 @@ Three rules hold it together:
    simulation.** They meet at `SimState`.
 3. **Rendering carries meaning differently by theme.** At night structure is
    matte and meaning is neon; in daylight hue and value carry meaning without
-   relying on bloom.
+   relying on bloom. Local-time light follows an approximate 06:00–18:00 path
+   from the reader's clock; it uses neither geolocation nor an astronomical
+   latitude/season model.
 
 Stack: [three.js](https://threejs.org) r185, TypeScript, Vite. three.js is the
 3D application's only bundled runtime dependency. The separate 2D Query flow
