@@ -126,9 +126,11 @@ export interface Knobs {
   standbyBSlowApply: boolean
   /** A long-running standby read reports xmin through hot_standby_feedback. */
   standbyLongQuery: boolean
-  /** The remote archive repository is reachable by archive_command. */
-  archiveAvailable: boolean
-  /** pgBackRest repo1-retention-full count used by the DR model. */
+  /** WAL-G's object-storage credentials are valid for wal-push. */
+  walGArchiveCredentialsValid: boolean
+  /** Concurrent WAL-G backup-fetch and wal-fetch download workers. */
+  walGDownloadConcurrency: number
+  /** Full backups kept by the modeled `wal-g delete retain FULL n` policy. */
   backupRetention: number
   /** Seconds before now selected by the recovery_target_time control. */
   recoveryTargetAge: number
@@ -184,7 +186,8 @@ export const DEFAULT_KNOBS: Knobs = {
   standbyBNetworkLag: 55,
   standbyBSlowApply: false,
   standbyLongQuery: false,
-  archiveAvailable: true,
+  walGArchiveCredentialsValid: true,
+  walGDownloadConcurrency: 10,
   backupRetention: 3,
   recoveryTargetAge: 20,
   haPartition: 'healthy',
@@ -756,29 +759,31 @@ export type BaseBackupStatus = 'idle' | 'copying' | 'waiting_wal' | 'failed'
 
 export interface BaseBackup {
   id: number
-  /** pgBackRest full backup label in the city's compact teaching format. */
+  /** WAL-G base-backup name derived from the backup start WAL segment. */
   label: string
   startedAt: number
   completedAt: number
+  startTimeline: number
   startLsn: number
   stopLsn: number
   /** Logical bytes read from the data directory. */
   dataBytes: number
-  /** Scaled compressed bytes stored in the repository. */
-  repositoryBytes: number
+  /** Scaled compressed bytes stored in object storage. */
+  objectStoreBytes: number
   durationSec: number
   source: 'standby'
-  tool: 'pgBackRest'
+  tool: 'WAL-G'
 }
 
 export interface BaseBackupOperation {
   status: BaseBackupStatus
   progress: number
   startedAt: number
+  startTimeline: number
   startLsn: number
   stopLsn: number
   dataBytes: number
-  repositoryBytes: number
+  objectStoreBytes: number
   copiedBytes: number
   estimatedDurationSec: number
   failureReason: string
@@ -826,7 +831,7 @@ export interface ArchiveRecoveryState {
 
 export interface DisasterRecoveryState {
   /** The concrete behavior used where WAL-G and pgBackRest differ. */
-  tool: 'pgBackRest'
+  tool: 'WAL-G'
   dataDirectoryBytes: number
   archive: ArchiveRecoveryState
   backups: BaseBackup[]
@@ -985,7 +990,7 @@ export interface SimApi {
   request(kind: QueryKind, table: number, opts?: TraceRequestOptions): void
   setTraceMode(mode: TracePlayback): void
   endTrace(): void
-  /** Start a pgBackRest full backup with backup-standby=y. */
+  /** Start a WAL-G full backup-push from standby_a to object storage. */
   startBaseBackup(): boolean
   /** Restore to `targetAgeSec` before now, or the recoveryTargetAge control. */
   startPointInTimeRestore(targetAgeSec?: number): boolean

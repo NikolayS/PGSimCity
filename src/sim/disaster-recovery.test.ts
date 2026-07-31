@@ -22,6 +22,17 @@ function takeBackup(sim: Sim): void {
 }
 
 describe('disaster recovery', () => {
+  it('models WAL-G writing backups and WAL directly to object storage', () => {
+    const sim = createSim(createBus())
+
+    expect(sim.state.disasterRecovery.tool).toBe('WAL-G')
+    takeBackup(sim)
+    const backup = sim.state.disasterRecovery.backups[0]
+    expect(backup.tool).toBe('WAL-G')
+    expect(backup.label).toMatch(/^base_[0-9A-F]{24}$/)
+    expect(backup.objectStoreBytes).toBeGreaterThan(0)
+  })
+
   it('makes a full backup take time proportional to the data directory size', () => {
     const normal = createSim(createBus())
     expect(normal.startBaseBackup()).toBe(true)
@@ -45,24 +56,25 @@ describe('disaster recovery', () => {
     const sim = createSim(createBus())
     sim.setKnob('tps', 100)
     sim.setKnob('writeRatio', 1)
-    sim.setKnob('archiveAvailable', false)
+    sim.setKnob('walGArchiveCredentialsValid', false)
 
     expect(sim.startBaseBackup()).toBe(true)
     advance(sim, sim.state.disasterRecovery.backup.estimatedDurationSec + 2)
 
     expect(sim.state.disasterRecovery.backup.status).toBe('waiting_wal')
+    expect(sim.state.disasterRecovery.backup.progress).toBe(1)
     expect(sim.state.disasterRecovery.backups).toHaveLength(0)
 
-    sim.setKnob('archiveAvailable', true)
+    sim.setKnob('walGArchiveCredentialsValid', true)
     advanceUntil(sim, () => sim.state.disasterRecovery.backup.status === 'idle')
     expect(sim.state.disasterRecovery.backups).toHaveLength(1)
   })
 
-  it('queues completed WAL while archive-push fails, grows pg_wal, and rejects writes at the scaled safety limit', () => {
+  it('queues completed WAL when WAL-G credentials expire, grows pg_wal, and rejects writes at the scaled safety limit', () => {
     const sim = createSim(createBus())
     sim.setKnob('tps', 5000)
     sim.setKnob('writeRatio', 1)
-    sim.setKnob('archiveAvailable', false)
+    sim.setKnob('walGArchiveCredentialsValid', false)
     const initialBytes = sim.state.disasterRecovery.archive.pgWalBytes
 
     advanceUntil(sim, () => sim.state.disasterRecovery.archive.writesBlocked, 360)
@@ -77,7 +89,7 @@ describe('disaster recovery', () => {
     advance(sim, 5)
     expect(sim.state.disasterRecovery.archive.rejectedWrites).toBeGreaterThan(rejected)
 
-    sim.setKnob('archiveAvailable', true)
+    sim.setKnob('walGArchiveCredentialsValid', true)
     advanceUntil(sim, () => !sim.state.disasterRecovery.archive.writesBlocked, 240)
     expect(sim.state.disasterRecovery.archive.queueSegments).toBeLessThan(stalledQueue)
   })
@@ -107,6 +119,22 @@ describe('disaster recovery', () => {
     expect(sim.state.disasterRecovery.expiredBackups).toBe(1)
   })
 
+  it('names an expired recovery window in WAL-G delete-retain vocabulary', () => {
+    const sim = createSim(createBus())
+    sim.setKnob('tps', 1200)
+    sim.setKnob('writeRatio', 0.8)
+    sim.setKnob('backupRetention', 1)
+
+    takeBackup(sim)
+    const expiredTarget = sim.state.disasterRecovery.backups[0].completedAt - 1
+    advance(sim, 8)
+    takeBackup(sim)
+
+    expect(sim.startPointInTimeRestore(sim.state.t - expiredTarget)).toBe(false)
+    expect(sim.state.disasterRecovery.restore.failureReason)
+      .toMatch(/wal-g delete retain FULL/i)
+  })
+
   it('derives a longer recovery time from an older backup and more WAL replay', () => {
     function estimateAfter(age: number): { seconds: number; walBytes: number; backupAge: number } {
       const sim = createSim(createBus())
@@ -134,6 +162,56 @@ describe('disaster recovery', () => {
     expect(older.backupAge).toBeGreaterThan(recent.backupAge)
     expect(older.walBytes).toBeGreaterThan(recent.walBytes)
     expect(older.seconds).toBeGreaterThan(recent.seconds)
+  })
+
+  it('measures PITR replay WAL from the backup start LSN', () => {
+    const sim = createSim(createBus())
+    sim.setKnob('tps', 1600)
+    sim.setKnob('writeRatio', 0.85)
+    takeBackup(sim)
+    advance(sim, 24)
+    advanceUntil(
+      sim,
+      () => sim.state.disasterRecovery.archive.archivedThroughTime >= sim.state.t - 2,
+      180,
+    )
+
+    expect(sim.startPointInTimeRestore(2)).toBe(true)
+    const backup = sim.state.disasterRecovery.backups[0]
+    const restore = sim.state.disasterRecovery.restore
+
+    expect(restore.walBytesRequired).toBe(restore.targetLsn - backup.startLsn)
+    expect(restore.walBytesRequired).toBeGreaterThan(restore.targetLsn - backup.stopLsn)
+  })
+
+  it('makes low WALG_DOWNLOAD_CONCURRENCY object-fetch bound', () => {
+    function estimateWithConcurrency(concurrency: number): { seconds: number; walBytes: number; replayed: number } {
+      const sim = createSim(createBus())
+      sim.setKnob('tps', 1600)
+      sim.setKnob('writeRatio', 0.85)
+      takeBackup(sim)
+      advance(sim, 24)
+      advanceUntil(
+        sim,
+        () => sim.state.disasterRecovery.archive.archivedThroughTime >= sim.state.t - 2,
+        180,
+      )
+      sim.setKnob('walGDownloadConcurrency', concurrency)
+      expect(sim.startPointInTimeRestore(2)).toBe(true)
+      advance(sim, 1)
+      return {
+        seconds: sim.state.disasterRecovery.restore.estimatedDurationSec,
+        walBytes: sim.state.disasterRecovery.restore.walBytesRequired,
+        replayed: sim.state.disasterRecovery.restore.backupBytesFetched,
+      }
+    }
+
+    const serial = estimateWithConcurrency(1)
+    const concurrent = estimateWithConcurrency(10)
+
+    expect(serial.walBytes).toBe(concurrent.walBytes)
+    expect(serial.seconds).toBeGreaterThan(concurrent.seconds)
+    expect(serial.replayed).toBeLessThan(concurrent.replayed)
   })
 
   it('stops PITR at the selected target without promotion or failover state', () => {
@@ -181,4 +259,5 @@ describe('disaster recovery', () => {
     sim.setKnob('recoveryTargetAge', 20)
     expect(sim.state.knobs.recoveryTargetAge).toBe(20)
   })
+
 })

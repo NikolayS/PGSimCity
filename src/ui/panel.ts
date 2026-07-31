@@ -387,14 +387,14 @@ export function createInspector(ctx: UiContext): UiModule {
             : op.status === 'waiting_wal'
               ? 'Waiting for archived WAL'
               : op.status === 'failed'
-                ? 'Retry pgBackRest full backup'
-                : 'Take pgBackRest full backup',
+                ? 'Retry WAL-G full backup'
+                : 'Take WAL-G full backup',
         )
         setText(
           hint,
           op.status === 'failed'
             ? op.failureReason
-            : `Reads ${fmtBytes(s.disasterRecovery.dataDirectoryBytes)} from standby_a at a compressed teaching timescale.`,
+            : `WAL-G reads ${fmtBytes(s.disasterRecovery.dataDirectoryBytes)} from standby_a and pushes compressed objects straight to S3 at a teaching timescale.`,
         )
         return
       }

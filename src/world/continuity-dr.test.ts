@@ -5,7 +5,7 @@ import { createTheme } from '../core/theme'
 import type { ComponentDef, FlowRequest, QualitySettings, WorldContext } from '../core/types'
 import { createSim } from '../sim/model'
 import { createContinuity } from './continuity'
-import { ANCHOR } from './layout'
+import { ANCHOR, ROUTES } from './layout'
 
 function fakeCanvas(): HTMLCanvasElement {
   const gradient = { addColorStop: () => undefined }
@@ -104,7 +104,6 @@ describe('continuity and three-node projection', () => {
       'timeline.yard',
       'object.store',
       'backup.vault',
-      'backup.host',
       'recovery.ground',
       'recovery.clock',
       'restore.winch',
@@ -251,6 +250,11 @@ describe('continuity and three-node projection', () => {
       }
     }
     expect([...plateMeshes.values()].reduce((count, meshes) => count + meshes.length, 0)).toBe(15)
+    sim.setKnob('walGArchiveCredentialsValid', false)
+    continuity.update(1 / 30, sim.state, sim.state.t)
+    expect(defs.find((def) => def.id === 'archive.gate')?.readout?.(sim.state))
+      .toContain('credentials expired')
+    sim.setKnob('walGArchiveCredentialsValid', true)
 
     sim.startBaseBackup()
     for (let i = 0; i < 900; i++) {
@@ -258,8 +262,18 @@ describe('continuity and three-node projection', () => {
       continuity.update(1 / 30, sim.state, sim.state.t)
     }
 
-    expect(flows.some((flow) => flow.route === 'backup.take')).toBe(true)
-    expect(flows.some((flow) => flow.route === 'backup.store')).toBe(true)
+    expect(flows.some((flow) => flow.route === 'backup.push')).toBe(true)
+    expect(flows.some((flow) => flow.route === 'backup.take')).toBe(false)
+    expect(flows.some((flow) => flow.route === 'backup.store')).toBe(false)
+    expect(continuity.group.getObjectByName('backup.host')).toBeUndefined()
+    expect(defs.some((def) => def.id === 'backup.host')).toBe(false)
+    expect(ROUTES['backup.take']).toBeUndefined()
+    expect(ROUTES['backup.store']).toBeUndefined()
+    expect(ROUTES['backup.push'].points.at(-1)).toEqual([
+      ANCHOR.backupVault[0],
+      6,
+      ANCHOR.backupVault[2] + 16,
+    ])
     expect(flows.some((flow) => flow.route === 'net.streamB')).toBe(true)
     expect(flows.some((flow) => flow.route === 'net.ackB')).toBe(true)
     expect(flows.some((flow) => flow.route === 'replicaB.apply')).toBe(true)
