@@ -1896,20 +1896,34 @@ export function createHud(ctx: UiContext): UiModule {
     )
     if (decision.choice) {
       const chosen = decision.choice === 'promote-standby-a' ? 'standby_a' : 'standby_b'
+      const rejoin = s.highAvailability.rejoin
+      const rebuilt = rejoin.reinitializeNode === 'standbyA'
+        ? 'standby_a'
+        : rejoin.reinitializeNode === 'standbyB'
+          ? 'standby_b'
+          : null
       setText(
         decisionResult,
         s.highAvailability.transition.status !== 'complete'
           ? `You selected ${chosen}. The primary is gone; Patroni is waiting for the old leader lease before promotion.`
-          : `You promoted ${chosen}: ${fmtBytes(decision.lossBytes)} and ${fmtNum(decision.lossTransactions)} committed write transactions are absent from the new timeline. Rejoining the former primary requires pg_rewind to copy ${fmtBytes(decision.rejoinBytes)} of changed blocks.`,
+          : rebuilt
+            ? `You promoted ${chosen}: ${fmtBytes(decision.lossBytes)} and ${fmtNum(decision.lossTransactions)} committed write transactions are absent from the new timeline. The former primary needs ${fmtBytes(rejoin.bytesRewound)} of pg_rewind work; ${rebuilt} was already past the fork and needs a ${fmtBytes(rejoin.reinitializeBytes)} reinitialisation. Zero healthy standbys remain.`
+            : `You promoted ${chosen}: ${fmtBytes(decision.lossBytes)} and ${fmtNum(decision.lossTransactions)} committed write transactions are absent from the new timeline. Rejoining the former primary requires pg_rewind to copy ${fmtBytes(rejoin.bytesRewound)} of changed blocks.`,
       )
-      if (s.highAvailability.transition.status === 'complete' && s.highAvailability.rejoin.required) {
+      if (s.highAvailability.transition.status === 'complete' && rejoin.required) {
         decisionRecover.hidden = false
         decisionRecover.disabled = decision.phase === 'recovering'
         setText(
           decisionRecover,
           decision.phase === 'recovering'
-            ? `pg_rewind ${(s.highAvailability.rejoin.progress * 100).toFixed(0)}%`
-            : 'Rejoin former primary with pg_rewind',
+            ? rebuilt
+              ? rejoin.status === 'complete'
+                ? `Reinitialising follower ${(rejoin.reinitializeCopiedBytes / Math.max(1, rejoin.reinitializeBytes) * 100).toFixed(0)}%`
+                : `pg_rewind ${Math.round(rejoin.progress * 100)}% · follower rebuild running`
+              : `pg_rewind ${Math.round(rejoin.progress * 100)}%`
+            : rebuilt
+              ? 'Repair both divergent nodes'
+              : 'Rejoin former primary with pg_rewind',
         )
       }
     }

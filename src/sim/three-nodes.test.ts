@@ -83,6 +83,7 @@ describe('three-node physical cluster', () => {
   it('fills the primary WAL volume through a slot for a disconnected standby', { timeout: 20_000 }, () => {
     const sim = createAggregateSim()
     sim.setKnob('archiveAvailable', true)
+    sim.setKnob('synchronousCommit', 'local')
     sim.setKnob('replicaEnabled', false)
     sim.setKnob('tps', 5000)
     sim.setKnob('writeRatio', 1)

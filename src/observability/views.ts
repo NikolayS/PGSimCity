@@ -119,9 +119,12 @@ interface ActRow {
  * post into a monitoring query that then silently matches nothing.
  */
 function actOf(b: BackendSim, s: SimState): { state: string; wet: string; we: string; tone: Tone } {
+  const syncStandby = s.highAvailability.currentLeader === 'standbyA'
+    ? s.replication.standbys[1]
+    : s.replication.standbys[0]
   const syncRep =
-    s.replication.mode === 'sync'
-    && s.replication.enabled
+    syncStandby.mode === 'sync'
+    && s.knobs.synchronousStandbyNames
     && (s.knobs.synchronousCommit === 'on' || s.knobs.synchronousCommit === 'remote_apply')
   switch (b.state) {
     case 'idle':

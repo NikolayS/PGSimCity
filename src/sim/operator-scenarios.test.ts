@@ -177,10 +177,27 @@ describe('operator scenario: select a failover candidate', () => {
     expect(laggingChoice.lossBytes).toBeGreaterThan(10 * 1024 * 1024)
     expect(laggingChoice.lossTransactions).toBeGreaterThan(4_000)
 
+    const healthyStandbys = lagging.state.cluster.nodes.filter(
+      (node) => node.role === 'standby' && node.online,
+    )
+    const aheadFollower = lagging.state.cluster.nodes[1]
+    expect.soft(healthyStandbys).toHaveLength(0)
+    expect.soft(aheadFollower.role).toBe('diverged')
+    expect.soft(aheadFollower.online).toBe(false)
+    expect.soft(lagging.state.replication.standbys[0].connected).toBe(false)
+    expect.soft(laggingChoice.rejoinBytes).toBeGreaterThan(1024 * 1024 * 1024)
+    expect.soft(lagging.state.highAvailability.rejoin.reinitializeRequired).toBe(true)
+    expect.soft(lagging.state.highAvailability.rejoin.reinitializeNode).toBe('standbyA')
+    expect.soft(lagging.state.highAvailability.rejoin.reinitializeBytes)
+      .toBeGreaterThan(1024 * 1024 * 1024)
+
     expect(lagging.recoverScenario()).toBe(true)
     advanceUntil(lagging, () => lagging.state.scenarioDecision?.phase === 'recovered')
     expect(lagging.state.cluster.nodes[0].online).toBe(true)
     expect(lagging.state.cluster.nodes[0].role).toBe('standby')
+    expect(lagging.state.cluster.nodes[1].online).toBe(true)
+    expect(lagging.state.cluster.nodes[1].role).toBe('standby')
+    expect(lagging.state.replication.standbys[0].connected).toBe(true)
     expect(lagging.state.highAvailability.rejoin.required).toBe(false)
   })
 })

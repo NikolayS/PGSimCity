@@ -711,6 +711,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       rejoin: {
         required: false,
         node: null,
+        reinitializeRequired: false,
+        reinitializeNode: null,
+        reinitializeBytes: 0,
+        reinitializeCopiedBytes: 0,
         blockChangeTrackingAvailable: true,
         status: 'idle',
         progress: 0,
@@ -3211,7 +3215,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     const networkLagMs = index === 0 ? K.replicaNetworkLag : K.standbyBNetworkLag
     /* Patroni moves the synchronous role to the remaining follower after a
      * promotion; synchronous_commit still controls each transaction's wait. */
-    const sync = synchronousStandby() === standby
+    const sync = K.synchronousStandbyNames && synchronousStandby() === standby
 
     standby.enabled = enabled
     standby.networkLagMs = networkLagMs
@@ -3222,6 +3226,17 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       standby.inFlight = 0
       standby.lagBytes = 0
       standby.lagSec = 0
+      standby.applyActivity = damp(standby.applyActivity, 0, 3, dt)
+      standby.walSender = 'stopped'
+      standby.walReceiver = 'stopped'
+      standby.startupProcess = 'stopped'
+      return
+    }
+
+    const standbyNode = state.cluster.nodes[index + 1]
+    if (standbyNode.role === 'diverged') {
+      standby.connected = false
+      standby.inFlight = 0
       standby.applyActivity = damp(standby.applyActivity, 0, 3, dt)
       standby.walSender = 'stopped'
       standby.walReceiver = 'stopped'
@@ -3429,10 +3444,31 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       node.dataDirectory.appliedLsn = wal.insertLsn
     }
 
+    const oldPrimary = state.cluster.nodes[0]
+    if (
+      leaderId
+      && leaderId !== 'primary'
+      && oldPrimary.role === 'standby'
+      && oldPrimary.online
+    ) {
+      oldPrimary.wal.receivedLsn = wal.insertLsn
+      oldPrimary.wal.writtenLsn = wal.writeLsn
+      oldPrimary.wal.flushedLsn = wal.flushLsn
+      oldPrimary.wal.appliedLsn = wal.insertLsn
+      oldPrimary.wal.segmentCount = wal.segmentCount
+      oldPrimary.wal.diskBytes = wal.segmentCount * WAL_SEG
+      oldPrimary.dataDirectory.bytes = dr.dataDirectoryBytes
+      oldPrimary.dataDirectory.appliedLsn = wal.insertLsn
+    }
+
     for (let i = 0 as 0 | 1; i < 2; i = (i + 1) as 0 | 1) {
       const standby = rep.standbys[i]
       const node = state.cluster.nodes[i + 1]
       if (node.id === leaderId) continue
+      if (node.role === 'diverged') {
+        node.online = false
+        continue
+      }
       node.online = standby.enabled
       node.wal.receivedLsn = standby.receivedLsn
       node.wal.writtenLsn = standby.writtenLsn
@@ -3764,10 +3800,25 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   function prepareFollowerAfterPromotion(
     id: 'standbyA' | 'standbyB',
     forkLsn: number,
-  ): void {
-    if (ha.currentLeader === id) return
+  ): boolean {
+    if (ha.currentLeader === id) return false
     const index = id === 'standbyA' ? 0 : 1
     const standby = rep.standbys[index]
+    const node = state.cluster.nodes[index + 1]
+    /* PostgreSQL refuses a timeline switch when recovery has already replayed
+     * beyond the new timeline's fork. Patroni must rewind or reinitialise this
+     * data directory; silently moving its LSNs backwards invents recovery. */
+    if (standby.appliedLsn > forkLsn) {
+      node.role = 'diverged'
+      node.online = false
+      standby.connected = false
+      standby.inFlight = 0
+      standby.walSender = 'stopped'
+      standby.walReceiver = 'stopped'
+      standby.startupProcess = 'stopped'
+      resetPhysicalRuntime(physicalRuntime[index], standby.appliedLsn)
+      return true
+    }
     standby.sentLsn = Math.min(standby.sentLsn, forkLsn)
     standby.receivedLsn = Math.min(standby.receivedLsn, forkLsn)
     standby.writtenLsn = Math.min(standby.writtenLsn, forkLsn)
@@ -3777,6 +3828,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     standby.acknowledgedApplyLsn = standby.appliedLsn
     resetPhysicalRuntime(physicalRuntime[index], standby.appliedLsn)
     standby.connected = standby.enabled
+    return false
   }
 
   function completePromotion(unplanned: boolean): void {
@@ -3828,12 +3880,21 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       physicalRuntime[targetId === 'standbyA' ? 0 : 1],
       forkLsn,
     )
-    prepareFollowerAfterPromotion('standbyA', forkLsn)
-    prepareFollowerAfterPromotion('standbyB', forkLsn)
+    const standbyANeedsReinitialize = prepareFollowerAfterPromotion('standbyA', forkLsn)
+    const standbyBNeedsReinitialize = prepareFollowerAfterPromotion('standbyB', forkLsn)
+    const reinitializeNode = standbyANeedsReinitialize
+      ? 'standbyA'
+      : standbyBNeedsReinitialize
+        ? 'standbyB'
+        : null
 
     const rejoin = ha.rejoin
-    rejoin.required = unplanned
+    rejoin.required = unplanned || reinitializeNode !== null
     rejoin.node = unplanned ? sourceId : null
+    rejoin.reinitializeRequired = reinitializeNode !== null
+    rejoin.reinitializeNode = reinitializeNode
+    rejoin.reinitializeBytes = reinitializeNode ? dr.dataDirectoryBytes : 0
+    rejoin.reinitializeCopiedBytes = 0
     rejoin.blockChangeTrackingAvailable = K.walLogHints
     rejoin.status = 'idle'
     rejoin.progress = 0
@@ -3852,7 +3913,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     ) {
       scenarioDecision.lossBytes = transition.lossBytes
       scenarioDecision.lossTransactions = transition.lossTransactions
-      scenarioDecision.rejoinBytes = rejoin.bytesRewound
+      scenarioDecision.rejoinBytes = rejoin.bytesRewound + rejoin.reinitializeBytes
       scenarioDecision.phase = 'outcome'
     }
 
@@ -3866,7 +3927,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     bus.emit('narrate', {
       title: unplanned ? 'Two histories now exist' : 'Orderly handover complete',
       body: unplanned
-        ? `Timeline ${ha.timeline.current} forked from timeline ${ha.timeline.parent} at ${fmtLsn(forkLsn)}. The old history continues for ${transition.lossBytes} bytes that the new primary never received: ${transition.lossTransactions} committed write transactions are lost. The former primary cannot follow this new history until pg_rewind discards its divergent tail.`
+        ? reinitializeNode
+          ? `Timeline ${ha.timeline.current} forked from timeline ${ha.timeline.parent} at ${fmtLsn(forkLsn)}. The former primary needs pg_rewind, and ${state.cluster.nodes[clusterNodeIndex(reinitializeNode)].name} replayed beyond the fork, so PostgreSQL refuses the new timeline until Patroni rewinds or reinitialises that follower. No healthy standby remains.`
+          : `Timeline ${ha.timeline.current} forked from timeline ${ha.timeline.parent} at ${fmtLsn(forkLsn)}. The old history continues for ${transition.lossBytes} bytes that the new primary never received: ${transition.lossTransactions} committed write transactions are lost. The former primary cannot follow this new history until pg_rewind discards its divergent tail.`
         : `Patroni waited ${transition.waitSec.toFixed(1)} seconds for the standby, then moved the leader lock and service address. Zero bytes and zero transactions were lost.`,
       seconds: 12,
     })
@@ -3940,10 +4003,13 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       || rejoin.node !== 'primary'
       || rejoin.status === 'checking'
       || rejoin.status === 'rewinding'
+      || rejoin.status === 'complete'
     ) {
       toast(
-        rejoin.required
-          ? 'pg_rewind is already running'
+        rejoin.status === 'complete' && rejoin.reinitializeRequired
+          ? 'pg_rewind repaired the former primary; the ahead follower still requires reinitialisation'
+          : rejoin.required
+            ? 'pg_rewind is already running'
           : 'pg_rewind has no divergent former primary to repair',
         'warn',
         5500,
@@ -4035,7 +4101,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     rejoin.status = 'complete'
     rejoin.progress = 1
     rejoin.bytesCopied = rejoin.bytesRewound
-    rejoin.required = false
+    rejoin.required = rejoin.reinitializeRequired
     rejoin.failureReason = ''
     toast(
       `pg_rewind completed in ${rejoin.elapsedSec.toFixed(1)} s; the former primary can now follow timeline ${ha.timeline.current}`,
@@ -4047,6 +4113,44 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       body: `pg_rewind took ${rejoin.elapsedSec.toFixed(1)} seconds. It returned the old data directory to the common history, discarded the divergent tail, and the node now follows timeline ${ha.timeline.current} as a standby.`,
       seconds: 9,
     })
+  }
+
+  function finishFollowerReinitialize(): void {
+    const rejoin = ha.rejoin
+    const id = rejoin.reinitializeNode
+    if (id !== 'standbyA' && id !== 'standbyB') return
+    const index = id === 'standbyA' ? 0 : 1
+    const standby = rep.standbys[index]
+    const node = state.cluster.nodes[index + 1]
+    const lsn = wal.flushLsn
+
+    standby.sentLsn = standby.receivedLsn = standby.writtenLsn = lsn
+    standby.flushedLsn = standby.appliedLsn = lsn
+    standby.acknowledgedFlushLsn = standby.acknowledgedApplyLsn = lsn
+    standby.connected = standby.enabled
+    standby.inFlight = 0
+    standby.walSender = standby.enabled ? 'streaming' : 'stopped'
+    standby.walReceiver = standby.enabled ? 'streaming' : 'stopped'
+    standby.startupProcess = standby.enabled ? 'streaming' : 'stopped'
+    resetPhysicalRuntime(physicalRuntime[index], lsn)
+
+    node.role = 'standby'
+    node.online = standby.enabled
+    node.leaderOpinion = ha.currentLeader
+    node.wal.receivedLsn = lsn
+    node.wal.writtenLsn = lsn
+    node.wal.flushedLsn = lsn
+    node.wal.appliedLsn = lsn
+    node.dataDirectory.appliedLsn = lsn
+
+    rejoin.reinitializeCopiedBytes = rejoin.reinitializeBytes
+    rejoin.reinitializeRequired = false
+    rejoin.required = rejoin.status !== 'complete'
+    toast(
+      `${node.name} reinitialised from ${fmtBytes(rejoin.reinitializeBytes)} of base-backup data and can follow timeline ${ha.timeline.current}`,
+      'good',
+      7500,
+    )
   }
 
   function tickHighAvailability(dt: number): void {
@@ -4946,7 +5050,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
             done = b.stateT >= 0.012
           } else if (
             (sc === 'on' || sc === 'remote_apply')
-            && synchronousStandby().enabled
+            && K.synchronousStandbyNames
           ) {
             const syncStandby = synchronousStandby()
             const acknowledged =
@@ -4959,8 +5063,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
               toast('commits are waiting for a synchronous standby that is not there', 'warn', 6000)
             }
           } else {
-            // With no standby configured, every synchronous_commit mode
-            // collapses to the local durability guarantee.
+            // With synchronous_standby_names empty, remote modes collapse to
+            // the local durability guarantee.
             done = wal.flushLsn >= x.commitLsn
             if (b.stateT > 8) done = true // watchdog for local states only
           }
@@ -5001,18 +5105,22 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
   function commitWaitEstimate(): number {
     const fsync = Math.max(0.09, flushDur) * 1.5
+    const syncStandby = synchronousStandby()
+    const remoteWait = K.synchronousStandbyNames
+      ? syncStandby.connected
+        ? (syncStandby.networkLagMs * 2) / 1000
+        : 9999
+      : 0
     switch (K.synchronousCommit) {
       case 'off':
         return 0.012
       case 'local':
         return fsync
       case 'on':
-        return fsync + (K.replicaEnabled ? (K.replicaNetworkLag * 2) / 1000 : 0)
+        return fsync + remoteWait
       case 'remote_apply':
-        return fsync + (
-          K.replicaEnabled
-            ? (K.replicaNetworkLag * 2) / 1000 + REPLICA_APPLY_ACK_DELAY
-            : 0
+        return fsync + remoteWait + (
+          K.synchronousStandbyNames ? REPLICA_APPLY_ACK_DELAY : 0
         )
     }
   }
@@ -5360,8 +5468,20 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     ) {
       decision.lossBytes = ha.transition.lossBytes
       decision.lossTransactions = ha.transition.lossTransactions
-      decision.rejoinBytes = ha.rejoin.bytesRewound
+      decision.rejoinBytes = ha.rejoin.bytesRewound + ha.rejoin.reinitializeBytes
       decision.phase = 'outcome'
+    }
+    if (
+      decision.phase === 'recovering'
+      && ha.rejoin.reinitializeRequired
+    ) {
+      ha.rejoin.reinitializeCopiedBytes = Math.min(
+        ha.rejoin.reinitializeBytes,
+        ha.rejoin.reinitializeCopiedBytes + DR_BACKUP_BYTES_PER_SEC * dt,
+      )
+      if (ha.rejoin.reinitializeCopiedBytes >= ha.rejoin.reinitializeBytes) {
+        finishFollowerReinitialize()
+      }
     }
     if (
       decision.phase === 'recovering'
@@ -5657,9 +5777,22 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         break
       case 'synchronousCommit':
         if (K.synchronousCommit === 'off') toast("synchronous_commit=off — commits no longer wait for fsync", 'warn', 5000)
-        else if (K.synchronousCommit === 'remote_apply' && !K.replicaEnabled) {
-          toast('remote_apply needs a synchronous standby — there is none, so only the local flush is guaranteed', 'warn', 6000)
+        else if (
+          (K.synchronousCommit === 'on' || K.synchronousCommit === 'remote_apply')
+          && K.synchronousStandbyNames
+          && !synchronousStandby().connected
+        ) {
+          toast('commits will wait until the named synchronous standby returns or synchronous_standby_names is cleared and reloaded', 'warn', 7000)
         }
+        break
+      case 'synchronousStandbyNames':
+        toast(
+          K.synchronousStandbyNames
+            ? 'synchronous_standby_names loaded — remote commit durability now reduces availability'
+            : 'synchronous_standby_names cleared and reloaded — SyncRep waiters released with local durability only',
+          K.synchronousStandbyNames ? 'warn' : 'good',
+          7000,
+        )
         break
       case 'archiveAvailable':
         toast(
@@ -5844,6 +5977,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     ha.transition.failureReason = ''
     ha.rejoin.required = false
     ha.rejoin.node = null
+    ha.rejoin.reinitializeRequired = false
+    ha.rejoin.reinitializeNode = null
+    ha.rejoin.reinitializeBytes = 0
+    ha.rejoin.reinitializeCopiedBytes = 0
     ha.rejoin.blockChangeTrackingAvailable = true
     ha.rejoin.status = 'idle'
     ha.rejoin.progress = 0

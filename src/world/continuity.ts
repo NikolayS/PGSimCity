@@ -753,7 +753,14 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     SBD[0], 6.4, SBD[2] - 15.5, Math.PI, 1.2, COLOR.inkDim, 0.72,
     gBBuffers,
   )
-  plate("synchronous_standby_names = 'standby_a'", SBD[0], 4.4, SBD[2] - 15.5, Math.PI, 1.2, COLOR.inkDim, 0.72, gBBuffers)
+  const syncStandbyAPlate = plate("synchronous_standby_names = 'standby_a'", SBD[0], 4.4, SBD[2] - 15.5, Math.PI, 1.2, COLOR.inkDim, 0.72, gBBuffers)
+  syncStandbyAPlate.name = 'sync-standby-name.a'
+  const syncStandbyBPlate = plate("synchronous_standby_names = 'standby_b'", SBD[0], 4.4, SBD[2] - 15.5, Math.PI, 1.2, COLOR.inkDim, 0.72, gBBuffers)
+  syncStandbyBPlate.name = 'sync-standby-name.b'
+  syncStandbyBPlate.visible = false
+  const syncStandbyNonePlate = plate("synchronous_standby_names = ''", SBD[0], 4.4, SBD[2] - 15.5, Math.PI, 1.2, COLOR.inkDim, 0.72, gBBuffers)
+  syncStandbyNonePlate.name = 'sync-standby-name.none'
+  syncStandbyNonePlate.visible = false
   plate('standby_b data directory', SBS[0], SBS[1] + 11.5, SBS[2] + 13, 0, 1.6, COLOR.storage, 0.9, gBStorage)
 
   /* ---------------------------------------------------------------------
@@ -1024,8 +1031,8 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
 
   ctx.register({
     id: 'ha.rejoin',
-    name: 'pg_rewind rejoin bay',
-    role: 'returns a divergent former primary to the common timeline',
+    name: 'rewind or reinitialise bay',
+    role: 'repairs every data directory that is ahead of the new timeline fork',
     kind: 'concept',
     district: 'replication',
     object: gRejoin,
@@ -1036,11 +1043,16 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     readout: (s: SimState) => {
       const rewind = s.highAvailability.rejoin
       if (rewind.status === 'failed') return rewind.failureReason
+      if (rewind.reinitializeRequired && rewind.status === 'complete') {
+        return `former primary repaired · rebuilding ${rewind.reinitializeNode} ${fmtBytes(rewind.reinitializeCopiedBytes)} / ${fmtBytes(rewind.reinitializeBytes)}`
+      }
       if (rewind.status === 'checking') return `checking prerequisites · ${rewind.elapsedSec.toFixed(1)} s elapsed`
       if (rewind.status === 'rewinding') return `rewinding ${fmtBytes(rewind.bytesCopied)} / ${fmtBytes(rewind.bytesRewound)}`
       if (rewind.status === 'complete') return `complete in ${rewind.elapsedSec.toFixed(1)} s · following timeline ${s.highAvailability.timeline.current}`
       return rewind.required
-        ? `former primary diverged by ${fmtBytes(rewind.bytesRewound)} · cannot rejoin directly`
+        ? rewind.reinitializeRequired
+          ? `two nodes need repair · follower rebuild ${fmtBytes(rewind.reinitializeBytes)}`
+          : `former primary diverged by ${fmtBytes(rewind.bytesRewound)} · cannot rejoin directly`
         : 'no divergent node waiting'
     },
   })
@@ -1336,6 +1348,11 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     /* --- 5. Patroni lease, endpoint, roles, and pg_rewind ----------------*/
     const ha = sim.highAvailability
     const leader = ha.currentLeader
+    syncStandbyAPlate.visible = sim.knobs.synchronousStandbyNames
+      && leader !== 'standbyA'
+    syncStandbyBPlate.visible = sim.knobs.synchronousStandbyNames
+      && leader === 'standbyA'
+    syncStandbyNonePlate.visible = !sim.knobs.synchronousStandbyNames
     epArrow.visible = leader !== null
     if (leader) {
       let targetX: number = ANCHOR.postmaster[0]

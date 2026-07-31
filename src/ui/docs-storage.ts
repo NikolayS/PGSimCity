@@ -25,6 +25,11 @@ function sumTables(s: SimState, pick: (t: TableSim) => number): number {
 
 const ratio = (a: number, b: number): number => (b > 0 ? a / b : 0)
 
+const synchronousStandby = (s: SimState) =>
+  s.highAvailability.currentLeader === 'standbyA'
+    ? s.replication.standbys[1]
+    : s.replication.standbys[0]
+
 /** Bytes currently sitting in pg_wal. */
 const walDirBytes = (s: SimState): number => s.wal.segmentCount * s.wal.segmentSize
 
@@ -404,7 +409,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     sections: [
       {
         heading: 'The fork in front of you is sequential',
-        body: 'The old primary stopped before this standby was promoted, so only one history is accepting writes. Promotion made timeline 2 at the standby’s durable LSN. The former primary had flushed a tail of timeline 1 after that point but never shipped it; those measured bytes and committed write transactions are lost. `pg_rewind` repairs the old data directory for the one surviving history by discarding that already-orphaned WAL tail. This is bad, but bounded by the replication gap the city just measured.',
+        body: 'The old primary stopped before this standby was promoted, so only one history is accepting writes. Promotion made timeline 2 at the selected standby’s durable LSN. The former primary needs `pg_rewind` because it has a tail on timeline 1. Any other follower that already replayed past the fork cannot silently move backward either: PostgreSQL rejects timeline 2 because it does not contain that data directory’s minimum recovery point, so Patroni must rewind or reinitialise that follower too. The PostgreSQL manual’s failover and timeline sections describe the branch; the recovery code enforces the minimum recovery point.',
       },
       {
         heading: 'A concurrent fork is split-brain',
@@ -530,13 +535,17 @@ export const DOCS_STORAGE: ComponentDoc[] = [
 
   {
     id: 'ha.rejoin',
-    title: 'pg_rewind rejoin bay',
-    subtitle: 'return a divergent former primary to the common history',
-    tldr: 'Find the fork, undo changed blocks on the old history, then let the node follow the new timeline.',
+    title: 'Rejoin bay',
+    subtitle: 'pg_rewind or reinitialise every node ahead of the fork',
+    tldr: 'Find every data directory past the fork; rewind it when possible, otherwise copy a fresh base backup.',
     sections: [
       {
         heading: 'What pg_rewind repairs',
         body: '`pg_rewind` compares timeline history, finds the last common checkpoint, identifies data blocks changed on the former primary after divergence, and replaces those blocks from the new primary. It then prepares recovery so the repaired data directory can replay the new timeline. This is usually much smaller than copying a whole base backup, but it is not a merge: changes unique to the old primary are discarded.',
+      },
+      {
+        heading: 'A follower can need the same decision',
+        body: 'Promoting the most-lagged candidate can put every other follower past the new fork. PostgreSQL refuses to start recovery on the new timeline when it does not contain the follower’s minimum recovery point. Patroni therefore checks each ahead follower and uses `pg_rewind` when its prerequisites hold or reinitialises it from a fresh base backup. The city’s candidate drill deliberately shows the conservative full-copy path: immediately after promotion it has zero healthy standbys, not one.',
       },
       {
         heading: 'Three ways it can be impossible',
@@ -551,6 +560,12 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       { label: 'Required', get: (s) => s.highAvailability.rejoin.required ? 'yes — histories diverged' : 'no' },
       { label: 'Status', get: (s) => s.highAvailability.rejoin.status },
       { label: 'Diverged bytes', get: (s) => fmtBytes(s.highAvailability.rejoin.bytesRewound) },
+      {
+        label: 'Follower rebuild',
+        get: (s) => s.highAvailability.rejoin.reinitializeNode
+          ? `${s.cluster.nodes[s.highAvailability.rejoin.reinitializeNode === 'standbyA' ? 1 : 2].name} · ${fmtBytes(s.highAvailability.rejoin.reinitializeCopiedBytes)} / ${fmtBytes(s.highAvailability.rejoin.reinitializeBytes)}`
+          : 'not required',
+      },
       { label: 'Elapsed', get: (s) => fmtDuration(s.highAvailability.rejoin.elapsedSec) },
       {
         label: 'Result',
@@ -565,8 +580,15 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     actions: ['start-pg-rewind'],
     see: ['timeline.yard', 'ha.dcs', 'backup.host'],
     refs: {
-      docs: [manual('app-pgrewind.html', 'pg_rewind')],
-      source: [srcFile('src/bin/pg_rewind/pg_rewind.c', 'main')],
+      docs: [
+        manual('app-pgrewind.html', 'pg_rewind'),
+        manual('warm-standby.html', '26.2. Log-Shipping Standby Servers — failover'),
+        { label: 'Patroni rewind and reinitialise decision', url: 'https://github.com/patroni/patroni/blob/master/patroni/postgresql/rewind.py' },
+      ],
+      source: [
+        srcFile('src/bin/pg_rewind/pg_rewind.c', 'main'),
+        srcFile('src/backend/access/transam/xlogrecovery.c', 'checkTimeLineSwitch, rescanLatestTimeLine'),
+      ],
       rogov: rogov(R_WAL, 'Write-Ahead Log — recovery', 'the nearest honest chapter; Rogov does not cover pg_rewind'),
     },
   },
@@ -1817,18 +1839,29 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
     ],
     metrics: [
-      { label: 'Mode', get: (s) => (s.replication.enabled ? s.replication.mode : 'no standby') },
-      { label: 'Network latency', get: (s) => `${fmtNum(s.replication.networkLagMs)} ms`, hint: 'one way' },
       {
-        // This model names its connected standby in synchronous_standby_names,
-        // so on and remote_apply both put the network in the commit path.
+        label: 'Mode',
+        get: (s) => s.knobs.synchronousStandbyNames
+          ? synchronousStandby(s).connected
+            ? 'synchronous'
+            : 'synchronous · waiting for standby'
+          : 'asynchronous · names empty',
+      },
+      { label: 'Network latency', get: (s) => `${fmtNum(synchronousStandby(s).networkLagMs)} ms`, hint: 'one way to the active synchronous follower' },
+      {
         label: 'Commit tax',
-        get: (s) =>
-          s.replication.enabled && s.replication.connected && s.replication.mode === 'sync'
-            ? `${fmtNum(s.replication.networkLagMs * 2)} ms per commit`
-            : s.knobs.synchronousCommit === 'off'
-              ? 'none — the commit does not wait at all'
-              : 'none — local flush only',
+        get: (s) => {
+          if (s.knobs.synchronousCommit === 'off') return 'none — the commit does not wait at all'
+          if (
+            (s.knobs.synchronousCommit === 'on' || s.knobs.synchronousCommit === 'remote_apply')
+            && s.knobs.synchronousStandbyNames
+          ) {
+            return synchronousStandby(s).connected
+              ? `${fmtNum(synchronousStandby(s).networkLagMs * 2)} ms per commit`
+              : 'unbounded · IPC / SyncRep'
+          }
+          return 'none — local flush only'
+        },
         hint: 'a commit only pays the network when a synchronous standby is in the path',
       },
       { label: 'In flight', get: (s) => fmtNum(s.replication.inFlight), hint: 'WAL records on the wire' },
@@ -1840,7 +1873,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
             : `${fmtBytes(s.replication.lagBytes)} · ${fmtDuration(s.replication.lagSec)}`,
       },
     ],
-    knobs: ['synchronousCommit', 'replicaNetworkLag', 'replicaEnabled', 'replicaSlowApply'],
+    knobs: ['synchronousCommit', 'synchronousStandbyNames', 'replicaNetworkLag', 'replicaEnabled', 'replicaSlowApply'],
     see: ['walsender', 'walreceiver', 'replica.standby', 'walwriter'],
     source: ['src/backend/replication/walsender.c', 'src/backend/replication/walreceiver.c'],
     refs: {

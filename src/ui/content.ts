@@ -172,6 +172,15 @@ export const KNOB_META: KnobMeta[] = [
     danger: true,
   },
   {
+    key: 'synchronousStandbyNames',
+    label: 'synchronous_standby_names set',
+    guc: 'synchronous_standby_names',
+    group: 'replication',
+    kind: 'toggle',
+    hint: 'Names the active follower as synchronous. Clearing it and reloading releases SyncRep waiters but gives up remote durability; PostgreSQL manual §26.2.8 calls out this availability trade-off.',
+    danger: true,
+  },
+  {
     key: 'walLevel',
     label: 'wal_level',
     guc: 'wal_level',

@@ -724,8 +724,8 @@ SELECT * FROM pg_buffercache_usage_counts();`,
     note:
       'The name of the local flush wait changed. PostgreSQL 17 started generating the wait event list from a table and normalised the capitalisation on the way through, so this event is `WALSync` on 16 and older and `WalSync` from 17 on. A monitoring query that greps for the old spelling on a new server matches nothing at all, and reports a healthy zero while doing it.',
     branches: [
-      { label: 'They are waiting on `IPC / SyncRep`.', next: 'v.sync_remote', test: (s) => s.replication.mode === 'sync' && waits(s).commit > 0 },
-      { label: 'They are waiting on `IO / WalSync`.', next: 'v.sync_local', test: (s) => s.replication.mode !== 'sync' && waits(s).commit > 0 },
+      { label: 'They are waiting on `IPC / SyncRep`.', next: 'v.sync_remote', test: (s) => s.knobs.synchronousStandbyNames && (s.knobs.synchronousCommit === 'on' || s.knobs.synchronousCommit === 'remote_apply') && waits(s).commit > 0 },
+      { label: 'They are waiting on `IO / WalSync`.', next: 'v.sync_local', test: (s) => (!s.knobs.synchronousStandbyNames || s.knobs.synchronousCommit === 'local' || s.knobs.synchronousCommit === 'off') && waits(s).commit > 0 },
       { label: 'Nobody is waiting to commit.', next: 'v.commit_ok', test: (s) => waits(s).commit === 0 },
     ],
   },
