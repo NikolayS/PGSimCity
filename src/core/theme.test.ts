@@ -67,6 +67,7 @@ const STANDARD_FRAG = [
   '  #include <color_fragment>',
   '  #include <roughnessmap_fragment>',
   '  #include <normal_fragment_maps>',
+  '  #include <lights_fragment_end>',
   '}',
 ].join('\n')
 
@@ -129,6 +130,32 @@ describe('the masonry surface term', () => {
       // in the city would course from the same origin and read as one object.
       expect(out.vertexShader, mode).toContain('instanceMatrix')
     }
+  })
+
+  it('adds baked transport to indirect diffuse without touching emissive', () => {
+    for (const mode of ['day', 'night'] as const) {
+      const out = inMode(mode, () =>
+        compile(theme.mat(`wal.baked.${mode}`, { color: 0x2a3752 }), true),
+      )
+      expect(out.vertexShader, mode).toContain('attribute vec3 pgBakeSkyA;')
+      expect(out.vertexShader, mode).toContain('varying vec3 pgBakedIndirect;')
+      expect(out.fragmentShader, mode).toContain('irradiance += pgBakedIndirect;')
+      const baked = out.vertexShader.slice(out.vertexShader.indexOf('vec3 pgBakedTransport'))
+      expect(baked).not.toContain('totalEmissiveRadiance')
+      expect(baked).not.toContain('emissive')
+    }
+  })
+
+  it('recombines one transport bake with separate day and night light', () => {
+    const day = inMode('day', () =>
+      compile(theme.mat('storage.baked.day', { color: 0x1a2333 }), true),
+    )
+    const night = inMode('night', () =>
+      compile(theme.mat('storage.baked.night', { color: 0x1a2333 }), true),
+    )
+    expect(day.vertexShader).toContain('const vec3 pgBakeSkyColor = vec3( 0.550000')
+    expect(night.vertexShader).toContain('const vec3 pgBakeSkyColor = vec3( 0.018000')
+    expect(day.vertexShader).not.toBe(night.vertexShader)
   })
 
   it('cannot reach meaning: neon and line materials get nothing', () => {

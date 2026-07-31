@@ -2,6 +2,7 @@ import * as THREE from 'three'
 
 import { makeRng } from '../core/util'
 import type { QualityLevel, WorldContext, WorldModule } from '../core/types'
+import { disposeBakedIndirect, installBakedIndirect } from './baked-light'
 
 interface Roof {
   x: number
@@ -279,12 +280,25 @@ export function createSilhouetteDetails(ctx: WorldContext): WorldModule {
 
   applyQuality(ctx.quality.level)
   const offQuality = ctx.bus.on('quality', ({ level }) => applyQuality(level))
+  let bakeAttempted = false
+  let bakeInstalled = false
+
+  function installBake(): void {
+    if (bakeAttempted) return
+    bakeAttempted = true
+    const stats = installBakedIndirect(ctx.scene)
+    ctx.scene.userData.pgBakedLight = stats
+    bakeInstalled = stats.installed
+  }
 
   return {
     id: 'silhouette',
     group,
-    update(): void {},
+    update(): void {
+      installBake()
+    },
     dispose(): void {
+      if (bakeInstalled) disposeBakedIndirect(ctx.scene)
       offQuality()
     },
   }
