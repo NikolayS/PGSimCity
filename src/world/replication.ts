@@ -7,10 +7,13 @@ import { ANCHOR, CITY, TABLES, routeLength, routePoint, routeTangent } from './l
 
 export function standbyReadout(s: SimState): string {
   const r = s.replication.standbys[0]
+  const slot = s.replication.physicalSlots[0]
   const opinion = s.cluster.nodes[1].leaderOpinion ?? 'unknown'
   if (!r.enabled) return 'offline'
   if (!r.connected) {
-    return `disconnected · sees ${opinion} as leader · slot holds ${fmtBytes(s.replication.physicalSlots[0].retainedBytes)}`
+    return slot.exists
+      ? `disconnected · sees ${opinion} as leader · slot holds ${fmtBytes(slot.retainedBytes)}`
+      : `disconnected · sees ${opinion} as leader · slot dropped; rebuild required`
   }
   return `${fmtBytes(r.lagBytes)} behind · ${r.lagSec.toFixed(1)} s · sees ${opinion} as leader`
 }

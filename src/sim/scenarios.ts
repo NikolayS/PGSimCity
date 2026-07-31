@@ -432,6 +432,129 @@ export const SCENARIOS: ScenarioDef[] = [
       [84, 'Do not turn it off', 'full_page_writes=off is safe only on storage that guarantees atomic 8 KiB writes. If you are not certain your stack does — and on a cloud volume you are not — leaving it off means a crash can produce silent corruption you discover months later.'],
     ],
   },
+
+  /* ---------------------------------------------------------------------- */
+  {
+    id: 'slot-pressure',
+    name: 'Slot pressure',
+    blurb: 'A teaching-scale write flood lets a disconnected standby slot consume primary WAL headroom in under three simulated minutes.',
+    icon: '⌁',
+    focus: 'wal.vault',
+    duration: 0,
+    knobs: {
+      tps: 750,
+      writeRatio: 1,
+      updateRatio: 1,
+      seqScanRatio: 0,
+      sharedBuffers: 768,
+      synchronousCommit: 'local',
+      fullPageWrites: true,
+      walLevel: 'replica',
+      archiveAvailable: true,
+      replicaEnabled: true,
+      standbyBEnabled: false,
+      checkpointTimeout: 15,
+      checkpointCompletionTarget: 0.5,
+      maxWalSize: 512,
+    },
+    decision: {
+      revealAt: 179,
+      choices: [
+        {
+          id: 'add-wal-capacity',
+          label: 'Add 512 MiB capacity',
+          hint: 'Keep the slot and give standby_b enough headroom to catch up.',
+        },
+        {
+          id: 'drop-replication-slot',
+          label: 'Drop standby_b_slot',
+          hint: 'Release retained WAL now; standby_b will need a new base backup.',
+        },
+      ],
+    },
+  },
+
+  /* ---------------------------------------------------------------------- */
+  {
+    id: 'vacuum-blockade',
+    name: 'Vacuum blockade',
+    blurb: 'An idle transaction pins xmin while autovacuum scans growing tables and removes nothing.',
+    icon: '⌛',
+    focus: 'proc.array',
+    duration: 0,
+    knobs: {
+      tps: 1600,
+      writeRatio: 0.88,
+      updateRatio: 0.94,
+      seqScanRatio: 0,
+      sharedBuffers: 768,
+      autovacuum: true,
+      autovacuumScaleFactor: 0.01,
+      longRunningXact: true,
+      replicaEnabled: true,
+      checkpointTimeout: 120,
+      maxWalSize: 768,
+    },
+    decision: {
+      revealAt: 56,
+      choices: [
+        {
+          id: 'terminate-transaction',
+          label: 'Terminate the session',
+          hint: 'Abort one idle transaction and release xmin for the next vacuum pass.',
+        },
+        {
+          id: 'wait-for-transaction',
+          label: 'Keep waiting',
+          hint: 'Preserve the session while dead row versions and relation pages keep growing.',
+        },
+      ],
+    },
+  },
+
+  /* ---------------------------------------------------------------------- */
+  {
+    id: 'failover-candidate',
+    name: 'Choose the candidate',
+    blurb: 'Two failover candidates have different durable LSNs; promotion makes the gap permanent.',
+    icon: '⑂',
+    focus: 'standby.b',
+    duration: 0,
+    knobs: {
+      tps: 2200,
+      writeRatio: 1,
+      updateRatio: 0.7,
+      seqScanRatio: 0,
+      sharedBuffers: 768,
+      synchronousCommit: 'on',
+      walLevel: 'replica',
+      replicaEnabled: true,
+      replicaNetworkLag: 20,
+      replicaSlowApply: false,
+      standbyBEnabled: true,
+      standbyBNetworkLag: 900,
+      standbyBSlowApply: true,
+      patroniDcsAvailable: true,
+      walLogHints: true,
+      checkpointTimeout: 120,
+      maxWalSize: 768,
+    },
+    decision: {
+      revealAt: 28,
+      choices: [
+        {
+          id: 'promote-standby-a',
+          label: 'Promote standby_a',
+          hint: 'Use the candidate with the later durable LSN.',
+        },
+        {
+          id: 'promote-standby-b',
+          label: 'Promote standby_b',
+          hint: 'Use the more-lagged candidate and discard its missing WAL history.',
+        },
+      ],
+    },
+  },
 ]
 
 export default SCENARIOS

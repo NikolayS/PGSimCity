@@ -68,6 +68,8 @@ import type {
   PlanNode,
   QueryKind,
   SampleFrames,
+  ScenarioChoiceId,
+  ScenarioDecisionState,
   SimApi,
   SimState,
   TableSim,
@@ -84,6 +86,7 @@ import {
   clamp01,
   damp,
   expDelay,
+  fmtBytes,
   fmtLsn,
   makeRng,
   pushHistory,
@@ -548,6 +551,7 @@ export function createSim(bus: Bus): SimApi {
   const standbyASlot: PhysicalReplicationSlotState = {
     name: 'standby_a_slot',
     standbyId: 'standbyA',
+    exists: true,
     active: true,
     restartLsn: initialLsn,
     retainedBytes: 0,
@@ -555,6 +559,7 @@ export function createSim(bus: Bus): SimApi {
   const standbyBSlot: PhysicalReplicationSlotState = {
     name: 'standby_b_slot',
     standbyId: 'standbyB',
+    exists: true,
     active: true,
     restartLsn: initialLsn,
     retainedBytes: 0,
@@ -775,6 +780,7 @@ export function createSim(bus: Bus): SimApi {
     },
     scenario: null,
     scenarioT: 0,
+    scenarioDecision: null,
     forkPulse: 0,
     trace: {
       slot: -1,
@@ -2042,7 +2048,7 @@ export function createSim(bus: Bus): SimApi {
     for (let i = 0; i < 2; i++) {
       const standby = rep.standbys[i]
       const slot = rep.physicalSlots[i]
-      if (K.walLevel === 'minimal') {
+      if (K.walLevel === 'minimal' || !slot.exists) {
         slot.active = false
         slot.restartLsn = wal.insertLsn
         slot.retainedBytes = 0
@@ -3600,6 +3606,46 @@ export function createSim(bus: Bus): SimApi {
       && state.cluster.nodes[clusterNodeIndex(id)].online
   }
 
+  function stopPrimaryAndStreams(): void {
+    ha.acceptingWrites = false
+    const sourceNode = state.cluster.nodes[0]
+    sourceNode.wal.receivedLsn = wal.insertLsn
+    sourceNode.wal.writtenLsn = wal.writeLsn
+    sourceNode.wal.flushedLsn = wal.flushLsn
+    sourceNode.wal.appliedLsn = wal.insertLsn
+    sourceNode.online = false
+    ha.timeline.oldHistoryEndLsn = wal.flushLsn
+    stopCrashedPrimaryWork()
+
+    /* The primary and its network are gone. Bytes already durable on each
+     * candidate survive; queued packets and primary-only bytes do not. */
+    for (let i = 0 as 0 | 1; i < 2; i = (i + 1) as 0 | 1) {
+      const standby = rep.standbys[i]
+      resetPhysicalRuntime(physicalRuntime[i], standby.flushedLsn)
+      standby.sentLsn = standby.receivedLsn = standby.writtenLsn = standby.flushedLsn
+      standby.inFlight = 0
+      standby.connected = false
+      standby.walSender = 'stopped'
+      standby.walReceiver = 'stopped'
+    }
+    patroniRenewT = 0
+  }
+
+  function stageFailoverCandidateDecision(): void {
+    if (ha.currentLeader !== 'primary' || ha.transition.status === 'waiting') return
+    const transition = ha.transition
+    transition.kind = 'failover'
+    transition.status = 'waiting'
+    transition.source = 'primary'
+    transition.target = null
+    transition.startedAt = state.t
+    transition.waitSec = 0
+    transition.lossBytes = 0
+    transition.lossTransactions = 0
+    transition.failureReason = ''
+    stopPrimaryAndStreams()
+  }
+
   function startSwitchover(target: 'standbyA' | 'standbyB' = 'standbyA'): boolean {
     if (
       ha.transition.status === 'waiting'
@@ -3635,8 +3681,46 @@ export function createSim(bus: Bus): SimApi {
   }
 
   function startFailover(target: 'standbyA' | 'standbyB' = 'standbyA'): boolean {
+    const transition = ha.transition
+    const stagedChoice =
+      transition.kind === 'failover'
+      && transition.status === 'waiting'
+      && transition.source === 'primary'
+      && transition.target === null
+      && !state.cluster.nodes[0].online
+    if (stagedChoice) {
+      const standby = standbyForNode(target)
+      const eligible =
+        K.walLevel !== 'minimal'
+        && standby.enabled
+        && state.cluster.nodes[clusterNodeIndex(target)].online
+      if (!K.patroniDcsAvailable || !eligible) {
+        toast(
+          !K.patroniDcsAvailable
+            ? 'Failover refused: no standby can acquire a leader lock while the DCS is unavailable'
+            : 'Failover refused: choose an online physical standby',
+          'warn',
+          6500,
+        )
+        return false
+      }
+      transition.target = target
+      toast(
+        `Candidate selected: ${standby.applicationName} is durable through ${fmtLsn(standby.flushedLsn)}`,
+        'info',
+        6500,
+      )
+      bus.emit('narrate', {
+        title: 'Promotion candidate selected',
+        body: `${standby.applicationName} can preserve only the WAL durable at its flush LSN. Patroni promotes after the old leader lease is gone; the gap to the former primary becomes the lost tail of timeline ${ha.timeline.current}.`,
+        seconds: 9,
+      })
+      if (!ha.currentLeader || ha.patroni.leaseRemainingSec <= 0) completePromotion(true)
+      return true
+    }
+
     if (
-      ha.transition.status === 'waiting'
+      transition.status === 'waiting'
       || ha.currentLeader !== 'primary'
       || !K.patroniDcsAvailable
       || !eligiblePromotionTarget(target)
@@ -3652,28 +3736,7 @@ export function createSim(bus: Bus): SimApi {
     }
 
     resetTransition('failover', 'primary', target)
-    ha.acceptingWrites = false
-    const sourceNode = state.cluster.nodes[0]
-    sourceNode.wal.receivedLsn = wal.insertLsn
-    sourceNode.wal.writtenLsn = wal.writeLsn
-    sourceNode.wal.flushedLsn = wal.flushLsn
-    sourceNode.wal.appliedLsn = wal.insertLsn
-    sourceNode.online = false
-    ha.timeline.oldHistoryEndLsn = wal.flushLsn
-    stopCrashedPrimaryWork()
-
-    /* The primary and its network are gone. Bytes already durable on the
-     * standby survive; queued packets and bytes only on the primary do not. */
-    for (let i = 0 as 0 | 1; i < 2; i = (i + 1) as 0 | 1) {
-      const standby = rep.standbys[i]
-      resetPhysicalRuntime(physicalRuntime[i], standby.flushedLsn)
-      standby.sentLsn = standby.receivedLsn = standby.writtenLsn = standby.flushedLsn
-      standby.inFlight = 0
-      standby.connected = false
-      standby.walSender = 'stopped'
-      standby.walReceiver = 'stopped'
-    }
-    patroniRenewT = 0
+    stopPrimaryAndStreams()
     toast(
       `Primary gone: Patroni is waiting ${ha.patroni.leaseRemainingSec.toFixed(1)} s for its DCS lease to expire`,
       'warn',
@@ -3772,6 +3835,17 @@ export function createSim(bus: Bus): SimApi {
     rejoin.bytesCopied = 0
     rejoin.failureReason = ''
     ha.acceptingWrites = true
+
+    const scenarioDecision = state.scenarioDecision
+    if (
+      scenarioDecision?.kind === 'failover-candidate'
+      && scenarioDecision.choice
+    ) {
+      scenarioDecision.lossBytes = transition.lossBytes
+      scenarioDecision.lossTransactions = transition.lossTransactions
+      scenarioDecision.rejoinBytes = rejoin.bytesRewound
+      scenarioDecision.phase = 'outcome'
+    }
 
     toast(
       unplanned
@@ -5074,6 +5148,221 @@ export function createSim(bus: Bus): SimApi {
   let savedKeys: (keyof Knobs)[] = []
   let beatIdx = 0
 
+  function totalDeadTuples(): number {
+    let total = 0
+    for (let i = 0; i < tables.length; i++) total += tables[i].deadTuples
+    return total
+  }
+
+  function totalTablePages(): number {
+    let total = 0
+    for (let i = 0; i < tables.length; i++) total += tables[i].pages
+    return total
+  }
+
+  function createScenarioDecision(id: string): ScenarioDecisionState | null {
+    if (id === 'slot-pressure') {
+      return {
+        kind: 'slot-pressure',
+        phase: 'staging',
+        choice: null,
+        correct: null,
+        slotRetainedAtDecision: 0,
+        capacityAtDecision: dr.archive.pgWalCapacityBytes,
+        addedCapacityBytes: 0,
+        rebuildRequired: false,
+        rebuildBytes: 0,
+        rebuildCopiedBytes: 0,
+        rejectedWritesAtDecision: 0,
+        rejectedWrites: 0,
+      }
+    }
+    if (id === 'vacuum-blockade') {
+      return {
+        kind: 'vacuum-blockade',
+        phase: 'staging',
+        choice: null,
+        correct: null,
+        deadTuplesAtDecision: 0,
+        pagesAtDecision: 0,
+        vacuumRunsAtDecision: 0,
+        landfillAtDecision: 0,
+        deadTuplesAdded: 0,
+        pagesAdded: 0,
+        blockedVacuumWorkers: 0,
+        deadTuplesReclaimed: 0,
+        transactionTerminated: false,
+      }
+    }
+    if (id === 'failover-candidate') {
+      return {
+        kind: 'failover-candidate',
+        phase: 'staging',
+        choice: null,
+        correct: null,
+        standbyALagBytes: 0,
+        standbyBLagBytes: 0,
+        lossBytes: 0,
+        lossTransactions: 0,
+        rejoinBytes: 0,
+      }
+    }
+    return null
+  }
+
+  function finishStandbyBRebuild(decision: Extract<ScenarioDecisionState, { kind: 'slot-pressure' }>): void {
+    const lsn = wal.flushLsn
+    const standby = rep.standbys[1]
+    const slot = rep.physicalSlots[1]
+    setKnob('standbyBEnabled', true)
+    standby.enabled = true
+    standby.connected = true
+    standby.sentLsn = lsn
+    standby.receivedLsn = lsn
+    standby.writtenLsn = lsn
+    standby.flushedLsn = lsn
+    standby.appliedLsn = lsn
+    standby.acknowledgedFlushLsn = lsn
+    standby.acknowledgedApplyLsn = lsn
+    standby.lagBytes = 0
+    standby.lagSec = 0
+    standby.inFlight = 0
+    standby.walSender = 'streaming'
+    standby.walReceiver = 'streaming'
+    standby.startupProcess = 'streaming'
+    resetPhysicalRuntime(physicalRuntime[1], lsn)
+    slot.exists = true
+    slot.active = true
+    slot.restartLsn = lsn
+    slot.retainedBytes = 0
+    const node = state.cluster.nodes[2]
+    node.online = true
+    node.role = 'standby'
+    node.leaderOpinion = ha.currentLeader
+    node.wal.receivedLsn = lsn
+    node.wal.writtenLsn = lsn
+    node.wal.flushedLsn = lsn
+    node.wal.appliedLsn = lsn
+    node.dataDirectory.appliedLsn = lsn
+    decision.rebuildCopiedBytes = decision.rebuildBytes
+    decision.rebuildRequired = false
+    decision.phase = 'recovered'
+    toast(
+      `standby_b rebuilt from ${fmtBytes(decision.rebuildBytes)} of base-backup data; its physical slot starts at the current LSN`,
+      'good',
+      7500,
+    )
+  }
+
+  function tickScenarioDecision(dt: number): void {
+    const decision = state.scenarioDecision
+    if (!decision || !state.scenario) return
+    let revealAt: number | undefined
+    for (let i = 0; i < SCENARIOS.length; i++) {
+      if (SCENARIOS[i].id === state.scenario) {
+        revealAt = SCENARIOS[i].decision?.revealAt
+        break
+      }
+    }
+    if (decision.phase === 'staging' && revealAt !== undefined && state.scenarioT >= revealAt) {
+      if (decision.kind === 'slot-pressure') {
+        /* The link has just been repaired. The remaining question is whether
+         * the retained WAL has enough disk headroom to survive catch-up. */
+        setKnob('standbyBEnabled', true)
+        decision.slotRetainedAtDecision = rep.physicalSlots[1].retainedBytes
+        decision.capacityAtDecision = dr.archive.pgWalCapacityBytes
+        decision.rejectedWritesAtDecision = dr.archive.rejectedWrites
+      } else if (decision.kind === 'vacuum-blockade') {
+        decision.deadTuplesAtDecision = totalDeadTuples()
+        decision.pagesAtDecision = totalTablePages()
+        decision.vacuumRunsAtDecision = av.totalRuns
+        decision.landfillAtDecision = av.landfill
+      } else {
+        decision.standbyALagBytes = Math.max(0, wal.flushLsn - rep.standbys[0].flushedLsn)
+        decision.standbyBLagBytes = Math.max(0, wal.flushLsn - rep.standbys[1].flushedLsn)
+        stageFailoverCandidateDecision()
+      }
+      decision.phase = 'ready'
+    }
+
+    if (decision.kind === 'slot-pressure') {
+      decision.rejectedWrites = Math.max(
+        0,
+        dr.archive.rejectedWrites - decision.rejectedWritesAtDecision,
+      )
+      if (
+        decision.choice === 'add-wal-capacity'
+        && rep.standbys[1].connected
+        && rep.physicalSlots[1].retainedBytes
+          <= Math.max(16 * MIB, decision.slotRetainedAtDecision * 0.1)
+      ) {
+        decision.phase = 'recovered'
+      }
+      if (decision.phase === 'recovering') {
+        decision.rebuildCopiedBytes = Math.min(
+          decision.rebuildBytes,
+          decision.rebuildCopiedBytes + DR_BACKUP_BYTES_PER_SEC * dt,
+        )
+        if (decision.rebuildCopiedBytes >= decision.rebuildBytes) {
+          finishStandbyBRebuild(decision)
+        }
+      }
+      return
+    }
+
+    if (decision.kind === 'vacuum-blockade') {
+      if (decision.phase !== 'staging') {
+        decision.deadTuplesAdded = Math.max(
+          decision.deadTuplesAdded,
+          totalDeadTuples() - decision.deadTuplesAtDecision,
+        )
+        decision.pagesAdded = Math.max(
+          decision.pagesAdded,
+          totalTablePages() - decision.pagesAtDecision,
+        )
+        decision.deadTuplesReclaimed = Math.max(
+          0,
+          av.landfill - decision.landfillAtDecision,
+        )
+        if (K.longRunningXact) {
+          let active = 0
+          for (let i = 0; i < av.workers.length; i++) {
+            if (av.workers[i].active) active++
+          }
+          decision.blockedVacuumWorkers = Math.max(decision.blockedVacuumWorkers, active)
+        }
+        if (
+          decision.transactionTerminated
+          && decision.deadTuplesReclaimed > 0
+          && !K.longRunningXact
+        ) {
+          decision.phase = 'recovered'
+        }
+      }
+      return
+    }
+
+    if (
+      decision.choice
+      && ha.transition.status === 'complete'
+      && ha.rejoin.status === 'idle'
+      && decision.phase !== 'outcome'
+      && decision.phase !== 'recovered'
+    ) {
+      decision.lossBytes = ha.transition.lossBytes
+      decision.lossTransactions = ha.transition.lossTransactions
+      decision.rejoinBytes = ha.rejoin.bytesRewound
+      decision.phase = 'outcome'
+    }
+    if (
+      decision.phase === 'recovering'
+      && ha.rejoin.status === 'complete'
+      && !ha.rejoin.required
+    ) {
+      decision.phase = 'recovered'
+    }
+  }
+
   function saveKnob<Key extends keyof Knobs>(k: Key): void {
     savedKnobs[k] = K[k]
   }
@@ -5088,6 +5377,7 @@ export function createSim(bus: Bus): SimApi {
     lockTimeout = LOCK_TIMEOUT_DEFAULT
     state.scenario = null
     state.scenarioT = 0
+    state.scenarioDecision = null
     beatIdx = 0
     bus.emit('scenario', { id: null })
     bus.emit('narrate', null)
@@ -5115,6 +5405,7 @@ export function createSim(bus: Bus): SimApi {
     lockTimeout = LOCK_TIMEOUT_DEFAULT
     state.scenario = def.id
     state.scenarioT = 0
+    state.scenarioDecision = createScenarioDecision(def.id)
     beatIdx = 0
     bus.emit('scenario', { id: def.id })
     if (def.focus) bus.emit('focus', { id: def.focus })
@@ -5137,6 +5428,7 @@ export function createSim(bus: Bus): SimApi {
     }
     const previousScenarioT = state.scenarioT
     state.scenarioT += dt
+    tickScenarioDecision(dt)
     // This guided beat describes the launcher waking and a worker being sent,
     // so a passive viewer must see that change too. Crossing the beat makes it
     // one-shot: a viewer remains free to turn the knob back off afterwards.
@@ -5173,6 +5465,124 @@ export function createSim(bus: Bus): SimApi {
       }
     }
     if (def.duration > 0 && state.scenarioT >= def.duration) endScenario(false)
+  }
+
+  function chooseScenario(choice: ScenarioChoiceId): boolean {
+    const decision = state.scenarioDecision
+    if (!decision || decision.phase !== 'ready' || decision.choice) return false
+
+    if (decision.kind === 'slot-pressure') {
+      if (choice === 'add-wal-capacity') {
+        decision.choice = choice
+        decision.correct = true
+        decision.addedCapacityBytes = 512 * MIB
+        dr.archive.pgWalCapacityBytes += decision.addedCapacityBytes
+        decision.phase = 'outcome'
+        toast(
+          '512 MiB of scaled pg_wal capacity added; standby_b keeps its slot and continues catch-up',
+          'good',
+          7000,
+        )
+        return true
+      }
+      if (choice === 'drop-replication-slot') {
+        decision.choice = choice
+        decision.correct = false
+        decision.rebuildRequired = true
+        decision.rebuildBytes = dr.dataDirectoryBytes
+        const slot = rep.physicalSlots[1]
+        slot.exists = false
+        slot.active = false
+        slot.restartLsn = wal.insertLsn
+        slot.retainedBytes = 0
+        setKnob('standbyBEnabled', false)
+        decision.phase = 'outcome'
+        toast(
+          'standby_b_slot dropped; retained WAL is recyclable, and standby_b now needs a fresh base backup',
+          'warn',
+          8000,
+        )
+        return true
+      }
+      return false
+    }
+
+    if (decision.kind === 'vacuum-blockade') {
+      if (choice === 'terminate-transaction') {
+        decision.choice = choice
+        decision.correct = true
+        decision.transactionTerminated = true
+        setKnob('longRunningXact', false)
+        decision.phase = 'outcome'
+        toast(
+          'One idle transaction terminated; its snapshot released and vacuum can remove dead row versions',
+          'good',
+          7000,
+        )
+        return true
+      }
+      if (choice === 'wait-for-transaction') {
+        decision.choice = choice
+        decision.correct = false
+        decision.phase = 'outcome'
+        toast(
+          'The idle transaction remains; every new dead row version stays behind the pinned xmin horizon',
+          'warn',
+          7500,
+        )
+        return true
+      }
+      return false
+    }
+
+    if (choice !== 'promote-standby-a' && choice !== 'promote-standby-b') return false
+    const target = choice === 'promote-standby-a' ? 'standbyA' : 'standbyB'
+    if (!startFailover(target)) return false
+    decision.choice = choice
+    decision.correct = choice === 'promote-standby-a'
+    decision.phase = 'recovering'
+    return true
+  }
+
+  function recoverScenario(): boolean {
+    const decision = state.scenarioDecision
+    if (!decision) return false
+    if (
+      decision.kind === 'slot-pressure'
+      && decision.choice === 'drop-replication-slot'
+      && decision.rebuildRequired
+      && decision.phase === 'outcome'
+    ) {
+      decision.phase = 'recovering'
+      decision.rebuildCopiedBytes = 0
+      toast(
+        `Base backup started: ${fmtBytes(decision.rebuildBytes)} must be copied before standby_b can stream again`,
+        'info',
+        7000,
+      )
+      return true
+    }
+    if (
+      decision.kind === 'vacuum-blockade'
+      && decision.choice === 'wait-for-transaction'
+      && K.longRunningXact
+      && decision.phase === 'outcome'
+    ) {
+      decision.transactionTerminated = true
+      decision.phase = 'recovering'
+      setKnob('longRunningXact', false)
+      return true
+    }
+    if (
+      decision.kind === 'failover-candidate'
+      && decision.phase === 'outcome'
+      && ha.rejoin.required
+      && startPgRewind()
+    ) {
+      decision.phase = 'recovering'
+      return true
+    }
+    return false
   }
 
   /* ======================================================================
@@ -5398,6 +5808,7 @@ export function createSim(bus: Bus): SimApi {
     state.maxConnections = N_BACKEND_SLOTS
     state.scenario = null
     state.scenarioT = 0
+    state.scenarioDecision = null
     state.forkPulse = 0
     state.locks.length = 0
     ha.currentLeader = 'primary'
@@ -5683,6 +6094,7 @@ export function createSim(bus: Bus): SimApi {
       standby.acknowledgedFlushLsn = lsn0
       standby.acknowledgedApplyLsn = lsn0
       const slot = rep.physicalSlots[i]
+      slot.exists = true
       slot.active = enabled
       slot.restartLsn = lsn0
       slot.retainedBytes = 0
@@ -5816,6 +6228,8 @@ export function createSim(bus: Bus): SimApi {
     update,
     setKnob,
     runScenario,
+    chooseScenario,
+    recoverScenario,
     request,
     setTraceMode,
     endTrace,

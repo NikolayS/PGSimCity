@@ -1058,9 +1058,12 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     color: COLOR.replication,
     readout: (s: SimState) => {
       const standby = s.replication.standbys[1]
+      const slot = s.replication.physicalSlots[1]
       const opinion = s.cluster.nodes[2].leaderOpinion ?? 'unknown'
       if (!standby.connected) {
-        return `disconnected · sees ${opinion} as leader · slot holds ${fmtBytes(s.replication.physicalSlots[1].retainedBytes)}`
+        return slot.exists
+          ? `disconnected · sees ${opinion} as leader · slot holds ${fmtBytes(slot.retainedBytes)}`
+          : `disconnected · sees ${opinion} as leader · slot dropped; rebuild required`
       }
       return `applied ${fmtLsn(standby.appliedLsn)} · ${standby.lagSec.toFixed(1)} s behind · sees ${opinion} as leader`
     },

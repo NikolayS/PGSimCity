@@ -953,6 +953,39 @@ standby and recorded exactly zero bytes and zero transactions lost.
 
 ---
 
+## Operator-scenario addendum — roadmap item 10
+
+No new `Knobs` field was added for the three operator situations, so the
+contract remains at verdict 33. Adding storage, dropping a replication slot,
+terminating a backend, promoting a named node, rebuilding a standby and running
+`pg_rewind` are operations with consequences, not configuration policy. They
+therefore use the existing model state and operation APIs rather than disguising
+one-shot work as sliders.
+
+All six branches were driven through `SimApi` at 1/30 s with the seeded model.
+The write rate in the slot case is deliberately scaled so the primary reaches a
+decision point in under three simulated minutes; the scenario rail
+discloses that scale.
+
+| Situation | Choice | Measured consequence | Recovery |
+|---|---|---|---|
+| `standby_b_slot` retains primary WAL | Add 512 MiB capacity | At the decision, the slot retained 363.23 MiB and `pg_wal` occupied 416 / 512 MiB. Capacity became 1 GiB, the slot stayed valid, standby_b caught up, and 0 writes were rejected after the choice. | Catch-up completed without rebuilding the standby. |
+| `standby_b_slot` retains primary WAL | Drop the slot | The retained floor became 0 and `pg_wal` fell from 416 to 224 MiB on the next model step, but standby_b could no longer resume from its old data directory. | A fresh 8.36 GiB base backup took 22.30 teaching seconds before the slot and stream could be recreated. |
+| Old snapshot pins xmin | Terminate the session | One idle transaction was aborted; this scenario models 0 uncommitted row changes in it. The horizon released and vacuum began reclaiming dead row versions. | The next vacuum pass reclaimed space without restarting the cluster. |
+| Old snapshot pins xmin | Wait 20 more seconds | 101,567 additional dead row versions and 1,689 heap pages (13.20 MiB) accumulated while all 3 autovacuum workers remained occupied behind the old horizon. | Terminating the same session later released xmin; vacuum then reclaimed space. |
+| Choose a failover candidate | Promote standby_a | The later durable candidate lost 598.80 KiB of WAL that contained 0 acknowledged write transactions. | The former primary remained a recoverable divergent node. |
+| Choose a failover candidate | Promote standby_b | The lagging candidate lost 13.26 MiB and 4,284 acknowledged write transactions; those numbers became permanent at the timeline fork. | `pg_rewind` copied 13.26 MiB in 6.03 teaching seconds and returned the former primary as a standby; it did not resurrect the lost transactions. |
+
+These are not symmetric “play styles.” In the staged slot incident, adding
+capacity preserves a viable standby for a 512 MiB cost, while dropping the slot
+trades that cost for an 8.36 GiB rebuild. In the xmin incident,
+`pg_stat_activity` shows that the holder is idle, so waiting protects no running
+query. In the failover incident, standby_a has the later durable LSN and
+synchronous acknowledgement history; choosing standby_b discards acknowledged
+commits.
+
+---
+
 ## Reproducing this audit
 
 Everything above was measured with a temporary probe under `test/`, driving

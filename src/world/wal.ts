@@ -47,8 +47,9 @@ export function walsenderReadout(s: SimState): string {
     r.physicalSlots[0].retainedBytes,
     r.physicalSlots[1].retainedBytes,
   )
+  const slots = (r.physicalSlots[0].exists ? 1 : 0) + (r.physicalSlots[1].exists ? 1 : 0)
   const opinion = s.cluster.nodes[0].leaderOpinion ?? 'unknown'
-  return `2 physical walsenders · ${connected} connected · largest slot hold ${fmtBytes(held)} · primary sees ${opinion} as leader`
+  return `${slots} physical slots · ${connected} walsenders connected · largest slot hold ${fmtBytes(held)} · primary sees ${opinion} as leader`
 }
 
 /** cx, cy, cz, w, h, d — for cylinders w/d are diameters. */

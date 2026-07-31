@@ -6,6 +6,12 @@ describe('scenario timelines', () => {
   it('advertises the complete beat timeline in the same seconds used by narration', () => {
     for (const scenario of SCENARIOS) {
       const beats = scenario.beats ?? []
+      if (scenario.decision) {
+        expect(beats, `${scenario.id} must be discovered before explanation`).toHaveLength(0)
+        expect(scenario.duration, scenario.id).toBe(0)
+        expect(scenario.decision.revealAt, scenario.id).toBeGreaterThan(0)
+        continue
+      }
       expect(beats[0]?.[0], scenario.id).toBe(0)
 
       let intervals = 0
