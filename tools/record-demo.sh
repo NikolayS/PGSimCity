@@ -4,9 +4,9 @@ set -Eeuo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 url="${1:-http://127.0.0.1:5173/}"
-output="${2:-/tmp/pgsimcity-v0.23.0-walkthrough.mp4}"
+output="${2:-/tmp/pgsimcity-v0.27.0-walkthrough.mp4}"
 port="${CDP_PORT:-9780}"
-seconds="${DEMO_SECONDS:-147}"
+seconds="${DEMO_SECONDS:-158}"
 start_seconds="${DEMO_START_SECONDS:-0}"
 minimum_kib=$((2 * 1024 * 1024))
 
@@ -19,7 +19,7 @@ if [[ ! "${port}" =~ ^[0-9]+$ ]] || ((port < 9500 || port > 9900)); then
   exit 2
 fi
 
-for command in curl df ffmpeg ffprobe node; do
+for command in curl df ffmpeg ffprobe node pactl parec pulseaudio; do
   if ! command -v "${command}" >/dev/null 2>&1; then
     echo "Missing required command: ${command}" >&2
     exit 2
@@ -56,13 +56,84 @@ fi
 echo "Capturing ${seconds} deterministic seconds from timeline ${start_seconds}s at 1280x720 and 30 fps."
 echo "Frames stream directly to ffmpeg; no PNG frame directory is created."
 
+pulse_started=0
+pulse_module_id=""
+passlog=""
+cleanup() {
+  if [[ -n "${passlog}" ]]; then
+    rm -f "${passlog}" "${passlog}-0.log" "${passlog}-0.log.mbtree"
+  fi
+  if [[ -n "${pulse_module_id}" ]]; then
+    pactl unload-module "${pulse_module_id}" >/dev/null 2>&1 || true
+  fi
+  if [[ "${pulse_started}" == "1" ]]; then
+    pulseaudio --kill >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
+
+if ! pactl info >/dev/null 2>&1; then
+  pulseaudio --start --exit-idle-time=-1
+  pulse_started=1
+fi
+pulse_sink="pgsimcity_demo_${port}_$$"
+pulse_module_id="$(
+  pactl load-module module-null-sink \
+    "sink_name=${pulse_sink}" \
+    rate=48000 \
+    channels=2
+)"
+if [[ ! "${pulse_module_id}" =~ ^[0-9]+$ ]]; then
+  echo "Could not create the private PulseAudio sink for app-audio capture." >&2
+  exit 1
+fi
+
 CDP_PORT="${port}" \
 CDP_SEQUENCE="${script_dir}/demo-video-sequence.mjs" \
 DEMO_SECONDS="${seconds}" \
 DEMO_START_SECONDS="${start_seconds}" \
 DEMO_OVERWRITE="${DEMO_OVERWRITE:-0}" \
+DEMO_PULSE_SOURCE="${pulse_sink}.monitor" \
+PULSE_SINK="${pulse_sink}" \
 node "${script_dir}/shoot.mjs" \
   "${url}" "${output}" "${DEMO_WAIT_MS:-30000}" 1280 720
+
+pactl unload-module "${pulse_module_id}" >/dev/null
+pulse_module_id=""
+if [[ "${pulse_started}" == "1" ]]; then
+  pulseaudio --kill >/dev/null
+  pulse_started=0
+fi
+
+ffmpeg -hide_banner -loglevel error -i "${output}" -f null -
+expected_frames=$((seconds * 30))
+actual_frames="$(
+  ffprobe \
+    -v error \
+    -select_streams v:0 \
+    -count_frames \
+    -show_entries stream=nb_read_frames \
+    -of default=noprint_wrappers=1:nokey=1 \
+    "${output}"
+)"
+if [[ "${actual_frames}" != "${expected_frames}" ]]; then
+  echo "Decoded ${actual_frames} frames; expected ${expected_frames}." >&2
+  exit 1
+fi
+if ((start_seconds <= 124 && start_seconds + seconds >= 139)); then
+  audio_codec="$(
+    ffprobe \
+      -v error \
+      -select_streams a:0 \
+      -show_entries stream=codec_name \
+      -of default=noprint_wrappers=1:nokey=1 \
+      "${output}"
+  )"
+  if [[ "${audio_codec}" != "aac" ]]; then
+    echo "Expected the app-audio proof as AAC; found ${audio_codec:-no audio track}." >&2
+    exit 1
+  fi
+fi
 
 ffprobe \
   -v error \
@@ -82,12 +153,8 @@ fi
 
 passlog="$(mktemp "${output_dir}/.pgsimcity-demo-pass.XXXXXX")"
 rm -f "${passlog}"
-cleanup_passlog() {
-  rm -f "${passlog}" "${passlog}-0.log" "${passlog}-0.log.mbtree"
-}
-trap cleanup_passlog EXIT
 
-echo "Encoding a sendable companion at 1,350 kbit/s (strictly under 28 MB)."
+echo "Encoding a sendable companion at 1,220 kbit/s video + 96 kbit/s audio (strictly under 28 MB)."
 ffmpeg \
   -hide_banner \
   -loglevel warning \
@@ -96,7 +163,7 @@ ffmpeg \
   -an \
   -c:v libx264 \
   -preset slow \
-  -b:v 1350k \
+  -b:v 1220k \
   -pass 1 \
   -passlogfile "${passlog}" \
   -pix_fmt yuv420p \
@@ -107,12 +174,13 @@ ffmpeg \
   -loglevel warning \
   -y \
   -i "${output}" \
-  -an \
   -c:v libx264 \
   -preset slow \
-  -b:v 1350k \
+  -b:v 1220k \
   -pass 2 \
   -passlogfile "${passlog}" \
+  -c:a aac \
+  -b:a 96k \
   -pix_fmt yuv420p \
   -movflags +faststart \
   "${small_output}"

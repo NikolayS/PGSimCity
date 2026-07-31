@@ -1,10 +1,19 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { existsSync, writeFileSync } from 'node:fs'
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
 
 const FPS = 30
-const DEFAULT_SECONDS = 147
+const DEFAULT_SECONDS = 158
 const FRAME_MS = 1000 / FPS
+const SWIM_START_SECONDS = 124
+const SWIM_DURATION_SECONDS = 15
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -56,7 +65,6 @@ export function fullReportProblems(report) {
   if (report.labels.maxDistrictLabels > 1) {
     problems.push(`walk mode showed ${report.labels.maxDistrictLabels} district chips`)
   }
-  if (!report.body.visible) problems.push('first-person body was not visible')
   if (!report.lever.approachSeen || !report.lever.operateSeen) {
     problems.push('autovacuum approach/operate prompt was not demonstrated')
   }
@@ -68,6 +76,39 @@ export function fullReportProblems(report) {
   }
   if (!report.door.inside || !report.door.mapVisible || report.door.maxOpenness < 0.95) {
     problems.push('postmaster door/control-center proof was incomplete')
+  }
+  if (
+    report.operatorDecision?.phaseSeen !== 'ready'
+    || report.operatorDecision.choiceCount !== 2
+    || !report.operatorDecision.choicesVisible
+    || report.operatorDecision.choiceMade !== null
+  ) {
+    problems.push('operator decision did not show both unchosen branch costs')
+  }
+  if (
+    !report.failover?.forkSeen
+    || report.failover.lossTransactions < 1
+    || report.failover.lossBytes < 1
+  ) {
+    problems.push('failover did not show a non-zero timeline fork loss')
+  }
+  if (
+    !report.failover?.formerPrimaryDiverged
+    || !report.failover.rewindStarted
+    || !report.failover.rewindComplete
+  ) {
+    problems.push('former primary divergence/pg_rewind proof was incomplete')
+  }
+  if (
+    !report.swim?.gaitSeen
+    || !report.swim.submergedSeen
+    || !report.swim.dragSeen
+    || !report.swim.buoyancySeen
+  ) {
+    problems.push('swim drag/buoyancy/submersion proof was incomplete')
+  }
+  if (!report.swim?.audioCaptured) {
+    problems.push('swim audio was not captured from the app')
   }
   const themes = new Set(report.environment.themes.map(({ mode }) => mode))
   if (!themes.has('day') || !themes.has('night')) {
@@ -123,6 +164,7 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
       caret-color: transparent !important;
     }
     body.pg-demo-capture .tour-first,
+    body.pg-demo-capture .tour-narrate,
     body.pg-demo-capture #toast-stack,
     body.pg-demo-capture .hud-toast {
       display: none !important;
@@ -142,9 +184,7 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
       z-index: 9998;
       width: min(570px, calc(100vw - 56px));
       padding: 13px 16px 14px;
-      border: 1px solid color-mix(in srgb, var(--ink) 34%, transparent);
       background: var(--bg-panel);
-      box-shadow: 0 12px 34px rgba(0, 0, 0, 0.28);
       color: var(--ink);
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       pointer-events: none;
@@ -154,7 +194,7 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
       right: 28px;
     }
     #pg-demo-caption[data-place="top"] {
-      top: 78px;
+      top: 146px;
       bottom: auto;
     }
     #pg-demo-caption .pg-demo-caption__eyebrow {
@@ -185,8 +225,7 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
       position: absolute;
       right: 14px;
       top: 13px;
-      padding: 4px 7px;
-      border: 1px solid color-mix(in srgb, var(--ink) 26%, transparent);
+      padding: 4px 0;
       color: var(--c-shmem);
       font-size: 10px;
       font-weight: 800;
@@ -281,6 +320,37 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
       inside: false,
       mapVisible: false,
     },
+    operatorDecision: {
+      phaseSeen: 'staging',
+      choiceCount: 0,
+      choicesVisible: false,
+      choiceMade: null,
+      choices: [],
+    },
+    failover: {
+      forkSeen: false,
+      lossTransactions: 0,
+      lossBytes: 0,
+      formerPrimaryDiverged: false,
+      rewindStarted: false,
+      rewindComplete: false,
+      forkLsn: 0,
+      oldHistoryEndLsn: 0,
+      newHistoryEndLsn: 0,
+      roles: [],
+    },
+    swim: {
+      gaitSeen: false,
+      submergedSeen: false,
+      dragSeen: false,
+      buoyancySeen: false,
+      audioCaptured: false,
+      maxSpeed: 0,
+      speedAtRelease: 0,
+      minFeetY: Number.POSITIVE_INFINITY,
+      feetYAtRise: 0,
+      maxRiseMetres: 0,
+    },
     environment: {
       themes: [],
       finalQuality: '',
@@ -341,36 +411,50 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
       requestedCaptionPlace,
       walkUpVisible,
     )
-    if (!visible(captionRoot) || !walkUpVisible) return
+    if (!visible(captionRoot)) return
 
-    report.captions.multipleCardFrames++
     const demoRect = captionRoot.getBoundingClientRect()
-    const walkUpRect = walkUp.getBoundingClientRect()
-    const overlaps = (
-      demoRect.left < walkUpRect.right
-      && demoRect.right > walkUpRect.left
-      && demoRect.top < walkUpRect.bottom
-      && demoRect.bottom > walkUpRect.top
-    )
-    if (!overlaps) return
+    const blockers = [
+      ...document.querySelectorAll(
+        '.walk-up-prompt:not([hidden]), .hud-decision:not([hidden]), '
+        + '.pgc-rail:not([hidden]), #canvas-root aside:not([hidden]), '
+        + '#hud-top > .pg-panel, #hud-bottom > .pg-panel, '
+        + '#hud-left .pgc-panel, #hud-right .pgc-panel, #compass .pg-panel',
+      ),
+    ].filter((node) => node !== captionRoot && visible(node))
+    if (blockers.length > 0) report.captions.multipleCardFrames++
+    for (const blocker of blockers) {
+      const blockerRect = blocker.getBoundingClientRect()
+      const overlaps = (
+        demoRect.left < blockerRect.right
+        && demoRect.right > blockerRect.left
+        && demoRect.top < blockerRect.bottom
+        && demoRect.bottom > blockerRect.top
+      )
+      if (!overlaps) continue
 
-    report.captions.overlapFrames++
-    report.captions.firstOverlap ??= {
-      frame: currentFrame,
-      demo: {
-        left: demoRect.left,
-        top: demoRect.top,
-        right: demoRect.right,
-        bottom: demoRect.bottom,
-      },
-      walkUp: {
-        left: walkUpRect.left,
-        top: walkUpRect.top,
-        right: walkUpRect.right,
-        bottom: walkUpRect.bottom,
-      },
+      report.captions.overlapFrames++
+      report.captions.firstOverlap ??= {
+        frame: currentFrame,
+        blocker: blocker.className || blocker.id || blocker.tagName,
+        demo: {
+          left: demoRect.left,
+          top: demoRect.top,
+          right: demoRect.right,
+          bottom: demoRect.bottom,
+        },
+        other: {
+          left: blockerRect.left,
+          top: blockerRect.top,
+          right: blockerRect.right,
+          bottom: blockerRect.bottom,
+        },
+      }
+      throw new Error(
+        `caption cards overlap at frame ${currentFrame}: `
+        + `${blocker.className || blocker.id || blocker.tagName}`,
+      )
     }
-    throw new Error(`caption cards overlap at frame ${currentFrame}`)
   }
 
   function setFadeForScene() {
@@ -460,7 +544,7 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
   }
 
   function frameDoorWitness() {
-    if (currentFrame < F(107) || currentFrame >= F(108.2)) return
+    if (currentFrame < F(77) || currentFrame >= F(78.2)) return
     const camera = pg.gfx.camera
     camera.position.set(15, 7, -190)
     camera.lookAt(0, 4.5, -206)
@@ -492,6 +576,12 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
   function promptText() {
     const prompt = document.querySelector('.walk-up-prompt:not([hidden])')
     return visible(prompt) ? prompt.textContent.replace(/\s+/g, ' ').trim() : ''
+  }
+
+  function compactBytes(value) {
+    if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MiB`
+    if (value >= 1024) return `${(value / 1024).toFixed(1)} KiB`
+    return `${Math.round(value)} bytes`
   }
 
   function pressE() {
@@ -552,9 +642,9 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
   report.environment.themes.push({ frame: 0, mode: 'day' })
   scene(0, 7)
   setCaption(
-    'PGSIMCITY · v0.23.0',
+    'PGSIMCITY · v0.27.0',
     'GOLDEN HOUR · RELEASE WALKTHROUGH',
-    'Scattering sky · raking sun · fixed 1/30 s simulation steps',
+    'Textured ground · scattering sky · fixed 1/30 s simulation steps',
     'DETERMINISTIC',
   )
   pg.rig.flyPath(
@@ -570,12 +660,13 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
     ],
     7,
   )
+  document.body.classList.add('pg-demo-cinematic')
 
   function beforeFrame(frame) {
     currentFrame = frame
 
     if (frame === F(7)) {
-      scene(7, 6)
+      scene(7, 5)
       pg.gfx.setQuality('reduced')
       startCollision(
         'backends',
@@ -588,8 +679,8 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
           target: [37.2, 2.5, -124],
         },
       )
-    } else if (frame === F(13)) {
-      scene(13, 6)
+    } else if (frame === F(12)) {
+      scene(12, 5)
       startCollision(
         'checkpointer',
         { x: -170, y: 0.02, z: -40, yaw: -Math.PI / 2, pitch: -0.04 },
@@ -601,8 +692,8 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
           target: [-160.5, 3.5, -39.5],
         },
       )
-    } else if (frame === F(19)) {
-      scene(19, 6)
+    } else if (frame === F(17)) {
+      scene(17, 5)
       startCollision(
         'maintenance',
         { x: -196, y: 0.62, z: -18, yaw: Math.PI, pitch: -0.05 },
@@ -614,8 +705,8 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
           target: [-196, 4, -8.8],
         },
       )
-    } else if (frame === F(25)) {
-      scene(25, 6)
+    } else if (frame === F(22)) {
+      scene(22, 5)
       startCollision(
         'standby',
         { x: 120, y: 0.02, z: 267, yaw: Math.PI, pitch: -0.08 },
@@ -627,8 +718,8 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
           target: [120, 3.5, 277],
         },
       )
-    } else if (frame === F(31)) {
-      scene(31, 6)
+    } else if (frame === F(27)) {
+      scene(27, 5)
       startCollision(
         'wal',
         { x: 168, y: 0.02, z: -76.5, yaw: Math.PI, pitch: -0.05 },
@@ -640,8 +731,8 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
           target: [168, 4, -67],
         },
       )
-    } else if (frame === F(37)) {
-      scene(37, 6)
+    } else if (frame === F(32)) {
+      scene(32, 5)
       startCollision(
         'query-lab',
         { x: 0, y: 45, z: -135.5, yaw: 0, pitch: -0.04 },
@@ -653,9 +744,9 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
           target: [0, 47, -144],
         },
       )
-    } else if (frame === F(43)) {
+    } else if (frame === F(37)) {
       finishCollision()
-      scene(43, 8)
+      scene(37, 7)
       pg.gfx.setQuality('reduced')
       ensureWalk({ x: 0, y: 0.02, z: -174, yaw: Math.PI, pitch: -0.03 })
       setCaption(
@@ -664,19 +755,16 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
         'Walk mode keeps context local; turn toward the postmaster for its in-world entrance sign.',
         'ON FOOT',
       )
-    } else if (frame === F(51)) {
-      scene(51, 4)
-      ensureWalk({ x: 30, y: 0.02, z: -180, yaw: Math.PI, pitch: -1.05 })
-      pg.walk.setTouchMove(0, 0.25)
-      setCaption(
-        'FIRST-PERSON BODY',
-        'A GROUNDED SILHOUETTE',
-        'The body projection follows position and gait; this release does not add hands.',
-        'WALKING',
-      )
-    } else if (frame === F(55)) {
-      scene(55, 37)
+    } else if (frame === F(44)) {
+      scene(44, 28)
       pg.gfx.setQuality('reduced')
+      pg.sim.reset()
+      pg.sim.setKnob('tps', 900)
+      pg.sim.setKnob('writeRatio', 0.8)
+      pg.sim.setKnob('updateRatio', 0.9)
+      pg.sim.setKnob('autovacuumScaleFactor', 0.02)
+      pg.sim.setKnob('autovacuum', true)
+      pg.sim.setKnob('paused', false)
       ensureWalk({
         x: -126,
         y: 0.62,
@@ -684,7 +772,7 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
         yaw: 1.777,
         pitch: -0.055,
       })
-      pg.walk.setTouchMove(0, 0.65)
+      pg.walk.setTouchMove(0, 0.8)
       report.lever.before = pg.sim.state.knobs.autovacuum
       setCaption(
         '03 / IN-WORLD CONTROL',
@@ -694,24 +782,24 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
         'left',
         'top',
       )
-    } else if (frame === F(69)) {
+    } else if (frame === F(55)) {
       pg.walk.setTouchMove(0, 0)
       report.lever.activeBeforePull = activeWorkers()
       report.lever.promptAtPull = promptText()
       if (pg.sim.state.knobs.autovacuum) pressE()
       leverPulled = pg.sim.state.knobs.autovacuum === false
       report.lever.after = pg.sim.state.knobs.autovacuum
-      pg.sim.setKnob('timeScale', 5)
+      pg.sim.setKnob('timeScale', 12)
       setCaption(
         '03 / IN-WORLD CONTROL',
         'LEVER OFF • ROUTINE LAUNCHES STOP',
-        `5× MODEL TIME • ${activeWorkers()} in-flight worker(s) finish; no new workers launch`,
-        '5× MODEL TIME',
+        `12× MODEL TIME • ${activeWorkers()} in-flight worker(s) finish; no new workers launch`,
+        '12× MODEL TIME',
         'left',
         'top',
       )
-    } else if (frame === F(70)) {
-      scene(70, 22)
+    } else if (frame === F(56)) {
+      scene(56, 8)
       ensureWalk({
         x: -176,
         y: 0.02,
@@ -719,33 +807,32 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
         yaw: 2.39,
         pitch: -0.12,
       })
-    } else if (frame === F(91)) {
+    } else if (frame === F(64)) {
       pg.sim.setKnob('timeScale', 1)
       report.lever.activeAfterWait = activeWorkers()
-    } else if (frame === F(92)) {
-      scene(92, 5)
       pg.walk.setTouchMove(0, 0)
       showConsoleGroup('Workload')
+      scene(64, 4)
       setCaption(
         'CONSEQUENCE PATH',
         'WRITE SHARE CREATES DEAD TUPLES',
-        'The product’s workload control states the causal path; the city is staged at 80% writes.',
+        'The workload control states the causal path; the city is staged at 80% writes.',
         'CONSOLE',
-        'right',
+        'left',
       )
-    } else if (frame === F(97)) {
-      scene(97, 5)
+    } else if (frame === F(68)) {
+      scene(68, 4)
       showConsoleGroup('Autovacuum')
       setCaption(
         'CONSEQUENCE PATH',
         'AUTOVACUUM OFF • THRESHOLD CONTROL VISIBLE',
         'The same console exposes the lever state and autovacuum_vacuum_scale_factor.',
         'CONSOLE',
-        'right',
+        'left',
       )
-    } else if (frame === F(102)) {
+    } else if (frame === F(72)) {
       closeConsole()
-      scene(102, 15)
+      scene(72, 12)
       pg.gfx.setQuality('reduced')
       ensureWalk({ x: 0, y: 0.02, z: -188, yaw: 0, pitch: -0.035 })
       pg.walk.setTouchMove(0, 0.55)
@@ -757,7 +844,7 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
         'left',
         'top',
       )
-    } else if (frame === F(107)) {
+    } else if (frame === F(77)) {
       pg.walk.setTouchMove(0, 0)
       pressE()
       setCaption(
@@ -768,59 +855,149 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
         'left',
         'top',
       )
-    } else if (frame === F(108.2)) {
+    } else if (frame === F(78.2)) {
       pressE()
       report.door.inside = pg.controlCenter.inside
       captionRoot.style.display = 'none'
-    } else if (frame === F(110.5) && pg.controlCenter.inside && !traceStarted) {
+    } else if (frame === F(80.5) && pg.controlCenter.inside && !traceStarted) {
       document.querySelector('.control-center__run')?.click()
       traceStarted = true
-    } else if (frame === F(117)) {
-      scene(117, 6)
-      pg.controlCenter.leave()
-      pg.setThemeMode('day', { persist: false })
+    } else if (frame === F(84)) {
+      scene(84, 12)
+      if (pg.controlCenter.inside) pg.controlCenter.leave()
+      pg.sim.reset()
+      pg.sim.runScenario('vacuum-blockade')
+      pg.sim.setKnob('timeScale', 8)
       pg.gfx.setQuality('reduced')
-      report.environment.themes.push({ frame, mode: 'day' })
+      document.body.classList.remove('pg-demo-cinematic')
       captionRoot.style.display = ''
       setCaption(
-        '05 / ENVIRONMENT · INDIRECT LIGHT',
-        'UNDER THE BUFFER-POOL OVERHANG',
-        'Direct sun cannot reach here; green and cyan surfaces colour the filled shadow.',
-        'BOUNCE',
+        '05 / OPERATOR DECISION',
+        'VACUUM BLOCKADE · BOTH COSTS STAY ON SCREEN',
+        '8× MODEL TIME TO DECISION · No branch is selected: abort one session, or preserve it while dead rows and pages grow.',
+        '8× MODEL TIME',
         'left',
         'top',
       )
-      startOrbitFocus([0, -42, 0], 92, [0.8, 0.16, 1])
-    } else if (frame === F(123)) {
-      scene(123, 6)
+    } else if (frame === F(91.2)) {
+      pg.sim.setKnob('paused', true)
+      pg.sim.setKnob('timeScale', 1)
+      captionBadge.textContent = 'DECISION PAUSED'
+      setCaptionDetail(
+        'BOTH BRANCH COSTS REMAIN VISIBLE · No branch is selected for the recording.',
+      )
+    } else if (frame === F(96)) {
+      scene(96, 12)
+      pg.sim.reset()
+      pg.sim.setKnob('tps', 2200)
+      pg.sim.setKnob('writeRatio', 1)
+      pg.sim.setKnob('updateRatio', 0.7)
+      pg.sim.setKnob('synchronousCommit', 'local')
+      pg.sim.setKnob('replicaEnabled', true)
+      pg.sim.setKnob('replicaNetworkLag', 400)
+      pg.sim.setKnob('standbyBEnabled', true)
+      pg.sim.setKnob('standbyBNetworkLag', 1250)
+      pg.sim.setKnob('standbyBSlowApply', true)
+      pg.sim.setKnob('walLogHints', true)
+      pg.sim.setKnob('timeScale', 6)
+      pg.sim.setKnob('paused', false)
+      pg.gfx.setQuality('reduced')
+      setCaption(
+        '06 / FAILOVER',
+        'THREE NODES · THREE DURABLE POSITIONS',
+        '6× MODEL TIME · The DCS lease posts stay distinct while standby_a and standby_b fall behind independently.',
+        '6× MODEL TIME',
+      )
+      startOrbitFocus([0, 8, 250], 180, [0.95, 0.36, 1])
+    } else if (frame === F(102)) {
+      pg.sim.setKnob('timeScale', 2)
+      pg.sim.startFailover('standbyA')
+      pg.bus.emit('select', { id: null })
+      setCaption(
+        '06 / FAILOVER',
+        'PRIMARY GONE · OLD LEADER LEASE DRAINS',
+        '2× MODEL TIME · Write admission is closed until standby_a can acquire the DCS leader lock.',
+        '2× MODEL TIME',
+        'left',
+        'top',
+      )
+      startOrbitFocus([0, 7, 250], 92, [0.8, 0.32, 1])
+    } else if (frame === F(108)) {
+      scene(108, 8)
+      pg.sim.setKnob('timeScale', 1)
+      setCaption(
+        '06 / FAILOVER · MEASURED LOSS',
+        'TIMELINE 2 FORKS FROM TIMELINE 1',
+        'Waiting for promotion result from the live simulation…',
+        'FORK',
+        'left',
+        'top',
+      )
+      startOrbitFocus([346, 8, -35], 92, [0.55, 0.38, 1])
+      pg.bus.emit('select', { id: null })
+    } else if (frame === F(116)) {
+      scene(116, 8)
+      pg.sim.startPgRewind()
+      pg.bus.emit('select', { id: null })
+      pg.sim.setKnob('timeScale', 3)
+      setCaption(
+        '06 / REJOIN',
+        'pg_rewind DISCARDS THE DIVERGENT TAIL',
+        '3× MODEL TIME · The former primary cannot merge histories; the rejoin bay tracks the measured copy.',
+        '3× MODEL TIME',
+        'left',
+        'top',
+      )
+      startOrbitFocus([-56, 5, 232], 68, [0.72, 0.34, 1])
+    } else if (frame === F(124)) {
+      scene(124, 15)
+      pg.sim.reset()
+      pg.setThemeMode('day', { persist: false })
       pg.gfx.setQuality('medium')
+      ensureWalk({ x: 0, y: 7.05, z: 34, yaw: Math.PI, pitch: -0.06 })
+      pg.walk.setTouchMove(0, 0.75)
+      report.swim.minFeetY = pg.walk.position.y
       setCaption(
-        '05 / ENVIRONMENT · LIGHT SHAFTS',
-        'MOVE PAST A PARTIAL OCCLUDER',
-        'Air contrast appears along the building edge as the low sun clears it.',
-        'REAL DEPTH',
+        '07 / BUFFER-POOL SWIM',
+        'FORWARD THRUST MEETS WATER DRAG',
+        'Listen: surface strokes are open; the same strokes are low-passed after the dive.',
+        'APP AUDIO',
         'left',
         'top',
       )
-      startOrbitPath(
-        [
-          [115, 3, 100],
-          [102, 5, 105],
-          [90, 7, 110],
-        ],
-        [
-          [-515, 148, -662],
-          [-518, 134, -656],
-          [-520, 120, -650],
-        ],
-        6,
-      )
-    } else if (frame === F(129)) {
-      scene(129, 6)
+    } else if (frame === F(128)) {
+      pg.walk.setTouchCrouch(true)
       setCaption(
-        '05 / ENVIRONMENT · WATER + SKY',
+        '07 / BUFFER-POOL SWIM',
+        'DIVE HELD · UNDERWATER WORLD CLOSES IN',
+        'The water column adds drag, depth motes, a surface boundary, and audible muffling.',
+        'DIVE',
+        'left',
+        'top',
+      )
+    } else if (frame === F(132)) {
+      pg.walk.setTouchMove(0, 0)
+      pg.walk.setTouchCrouch(false)
+      report.swim.speedAtRelease = pg.walk.speed
+      report.swim.feetYAtRise = pg.walk.position.y
+      setCaption(
+        '07 / BUFFER-POOL SWIM',
+        'INPUT RELEASED · DRAG SLOWS, BUOYANCY RISES',
+        'Live speed and vertical motion below come from the walk controller.',
+        'FLOAT',
+        'left',
+        'top',
+      )
+    } else if (frame === F(139)) {
+      scene(139, 7)
+      pg.walk.setTouchMove(0, 0)
+      pg.walk.setTouchCrouch(false)
+      pg.setThemeMode('day', { persist: false })
+      report.environment.themes.push({ frame, mode: 'day' })
+      setCaption(
+        '08 / ENVIRONMENT · WATER + SKY',
         'THE SKYLINE MOVES IN THE BUFFER POOL',
-        'A blurred reflection carries the city; the warm horizon deepens toward a cool scattering sky.',
+        'Daylight separates textured ground, the warm horizon, clouds, and the cool scattering sky.',
         'DAY',
         'left',
         'top',
@@ -836,17 +1013,17 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
           [0, 8.8, 0],
           [0, 8.8, 0],
         ],
-        6,
+        7,
       )
-    } else if (frame === F(135)) {
-      scene(135, 12)
+    } else if (frame === F(146)) {
+      scene(146, 12)
       pg.gfx.setQuality('reduced')
       pg.setThemeMode('night', { persist: false })
       report.environment.themes.push({ frame, mode: 'night' })
       setCaption(
-        '05 / ENVIRONMENT · NIGHT',
+        '08 / ENVIRONMENT · NIGHT',
         'MATTE STRUCTURE • NEON MEANING',
-        'The same responsive surfaces after dark: semantic light remains the strongest signal.',
+        'The same city after dark: semantic light remains the strongest signal.',
         'NIGHT',
       )
       startOrbitPath(
@@ -868,8 +1045,8 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
 
     if (activeCollision) pg.walk.setTouchMove(0, 0.55)
 
-    if (frame >= F(43) && frame < F(51)) {
-      const turnT = Math.max(0, Math.min(1, (frame / FPS_ - 46) / 4.5))
+    if (frame >= F(37) && frame < F(44)) {
+      const turnT = Math.max(0, Math.min(1, (frame / FPS_ - 39.5) / 3.8))
       const next = capturePose()
       next.yaw = Math.PI + Math.PI * turnT
       pg.walk.setPose(next)
@@ -897,7 +1074,7 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
       )
     }
 
-    if (frame >= F(43) && frame < F(51)) {
+    if (frame >= F(37) && frame < F(44)) {
       const labels = visibleLabels()
       const districts = labels.filter((node) => node.classList.contains('lbl--district'))
       report.labels.maxDistrictLabels = Math.max(report.labels.maxDistrictLabels, districts.length)
@@ -915,11 +1092,7 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
       )
     }
 
-    if (frame >= F(51) && frame < F(55)) {
-      report.body.visible ||= pg.gfx.scene.getObjectByName('walk:body-shadow')?.visible === true
-    }
-
-    if (frame >= F(55) && frame < F(69)) {
+    if (frame >= F(44) && frame < F(55)) {
       const root = document.querySelector('.walk-up-prompt:not([hidden])')
       const range = visible(root) ? root.dataset.range : ''
       report.lever.approachSeen ||= range === 'approach'
@@ -931,14 +1104,14 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
       setCaptionDetail(
         `DISTANCE ${distance.toFixed(1)} m • ${promptText() || 'AUTOVACUUM beacon ahead'}`,
       )
-    } else if (leverPulled && frame >= F(69) && frame < F(92)) {
+    } else if (leverPulled && frame >= F(55) && frame < F(64)) {
       setCaptionDetail(
-        `5× MODEL TIME • ACTIVE WORKERS ${activeWorkers()} • autovacuum = `
+        `12× MODEL TIME • ACTIVE WORKERS ${activeWorkers()} • autovacuum = `
         + `${pg.sim.state.knobs.autovacuum ? 'on' : 'off'}`,
       )
     }
 
-    if (frame >= F(102) && frame < F(117)) {
+    if (frame >= F(72) && frame < F(84)) {
       const state = pg.controlCenter.doorState
       if (report.door.states.at(-1)?.state !== state) {
         report.door.states.push({ frame, state })
@@ -949,7 +1122,90 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
       report.door.inside ||= pg.controlCenter.inside
     }
 
-    if (frame === F(146.9)) {
+    if (frame >= F(84) && frame < F(96)) {
+      const decision = pg.sim.state.scenarioDecision
+      if (decision) {
+        report.operatorDecision.phaseSeen = decision.phase
+        report.operatorDecision.choiceMade = decision.choice
+      }
+      const choices = [...document.querySelectorAll('[data-scenario-choice]')]
+        .filter(visible)
+      report.operatorDecision.choiceCount = Math.max(
+        report.operatorDecision.choiceCount,
+        choices.length,
+      )
+      report.operatorDecision.choicesVisible ||= choices.length === 2
+      if (choices.length === 2) {
+        report.operatorDecision.choices = choices.map((node) =>
+          node.textContent.replace(/\s+/g, ' ').trim())
+      }
+    }
+
+    if (frame >= F(96) && frame < F(124)) {
+      const ha = pg.sim.state.highAvailability
+      const transition = ha.transition
+      const timeline = ha.timeline
+      if (timeline.forkLsn > 0) {
+        report.failover.forkSeen = true
+        report.failover.lossTransactions = transition.lossTransactions
+        report.failover.lossBytes = transition.lossBytes
+        report.failover.forkLsn = timeline.forkLsn
+        report.failover.oldHistoryEndLsn = timeline.oldHistoryEndLsn
+        report.failover.newHistoryEndLsn = timeline.newHistoryEndLsn
+        report.failover.roles = pg.sim.state.cluster.nodes.map((node) => ({
+          id: node.id,
+          role: node.role,
+          opinion: node.leaderOpinion,
+        }))
+        report.failover.formerPrimaryDiverged ||=
+          pg.sim.state.cluster.nodes[0].role === 'diverged'
+      }
+      report.failover.rewindStarted ||=
+        ha.rejoin.status === 'checking'
+        || ha.rejoin.status === 'rewinding'
+        || ha.rejoin.status === 'complete'
+      report.failover.rewindComplete ||= ha.rejoin.status === 'complete'
+
+      if (frame >= F(108) && frame < F(116) && transition.status === 'complete') {
+        captionBadge.textContent = `${transition.lossTransactions} TX LOST`
+        setCaptionDetail(
+          `ACKNOWLEDGED ON OLD PRIMARY, ABSENT AFTER PROMOTION · `
+          + `${transition.lossTransactions.toLocaleString()} tx · `
+          + `${compactBytes(transition.lossBytes)} · fork LSN ${timeline.forkLsn.toLocaleString()}`,
+        )
+      } else if (frame >= F(116)) {
+        captionBadge.textContent = `${ha.rejoin.status.toUpperCase()} · 3×`
+        setCaptionDetail(
+          `3× MODEL TIME · STATUS ${ha.rejoin.status.toUpperCase()} · `
+          + `${(ha.rejoin.progress * 100).toFixed(0)}% · `
+          + `${compactBytes(ha.rejoin.bytesCopied)} / ${compactBytes(ha.rejoin.bytesRewound)}`,
+        )
+      }
+    }
+
+    if (frame >= F(124) && frame < F(139)) {
+      const feetY = pg.walk.position.y
+      report.swim.gaitSeen ||= pg.walk.gait === 'swim'
+      report.swim.submergedSeen ||= pg.walk.submerged
+      report.swim.maxSpeed = Math.max(report.swim.maxSpeed, pg.walk.speed)
+      report.swim.minFeetY = Math.min(report.swim.minFeetY, feetY)
+      if (frame >= F(132)) {
+        const rise = Math.max(0, feetY - report.swim.feetYAtRise)
+        report.swim.maxRiseMetres = Math.max(report.swim.maxRiseMetres, rise)
+        report.swim.dragSeen ||=
+          report.swim.speedAtRelease > 0.25
+          && pg.walk.speed < report.swim.speedAtRelease * 0.35
+        report.swim.buoyancySeen ||= rise > 0.25 && pg.walk.verticalSpeed > 0.08
+      }
+      const audioState = pg.walk.submerged ? 'UNDERWATER LOW-PASS' : 'OPEN-AIR STROKES'
+      setCaptionDetail(
+        `GAIT ${pg.walk.gait.toUpperCase()} · SPEED ${pg.walk.speed.toFixed(2)} m/s · `
+        + `VERTICAL ${pg.walk.verticalSpeed >= 0 ? '+' : ''}${pg.walk.verticalSpeed.toFixed(2)} m/s · `
+        + `FEET Y ${feetY.toFixed(2)} m · AUDIO ${audioState}`,
+      )
+    }
+
+    if (frame === F(157.9)) {
       report.environment.finalQuality = pg.gfx.quality.level
     }
 
@@ -977,6 +1233,10 @@ function installDemo(measureWallProof_, reservedCaptionPlace_) {
       pg.walk.setTouchMove(0, 0)
       report.environment.finalQuality = pg.gfx.quality.level
       return report
+    },
+    markAudioCaptured(captured) {
+      report.swim.audioCaptured = captured === true
+      return report.swim.audioCaptured
     },
   }
 
@@ -1014,6 +1274,123 @@ function ffmpegProcess(output, width, height) {
   })
 }
 
+async function runProcess(command, args) {
+  const child = spawn(command, args, { stdio: ['ignore', 'inherit', 'inherit'] })
+  const [code] = await once(child, 'close')
+  if (code !== 0) throw new Error(`${command} exited with status ${code}`)
+}
+
+async function captureSwimAudio(send, source, rawPath, wavPath) {
+  const enabled = await send('Runtime.evaluate', {
+    expression: `(async () => {
+      window.PGSIMCITY.audio.volume = 0.72
+      await window.PGSIMCITY.audio.enable()
+      return window.PGSIMCITY.audio.enabled
+    })()`,
+    awaitPromise: true,
+    returnByValue: true,
+    userGesture: true,
+  })
+  if (enabled.exceptionDetails || enabled.result.value !== true) {
+    throw new Error('the app audio graph did not start from the CDP user gesture')
+  }
+
+  const rawFd = openSync(rawPath, 'w')
+  const recorder = spawn('parec', [
+    `--device=${source}`,
+    '--format=s16le',
+    '--rate=48000',
+    '--channels=2',
+    '--raw',
+  ], {
+    stdio: ['ignore', rawFd, 'inherit'],
+  })
+  const recorderClosed = once(recorder, 'close')
+  closeSync(rawFd)
+  await once(recorder, 'spawn')
+  await sleep(250)
+
+  const synthesis = await send('Runtime.evaluate', {
+    expression: `new Promise((resolve) => {
+      const audio = window.PGSIMCITY.audio
+      const fps = ${FPS}
+      const frames = ${SWIM_DURATION_SECONDS * FPS}
+      let frame = 0
+      let distance = 0
+      audio.splash(0.48)
+      const timer = setInterval(() => {
+        const seconds = frame / fps
+        const moving = seconds < 9
+        const submerged = seconds >= 5
+        if (moving) distance += 1.55 / fps
+        audio.step(1 / fps, {
+          distance,
+          speed: moving ? 1.55 : 0,
+          gait: 'swim',
+          grounded: false,
+          surface: 'water',
+          submerged,
+        })
+        frame++
+        if (frame >= frames) {
+          clearInterval(timer)
+          resolve({ enabled: audio.enabled, frames, distance })
+        }
+      }, 1000 / fps)
+    })`,
+    awaitPromise: true,
+    returnByValue: true,
+  })
+  await sleep(400)
+  recorder.kill('SIGTERM')
+  const [recordCode] = await recorderClosed
+  if (recordCode !== 0 && recordCode !== null) {
+    throw new Error(`parec exited with status ${recordCode}`)
+  }
+  if (synthesis.exceptionDetails || synthesis.result.value?.enabled !== true) {
+    throw new Error('the app audio graph stopped during swim synthesis')
+  }
+  if (statSync(rawPath).size < 192000) {
+    throw new Error('PulseAudio returned less than one second of stereo audio')
+  }
+
+  await runProcess('ffmpeg', [
+    '-hide_banner',
+    '-loglevel', 'warning',
+    '-y',
+    '-f', 's16le',
+    '-ar', '48000',
+    '-ac', '2',
+    '-i', rawPath,
+    '-af', `atrim=start=0.25,apad=whole_dur=${SWIM_DURATION_SECONDS},atrim=duration=${SWIM_DURATION_SECONDS}`,
+    '-c:a', 'pcm_s16le',
+    wavPath,
+  ])
+}
+
+async function muxDemoAudio(videoPath, audioPath, output, seconds, delaySeconds) {
+  const delayMs = Math.max(0, Math.round(delaySeconds * 1000))
+  await runProcess('ffmpeg', [
+    '-hide_banner',
+    '-loglevel', 'warning',
+    '-y',
+    '-i', videoPath,
+    '-i', audioPath,
+    '-filter_complex',
+    `[1:a]adelay=${delayMs}:all=1,apad=whole_dur=${seconds}[demo_audio]`,
+    '-map', '0:v:0',
+    '-map', '[demo_audio]',
+    '-c:v', 'copy',
+    '-c:a', 'aac',
+    '-b:a', '128k',
+    '-pix_fmt', 'yuv420p',
+    '-t', String(seconds),
+    '-movflags', '+faststart',
+    '-metadata:s:a:0', 'title=PGSimCity procedural swim audio',
+    output,
+  ])
+}
+
 export async function runSequence({ send, logs, output, width, height }) {
   if (existsSync(output) && process.env.DEMO_OVERWRITE !== '1') {
     throw new Error(`Refusing to overwrite ${output}; set DEMO_OVERWRITE=1`)
@@ -1024,6 +1401,15 @@ export async function runSequence({ send, logs, output, width, height }) {
   const frames = Math.round(seconds * FPS)
   const startFrame = Math.round(startSeconds * FPS)
   const minimumSeconds = process.env.DEMO_ALLOW_SHORT === '1' ? 1 : 90
+  const fullFilm = startFrame === 0 && frames >= DEFAULT_SECONDS * FPS
+  const pulseSource = process.env.DEMO_PULSE_SOURCE || ''
+  const includesSwim =
+    startSeconds <= SWIM_START_SECONDS
+    && startSeconds + seconds >= SWIM_START_SECONDS + SWIM_DURATION_SECONDS
+  const captureAudio = pulseSource !== '' && includesSwim
+  if (fullFilm && !captureAudio) {
+    throw new Error('DEMO_PULSE_SOURCE is required for the full film swim-audio proof')
+  }
   if (
     !Number.isFinite(frames)
     || !Number.isFinite(startFrame)
@@ -1049,7 +1435,12 @@ export async function runSequence({ send, logs, output, width, height }) {
    */
   await sleep(1000)
 
-  const ffmpeg = ffmpegProcess(output, width, height)
+  const videoPath = captureAudio
+    ? `${output}.video-only-${process.pid}.mp4`
+    : output
+  const rawAudioPath = `${output}.swim-${process.pid}.raw`
+  const wavAudioPath = `${output}.swim-${process.pid}.wav`
+  const ffmpeg = ffmpegProcess(videoPath, width, height)
   let ffmpegError = null
   ffmpeg.on('error', (error) => {
     ffmpegError = error
@@ -1066,7 +1457,10 @@ export async function runSequence({ send, logs, output, width, height }) {
         returnByValue: true,
       })
       if (advanced.exceptionDetails || advanced.result.value !== true) {
-        throw new Error(`deterministic frame ${frame} did not advance`)
+        const detail = advanced.exceptionDetails?.exception?.description
+          || advanced.exceptionDetails?.text
+          || `returned ${JSON.stringify(advanced.result.value)}`
+        throw new Error(`deterministic frame ${frame} did not advance: ${detail}`)
       }
       const shot = await send('Page.captureScreenshot', {
         format: 'png',
@@ -1092,6 +1486,31 @@ export async function runSequence({ send, logs, output, width, height }) {
   const [code] = await once(ffmpeg, 'close')
   if (code !== 0) throw new Error(`ffmpeg exited with status ${code}`)
 
+  if (captureAudio) {
+    try {
+      console.log('[demo] capturing the app procedural swim audio')
+      await captureSwimAudio(send, pulseSource, rawAudioPath, wavAudioPath)
+      await muxDemoAudio(
+        videoPath,
+        wavAudioPath,
+        output,
+        seconds,
+        SWIM_START_SECONDS - startSeconds,
+      )
+      const marked = await send('Runtime.evaluate', {
+        expression: 'window.__PG_DEMO.markAudioCaptured(true)',
+        returnByValue: true,
+      })
+      if (marked.exceptionDetails || marked.result.value !== true) {
+        throw new Error('audio capture was not recorded in the verification report')
+      }
+    } finally {
+      for (const path of [videoPath, rawAudioPath, wavAudioPath]) {
+        if (existsSync(path)) unlinkSync(path)
+      }
+    }
+  }
+
   const result = await send('Runtime.evaluate', {
     expression: 'window.__PG_DEMO.finish()',
     awaitPromise: true,
@@ -1111,7 +1530,7 @@ export async function runSequence({ send, logs, output, width, height }) {
   console.log(`[demo] wrote ${output}`)
   console.log(`[demo] wrote ${reportPath}`)
   console.log(`[demo] report ${JSON.stringify(result.result.value)}`)
-  if (startFrame === 0 && frames >= DEFAULT_SECONDS * FPS) {
+  if (fullFilm) {
     const problems = fullReportProblems(result.result.value)
     if (problems.length > 0) {
       throw new Error(`full demo verification failed:\n- ${problems.join('\n- ')}`)
