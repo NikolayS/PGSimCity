@@ -13,6 +13,7 @@ import {
   paintSceneMaterial,
   setBloomAvailable,
   startThemeClock,
+  themeEnvironmentKey,
   themeMode,
 } from '../core/theme'
 import type { Atmosphere, ThemeMode } from '../core/theme'
@@ -306,15 +307,16 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
 
   /*
    * The visible dome is also the lighting source. PMREM captures it six times
-   * only when the sky model changes, then standard materials sample the
-   * prefiltered result without another pass per frame.
+   * only when the sky model changes. Local-clock keys advance at most every
+   * fifteen minutes (and not at all through deep night), then standard
+   * materials sample the prefiltered result without another pass per frame.
    */
   const environmentScene = new THREE.Scene()
   const environmentBackground = new THREE.Color(COLOR.bg)
   environmentScene.background = environmentBackground
   let pmremGenerator: THREE.PMREMGenerator | null = null
   let environmentTarget: THREE.WebGLRenderTarget | null = null
-  let environmentMode: ThemeMode | null = null
+  let environmentKey: string | null = null
 
   function applyEnvironmentIntensity(): void {
     // Day keeps the poster-flat cel bands; night gives glossy machinery enough
@@ -332,8 +334,8 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
 
     const sky = scene.getObjectByName('sky')
     if (!sky?.parent) return
-    const targetMode = themeMode()
-    if (!force && environmentTarget && environmentMode === targetMode) {
+    const targetKey = themeEnvironmentKey()
+    if (!force && environmentTarget && environmentKey === targetKey) {
       scene.environment = environmentTarget.texture
       return
     }
@@ -348,10 +350,10 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     } finally {
       parent.add(sky)
     }
-    nextTarget.texture.name = `pgsimcity.environment.${targetMode}`
+    nextTarget.texture.name = `pgsimcity.environment.${targetKey}`
     const previous = environmentTarget
     environmentTarget = nextTarget
-    environmentMode = targetMode
+    environmentKey = targetKey
     scene.environment = nextTarget.texture
     previous?.dispose()
   }
@@ -768,7 +770,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     scene.traverse((obj) => paintObject(obj, target))
     applyShadowRenderer()
     renderer.shadowMap.needsUpdate = true
-    refreshEnvironment(true)
+    refreshEnvironment()
   }
 
   const offTheme = onThemeMode(applyThemeMode)

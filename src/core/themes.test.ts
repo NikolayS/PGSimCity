@@ -3,9 +3,11 @@ import {
   ATMOSPHERE,
   CLOCK_SUNRISE_MINUTES,
   CLOCK_SUNSET_MINUTES,
+  CLOCK_ENVIRONMENT_REFRESH_MINUTES,
   DAY_PALETTE,
   NIGHT_PALETTE,
   clockAtmosphereAt,
+  clockEnvironmentKeyAt,
   clockSunAt,
   dayEmissive,
   dayInkOpacity,
@@ -40,6 +42,24 @@ describe('approximate local-clock sun path', () => {
     expect(clockSunAt(1050).daylight).toBe(1)
     expect(clockSunAt(1080).daylight).toBeGreaterThan(0)
     expect(clockSunAt(1110).daylight).toBe(0)
+  })
+
+  it('keeps the visible solar direction on the clock path while the key light blends through twilight', () => {
+    for (const minutes of [6 * 60 + 5, 8 * 60, 12 * 60, 17 * 60 + 55, 18 * 60 + 5]) {
+      const sun = clockSunAt(minutes)
+      const direction = clockAtmosphereAt(minutes).sunDirection
+      const length = Math.hypot(...direction)
+      const elevation = Math.asin(direction[1] / length) * (180 / Math.PI)
+      expect(elevation).toBeCloseTo(sun.elevationDeg, 10)
+    }
+  })
+
+  it('limits PMREM recaptures to quarter-hour daylight buckets and one stable night', () => {
+    expect(CLOCK_ENVIRONMENT_REFRESH_MINUTES).toBe(15)
+    expect(clockEnvironmentKeyAt(12 * 60)).toBe(clockEnvironmentKeyAt(12 * 60 + 14.9))
+    expect(clockEnvironmentKeyAt(12 * 60)).not.toBe(clockEnvironmentKeyAt(12 * 60 + 15))
+    expect(clockEnvironmentKeyAt(1 * 60)).toBe(clockEnvironmentKeyAt(4 * 60))
+    expect(clockEnvironmentKeyAt(20 * 60)).toBe(clockEnvironmentKeyAt(1 * 60))
   })
 })
 

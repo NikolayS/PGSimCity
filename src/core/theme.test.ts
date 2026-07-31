@@ -8,12 +8,31 @@ import {
   setBloomAvailable,
   setThemeClockMinutes,
   setThemeMode,
+  themeEnvironmentKey,
   themeMode,
 } from './theme'
 import { BAKED_SKY_COLOR, NIGHT_PALETTE } from './themes'
 import type { CuratedThemeMode, ThemeMode } from './themes'
 
 const READABLE_LUMINANCE = 0.24
+
+describe('prefiltered environment identity', () => {
+  it('changes on a theme switch and only at the clock refresh cadence', () => {
+    setThemeMode('day', { persist: false })
+    expect(themeEnvironmentKey()).toBe('day')
+
+    setThemeMode('clock', { persist: false })
+    setThemeClockMinutes(12 * 60)
+    const noon = themeEnvironmentKey()
+    setThemeClockMinutes(12 * 60 + 14)
+    expect(themeEnvironmentKey()).toBe(noon)
+    setThemeClockMinutes(12 * 60 + 15)
+    expect(themeEnvironmentKey()).not.toBe(noon)
+
+    setThemeMode('night', { persist: false })
+    expect(themeEnvironmentKey()).toBe('night')
+  })
+})
 
 function luminance({ r, g, b }: { r: number; g: number; b: number }): number {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b
