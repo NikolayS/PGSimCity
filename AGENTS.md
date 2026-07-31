@@ -39,11 +39,11 @@ Choose a unique `CDP_PORT` from 9500–9900 for every concurrent driver. Softwar
 WebGL runs at roughly 1–3 fps, so allow 45–70 seconds for the scene to settle.
 The optional final argument is JavaScript evaluated before the screenshot.
 
-### At most three browsers at once
+### At most two browsers at once
 
 `tools/shoot.mjs` takes a slot from a directory semaphore at
 `/tmp/claude-1000/cdp-gate` before it launches, and waits if all slots are
-taken. The cap is three, overridable with `CDP_MAX`.
+taken. The cap is two, overridable with `CDP_MAX`.
 
 **Do not raise it, and do not launch Chrome around the driver to avoid it.**
 Each browser rasterises WebGL through SwiftShader on the CPU and spikes to

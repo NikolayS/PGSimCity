@@ -192,7 +192,7 @@ const STEPS: TourStep[] = [
     id: 'stream',
     title: 'Streaming to a standby',
     body:
-      'The same write-ahead log that makes a commit durable is what keeps a second server alive. A walsender reads the WAL as it is written and pushes it down one TCP connection to the standby, where a single startup process replays it into an identical copy of every page. Nothing about your SQL crosses that wire — only the physical changes it produced. Watch a record leave the vault, cross the gap, and land.',
+      'The same write-ahead log that makes a commit durable keeps each standby alive. Follow standby A: its walsender reads the WAL as it is written and pushes it down one TCP connection, where one startup process replays it into an identical copy of every page. Standby B has an independent connection and replay process. Nothing about your SQL crosses either wire — only the physical changes it produced. Watch a record leave the vault, cross the first gap, and land.',
     focus: 'walsender',
     duration: 20,
     knobs: { replicaEnabled: true, walLevel: 'replica', replicaSlowApply: false, replicaNetworkLag: 30 },
@@ -214,7 +214,7 @@ const STEPS: TourStep[] = [
     id: 'city',
     title: 'The whole city again',
     body:
-      'That is the entire machine. Fork a process, plan the query, pull pages into memory, write the change into the WAL before the changed page ever reaches disk, flush that WAL to keep the promise, write the pages out later, collect the dead versions, and ship the same WAL to a second copy. Every performance problem you will ever have in Postgres is one of those steps costing more than you expected. The console on the left drives all of it — break something, and watch which street goes quiet.',
+      'That is the core query and maintenance loop. Fork a process, plan the query, pull pages into memory, write the change into the WAL before the changed page reaches disk, flush that WAL to keep the promise, write the pages out later, collect dead versions, and ship the same WAL to two standby copies. The wider city also models backup, archive, recovery, failover, and operator decisions. The console on the left drives the model — break something, and watch which street goes quiet.',
     focus: 'world.ground',
     duration: 18,
     scenario: null,
