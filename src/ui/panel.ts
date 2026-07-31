@@ -365,17 +365,14 @@ export function createInspector(ctx: UiContext): UiModule {
     const hint = el('p', { class: 'pg-hint' })
     const root = el('div', { class: 'pg-field' }, button, hint)
 
-    if (action === 'start-full-backup') {
-      button.addEventListener('click', () => {
-        ctx.sim.startBaseBackup()
-        sync()
-      })
-    } else {
-      button.addEventListener('click', () => {
-        ctx.sim.startPointInTimeRestore()
-        sync()
-      })
-    }
+    button.addEventListener('click', () => {
+      if (action === 'start-full-backup') ctx.sim.startBaseBackup()
+      else if (action === 'start-pitr') ctx.sim.startPointInTimeRestore()
+      else if (action === 'start-switchover') ctx.sim.startSwitchover()
+      else if (action === 'trigger-failover') ctx.sim.startFailover()
+      else ctx.sim.startPgRewind()
+      sync()
+    })
 
     function sync(): void {
       const s = ctx.sim.state
@@ -402,22 +399,98 @@ export function createInspector(ctx: UiContext): UiModule {
         return
       }
 
-      const restore = s.disasterRecovery.restore
-      const active = restore.status === 'fetching' || restore.status === 'replaying'
-      button.disabled = active || s.disasterRecovery.backups.length === 0
+      if (action === 'start-pitr') {
+        const restore = s.disasterRecovery.restore
+        const active = restore.status === 'fetching' || restore.status === 'replaying'
+        button.disabled = active || s.disasterRecovery.backups.length === 0
+        setText(
+          button,
+          active
+            ? `PITR ${(restore.progress * 100).toFixed(0)}%`
+            : restore.status === 'failed'
+              ? 'Retry point-in-time restore'
+              : 'Restore to selected time',
+        )
+        setText(
+          hint,
+          restore.status === 'failed'
+            ? restore.failureReason
+            : `Target: ${s.knobs.recoveryTargetAge}s before now. This fetches a retained full backup, then replays archived WAL; it never promotes.`,
+        )
+        return
+      }
+
+      const ha = s.highAvailability
+      const transition = ha.transition
+      if (action === 'start-switchover') {
+        const active = transition.status === 'waiting'
+        button.disabled =
+          active
+          || ha.currentLeader !== 'primary'
+          || !s.knobs.patroniDcsAvailable
+          || !s.replication.standbys[0].connected
+        setText(
+          button,
+          active && transition.kind === 'switchover'
+            ? `Waiting ${(transition.waitSec).toFixed(1)} s`
+            : transition.kind === 'switchover' && transition.status === 'complete'
+              ? 'Switchover complete'
+              : 'Planned switchover → standby_a',
+        )
+        setText(
+          hint,
+          transition.kind === 'switchover' && transition.status === 'complete'
+            ? `${transition.waitSec.toFixed(1)} s wait · zero bytes · zero transactions lost`
+            : 'Stops write admission, waits for standby_a to flush every byte, then transfers the Patroni leader lock.',
+        )
+        return
+      }
+
+      if (action === 'trigger-failover') {
+        const active = transition.status === 'waiting'
+        button.disabled =
+          active
+          || ha.currentLeader !== 'primary'
+          || !s.knobs.patroniDcsAvailable
+          || !s.replication.standbys[0].connected
+        setText(
+          button,
+          active && transition.kind === 'failover'
+            ? `Lease expires in ${ha.patroni.leaseRemainingSec.toFixed(1)} s`
+            : transition.kind === 'failover' && transition.status === 'complete'
+              ? 'Failover complete'
+              : 'Unplanned failover → standby_a',
+        )
+        setText(
+          hint,
+          transition.kind === 'failover' && transition.status === 'complete'
+            ? `${fmtBytes(transition.lossBytes)} and ${transition.lossTransactions.toLocaleString()} committed write transactions lost`
+            : 'Removes the primary immediately. Patroni waits out its lease, promotes standby_a at its durable LSN, and reports the missing history.',
+        )
+        return
+      }
+
+      const rewind = ha.rejoin
+      const active = rewind.status === 'checking' || rewind.status === 'rewinding'
+      button.disabled = active || !rewind.required
       setText(
         button,
         active
-          ? `PITR ${(restore.progress * 100).toFixed(0)}%`
-          : restore.status === 'failed'
-            ? 'Retry point-in-time restore'
-            : 'Restore to selected time',
+          ? `pg_rewind ${(rewind.progress * 100).toFixed(0)}%`
+          : rewind.status === 'failed'
+            ? 'Retry pg_rewind'
+            : rewind.status === 'complete'
+              ? 'pg_rewind complete'
+              : 'Run pg_rewind',
       )
       setText(
         hint,
-        restore.status === 'failed'
-          ? restore.failureReason
-          : `Target: ${s.knobs.recoveryTargetAge}s before now. This fetches a retained full backup, then replays archived WAL; it never promotes.`,
+        rewind.failureReason
+          || (
+            rewind.required
+              ? `${fmtBytes(rewind.bytesRewound)} diverged · estimated ${rewind.estimatedDurationSec.toFixed(1)} s after start`
+              : 'No divergent former primary currently needs rewind.'
+          ),
       )
     }
 

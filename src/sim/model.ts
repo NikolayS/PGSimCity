@@ -84,6 +84,7 @@ import {
   clamp01,
   damp,
   expDelay,
+  fmtLsn,
   makeRng,
   pushHistory,
   walSegName,
@@ -136,6 +137,13 @@ const DR_DATA_DIRECTORY_OVERHEAD_BYTES = 256 * MIB
 const DR_REPOSITORY_RATIO = 0.65
 /** Fixed rings retain timestamps without allocating in the update path. */
 const DR_HISTORY_SLOTS = 4096
+/** Patroni timings are compressed for observation; they are not recommendations. */
+const HA_LEASE_TTL_SECONDS = 4
+const HA_LEASE_RENEW_SECONDS = 1
+/** pg_rewind first checks prerequisites, then copies a scaled byte range. */
+const REWIND_CHECK_SECONDS = 2
+const REWIND_BYTES_PER_SEC = 8 * MIB
+const REWIND_COMMIT_SLOTS = 4096
 /** PostgreSQL's wal_buffers=-1 rule: shared_buffers/32, 64 KiB to one segment. */
 const walBufferCapacity = (sharedBuffersMiB: number): number =>
   clamp((sharedBuffersMiB * MIB) / 32, 64 * 1024, WAL_SEG)
@@ -195,6 +203,10 @@ function createClusterWalState(lsn: number): ClusterNodeWalState {
     segmentCount: N_WAL_SEG_SLOTS,
     diskBytes: N_WAL_SEG_SLOTS * WAL_SEG,
   }
+}
+
+function clusterNodeIndex(id: ClusterNodeId): 0 | 1 | 2 {
+  return id === 'primary' ? 0 : id === 'standbyA' ? 1 : 2
 }
 
 function isRunningState(state: BackendState): boolean {
@@ -653,6 +665,49 @@ export function createSim(bus: Bus): SimApi {
         },
       ],
     },
+    highAvailability: {
+      currentLeader: 'primary',
+      acceptingWrites: true,
+      patroni: {
+        leaderLock: 'primary',
+        leaseTtlSec: HA_LEASE_TTL_SECONDS,
+        leaseRemainingSec: HA_LEASE_TTL_SECONDS,
+        renewEverySec: HA_LEASE_RENEW_SECONDS,
+        demotions: 0,
+        splitBrain: false,
+      },
+      timeline: {
+        current: 1,
+        parent: 0,
+        forkLsn: 0,
+        oldHistoryEndLsn: initialLsn,
+        newHistoryEndLsn: initialLsn,
+      },
+      transition: {
+        kind: 'none',
+        status: 'idle',
+        source: null,
+        target: null,
+        startedAt: 0,
+        waitSec: 0,
+        lossBytes: 0,
+        lossTransactions: 0,
+        failureReason: '',
+      },
+      rejoin: {
+        required: false,
+        node: null,
+        blockChangeTrackingAvailable: true,
+        status: 'idle',
+        progress: 0,
+        startedAt: 0,
+        elapsedSec: 0,
+        estimatedDurationSec: 0,
+        bytesRewound: 0,
+        bytesCopied: 0,
+        failureReason: '',
+      },
+    },
     disasterRecovery: {
       tool: 'pgBackRest',
       dataDirectoryBytes: 0,
@@ -758,6 +813,7 @@ export function createSim(bus: Bus): SimApi {
   const bgw = state.bgwriter
   const av = state.autovac
   const rep = state.replication
+  const ha = state.highAvailability
   const dr = state.disasterRecovery
   const stats = state.stats
   type RuntimeStats = typeof stats & {
@@ -1097,6 +1153,15 @@ export function createSim(bus: Bus): SimApi {
   /** Arrivals the queue could not hold — pg's "too many clients already". */
   let refusedTx = 0
   let commitsAcc = 0
+  /**
+   * Bounded commit-position ledger used only to count acknowledged write
+   * transactions beyond a failover candidate's durable LSN. Typed arrays keep
+   * both the hot path and the failure drill allocation-free.
+   */
+  const commitLsn = new Float64Array(REWIND_COMMIT_SLOTS)
+  const commitCount = new Float64Array(REWIND_COMMIT_SLOTS)
+  let commitHead = 0
+  let commitSlots = 0
   let walAcc = 0
   let fpiAcc = 0
   let maintenanceWalPending = 0
@@ -1185,6 +1250,7 @@ export function createSim(bus: Bus): SimApi {
   let archiveWriteWarnT = -100
   let noBufWarnT = -100
   let planSeq = 1
+  let patroniRenewT = 0
 
   /** xmin horizon control. When a long transaction is open the horizon freezes. */
   let horizonFrozen = false
@@ -2248,7 +2314,7 @@ export function createSim(bus: Bus): SimApi {
         : 1
     if (restore.status === 'complete') {
       restore.progress = 1
-      toast('recovery_target_time reached — replay stopped; this pass does not promote or fail over', 'good', 6500)
+      toast('recovery_target_time reached — replay stopped; promotion is a separate HA action', 'good', 6500)
     }
   }
 
@@ -3066,6 +3132,12 @@ export function createSim(bus: Bus): SimApi {
   const bufferRoutes = ['replica.buffer', 'replicaB.buffer'] as const
   const ioRoutes = ['replica.io', 'replicaB.io'] as const
 
+  function synchronousStandby(): PhysicalStandbyState {
+    return ha.currentLeader === 'standbyA'
+      ? rep.standbys[1]
+      : rep.standbys[0]
+  }
+
   function resetPhysicalRuntime(runtime: RuntimePhysicalReplication, lsn: number): void {
     runtime.wireHead = runtime.wireTail = runtime.wireCount = 0
     runtime.applyAckHead = runtime.applyAckTail = runtime.applyAckCount = 0
@@ -3122,13 +3194,39 @@ export function createSim(bus: Bus): SimApi {
     const enabled = index === 0 ? K.replicaEnabled : K.standbyBEnabled
     const slowApply = index === 0 ? K.replicaSlowApply : K.standbyBSlowApply
     const networkLagMs = index === 0 ? K.replicaNetworkLag : K.standbyBNetworkLag
-    /* synchronous_standby_names names standby_a independently of each
-     * transaction's synchronous_commit setting. standby_b remains async. */
-    const sync = index === 0
+    /* Patroni moves the synchronous role to the remaining follower after a
+     * promotion; synchronous_commit still controls each transaction's wait. */
+    const sync = synchronousStandby() === standby
 
     standby.enabled = enabled
     standby.networkLagMs = networkLagMs
     standby.mode = sync ? 'sync' : 'async'
+
+    if (ha.currentLeader === standby.nodeId) {
+      standby.connected = false
+      standby.inFlight = 0
+      standby.lagBytes = 0
+      standby.lagSec = 0
+      standby.applyActivity = damp(standby.applyActivity, 0, 3, dt)
+      standby.walSender = 'stopped'
+      standby.walReceiver = 'stopped'
+      standby.startupProcess = 'stopped'
+      return
+    }
+
+    const leader = ha.currentLeader
+      ? state.cluster.nodes[clusterNodeIndex(ha.currentLeader)]
+      : undefined
+    if (!leader?.online) {
+      standby.connected = false
+      resetPhysicalRuntime(runtime, standby.appliedLsn)
+      standby.inFlight = 0
+      standby.applyActivity = damp(standby.applyActivity, 0, 3, dt)
+      standby.walSender = 'stopped'
+      standby.walReceiver = 'stopped'
+      standby.startupProcess = 'stopped'
+      return
+    }
 
     if (!enabled || K.walLevel === 'minimal') {
       if (standby.connected) {
@@ -3303,18 +3401,23 @@ export function createSim(bus: Bus): SimApi {
   }
 
   function syncClusterProjection(): void {
-    primaryNodeWal.receivedLsn = wal.insertLsn
-    primaryNodeWal.writtenLsn = wal.writeLsn
-    primaryNodeWal.flushedLsn = wal.flushLsn
-    primaryNodeWal.appliedLsn = wal.insertLsn
-    primaryNodeWal.segmentCount = wal.segmentCount
-    primaryNodeWal.diskBytes = wal.segmentCount * WAL_SEG
-    primaryDataDirectory.bytes = dr.dataDirectoryBytes
-    primaryDataDirectory.appliedLsn = wal.insertLsn
+    const leaderId = ha.currentLeader
+    if (leaderId) {
+      const node = state.cluster.nodes[clusterNodeIndex(leaderId)]
+      node.wal.receivedLsn = wal.insertLsn
+      node.wal.writtenLsn = wal.writeLsn
+      node.wal.flushedLsn = wal.flushLsn
+      node.wal.appliedLsn = wal.insertLsn
+      node.wal.segmentCount = wal.segmentCount
+      node.wal.diskBytes = wal.segmentCount * WAL_SEG
+      node.dataDirectory.bytes = dr.dataDirectoryBytes
+      node.dataDirectory.appliedLsn = wal.insertLsn
+    }
 
     for (let i = 0 as 0 | 1; i < 2; i = (i + 1) as 0 | 1) {
       const standby = rep.standbys[i]
       const node = state.cluster.nodes[i + 1]
+      if (node.id === leaderId) continue
       node.online = standby.enabled
       node.wal.receivedLsn = standby.receivedLsn
       node.wal.writtenLsn = standby.writtenLsn
@@ -3328,6 +3431,7 @@ export function createSim(bus: Bus): SimApi {
       node.dataDirectory.bytes = dr.dataDirectoryBytes
       node.dataDirectory.appliedLsn = standby.appliedLsn
     }
+    ha.timeline.newHistoryEndLsn = wal.insertLsn
   }
 
   function syncLegacyReplication(): void {
@@ -3383,6 +3487,507 @@ export function createSim(bus: Bus): SimApi {
     }
     syncHorizonPin()
     syncClusterProjection()
+  }
+
+  /* ======================================================================
+   * PATRONI, PROMOTION, TIMELINES, AND REJOIN
+   * ====================================================================*/
+
+  function resetActiveWalAt(lsn: number): void {
+    wal.insertLsn = lsn
+    wal.writeLsn = lsn
+    wal.flushLsn = lsn
+    wal.bufferBytes = 0
+    flushing = false
+    flushTarget = lsn
+    flushCovered = lsn
+    flushT = 0
+    flushBytes = 0
+    walWriterT = 0
+    maintenanceWalPending = 0
+    maintenanceFpiPending = 0
+
+    const seg0 = Math.floor(lsn / WAL_SEG)
+    const base = seg0 - 3
+    for (let i = 0; i < N_WAL_SEG_SLOTS; i++) {
+      const segment = segments[i]
+      segment.id = base + i
+      segment.name = walSegName(segment.id, ha.timeline.current)
+      segment.bytes = segment.id < seg0
+        ? WAL_SEG
+        : segment.id === seg0
+          ? lsn - seg0 * WAL_SEG
+          : 0
+      segment.fill = segment.id < seg0
+        ? 1
+        : segment.id === seg0
+          ? segment.bytes / WAL_SEG
+          : 0
+      segment.state =
+        segment.id < seg0 ? 'archived'
+        : segment.id === seg0 ? 'current'
+        : 'recycled'
+    }
+    archiveNextSeg = seg0
+    archiveInFlight = -1
+    archT = 0
+    archiveRetryT = 0
+    lastObservedCurrentSeg = seg0
+    closedSegmentId.fill(-1)
+    closedSegmentAt.fill(0)
+
+    ckpt.redoLsn = lsn
+    ckpt.completedRedoLsn = lsn
+    rep.logicalSlotLsn = lsn
+    dr.archive.archivedThroughLsn = Math.min(dr.archive.archivedThroughLsn, lsn)
+
+    lagSampleHead = 0
+    lagSampleCount = 1
+    lagSampleLsn[0] = lsn
+    lagSampleAt[0] = state.t
+  }
+
+  function stopCrashedPrimaryWork(): void {
+    pendingTx = 0
+    nextArrival = 0
+    for (let i = 0; i < N_BACKEND_SLOTS; i++) {
+      const b = backends[i]
+      const x = extras[i]
+      b.active = false
+      b.state = 'free'
+      b.xid = 0
+      b.plan = null
+      x.txCount = 0
+      x.walPending = 0
+      x.walPendingFpi = 0
+      x.walPrepared = false
+      x.planFlat.length = 0
+      unpinAll(i)
+    }
+    wal.insertLsn = wal.writeLsn = wal.flushLsn
+    wal.bufferBytes = 0
+    flushing = false
+    flushTarget = wal.flushLsn
+    flushCovered = wal.flushLsn
+  }
+
+  function resetTransition(
+    kind: 'switchover' | 'failover',
+    source: ClusterNodeId,
+    target: 'standbyA' | 'standbyB',
+  ): void {
+    const transition = ha.transition
+    transition.kind = kind
+    transition.status = 'waiting'
+    transition.source = source
+    transition.target = target
+    transition.startedAt = state.t
+    transition.waitSec = 0
+    transition.lossBytes = 0
+    transition.lossTransactions = 0
+    transition.failureReason = ''
+  }
+
+  function standbyForNode(id: 'standbyA' | 'standbyB'): PhysicalStandbyState {
+    return rep.standbys[id === 'standbyA' ? 0 : 1]
+  }
+
+  function eligiblePromotionTarget(id: 'standbyA' | 'standbyB'): boolean {
+    const standby = standbyForNode(id)
+    return K.walLevel !== 'minimal'
+      && standby.enabled
+      && standby.connected
+      && state.cluster.nodes[clusterNodeIndex(id)].online
+  }
+
+  function startSwitchover(target: 'standbyA' | 'standbyB' = 'standbyA'): boolean {
+    if (
+      ha.transition.status === 'waiting'
+      || ha.currentLeader !== 'primary'
+      || !K.patroniDcsAvailable
+      || !eligiblePromotionTarget(target)
+    ) {
+      toast(
+        !K.patroniDcsAvailable
+          ? 'Switchover refused: Patroni cannot transfer the leader lock while the DCS is unavailable'
+          : 'Switchover refused: reset the drill and choose a connected physical standby',
+        'warn',
+        6500,
+      )
+      return false
+    }
+    resetTransition('switchover', 'primary', target)
+    ha.acceptingWrites = false
+    pendingTx = 0
+    toast(
+      `Planned switchover: writes stopped; waiting for ${standbyForNode(target).applicationName} to flush every byte`,
+      'info',
+      6500,
+    )
+    bus.emit('narrate', {
+      title: 'Planned switchover',
+      body: `Write admission is closed. Patroni will not move the leader lock until ${standbyForNode(target).applicationName} has flushed every byte. The wait is the cost; loss must remain zero.`,
+      seconds: 8,
+    })
+    bus.emit('focus', { id: 'ha.dcs' })
+    bus.emit('select', { id: 'ha.dcs' })
+    return true
+  }
+
+  function startFailover(target: 'standbyA' | 'standbyB' = 'standbyA'): boolean {
+    if (
+      ha.transition.status === 'waiting'
+      || ha.currentLeader !== 'primary'
+      || !K.patroniDcsAvailable
+      || !eligiblePromotionTarget(target)
+    ) {
+      toast(
+        !K.patroniDcsAvailable
+          ? 'Failover refused: no standby can acquire a leader lock while the DCS is unavailable'
+          : 'Failover refused: reset the drill and choose a connected physical standby',
+        'warn',
+        6500,
+      )
+      return false
+    }
+
+    resetTransition('failover', 'primary', target)
+    ha.acceptingWrites = false
+    const sourceNode = state.cluster.nodes[0]
+    sourceNode.wal.receivedLsn = wal.insertLsn
+    sourceNode.wal.writtenLsn = wal.writeLsn
+    sourceNode.wal.flushedLsn = wal.flushLsn
+    sourceNode.wal.appliedLsn = wal.insertLsn
+    sourceNode.online = false
+    ha.timeline.oldHistoryEndLsn = wal.flushLsn
+    stopCrashedPrimaryWork()
+
+    /* The primary and its network are gone. Bytes already durable on the
+     * standby survive; queued packets and bytes only on the primary do not. */
+    for (let i = 0 as 0 | 1; i < 2; i = (i + 1) as 0 | 1) {
+      const standby = rep.standbys[i]
+      resetPhysicalRuntime(physicalRuntime[i], standby.flushedLsn)
+      standby.sentLsn = standby.receivedLsn = standby.writtenLsn = standby.flushedLsn
+      standby.inFlight = 0
+      standby.connected = false
+      standby.walSender = 'stopped'
+      standby.walReceiver = 'stopped'
+    }
+    patroniRenewT = 0
+    toast(
+      `Primary gone: Patroni is waiting ${ha.patroni.leaseRemainingSec.toFixed(1)} s for its DCS lease to expire`,
+      'warn',
+      6500,
+    )
+    bus.emit('narrate', {
+      title: 'Unplanned failover',
+      body: `The primary disappeared. ${standbyForNode(target).applicationName} is durable through ${fmtLsn(standbyForNode(target).flushedLsn)}, while the primary had flushed further. Patroni must wait for the old leader lease to expire before it can promote.`,
+      seconds: 9,
+    })
+    bus.emit('focus', { id: 'ha.dcs' })
+    bus.emit('select', { id: 'ha.dcs' })
+    return true
+  }
+
+  function prepareFollowerAfterPromotion(
+    id: 'standbyA' | 'standbyB',
+    forkLsn: number,
+  ): void {
+    if (ha.currentLeader === id) return
+    const index = id === 'standbyA' ? 0 : 1
+    const standby = rep.standbys[index]
+    standby.sentLsn = Math.min(standby.sentLsn, forkLsn)
+    standby.receivedLsn = Math.min(standby.receivedLsn, forkLsn)
+    standby.writtenLsn = Math.min(standby.writtenLsn, forkLsn)
+    standby.flushedLsn = Math.min(standby.flushedLsn, forkLsn)
+    standby.appliedLsn = Math.min(standby.appliedLsn, forkLsn)
+    standby.acknowledgedFlushLsn = standby.flushedLsn
+    standby.acknowledgedApplyLsn = standby.appliedLsn
+    resetPhysicalRuntime(physicalRuntime[index], standby.appliedLsn)
+    standby.connected = standby.enabled
+  }
+
+  function completePromotion(unplanned: boolean): void {
+    const transition = ha.transition
+    const sourceId = transition.source
+    const targetId = transition.target
+    if (!sourceId || !targetId || targetId === 'primary') return
+    const target = standbyForNode(targetId)
+    const forkLsn = unplanned ? target.flushedLsn : wal.flushLsn
+    const oldEnd = unplanned ? ha.timeline.oldHistoryEndLsn : forkLsn
+
+    transition.lossBytes = Math.max(0, oldEnd - forkLsn)
+    transition.lossTransactions = unplanned
+      ? committedWritesBetween(forkLsn, oldEnd)
+      : 0
+    transition.waitSec = Math.max(0, state.t - transition.startedAt)
+    transition.status = 'complete'
+
+    ha.timeline.parent = ha.timeline.current
+    ha.timeline.current++
+    ha.timeline.forkLsn = forkLsn
+    ha.timeline.oldHistoryEndLsn = oldEnd
+    ha.timeline.newHistoryEndLsn = forkLsn
+
+    const source = state.cluster.nodes[clusterNodeIndex(sourceId)]
+    const promoted = state.cluster.nodes[clusterNodeIndex(targetId)]
+    source.role = unplanned ? 'diverged' : 'standby'
+    source.online = !unplanned
+    source.leaderOpinion = unplanned ? sourceId : targetId
+    promoted.role = 'primary'
+    promoted.online = true
+    promoted.leaderOpinion = targetId
+    for (let i = 0; i < state.cluster.nodes.length; i++) {
+      const node = state.cluster.nodes[i]
+      if (node.id !== sourceId) node.leaderOpinion = targetId
+      if (node.id !== sourceId && node.id !== targetId) node.role = 'standby'
+    }
+
+    ha.currentLeader = targetId
+    ha.patroni.leaderLock = targetId
+    ha.patroni.leaseRemainingSec = ha.patroni.leaseTtlSec
+    patroniRenewT = 0
+    resetActiveWalAt(forkLsn)
+
+    target.sentLsn = target.receivedLsn = target.writtenLsn = forkLsn
+    target.flushedLsn = target.appliedLsn = forkLsn
+    target.acknowledgedFlushLsn = target.acknowledgedApplyLsn = forkLsn
+    resetPhysicalRuntime(
+      physicalRuntime[targetId === 'standbyA' ? 0 : 1],
+      forkLsn,
+    )
+    prepareFollowerAfterPromotion('standbyA', forkLsn)
+    prepareFollowerAfterPromotion('standbyB', forkLsn)
+
+    const rejoin = ha.rejoin
+    rejoin.required = unplanned
+    rejoin.node = unplanned ? sourceId : null
+    rejoin.blockChangeTrackingAvailable = K.walLogHints
+    rejoin.status = 'idle'
+    rejoin.progress = 0
+    rejoin.startedAt = 0
+    rejoin.elapsedSec = 0
+    rejoin.estimatedDurationSec = 0
+    rejoin.bytesRewound = Math.max(0, oldEnd - forkLsn)
+    rejoin.bytesCopied = 0
+    rejoin.failureReason = ''
+    ha.acceptingWrites = true
+
+    toast(
+      unplanned
+        ? `Failover complete: ${transition.lossBytes} bytes and ${transition.lossTransactions} committed write transactions lost; timeline ${ha.timeline.current} forked`
+        : `Switchover complete after ${transition.waitSec.toFixed(1)} s: zero bytes and zero transactions lost`,
+      unplanned ? 'warn' : 'good',
+      8500,
+    )
+    bus.emit('narrate', {
+      title: unplanned ? 'Two histories now exist' : 'Orderly handover complete',
+      body: unplanned
+        ? `Timeline ${ha.timeline.current} forked from timeline ${ha.timeline.parent} at ${fmtLsn(forkLsn)}. The old history continues for ${transition.lossBytes} bytes that the new primary never received: ${transition.lossTransactions} committed write transactions are lost. The former primary cannot follow this new history until pg_rewind discards its divergent tail.`
+        : `Patroni waited ${transition.waitSec.toFixed(1)} seconds for the standby, then moved the leader lock and service address. Zero bytes and zero transactions were lost.`,
+      seconds: 12,
+    })
+    bus.emit('focus', { id: 'timeline.yard' })
+    bus.emit('select', { id: 'timeline.yard' })
+  }
+
+  function demoteExpiredLeader(): void {
+    const leaderId = ha.currentLeader
+    if (!leaderId) return
+    const leader = state.cluster.nodes[clusterNodeIndex(leaderId)]
+    leader.role = 'standby'
+    leader.leaderOpinion = null
+    ha.currentLeader = null
+    ha.patroni.leaderLock = null
+    ha.patroni.demotions++
+    ha.acceptingWrites = false
+    pendingTx = 0
+    toast(
+      'Patroni lease expired: the node demoted itself; the DCS is unavailable, so no rival can promote',
+      'warn',
+      7500,
+    )
+  }
+
+  function tickPatroni(dt: number): void {
+    const leaderId = ha.currentLeader
+    if (!leaderId) return
+    const leaderOnline = state.cluster.nodes[clusterNodeIndex(leaderId)].online
+    if (K.patroniDcsAvailable && leaderOnline) {
+      patroniRenewT += dt
+      ha.patroni.leaseRemainingSec = Math.max(
+        0,
+        ha.patroni.leaseRemainingSec - dt,
+      )
+      if (patroniRenewT >= ha.patroni.renewEverySec) {
+        patroniRenewT -= ha.patroni.renewEverySec
+        ha.patroni.leaseRemainingSec = ha.patroni.leaseTtlSec
+        for (let i = 0; i < 3; i++) {
+          const node = state.cluster.nodes[i]
+          if (node.online) {
+            const route = i === 0 ? 'ha.lease1' : i === 1 ? 'ha.lease2' : 'ha.lease3'
+            flow(route, 1, 'stat', 0.9)
+          }
+        }
+      }
+      return
+    }
+
+    ha.patroni.leaseRemainingSec = Math.max(
+      0,
+      ha.patroni.leaseRemainingSec - dt,
+    )
+    if (ha.patroni.leaseRemainingSec > 0) return
+    ha.patroni.leaderLock = null
+    if (
+      ha.transition.kind === 'failover'
+      && ha.transition.status === 'waiting'
+      && K.patroniDcsAvailable
+    ) {
+      completePromotion(true)
+    } else {
+      demoteExpiredLeader()
+    }
+  }
+
+  function startPgRewind(): boolean {
+    const rejoin = ha.rejoin
+    if (
+      !rejoin.required
+      || rejoin.node !== 'primary'
+      || rejoin.status === 'checking'
+      || rejoin.status === 'rewinding'
+    ) {
+      toast(
+        rejoin.required
+          ? 'pg_rewind is already running'
+          : 'pg_rewind has no divergent former primary to repair',
+        'warn',
+        5500,
+      )
+      return false
+    }
+    rejoin.status = 'checking'
+    rejoin.progress = 0
+    rejoin.startedAt = state.t
+    rejoin.elapsedSec = 0
+    rejoin.bytesRewound = Math.max(
+      0,
+      ha.timeline.oldHistoryEndLsn - ha.timeline.forkLsn,
+    )
+    rejoin.bytesCopied = 0
+    rejoin.estimatedDurationSec =
+      REWIND_CHECK_SECONDS
+      + Math.max(4, rejoin.bytesRewound / REWIND_BYTES_PER_SEC)
+    rejoin.failureReason = ''
+    toast(
+      'pg_rewind started: locating the divergence point and checking required WAL',
+      'info',
+      5500,
+    )
+    bus.emit('narrate', {
+      title: 'The old primary cannot simply rejoin',
+      body: 'Its WAL describes a history the new primary never had. pg_rewind first finds the common point and verifies the old data directory, block-change tracking, and required WAL; only then can it discard changed blocks and follow the new timeline.',
+      seconds: 10,
+    })
+    bus.emit('focus', { id: 'ha.rejoin' })
+    bus.emit('select', { id: 'ha.rejoin' })
+    return true
+  }
+
+  function failPgRewind(reason: string): void {
+    const rejoin = ha.rejoin
+    rejoin.status = 'failed'
+    rejoin.failureReason = reason
+    rejoin.progress = Math.min(0.25, rejoin.elapsedSec / rejoin.estimatedDurationSec)
+    toast(reason, 'warn', 8000)
+    bus.emit('narrate', {
+      title: 'pg_rewind failed',
+      body: `${reason}. This node still cannot rejoin; rebuild it from a fresh base backup or restore the missing prerequisite.`,
+      seconds: 10,
+    })
+  }
+
+  function tickPgRewind(dt: number): void {
+    const rejoin = ha.rejoin
+    if (rejoin.status !== 'checking' && rejoin.status !== 'rewinding') return
+    rejoin.elapsedSec += dt
+    if (rejoin.status === 'checking') {
+      rejoin.progress = Math.min(
+        0.25,
+        (rejoin.elapsedSec / REWIND_CHECK_SECONDS) * 0.25,
+      )
+      if (rejoin.elapsedSec < REWIND_CHECK_SECONDS) return
+      if (!K.oldPrimaryDataIntact) {
+        failPgRewind('pg_rewind failed: the former primary data directory is missing or unreadable')
+        return
+      }
+      if (!rejoin.blockChangeTrackingAvailable) {
+        failPgRewind('pg_rewind failed: data checksums are off and wal_log_hints was not enabled before divergence')
+        return
+      }
+      if (!K.rewindWalRetained) {
+        failPgRewind('pg_rewind failed: required WAL before the divergence point has already been recycled')
+        return
+      }
+      rejoin.status = 'rewinding'
+    }
+
+    const copyDuration = rejoin.estimatedDurationSec - REWIND_CHECK_SECONDS
+    const copyElapsed = Math.max(0, rejoin.elapsedSec - REWIND_CHECK_SECONDS)
+    const copyProgress = Math.min(1, copyElapsed / copyDuration)
+    rejoin.bytesCopied = Math.round(rejoin.bytesRewound * copyProgress)
+    rejoin.progress = 0.25 + copyProgress * 0.75
+    if (copyProgress < 1) return
+
+    const node = state.cluster.nodes[0]
+    node.role = 'standby'
+    node.online = true
+    node.leaderOpinion = ha.currentLeader
+    node.wal.receivedLsn = wal.insertLsn
+    node.wal.writtenLsn = wal.writeLsn
+    node.wal.flushedLsn = wal.flushLsn
+    node.wal.appliedLsn = wal.insertLsn
+    node.dataDirectory.appliedLsn = wal.insertLsn
+    rejoin.status = 'complete'
+    rejoin.progress = 1
+    rejoin.bytesCopied = rejoin.bytesRewound
+    rejoin.required = false
+    rejoin.failureReason = ''
+    toast(
+      `pg_rewind completed in ${rejoin.elapsedSec.toFixed(1)} s; the former primary can now follow timeline ${ha.timeline.current}`,
+      'good',
+      7500,
+    )
+    bus.emit('narrate', {
+      title: 'Former primary repaired',
+      body: `pg_rewind took ${rejoin.elapsedSec.toFixed(1)} seconds. It returned the old data directory to the common history, discarded the divergent tail, and the node now follows timeline ${ha.timeline.current} as a standby.`,
+      seconds: 9,
+    })
+  }
+
+  function tickHighAvailability(dt: number): void {
+    tickPatroni(dt)
+    const transition = ha.transition
+    if (transition.status === 'waiting') {
+      transition.waitSec = Math.max(0, state.t - transition.startedAt)
+      if (
+        transition.kind === 'switchover'
+        && transition.target
+        && transition.target !== 'primary'
+      ) {
+        const target = standbyForNode(transition.target)
+        if (
+          transition.waitSec >= 0.5
+          && wal.insertLsn === wal.flushLsn
+          && target.flushedLsn >= wal.flushLsn
+          && target.inFlight === 0
+        ) {
+          completePromotion(false)
+        }
+      }
+    }
+    tickPgRewind(dt)
   }
 
   /* ======================================================================
@@ -3980,6 +4585,25 @@ export function createSim(bus: Bus): SimApi {
     b.stateDur = rr(0.03, 0.07)
   }
 
+  function rememberCommittedWrites(lsn: number, count: number): void {
+    if (lsn <= 0 || count <= 0) return
+    commitLsn[commitHead] = lsn
+    commitCount[commitHead] = count
+    commitHead = (commitHead + 1) % REWIND_COMMIT_SLOTS
+    if (commitSlots < REWIND_COMMIT_SLOTS) commitSlots++
+  }
+
+  function committedWritesBetween(afterLsn: number, throughLsn: number): number {
+    let total = 0
+    for (let i = 0; i < commitSlots; i++) {
+      const at = (commitHead - 1 - i + REWIND_COMMIT_SLOTS) % REWIND_COMMIT_SLOTS
+      const lsn = commitLsn[at]
+      if (lsn <= afterLsn) break
+      if (lsn <= throughLsn) total += commitCount[at]
+    }
+    return total
+  }
+
   function endVisit(slot: number): void {
     const b = backends[slot]
     const x = extras[slot]
@@ -3995,6 +4619,7 @@ export function createSim(bus: Bus): SimApi {
     stats.rollbacks += rb
     stats.commits += x.txCount - rb
     commitsAcc += x.txCount - rb
+    if (x.writes) rememberCommittedWrites(x.commitLsn, x.txCount - rb)
     const table = tables[b.table]
     if (
       b.query === 'update'
@@ -4236,13 +4861,17 @@ export function createSim(bus: Bus): SimApi {
             // Commit returns immediately; the WAL is written by walwriter later.
             // Crash here and you lose the last few hundred ms of transactions.
             done = b.stateT >= 0.012
-          } else if ((sc === 'on' || sc === 'remote_apply') && rep.enabled) {
+          } else if (
+            (sc === 'on' || sc === 'remote_apply')
+            && synchronousStandby().enabled
+          ) {
+            const syncStandby = synchronousStandby()
             const acknowledged =
               sc === 'on'
-                ? rep.standbys[0].acknowledgedFlushLsn
-                : rep.standbys[0].acknowledgedApplyLsn
+                ? syncStandby.acknowledgedFlushLsn
+                : syncStandby.acknowledgedApplyLsn
             done = wal.flushLsn >= x.commitLsn && acknowledged >= x.commitLsn
-            if (!rep.connected && state.t - degradeWarnT > 20) {
+            if (!syncStandby.connected && state.t - degradeWarnT > 20) {
               degradeWarnT = state.t
               toast('commits are waiting for a synchronous standby that is not there', 'warn', 6000)
             }
@@ -4629,6 +5258,36 @@ export function createSim(bus: Bus): SimApi {
       case 'recoveryTargetAge':
         K.recoveryTargetAge = clamp(Math.round(K.recoveryTargetAge), 0, 300)
         break
+      case 'patroniDcsAvailable':
+        toast(
+          K.patroniDcsAvailable
+            ? 'Patroni can reach the DCS again; no node promotes until it acquires the leader lock'
+            : `DCS unavailable: the leader lease is draining from ${ha.patroni.leaseRemainingSec.toFixed(1)} s`,
+          K.patroniDcsAvailable ? 'good' : 'warn',
+          6500,
+        )
+        break
+      case 'walLogHints':
+        toast(
+          K.walLogHints
+            ? 'wal_log_hints enabled for future changed-block tracking'
+            : 'wal_log_hints off and checksums off — a later pg_rewind will fail',
+          K.walLogHints ? 'good' : 'warn',
+          6000,
+        )
+        break
+      case 'oldPrimaryDataIntact':
+      case 'rewindWalRetained':
+        if (!K[key]) {
+          toast(
+            key === 'oldPrimaryDataIntact'
+              ? 'Former primary data directory unavailable — pg_rewind has no source to inspect'
+              : 'Divergence WAL recycled — pg_rewind cannot find the common history',
+            'warn',
+            6000,
+          )
+        }
+        break
       case 'timeScale':
         K.timeScale = clamp(K.timeScale, 0.05, 20)
         break
@@ -4658,26 +5317,39 @@ export function createSim(bus: Bus): SimApi {
 
     tickScenario(dt)
 
-    // client arrivals — Poisson at knobs.tps
-    nextArrival -= dt
-    let guard = 900
-    while (nextArrival <= 0 && guard-- > 0) {
-      pendingTx++
-      runtimeStats.arrivals++
-      const d = expDelay(K.tps, rng)
-      if (!isFinite(d)) { nextArrival = 1e9; break }
-      nextArrival += d
+    // Patroni closes write admission while handing over or after lease loss.
+    if (ha.acceptingWrites) {
+      nextArrival -= dt
+      let guard = 900
+      while (nextArrival <= 0 && guard-- > 0) {
+        pendingTx++
+        runtimeStats.arrivals++
+        const d = expDelay(K.tps, rng)
+        if (!isFinite(d)) { nextArrival = 1e9; break }
+        nextArrival += d
+      }
     }
 
     tickPostmaster(dt)
     tickLocks(dt)
     tickBackends(dt)
     tickBgwriter(dt)
-    tickCheckpoint(dt)
+    if (
+      ha.transition.kind !== 'switchover'
+      || ha.transition.status !== 'waiting'
+    ) {
+      tickCheckpoint(dt)
+    }
     tickWal(dt)
     tickDisasterRecovery(dt)
     tickReplication(dt)
-    tickAutovac(dt)
+    tickHighAvailability(dt)
+    if (
+      ha.transition.kind !== 'switchover'
+      || ha.transition.status !== 'waiting'
+    ) {
+      tickAutovac(dt)
+    }
     tickTables(dt)
     sweepPool()
 
@@ -4728,6 +5400,39 @@ export function createSim(bus: Bus): SimApi {
     state.scenarioT = 0
     state.forkPulse = 0
     state.locks.length = 0
+    ha.currentLeader = 'primary'
+    ha.acceptingWrites = true
+    ha.patroni.leaderLock = 'primary'
+    ha.patroni.leaseTtlSec = HA_LEASE_TTL_SECONDS
+    ha.patroni.leaseRemainingSec = HA_LEASE_TTL_SECONDS
+    ha.patroni.renewEverySec = HA_LEASE_RENEW_SECONDS
+    ha.patroni.demotions = 0
+    ha.patroni.splitBrain = false
+    ha.timeline.current = 1
+    ha.timeline.parent = 0
+    ha.timeline.forkLsn = 0
+    ha.timeline.oldHistoryEndLsn = 0x1a000000
+    ha.timeline.newHistoryEndLsn = 0x1a000000
+    ha.transition.kind = 'none'
+    ha.transition.status = 'idle'
+    ha.transition.source = null
+    ha.transition.target = null
+    ha.transition.startedAt = 0
+    ha.transition.waitSec = 0
+    ha.transition.lossBytes = 0
+    ha.transition.lossTransactions = 0
+    ha.transition.failureReason = ''
+    ha.rejoin.required = false
+    ha.rejoin.node = null
+    ha.rejoin.blockChangeTrackingAvailable = true
+    ha.rejoin.status = 'idle'
+    ha.rejoin.progress = 0
+    ha.rejoin.startedAt = 0
+    ha.rejoin.elapsedSec = 0
+    ha.rejoin.estimatedDurationSec = 0
+    ha.rejoin.bytesRewound = 0
+    ha.rejoin.bytesCopied = 0
+    ha.rejoin.failureReason = ''
 
     for (let i = 0; i < N_BACKEND_SLOTS; i++) {
       const b = backends[i]
@@ -4995,6 +5700,7 @@ export function createSim(bus: Bus): SimApi {
       const node = state.cluster.nodes[i]
       node.online = i === 0 || rep.standbys[i - 1].enabled
       node.leaderOpinion = 'primary'
+      node.role = i === 0 ? 'primary' : 'standby'
       node.wal.receivedLsn = lsn0
       node.wal.writtenLsn = lsn0
       node.wal.flushedLsn = lsn0
@@ -5034,6 +5740,10 @@ export function createSim(bus: Bus): SimApi {
 
     pendingTx = 0
     nextArrival = 0
+    commitLsn.fill(0)
+    commitCount.fill(0)
+    commitHead = 0
+    commitSlots = 0
     traceQueue.length = 0
     traceRunning = false
     tracePlayback = 'slow'
@@ -5059,6 +5769,7 @@ export function createSim(bus: Bus): SimApi {
     refuseWarnT = -100
     archiveWriteWarnT = -100
     noBufWarnT = -100
+    patroniRenewT = 0
     savedKeys = []
     beatIdx = 0
   }
@@ -5111,6 +5822,9 @@ export function createSim(bus: Bus): SimApi {
     startBaseBackup,
     startPointInTimeRestore,
     setLeaderOpinion,
+    startSwitchover,
+    startFailover,
+    startPgRewind,
     reset,
   }
 }

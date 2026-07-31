@@ -8,7 +8,8 @@ convincingly.
 Original scope: the 23 fields of `Knobs` in `src/core/types.ts:75`. The
 disaster-recovery addendum below audits the three controls added by roadmap
 item 1, and the three-node addendum audits the three controls added by roadmap
-item 2, bringing the current contract to 29 fields. Method: read every
+item 2. The failover addendum audits four controls added by roadmap item 3,
+bringing the current contract to 33 fields. Method: read every
 consumer, then drive the model directly — `createSim()` with a stub bus,
 `setKnob()`, `update(1/30)`, seeded RNG, 300–400 s of warm-up before every
 reading, and an explicit down-sweep afterwards to test recovery. Every number
@@ -923,6 +924,32 @@ Reconnecting the standby and dropping load to 1 tps reduced retention to
 115.9 KiB, primary `pg_wal` to 224 MiB, and reopened writes after 90 s.
 Production capacity and time-to-fill depend on WAL rate and filesystem size;
 real PostgreSQL PANICs when the filesystem fills.
+
+---
+
+## Failover and rejoin control addendum — roadmap item 3
+
+Measured with the same seeded direct-model method. The failover drill used
+2,000 offered tps, 100% writes and `synchronous_commit = local`, because a
+standby named for synchronous commit would correctly reduce this particular
+loss window to zero. `pg_rewind` checks prerequisites for 2.0 teaching seconds
+before it starts copying; a failed preflight is therefore visibly an operation,
+not an instantaneous boolean response.
+
+| # | Knob | Real setting | Verdict | Measured response and recovery |
+|---|---|---|---|---|
+| 30 | `patroniDcsAvailable` | DCS reachability, not a GUC | **CORRECT** | Off drained the 4.0 s leader lease to 2.0 s after 2.0 s; restoring access renewed it to 3.9 s after the next 1.0 s HA cycle with the same primary and open writes. Leaving it off past 4.0 s demoted the primary, cleared the leader lock, closed writes, and left zero primary roles / `splitBrain = false`. That expiry is intentionally asymmetric: DCS reachability returning does not silently promote a node in this compact model; an operator runs a handover drill or resets it. |
+| 31 | `walLogHints` | `wal_log_hints` (data checksums are declared off) | **CORRECT** | On before divergence let `pg_rewind` repair a 6,707,050-byte divergent tail in 6.03 s. Off before divergence failed after the 2.0 s prerequisite pass with “data checksums are off and wal_log_hints was not enabled before divergence.” Turning it on afterwards still failed: past hint records cannot be created retroactively. Recovery correctly requires a fresh divergence whose prerequisite was already enabled (or a rebuild). |
+| 32 | `oldPrimaryDataIntact` | incident condition, not a GUC | **CORRECT** | Off made `pg_rewind` spend 2.0 s checking and then fail because the former primary data directory was missing or unreadable. Restoring that condition and retrying completed the same measured rewind. The failed attempt does not alter the divergent node. |
+| 33 | `rewindWalRetained` | required divergence WAL availability, not a GUC | **CORRECT** | Off made the 2.0 s check fail with the explicit recycled-WAL reason; on plus retry completed. This control represents availability from retained `pg_wal` or an accessible archive, not a promise that changing a PostgreSQL setting resurrects deleted WAL. |
+
+The promotion itself was swept at two different one-way lags under the same
+workload. At 40 ms, timeline 2 forked at `0/20B4FE66`; the former primary ended
+at `0/20BC016D`, so **459,527 bytes and 171 committed write transactions** were
+lost. At 400 ms, the fork was `0/2055AA03` against that same former-primary end:
+**6,707,050 bytes and 2,622 transactions** were lost. The direction is strict
+for both units. A planned switchover from the 300 ms case waited 2.67 s for the
+standby and recorded exactly zero bytes and zero transactions lost.
 
 ---
 
