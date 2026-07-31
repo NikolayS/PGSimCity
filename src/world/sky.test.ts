@@ -10,8 +10,10 @@ import {
   cloudAngularWidths,
   cloudElevations,
   createSky,
+  dayScatteringPhase,
   dayHazeMix,
   daySkyRamp,
+  skyScatteringEnabled,
 } from './sky'
 
 const DEG = Math.PI / 180
@@ -36,6 +38,26 @@ function shows(obj: THREE.Object3D | undefined): boolean {
 }
 
 describe('day sky', () => {
+  it('uses forward Mie and wavelength-sensitive Rayleigh scattering only on upper day tiers', () => {
+    const towardSun = dayScatteringPhase(0.995)
+    const acrossSun = dayScatteringPhase(0)
+    const awayFromSun = dayScatteringPhase(-0.995)
+
+    // Rayleigh is symmetric and blue-weighted; Mie is strongly forward so the
+    // low sun owns a halo instead of merely sitting on a vertical colour ramp.
+    expect(towardSun.rayleigh).toBeCloseTo(awayFromSun.rayleigh, 12)
+    expect(towardSun.rayleighBlue / towardSun.rayleighRed).toBeGreaterThan(4)
+    expect(towardSun.mie).toBeGreaterThan(acrossSun.mie * 20)
+    expect(acrossSun.mie).toBeGreaterThan(awayFromSun.mie)
+
+    expect(skyScatteringEnabled(ATMOSPHERE.day, 'medium')).toBe(true)
+    expect(skyScatteringEnabled(ATMOSPHERE.day, 'high')).toBe(true)
+    expect(skyScatteringEnabled(ATMOSPHERE.day, 'ultra')).toBe(true)
+    expect(skyScatteringEnabled(ATMOSPHERE.day, 'low')).toBe(false)
+    expect(skyScatteringEnabled(ATMOSPHERE.day, 'reduced')).toBe(false)
+    expect(skyScatteringEnabled(ATMOSPHERE.night, 'ultra')).toBe(false)
+  })
+
   it('places the sun on the incoming direction of the daylight key', () => {
     const sky = createSky({} as ThemeApi)
     applySkyAtmosphere(sky, ATMOSPHERE.day, 'high')
@@ -49,6 +71,7 @@ describe('day sky', () => {
 
     expect(actual.dot(expected)).toBeGreaterThan(0.999999)
     expect(material.uniforms.uDaylight.value).toBe(1)
+    expect(material.uniforms.uScattering.value).toBe(1)
 
     // The flattened copy drives the low horizon glow and must not drift.
     const flat = material.uniforms.uSunFlat.value as THREE.Vector2
@@ -60,6 +83,20 @@ describe('day sky', () => {
     expect(cloudSun.dot(expected)).toBeGreaterThan(0.999999)
     expect(clouds.material.uniforms.uCloudLight.value).toBeInstanceOf(THREE.Color)
     expect(clouds.material.uniforms.uCloudShade.value).toBeInstanceOf(THREE.Color)
+
+    ;(sky.userData.dispose as () => void)()
+  })
+
+  it('keeps the legacy dome path for night and both rescue tiers', () => {
+    const sky = createSky({} as ThemeApi)
+    const dome = sky.getObjectByName('sky.dome') as THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>
+
+    for (const level of ['low', 'reduced'] as const) {
+      applySkyAtmosphere(sky, ATMOSPHERE.day, level)
+      expect(dome.material.uniforms.uScattering.value).toBe(0)
+    }
+    applySkyAtmosphere(sky, ATMOSPHERE.night, 'ultra')
+    expect(dome.material.uniforms.uScattering.value).toBe(0)
 
     ;(sky.userData.dispose as () => void)()
   })

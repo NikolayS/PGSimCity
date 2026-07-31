@@ -20,6 +20,7 @@ import { applyGroundAtmosphere } from '../world/plate-fog'
 import { applySkyAtmosphere } from '../world/sky'
 import type { Bus, QualityLevel, QualitySettings } from '../core/types'
 import { GoldenHourOutputPass } from './color-grade'
+import { waterReflectionScale } from './water'
 
 /* ============================================================================
  * THE RENDERER
@@ -148,6 +149,8 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
 
 export interface FidelitySettings {
   environment: boolean
+  /** Fraction of the drawing buffer used by the planar water pass. */
+  reflectionScale: number
   ambientOcclusion: boolean
   /** Fraction of the device framebuffer used by GTAO's normal/depth buffers. */
   aoScale: number
@@ -164,6 +167,7 @@ export interface FidelitySettings {
 export const FIDELITY_PRESETS: Record<QualityLevel, FidelitySettings> = {
   low: {
     environment: false,
+    reflectionScale: waterReflectionScale('low'),
     ambientOcclusion: false,
     aoScale: 0,
     aoSamples: 0,
@@ -173,6 +177,7 @@ export const FIDELITY_PRESETS: Record<QualityLevel, FidelitySettings> = {
   },
   reduced: {
     environment: false,
+    reflectionScale: waterReflectionScale('reduced'),
     ambientOcclusion: false,
     aoScale: 0,
     aoSamples: 0,
@@ -182,6 +187,7 @@ export const FIDELITY_PRESETS: Record<QualityLevel, FidelitySettings> = {
   },
   medium: {
     environment: true,
+    reflectionScale: waterReflectionScale('medium'),
     ambientOcclusion: true,
     aoScale: 0.25,
     aoSamples: 3,
@@ -191,6 +197,7 @@ export const FIDELITY_PRESETS: Record<QualityLevel, FidelitySettings> = {
   },
   high: {
     environment: true,
+    reflectionScale: waterReflectionScale('high'),
     ambientOcclusion: true,
     aoScale: 0.35,
     aoSamples: 4,
@@ -200,6 +207,7 @@ export const FIDELITY_PRESETS: Record<QualityLevel, FidelitySettings> = {
   },
   ultra: {
     environment: true,
+    reflectionScale: waterReflectionScale('ultra'),
     ambientOcclusion: true,
     aoScale: 0.5,
     aoSamples: 6,

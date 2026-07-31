@@ -7,9 +7,9 @@ import type { QualityLevel, ThemeApi } from '../core/types'
 /* ============================================================================
  * SKY — one procedural atmosphere, with deliberately different day and night.
  *
- * Everything is procedural: a gradient dome, a sun drawn into that dome, one
- * instanced cloud draw, and one Points starfield. The dome is pinned to the
- * camera every frame so the atmosphere stays at infinity.
+ * Everything is procedural: a Preetham day atmosphere, the established night
+ * dome, one instanced cloud draw, and one Points starfield. The dome is pinned
+ * to the camera every frame so the atmosphere stays at infinity.
  *
  * Both shaders end with three's own tonemapping + colorspace chunks so they sit
  * in exactly the same colour pipeline as the city. The sun's soft rim is drawn
@@ -21,6 +21,45 @@ const SKY_RADIUS = 1800
 const STAR_RADIUS = 1720
 const N_STARS = 1400
 const CLOUD_RADIUS = 1500
+
+/*
+ * Preetham's analytic daylight model. Rayleigh gives wavelength-dependent sky
+ * colour; Henyey-Greenstein Mie phase gives the low sun its forward halo.
+ */
+const SCATTERING = {
+  turbidity: 4.5,
+  rayleigh: 1.75,
+  mieCoefficient: 0.0035,
+  mieDirectionalG: 0.95,
+} as const
+const TOTAL_RAYLEIGH = [5.804542996261093e-6, 1.3562911419845635e-5, 3.0265902468824876e-5] as const
+
+export interface DayScatteringPhase {
+  rayleigh: number
+  rayleighRed: number
+  rayleighBlue: number
+  mie: number
+}
+
+/** CPU mirror of the shader phase terms, used to pin their physical behavior. */
+export function dayScatteringPhase(cosTheta: number): DayScatteringPhase {
+  const c = Math.max(-1, Math.min(1, cosTheta))
+  const rayleigh = (3 / (16 * Math.PI)) * (1 + c * c)
+  const g2 = SCATTERING.mieDirectionalG * SCATTERING.mieDirectionalG
+  const inverse = 1 / Math.pow(1 - 2 * SCATTERING.mieDirectionalG * c + g2, 1.5)
+  const mie = ((1 - g2) * inverse) / (4 * Math.PI)
+  return {
+    rayleigh,
+    rayleighRed: rayleigh * TOTAL_RAYLEIGH[0],
+    rayleighBlue: rayleigh * TOTAL_RAYLEIGH[2],
+    mie,
+  }
+}
+
+/** Rescue tiers and the established night retain the cheaper legacy dome. */
+export function skyScatteringEnabled(air: Atmosphere, quality: QualityLevel): boolean {
+  return air.daylight && quality !== 'low' && quality !== 'reduced'
+}
 
 /* ---------------------------------------------------------------------------
  * THE BAND THAT DECIDES THE DAY SKY.
@@ -86,6 +125,7 @@ const DAY = {
 } as const
 
 const g = (v: number): string => v.toFixed(4)
+const sci = (v: number): string => v.toExponential(12)
 
 /** Horizon→zenith mix for a dome height. Mirrors the ramp in `skyFrag`. */
 export function daySkyRamp(h: number): number {
@@ -156,9 +196,32 @@ const ASTERISM_LINKS: readonly (readonly [number, number])[] = [
 ]
 
 const skyVert = /* glsl */ `
+uniform vec3 uSunDirection;
 varying vec3 vDir;
+varying vec3 vBetaR;
+varying vec3 vBetaM;
+varying float vSunE;
+
+const float SKY_PI = 3.1415926535897932384626433832795;
+const vec3 TOTAL_RAYLEIGH = vec3(
+  ${sci(TOTAL_RAYLEIGH[0])},
+  ${sci(TOTAL_RAYLEIGH[1])},
+  ${sci(TOTAL_RAYLEIGH[2])}
+);
+const vec3 MIE_CONST = vec3( 1.8399918514433978E14, 2.7798023919660528E14, 4.0790479543861094E14 );
+
+float sunIntensity( float zenithCos ) {
+  float cutoffAngle = 1.6110731556870734;
+  float steepness = 1.5;
+  return 1000.0 * max( 0.0, 1.0 - exp( -( ( cutoffAngle - acos( clamp( zenithCos, -1.0, 1.0 ) ) ) / steepness ) ) );
+}
+
 void main() {
   vDir = position;
+  vSunE = sunIntensity( uSunDirection.y );
+  vBetaR = TOTAL_RAYLEIGH * ${g(SCATTERING.rayleigh)};
+  float mieC = ( 0.2 * ${g(SCATTERING.turbidity)} ) * 10E-18;
+  vBetaM = 0.434 * mieC * MIE_CONST * ${g(SCATTERING.mieCoefficient)};
   vec4 p = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
   // Pin to the far plane. The dome can then never be clipped by whatever the
   // camera's far distance happens to be, and it never occludes anything.
@@ -174,7 +237,28 @@ uniform vec3 uGlow;
 uniform vec3 uSunDirection;
 uniform vec2 uSunFlat;
 uniform float uDaylight;
+uniform float uScattering;
 varying vec3 vDir;
+varying vec3 vBetaR;
+varying vec3 vBetaM;
+varying float vSunE;
+
+const float SKY_PI = 3.1415926535897932384626433832795;
+const float RAYLEIGH_ZENITH_LENGTH = 8.4E3;
+const float MIE_ZENITH_LENGTH = 1.25E3;
+const float THREE_OVER_SIXTEENPI = 0.05968310365946075;
+const float ONE_OVER_FOURPI = 0.07957747154594767;
+
+float rayleighPhase( float cosTheta ) {
+  return THREE_OVER_SIXTEENPI * ( 1.0 + cosTheta * cosTheta );
+}
+
+float hgPhase( float cosTheta ) {
+  float g = ${g(SCATTERING.mieDirectionalG)};
+  float g2 = g * g;
+  float inverse = 1.0 / pow( max( 1.0 - 2.0 * g * cosTheta + g2, 1e-4 ), 1.5 );
+  return ONE_OVER_FOURPI * ( 1.0 - g2 ) * inverse;
+}
 
 void main() {
   vec3 d = normalize( vDir );
@@ -182,36 +266,57 @@ void main() {
 
   vec3 col;
   if ( uDaylight > 0.5 ) {
-    // Two overlapping ramps. The smoothstep spends most of the gradient inside
-    // the first ~17°, where a visitor who tilts up at all is looking; the
-    // linear tail keeps deepening to the zenith, so looking straight up is sky
-    // and not a painted ceiling.
-    float rise = smoothstep( ${g(DAY.riseFrom)}, ${g(DAY.riseTo)}, h );
-    float deep = clamp( ( h - ${g(DAY.deepFrom)} ) / ${g(1 - DAY.deepFrom)}, 0.0, 1.0 );
-    col = mix( uHorizon, uZenith, rise * ${g(DAY.riseWeight)} + deep * ${g(1 - DAY.riseWeight)} );
+    if ( uScattering > 0.5 ) {
+      // The finite ground plate exposes a little dome below the mathematical
+      // horizon. Continue the tangent atmosphere there, then meet scene fog.
+      vec3 scatterDirection = normalize( vec3( d.x, max( d.y, 0.015 ), d.z ) );
+      float zenithAngle = acos( max( 0.0, scatterDirection.y ) );
+      float inverse = 1.0 / (
+        cos( zenithAngle )
+        + 0.15 * pow( 93.885 - zenithAngle * 180.0 / SKY_PI, -1.253 )
+      );
+      float sR = RAYLEIGH_ZENITH_LENGTH * inverse;
+      float sM = MIE_ZENITH_LENGTH * inverse;
+      vec3 extinction = exp( -( vBetaR * sR + vBetaM * sM ) );
 
-    // BELOW the horizon is the only sky the establishing shot has (see
-    // ESTABLISHING_BAND). In daylight that band is distance, not ground: it
-    // goes paler and warmer downward. Night keeps its multiply-down, below.
-    col = mix( col, uHaze, smoothstep( ${g(DAY.hazeFrom)}, ${g(DAY.hazeTo)}, h ) );
+      float cosTheta = dot( scatterDirection, uSunDirection );
+      vec3 betaRTheta = vBetaR * rayleighPhase( cosTheta );
+      vec3 betaMTheta = vBetaM * hgPhase( cosTheta );
+      vec3 scatter = vSunE * ( betaRTheta + betaMTheta ) / ( vBetaR + vBetaM );
+      vec3 inscatter = pow( scatter * ( 1.0 - extinction ), vec3( 1.5 ) );
+      float lowSun = clamp( pow( 1.0 - uSunDirection.y, 5.0 ), 0.0, 1.0 );
+      inscatter *= mix( vec3( 1.0 ), pow( scatter * extinction, vec3( 0.5 ) ), lowSun );
 
-    // Horizon haze is brightest under the sun. The establishing camera looks
-    // down, so this low directional band carries the hour even when the disc is
-    // just above its frame.
-    vec2 fxz = vec2( d.x, d.z );
-    float toward = max( 0.0, dot( fxz / max( length( fxz ), 1e-4 ), uSunFlat ) );
-    float low = exp( - abs( h - ${g(DAY.glowCentre)} ) * ${g(DAY.glowFalloff)} );
-    // Cubed by multiplication, not pow(): this runs on every sky pixel and the
-    // dome is most of the frame in a renderer that is already fill-bound.
-    col = mix( col, uGlow, low * toward * toward * toward * ${g(DAY.glowWeight)} );
+      vec3 direct = vec3( 0.1 ) * extinction;
+      float disc = smoothstep( 0.9999567, 0.9999767, cosTheta );
+      direct += vSunE * 19000.0 * extinction * disc;
+      col = ( inscatter + direct ) * 0.018 + vec3( 0.0, 0.0003, 0.00075 );
+      // Analytic scattering is HDR. Compress it before the application's shared
+      // output transform so the solar disc stays white without flattening its
+      // much broader aerosol halo.
+      col = col / ( vec3( 1.0 ) + col );
+      col = mix( col, vec3( 0.98, 0.68, 0.36 ), disc * 0.86 );
+      col = mix( col, uHaze, smoothstep( ${g(DAY.hazeFrom)}, ${g(DAY.hazeTo)}, h ) );
+      // The atmosphere is a backdrop, not a semantic light source.
+      col = min( col, vec3( 0.98 ) );
+    } else {
+      // The original ramp is the rescue-tier path.
+      float rise = smoothstep( ${g(DAY.riseFrom)}, ${g(DAY.riseTo)}, h );
+      float deep = clamp( ( h - ${g(DAY.deepFrom)} ) / ${g(1 - DAY.deepFrom)}, 0.0, 1.0 );
+      col = mix( uHorizon, uZenith, rise * ${g(DAY.riseWeight)} + deep * ${g(1 - DAY.riseWeight)} );
+      col = mix( col, uHaze, smoothstep( ${g(DAY.hazeFrom)}, ${g(DAY.hazeTo)}, h ) );
 
-    // The directional light and this disc share one direction. A compact halo
-    // softens the edge without turning the sky into a lens flare.
-    float sunDot = dot( d, uSunDirection );
-    float halo = smoothstep( 0.99756, 0.99970, sunDot );
-    float disc = smoothstep( 0.99951, 0.99978, sunDot );
-    col += vec3( 1.0, 0.52, 0.18 ) * halo * 0.12;
-    col = mix( col, vec3( 1.0, 0.68, 0.30 ), disc * 0.94 );
+      vec2 fxz = vec2( d.x, d.z );
+      float toward = max( 0.0, dot( fxz / max( length( fxz ), 1e-4 ), uSunFlat ) );
+      float low = exp( - abs( h - ${g(DAY.glowCentre)} ) * ${g(DAY.glowFalloff)} );
+      col = mix( col, uGlow, low * toward * toward * toward * ${g(DAY.glowWeight)} );
+
+      float sunDot = dot( d, uSunDirection );
+      float halo = smoothstep( 0.99756, 0.99970, sunDot );
+      float disc = smoothstep( 0.99951, 0.99978, sunDot );
+      col += vec3( 1.0, 0.52, 0.18 ) * halo * 0.12;
+      col = mix( col, vec3( 1.0, 0.68, 0.30 ), disc * 0.94 );
+    }
   } else {
     // The established night gradient and restrained eastern warmth.
     col = mix( uHorizon, uZenith, smoothstep( -0.04, 0.62, h ) );
@@ -429,6 +534,7 @@ export function applySkyAtmosphere(sky: THREE.Object3D, air: Atmosphere, quality
       sunFlat.set(x * invFlat, z * invFlat)
     }
     if (uniforms.uDaylight) uniforms.uDaylight.value = air.daylight ? 1 : 0
+    if (uniforms.uScattering) uniforms.uScattering.value = skyScatteringEnabled(air, quality) ? 1 : 0
   }
 
   const clouds = sky.getObjectByName('sky.clouds') as
@@ -478,6 +584,7 @@ export function createSky(theme: ThemeApi): THREE.Object3D {
       uSunDirection: { value: new THREE.Vector3(0, 1, 0) },
       uSunFlat: { value: new THREE.Vector2(0, -1) },
       uDaylight: { value: 0 },
+      uScattering: { value: 0 },
     },
     vertexShader: skyVert,
     fragmentShader: skyFrag,
