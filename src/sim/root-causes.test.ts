@@ -210,6 +210,57 @@ describe('autovacuum cost balance', () => {
 
     expect(ioReadTotal / samples).toBeLessThanOrEqual(225)
   })
+
+  it('paces vacuum heap scans instead of discounting their I/O', () => {
+    const sim = createAggregateSim()
+    sim.setKnob('tps', 0)
+    sim.setKnob('autovacuumScaleFactor', 0)
+    sim.setKnob('fullPageWrites', false)
+
+    const deadline = sim.state.t + 20
+    let worker = sim.state.autovac.workers.find(
+      (candidate) => candidate.active && candidate.phase === 'scan_heap' && candidate.progress < 0.8,
+    )
+    while (!worker && sim.state.t < deadline) {
+      sim.update(AGGREGATE_TEST_STEP)
+      worker = sim.state.autovac.workers.find(
+        (candidate) => candidate.active && candidate.phase === 'scan_heap' && candidate.progress < 0.8,
+      )
+    }
+
+    expect(worker, 'no vacuum worker entered scan_heap').toBeDefined()
+    if (!worker) return
+    const scanning = sim.state.autovac.workers
+      .filter((candidate) => candidate.active && candidate.phase === 'scan_heap' && candidate.progress < 0.8)
+      .map((candidate) => {
+        const table = sim.state.tables[candidate.table]
+        const visibleHeapShare = table.def.id === 'events' ? 0.15 : 1
+        return {
+          worker: candidate,
+          table: table.def.id,
+          scannedPages: Math.max(1, Math.round(table.pages * visibleHeapShare)),
+          progressBefore: candidate.progress,
+        }
+      })
+
+    advanceBy(sim, 1)
+
+    let processedPagesPerSec = 0
+    for (const sample of scanning) {
+      expect(sample.worker.phase).toBe('scan_heap')
+      const workerPagesPerSec =
+        (sample.worker.progress - sample.progressBefore) * sample.scannedPages
+      processedPagesPerSec += workerPagesPerSec
+      expect(
+        workerPagesPerSec,
+        `${sample.table} vacuum processed ${workerPagesPerSec} heap pages/s`,
+      ).toBeLessThanOrEqual(75.5)
+    }
+    expect(
+      sim.state.stats.ioReadPerSec,
+      `reported ${sim.state.stats.ioReadPerSec} reads/s while vacuum processed ${processedPagesPerSec}`,
+    ).toBeGreaterThanOrEqual(processedPagesPerSec * 0.8)
+  })
 })
 
 describe('backend dirty-eviction cost', () => {

@@ -97,7 +97,7 @@ describe('operator scenario: a replication slot is filling pg_wal', () => {
 
 describe('operator scenario: an old transaction pins xmin', () => {
   it('plays termination and waiting, then releases the wait branch for cleanup', () => {
-    const terminate = createSim(createBus())
+    const terminate = createAggregateSim(1 / 3)
     terminate.runScenario('vacuum-blockade')
     const terminateReady = readyDecision(terminate)
     expect(terminateReady.kind).toBe('vacuum-blockade')
@@ -112,10 +112,15 @@ describe('operator scenario: an old transaction pins xmin', () => {
     expect(killed.correct).toBe(true)
     expect(killed.transactionTerminated).toBe(true)
     expect(terminate.state.knobs.longRunningXact).toBe(false)
-    advanceUntil(terminate, () => terminate.state.scenarioDecision?.phase === 'recovered')
+    advanceUntil(
+      terminate,
+      () => terminate.state.scenarioDecision?.phase === 'recovered',
+      900,
+      1 / 3,
+    )
     expect(killed.deadTuplesReclaimed).toBeGreaterThan(0)
 
-    const wait = createSim(createBus())
+    const wait = createAggregateSim(1 / 3)
     wait.runScenario('vacuum-blockade')
     readyDecision(wait)
     expect(wait.chooseScenario('wait-for-transaction')).toBe(true)
@@ -130,7 +135,12 @@ describe('operator scenario: an old transaction pins xmin', () => {
     expect(wait.state.knobs.longRunningXact).toBe(true)
 
     expect(wait.recoverScenario()).toBe(true)
-    advanceUntil(wait, () => wait.state.scenarioDecision?.phase === 'recovered')
+    advanceUntil(
+      wait,
+      () => wait.state.scenarioDecision?.phase === 'recovered',
+      900,
+      1 / 3,
+    )
     expect(wait.state.knobs.longRunningXact).toBe(false)
     expect(waited.deadTuplesReclaimed).toBeGreaterThan(0)
     expect(waited.deadTuplesAdded).toBeGreaterThan(killed.deadTuplesAdded)

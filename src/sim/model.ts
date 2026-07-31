@@ -430,6 +430,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     throw new Error(`invalid simulation maxStep: ${maxStep}`)
   }
   const rng = makeRng(0xc0ffee)
+  // Particle sampling must not perturb workload selection when I/O rates move.
+  const presentationRng = makeRng(0x10cafe)
   const rr = (lo: number, hi: number) => lo + (hi - lo) * rng()
 
   /* ---- state skeleton (built once, then reset in place: world modules hold
@@ -1783,7 +1785,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       // kernel-cache outcome at the source so motion and drive LEDs consume
       // one fact rather than independently guessing.
       const ioPressure = clamp01(stats.ioReadPerSec / 900)
-      const osCacheHit = rng() < 0.74 - ioPressure * 0.29
+      const osCacheHit = presentationRng() < 0.74 - ioPressure * 0.29
       flow(osCacheHit ? rid.ioReadCache(table) : rid.ioRead(table), 1, 'page_read', 1.2)
     }
     if (forWrite) markDirty(v, slot)
@@ -2888,17 +2890,23 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   }
 
   /**
-   * vacuum_cost_delay as an aggregate rate cap. PostgreSQL budgets hits,
-   * misses and dirty pages with different points; the scaled city exposes the
-   * consequence as a physical-I/O ceiling shared equally by the three workers.
+   * PostgreSQL's vacuum_delay_point() sleeps after the cost limit is crossed.
+   * The city models that elapsed time as a per-worker I/O pace ceiling; it does
+   * not model cost points, delay intervals or dynamic worker rebalancing.
    */
+  function pacedVacuumDuration(
+    readPages: number,
+    writePages: number,
+    unthrottledDuration: number,
+  ): number {
+    const pacedDuration = (readPages + writePages) / VACUUM_PAGES_PER_WORKER_SEC
+    return Math.max(unthrottledDuration, pacedDuration)
+  }
+
+  /** Account every physical page; pacedVacuumDuration() throttles the work. */
   function chargeVacuumIo(readPagesPerSec: number, writePagesPerSec: number, dt: number): void {
-    const demand = readPagesPerSec + writePagesPerSec
-    const scale = demand > VACUUM_PAGES_PER_WORKER_SEC
-      ? VACUUM_PAGES_PER_WORKER_SEC / demand
-      : 1
-    ioReadAcc += readPagesPerSec * scale * dt
-    ioWriteAcc += writePagesPerSec * scale * dt
+    ioReadAcc += readPagesPerSec * dt
+    ioWriteAcc += writePagesPerSec * dt
   }
 
   function vacuumHeapBlock(worker: number, tableIndex: number, ordinal: number): number {
@@ -2929,6 +2937,26 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
           ) / Math.max(1, coldModified),
         ),
     )
+  }
+
+  function vacuumIndexModifiedPages(worker: number, tableIndex: number, indexNo: number): number {
+    const pages = indexPagesFor(tableIndex, indexNo)
+    const hotSet = Math.max(
+      1,
+      Math.round(hotIdxPages[tableIndex] * (pages / Math.max(1, idxPages[tableIndex]))),
+    )
+    return affectedVacuumPages(
+      pages,
+      vacIndexPageTouches[worker] / Math.max(1, tables[tableIndex].def.indexes.length),
+      hotSet,
+      INDEX_HOT_SHARE,
+    )
+  }
+
+  function vacuumIndexDuration(worker: number, tableIndex: number, indexNo: number): number {
+    const pages = indexPagesFor(tableIndex, indexNo)
+    const modified = vacuumIndexModifiedPages(worker, tableIndex, indexNo)
+    return pacedVacuumDuration(pages, modified, 1 + pages / 260)
   }
 
   function tickAutovac(dt: number): void {
@@ -2962,7 +2990,16 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
             // scan cost is proportional to the heap — the visibility map lets
             // vacuum skip all-visible pages, so append-only tables are cheap.
             const skip = t.def.id === 'events' ? 0.15 : 1
-            vacNext(w, 'scan_heap', Math.max((t.pages / 900) * skip, 1.2))
+            const readPages = Math.max(1, Math.round(t.pages * skip))
+            vacNext(
+              w,
+              'scan_heap',
+              pacedVacuumDuration(
+                readPages,
+                vacScanModified[i],
+                Math.max((t.pages / 900) * skip, 1.2),
+              ),
+            )
           }
           break
         }
@@ -2993,7 +3030,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
               vacNext(w, 'analyze', 1.0)
             } else {
               vacIdxLeft[i] = t.def.indexes.length
-              vacNext(w, 'vacuum_index', 1.0 + indexPagesFor(ti, 0) / 260)
+              vacNext(w, 'vacuum_index', vacuumIndexDuration(i, ti, 0))
             }
           }
           break
@@ -3002,16 +3039,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
           const indexNo = t.def.indexes.length - vacIdxLeft[i]
           const pages = indexPagesFor(ti, indexNo)
           const killed = vacIndexTarget[i] / Math.max(1, t.def.indexes.length)
-          const hotSet = Math.max(
-            1,
-            Math.round(hotIdxPages[ti] * (pages / Math.max(1, idxPages[ti]))),
-          )
-          const modified = affectedVacuumPages(
-            pages,
-            vacIndexPageTouches[i] / Math.max(1, t.def.indexes.length),
-            hotSet,
-            INDEX_HOT_SHARE,
-          )
+          const modified = vacuumIndexModifiedPages(i, ti, indexNo)
           const killedPerPage = modified > 0 ? killed / modified : 0
           const base = indexBlockOffset(ti, indexNo)
           chargeVacuumIo(
@@ -3027,11 +3055,20 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
             vacIdxLeft[i]--
             if (vacIdxLeft[i] > 0) {
               const nextIndex = t.def.indexes.length - vacIdxLeft[i]
-              vacNext(w, 'vacuum_index', 1.0 + indexPagesFor(ti, nextIndex) / 260)
+              vacNext(w, 'vacuum_index', vacuumIndexDuration(i, ti, nextIndex))
             } else {
               deadIndexTuples[ti] = Math.max(0, deadIndexTuples[ti] - vacIndexTarget[i])
               refreshIndexPages(ti)
-              vacNext(w, 'vacuum_heap', Math.max(t.pages / 1600, 0.8))
+              const modified = Math.max(0, vacHeapModified[i] - vacScanModified[i])
+              vacNext(
+                w,
+                'vacuum_heap',
+                pacedVacuumDuration(
+                  modified,
+                  modified,
+                  Math.max(t.pages / 1600, 0.8),
+                ),
+              )
             }
           }
           break
