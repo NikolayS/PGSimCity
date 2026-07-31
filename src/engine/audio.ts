@@ -53,6 +53,8 @@ const STORAGE_KEY = 'pgsimcity.audio'
 const DEFAULT_VOLUME = 0.35
 const OPEN_FREQUENCY = 5600
 const SUBMERGED_FREQUENCY = 620
+/** The low-pass removes brightness; this gain drop makes the dry world recede. */
+const SUBMERGED_LEVEL = 0.48
 const VOICE_COUNT = 8
 const NOISE_SECONDS = 1
 const SILENCE = 0.0001
@@ -206,10 +208,11 @@ export function createAudio(bus: Bus): AudioApi {
     const output = masterGain
     if (!ctx || !output || ctx.state === 'closed') return
     const now = ctx.currentTime
+    const target = value * (submerged ? SUBMERGED_LEVEL : 1)
     output.gain.cancelScheduledValues(now)
     output.gain.setValueAtTime(output.gain.value, now)
-    if (immediate) output.gain.setValueAtTime(value, now)
-    else output.gain.linearRampToValueAtTime(value, now + 0.025)
+    if (immediate) output.gain.setValueAtTime(target, now)
+    else output.gain.linearRampToValueAtTime(target, now + 0.025)
   }
 
   function setSubmerged(next: boolean, dt: number): void {
@@ -217,12 +220,19 @@ export function createAudio(bus: Bus): AudioApi {
     submerged = next
     const ctx = context
     const filter = masterFilter
-    if (!ctx || !filter || ctx.state === 'closed') return
+    const output = masterGain
+    if (!ctx || !filter || !output || ctx.state === 'closed') return
     const now = ctx.currentTime
     const settle = clamp(Number.isFinite(dt) ? dt * 2 : 0.08, 0.04, 0.16)
     filter.frequency.cancelScheduledValues(now)
     filter.frequency.setTargetAtTime(
       submerged ? SUBMERGED_FREQUENCY : OPEN_FREQUENCY,
+      now,
+      settle,
+    )
+    output.gain.cancelScheduledValues(now)
+    output.gain.setTargetAtTime(
+      live ? volume * (submerged ? SUBMERGED_LEVEL : 1) : 0,
       now,
       settle,
     )

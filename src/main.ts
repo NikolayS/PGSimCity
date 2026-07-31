@@ -190,7 +190,7 @@ async function boot(): Promise<void> {
   // MUST follow build(): build() resets the box array and would discard these.
   collision.addPublished(scene)
   access.installCollision(collision)
-  const water = createBufferWater(scene, gfx.quality)
+  const water = createBufferWater(scene, gfx.quality, { camera })
   scene.add(water.group)
   const walk = createWalkController({
     camera,

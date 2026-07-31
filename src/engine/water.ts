@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { Reflector } from 'three/examples/jsm/objects/Reflector.js'
 import { themeMode } from '../core/theme'
 import type { QualityLevel, QualitySettings } from '../core/types'
-import { damp } from '../core/util'
+import { damp, makeRng } from '../core/util'
 import { CITY } from '../world/layout'
 
 export interface BufferWaterApi {
@@ -14,12 +14,23 @@ export interface BufferWaterApi {
   dispose(): void
 }
 
+export interface BufferWaterOptions {
+  /** Test override; production reads prefers-reduced-motion once at creation. */
+  reducedMotion?: boolean
+  /** Keeps the fixed particulate field close enough to give a swimmer parallax. */
+  camera?: THREE.Camera
+}
+
 const SPAN = (CITY.buf.grid - 1) * CITY.buf.pitch + CITY.buf.tile
 const SURFACE_Y = CITY.buf.baseY + CITY.buf.maxRise + 0.4
 const BOTTOM_Y = CITY.buf.baseY
 const DEPTH = SURFACE_Y - BOTTOM_Y
 const RIPPLE_COUNT = 6
 const RIPPLE_SECONDS = 1.15
+const PARTICULATE_COUNT = 192
+const PARTICULATE_FIELD = 18
+const PARTICULATE_OPACITY = 0.22
+const PARTICULATE_TEXTURE_SIZE = 16
 const WATER_COLOR = 0x5aa9e8
 const UNDERWATER_FOG = 0x163a66
 const UNDERWATER_NEAR = 3
@@ -38,6 +49,15 @@ const REFLECTION_SCALE: Record<QualityLevel, number> = {
 /** Fraction of the drawing buffer spent on the planar water pass. */
 export function waterReflectionScale(level: QualityLevel): number {
   return REFLECTION_SCALE[level]
+}
+
+function prefersReducedMotion(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false
+  try {
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  } catch {
+    return false
+  }
 }
 
 const waterVertex = /* glsl */ `
@@ -165,7 +185,10 @@ interface Ripple {
 export function createBufferWater(
   scene: THREE.Scene,
   quality: Pick<QualitySettings, 'level'> = DEFAULT_QUALITY,
+  opts: BufferWaterOptions = {},
 ): BufferWaterApi {
+  const reducedMotion = opts.reducedMotion ?? prefersReducedMotion()
+  const particulateCamera = opts.camera
   const group = new THREE.Group()
   group.name = 'buffer.water'
 
@@ -242,6 +265,66 @@ export function createBufferWater(
   grid.raycast = () => {}
   group.add(grid)
 
+  /*
+   * World-space motes create parallax around a moving swimmer without painting
+   * over the buffer tiles. Normal blending and depth testing preserve every
+   * semantic tile colour; one fixed buffer is rewritten only while submerged.
+   */
+  const particulateGeometry = new THREE.BufferGeometry()
+  const particulatePositions = new Float32Array(PARTICULATE_COUNT * 3)
+  const particulateRng = makeRng(0x51a11)
+  for (let i = 0; i < PARTICULATE_COUNT; i++) {
+    const offset = i * 3
+    particulatePositions[offset] = (particulateRng() - 0.5) * PARTICULATE_FIELD
+    particulatePositions[offset + 1] = BOTTOM_Y + 0.12 + particulateRng() * (DEPTH - 0.24)
+    particulatePositions[offset + 2] = (particulateRng() - 0.5) * PARTICULATE_FIELD
+  }
+  const particulatePosition = new THREE.BufferAttribute(particulatePositions, 3)
+  particulatePosition.setUsage(THREE.DynamicDrawUsage)
+  particulateGeometry.setAttribute('position', particulatePosition)
+  const particulateTexels = new Uint8Array(
+    PARTICULATE_TEXTURE_SIZE * PARTICULATE_TEXTURE_SIZE * 4,
+  )
+  for (let y = 0; y < PARTICULATE_TEXTURE_SIZE; y++) {
+    for (let x = 0; x < PARTICULATE_TEXTURE_SIZE; x++) {
+      const tx = (x + 0.5) / PARTICULATE_TEXTURE_SIZE - 0.5
+      const ty = (y + 0.5) / PARTICULATE_TEXTURE_SIZE - 0.5
+      const edge = Math.max(0, Math.min(1, (0.5 - Math.hypot(tx, ty)) * 8))
+      const offset = (y * PARTICULATE_TEXTURE_SIZE + x) * 4
+      particulateTexels[offset] = 255
+      particulateTexels[offset + 1] = 255
+      particulateTexels[offset + 2] = 255
+      particulateTexels[offset + 3] = Math.round(edge * edge * 255)
+    }
+  }
+  const particulateTexture = new THREE.DataTexture(
+    particulateTexels,
+    PARTICULATE_TEXTURE_SIZE,
+    PARTICULATE_TEXTURE_SIZE,
+    THREE.RGBAFormat,
+  )
+  particulateTexture.name = 'PGSimCity.water.particulate'
+  particulateTexture.needsUpdate = true
+  const particulateMaterial = new THREE.PointsMaterial({
+    color: 0xd9efff,
+    map: particulateTexture,
+    alphaTest: 0.02,
+    size: 0.035,
+    sizeAttenuation: true,
+    transparent: true,
+    opacity: 0,
+    depthTest: true,
+    depthWrite: false,
+    blending: THREE.NormalBlending,
+  })
+  const particulate = new THREE.Points(particulateGeometry, particulateMaterial)
+  particulate.name = 'buffer.water.particulate'
+  particulate.visible = false
+  particulate.frustumCulled = false
+  particulate.renderOrder = 4
+  particulate.raycast = () => {}
+  group.add(particulate)
+
   const rippleGeometry = new THREE.RingGeometry(0.78, 1, 32)
   const ripples: Ripple[] = []
   for (let i = 0; i < RIPPLE_COUNT; i++) {
@@ -288,7 +371,7 @@ export function createBufferWater(
 
   function update(dt: number, submerged: boolean): void {
     const d = dt > 0 ? dt : 0
-    waterTime += d
+    if (!reducedMotion) waterTime += d
     surfaceMaterial.uniforms.uTime.value = waterTime
     for (let i = 0; i < ripples.length; i++) {
       const ripple = ripples[i]
@@ -300,9 +383,48 @@ export function createBufferWater(
         continue
       }
       const t = ripple.age / RIPPLE_SECONDS
-      const scale = 0.65 + ripple.strength * 0.35 + t * (5.5 + ripple.strength * 3)
+      const spread = reducedMotion ? 0 : t * (5.5 + ripple.strength * 3)
+      const scale = 0.65 + ripple.strength * 0.35 + spread
       ripple.mesh.scale.setScalar(scale)
       ripple.mesh.material.opacity = (1 - t) * (0.34 + ripple.strength * 0.34)
+    }
+
+    if (submerged && !reducedMotion && d > 0) {
+      const fieldHalf = PARTICULATE_FIELD * 0.5
+      const centreX = particulateCamera
+        ? Math.max(
+            -SPAN * 0.5 + fieldHalf,
+            Math.min(SPAN * 0.5 - fieldHalf, particulateCamera.position.x),
+          )
+        : 0
+      const centreZ = particulateCamera
+        ? Math.max(
+            -SPAN * 0.5 + fieldHalf,
+            Math.min(SPAN * 0.5 - fieldHalf, particulateCamera.position.z),
+          )
+        : 0
+      for (let i = 0; i < PARTICULATE_COUNT; i++) {
+        const offset = i * 3
+        particulatePositions[offset] += ((i % 3) - 1) * 0.013 * d
+        particulatePositions[offset + 1] += (0.045 + (i % 7) * 0.009) * d
+        particulatePositions[offset + 2] += (((i * 5) % 3) - 1) * 0.009 * d
+        while (particulatePositions[offset] > centreX + fieldHalf) {
+          particulatePositions[offset] -= PARTICULATE_FIELD
+        }
+        while (particulatePositions[offset] < centreX - fieldHalf) {
+          particulatePositions[offset] += PARTICULATE_FIELD
+        }
+        if (particulatePositions[offset + 1] > SURFACE_Y - 0.08) {
+          particulatePositions[offset + 1] = BOTTOM_Y + 0.08
+        }
+        while (particulatePositions[offset + 2] > centreZ + fieldHalf) {
+          particulatePositions[offset + 2] -= PARTICULATE_FIELD
+        }
+        while (particulatePositions[offset + 2] < centreZ - fieldHalf) {
+          particulatePositions[offset + 2] += PARTICULATE_FIELD
+        }
+      }
+      particulatePosition.needsUpdate = true
     }
 
     if (!fog) return
@@ -337,6 +459,8 @@ export function createBufferWater(
     fog.far = airFar + (UNDERWATER_FAR - airFar) * fogAmount
     surfaceMaterial.uniforms.uOpacity.value = 0.18 + fogAmount * 0.13
     volumeMaterial.opacity = 0.025 + fogAmount * 0.055
+    particulateMaterial.opacity = PARTICULATE_OPACITY * fogAmount
+    particulate.visible = fogAmount > 0.002
   }
 
   function dispose(): void {
@@ -352,6 +476,9 @@ export function createBufferWater(
     volumeMaterial.dispose()
     grid.geometry.dispose()
     gridMaterial.dispose()
+    particulateGeometry.dispose()
+    particulateMaterial.dispose()
+    particulateTexture.dispose()
     rippleGeometry.dispose()
     for (let i = 0; i < ripples.length; i++) ripples[i].mesh.material.dispose()
     ripples.length = 0
