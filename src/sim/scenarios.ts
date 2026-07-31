@@ -52,7 +52,7 @@ export const SCENARIOS: ScenarioDef[] = [
     },
     beats: [
       [0, 'A healthy database', 'Two hundred and forty transactions a second, and almost nothing is dramatic. Watch the plaza: the blue tiles are clean pages in shared_buffers, the red ones are dirty — modified in memory, not yet on disk. That distinction is the whole game.'],
-      [14, 'Where the reads come from', 'Most reads land on a tile that is already here — the hot pages of every table are resident, and index roots effectively never leave. The hit ratio still reads in the seventies rather than the 99% a tuned OLTP server shows, and the seq-scan dial is why: this workload sweeps whole relations far larger than the pool, and every one of those pages is a genuine trip down the green roads. Turn seq scans down and watch the ratio climb.'],
+      [14, 'Where the reads come from', 'Most reads land on a tile that is already here. The hit ratio still reads below a typical tuned OLTP server, and the seq-scan dial is why: this workload sweeps relations larger than the pool. Every shared-buffer miss makes PostgreSQL issue a read, but its statistics cannot say whether the operating-system cache or a physical device served it. Turn seq scans down and watch the ratio climb.'],
       [30, 'WAL first, data later', 'Every write travels east to wal_buffers before it touches anything permanent. The commit only waits for that amber stream to hit the disk — never for the data pages. That inversion is why a database can be both durable and fast.'],
       [50, 'The city breathes', 'bgwriter trickles a few dirty pages out ahead of the clock hand. The checkpointer counts down. Autovacuum sleeps. Nothing here is urgent, and that is exactly what a well-tuned system looks like from the air.'],
       [72, 'Now break it', 'You have the baseline. Every other scenario changes one thing and lets you watch the consequence propagate through the same streets.'],
@@ -84,12 +84,12 @@ export const SCENARIOS: ScenarioDef[] = [
     },
     beats: [
       [0, 'checkpoint_timeout is five minutes', 'So you would expect a checkpoint every five minutes. Watch what actually happens. The write rate is high and max_wal_size is only 48 MiB.'],
-      [12, 'WAL wins the race', 'The vault fills faster than the clock ticks. When WAL written since the last REDO point crosses max_wal_size, Postgres starts a checkpoint immediately — reason "wal", not "time". The timer never gets a say.'],
-      [26, 'The write phase', 'Pink particles stream from the checkpointer into the plaza and down to storage. It is spreading the dirty pages over checkpoint_completion_target — but the deadline it is spreading over is now "when we refill 48 MiB", which is seconds away, not minutes.'],
+      [12, 'WAL wins the race', 'The vault fills faster than the clock ticks. This model crosses its scaled max_wal_size threshold and starts a checkpoint with reason "wal", not "time". PostgreSQL 18 uses a moving threshold rounded in whole WAL segments; the city preserves that dependency but not its exact segment arithmetic.'],
+      [26, 'The write phase', 'Pink particles stream from the checkpointer into the plaza and down to storage. It spreads the dirty pages over checkpoint_completion_target, but this modeled WAL-pressure deadline is only seconds away rather than the configured five minutes.'],
       [42, 'And then full-page writes', 'Look at the amber flood that starts with each checkpoint. The first time any page is modified after the checkpoint has stamped its redo point, its entire 8 KiB image goes into the WAL. Frequent checkpoints mean every page pays that toll again and again — which fills the WAL faster — which triggers the next checkpoint sooner.'],
       [62, 'That is the storm', 'Checkpoint → full-page writes → more WAL → earlier checkpoint. A feedback loop that eats your I/O budget and shows up as random latency spikes your application developers will swear are network problems.'],
-      [82, 'The fix is boring', 'Raise max_wal_size until checkpoints are triggered by time, not by volume. Disk is cheap; a checkpoint storm is not. Then raise checkpoint_timeout so each one has room to spread out.'],
-      [104, 'Check your own server', 'pg_stat_checkpointer tells you the ratio directly: if `num_requested` is anywhere near `num_timed`, you are living in this scenario. On PostgreSQL 16 and older the same two columns live in pg_stat_bgwriter and are called `checkpoints_req` and `checkpoints_timed`.'],
+      [82, 'The fix follows the cause', 'This scenario exposes its cause as WAL pressure, so raising max_wal_size against measured WAL rate and disk headroom is appropriate. On a real server, requested checkpoints can also come from explicit CHECKPOINT, backup and shutdown activity; verify the reason before tuning.'],
+      [104, 'Check your own server', '`pg_stat_checkpointer.num_requested` counts requested checkpoints but does not encode why they were requested. Correlate its rate with WAL volume, checkpoint messages, explicit maintenance and backups. On PostgreSQL 16 and older the counters are `checkpoints_req` and `checkpoints_timed` in pg_stat_bgwriter.'],
     ],
   },
 
@@ -116,7 +116,7 @@ export const SCENARIOS: ScenarioDef[] = [
     beats: [
       [0, 'Sixteen MiB', 'The lit part of the plaza just collapsed. shared_buffers is now far smaller than the working set, and everything the workload wants is fighting for the same handful of frames.'],
       [12, 'The clock sweep', 'That rotating hand is the buffer replacement algorithm. Postgres has no LRU list; it walks the pool decrementing each frame\'s usage_count, and the first frame it finds at zero becomes the victim. Cheap, no global lock to fight over, good enough — until there is nothing worth keeping.'],
-      [28, 'Read the hit ratio', 'It fell off a cliff. Every miss is a trip down the green roads to storage, and at this rate the operating system page cache is the only thing between you and the disk.'],
+      [28, 'Read the hit ratio', 'It fell off a cliff. Every miss leaves shared_buffers and asks the operating system for a page; PostgreSQL’s standard block counters cannot distinguish an OS-cache hit from a device read. The green road represents that request, not proof that a disk moved.'],
       [44, 'Backends doing their own writes', 'Here is the symptom nobody recognises. When the victim frame is dirty, the backend that wanted the frame has to write it out first — before it can even start its own read. Your user-facing query is now performing someone else\'s I/O.'],
       [62, 'How you would see this', 'Query pg_stat_io and filter on `backend_type = \'client backend\'`: the `writes` there are user queries doing their own I/O. If that is large next to the checkpointer\'s writes, either shared_buffers is too small or the bgwriter is not keeping up. Both show up as latency, never as an error. Before PostgreSQL 17 the same signal was `buffers_backend` in pg_stat_bgwriter, which is where most advice on the internet still points.'],
       [82, 'Turn the dial back up', 'Drag shared_buffers up and watch the plaza light back up, the sweep slow down, and the storage roads go quiet. 25% of RAM is the usual starting point — the interesting part is that the curve is not linear: it is flat, then a cliff, then flat again.'],
@@ -148,7 +148,7 @@ export const SCENARIOS: ScenarioDef[] = [
       [0, 'An UPDATE does not update', 'Under MVCC, UPDATE writes a *new* row version and marks the old one dead. Routine autovacuum is off now, so the launcher will send nobody new in this city. PostgreSQL does let a worker that was already running finish, and still forces anti-wraparound vacuums — the city does not model per-relation XID age. Until then, these dead versions accumulate.'],
       [16, 'sessions is the victim', 'Small table, rewritten constantly, and at most 15% of its updates can be HOT — fewer and fewer as the pages fill up, because a HOT update needs room for the new version on the same page. Watch its bloat bar climb in the underworld while accounts — 85% HOT while it has space — barely moves.'],
       [34, 'HOT is the quiet hero', 'A Heap-Only Tuple update keeps the new version on the same page and does not touch any index. Postgres can then prune those dead versions during ordinary page access, with no vacuum at all. That is why accounts stays lean and sessions does not.'],
-      [52, 'Bloat is not just size', 'The table is physically growing. Every sequential scan now reads more pages for the same live rows, every index is fatter, and the buffer pool holds more garbage. Bloat costs you cache, not just disk.'],
+      [52, 'Bloat is not just size', 'The table is physically growing. Sequential scans now read more pages for the same live rows, and non-HOT churn can bloat indexes too. HOT updates create no new index entries. Either way, a larger working set competes for cache as well as disk.'],
       [70, 'Autovacuum comes back on', 'The scenario turns autovacuum on now. The launcher wakes and dispatches a worker down the violet road — and it is the worker, not the launcher, that reads the statistics and picks out every table whose dead row versions exceed 50 + scale_factor × its live row count.'],
       [88, 'What a worker actually does', 'Scan the heap for dead line pointers. Then one full pass per index to remove their entries — the index passes are the part of vacuum that scales with index count, so a table with six indexes costs far more to vacuum than the same table with one. Then back to the heap to free the line pointers. It finishes by trying to truncate — but that needs a lock it will not wait for, and only trailing pages that are completely empty ever go back to the filesystem, which in a table this busy means none of them.'],
       [112, 'Space is reused, not returned', 'Vacuum does not usually give disk back to the filesystem; it makes space reusable inside the table. That is fine. What you actually want is for vacuum to keep up, so bloat plateaus instead of climbing.'],
@@ -212,7 +212,7 @@ export const SCENARIOS: ScenarioDef[] = [
       [26, 'Locks queue in order', 'This is the detail that surprises people. A blocked ACCESS EXCLUSIVE request also blocks every *later* request, even harmless SELECTs that would never have conflicted with each other. One waiter poisons the whole queue behind it.'],
       [42, 'It spreads beyond the table', 'Queries on other tables are still running fine — but every blocked session is still holding a connection. Watch the backend row fill up with waiters. Once they exhaust the pool, traffic that never touches this table starts failing too. One lock becomes a total outage.'],
       [58, 'lock_timeout saves you', 'After fifteen seconds the waiters give up with "canceling statement due to lock timeout" and roll back. An error your application can retry beats a connection pool that fills up and takes down everything else.'],
-      [74, 'The operational rule', 'Never run DDL without SET lock_timeout first. Take the lock quickly or fail fast, and never leave a transaction open around it. pg_locks joined to pg_stat_activity tells you who the holder is; you almost always want to cancel the holder, not the waiters.'],
+      [74, 'The operational rule', 'Use SET lock_timeout for DDL so it acquires the lock quickly or fails. If an idle transaction holds the lock, pg_cancel_backend has no running query to cancel and does not end the transaction. Get the client to commit or roll back, or—after verifying the PID, owner and abort consequences—use pg_terminate_backend.'],
     ],
   },
 
@@ -244,11 +244,11 @@ export const SCENARIOS: ScenarioDef[] = [
     beats: [
       [0, 'Two rows, not one cluster lag', 'The primary runs one walsender per standby. Both nodes receive, write, flush and apply independently, so pg_stat_replication has two rows and neither row can stand in for “the cluster”.'],
       [16, 'The wire', 'Both orange streams carry physical WAL. Each has its own packet queue and acknowledgement path; delaying standby_b does not move standby_a’s positions.'],
-      [32, 'Replay is single-threaded', 'One startup process applies WAL records in order. Your primary generated that WAL with sixteen concurrent backends. There is no parallel redo. When the write rate exceeds what one process can apply, replay falls behind and stays behind.'],
+      [32, 'Replay is single-threaded', 'Core PostgreSQL 18 uses one startup process to apply the ordered WAL stream; recovery prefetch can improve I/O but is not general parallel redo. Replay falls behind while sustained WAL generation exceeds replay capacity, and catches up whenever replay capacity becomes greater than the incoming rate.'],
       [50, 'Watch the disagreement open', 'standby_b received and flushed positions keep moving while applied falls behind. standby_a stays current on the same workload, proving the lag belongs to one startup process rather than to shared global state.'],
       [68, 'Why it matters', 'A read on standby_b returns data from its applied LSN, not its flushed LSN and not standby_a’s opinion. Applications get no automatic warning that two read replicas disagree.'],
-      [86, 'Slots hold receipt, not replay', 'standby_b’s physical slot advances with durable receive, so slow apply grows its own pg_wal. Disconnect a standby instead and its slot restart_lsn freezes on the primary; primary pg_wal then grows until the disk fills.'],
-      [104, 'Monitor replay, alert on bytes', 'Track pg_current_wal_lsn() minus replay_lsn in bytes, and the replay_lag interval. Set max_slot_wal_keep_size so a dead slot cannot consume the whole volume.'],
+      [86, 'Slots hold receipt, not replay', 'standby_b’s physical slot advances with durable receive, so slow apply grows its own pg_wal. Disconnect a standby instead and its slot restart_lsn stops advancing on the primary; without a configured retention limit or idle-slot timeout, primary pg_wal can then grow until the volume fills.'],
+      [104, 'Monitor replay, alert on bytes', 'Track pg_current_wal_lsn() minus replay_lsn for current byte backlog. The replay_lag interval estimates recent commit-delay impact, not current staleness or catch-up time, and can become NULL when idle. Set max_slot_wal_keep_size so a dead slot cannot consume the whole volume.'],
     ],
   },
 
@@ -309,7 +309,7 @@ export const SCENARIOS: ScenarioDef[] = [
       [16, 'Read the plan tree', 'Above the backend row, each running query shows its plan, lighting up from the leaves toward the root. That is the real order of execution: children produce rows, parents consume them. Nothing runs until something below it has emitted a tuple.'],
       [34, 'Seq scan is not the enemy', 'For a query that touches most of a table, sequential I/O beats random I/O by so much that the planner is right to choose it. Postgres estimates this with seq_page_cost = 1.0 and random_page_cost = 4.0 — a ratio calibrated for spinning rust. On NVMe, 1.1 is closer to the truth, and lowering it makes the planner willing to use indexes it currently refuses.'],
       [56, 'Bitmap scans are the middle', 'When an index matches too many rows for a plain index scan but not enough for a full sweep, the planner builds a bitmap of pages first, then reads the heap in physical order. You get index selectivity with sequential access.'],
-      [74, 'The pool defends itself', 'Notice that these scans do not wipe the buffer pool. A sequential scan of a table larger than a quarter of shared_buffers uses a small ring buffer — 256 KiB — and recycles its own frames. Postgres refuses to let one analytics query evict everyone\'s hot data.'],
+      [74, 'The pool limits pollution', 'A sequential scan of a relation larger than a quarter of shared_buffers uses the bulk-read strategy. In PostgreSQL 18 it starts at 256 KiB, grows with io_combine_limit × effective_io_concurrency, and is capped; PostgreSQL 18.3 defaults yield about 2.25 MiB with 8 KiB blocks. The ring limits cache pollution but does not guarantee that no hot page is displaced.'],
       [94, 'Try the other direction', 'Drag the seq scan ratio down and watch the storage roads go quiet while the index structures light up. Same throughput, a fraction of the I/O.'],
     ],
   },
@@ -395,10 +395,10 @@ export const SCENARIOS: ScenarioDef[] = [
       maxWalSize: 384,
     },
     beats: [
-      [0, 'wal_level = logical', 'Physical replication ships byte-for-byte block changes: the standby is an exact copy, same version, same everything. Logical decoding reads the same WAL and reconstructs the *rows* that changed.'],
+      [0, 'wal_level = logical', 'Physical replication replays WAL-logged block changes for the whole cluster; the standby is not a byte-identical data directory because local state and unlogged contents differ. Logical decoding reads WAL and reconstructs the committed *rows* that changed for selected logical consumers.'],
       [16, 'The decoder', 'A new road opens from the vault to the logical decoder and out to a subscriber. Same source of truth, completely different output: INSERT/UPDATE/DELETE per row, per table, in commit order.'],
       [32, 'It costs you upstream', 'wal_level=logical writes more WAL — extra identity information so a change can be reconstructed without the original page. Turning it on is a decision about volume and a server restart, not a free flag.'],
-      [50, 'Slots are the dangerous part', 'A logical slot guarantees the subscriber will not miss anything, which means the primary must keep every WAL segment the slot has not confirmed. An inactive slot is a disk-full incident with a delay fuse. Check pg_replication_slots.active on every server you own.'],
+      [50, 'Slots are the dangerous part', 'For a logical slot, restart_lsn governs the oldest WAL still retained; confirmed_flush_lsn records consumer acknowledgement and may be further ahead. An inactive permanent slot can become a disk-full incident unless ownership is resolved or configured timeout and retention limits invalidate it.'],
       [70, 'What it is good for', 'Major-version upgrades with seconds of downtime, selective table replication, and streaming changes into a warehouse or a queue. It is the mechanism behind almost every "change data capture" product you have ever used.'],
     ],
   },
@@ -437,7 +437,7 @@ export const SCENARIOS: ScenarioDef[] = [
   {
     id: 'slot-pressure',
     name: 'Slot pressure',
-    blurb: 'A teaching-scale write flood lets a disconnected standby slot consume primary WAL headroom in under three simulated minutes.',
+    blurb: 'A required standby must resume from its slot. Verify ownership and recovery intent, calculate exhaustion and catch-up, then add only validated temporary headroom.',
     icon: '⌁',
     focus: 'wal.vault',
     duration: 0,
@@ -462,13 +462,13 @@ export const SCENARIOS: ScenarioDef[] = [
       choices: [
         {
           id: 'add-wal-capacity',
-          label: 'Add 512 MiB capacity',
-          hint: 'Keep the slot and give standby_b enough headroom to catch up.',
+          label: 'Add validated 512 MiB headroom',
+          hint: 'The owner requires continuity without a rebuild; the measured WAL rate and catch-up plan establish this amount as adequate temporary headroom.',
         },
         {
           id: 'drop-replication-slot',
-          label: 'Drop standby_b_slot',
-          hint: 'Release retained WAL now; standby_b will need a new base backup.',
+          label: 'Drop the required slot',
+          hint: 'Release retained WAL now, violate the stated continuity requirement, and rebuild standby_b from a new base backup.',
         },
       ],
     },
@@ -478,7 +478,7 @@ export const SCENARIOS: ScenarioDef[] = [
   {
     id: 'vacuum-blockade',
     name: 'Vacuum blockade',
-    blurb: 'An idle transaction pins xmin while autovacuum scans growing tables and removes nothing.',
+    blurb: 'A verified abandoned, idle transaction with no work worth preserving pins xmin; terminating it aborts the transaction and releases cleanup.',
     icon: '⌛',
     focus: 'proc.array',
     duration: 0,
@@ -501,7 +501,7 @@ export const SCENARIOS: ScenarioDef[] = [
         {
           id: 'terminate-transaction',
           label: 'Terminate the session',
-          hint: 'Abort one idle transaction and release xmin for the next vacuum pass.',
+          hint: 'The PID, owner and business impact are verified; abort the abandoned transaction and release xmin.',
         },
         {
           id: 'wait-for-transaction',
@@ -516,7 +516,7 @@ export const SCENARIOS: ScenarioDef[] = [
   {
     id: 'failover-candidate',
     name: 'Choose the candidate',
-    blurb: 'Two failover candidates have different durable LSNs; promotion makes the gap permanent.',
+    blurb: 'After fencing the old primary, two otherwise eligible same-system, usable-timeline candidates differ only in durable LSN.',
     icon: '⑂',
     focus: 'standby.b',
     duration: 0,
@@ -545,7 +545,7 @@ export const SCENARIOS: ScenarioDef[] = [
         {
           id: 'promote-standby-a',
           label: 'Promote standby_a',
-          hint: 'Use the candidate with the later durable LSN.',
+          hint: 'Within the stated eligibility and fencing assumptions, use the later durable replay position.',
         },
         {
           id: 'promote-standby-b',

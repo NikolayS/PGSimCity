@@ -341,7 +341,7 @@ const activityAgg: ProjectionFn = (s, c) => {
     })),
     empty: 'No client backends are connected. Raise the transaction rate to give the server something to do.',
     caption:
-      'A backend that is active with wait_event_type = null is on CPU — that is work, not waiting. Every other bucket is a queue, and the biggest one names your bottleneck.',
+      'Active with wait_event_type = null means the backend is not currently reporting an instrumented wait. It often suggests CPU or runnable work, but is not a CPU-running bit; the process may be pre-empted or doing uninstrumented work. State and wait columns are independent, and idle states are not queues.',
   }
 }
 
@@ -496,13 +496,13 @@ const bgwriter: ProjectionFn = (s, c, mode) => ({
 const checkpointer: ProjectionFn = (s, c, mode) => {
   const t = c.total
   const done = t.ckptTimed + t.ckptRequested
-  const forced = done > 0 ? t.ckptRequested / done : 0
-  const tone: Tone = done === 0 ? 'dim' : forced > 0.5 ? 'crit' : forced > 0.2 ? 'warn' : 'ok'
+  const requested = done > 0 ? t.ckptRequested / done : 0
+  const tone: Tone = done === 0 ? 'dim' : requested > 0.5 ? 'crit' : requested > 0.2 ? 'warn' : 'ok'
   return {
     cols: [
       { key: 'num_timed', label: 'num_timed', num: true },
       { key: 'num_requested', label: 'num_requested', num: true },
-      { key: 'forced', label: 'forced %', num: true },
+      { key: 'forced', label: 'requested %', num: true },
       { key: 'buffers_written', label: 'buffers_written', num: true },
       { key: 'write_time', label: 'write_time (ms)', num: true },
       { key: 'phase', label: 'phase (model)' },
@@ -526,8 +526,8 @@ const checkpointer: ProjectionFn = (s, c, mode) => {
     ],
     caption:
       done === 0
-        ? `No checkpoint has completed since the counters were reset ${fmtNum(c.total.elapsed)} s ago, so forced % has nothing to divide and reads "—". That is not the page failing to load: on a healthy server with room in max_wal_size, an empty row here after a minute is exactly what you want to see, because it means the next checkpoint is still waiting for the timer. The phase column on the right is the one still moving.`
-        : 'forced % is num_requested / (num_timed + num_requested), computed by hand. buffers_written is blank because checkpoint writes are counted only inside the representative frame sample. Above roughly a fifth, max_wal_size is setting your checkpoint schedule and checkpoint_timeout is a decoration. The last column is model-only.',
+        ? `No checkpoint has completed since the counters were reset ${fmtNum(c.total.elapsed)} s ago, so requested % has nothing to divide and reads "—". The model phase on the right can still be moving.`
+        : 'requested % is num_requested / (num_timed + num_requested), computed by hand. PostgreSQL num_requested combines multiple request sources; this ratio does not prove max_wal_size pressure. Correlate checkpoint messages, WAL volume, maintenance and backups. buffers_written is blank because model writes are sample-scale; the last column is model-only.',
   }
 }
 
@@ -783,10 +783,7 @@ const replication: ProjectionFn = (s) => {
           v: fmtBytes(standby.lagBytes),
           tone: standby.lagBytes > 4e6 ? 'crit' : standby.lagBytes > 1e6 ? 'warn' : 'ok',
         },
-        replay_lag: {
-          v: `${standby.lagSec.toFixed(2)} s`,
-          tone: standby.lagSec > 8 ? 'crit' : standby.lagSec > 2 ? 'warn' : 'ok',
-        },
+        replay_lag: NULLC,
         sync_state: {
           v: standby.mode === 'sync' ? 'sync' : 'async',
           tone: standby.mode === 'sync' ? 'accent' : 'dim',
@@ -808,7 +805,7 @@ const replication: ProjectionFn = (s) => {
     ],
     rows,
     caption:
-      'Each row is a separate walsender and a separate standby opinion. Read sent → write → flush → replay left to right: write means walreceiver has received and written the bytes, flush means its own pg_wal is durable, and replay means the startup process has applied them. "primary − replay" is what that standby’s readers experience.',
+      'Each row is a separate walsender. Read sent → write → flush → replay as stage boundaries; byte gaps localise backlog but do not prove a root cause. "primary − replay" is a model-derived current byte gap. replay_lag is blank because PostgreSQL defines it as recent commit-delay impact, not current byte lag converted to seconds, and the model does not reproduce its idle-to-NULL semantics.',
   }
 }
 
@@ -1017,7 +1014,7 @@ const slots: ProjectionFn = (s) => {
         slot_name: 'pgsimcity_sub',
         slot_type: 'logical',
         active: { v: 't', tone: 'ok' },
-        restart_lsn: NULLC,
+        restart_lsn: { v: fmtLsn(s.replication.logicalSlotLsn), tone: 'warn' },
         confirmed_flush_lsn: { v: fmtLsn(s.replication.logicalSlotLsn), tone: 'accent' },
         retained: { v: fmtBytes(Math.max(0, behind)), tone: behind > 4e6 ? 'warn' : 'dim' },
         wal_status: { v: 'reserved', tone: 'ok' },
@@ -1036,7 +1033,7 @@ const slots: ProjectionFn = (s) => {
     ],
     rows,
     caption:
-      'WAL retained is derived: primary insert LSN minus restart_lsn for each physical slot, or confirmed_flush_lsn for a logical slot. An inactive physical slot stays here and keeps restart_lsn fixed; its retained bytes can fill the primary WAL volume. The model does not configure max_slot_wal_keep_size, so physical slots remain reserved rather than being invalidated.',
+      'WAL retained is derived as primary insert LSN minus restart_lsn for every slot. For logical slots the model collapses restart_lsn and confirmed_flush_lsn to one position; real PostgreSQL exposes both and restart_lsn can be earlier. The model does not configure max_slot_wal_keep_size or idle_replication_slot_timeout, so its slots remain reserved rather than being invalidated.',
   }
 }
 

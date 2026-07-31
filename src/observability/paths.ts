@@ -199,7 +199,7 @@ const QUIET_SECONDS = 25
 /**
  * Has the checkpoint storm actually stopped?
  *
- * Graded on whether num_requested is still *moving*, not on the forced share —
+ * Graded on whether num_requested is still *moving*, not on the requested share —
  * and the difference is the whole reason this function exists rather than a
  * one-line ratio test. Immediately after a fix the counters are nearly empty, so
  * a single checkpoint that was already in flight when the setting changed makes
@@ -208,16 +208,16 @@ const QUIET_SECONDS = 25
  * a cumulative counter — which this page spends a paragraph warning against, so
  * it had better not make it.
  *
- * "num_requested stops moving" is also exactly what the fix text tells the
+ * "num_requested stops moving" is also what the model-specific fix text tells the
  * reader to watch, so the tool and the advice agree.
  */
 function ckptResolved(c: Collector): Resolution {
-  const forced = Math.round(c.total.ckptRequested)
+  const requested = Math.round(c.total.ckptRequested)
   const secs = Math.round(c.total.elapsed)
-  if (forced > 0)
+  if (requested > 0)
     return {
       ok: false,
-      reading: `num_requested has moved ${forced} time${forced === 1 ? '' : 's'} in the ${secs} s since the counters were reset — WAL volume is still forcing checkpoints`,
+      reading: `num_requested has moved ${requested} time${requested === 1 ? '' : 's'} in the ${secs} s since reset — this model records WAL pressure as the cause, but the PostgreSQL counter alone would not`,
     }
   if (secs < QUIET_SECONDS)
     return {
@@ -230,7 +230,7 @@ function ckptResolved(c: Collector): Resolution {
     reading:
       timed > 0
         ? `num_requested has not moved in ${secs} s and ${timed} checkpoint${timed === 1 ? '' : 's'} fired on the timer — the schedule is yours again`
-        : `num_requested has not moved in ${secs} s — nothing has crossed max_wal_size, so the next checkpoint is the timer's to call`,
+        : `num_requested has not moved in ${secs} s — no requested checkpoint has completed in this observation window`,
   }
 }
 
@@ -292,7 +292,7 @@ const KB = {
     max: 1024,
     step: 16,
     unit: 'MB',
-    help: 'WAL volume that forces a checkpoint regardless of the timer. Raise it until checkpoints are timed again.',
+    help: 'The WAL budget used by PostgreSQL’s moving checkpoint threshold. Change it only after WAL pressure is established as the request cause.',
   },
   checkpointTimeout: {
     key: 'checkpointTimeout',
@@ -481,7 +481,7 @@ const STEPS: Step[] = [
  GROUP BY 1, 2, 3
  ORDER BY 4 DESC;`,
     look:
-      'A backend that is `active` with `wait_event_type` null is on CPU, and that is work. Everything else in this list is a queue. The largest queue names the bottleneck, and the name is deliberately specific: Postgres is telling you which subsystem, not just that something is slow.',
+      'A backend that is `active` with `wait_event_type` null is not currently reporting an instrumented wait. That often suggests CPU or runnable work, but it is not a CPU-running bit: the process may be pre-empted or doing work with no exposed wait event. State and wait columns are independent, and idle states are not queues. Use the largest instrumented wait bucket to focus investigation, not to claim complete time attribution.',
     note:
       'wait_event_type and wait_event arrived in 9.6. On 9.5 and older, pg_stat_activity had a single boolean `waiting` column that told you a backend was stuck on a heavyweight lock and nothing else — which is why so much old advice assumes every wait is a lock.',
     branches: [
@@ -502,8 +502,8 @@ const STEPS: Step[] = [
   {
     id: 'stall.1',
     kind: 'step',
-    title: 'Is the checkpointer running on the timer, or being forced?',
-    why: 'Periodic write stalls on an otherwise healthy server are checkpoints until proven otherwise. One column tells you whether the schedule is yours or the workload\'s.',
+    title: 'Is the checkpointer running on the timer, or on requests?',
+    why: 'Periodic stalls may correlate with checkpoints. These counters separate timer checkpoints from requested ones, but a second source is needed to identify why a request occurred.',
     instrument: 'pg_stat_checkpointer',
     projection: 'checkpointer',
     city: 'checkpointer',
@@ -511,19 +511,19 @@ const STEPS: Step[] = [
        write_time, sync_time
   FROM pg_stat_checkpointer;`,
     look:
-      '`num_timed` counts checkpoints that fired because `checkpoint_timeout` elapsed. `num_requested` counts the ones forced early because WAL since the last redo point crossed `max_wal_size`. If num_requested is anywhere near num_timed, your checkpoint interval is not the one you configured.',
+      '`num_timed` counts checkpoints initiated by `checkpoint_timeout`. `num_requested` counts requested checkpoints from multiple causes, including WAL pressure, explicit CHECKPOINT, base-backup activity and shutdown. A high requested rate tells you to correlate checkpoint messages, WAL volume, maintenance and backups; it does not prove max_wal_size is too small.',
     note:
       'pg_stat_checkpointer is new in PostgreSQL 17. On 16 and older these two counters live in pg_stat_bgwriter and are called `checkpoints_timed` and `checkpoints_req` — same numbers, older home. Most tuning guides still name the old columns.',
     branches: [
-      { label: '`num_requested` is a serious share of all checkpoints.', next: 'stall.2', test: (_s, c) => c.total.ckptDone > 0 && forcedShare(c) > 0.2 },
+      { label: '`num_requested` is a serious share; investigate the request sources.', next: 'stall.2', test: (_s, c) => c.total.ckptDone > 0 && forcedShare(c) > 0.2 },
       { label: 'Almost every checkpoint is timed.', next: 'v.ckpt_ok', test: (_s, c) => c.total.ckptDone > 0 && forcedShare(c) <= 0.2 },
     ],
   },
   {
     id: 'stall.2',
     kind: 'step',
-    title: 'What is filling the WAL that fast?',
-    why: 'A forced checkpoint means WAL volume beat the clock. The next question is whether that volume is your data or the checkpoints themselves.',
+    title: 'Does WAL volume explain the requests in this incident?',
+    why: 'This model records WAL pressure as its request source. On a real server, use WAL volume and checkpoint messages to establish that cause before asking whether full-page images amplify it.',
     instrument: 'pg_stat_wal',
     projection: 'wal',
     city: 'wal.vault',
@@ -780,7 +780,7 @@ SELECT * FROM pg_buffercache_usage_counts();`,
 
 SELECT buffers_clean, buffers_alloc FROM pg_stat_bgwriter;`,
     look:
-      'On a healthy server num_requested stays near zero: checkpoints happen because the timer said so, not because WAL filled up. buffers_clean should be non-zero but modest — the background writer is meant to clean a short way ahead of the clock hand, not to empty the pool.',
+      'A low num_requested rate means few checkpoints were requested during this window; it does not reveal why any request occurred. Correlate requests with WAL volume, checkpoint messages, backups and explicit maintenance. buffers_clean should be non-zero but modest — the background writer is meant to clean a short way ahead of the clock hand, not to empty the pool.',
     note:
       'PostgreSQL 17 split pg_stat_checkpointer out of pg_stat_bgwriter. If you are on 16 or older, read checkpoints_timed and checkpoints_req from pg_stat_bgwriter instead.',
     branches: [{ label: 'Next: is the standby keeping up?', next: 'normal.4', test: () => true }],
@@ -798,7 +798,7 @@ SELECT buffers_clean, buffers_alloc FROM pg_stat_bgwriter;`,
        replay_lag
   FROM pg_stat_replication;`,
     look:
-      'Alert on `pg_current_wal_lsn() - replay_lsn` in bytes, and graph replay_lag as an interval. Bytes tell you how much data is at risk; the interval tells you how stale a read on the standby is. You want both, and most monitoring ships neither by default.',
+      'Alert on `pg_current_wal_lsn() - replay_lsn` in bytes for current backlog. Graph replay_lag too, but read it as PostgreSQL defines it: an estimate of recent commit-delay impact at replay, not current staleness, byte lag converted to time or a catch-up forecast. It may retain a recent value and then become NULL on an idle system.',
     branches: [{ label: 'That is the baseline. Now go break something.', next: 'v.baseline', test: () => true }],
   },
 ]
@@ -811,19 +811,19 @@ const VERDICTS: Verdict[] = [
   {
     id: 'v.ckpt_storm',
     kind: 'verdict',
-    title: 'Checkpoints are WAL-triggered, and full-page writes are feeding them.',
+    title: 'This modeled incident is WAL-triggered, and full-page writes feed it.',
     because:
-      'max_wal_size is being crossed long before checkpoint_timeout elapses, so the checkpointer starts a new run on volume rather than on the schedule you set. Every one of those runs stamps a new redo point, and every page then owes a full 8 kB image the next time it is touched.',
+      'PGSimCity records max_wal_size pressure as the request cause here. In PostgreSQL, num_requested alone would not establish that cause; checkpoint messages and correlated WAL volume do. Each checkpoint stamps a new redo point, after which a page may owe a full 8 KiB image on its first change.',
     mechanism:
       'Checkpoint → full-page writes → more WAL → max_wal_size crossed sooner → the next checkpoint starts early. It is a feedback loop, and it is self-sustaining once it starts. What your users see is not an error: it is a periodic latency spike that your application team will confidently attribute to the network, because the database never logs anything.',
     evidence: (_s, c) => [
       { label: 'num_timed', value: String(Math.round(c.total.ckptTimed)) },
       { label: 'num_requested', value: String(Math.round(c.total.ckptRequested)), tone: 'crit' },
-      { label: 'forced share', value: `${(forcedShare(c) * 100).toFixed(0)}%`, tone: 'crit' },
+      { label: 'requested share', value: `${(forcedShare(c) * 100).toFixed(0)}%`, tone: 'crit' },
       { label: 'full-page images', value: `${(fpiShare(c) * 100).toFixed(0)}% of wal_bytes`, tone: 'warn' },
     ],
     fix:
-      'Raise max_wal_size until num_requested stops moving and checkpoints are timed again. Disk is cheap; a checkpoint storm is not. Then raise checkpoint_timeout so each checkpoint has room to spread its writes over checkpoint_completion_target — and remember that you are trading against crash-recovery time, which is the only real cost.',
+      'Because this model exposes WAL pressure as the cause, raise max_wal_size against its measured peak WAL rate and headroom, then verify the pressure stops. On a real server, first exclude explicit CHECKPOINT, backup and shutdown requests; changing max_wal_size cannot fix those. checkpoint_timeout also trades full-page-image frequency against crash-recovery work.',
     knobs: [KB.maxWalSize, KB.checkpointTimeout],
     confirm: {
       projection: 'checkpointer',
@@ -840,18 +840,18 @@ const VERDICTS: Verdict[] = [
   {
     id: 'v.wal_volume',
     kind: 'verdict',
-    title: 'You are simply generating more WAL than max_wal_size was sized for.',
+    title: 'In this model, WAL generation outruns the configured checkpoint budget.',
     because:
-      'Checkpoints are being forced by volume, but full-page images are not the bulk of it — this is your own write workload. The setting is not wrong in principle; it is wrong for this much traffic.',
+      'The model’s recorded checkpoint reason is WAL volume, and full-page images are not the bulk of the bytes. A real num_requested counter would require independent cause evidence before supporting that conclusion.',
     mechanism:
       'max_wal_size is a budget, not a limit. Cross it and Postgres starts a checkpoint immediately so it can recycle segments below the new redo point. On a write-heavy server sized for a quieter one, that budget is crossed continuously and the timer never gets a say.',
     evidence: (s, c) => [
       { label: 'wal_bytes/sec', value: `${fmtBytes(c.rate.walBytes)}/s` },
       { label: 'max_wal_size', value: `${s.knobs.maxWalSize} MB` },
-      { label: 'forced share', value: `${(forcedShare(c) * 100).toFixed(0)}%`, tone: 'warn' },
+      { label: 'requested share', value: `${(forcedShare(c) * 100).toFixed(0)}%`, tone: 'warn' },
     ],
     fix:
-      'Raise max_wal_size to cover several minutes of WAL at your peak rate, then confirm num_requested stops climbing. If the volume itself is the surprise, look at what is writing: wal_level = logical costs extra, and an UPDATE that cannot be HOT writes every index entry as well as the row.',
+      'For this modeled cause, size max_wal_size from measured peak WAL rate, available disk and recovery objectives, then confirm the WAL-triggered requests stop. In production, confirm the request reason from checkpoint messages and surrounding activity rather than treating num_requested as a cause code.',
     knobs: [KB.maxWalSize],
     confirm: {
       projection: 'checkpointer',
@@ -865,11 +865,11 @@ const VERDICTS: Verdict[] = [
   {
     id: 'v.ckpt_ok',
     kind: 'verdict',
-    title: 'The checkpointer is behaving. Look elsewhere.',
+    title: 'Few checkpoints were requested in this window.',
     because:
-      'Checkpoints are firing on the timer, which means max_wal_size is comfortably ahead of your WAL rate. Periodic stalls, if you still have them, are not coming from here.',
+      'The observed checkpoints are mostly timer-driven. That is evidence against a high rate of requested checkpoints, not proof that max_wal_size is ideal or that checkpoint I/O cannot contribute to a stall.',
     mechanism:
-      'A timed checkpoint spreads its writes over checkpoint_completion_target of the interval, so the I/O is deliberately gentle. A forced one has to spread over "how long until we refill max_wal_size", which can be seconds.',
+      'A timed checkpoint normally has checkpoint_completion_target of the configured interval for pacing. A checkpoint that this model starts under WAL pressure may have only the model’s estimated time to refill its WAL budget; other kinds of requested checkpoint do not imply that deadline.',
     evidence: (_s, c) => [
       { label: 'num_timed', value: String(Math.round(c.total.ckptTimed)), tone: 'ok' },
       { label: 'num_requested', value: String(Math.round(c.total.ckptRequested)), tone: 'ok' },
@@ -926,7 +926,7 @@ const VERDICTS: Verdict[] = [
     id: 'v.av_off',
     kind: 'verdict',
     title: 'Routine autovacuum is off. Anti-wraparound cleanup is the only override.',
-    because: 'Dead row versions accumulate with every UPDATE and DELETE, and only vacuum removes them.',
+    because: 'Dead row versions are accumulating faster than cleanup removes them. Vacuum performs comprehensive cleanup, while HOT page pruning can also remove eligible dead versions during ordinary page access.',
     mechanism:
       'Under MVCC an UPDATE writes a new row version and marks the old one dead; the old version stays on the page until somebody reclaims it. With routine vacuum disabled the table and indexes bloat, every sequential scan reads more pages for the same live rows, and the buffer pool fills with garbage. PostgreSQL still forces anti-wraparound vacuum near autovacuum_freeze_max_age; PGSimCity does not yet model that XID-age safety valve. Bloat costs you cache, not just disk.',
     evidence: (s) => [
@@ -950,7 +950,10 @@ const VERDICTS: Verdict[] = [
       }
     },
     city: 'autovac.launcher',
-    reading: [DOC('routine-vacuuming.html', 'Routine Vacuuming')],
+    reading: [
+      DOC('routine-vacuuming.html', 'Routine Vacuuming'),
+      DOC('storage-hot.html', 'Heap-Only Tuples'),
+    ],
   },
   {
     id: 'v.av_tuning',
@@ -1054,7 +1057,7 @@ const VERDICTS: Verdict[] = [
     kind: 'verdict',
     title: 'shared_buffers is too small for this working set.',
     because:
-      'Almost every resident buffer sits at usage_count 0 — nothing survives long enough to be used twice. The clock sweep never stops, and every miss is a real trip to storage.',
+      'Almost every resident buffer sits at usage_count 0 — nothing survives long enough to be used twice. The clock sweep never stops, and every miss asks the operating system for a page; PostgreSQL statistics cannot distinguish an OS-cache hit from physical device I/O.',
     mechanism:
       'Postgres has no LRU list. The sweep walks the pool decrementing usage counts and takes the first frame at zero. That is cheap and needs no global lock, and it works beautifully — right up until there is nothing in the pool worth keeping, at which point the sweep degenerates into an expensive way of evicting pages you are about to need again.',
     evidence: (s) => [
@@ -1084,7 +1087,7 @@ const VERDICTS: Verdict[] = [
     title: 'The buffer pool is healthy. Your I/O is going somewhere else.',
     because: 'Reads are mostly hits, the usage-count distribution shows a real working set, and writes are spread across the background processes the way they should be.',
     mechanism:
-      'A high hit ratio does not mean zero I/O — it means the I/O you are doing is necessary. Sequential scans of relations larger than a quarter of shared_buffers deliberately use a small 256 kB ring so they cannot evict everyone else\'s hot pages, so a big analytics query can drive real read volume without hurting the pool at all.',
+      'A high hit ratio does not mean zero I/O or prove that the remaining reads are necessary. PostgreSQL 18 gives sequential scans of relations larger than a quarter of shared_buffers a bulk-read ring that starts at 256 KiB, grows with io_combine_limit × effective_io_concurrency and is capped. The ring limits cache pollution; it does not guarantee zero displacement or prove physical device reads. The current city model uses a historical fixed 32-frame approximation, so its sampled cache cannot validate PostgreSQL 18’s ring size.',
     evidence: (s) => [
       { label: 'cache hit ratio', value: `${s.stats.cacheHitPct.toFixed(1)}%`, tone: 'ok' },
       { label: 'sampled frames at usage_count 0', value: `${(coldShare(s) * 100).toFixed(0)}%`, tone: 'ok' },
@@ -1111,7 +1114,7 @@ const VERDICTS: Verdict[] = [
       { label: 'connections in use', value: `${s.stats.activeBackends} of ${s.maxConnections}` },
     ],
     fix:
-      'Cancel the holder, not the waiters. Then adopt the rule: never run DDL without SET lock_timeout first. Take the lock quickly or fail fast, and never leave a transaction open around it. An error your application can retry beats a connection pool that fills up and takes everything else down with it.',
+      'End the holder’s transaction, not the waiters’ queries. Ask the client to commit or roll back; if the session is abandoned, verify the PID, owner and abort consequences before pg_terminate_backend(). pg_cancel_backend() only cancels a current query and cannot clear an idle-in-transaction session. Use SET lock_timeout for DDL so lock acquisition fails promptly.',
     knobs: [KB.lockContention],
     confirm: {
       projection: 'locks',
@@ -1134,7 +1137,10 @@ const VERDICTS: Verdict[] = [
           : `${s.locks.length} session${s.locks.length === 1 ? '' : 's'} still queued behind the holder, oldest ${Math.max(0, ...s.locks.map((l) => l.ageSec)).toFixed(0)} s`,
     }),
     city: 'lock.manager',
-    reading: [DOC('explicit-locking.html', 'Explicit Locking')],
+    reading: [
+      DOC('explicit-locking.html', 'Explicit Locking'),
+      DOC('functions-admin.html#FUNCTIONS-ADMIN-SIGNAL', 'Server Signaling Functions'),
+    ],
   },
   {
     id: 'v.no_locks',
@@ -1159,10 +1165,10 @@ const VERDICTS: Verdict[] = [
     because:
       'sent_lsn, write_lsn and flush_lsn are all tracking the primary — the network is fine and the standby\'s disk is fine. Only replay_lsn is sliding backwards.',
     mechanism:
-      'One startup process applies WAL records in order, and there is no parallel redo. Your primary generated that WAL with sixteen concurrent backends. When the write rate exceeds what one process can apply, replay falls behind and stays behind — it has no way to catch up while the primary keeps writing. A read on this standby returns data from replay_lsn, and nothing in the connection tells your application that.',
+      'Core PostgreSQL 18 uses one startup process for ordered WAL replay; recovery prefetch improves I/O but is not general parallel redo. Lag grows while sustained generation exceeds replay capacity. The standby can catch up while the primary keeps writing whenever replay capacity exceeds the incoming rate. A read there reflects replay_lsn, and the connection itself does not advertise staleness.',
     evidence: (s) => [
       { label: 'flush − replay', value: fmtBytes(s.replication.flushLsn - s.replication.replayLsn), tone: 'crit' },
-      { label: 'replay_lag', value: `${s.replication.lagSec.toFixed(1)} s`, tone: 'crit' },
+      { label: 'model replay delay', value: `${s.replication.lagSec.toFixed(1)} s`, tone: 'crit' },
       { label: 'primary WAL rate', value: `${fmtBytes(s.wal.bytesPerSec)}/s` },
     ],
     fix:
@@ -1178,7 +1184,7 @@ const VERDICTS: Verdict[] = [
         return { ok: false, reading: 'pg_stat_replication is empty — the walsender is gone, which is worse than lag, not better' }
       return {
         ok: s.replication.lagSec <= 2,
-        reading: `replay_lag ${s.replication.lagSec.toFixed(2)} s, ${fmtBytes(s.replication.lagBytes)} behind the primary`,
+        reading: `model replay delay ${s.replication.lagSec.toFixed(2)} s · current byte backlog ${fmtBytes(s.replication.lagBytes)}`,
       }
     },
     city: 'replica.standby',
@@ -1190,16 +1196,16 @@ const VERDICTS: Verdict[] = [
   {
     id: 'v.network',
     kind: 'verdict',
-    title: 'The WAL is not arriving. This one really is the network.',
-    because: 'sent_lsn itself is far behind the primary\'s current WAL position, so the walsender cannot push bytes onto the wire fast enough.',
+    title: 'Backlog is accumulating at or before WAL transmission.',
+    because: 'sent_lsn is behind the primary’s current WAL position. That localises the bottleneck to the sender side or link, but does not identify the network as the root cause by itself.',
     mechanism:
-      'Network latency delays every one of the four positions equally, which is exactly why it is so often misdiagnosed: the graph of "replication lag" moves, so people tune the standby. Look at sent_lsn specifically. If the primary cannot even send, nothing downstream of it is the problem.',
+      'Inspect walsender scheduling and CPU pressure, WAL availability and read throughput, sender-side limits, and link throughput or congestion. High latency alone need not create a persistent byte backlog when throughput is sufficient. A primary-to-sent gap rules attention toward or before transmission; it does not prove which component caused it.',
     evidence: (s) => [
       { label: 'primary − sent', value: fmtBytes(s.wal.writeLsn - s.replication.sentLsn), tone: 'crit' },
       { label: 'one-way delay', value: `${s.replication.networkLagMs} ms`, tone: 'warn' },
       { label: 'records in flight', value: String(s.replication.inFlight) },
     ],
-    fix: 'Fix the link, or move the standby closer. Nothing you change inside Postgres will make bytes cross the wire faster.',
+    fix: 'Inspect the walsender and link together. Fix sender scheduling or WAL-read constraints when they are responsible; fix link throughput or congestion when the transport is responsible. Use byte-rate evidence rather than latency alone.',
     knobs: [KB.replicaNetworkLag],
     confirm: {
       projection: 'replication',
@@ -1224,16 +1230,16 @@ const VERDICTS: Verdict[] = [
     id: 'v.rep_ok',
     kind: 'verdict',
     title: 'The standby is current.',
-    because: 'All four positions are within a few kilobytes of the primary and replay_lag is negligible.',
+    because: 'All four modeled positions are within a few kilobytes of the primary and the current modeled replay delay is small.',
     mechanism:
       'This is what healthy looks like, and it is worth knowing precisely, because the failure mode is silent. Nothing errors when a replica falls behind: it keeps answering queries, with older data.',
     evidence: (s) => [
       { label: 'primary − replay', value: fmtBytes(s.replication.lagBytes), tone: 'ok' },
-      { label: 'replay_lag', value: `${s.replication.lagSec.toFixed(2)} s`, tone: 'ok' },
+      { label: 'model replay delay', value: `${s.replication.lagSec.toFixed(2)} s`, tone: 'ok' },
       { label: 'sync_state', value: s.replication.mode === 'sync' ? 'sync' : 'async' },
     ],
     fix:
-      'Set up the alert while it is healthy, not during the incident. And check pg_replication_slots on every server you own: an inactive slot retains WAL forever and is a disk-full outage with a delay fuse.',
+      'Set up the alert while it is healthy. Check pg_replication_slots for ownership, restart_lsn, wal_status and safe_wal_size; inactive permanent slots retain WAL by default, while configured timeout or max_slot_wal_keep_size can invalidate them.',
     knobs: [KB.replicaSlowApply],
     city: 'walsender',
     reading: [DOC('warm-standby.html', 'Log-Shipping Standby Servers')],
@@ -1302,7 +1308,7 @@ const VERDICTS: Verdict[] = [
       { label: 'insert − flush', value: fmtBytes(s.wal.insertLsn - s.wal.flushLsn) },
     ],
     fix:
-      'Decide per transaction, not per cluster. synchronous_commit is a session setting: money moves with remote_apply, telemetry commits with off, everything else stays on the default. Turning it off does not risk consistency — the database will never come up corrupt — it risks losing the last few hundred milliseconds of **committed** transactions in a crash.',
+      'Decide per transaction, not per cluster. synchronous_commit is a session setting: money moves may need remote_apply, while disposable telemetry may accept off. Turning it off preserves crash consistency but can lose the last few hundred milliseconds of **acknowledged** transactions after a PostgreSQL server, operating-system or power failure.',
     knobs: [KB.synchronousCommit, KB.fullPageWrites],
     confirm: {
       projection: 'wal_lsn',
@@ -1332,10 +1338,10 @@ const VERDICTS: Verdict[] = [
       { label: 'synchronous_commit', value: s.knobs.synchronousCommit, tone: 'warn' },
       { label: 'waiting to commit', value: String(waits(s).commit), tone: 'warn' },
       { label: 'one-way delay', value: `${s.replication.networkLagMs} ms` },
-      { label: 'replay_lag', value: `${s.replication.lagSec.toFixed(2)} s` },
+      { label: 'model replay delay', value: `${s.replication.lagSec.toFixed(2)} s` },
     ],
     fix:
-      'Confirm you meant to buy this. If you did, keep the standby close and watch replay_lag, because at remote_apply your commit latency is your replica\'s replay latency. If you did not, `local` gives you the local durability guarantee without the round trip.',
+      'Confirm you meant to buy this. At remote_apply, measure commit latency and the standby’s apply path directly. PostgreSQL replay_lag estimates recent commit-delay impact; it is not a current staleness or catch-up timer. If remote durability is not required, `local` gives local durability without the round trip.',
     knobs: [KB.synchronousCommit, KB.replicaNetworkLag],
     confirm: {
       projection: 'wal_lsn',
@@ -1353,9 +1359,9 @@ const VERDICTS: Verdict[] = [
     id: 'v.commit_ok',
     kind: 'verdict',
     title: 'Nothing is waiting to commit.',
-    because: 'No backend is on WalSync or SyncRep. The WAL flush path is keeping up with the commit rate.',
+    because: 'No backend is on WalSync or SyncRep. That can mean the required durability path is keeping up, or that synchronous_commit is configured not to wait; read the setting with the wait events.',
     mechanism:
-      'A commit waits for one thing: the WAL record describing the change reaching durable storage. Your data pages can stay dirty in shared_buffers for minutes afterwards. That inversion — log first, data later — is why a database can be both durable and fast.',
+      'With synchronous_commit requiring local durability, a commit waits for its WAL record to reach durable storage while data pages may remain dirty in shared_buffers. With synchronous_commit = off, PostgreSQL may acknowledge earlier. Read the wait queue together with the configured guarantee.',
     evidence: (s) => [
       { label: 'synchronous_commit', value: s.knobs.synchronousCommit, tone: 'ok' },
       { label: 'insert − flush', value: fmtBytes(s.wal.insertLsn - s.wal.flushLsn), tone: 'ok' },
@@ -1374,12 +1380,12 @@ const VERDICTS: Verdict[] = [
     because:
       'You have read the four views that between them describe a working PostgreSQL server: the workload, the sessions, the write path, and the copy of your data.',
     mechanism:
-      'None of these numbers mean anything in isolation. They mean something as a **change** — which is why every one of them is a counter since a reset, and why the single most useful monitoring you can build is two samples and a subtraction.',
+      'These views mix cumulative counters, current states, gauges and interval estimates. Counters become rates through two samples and a subtraction; current pg_stat_activity state and replication positions are read as snapshots; lag intervals have their own documented semantics. Classify a value before comparing it over time.',
     evidence: (s, c) => [
       { label: 'tps', value: s.stats.tps.toFixed(0), tone: 'ok' },
       { label: 'cache hit', value: `${s.stats.cacheHitPct.toFixed(1)}%`, tone: 'ok' },
-      { label: 'forced checkpoints', value: `${(forcedShare(c) * 100).toFixed(0)}%`, tone: 'ok' },
-      { label: 'replay_lag', value: `${s.replication.lagSec.toFixed(2)} s`, tone: 'ok' },
+      { label: 'requested checkpoints', value: `${(forcedShare(c) * 100).toFixed(0)}%`, tone: 'ok' },
+      { label: 'model replay delay', value: `${s.replication.lagSec.toFixed(2)} s`, tone: 'ok' },
     ],
     fix:
       'Pick any other complaint on the left. Each one puts this same server into a state that produces that symptom, and walks you to the column that proves it. The numbers you just learned are the ones that will look wrong.',

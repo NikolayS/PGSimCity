@@ -87,7 +87,7 @@ const STEPS: TourStep[] = [
     id: 'connect',
     title: 'A client connects',
     body:
-      'Everything starts with a TCP connection. The postmaster has been listening since the server booted: it checks who you are, checks the database exists, and then does something no thread pool would ever do — it forks an entire new process to serve you, and steps out of the way. Watch the pulse leave the tower and land in the row of buildings ahead.',
+      'Everything starts with a TCP connection. The postmaster has listened since server boot: it accepts the socket and starts a child process, then steps out of the client path. The child reads the startup packet, checks the requested database and `pg_hba.conf`, authenticates the user, and becomes the dedicated backend. Watch the pulse leave the tower and land in the row of buildings ahead.',
     focus: 'client.pool',
     duration: 16,
     knobs: { tps: 140, writeRatio: 0.3, updateRatio: 0.6, seqScanRatio: 0.15, timeScale: 1, paused: false },
@@ -114,7 +114,7 @@ const STEPS: TourStep[] = [
     id: 'buffers',
     title: 'Reading a page: the cache',
     body:
-      'Postgres never reads a single row off disk. It reads the whole 8 KiB page that contains it into shared_buffers, represented by the sampled frames in the lit plaza, and every backend then reads that one cached copy. Blue tiles match what is on disk; the sweeping hand is the clock algorithm looking for a frame nobody wants any more. Watch the cache hit figure in the top bar. A tuned OLTP server sits above 99% because nearly every read lands on a page that is already cached; this city reaches the same range once its default working set is warm. Shrink shared_buffers below that working set, or make sequential scans sweep relations larger than a quarter of the pool, and the number falls as the clock starts evicting pages.',
+      'Postgres reads the whole 8 KiB page containing a row into shared_buffers, represented by the sampled frames in the lit plaza, and every backend then reads that shared copy. Blue tiles match durable storage; the sweeping hand is the clock algorithm looking for a reusable frame. A shared-buffer miss makes PostgreSQL issue a read, but the operating-system page cache may satisfy it without physical device I/O. Large sequential scans above a quarter of shared_buffers use PostgreSQL 18’s bulk-read ring to limit cache pollution; with 18.3 defaults it starts at 256 KiB, grows to about 2.25 MiB for I/O concurrency, and remains capped. The city’s fixed sampled ring visualizes that isolation mechanism but not PostgreSQL 18’s dynamic size.',
     focus: 'shared.buffers',
     duration: 18,
     knobs: { seqScanRatio: 0.12 },
@@ -123,7 +123,7 @@ const STEPS: TourStep[] = [
     id: 'page',
     title: 'What a page actually is',
     body:
-      'Underneath the city is the data directory: ordinary files on an ordinary filesystem, cut into 8 KiB pages. A page holds a small header, a list of pointers at the front, and rows packed in from the back — which is how a row can move inside its page without a single index noticing. Watch one page ride the green road up into the plaza. That climb is precisely what a cache miss costs you.',
+      'Underneath the city is the data directory: ordinary files on an ordinary filesystem, cut into 8 KiB pages. A page holds a small header, a list of pointers at the front, and rows packed in from the back — which is how a row can move inside its page without a single index noticing. Watch one page ride the green road up into the plaza. That climb represents a shared-buffer miss; PostgreSQL’s counters cannot tell whether the kernel then served it from RAM or a storage device.',
     focus: 'storage.table.accounts',
     duration: 16,
   },
@@ -144,7 +144,7 @@ const STEPS: TourStep[] = [
     id: 'commit',
     title: 'Commit, and what fsync costs',
     body:
-      'A commit does not wait for your data pages to reach disk; those can sit in memory for minutes. It waits for the WAL record describing the change to be physically flushed, and that flush is an fsync — a real, mechanical, millisecond-scale wait that no amount of RAM removes. We have just set synchronous_commit to off, so nobody waits at all. Watch the queue at the WAL writer drain: that is the latency you bought, and the last fraction of a second of committed transactions you agreed to lose if the power fails.',
+      'A durable commit does not wait for data pages; it waits for the WAL record describing the change to be flushed. We have set `synchronous_commit` to off, so PostgreSQL may acknowledge commits before that flush. Watch the queue at the WAL writer drain: that is the latency you bought, and the last fraction of a second of acknowledged transactions you agreed could be lost after a PostgreSQL server crash, operating-system crash or power failure. Recovery remains consistent; it may be older than the client acknowledgements.',
     focus: 'walwriter',
     duration: 20,
     knobs: { synchronousCommit: 'off', tps: 600, writeRatio: 0.7 },
@@ -164,7 +164,7 @@ const STEPS: TourStep[] = [
     id: 'mvcc',
     title: 'MVCC: updates leave corpses',
     body:
-      'An UPDATE here does not overwrite anything. It writes a new version of the row and marks the old one dead, because an older transaction may still be entitled to see the old value — that is how readers never block writers and writers never block readers. The price is that every table accumulates versions nobody will ever read again. Autovacuum has just been switched off: watch the sessions table swell while nothing at all collects the debris.',
+      'An UPDATE does not overwrite the old version’s user-column values. It writes a new row version and changes the old tuple header to mark it superseded, because an older transaction may still be entitled to the old value. Ordinary snapshot reads and ordinary row-version changes do not block each other merely for visibility, although explicit locks and row-locking operations still can. Autovacuum has just been switched off: watch the sessions table accumulate obsolete versions while routine cleanup pauses.',
     focus: 'storage.table.sessions',
     duration: 18,
     scenario: 'bloat-and-vacuum',

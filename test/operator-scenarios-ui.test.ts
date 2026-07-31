@@ -53,8 +53,8 @@ describe('operator scenario dock', () => {
     expect(dock.getAttribute('aria-modal')).toBeNull()
     expect(dock.textContent).toContain('standby_b_slot')
     expect(dock.textContent).toContain('pg_wal')
-    expect(dock.textContent).toContain('Add 512 MiB capacity')
-    expect(dock.textContent).toContain('Drop standby_b_slot')
+    expect(dock.textContent).toContain('Add validated 512 MiB headroom')
+    expect(dock.textContent).toContain('Drop the required slot')
 
     document.querySelector<HTMLButtonElement>(
       '[data-scenario-choice="drop-replication-slot"]',

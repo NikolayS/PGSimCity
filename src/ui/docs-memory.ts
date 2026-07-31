@@ -330,7 +330,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What it actually does',
         body:
-          'The postmaster is the process you start and the one whose pid is in `postmaster.pid`. Its job list is short: create the shared memory segment, start the fixed background processes, listen on the socket, and for each accepted connection `fork()` a child that will handle it. It does not parse SQL, it does not read tables, and it never serves a client itself. Everything a user experiences is done by one of its children.',
+          'The postmaster is the process you start and the one whose pid is in `postmaster.pid`. Its job list is short: create the shared memory segment, start the fixed background processes, listen on the socket, and for each accepted connection start a child that will handle it. That child reads the startup packet, selects the `pg_hba.conf` rule and authenticates the client before entering the query loop. The postmaster does not authenticate the user, parse SQL or read tables; everything a user experiences is done by one of its children.',
       },
       {
         heading: 'Why it deliberately touches nothing',
@@ -363,7 +363,11 @@ export const DOCS_MEMORY: ComponentDoc[] = [
         manual('tutorial-arch.html', '1.2. Architectural Fundamentals'),
         manual('runtime-config-connection.html', '19.3. Connections and Authentication'),
       ],
-      source: [srcFile('src/backend/postmaster/postmaster.c', 'PostmasterMain, BackendStartup, HandleChildCrash')],
+      source: [
+        srcFile('src/backend/postmaster/postmaster.c', 'PostmasterMain, BackendStartup, HandleChildCrash'),
+        srcFile('src/backend/tcop/backend_startup.c', 'BackendMain, BackendInitialize'),
+        srcFile('src/backend/libpq/auth.c', 'ClientAuthentication'),
+      ],
       suzuki: suzuki(2, 'Process and Memory Architecture (§2.1)'),
       rogov: rogov(R_MVCC, 'Introduction — processes and memory'),
     },
@@ -437,7 +441,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'Every state this tower can be in',
         body:
-          "`idle` means connected with no transaction open — harmless. `parse` and `plan` are usually microseconds unless the statement is enormous. `exec_cpu` is real work on real data in memory; `exec_io` is the same query waiting for a page to arrive from storage. `sort` means the backend is inside a sort or hash node — where a real one would discover whether the data fits in `work_mem` or has to spill to a temp file. `wal_insert` is copying a WAL record into the shared WAL buffers; `commit_wait` is the fsync at commit, and possibly a round trip to a synchronous standby. `blocked` means it is queued behind someone else's heavyweight lock. `sending` is pushing result rows down the socket, which can dominate for wide result sets on slow clients.",
+          "The tower uses simulated phases: `parse`, `plan`, `exec_cpu`, `exec_io`, `sort`, `wal_insert`, `commit_wait`, `blocked` and `sending`. They make a statement's path visible, but they are not values of `pg_stat_activity.state`. In a real server, `state` and the independently reported `wait_event_type` / `wait_event` must be read together: an active backend may move between CPU or runnable work, instrumented waits and work with no exposed wait event while remaining `active` throughout.",
       },
       {
         heading: 'Idle in transaction, and why it is dangerous',
@@ -452,7 +456,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'Where the model simplifies',
         body:
-          'In the real thing these phases overlap and interleave far more than one tower can show: WAL records are inserted throughout execution rather than in a distinct phase, and a single statement can bounce between CPU and I/O thousands of times. The states here are the ones you can actually observe from `pg_stat_activity`, arranged so you can watch a statement move through them.',
+          "In the real thing these phases overlap and interleave far more than one tower can show: WAL records are inserted throughout execution rather than in a distinct phase, and a single statement can bounce between CPU and I/O thousands of times. `pg_stat_activity.state` instead reports values such as `starting`, `active`, `idle`, `idle in transaction`, `idle in transaction (aborted)`, `fastpath function call` and `disabled`; wait events are a separate dimension. The tower's finer phases are explicitly a teaching model, not observable activity states.",
       },
     ],
     metrics: [
@@ -488,7 +492,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'The unit that catches everyone',
         body:
-          'A backend allocates its private memory in contexts that are reset when a query ends, so leaks are rare. What is not rare is misjudging the multiplier. `work_mem` (default 4 MiB) is the budget for *one* sort, hash join, hash aggregate or bitmap. A plan with three hash joins and a sort can use four times `work_mem`; run it with two parallel workers and each worker gets its own copy. The correct mental model is `work_mem` multiplied by concurrent memory-hungry nodes multiplied by concurrent backends, and that product is what the machine must actually have.',
+          'A backend allocates its private memory in contexts that are reset when a query ends, so leaks are rare. What is not rare is misjudging the multiplier. In PostgreSQL 18.3, `work_mem` defaults to 4 MiB per eligible operation, while a hash operation may use `work_mem × hash_mem_multiplier` and that multiplier defaults to 2.0. Three hash operations plus one sort therefore have nominal allowances around seven times `work_mem`, and concurrently active nodes can overlap. Parallel workers often make their own allocations, but Parallel Hash uses a shared hash table rather than one full private copy per worker. Size for the actual plan nodes, workers and concurrent backends instead of multiplying by one slogan.',
       },
       {
         heading: 'What happens when it is not enough',
@@ -599,7 +603,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'Finding a victim: the clock sweep',
         body:
-          'When a page is not present, someone must give up a frame. The free list only holds frames that have never been used or were released by a `DROP` or `TRUNCATE`, so in a warm system it is empty and the allocator runs a clock sweep instead: it walks the descriptor array in a circle, decrementing each usage count it passes, and takes the first frame it finds with usage count zero and no pins. Frequently used pages keep getting their count bumped back up and survive; a page touched once during a scan is gone within one revolution. There is no LRU list, no timestamps, and no global lock — approximation is the point.',
+          'When a page is not present, someone must give up a frame. The free list only holds frames that have never been used or were released by a `DROP` or `TRUNCATE`, so in a warm system it is empty and the allocator runs a clock sweep instead: it walks the descriptor array in a circle, decrementing each usage count it passes, and takes the first frame it finds with usage count zero and no pins. A page at usage count 1 is decremented to zero on one encounter and becomes eligible on a later encounter only if it remains unpinned and untouched. Frequently used pages keep getting bumped and survive. There is no LRU list, no timestamps, and no global lock — approximation is the point.',
       },
       {
         heading: 'When the backend has to write',
@@ -609,7 +613,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'Sizing it honestly',
         body:
-          'Postgres reads through the OS page cache, so a page can be cached twice — once here, once by the kernel. That double buffering wastes some RAM, but the OS cache is not the enemy: it is what makes a miss here cost microseconds instead of milliseconds. 25% of system RAM is the traditional starting point and is still a reasonable default; larger values are common on dedicated machines, but the returns fall off and the costs are real, since the checkpointer must scan every frame and each checkpoint has more to write. Do not tune to a hit ratio — a 99% hit ratio on a badly estimated plan reading a million pages is worse than 90% on a plan reading a hundred. Use `pg_buffercache` to see what is actually resident, and `pg_stat_io` to see what it is costing you. Also note that large sequential scans and vacuum deliberately confine themselves to a small ring of buffers so they cannot flush the cache; in PG 16 the vacuum ring size became tunable with `vacuum_buffer_usage_limit`.',
+          'Postgres reads through the OS page cache, so a page can be cached twice — once here, once by the kernel. That double buffering wastes some RAM, but the OS cache is not the enemy: it can satisfy a shared-buffer miss without physical device I/O. 25% of system RAM is a traditional starting point; larger values are common on dedicated machines, but returns fall off and the checkpointer must scan more buffer descriptors. Buffer-pool capacity does not determine how many pages are dirty: workload, background writing, checkpoint pacing and dirtying rate do. Do not tune to a hit ratio — a 99% hit ratio on a badly estimated plan reading a million pages is worse than 90% on a plan reading a hundred. PostgreSQL 18 also protects the pool during a large sequential scan with a bulk-read ring: `GetAccessStrategy(BAS_BULKREAD)` starts at 256 KiB, adds space for `io_combine_limit × effective_io_concurrency`, and applies pin and one-eighth-of-`shared_buffers` caps. With PostgreSQL 18.3 defaults and 8 KiB blocks that is about 2.25 MiB, not a fixed 256 KiB. PGSimCity’s current TypeScript buffer sample still uses the historical fixed 32-frame ring, so its animation teaches cache isolation but does not reproduce PostgreSQL 18’s numeric ring sizing.',
       },
     ],
     metrics: [
@@ -706,12 +710,12 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What a snapshot is',
         body:
-          'Postgres never overwrites a row in place; an `UPDATE` writes a new version and leaves the old one. Deciding which version a query may see is the job of a snapshot, and a snapshot is three things: `xmin`, the oldest transaction still running; `xmax`, the first transaction id not yet assigned; and the list of transaction ids in between that were in progress at that instant. Anything older than `xmin` is settled, anything at or above `xmax` had not started, and the list covers the middle.',
+          'Postgres does not overwrite a row version’s user-column values during an `UPDATE`; it writes a new version and leaves the old one. Tuple headers, hint bits and page metadata can still be modified in place. Deciding which version a query may see is the job of a snapshot, and a snapshot is three things: `xmin`, the oldest transaction still running; `xmax`, the first transaction id not yet assigned; and the list of transaction ids in between that were in progress at that instant. Anything older than `xmin` is settled, anything at or above `xmax` had not started, and the list covers the middle.',
       },
       {
         heading: 'How a row version is judged',
         body:
-          'Each row version carries `xmin` (the transaction that created it) and `xmax` (the transaction that deleted or superseded it, if any). A version is visible if its creator committed and is visible to your snapshot, and its deleter either does not exist, aborted, or is not visible to your snapshot. That test needs commit status, which comes from the commit log, cached and then cached again in the row itself as a hint bit. Your own open transaction is the one case the snapshot does not decide: you do see rows your earlier statements inserted and you no longer see rows they deleted, although nothing has committed — that is settled by the command counters `cmin` and `cmax`, checked before any commit status is consulted. This is MVCC: readers never block writers and writers never block readers, at the cost of leaving old versions behind for vacuum.',
+          'Each row version carries `xmin` (the transaction that created it) and `xmax` (the transaction that deleted or superseded it, if any). A version is visible if its creator committed and is visible to your snapshot, and its deleter either does not exist, aborted, or is not visible to your snapshot. That test needs commit status, which comes from the commit log, cached and then cached again in the row itself as a hint bit. Your own open transaction is the one case the snapshot does not decide: you do see rows your earlier statements inserted and you no longer see rows they deleted, although nothing has committed — that is settled by the command counters `cmin` and `cmax`, checked before any commit status is consulted. Ordinary MVCC reads do not block ordinary row-version changes merely to preserve visibility; explicit table locks, row-locking reads, unique checks and foreign-key interactions still can block.',
       },
       {
         heading: 'Why taking one has to be cheap',
@@ -786,7 +790,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What to do about it',
         body:
-          'Prevention beats cure: set `idle_in_transaction_session_timeout` to something in the minutes, `statement_timeout` on the application role, and in PG 17 and later `transaction_timeout` for transactions that are neither idle nor a single long statement. Monitor for replication slots with no consumer and drop them — an inactive slot will happily hold the horizon and fill `pg_wal` until the volume is full. If you must cure it, `pg_terminate_backend()` on the offender, then repack the damaged tables with `VACUUM FULL` (takes an `ACCESS EXCLUSIVE` lock, rewrites the table) or `pg_repack` (does not, but needs room for a copy).',
+          'Prevention beats cure: set `idle_in_transaction_session_timeout` to something in the minutes, `statement_timeout` on the application role, and in PG 17 and later `transaction_timeout` for transactions that are neither idle nor a single long statement. Monitor for replication slots with no consumer and resolve them according to ownership and recovery intent. If you must cure a verified abandoned session, `pg_terminate_backend()` aborts its transaction. Repacking with `VACUUM FULL` holds `ACCESS EXCLUSIVE` for the rewrite; `pg_repack` instead takes brief `ACCESS EXCLUSIVE` locks at setup and final swap, holds `SHARE UPDATE EXCLUSIVE` through much of the copy, and needs room for the shadow copy.',
       },
     ],
     metrics: [
@@ -814,6 +818,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       docs: [
         manual('routine-vacuuming.html', '24.1. Routine Vacuuming'),
         manual('mvcc-intro.html', '13.1. Introduction'),
+        { label: 'pg_repack documentation — locking and operation', url: 'https://reorg.github.io/pg_repack/' },
       ],
       source: [
         srcFile('src/backend/storage/ipc/procarray.c', 'ComputeXidHorizons, GetOldestNonRemovableTransactionId'),
@@ -853,7 +858,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'Deadlocks, and what you would see',
         body:
-          'Postgres does not prevent deadlocks, it detects them. A backend that has waited `deadlock_timeout` (default 1s) builds the wait-for graph, and if it finds a cycle one transaction is aborted with a serialization failure. Deadlocks are usually an application ordering bug, not a database problem. Operationally: set `lock_timeout` (a few seconds) on any session that runs DDL so it gives up rather than freezing the table behind it, turn on `log_lock_waits`, and diagnose live incidents with `pg_blocking_pids(pid)` joined against `pg_stat_activity`.',
+          'Postgres does not prevent deadlocks, it detects them. A backend that has waited `deadlock_timeout` (default 1s) builds the wait-for graph, and if it finds a cycle one transaction is aborted with SQLSTATE `40P01 deadlock_detected`. SQLSTATE `40001 serialization_failure` is a different condition, although applications commonly retry both at the whole-transaction boundary. Deadlocks are usually an application ordering bug. Operationally: set `lock_timeout` on sessions that run DDL, turn on `log_lock_waits`, and diagnose live incidents with `pg_blocking_pids(pid)` joined against `pg_stat_activity`.',
       },
     ],
     metrics: [
@@ -885,6 +890,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
         manual('explicit-locking.html', '13.3. Explicit Locking'),
         manual('view-pg-locks.html', '53.13. pg_locks'),
         manual('runtime-config-locks.html', '19.12. Lock Management'),
+        manual('errcodes-appendix.html', 'Appendix A. PostgreSQL Error Codes'),
       ],
       source: [
         srcFile('src/backend/storage/lmgr/lock.c', 'LockAcquire, LockRelease'),
@@ -1011,7 +1017,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'Insert, write, flush — three different LSNs',
         body:
-          'These are three distinct positions and confusing them causes real mistakes. The *insert* LSN is how far records have been placed into the buffer (`pg_current_wal_insert_lsn()`). The *write* LSN is how far has been handed to the operating system (`pg_current_wal_lsn()`). The *flush* LSN is how far has actually been fsynced and is therefore durable (`pg_current_wal_flush_lsn()`). A commit is not a commit until the flush LSN passes the commit record. Replication has its own versions of all three, plus a fourth: applied.',
+          'These are three distinct positions and confusing them causes real mistakes. The *insert* LSN is how far records have been placed into the buffer (`pg_current_wal_insert_lsn()`). The *write* LSN is how far has been handed to the operating system (`pg_current_wal_lsn()`). The *flush* LSN is how far has actually been fsynced and is therefore durable (`pg_current_wal_flush_lsn()`). A commit is durable once the flush LSN passes its commit record; with `synchronous_commit = off`, PostgreSQL may acknowledge the transaction before that point. Replication has its own versions of all three, plus a fourth: applied.',
       },
       {
         heading: 'When the ring fills',
@@ -1211,7 +1217,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'It does not pick an index — it enumerates paths',
         body:
-          'For each relation the planner builds every access path it can: sequential scan, index scan, index-only scan, bitmap heap scan over one or more bitmap index scans, TID scan. Then it builds join paths over those — nested loop, hash join, merge join — for the join orders it is willing to consider, keeping at each step every path that is best at *something* (cheapest total, cheapest startup, or already sorted usefully) rather than only the outright cheapest. Finally it turns the winning path tree into a Plan. Join order search is exhaustive up to `join_collapse_limit` (default 8) relations and switches to a genetic algorithm above `geqo_threshold` (default 12), which is why very wide joins can plan differently between runs.',
+          'For each relation the planner builds every access path it can: sequential scan, index scan, index-only scan, bitmap heap scan over one or more bitmap index scans, TID scan. Then it builds join paths over those — nested loop, hash join, merge join — for the join orders it is willing to consider, keeping at each step every path that is best at *something* rather than only the outright cheapest. Finally it turns the winning path tree into a Plan. In PostgreSQL 18.3, `join_collapse_limit` defaults to 8 and governs how far explicit JOIN/FROM structures are flattened; `geqo_threshold` defaults to 12 and separately controls when the genetic query optimizer is considered. They interact, but `join_collapse_limit` is not the threshold at which exhaustive search simply stops.',
       },
       {
         heading: 'The cost model',
@@ -1226,12 +1232,12 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'Why estimates go wrong',
         body:
-          'Four causes cover most cases. *Correlated columns*: the planner assumes independence, so `WHERE city = ? AND postcode = ?` multiplies two selectivities that are really the same one, and badly underestimates. *Out-of-range values*: on an append-only table, rows newer than the last `ANALYZE` fall past the end of the histogram and estimate as one row — the classic reason a query about today is planned as if it returned nothing. *Expressions*: `WHERE lower(email) = ?` has no statistics at all unless you create an index on that expression, which gives it some. *n_distinct on large tables*: it is estimated from a sample and is often far too low for a big table, which wrecks join and grouping estimates.',
+          'Four causes cover most cases. *Correlated columns*: the planner assumes independence, so `WHERE city = ? AND postcode = ?` multiplies two selectivities that are really the same one, and badly underestimates. *Out-of-range values*: on an append-only table, rows newer than the last `ANALYZE` fall past the end of the histogram. *Expressions*: ordinary per-column statistics do not describe `lower(email)`, but modern PostgreSQL can collect expression statistics with `CREATE STATISTICS ... ON (lower(email))` without an index; an expression index is a separate remedy when the query also needs indexed access. *n_distinct on large tables*: it is estimated from a sample and can be far too low, which wrecks join and grouping estimates.',
       },
       {
         heading: 'What to do about it',
         body:
-          'First check the estimates, with `EXPLAIN (ANALYZE, BUFFERS)`, and find the *lowest* node where estimated and actual rows diverge — everything above it is a consequence, not a cause. Then fix the input: `ANALYZE` the table if it is stale, raise `default_statistics_target` or the per-column target for skewed columns, use `CREATE STATISTICS` for correlated column groups (functional dependencies, multi-column distinct counts, multi-column MCV lists), and add an expression index where you filter on an expression. Fix the constants too — an honest `random_page_cost` and `effective_cache_size` correct a whole class of "why is it not using my index" complaints. Use `enable_seqscan = off` only as a diagnostic to see what the alternative would have cost; never leave it that way in production.',
+          'First check the estimates, with `EXPLAIN (ANALYZE, BUFFERS)`, and find the *lowest* node where estimated and actual rows diverge — everything above it is a consequence, not a cause. Then fix the input: `ANALYZE` the table if it is stale, raise `default_statistics_target` or the per-column target for skewed columns, and use `CREATE STATISTICS` for correlated column groups or expressions. Add an expression index when indexed access is useful, not merely to obtain expression statistics. Fix the constants too — an honest `random_page_cost` and `effective_cache_size` correct a whole class of "why is it not using my index" complaints. Use `enable_seqscan = off` only as a diagnostic; never leave it that way in production.',
       },
     ],
     metrics: [
@@ -1256,6 +1262,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
         manual('planner-optimizer.html', '51.5. Planner/Optimizer'),
         manual('runtime-config-query.html', '19.7. Query Planning'),
         manual('planner-stats.html', '14.2. Statistics Used by the Planner'),
+        manual('sql-createstatistics.html', 'CREATE STATISTICS'),
       ],
       source: [
         srcFile('src/backend/optimizer/path/costsize.c', 'cost_seqscan, cost_index, index_pages_fetched'),
@@ -1281,12 +1288,12 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'Blocking nodes are the exception',
         body:
-          'Some nodes cannot answer until they have consumed everything: `Sort` must see every row before it can return the first, `Hash` must build the whole hash table, aggregates must finish counting. These are exactly the nodes with a large *startup cost*, and they are where `work_mem` gets spent. Everything else — sequential scans, nested loops, appends — streams. That distinction is why `LIMIT 10` can be nearly free over a streaming plan and appallingly expensive over a plan that sorts fifty million rows first.',
+          'Some nodes cannot answer until they have consumed their required input: `Sort` must see every row before it can return the first, and `Hash` must build its hash table before probing begins. A single global aggregate and HashAggregate are blocking in the useful sense; a sorted GroupAggregate can emit each completed group before consuming the entire input. These nodes have startup cost and are where `work_mem` is often spent. Streaming nodes such as sequential scans, nested loops and appends can return rows earlier, which is why `LIMIT 10` may be cheap over one plan and expensive over a plan that sorts fifty million rows first.',
       },
       {
         heading: 'What parallel query changes',
         body:
-          'A `Gather` node asks the postmaster to start background workers, sets up a dynamic shared memory segment with a tuple queue per worker, and each worker runs its own copy of the subplan below. Scans below a Gather hand out page ranges so workers do not duplicate work; `Gather Merge` keeps sorted order at the cost of merging. The leader usually helps rather than waiting idle. Each worker gets its own `work_mem`, so a parallel hash join can use several times what you expected. Parallelism is disabled entirely by parallel-unsafe functions and by anything that writes.',
+          'A `Gather` node asks the postmaster to start background workers, sets up a dynamic shared memory segment with a tuple queue per worker, and each worker runs its own copy of the subplan below. Scans below a Gather hand out page ranges so workers do not duplicate work; `Gather Merge` keeps sorted order at the cost of merging. The leader usually helps rather than waiting idle. Many plan nodes allocate private memory per worker, while Parallel Hash is deliberately different: workers cooperate on one shared hash table whose limit is based on the participating processes. Parallelism is disabled by parallel-unsafe functions and for plan regions that perform writes.',
       },
       {
         heading: 'Writes, and the part nobody expects',
@@ -1300,7 +1307,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       },
     ],
     metrics: [
-      { label: 'On CPU', get: (s) => fmtNum(nIn(s, 'exec_cpu')) },
+      { label: 'Model CPU phase', get: (s) => fmtNum(nIn(s, 'exec_cpu')), hint: 'a teaching phase, not a pg_stat_activity CPU-running signal' },
       { label: 'Waiting on I/O', get: (s) => fmtNum(nIn(s, 'exec_io')) },
       { label: 'Sorting or hashing', get: (s) => fmtNum(nIn(s, 'sort')) },
       { label: 'Streaming rows', get: (s) => fmtNum(nIn(s, 'sending')) },
@@ -1344,7 +1351,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'The tells worth knowing',
         body:
-          '`Rows Removed by Filter` means the node read a lot to throw most of it away — usually a missing or unusable index. `Heap Fetches` on an Index Only Scan means the visibility map is not current, so it was not really index-only; vacuum the table. `Sort Method: external merge  Disk: nnnnkB` means `work_mem` was too small. `lossy` blocks on a Bitmap Heap Scan mean the bitmap outgrew `work_mem` and degraded to page granularity. `Never Executed` means the node was pruned or the loop ended early. And `Buffers: shared read=` counts real reads while `hit=` counts cache hits — always ask for `BUFFERS`.',
+          '`Rows Removed by Filter` means the node read a lot to throw most of it away — often a missing or unusable index. `Heap Fetches` on an Index Only Scan means the visibility map did not let every tuple be answered from the index. `Sort Method: external merge  Disk: nnnnkB` means the sort spilled beyond `work_mem`; `lossy` bitmap blocks mean page-granularity rechecks. `Never Executed` means the node was pruned or the loop ended early. In `Buffers`, `shared hit=` means the page was already in `shared_buffers`; `shared read=` means a shared-buffer miss caused PostgreSQL to issue a read, which the OS page cache may still satisfy without device I/O. Always ask for `BUFFERS`, but do not over-read it.',
       },
       {
         heading: 'How to run it honestly',
