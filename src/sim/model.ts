@@ -277,6 +277,8 @@ const IDX_BASE = 1 << 20
 const FLOW_BUDGET_PER_SEC = 420
 const WAL_WRITER_DELAY = 0.2
 const BGW_DELAY = 0.2
+/** BgBufferSync's fixed horizon for scanning the whole pool while idle. */
+const BGW_SCAN_WHOLE_POOL_SECONDS = 120
 /** Packet-flight animation only; replication timings are converted back out. */
 const NET_PACKET_STRETCH = 6
 /** Startup-process replay work after the standby has flushed a commit record. */
@@ -362,6 +364,7 @@ interface Extra {
   commitLsn: number
   writes: boolean
   needsSort: boolean
+  postFilterCpu: boolean
   hot: boolean
   seqScan: boolean
   scanBlk: number
@@ -398,6 +401,7 @@ function makeExtra(): Extra {
     commitLsn: 0,
     writes: false,
     needsSort: false,
+    postFilterCpu: false,
     hot: false,
     seqScan: false,
     scanBlk: 0,
@@ -996,8 +1000,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     Math.max(1, Math.min(t.pages, Math.max(8, Math.ceil(t.pages / SCAN_STRIDE))))
   /**
    * Step `i` of an evenly-spaced sample of the whole relation. Repeated scans
-   * use the same sample because they read the same relation; touchPage accounts
-   * each cached sample at the represented relation-wide hit probability.
+   * use the same sample because they read the same relation; touchPage keeps a
+   * recycling BAS_BULKREAD stream distinct from normal resident-page hits.
    */
   const scanBlkOf = (t: TableSim, i: number): number => {
     const n = scanGridN(t)
@@ -1026,17 +1030,18 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   const wUpd: number[] = TABLES.map((d) =>
     d.id === 'events' ? 0 : d.weight * (d.id === 'sessions' ? 2.0 : 1),
   )
-  // The planner picks a seq scan when the relation is small; a selective
-  // predicate on a big table gets an index. So sequential scans land
-  // overwhelmingly on the small relations, and only the analytics query
-  // (`aggregate`) sweeps the big ones.
+  // The background OLTP mix sends nearly all ordinary seq scans to the small,
+  // frequently rewritten relation. A periodic documents report retains a cold
+  // tail; full analytics remain explicit or exceptional so they do not dominate
+  // every page-weighted metric in the otherwise healthy default city.
   /** Row count each relation settles at — inserts replace what deletes remove. */
   const naturalLive: number[] = TABLES.map((d) => d.pages * d.tuplesPerPage)
   /** 0 = tables at their natural size, 1 = draining hard. See tickTables(). */
   let liveDeficit = 0
-  const wSeq: number[] = TABLES.map((d) => d.weight * Math.pow(600 / d.pages, 2))
+  const sessionsSeqTable = TABLES.findIndex((d) => d.id === 'sessions')
+  const documentsSeqTable = TABLES.findIndex((d) => d.id === 'documents')
   const wAgg: number[] = TABLES.map((d) => d.weight * Math.pow(d.pages / 600, 0.6))
-  const SMALL_SEQ_SCAN_SHARE = 0.99
+  const SMALL_SEQ_SCAN_SHARE = 0.9999
 
   /* ---- buffer mapping table (the real shared hash table) --------------- */
 
@@ -1246,6 +1251,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
   let pendingTx = 0
   let nextArrival = 0
+  let backgroundSeqScans = 0
+  let nextWideSeqScan = 1
   /** Transactions carried by one backend trip. See sizeBatch(). */
   let batchSize = 1
   const traceQueue: TraceRequest[] = []
@@ -1345,6 +1352,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   let cleanedAcc = 0
   let bgwriterAllocations = 0
   let bgwriterAllocationEstimate = 0
+  let bgwriterScanRemainder = 0
+  let clockSweepPasses = 0
+  let bgwriterScanPasses = 0
+  let bgwriterCursorValid = true
   let logicalAcc = 0
   let statT = 0
   let degradeWarnT = -100
@@ -1661,7 +1672,12 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     let trycounter = size
     for (;;) {
       const b = buf.clockHand
-      buf.clockHand = buf.clockHand + 1 >= size ? 0 : buf.clockHand + 1
+      if (buf.clockHand + 1 >= size) {
+        buf.clockHand = 0
+        clockSweepPasses++
+      } else {
+        buf.clockHand++
+      }
       if (!buf.pinned[b]) {
         if (buf.usage[b] > 0) {
           buf.usage[b]--
@@ -1719,13 +1735,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       b.lastBuffer = found
       if (forWrite) markDirty(found, slot)
       // One sampled ring block represents roughly SCAN_STRIDE blocks spread
-      // across the relation. The sample frame may be resident while most of the
-      // represented full scan is not; account the relation-wide resident share
-      // instead of turning every repeated sample into a 100% cache hit.
-      const representativeHit =
-        !useRing
-        || rel >= N_TABLES
-        || rng() < clamp01((K.sharedBuffers * MIB) / PAGE / Math.max(1, tables[rel].pages))
+      // across the relation. Its representative frame can recur while the
+      // 32-frame BAS_BULKREAD stream itself is recycling cold pages, so score
+      // the sample the same way as drainPages()'s statistical tail.
+      const representativeHit = !useRing
       if (representativeHit) {
         buf.hits++
         winHits++
@@ -1862,6 +1875,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     buf.sampleFrames = size
     if (buf.clockHand >= size) buf.clockHand = 0
     if (bgw.scanPos >= size) bgw.scanPos = 0
+    bgwriterScanRemainder = 0
+    clockSweepPasses = 0
+    bgwriterScanPasses = 0
+    bgwriterCursorValid = true
     for (let i = 0; i < ringBuf.length; i++) if (ringBuf[i] >= size) ringBuf[i] = -1
     // pinsFor() shrinks with the pool; pins parked in ring positions the new
     // bound no longer reaches would otherwise be held for ever.
@@ -2607,10 +2624,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   /* ======================================================================
    * BGWRITER
    *
-   * The bgwriter does NOT clean the whole pool — it cleans a little way ahead
-   * of the clock hand, so pages a backend is about to reuse are already clean.
-   * Hot dirty pages stay dirty until the checkpoint. Turn it off and the
-   * backends start doing those writes themselves (buffers.dirtyEvictions).
+   * The bgwriter cleans ahead of the clock hand so pages a backend is about to
+   * reuse are already clean. Its persistent cursor also makes enough progress
+   * to lap an otherwise idle pool every two minutes. Hot dirty pages stay dirty
+   * until their usage count falls or the checkpoint writes them.
    * ====================================================================*/
 
   function tickBgwriter(dt: number): void {
@@ -2620,6 +2637,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       bgw.cleanedPerSec = damp(bgw.cleanedPerSec, 0, 2, dt)
       bgwriterAllocations = 0
       bgwriterAllocationEstimate = 0
+      bgwriterScanRemainder = 0
+      bgwriterCursorValid = false
       return
     }
     bgwT += dt
@@ -2635,11 +2654,42 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       recentAllocations,
       damp(bgwriterAllocationEstimate, recentAllocations, 1.5, BGW_DELAY),
     )
-    const lookahead = clamp(
-      Math.round(bgwriterAllocationEstimate * 2),
-      16,
+    const cursorBehindClock =
+      bgwriterScanPasses < clockSweepPasses
+      || (
+        bgwriterScanPasses === clockSweepPasses
+        && bgw.scanPos < buf.clockHand
+      )
+    // BgBufferSync skips next_to_clean to the strategy point only when its
+    // persistent cursor has fallen behind; an idle cursor is never re-anchored.
+    if (!bgwriterCursorValid || cursorBehindClock) {
+      bgw.scanPos = buf.clockHand
+      bgwriterScanPasses = clockSweepPasses
+      bgwriterCursorValid = true
+    }
+    // BgBufferSync retains next_to_clean across rounds. Its minimum scan rate
+    // covers NBuffers in 120 seconds even when allocation activity is zero.
+    // Carry the fractional representative frame so the fixed sample preserves
+    // that horizon at every shared_buffers setting.
+    const idleScanBudget =
+      bgwriterScanRemainder
+      + (buf.sampleFrames * BGW_DELAY) / BGW_SCAN_WHOLE_POOL_SECONDS
+    const minimumScan = Math.floor(idleScanBudget)
+    bgwriterScanRemainder = idleScanBudget - minimumScan
+    const requestedLookahead = clamp(
+      Math.max(Math.round(bgwriterAllocationEstimate * 2), minimumScan),
+      0,
       buf.sampleFrames,
     )
+    // next_to_clean may get at most one pass ahead of the strategy point.
+    // BgBufferSync calls this remaining distance bufs_to_lap.
+    const buffersToLap = Math.max(
+      0,
+      (clockSweepPasses + 1) * buf.sampleFrames
+        + buf.clockHand
+        - (bgwriterScanPasses * buf.sampleFrames + bgw.scanPos),
+    )
+    const lookahead = Math.min(requestedLookahead, buffersToLap)
     // cleanedTotal counts representative frames. Project the real-page GUC
     // onto that sample so 100 and 400 do not both exceed a 64-frame plaza.
     const cleanLimit = K.bgwriterLruMaxpages <= 0
@@ -2647,9 +2697,14 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       : Math.max(1, Math.ceil((K.bgwriterLruMaxpages * buf.sampleFrames) / N_BUFFERS))
     let cleaned = 0
     let scanned = 0
-    bgw.scanPos = buf.clockHand
     while (scanned < lookahead && cleaned < cleanLimit) {
-      const b = (bgw.scanPos + scanned) % buf.sampleFrames
+      const b = bgw.scanPos
+      if (bgw.scanPos + 1 >= buf.sampleFrames) {
+        bgw.scanPos = 0
+        bgwriterScanPasses++
+      } else {
+        bgw.scanPos++
+      }
       scanned++
       // only frames that are about to be handed out: usage 0, unpinned
       if (buf.dirty[b] && buf.usage[b] === 0 && !buf.pinned[b]) {
@@ -4573,43 +4628,45 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     const ix = t.def.indexes
     const pkey = ix[0].name
     const alt = ix.length > 1 ? ix[1].name : ix[0].name
-    const seqCost = t.pages * 1.0 + live * 0.01
+    const diskRunCost = t.pages * 1.0
+    const cpuRunCost = live * 0.01
+    const seqCost = diskRunCost + cpuRunCost
 
     switch (kind) {
       case 'select_idx': {
-        const shape = rng()
-        if (shape < 0.45) {
-          return pn('Index Scan', `using ${pkey} on ${name}  (Index Cond: id = $1)`, rows, 0.42 + rows * 0.25, [])
-        }
-        if (shape < 0.75) {
-          const bi = pn('Bitmap Index Scan', `on ${alt}  (Index Cond: ${name.slice(0, 3)}_key = $1)`, rows * 1.4, 4.2 + rows * 0.02, [])
-          return pn('Bitmap Heap Scan', `on ${name}  (Recheck Cond: …, Heap Blocks: exact=${Math.max(1, Math.round(rows / 3))})`, rows, 18 + rows * 0.3, [bi])
-        }
-        const inner = pn('Index Scan', `using ${tables[0].def.indexes[0].name} on ${tables[0].def.name}`, 1, 0.42, [])
-        const outer = pn('Index Scan', `using ${alt} on ${name}`, rows, 0.42 + rows * 0.2, [])
-        return pn('Nested Loop', `(Join Filter: none, rows=${Math.round(rows)})`, rows, 8 + rows * 0.6, [outer, inner])
+        // Retiring random plan shapes must not re-roll the seeded workload that
+        // follows this plan; preserve the former shape draw as a sequence guard.
+        rng()
+        return pn('Index Scan', `using ${pkey} on ${name}  (Index Cond: id = $1)`, 1, 0.67, [])
       }
       case 'select_seq': {
-        const s = pn('Seq Scan', `on ${name}  (Filter: payload ~~ $1, Rows Removed by Filter: ${Math.round(live * 0.94)})`, rows, seqCost, [])
-        if (rng() < 0.45) {
-          const so = pn('Sort', `(Sort Key: created_at DESC, Sort Method: top-N heapsort, Memory: ${Math.round(28 + rng() * 60)}kB)`, rows, seqCost * 1.1, [s])
+        // Preserve both draws the former random Sort branch consumed while SQL,
+        // rather than chance, now decides whether the Sort exists.
+        const retiredShapeRoll = rng()
+        const sortMemoryRoll = retiredShapeRoll < 0.45 ? rng() : retiredShapeRoll
+        const filter = name === 'events' ? 'payload @> $1' : 'updated_at > $1'
+        const s = pn('Seq Scan', `on ${name}  (Filter: ${filter}, Rows Removed by Filter: ${Math.round(live * 0.94)})`, rows, seqCost, [])
+        if (name === 'events') {
+          const so = pn('Sort', `(Sort Key: created_at DESC, Sort Method: top-N heapsort, Memory: ${Math.round(28 + sortMemoryRoll * 60)}kB)`, rows, seqCost * 1.1, [s])
           return pn('Limit', `(rows=${Math.round(rows)})`, rows, seqCost * 1.12, [so])
         }
         return s
       }
       case 'aggregate': {
+        // cost_seqscan() divides only CPU cost across parallel participants;
+        // the operating system's read-ahead already amortizes the disk run.
+        const parallelSeqCost = diskRunCost + cpuRunCost / 3
+        const ps = pn('Parallel Seq Scan', `on ${name}  (rows=${Math.round(live / 3)})`, live / 3, parallelSeqCost, [])
+        const pa = pn('Partial HashAggregate', '(Group Key: status)', 12, parallelSeqCost + 80, [ps])
         if (rng() < 0.5) {
-          const ps = pn('Parallel Seq Scan', `on ${name}  (rows=${Math.round(live / 3)})`, live / 3, seqCost / 3, [])
-          const pa = pn('Partial HashAggregate', `(Group Key: ${name.slice(0, 1)}.status)`, 12, seqCost / 3 + 80, [ps])
-          const gm = pn('Gather Merge', '(Workers Planned: 2, Workers Launched: 2)', 36, seqCost / 3 + 140, [pa])
-          return pn('Finalize GroupAggregate', '(Group Key: status)', 12, seqCost / 3 + 190, [gm])
+          const gather = pn('Gather', '(Workers Planned: 2, Workers Launched: 2)', 36, parallelSeqCost + 140, [pa])
+          return pn('Finalize HashAggregate', '(Group Key: status)', 12, parallelSeqCost + 190, [gather])
         }
-        const a = tables[0]
-        const inner = pn('Seq Scan', `on ${a.def.name}`, a.liveTuples, a.pages * 1.0 + a.liveTuples * 0.01, [])
-        const hash = pn('Hash', `(Buckets: 4096  Batches: 1  Memory Usage: ${Math.round(180 + rng() * 900)}kB)`, a.liveTuples, a.pages * 1.2, [inner])
-        const outer = pn('Seq Scan', `on ${name}`, live, seqCost, [])
-        const hj = pn('Hash Join', `(Hash Cond: ${name.slice(0, 1)}.account_id = a.id)`, live, seqCost * 1.6, [outer, hash])
-        return pn('HashAggregate', '(Group Key: a.region)', 24, seqCost * 1.7, [hj])
+        // create_gather_merge_path() rejects a subpath without matching pathkeys.
+        const sortMemory = Math.round(180 + rng() * 900)
+        const sort = pn('Sort', `(Sort Key: status, Memory: ${sortMemory}kB)`, 12, parallelSeqCost + 120, [pa])
+        const gatherMerge = pn('Gather Merge', '(Workers Planned: 2, Workers Launched: 2)', 36, parallelSeqCost + 180, [sort])
+        return pn('Finalize GroupAggregate', '(Group Key: status)', 12, parallelSeqCost + 230, [gatherMerge])
       }
       case 'insert': {
         const src = pn('Values Scan', 'on "*VALUES*"', rows, 0.01 * rows, [])
@@ -4758,7 +4815,17 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     } else if (rng() < K.seqScanRatio) {
       // Analytics against an OLTP database are rare and expensive; ordinary
       // seq scans are common and small.
-      if (rng() < SMALL_SEQ_SCAN_SHARE) { kind = 'select_seq'; ti = weightedPick(wSeq, rng) }
+      if (rng() < SMALL_SEQ_SCAN_SHARE) {
+        kind = 'select_seq'
+        backgroundSeqScans++
+        const cadenceRoll = rng()
+        if (backgroundSeqScans >= nextWideSeqScan) {
+          ti = documentsSeqTable
+          nextWideSeqScan = backgroundSeqScans + 450 + Math.floor(cadenceRoll * 101)
+        } else {
+          ti = sessionsSeqTable
+        }
+      }
       else { kind = 'aggregate'; ti = weightedPick(wAgg, rng) }
     } else {
       kind = 'select_idx'
@@ -4788,14 +4855,29 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     x.idleT = 0
     x.writes = kind === 'insert' || kind === 'update' || kind === 'delete'
     x.seqScan = kind === 'select_seq' || kind === 'aggregate'
-    x.needsSort = kind === 'aggregate' || (kind === 'select_seq' && rng() < 0.45)
+    // SQL now decides whether the trace sorts. Preserve the former seeded
+    // branch as predicate CPU so correcting the plan does not make that work or
+    // its later workload sequence disappear.
+    const retiredSortRoll = kind === 'select_seq' ? rng() : 1
+    x.needsSort = kind === 'aggregate' || (kind === 'select_seq' && TABLES[ti].id === 'events')
+    x.postFilterCpu =
+      kind === 'select_seq'
+      && TABLES[ti].id !== 'events'
+      && retiredSortRoll < 0.45
     x.hot = kind === 'update'
       && (requested?.hot ?? (rng() < TABLES[ti].hotFriendly && tables[ti].bloat < 0.55))
+    // A primary-key lookup still samples a bound id from the workload even
+    // though the unique index fixes its result cardinality at one row.
+    let uniqueLookupRows = 0
+    if (kind === 'select_idx') {
+      rng()
+      uniqueLookupRows = 1
+    }
     x.rowsPerStmt =
       kind === 'insert' ? 1 + Math.floor(rng() * 4)
       : kind === 'update' ? 2 + Math.floor(rng() * 10)
       : kind === 'delete' ? 1 + Math.floor(rng() * 18)
-      : kind === 'select_idx' ? 1 + Math.floor(rng() * 6)
+      : kind === 'select_idx' ? uniqueLookupRows
       : 20 + Math.floor(rng() * 400)
 
     if (x.writes && dr.archive.writesBlocked) {
@@ -4865,8 +4947,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       // min(pages, 200), i.e. 48% of `sessions` against select_seq's 7% of the
       // same table: two statements reading identical blocks, one of them handing
       // the buffer pool seven times the traffic. What actually separates them is
-      // which relations the planner sends them to (wSeq favours the small ones,
-      // wAgg the large) and the sort/hash `aggregate` runs on top.
+      // which relations the query generator sends them to (ordinary scans
+      // favour the small relation; wAgg favours large ones) and the sort/hash
+      // `aggregate` runs on top.
       case 'select_seq':
       case 'aggregate':
         perStmt = scanGridN(t)
@@ -5353,6 +5436,11 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
               }
               if (x.needsSort) {
                 b.state = 'sort'
+                b.stateT = 0
+                b.stateDur = rr(0.12, 0.34)
+              } else if (x.postFilterCpu) {
+                x.postFilterCpu = false
+                b.state = 'exec_cpu'
                 b.stateT = 0
                 b.stateDur = rr(0.12, 0.34)
               } else if (x.writes) {
@@ -6540,6 +6628,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     bgw.cleanedTotal = asSampleFrames(0)
     bgw.cleanedPerSec = 0
     bgw.activity = 0
+    bgwriterScanRemainder = 0
+    clockSweepPasses = 0
+    bgwriterScanPasses = 0
+    bgwriterCursorValid = true
 
     av.enabled = K.autovacuum
     av.nextLaunchSec = AV_NAPTIME * 0.4
@@ -6711,6 +6803,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
     pendingTx = 0
     nextArrival = 0
+    backgroundSeqScans = 0
+    nextWideSeqScan = 1
     commitLsn.fill(0)
     commitCount.fill(0)
     commitHead = 0

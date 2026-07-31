@@ -16,7 +16,8 @@ consumer, then drive the model directly — `createSim()` with a stub bus,
 reading, and an explicit down-sweep afterwards to test recovery. Every number
 quoted below is measured, not estimated.
 
-**Verdict count: 13 `CORRECT`, 10 `WRONG`, 0 `MISSING`.**
+**Original verdict count (2026-07-29 snapshot): 13 `CORRECT`, 10 `WRONG`,
+0 `MISSING`.**
 
 The roadmap says "eleven of twenty-two". This audit re-grades four of them and
 adds three the earlier sweep passed; see [Changes from the previous
@@ -24,7 +25,39 @@ sweep](#changes-from-the-previous-sweep).
 
 ---
 
-## Verdict table
+## Re-verification marker — 2026-07-31
+
+This document records the original audit rather than silently replacing it.
+Its numeric `src/sim/model.ts` line references describe the 2026-07-29 source
+snapshot and no longer resolve against current `main`; use the named functions
+and regression tests below for current navigation.
+
+All ten original `WRONG` verdicts were re-run against current `main` on
+2026-07-31 and are now `CORRECT`. For the original 23-knob scope, the current
+count is therefore **23 `CORRECT`, 0 `WRONG`, 0 `MISSING`**.
+
+| # | Knob | Original | Re-verified 2026-07-31 | Current evidence |
+|---|---|---|---|---|
+| 6 | `checkpointTimeout` | `WRONG` | **CORRECT** | `checkpoint_timeout full-page-image amortisation` verifies fewer checkpoints and lower full-page-image volume at a longer interval. |
+| 9 | `bgwriterEnabled` | `WRONG` | **CORRECT** | `backend dirty-eviction cost` verifies that the writer reduces backend victim writes without reducing throughput. RC-4 is fixed. |
+| 10 | `bgwriterLruMaxpages` | `WRONG` | **CORRECT** | The cap now binds under churn, and `model-fidelity.test.ts` verifies that the persistent idle cursor laps the pool in two minutes. |
+| 11 | `synchronousCommit` | `WRONG` | **CORRECT** | `synchronous_commit guarantees` verifies the `off < local < on < remote_apply` wait ladder. |
+| 12 | `walLevel` | `WRONG` | **CORRECT** | `replication state normalization` verifies that `minimal` removes impossible physical and logical replication state and bounds retained WAL. |
+| 13 | `fullPageWrites` | `WRONG` | **CORRECT** | `autovacuum cost balance` verifies visible full-page-image WAL without the former large throughput reward. |
+| 14 | `autovacuum` | `WRONG` | **CORRECT** | `autovacuum cost balance` and `paces vacuum heap scans instead of discounting their I/O` verify subordinate WAL/I/O and a real pace limit. |
+| 18 | `replicaEnabled` | `WRONG` | **CORRECT** | `replication state normalization` verifies zero lag and no stale replay position when the standby is absent. |
+| 19 | `replicaNetworkLag` | `WRONG` | **CORRECT** | `replication timing units` verifies real seconds in `replay_lag` while packet motion remains visually stretched. |
+| 21 | `standbyLongQuery` | `WRONG` | **CORRECT** | `hot_standby_feedback gating` verifies that no disconnected standby can pin xmin and that disconnect releases an existing pin. |
+
+The audit's separate RC-5 finding is also fixed: `wal_buffers auto-tuning`
+verifies `shared_buffers / 32` with PostgreSQL's 64 KiB floor and one-segment
+cap. RC-4's current evidence is listed with knob 9 above. The detailed sections
+below retain their original measurements and `WRONG` labels as historical
+evidence; they are not the current verdicts.
+
+---
+
+## Original verdict table (historical)
 
 | # | Knob | Real setting | Verdict | One-line reason |
 |---|---|---|---|---|
