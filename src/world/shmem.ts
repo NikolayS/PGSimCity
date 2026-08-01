@@ -1555,7 +1555,9 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
       setColor3(pillarCol, i, r, g, bl)
       setColor3(pillarOutlineCol, i, r * 2.4, g * 2.4, bl * 2.4)
     }
-    const externalPin = sim.knobs.standbyLongQuery || sim.replication.logicalEnabled
+    const externalPin = sim.knobs.standbyALongQuery
+      || sim.knobs.standbyBLongQuery
+      || sim.replication.logicalEnabled
     const externalTarget = externalPin ? procY(xid, sim.xminHorizon) : 0
     externalH[0] += (externalTarget - externalH[0]) * kH
     setTRS(externalMat, 0, EXTERNAL_X[0], MOUNT_Y, 0, externalPin ? 1 : 0, externalH[0], externalPin ? 1 : 0)

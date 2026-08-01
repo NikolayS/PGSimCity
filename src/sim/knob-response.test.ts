@@ -206,7 +206,7 @@ function failedOver(value: boolean, key: 'walLogHints' | 'oldPrimaryDataIntact' 
   sim.setKnob('standbyBEnabled', false)
   setWorkload(sim)
   if (key === 'walLogHints') sim.setKnob(key, value)
-  sim.setKnob('replicaNetworkLag', 400)
+  sim.setKnob('standbyANetworkLag', 400)
   advance(sim, 35)
   if (!sim.startFailover('standbyA')) throw new Error('failover did not start')
   advanceUntil(sim, () => sim.state.highAvailability.transition.status === 'complete', 60)
@@ -322,19 +322,19 @@ const RESPONSE_CONTRACTS = {
       const sim = createSim(createBus())
       sim.setKnob('tps', 1_000)
       sim.setKnob('writeRatio', 1)
-      sim.setKnob('replicaNetworkLag', 400)
+      sim.setKnob('standbyANetworkLag', 400)
       sim.setKnob('synchronousCommit', value)
       advance(sim, 20)
       return sim.state.stats.commits
     },
   },
   synchronousStandbyNames: {
-    target: false,
-    measure(value: boolean) {
+    target: 'none',
+    measure(value: Knobs['synchronousStandbyNames']) {
       const sim = createSim(createBus())
       sim.setKnob('synchronousStandbyNames', value)
       advance(sim, 1)
-      return sim.state.replication.standbys[0].mode
+      return sim.state.replication.standbys.map((standby) => standby.mode).join('/')
     },
   },
   walLevel: {
@@ -392,30 +392,30 @@ const RESPONSE_CONTRACTS = {
       return sim.state.locks.length
     },
   },
-  replicaEnabled: {
+  standbyAEnabled: {
     target: false,
     measure(value: boolean) {
       const sim = createSim(createBus())
-      sim.setKnob('replicaEnabled', value)
+      sim.setKnob('standbyAEnabled', value)
       advance(sim, 1)
       return sim.state.replication.standbys[0].connected
     },
   },
-  replicaNetworkLag: {
+  standbyANetworkLag: {
     target: 400,
     measure(value: number) {
       const sim = createSim(createBus())
-      sim.setKnob('replicaNetworkLag', value)
+      sim.setKnob('standbyANetworkLag', value)
       advance(sim, 1)
       return sim.state.replication.standbys[0].networkLagMs
     },
   },
-  replicaSlowApply: {
+  standbyASlowApply: {
     target: true,
     measure(value: boolean) {
       const sim = createSim(createBus())
       setWorkload(sim)
-      sim.setKnob('replicaSlowApply', value)
+      sim.setKnob('standbyASlowApply', value)
       advance(sim, 35)
       return sim.state.replication.standbys[0].lagBytes
     },
@@ -448,11 +448,20 @@ const RESPONSE_CONTRACTS = {
       return sim.state.replication.standbys[1].lagBytes
     },
   },
-  standbyLongQuery: {
+  standbyALongQuery: {
     target: true,
     measure(value: boolean) {
       const sim = createSim(createBus())
-      sim.setKnob('standbyLongQuery', value)
+      sim.setKnob('standbyALongQuery', value)
+      advance(sim, 12)
+      return sim.state.oldestSnapshotAge
+    },
+  },
+  standbyBLongQuery: {
+    target: true,
+    measure(value: boolean) {
+      const sim = createSim(createBus())
+      sim.setKnob('standbyBLongQuery', value)
       advance(sim, 12)
       return sim.state.oldestSnapshotAge
     },
@@ -619,7 +628,7 @@ describe('knob-response contract', () => {
 
     snapshots.set('sharedBuffers:base', makeSnapshots(defs, 'sharedBuffers', 128))
     snapshots.set('sharedBuffers:target', makeSnapshots(defs, 'sharedBuffers', 1024))
-    snapshots.set('hard:replicaEnabled', makeSnapshots(defs, 'replicaEnabled', false))
+    snapshots.set('hard:standbyAEnabled', makeSnapshots(defs, 'standbyAEnabled', false))
     snapshots.set('hard:walLevel', makeSnapshots(defs, 'walLevel', 'minimal'))
   }, 30_000)
 
@@ -690,13 +699,13 @@ describe('knob-response contract', () => {
   })
 
   it('does not advertise standby reads when replication is unavailable', () => {
-    const disabled = snapshots.get('hard:replicaEnabled')!
+    const disabled = snapshots.get('hard:standbyAEnabled')!
     const minimal = snapshots.get('hard:walLevel')!
 
-    expect(disabled.state.replication.connected).toBe(false)
+    expect(disabled.state.replication.standbys[0].connected).toBe(false)
     expect(disabled.readouts.get('replica.client')).toBe('no standby — reads unavailable')
     expect(minimal.state.knobs.walLevel).toBe('minimal')
-    expect(minimal.state.replication.connected).toBe(false)
+    expect(minimal.state.replication.standbys[0].connected).toBe(false)
     expect(minimal.readouts.get('replica.client')).toBe('no standby — reads unavailable')
   })
 })

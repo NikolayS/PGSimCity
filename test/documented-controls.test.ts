@@ -460,7 +460,7 @@ describe('README control-surface instructions', () => {
   it.each([
     ['longRunningXact', true, 'Long-running transaction'],
     ['synchronousCommit', 'off', '`synchronous_commit`'],
-    ['replicaSlowApply', true, 'Slow replay'],
+    ['standbyASlowApply', true, 'Slow replay'],
   ] as const)('changes documented control %s through the rendered input', (key, value, label) => {
     const current = fixture()
     expect(readme).toContain(label)

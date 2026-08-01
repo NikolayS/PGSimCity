@@ -195,7 +195,7 @@ const STEPS: TourStep[] = [
       'The same write-ahead log that makes a commit durable feeds PostgreSQL standbys. The city tracks independent sent, written, flushed and replayed LSNs for two nodes and animates records along their routes; it does not keep a second copy of table rows or pages. Watch standby A’s modeled record leave the vault, cross the wire, and advance its replay frontier.',
     focus: 'walsender',
     duration: 20,
-    knobs: { replicaEnabled: true, walLevel: 'replica', replicaSlowApply: false, replicaNetworkLag: 30 },
+    knobs: { standbyAEnabled: true, walLevel: 'replica', standbyASlowApply: false, standbyANetworkLag: 30 },
     look: [
       [8, 'net.wire'],
       [14, 'startup.proc'],

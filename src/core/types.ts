@@ -75,6 +75,7 @@ export interface TableDef {
 
 export type SyncCommit = 'off' | 'local' | 'remote_write' | 'on' | 'remote_apply'
 export type WalLevel = 'minimal' | 'replica' | 'logical'
+export type SynchronousStandbyNames = 'none' | 'standbyA' | 'standbyB'
 export type HaPartition =
   | 'healthy'
   | 'isolate_node'
@@ -102,8 +103,8 @@ export interface Knobs {
   /** pages per bgwriter round */
   bgwriterLruMaxpages: number
   synchronousCommit: SyncCommit
-  /** True when synchronous_standby_names names the active follower. */
-  synchronousStandbyNames: boolean
+  /** Which follower synchronous_standby_names selects, or an empty setting. */
+  synchronousStandbyNames: SynchronousStandbyNames
   walLevel: WalLevel
   fullPageWrites: boolean
   autovacuum: boolean
@@ -113,19 +114,22 @@ export interface Knobs {
   longRunningXact: boolean
   /** Take a heavyweight lock that blocks writers on one table. */
   lockContention: boolean
-  replicaEnabled: boolean
+  /** Whether standby_a is streaming from the primary. */
+  standbyAEnabled: boolean
   /** ms of one-way network delay to standby_a. */
-  replicaNetworkLag: number
+  standbyANetworkLag: number
   /** standby_a applies WAL slower than it arrives. */
-  replicaSlowApply: boolean
+  standbyASlowApply: boolean
   /** Whether standby_b is streaming from the primary. */
   standbyBEnabled: boolean
   /** ms of one-way network delay to standby_b. */
   standbyBNetworkLag: number
   /** standby_b applies WAL slower than it arrives. */
   standbyBSlowApply: boolean
-  /** A long-running standby read reports xmin through hot_standby_feedback. */
-  standbyLongQuery: boolean
+  /** A long-running standby_a read reports xmin through hot_standby_feedback. */
+  standbyALongQuery: boolean
+  /** A long-running standby_b read reports xmin through hot_standby_feedback. */
+  standbyBLongQuery: boolean
   /** WAL-G's object-storage credentials are valid for wal-push. */
   walGArchiveCredentialsValid: boolean
   /** Concurrent WAL-G backup-fetch and wal-fetch download workers. */
@@ -167,7 +171,7 @@ export const DEFAULT_KNOBS: Knobs = {
   bgwriterEnabled: true,
   bgwriterLruMaxpages: 100,
   synchronousCommit: 'on',
-  synchronousStandbyNames: true,
+  synchronousStandbyNames: 'standbyA',
   walLevel: 'replica',
   fullPageWrites: true,
   autovacuum: true,
@@ -179,13 +183,14 @@ export const DEFAULT_KNOBS: Knobs = {
   autovacuumScaleFactor: 0.02,
   longRunningXact: false,
   lockContention: false,
-  replicaEnabled: true,
-  replicaNetworkLag: 30,
-  replicaSlowApply: false,
+  standbyAEnabled: true,
+  standbyANetworkLag: 30,
+  standbyASlowApply: false,
   standbyBEnabled: true,
   standbyBNetworkLag: 55,
   standbyBSlowApply: false,
-  standbyLongQuery: false,
+  standbyALongQuery: false,
+  standbyBLongQuery: false,
   walGArchiveCredentialsValid: true,
   walGDownloadConcurrency: 10,
   backupRetention: 3,
@@ -517,27 +522,9 @@ export interface TableSim {
 }
 
 export interface ReplicationState {
-  /**
-   * Compatibility projection of standby_a for older teaching surfaces.
-   * `standbys` is canonical; these fields are copied from its first entry.
-   */
-  enabled: boolean
-  connected: boolean
-  mode: 'async' | 'sync'
-  sentLsn: number
-  writeLsn: number
-  flushLsn: number
-  replayLsn: number
-  lagBytes: number
-  lagSec: number
-  networkLagMs: number
-  /** standby replay progress heat 0..1 */
-  applyActivity: number
   logicalEnabled: boolean
   logicalSlotLsn: number
   logicalChangesPerSec: number
-  /** number of WAL records in flight on the wire */
-  inFlight: number
   /** The two independent physical streams fed by separate walsenders. */
   standbys: [PhysicalStandbyState, PhysicalStandbyState]
   /** Physical slots survive connection loss and retain primary WAL. */

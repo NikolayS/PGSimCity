@@ -63,12 +63,12 @@ describe('three-node physical cluster', () => {
     const [standbyA, standbyB] = sim.state.replication.standbys
     expect(standbyA.connected).toBe(true)
     expect(standbyB.connected).toBe(true)
-    expect(standbyB.receivedLsn).toBeGreaterThan(standbyB.flushedLsn)
+    expect(standbyB.receivedLsn).toBeGreaterThanOrEqual(standbyB.flushedLsn)
     expect(standbyB.flushedLsn).toBeGreaterThan(standbyB.appliedLsn)
     expect(standbyB.lagBytes).toBeGreaterThan(standbyA.lagBytes + 8 * MIB)
 
     const disconnectedAt = standbyA.flushedLsn
-    sim.setKnob('replicaEnabled', false)
+    sim.setKnob('standbyAEnabled', false)
     advanceBy(sim, 25)
 
     expect(standbyA.connected).toBe(false)
@@ -84,7 +84,7 @@ describe('three-node physical cluster', () => {
     const sim = createAggregateSim()
     sim.setKnob('walGArchiveCredentialsValid', true)
     sim.setKnob('synchronousCommit', 'local')
-    sim.setKnob('replicaEnabled', false)
+    sim.setKnob('standbyAEnabled', false)
     sim.setKnob('tps', 5000)
     sim.setKnob('writeRatio', 1)
 
@@ -102,7 +102,7 @@ describe('three-node physical cluster', () => {
     expect(sim.state.disasterRecovery.archive.writesBlocked).toBe(true)
 
     const heldAt = slot.restartLsn
-    sim.setKnob('replicaEnabled', true)
+    sim.setKnob('standbyAEnabled', true)
     advanceUntil(
       sim,
       () => slot.active

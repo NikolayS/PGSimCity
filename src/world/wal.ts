@@ -1,5 +1,9 @@
 import * as THREE from 'three'
 import { COLOR, mixHex } from '../core/theme'
+import {
+  allConnectedStandbysSentLsn,
+  oldestReplicationSlotLsn,
+} from '../core/replication'
 import { N_WAL_SEG_SLOTS } from '../core/types'
 import type { SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, damp, fmtBytes, fmtLsn, lerp, makeRng, smoothstep } from '../core/util'
@@ -1385,7 +1389,8 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
     const dts = clamp(t - prevT, 0, 0.25) // simulated dt: freezes when paused
     prevT = t
     const wal = sim.wal
-    const rep = sim.replication
+    const replication = sim.replication
+    const rep = replication.standbys[0]
 
     /* --- 1. WALWRITER -------------------------------------------------- */
 
@@ -1491,9 +1496,10 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
     /* --- 2. THE VAULT --------------------------------------------------- */
 
     const segs = wal.segments
-    const sentSeg = Math.floor(rep.sentLsn / Math.max(1, wal.segmentSize))
-    const slotRestartLsn = rep.logicalEnabled ? Math.min(rep.flushLsn, rep.logicalSlotLsn) : rep.flushLsn
-    const slotRestartSeg = Math.floor(slotRestartLsn / Math.max(1, wal.segmentSize))
+    const sentLsn = allConnectedStandbysSentLsn(sim)
+    const sentSeg = Math.floor((sentLsn ?? 0) / Math.max(1, wal.segmentSize))
+    const slotRestartLsn = oldestReplicationSlotLsn(sim)
+    const slotRestartSeg = Math.floor((slotRestartLsn ?? wal.insertLsn) / Math.max(1, wal.segmentSize))
     const currentSeg = Math.floor(wal.insertLsn / Math.max(1, wal.segmentSize))
     let curIdx = -1
     const outArr = outColAttr.array as Float32Array
@@ -1552,10 +1558,10 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
       else hideInst(segCaps, i)
 
       // "already streamed to the standby" marker on the flank
-      const streamed = rep.connected && s.id < sentSeg && st !== 'recycled'
+      const streamed = sentLsn !== undefined && s.id < sentSeg && st !== 'recycled'
       _c.setHex(COLOR.replication).multiplyScalar(streamed ? 1.6 : 0)
       segMarks.setColorAt(i, _c)
-      const held = rep.enabled && s.id >= slotRestartSeg && s.id < currentSeg && st !== 'recycled'
+      const held = slotRestartLsn !== undefined && s.id >= slotRestartSeg && s.id < currentSeg && st !== 'recycled'
       _c.setHex(COLOR.warn).multiplyScalar(held ? 1.7 : 0)
       segHoldMarks.setColorAt(i, _c)
 
@@ -1758,14 +1764,14 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
     }
     streamPulse = Math.max(0, streamPulse - dt * 2.2)
 
-    const connected = rep.standbys[0].connected || rep.standbys[1].connected
-    _c.setHex(COLOR.replication).multiplyScalar(rep.standbys[0].enabled ? (rep.standbys[0].connected ? 1.35 : 0.35) : 0.035)
+    const connected = replication.standbys[0].connected || replication.standbys[1].connected
+    _c.setHex(COLOR.replication).multiplyScalar(replication.standbys[0].enabled ? (replication.standbys[0].connected ? 1.35 : 0.35) : 0.035)
     consumerBays.setColorAt(0, _c)
     consumerRatchets.setColorAt(0, _c)
-    _c.setHex(COLOR.replication).multiplyScalar(rep.standbys[1].enabled ? (rep.standbys[1].connected ? 1.35 : 0.35) : 0.035)
+    _c.setHex(COLOR.replication).multiplyScalar(replication.standbys[1].enabled ? (replication.standbys[1].connected ? 1.35 : 0.35) : 0.035)
     consumerBays.setColorAt(1, _c)
     consumerRatchets.setColorAt(1, _c)
-    _c.setHex(COLOR.toast).multiplyScalar(rep.logicalEnabled ? 1.25 : 0.035)
+    _c.setHex(COLOR.toast).multiplyScalar(replication.logicalEnabled ? 1.25 : 0.035)
     consumerBays.setColorAt(2, _c)
     consumerRatchets.setColorAt(2, _c)
     consumerBays.instanceColor!.needsUpdate = true
@@ -1782,8 +1788,8 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
 
     // The ratchet marks the slot position; retained bytes light pg_wal itself.
     const largestSlotHold = Math.max(
-      rep.physicalSlots[0].retainedBytes,
-      rep.physicalSlots[1].retainedBytes,
+      replication.physicalSlots[0].retainedBytes,
+      replication.physicalSlots[1].retainedBytes,
     )
     const lagFrac = clamp01(Math.sqrt(largestSlotHold / (192 * MB)))
     setTRS(spoolWind, 0, SPX, SPY, SPZ, 2.1, 2.0, 2.1, spoolAxis)
@@ -1809,7 +1815,7 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
 
     const logicalOn = sim.knobs.walLevel === 'logical'
     logicalBeat = damp(logicalBeat, logicalOn ? 1 : 0, 4, dt)
-    const changes = logicalOn ? clamp01(rep.logicalChangesPerSec / 220) : 0
+    const changes = logicalOn ? clamp01(replication.logicalChangesPerSec / 220) : 0
 
     _c.setHex(COLOR.toast).multiplyScalar(logicalBeat * (0.25 + changes * 0.9))
     prismCoreMat.color.copy(_c)
