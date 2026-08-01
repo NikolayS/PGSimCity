@@ -129,6 +129,11 @@ describe('continuity and three-node projection', () => {
         .every((def) => def.readout !== undefined),
     ).toBe(true)
 
+    const archiveGate = defs.find((def) => def.id === 'archive.gate')
+    expect(archiveGate?.readout?.(sim.state)).toMatch(/primary.*16\.0 MiB.*%.*wal-push/i)
+    const backupVault = defs.find((def) => def.id === 'backup.vault')
+    expect(backupVault?.readout?.(sim.state)).toMatch(/daily.*standby_a/i)
+
     const dcs = defs.find((def) => def.id === 'ha.dcs')
     expect(dcs).toBeDefined()
     const focus = dcs!.focus
@@ -273,6 +278,16 @@ describe('continuity and three-node projection', () => {
       ANCHOR.backupVault[0],
       6,
       ANCHOR.backupVault[2] + 16,
+    ])
+    expect(ROUTES['backup.push'].points[0]).toEqual([
+      ANCHOR.standby[0] + 16,
+      6,
+      ANCHOR.standby[2] + 8,
+    ])
+    expect(ROUTES['archive.ship'].points[0]).toEqual([
+      ANCHOR.archiver[0] + 8,
+      8,
+      ANCHOR.archiver[2] - 4,
     ])
     expect(flows.some((flow) => flow.route === 'net.streamB')).toBe(true)
     expect(flows.some((flow) => flow.route === 'net.ackB')).toBe(true)

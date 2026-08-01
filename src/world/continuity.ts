@@ -55,6 +55,7 @@ type Box = [number, number, number, number, number, number]
 
 const N_VAULT = CONTINUITY.backupSlots
 const N_SILO = CONTINUITY.silo.rows * CONTINUITY.silo.cols
+const N_GATE_SEGMENT_CELLS = 16
 const N_LEASE = 3
 const BUF_B = 32
 const N_TILE_B = BUF_B * BUF_B
@@ -220,10 +221,24 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   const retryCrate = lamp(COLOR.warn, 1.2, 4.5, 3.2, 3.2, AG[0] - 12, 5.6, AG[2] - 20, gGate)
   retryCrate.visible = false
 
+  /** One cell per MiB in the primary's current, real 16 MiB segment. */
+  const gateSegmentCells = neonBank('archive.gate.current-segment', unitBox, N_GATE_SEGMENT_CELLS, gGate)
+  for (let i = 0; i < N_GATE_SEGMENT_CELLS; i++) {
+    _p.set(AG[0] - 1.9, 12.8, AG[2] - 7.5 + i)
+    _sc.set(0.5, 0.68, 0.72)
+    _m.compose(_p, _qi, _sc)
+    gateSegmentCells.setMatrixAt(i, _m)
+    gateSegmentCells.setColorAt(i, _c.setHex(OFF))
+  }
+  gateSegmentCells.instanceMatrix.needsUpdate = true
+  const gateSegmentClosed = lamp(COLOR.archive, 1.7, 0.62, 0.22, 16.2, AG[0] - 2.0, 13.35, AG[2], gGate)
+  gateSegmentClosed.visible = false
+
   plate('RETENTION / OWNERSHIP BOUNDARY', AG[0] - 1.9, 19.4, AG[2], -Math.PI / 2, 2.1, COLOR.archive, 0.92, gGate)
+  plate('PRIMARY CURRENT SEGMENT · 16 MiB · 1 CELL = 1 MiB', AG[0] - 2.0, 11.1, AG[2], -Math.PI / 2, 1.15, COLOR.wal, 0.86, gGate)
   plate(
     'wal-g wal-push: exit code 0 means STORED — otherwise the archiver retries the same file, forever',
-    AG[0] - 1.9, 11.6, AG[2], -Math.PI / 2, 1.4, COLOR.inkDim, 0.62,
+    AG[0] - 1.9, 8.8, AG[2], -Math.PI / 2, 1.3, COLOR.inkDim, 0.62,
   )
   plate('retry siding', AG[0] - 12, 5.4, AG[2] - 24, 0, 1.6, COLOR.warn, 0.6)
 
@@ -439,6 +454,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   plate('BASE-BACKUP OBJECTS', BV[0], 12.6, BV[2] - 14, Math.PI, 2.8, COLOR.storage, 0.9, gVault)
   plate('wal-g backup-push · compressed objects and metadata · same S3 store', BV[0], 9.4, BV[2] - 14.4, Math.PI, 1.45, COLOR.inkDim, 0.68)
   plate('WAL alone restores nothing — it has to be replayed ONTO one of these', BV[0], 7.4, BV[2] - 14.4, Math.PI, 1.3, COLOR.inkDim, 0.62)
+  plate('DAILY SCHEDULE · backup-push starts at standby_a', BV[0], 5.5, BV[2] - 14.4, Math.PI, 1.3, COLOR.storage, 0.78)
   plate('recovery window', BV[0], 1.6, BV[2] + 22, 0, 1.6, COLOR.storage, 0.7)
 
   /* ---------------------------------------------------------------------
@@ -882,10 +898,20 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     readout: (s: SimState) => {
       const a = s.disasterRecovery.archive
       const q = a.queueSegments
-      if (a.writesBlocked) return `${q} queued · scaled pg_wal safety limit reached · writes rejected`
-      if (!s.knobs.walGArchiveCredentialsValid) return `${q} queued · wal-push credentials expired · retrying oldest .ready file`
-      if (q > 0) return `${q} queued · ${s.wal.archived} shipped`
-      return `clear · ${s.wal.archived} segments shipped`
+      let bytes = 0
+      let fill = 0
+      for (let i = 0; i < s.wal.segments.length; i++) {
+        const segment = s.wal.segments[i]
+        if (segment.state !== 'current') continue
+        bytes = segment.bytes
+        fill = segment.fill
+        break
+      }
+      const approach = `primary current ${fmtBytes(bytes)} / ${fmtBytes(s.wal.segmentSize)} · ${(fill * 100).toFixed(1)}% · then wal-push`
+      if (a.writesBlocked) return `${approach} · ${q} queued · scaled pg_wal safety limit reached · writes rejected`
+      if (!s.knobs.walGArchiveCredentialsValid) return `${approach} · ${q} queued · credentials expired · retrying oldest .ready file`
+      if (q > 0) return `${approach} · wal-push active · ${q} .ready`
+      return `${approach} · ${s.wal.archived} stored`
     },
   })
 
@@ -935,9 +961,15 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     color: COLOR.storage,
     readout: (s: SimState) => {
       const backups = s.disasterRecovery.backups
-      if (backups.length === 0) return 'empty · archived WAL alone cannot restore the data directory'
+      const op = s.disasterRecovery.backup
+      const next = fmtDuration(Math.max(0, s.disasterRecovery.backupSchedule.nextStartAt - s.t))
+      if (op.status === 'copying') {
+        return `${op.trigger === 'schedule' ? 'daily scheduled' : 'manual'} backup-push from standby_a · ${(op.progress * 100).toFixed(0)}%`
+      }
+      if (op.status === 'waiting_wal') return `${op.trigger === 'schedule' ? 'daily scheduled' : 'manual'} backup from standby_a · copied · waiting for stop WAL`
+      if (backups.length === 0) return `daily backup-push from standby_a in ${next} · empty until then`
       const newest = backups[backups.length - 1]
-      return `${backups.length} full backup${backups.length === 1 ? '' : 's'} held · newest ${fmtDuration(s.t - newest.completedAt)} old`
+      return `${backups.length} full backup${backups.length === 1 ? '' : 's'} held · newest ${fmtDuration(s.t - newest.completedAt)} old · next daily from standby_a in ${next}`
     },
   })
 
@@ -1221,6 +1253,22 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     gateLamp[1].visible = busy && !failing
     gateLamp[2].visible = failing
     retryCrate.visible = failing
+
+    let currentSegmentFill = 0
+    for (let i = 0; i < sim.wal.segments.length; i++) {
+      const segment = sim.wal.segments[i]
+      if (segment.state !== 'current') continue
+      currentSegmentFill = segment.fill
+      break
+    }
+    const filledCells = currentSegmentFill * N_GATE_SEGMENT_CELLS
+    for (let i = 0; i < N_GATE_SEGMENT_CELLS; i++) {
+      const amount = clamp01(filledCells - i)
+      _c.setHex(COLOR.wal).multiplyScalar(0.035 + amount * 1.75)
+      gateSegmentCells.setColorAt(i, _c)
+    }
+    if (gateSegmentCells.instanceColor) gateSegmentCells.instanceColor.needsUpdate = true
+    gateSegmentClosed.visible = archive.queueSegments > 0
 
     if (prevArchived < 0) prevArchived = sim.wal.archived
     let shipped = Math.max(0, sim.wal.archived - prevArchived)

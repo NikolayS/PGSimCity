@@ -333,7 +333,7 @@ export const KNOB_META: KnobMeta[] = [
     max: 5,
     step: 1,
     unit: 'full backups',
-    hint: 'Full-backup count passed to the scheduled WAL-G delete retain FULL command. The model runs it with --confirm after each successful full backup; expired history cannot be resurrected.',
+    hint: 'Full-backup count passed to WAL-G delete retain FULL. A backup-push runs from standby_a once per 60-second teaching day, then the model runs this retention command with --confirm; expired history cannot be resurrected.',
   },
   {
     key: 'walGDownloadConcurrency',

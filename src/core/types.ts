@@ -775,12 +775,14 @@ export interface BaseBackup {
   /** Scaled compressed bytes stored in object storage. */
   objectStoreBytes: number
   durationSec: number
-  source: 'standby'
+  source: 'standby_a'
+  trigger: 'manual' | 'schedule'
   tool: 'WAL-G'
 }
 
 export interface BaseBackupOperation {
   status: BaseBackupStatus
+  trigger: 'manual' | 'schedule'
   progress: number
   startedAt: number
   startTimeline: number
@@ -791,6 +793,13 @@ export interface BaseBackupOperation {
   copiedBytes: number
   estimatedDurationSec: number
   failureReason: string
+}
+
+export interface BaseBackupSchedule {
+  /** One real day represented on the continuity quarter's teaching clock. */
+  intervalSec: number
+  /** Absolute simulated time of the next automatic backup-push attempt. */
+  nextStartAt: number
 }
 
 export type PointInTimeRestoreStatus =
@@ -841,6 +850,7 @@ export interface DisasterRecoveryState {
   backups: BaseBackup[]
   expiredBackups: number
   oldestRecoverableTime: number
+  backupSchedule: BaseBackupSchedule
   backup: BaseBackupOperation
   restore: PointInTimeRestore
 }
