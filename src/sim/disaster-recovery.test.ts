@@ -22,6 +22,44 @@ function takeBackup(sim: Sim): void {
 }
 
 describe('disaster recovery', () => {
+  it('makes the first real 16 MiB segment close and archive at shipped defaults during a visit', { timeout: 15_000 }, () => {
+    const sim = createSim(createBus())
+    const startedAt = sim.state.t
+
+    expect(sim.state.wal.segmentSize).toBe(16 * 1024 * 1024)
+    advanceUntil(sim, () => sim.state.wal.archived > 0, 6000)
+
+    const wait = sim.state.t - startedAt
+    expect(wait, `first wal-push took ${wait.toFixed(2)} simulated seconds`).toBeLessThan(60)
+  })
+
+  it('schedules one daily teaching backup from standby_a without a button press', () => {
+    const sim = createSim(createBus())
+    const schedule = sim.state.disasterRecovery.backupSchedule
+
+    expect(schedule.intervalSec).toBe(60)
+    expect(schedule.nextStartAt).toBeGreaterThan(sim.state.t)
+    advanceUntil(sim, () => sim.state.disasterRecovery.backup.status === 'copying', 60)
+
+    expect(sim.state.disasterRecovery.backup.trigger).toBe('schedule')
+    expect(sim.state.replication.standbys[0].applicationName).toBe('standby_a')
+    advanceUntil(sim, () => sim.state.disasterRecovery.backups.length === 1, 60)
+    expect(sim.state.disasterRecovery.backups[0].source).toBe('standby_a')
+  })
+
+  it('applies count retention as scheduled daily backups keep arriving', () => {
+    const sim = createSim(createBus())
+    sim.setKnob('backupRetention', 2)
+
+    advanceUntil(sim, () => sim.state.disasterRecovery.expiredBackups === 1, 240)
+
+    expect(sim.state.disasterRecovery.backups).toHaveLength(2)
+    expect(sim.state.disasterRecovery.backups.every((backup) => backup.trigger === 'schedule')).toBe(true)
+    expect(sim.state.disasterRecovery.oldestRecoverableTime)
+      .toBe(sim.state.disasterRecovery.backups[0].completedAt)
+    expect(sim.state.t - sim.state.disasterRecovery.backups[1].completedAt).toBeLessThan(2)
+  })
+
   it('models WAL-G writing backups and WAL directly to object storage', () => {
     const sim = createSim(createBus())
 

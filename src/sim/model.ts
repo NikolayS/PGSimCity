@@ -7,7 +7,7 @@
  * page when shared_buffers is too small, full-page writes really explode right
  * after a checkpoint, and an old snapshot really does stop vacuum dead.
  *
- * TWO HONEST DISTORTIONS, both deliberate:
+ * THREE HONEST DISTORTIONS, all deliberate:
  *
  *  1. BACKEND LIFECYCLE TIME IS STRETCHED for anything sub-second. A real
  *     parse is ~50µs and a real fsync is ~1ms; at 60fps you would never see
@@ -43,6 +43,12 @@
  *     in the batch past the cap is free, which is the batch controller's bug
  *     rebuilt out of a different part. Anything that samples for the animation's
  *     sake must leave the cost alone.
+ *
+ *  3. THE OPENING WAL SEGMENT IS STAGED NEAR COMPLETION. The city opens 92%
+ *     into a real 16 MiB segment, before its silent 14-second warm-up, so a
+ *     reader can watch the remaining bytes close and enter archive_command.
+ *     Only the starting LSN is staged: WAL rates, LSN deltas, segment size,
+ *     max_wal_size arithmetic, and later segment fill remain unscaled.
  * ==========================================================================*/
 
 import {
@@ -113,6 +119,8 @@ export { traceStopBit, walTriggerBytes } from '../core/model-helpers'
 
 const PAGE = 8192
 const WAL_SEG = 16 * 1024 * 1024
+const INITIAL_WAL_SEGMENT_START = 0x1a000000
+const INITIAL_WAL_LSN = INITIAL_WAL_SEGMENT_START + Math.floor(WAL_SEG * 0.92)
 /** BAS_BULKREAD: a big seq scan gets a 256 KiB ring so it cannot evict the pool. */
 const RING = 32
 const STEP_MAX = 1 / 30
@@ -140,6 +148,8 @@ const DR_BACKUP_FETCH_BYTES_PER_STREAM_SEC = 64 * MIB
 const DR_WAL_FETCH_BYTES_PER_STREAM_SEC = 4 * MIB
 /** Scaled wal-push service time for one completed 16 MiB segment. */
 export const DR_ARCHIVE_SEGMENT_SECONDS = 0.75
+/** One daily schedule interval on the continuity quarter's compressed clock. */
+export const DR_BACKUP_CADENCE_SECONDS = 60
 /** Teaching-scale pg_wal volume; production capacity is installation-specific. */
 export const DR_PG_WAL_CAPACITY_BYTES = 512 * MIB
 /** Fixed metadata/catalog allowance outside the declared heap and index pages. */
@@ -430,10 +440,13 @@ function makeExtra(): Extra {
 export interface SimOptions {
   /** Aggregate probes may trade frame resolution for fewer deterministic steps. */
   maxStep?: number
+  /** Aggregate mechanism probes may isolate themselves from the daily DR job. */
+  scheduledBackups?: boolean
 }
 
 export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi {
   const maxStep = options.maxStep ?? STEP_MAX
+  const scheduledBackups = options.scheduledBackups ?? true
   if (!isFinite(maxStep) || maxStep <= 0 || maxStep > STEP_MAX * MAX_STEPS) {
     throw new Error(`invalid simulation maxStep: ${maxStep}`)
   }
@@ -513,7 +526,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     mvcc: createRepresentativeRow(99999, def.pages > 1 ? 1 : 0),
   }))
 
-  const initialLsn = 0x1a000000
+  const initialLsn = INITIAL_WAL_LSN
   const primaryBuffers = createBufferPoolState(DEFAULT_KNOBS.sharedBuffers, 0.98)
   const standbyABuffers = createBufferPoolState(DEFAULT_KNOBS.sharedBuffers, 0.96)
   const standbyBBuffers = createBufferPoolState(DEFAULT_KNOBS.sharedBuffers, 0.96)
@@ -835,8 +848,13 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       backups: [],
       expiredBackups: 0,
       oldestRecoverableTime: 0,
+      backupSchedule: {
+        intervalSec: DR_BACKUP_CADENCE_SECONDS,
+        nextStartAt: DR_BACKUP_CADENCE_SECONDS,
+      },
       backup: {
         status: 'idle',
+        trigger: 'manual',
         progress: 0,
         startedAt: 0,
         startTimeline: 1,
@@ -1361,6 +1379,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   let archiveRetryT = 0
   let lastObservedCurrentSeg = 0
   let backupSeq = 1
+  let backupTrigger: 'manual' | 'schedule' = 'manual'
   const closedSegmentId = new Int32Array(DR_HISTORY_SLOTS)
   const closedSegmentAt = new Float64Array(DR_HISTORY_SLOTS)
   const walHistoryLsn = new Float64Array(DR_HISTORY_SLOTS)
@@ -2264,7 +2283,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       dataBytes: op.dataBytes,
       objectStoreBytes: op.objectStoreBytes,
       durationSec: duration,
-      source: 'standby',
+      source: 'standby_a',
+      trigger: op.trigger,
       tool: 'WAL-G',
     })
     backupSeq++
@@ -2290,6 +2310,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   function startBaseBackup(): boolean {
     const op = dr.backup
     if (op.status === 'copying' || op.status === 'waiting_wal') return false
+    op.trigger = backupTrigger
     if (!rep.connected || !K.replicaEnabled || K.walLevel === 'minimal') {
       failBaseBackup(
         K.walLevel === 'minimal'
@@ -2311,8 +2332,27 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     op.copiedBytes = 0
     op.estimatedDurationSec = op.dataBytes / DR_BACKUP_BYTES_PER_SEC
     op.failureReason = ''
-    toast('WAL-G backup-push started on standby_a — compressed objects stream straight to object storage', 'info', 6000)
+    if (op.trigger === 'manual') {
+      dr.backupSchedule.nextStartAt = state.t + dr.backupSchedule.intervalSec
+    }
+    toast(
+      `WAL-G ${op.trigger === 'schedule' ? 'daily scheduled ' : ''}backup-push started on standby_a — compressed objects stream straight to object storage`,
+      'info',
+      6000,
+    )
     return true
+  }
+
+  function tickBackupSchedule(): void {
+    const schedule = dr.backupSchedule
+    if (state.t < schedule.nextStartAt) return
+    do schedule.nextStartAt += schedule.intervalSec
+    while (schedule.nextStartAt <= state.t)
+    const op = dr.backup
+    if (op.status === 'copying' || op.status === 'waiting_wal') return
+    backupTrigger = 'schedule'
+    startBaseBackup()
+    backupTrigger = 'manual'
   }
 
   function rememberWalPosition(dt: number): void {
@@ -2415,6 +2455,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   function tickDisasterRecovery(dt: number): void {
     dr.dataDirectoryBytes = dataDirectoryBytes()
     rememberWalPosition(dt)
+    if (scheduledBackups) tickBackupSchedule()
 
     const backup = dr.backup
     if (backup.status === 'copying') {
@@ -6537,8 +6578,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     ha.timeline.current = 1
     ha.timeline.parent = 0
     ha.timeline.forkLsn = 0
-    ha.timeline.oldHistoryEndLsn = 0x1a000000
-    ha.timeline.newHistoryEndLsn = 0x1a000000
+    ha.timeline.oldHistoryEndLsn = INITIAL_WAL_LSN
+    ha.timeline.newHistoryEndLsn = INITIAL_WAL_LSN
     ha.transition.kind = 'none'
     ha.transition.status = 'idle'
     ha.transition.source = null
@@ -6637,7 +6678,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       standbyPool.usedCount = asSampleFrames(0)
     }
 
-    const lsn0 = 0x1a000000
+    const lsn0 = INITIAL_WAL_LSN
     wal.insertLsn = wal.writeLsn = wal.flushLsn = lsn0
     wal.bufferBytes = 0
     wal.bufferCapacity = walBufferCapacity(K.sharedBuffers)
@@ -6785,8 +6826,12 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     dr.backups.length = 0
     dr.expiredBackups = 0
     dr.oldestRecoverableTime = 0
+    dr.backupSchedule.intervalSec = DR_BACKUP_CADENCE_SECONDS
+    dr.backupSchedule.nextStartAt = DR_BACKUP_CADENCE_SECONDS
     backupSeq = 1
+    backupTrigger = 'manual'
     dr.backup.status = 'idle'
+    dr.backup.trigger = 'manual'
     dr.backup.progress = 0
     dr.backup.startedAt = 0
     dr.backup.startTimeline = 1

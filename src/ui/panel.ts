@@ -2,7 +2,7 @@ import '../styles/panel.css'
 
 import { destinationForId } from '../core/destinations'
 import type { ComponentDef, ComponentDoc, ComponentKind, DocRef, DocReferences, Knobs, SimState } from '../core/types'
-import { fmtBytes } from '../core/util'
+import { fmtBytes, fmtDuration } from '../core/util'
 import { doc, knobMeta, mdToHtml } from './content'
 import {
   SHEET_EVENT,
@@ -394,7 +394,7 @@ export function createInspector(ctx: UiContext): UiModule {
           hint,
           op.status === 'failed'
             ? op.failureReason
-            : `WAL-G reads ${fmtBytes(s.disasterRecovery.dataDirectoryBytes)} from standby_a and pushes compressed objects straight to S3 at a teaching timescale.`,
+            : `Daily backup-push reads ${fmtBytes(s.disasterRecovery.dataDirectoryBytes)} from standby_a and sends compressed objects straight to S3. One teaching day is ${fmtDuration(s.disasterRecovery.backupSchedule.intervalSec)}; next scheduled start in ${fmtDuration(Math.max(0, s.disasterRecovery.backupSchedule.nextStartAt - s.t))}.`,
         )
         return
       }

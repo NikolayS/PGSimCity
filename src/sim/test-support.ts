@@ -7,5 +7,5 @@ export const FRAME_TEST_STEP = 1 / 30
 export const AGGREGATE_TEST_STEP = 1 / 15
 
 export function createAggregateSim(maxStep = AGGREGATE_TEST_STEP): SimApi {
-  return createSim(createBus(), { maxStep })
+  return createSim(createBus(), { maxStep, scheduledBackups: false })
 }
