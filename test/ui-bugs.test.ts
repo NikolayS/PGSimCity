@@ -15,7 +15,11 @@ import { createSim } from '../src/sim/model'
 import { recordRepresentativeUpdate } from '../src/sim/mvcc'
 import { createAnatomy } from '../src/ui/anatomy'
 import { knobMeta } from '../src/ui/content'
-import { createControls, createKnobControl } from '../src/ui/controls'
+import {
+  createControls,
+  createKnobControl,
+  KNOB_PREFERENCES_STORAGE_KEY,
+} from '../src/ui/controls'
 import { createHud } from '../src/ui/hud'
 import { createHelp } from '../src/ui/help'
 import { createInspector } from '../src/ui/panel'
@@ -89,6 +93,37 @@ describe('shared_buffers control', () => {
 
     input.dispatchEvent(new Event('input'))
     expect(ctx.sim.state.knobs.sharedBuffers).toBe(2048)
+  })
+})
+
+describe('standby knob preference migration', () => {
+  it('loads old replica-prefixed values as standby A preferences', () => {
+    const dom = installTestDom()
+    dom.mount('hud-left')
+    window.localStorage.setItem(KNOB_PREFERENCES_STORAGE_KEY, JSON.stringify({
+      replicaEnabled: false,
+      replicaNetworkLag: 175,
+      replicaSlowApply: true,
+      standbyLongQuery: true,
+      synchronousStandbyNames: false,
+    }))
+    const ctx = context()
+
+    const controls = createControls(ctx)
+
+    expect(ctx.sim.state.knobs.standbyAEnabled).toBe(false)
+    expect(ctx.sim.state.knobs.standbyANetworkLag).toBe(175)
+    expect(ctx.sim.state.knobs.standbyASlowApply).toBe(true)
+    expect(ctx.sim.state.knobs.standbyALongQuery).toBe(true)
+    expect(ctx.sim.state.knobs.synchronousStandbyNames).toBe('none')
+    expect(JSON.parse(window.localStorage.getItem(KNOB_PREFERENCES_STORAGE_KEY)!)).toEqual({
+      standbyAEnabled: false,
+      standbyANetworkLag: 175,
+      standbyASlowApply: true,
+      standbyALongQuery: true,
+      synchronousStandbyNames: 'none',
+    })
+    controls.dispose()
   })
 })
 

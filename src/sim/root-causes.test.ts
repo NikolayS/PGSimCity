@@ -78,16 +78,17 @@ describe('replication state normalization', () => {
     advanceBy(sim, 5)
 
     const { replication, wal } = sim.state
-    expect(replication.connected).toBe(false)
+    const standbyA = replication.standbys[0]
+    expect(standbyA.connected).toBe(false)
     expect(replication.logicalEnabled).toBe(false)
     expect(replication.logicalChangesPerSec).toBeLessThan(0.1)
     expect(replication.logicalSlotLsn).toBe(wal.insertLsn)
-    expect(replication.sentLsn).toBe(wal.flushLsn)
-    expect(replication.writeLsn).toBe(wal.flushLsn)
-    expect(replication.flushLsn).toBe(wal.flushLsn)
-    expect(replication.replayLsn).toBe(wal.flushLsn)
-    expect(replication.lagBytes).toBe(0)
-    expect(replication.lagSec).toBe(0)
+    expect(standbyA.sentLsn).toBe(wal.flushLsn)
+    expect(standbyA.writtenLsn).toBe(wal.flushLsn)
+    expect(standbyA.flushedLsn).toBe(wal.flushLsn)
+    expect(standbyA.appliedLsn).toBe(wal.flushLsn)
+    expect(standbyA.lagBytes).toBe(0)
+    expect(standbyA.lagSec).toBe(0)
   })
 
   it('bounds pg_wal by checkpoint retention when replication is impossible', { timeout: 20_000 }, () => {
@@ -103,23 +104,23 @@ describe('replication state normalization', () => {
     )
   })
 
-  it('reports no lag and no stale replay position for an absent standby', () => {
+  it('keeps a disconnected standby at its own durable position for slot accounting', () => {
     const sim = createSim(createBus())
     sim.setKnob('tps', 300)
     sim.setKnob('writeRatio', 0.6)
     advanceBy(sim, 40)
 
-    sim.setKnob('replicaEnabled', false)
+    const standbyA = sim.state.replication.standbys[0]
+    const durableAtDisconnect = standbyA.flushedLsn
+    sim.setKnob('standbyAEnabled', false)
     advanceBy(sim, 5)
 
     const { replication, wal } = sim.state
-    expect(replication.connected).toBe(false)
-    expect(replication.sentLsn).toBe(wal.flushLsn)
-    expect(replication.writeLsn).toBe(wal.flushLsn)
-    expect(replication.flushLsn).toBe(wal.flushLsn)
-    expect(replication.replayLsn).toBe(wal.flushLsn)
-    expect(replication.lagBytes).toBe(0)
-    expect(replication.lagSec).toBe(0)
+    expect(standbyA.connected).toBe(false)
+    expect(standbyA.flushedLsn).toBe(durableAtDisconnect)
+    expect(wal.flushLsn).toBeGreaterThan(durableAtDisconnect)
+    expect(replication.physicalSlots[0].active).toBe(false)
+    expect(replication.physicalSlots[0].retainedBytes).toBeGreaterThan(0)
   })
 
   it('keeps the docs and PostgreSQL projections empty when replication cannot exist', () => {
@@ -377,7 +378,7 @@ describe('replication timing units', () => {
     const until = sim.state.t + seconds
     while (sim.state.t < until) {
       sim.update(Math.min(AGGREGATE_TEST_STEP, until - sim.state.t))
-      total += sim.state.replication.lagSec
+      total += sim.state.replication.standbys[0].lagSec
       samples++
     }
     return total / samples
@@ -388,14 +389,14 @@ describe('replication timing units', () => {
     sim.setKnob('tps', 300)
     sim.setKnob('writeRatio', 0.6)
     sim.setKnob('autovacuum', false)
-    sim.setKnob('replicaNetworkLag', 400)
+    sim.setKnob('standbyANetworkLag', 400)
     advanceBy(sim, 300)
 
     const stretched = meanReplayLag(sim, 60)
     expect(stretched).toBeGreaterThan(0.35)
     expect(stretched).toBeLessThan(0.6)
 
-    sim.setKnob('replicaNetworkLag', 0)
+    sim.setKnob('standbyANetworkLag', 0)
     advanceBy(sim, 300)
     expect(meanReplayLag(sim, 60)).toBeLessThan(0.05)
   })
@@ -407,7 +408,7 @@ describe('synchronous_commit guarantees', () => {
     sim.setKnob('tps', 300)
     sim.setKnob('writeRatio', 0.6)
     sim.setKnob('autovacuum', false)
-    sim.setKnob('replicaNetworkLag', 50)
+    sim.setKnob('standbyANetworkLag', 50)
     sim.setKnob('synchronousCommit', mode)
     advanceBy(sim, 10)
 
@@ -496,9 +497,9 @@ describe('checkpoint_timeout full-page-image amortisation', () => {
 describe('hot_standby_feedback gating', () => {
   it('cannot pin xmin without a connected standby', () => {
     const sim = createSim(createBus())
-    sim.setKnob('replicaEnabled', false)
+    sim.setKnob('standbyAEnabled', false)
     advanceBy(sim, 1)
-    sim.setKnob('standbyLongQuery', true)
+    sim.setKnob('standbyALongQuery', true)
 
     advanceBy(sim, 30)
 
@@ -507,11 +508,11 @@ describe('hot_standby_feedback gating', () => {
 
   it('releases xmin when the standby disconnects while feedback is active', () => {
     const sim = createSim(createBus())
-    sim.setKnob('standbyLongQuery', true)
+    sim.setKnob('standbyALongQuery', true)
     advanceBy(sim, 10)
     expect(sim.state.oldestSnapshotAge).toBeGreaterThan(9)
 
-    sim.setKnob('replicaEnabled', false)
+    sim.setKnob('standbyAEnabled', false)
     advanceBy(sim, 1)
 
     expect(sim.state.oldestSnapshotAge).toBeLessThanOrEqual(2)

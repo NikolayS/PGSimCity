@@ -7,7 +7,7 @@ import { createSim } from '../sim/model'
 import { SCENARIOS } from '../sim/scenarios'
 import { createCollector } from './collector'
 import type { Collector } from './collector'
-import { ALL_STEPS, NODES, SYMPTOMS } from './paths'
+import { ALL_STEPS, ALL_VERDICTS, NODES, SYMPTOMS } from './paths'
 import { PROJECTIONS, PROJECTION_SOURCES } from './views'
 
 const INTENDED_VERDICT = {
@@ -143,6 +143,24 @@ describe('diagnostic path contracts', () => {
     if (!step || step.kind !== 'step') return
     expect(step.branches.find((branch) => branch.next === 'v.replay')?.test(sim.state, collector)).toBe(true)
     expect(step.branches.find((branch) => branch.next === 'v.rep_ok')?.test(sim.state, collector)).toBe(false)
+  })
+
+  it('reports baseline health from the worst connected standby beside the two-row grid', () => {
+    const sim = createSim(createBus())
+    const collector = createCollector(sim)
+    const [standbyA, standbyB] = sim.state.replication.standbys
+    standbyA.lagBytes = 0
+    standbyA.lagSec = 0
+    standbyB.lagBytes = 17 * 1024 * 1024
+    standbyB.lagSec = 4.25
+    const baseline = ALL_VERDICTS.find((verdict) => verdict.id === 'v.baseline')
+
+    const evidence = baseline?.evidence(sim.state, collector)
+    const grid = PROJECTIONS.replication(sim.state, collector, 'total')
+
+    expect(grid.rows.find((row) => row.key === 'standbyB')?.cells.behind).toMatchObject({ v: '17.0 MiB' })
+    expect(evidence?.find((item) => item.label === 'worst connected standby')?.value).toBe('standby_b')
+    expect(evidence?.find((item) => item.label === 'model replay delay')?.value).toBe('4.25 s')
   })
 
   it('stages a genuinely healthy cache reading for the baseline lesson', () => {

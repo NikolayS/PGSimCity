@@ -23,7 +23,7 @@ function warmLag(sim: ReturnType<typeof createSim>, networkLagMs: number): void 
   sim.setKnob('tps', 2_000)
   sim.setKnob('writeRatio', 1)
   sim.setKnob('synchronousCommit', 'local')
-  sim.setKnob('replicaNetworkLag', networkLagMs)
+  sim.setKnob('standbyANetworkLag', networkLagMs)
   advanceBy(sim, 35)
 }
 
@@ -67,7 +67,7 @@ describe('Patroni switchover and failover', () => {
     sim.setKnob('synchronousCommit', 'on')
     advanceBy(sim, 15)
 
-    sim.setKnob('replicaEnabled', false)
+    sim.setKnob('standbyAEnabled', false)
     advanceBy(sim, 8)
     const commitsAfterDrain = sim.state.stats.commits
     advanceBy(sim, 10)
@@ -89,7 +89,7 @@ describe('Patroni switchover and failover', () => {
     expect.soft(waiters).toHaveLength(sim.state.maxConnections)
     expect.soft(waitEvents).toContain('SyncRep')
 
-    sim.setKnob('synchronousStandbyNames', false)
+    sim.setKnob('synchronousStandbyNames', 'none')
     advanceBy(sim, 8)
     expect(sim.state.stats.commits).toBeGreaterThan(commitsAfterDrain)
   })
@@ -225,7 +225,7 @@ describe('Patroni switchover and failover', () => {
     const sim = createSim(createBus())
     sim.setKnob('tps', 2_000)
     sim.setKnob('writeRatio', 1)
-    sim.setKnob('replicaNetworkLag', 400)
+    sim.setKnob('standbyANetworkLag', 400)
     sim.setKnob('synchronousCommit', 'on')
     advanceBy(sim, 35)
 

@@ -309,18 +309,18 @@ describe('continuity and three-node projection', () => {
     expect(syncStandbyB?.visible).toBe(false)
     expect(syncStandbyNone?.visible).toBe(false)
 
-    sim.setKnob('synchronousStandbyNames', false)
+    sim.setKnob('synchronousStandbyNames', 'none')
     continuity.update(1 / 30, sim.state, sim.state.t)
     expect(syncStandbyA?.visible).toBe(false)
     expect(syncStandbyB?.visible).toBe(false)
     expect(syncStandbyNone?.visible).toBe(true)
-    sim.setKnob('synchronousStandbyNames', true)
+    sim.setKnob('synchronousStandbyNames', 'standbyA')
     continuity.update(1 / 30, sim.state, sim.state.t)
 
     sim.setKnob('synchronousCommit', 'local')
     sim.setKnob('tps', 2_000)
     sim.setKnob('writeRatio', 1)
-    sim.setKnob('replicaNetworkLag', 400)
+    sim.setKnob('standbyANetworkLag', 400)
     for (let i = 0; i < 1_050; i++) sim.update(1 / 30)
     expect(sim.startFailover()).toBe(true)
     for (let i = 0; i < 300; i++) {

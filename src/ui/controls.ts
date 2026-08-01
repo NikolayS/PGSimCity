@@ -43,10 +43,100 @@ type LooseSetter = (key: keyof Knobs, value: KnobValue, source?: 'user') => void
 
 export function applyKnob(sim: SimApi, key: keyof Knobs, value: KnobValue): void {
   ;(sim.setKnob as unknown as LooseSetter)(key, value, 'user')
+  persistKnobPreference(sim, key)
 }
 
 export function readKnob(sim: SimApi, key: keyof Knobs): KnobValue {
   return sim.state.knobs[key]
+}
+
+/* ---------------------------------------------------------------------------
+ * Knob preferences. The three replica* keys shipped before standby_b existed;
+ * canonical keys win if a record contains both during a rolling upgrade.
+ * -------------------------------------------------------------------------*/
+
+export const KNOB_PREFERENCES_STORAGE_KEY = 'pgsimcity.knobs'
+
+const LEGACY_KNOB_KEYS = {
+  replicaEnabled: 'standbyAEnabled',
+  replicaNetworkLag: 'standbyANetworkLag',
+  replicaSlowApply: 'standbyASlowApply',
+  standbyLongQuery: 'standbyALongQuery',
+} as const satisfies Record<string, keyof Knobs>
+
+type StoredKnobs = Partial<Record<keyof Knobs, KnobValue>>
+
+function readStoredKnobs(): Record<string, unknown> {
+  try {
+    const raw = window.localStorage.getItem(KNOB_PREFERENCES_STORAGE_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as unknown
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {}
+  } catch {
+    return {}
+  }
+}
+
+function validStoredValue(meta: KnobMeta, value: unknown): value is KnobValue {
+  const fallback = DEFAULT_KNOBS[meta.key]
+  if (typeof value !== typeof fallback) return false
+  if (typeof value === 'number') return Number.isFinite(value)
+  if (meta.kind === 'select') {
+    return meta.options?.some((option) => option.value === value) ?? false
+  }
+  return true
+}
+
+function normalizedStoredKnobs(raw: Record<string, unknown>): StoredKnobs {
+  const migrated = { ...raw }
+  for (const [oldKey, newKey] of Object.entries(LEGACY_KNOB_KEYS)) {
+    if (!Object.hasOwn(migrated, newKey) && Object.hasOwn(migrated, oldKey)) {
+      migrated[newKey] = migrated[oldKey]
+    }
+    delete migrated[oldKey]
+  }
+  if (typeof migrated.synchronousStandbyNames === 'boolean') {
+    migrated.synchronousStandbyNames = migrated.synchronousStandbyNames
+      ? 'standbyA'
+      : 'none'
+  }
+
+  const stored: StoredKnobs = {}
+  for (const meta of KNOB_META) {
+    const value = migrated[meta.key]
+    if (validStoredValue(meta, value) && value !== DEFAULT_KNOBS[meta.key]) {
+      stored[meta.key] = value
+    }
+  }
+  return stored
+}
+
+function writeStoredKnobs(stored: StoredKnobs): void {
+  try {
+    window.localStorage.setItem(KNOB_PREFERENCES_STORAGE_KEY, JSON.stringify(stored))
+  } catch {
+    /* storage unavailable — controls still affect the live model */
+  }
+}
+
+export function loadKnobPreferences(sim: SimApi): void {
+  const stored = normalizedStoredKnobs(readStoredKnobs())
+  const set = sim.setKnob as unknown as LooseSetter
+  for (const meta of KNOB_META) {
+    const value = stored[meta.key]
+    if (value !== undefined) set(meta.key, value)
+  }
+  writeStoredKnobs(stored)
+}
+
+function persistKnobPreference(sim: SimApi, key: keyof Knobs): void {
+  const stored = normalizedStoredKnobs(readStoredKnobs())
+  const value = sim.state.knobs[key]
+  if (value === DEFAULT_KNOBS[key]) delete stored[key]
+  else stored[key] = value
+  writeStoredKnobs(stored)
 }
 
 /* ---------------------------------------------------------------------------
@@ -412,6 +502,8 @@ export function createControls(ctx: UiContext): UiModule {
     console.warn('[PGSimCity] #hud-left is missing — the console has nowhere to live')
     return { update() {}, dispose() {} }
   }
+
+  loadKnobPreferences(ctx.sim)
 
   const host = el('div', { class: 'pgc-host pgc-host--left' })
   const looseBus = ctx.bus as unknown as {

@@ -61,6 +61,7 @@ import {
 } from '../core/types'
 import { N_TABLES, TABLES } from '../core/catalog'
 import { traceStopBit, walTriggerBytes } from '../core/model-helpers'
+import { configuredSynchronousStandby } from '../core/replication'
 import { rid } from '../core/route-ids'
 import type {
   BackendSim,
@@ -116,6 +117,19 @@ export { traceStopBit, walTriggerBytes } from '../core/model-helpers'
 /* --------------------------------------------------------------------------
  * Constants
  * ------------------------------------------------------------------------*/
+
+const PHYSICAL_STANDBY_KNOBS = [
+  {
+    enabled: 'standbyAEnabled',
+    networkLag: 'standbyANetworkLag',
+    slowApply: 'standbyASlowApply',
+  },
+  {
+    enabled: 'standbyBEnabled',
+    networkLag: 'standbyBNetworkLag',
+    slowApply: 'standbyBSlowApply',
+  },
+] as const
 
 const PAGE = 8192
 const WAL_SEG = 16 * 1024 * 1024
@@ -549,7 +563,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     appliedLsn: initialLsn,
     lagBytes: 0,
     lagSec: 0,
-    networkLagMs: DEFAULT_KNOBS.replicaNetworkLag,
+    networkLagMs: DEFAULT_KNOBS.standbyANetworkLag,
     applyActivity: 0,
     inFlight: 0,
     walSender: 'streaming',
@@ -652,21 +666,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     },
     tables,
     replication: {
-      enabled: true,
-      connected: true,
-      mode: 'async',
-      sentLsn: initialLsn,
-      writeLsn: initialLsn,
-      flushLsn: initialLsn,
-      replayLsn: initialLsn,
-      lagBytes: 0,
-      lagSec: 0,
-      networkLagMs: DEFAULT_KNOBS.replicaNetworkLag,
-      applyActivity: 0,
       logicalEnabled: false,
       logicalSlotLsn: initialLsn,
       logicalChangesPerSec: 0,
-      inFlight: 0,
       standbys: [standbyA, standbyB],
       physicalSlots: [standbyASlot, standbyBSlot],
     },
@@ -1408,12 +1410,12 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   let horizonXid = state.xid
   let horizonT = 0
 
-  const standbyFeedbackActive = (): boolean =>
-    K.standbyLongQuery
-    && K.replicaEnabled
-    && rep.enabled
-    && rep.connected
-    && K.walLevel !== 'minimal'
+  const standbyFeedbackActive = (): boolean => {
+    if (K.walLevel === 'minimal') return false
+    const [standbyA, standbyB] = rep.standbys
+    return (K.standbyALongQuery && standbyA.enabled && standbyA.connected)
+      || (K.standbyBLongQuery && standbyB.enabled && standbyB.connected)
+  }
 
   const horizonPinRequested = (): boolean =>
     K.longRunningXact || standbyFeedbackActive()
@@ -2309,9 +2311,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
   function startBaseBackup(): boolean {
     const op = dr.backup
+    const standbyA = rep.standbys[0]
     if (op.status === 'copying' || op.status === 'waiting_wal') return false
     op.trigger = backupTrigger
-    if (!rep.connected || !K.replicaEnabled || K.walLevel === 'minimal') {
+    if (!standbyA.connected || !standbyA.enabled || K.walLevel === 'minimal') {
       failBaseBackup(
         K.walLevel === 'minimal'
           ? 'Full backup refused: wal_level=minimal cannot support the required archive recovery chain'
@@ -2459,7 +2462,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
     const backup = dr.backup
     if (backup.status === 'copying') {
-      if (!rep.connected) {
+      if (!rep.standbys[0].connected) {
         failBaseBackup('Full backup failed: standby_a disconnected while WAL-G was reading its data directory')
       } else {
         backup.copiedBytes = Math.min(
@@ -3393,9 +3396,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   const ioRoutes = ['replica.io', 'replicaB.io'] as const
 
   function synchronousStandby(): PhysicalStandbyState {
-    return ha.currentLeader === 'standbyA'
-      ? rep.standbys[1]
-      : rep.standbys[0]
+    return configuredSynchronousStandby(state) ?? rep.standbys[0]
   }
 
   function resetPhysicalRuntime(runtime: RuntimePhysicalReplication, lsn: number): void {
@@ -3453,12 +3454,13 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   function tickPhysicalStandby(index: 0 | 1, dt: number): void {
     const standby = rep.standbys[index]
     const runtime = physicalRuntime[index]
-    const enabled = index === 0 ? K.replicaEnabled : K.standbyBEnabled
-    const slowApply = index === 0 ? K.replicaSlowApply : K.standbyBSlowApply
-    const networkLagMs = index === 0 ? K.replicaNetworkLag : K.standbyBNetworkLag
+    const knobKeys = PHYSICAL_STANDBY_KNOBS[index]
+    const enabled = K[knobKeys.enabled]
+    const slowApply = K[knobKeys.slowApply]
+    const networkLagMs = K[knobKeys.networkLag]
     /* Patroni moves the synchronous role to the remaining follower after a
      * promotion; synchronous_commit still controls each transaction's wait. */
-    const sync = K.synchronousStandbyNames && synchronousStandby() === standby
+    const sync = configuredSynchronousStandby(state) === standby
 
     standby.enabled = enabled
     standby.networkLagMs = networkLagMs
@@ -3579,7 +3581,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
      * Small rolling gaps keep the three positions legible under sustained
      * traffic; an idle stream still converges exactly. */
     const receiveBusy = standby.receivedLsn < standby.sentLsn || wal.bytesPerSec > 64 * 1024
-    const displayGap = index === 0 ? 0 : 32 * 1024
+    const displayGap = 0
     const writeLimit = receiveBusy
       ? Math.max(standby.writtenLsn, standby.receivedLsn - displayGap)
       : standby.receivedLsn
@@ -3750,39 +3752,11 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     ha.timeline.newHistoryEndLsn = wal.insertLsn
   }
 
-  function syncLegacyReplication(): void {
-    const first = rep.standbys[0]
-    rep.enabled = first.enabled
-    rep.connected = first.connected
-    rep.mode = first.mode
-    rep.networkLagMs = first.networkLagMs
-    rep.applyActivity = first.applyActivity
-    rep.inFlight = first.inFlight
-    if (first.enabled && first.connected && K.walLevel !== 'minimal') {
-      rep.sentLsn = first.sentLsn
-      rep.writeLsn = first.writtenLsn
-      rep.flushLsn = first.flushedLsn
-      rep.replayLsn = first.appliedLsn
-      rep.lagBytes = first.lagBytes
-      rep.lagSec = first.lagSec
-    } else {
-      /* Existing single-standby surfaces historically use zero/primary when
-       * absent. Canonical frozen positions remain in standbys[0] and its slot. */
-      rep.sentLsn = rep.writeLsn = rep.flushLsn = rep.replayLsn = wal.flushLsn
-      rep.lagBytes = 0
-      rep.lagSec = 0
-    }
-  }
-
   function tickReplication(dt: number): void {
     tickPhysicalStandby(0, dt)
     tickPhysicalStandby(1, dt)
-    syncLegacyReplication()
 
-    rep.logicalEnabled =
-      K.walLevel === 'logical'
-      && rep.standbys[0].enabled
-      && rep.standbys[0].connected
+    rep.logicalEnabled = K.walLevel === 'logical'
     if (rep.logicalEnabled) {
       rep.logicalSlotLsn = Math.floor(
         Math.min(
@@ -5622,7 +5596,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
             done = b.stateT >= 0.012
           } else if (
             (sc === 'remote_write' || sc === 'on' || sc === 'remote_apply')
-            && K.synchronousStandbyNames
+            && K.synchronousStandbyNames !== 'none'
           ) {
             const syncStandby = synchronousStandby()
             const acknowledged = sc === 'remote_write'
@@ -5679,7 +5653,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   function commitWaitEstimate(): number {
     const fsync = Math.max(0.09, flushDur) * 1.5
     const syncStandby = synchronousStandby()
-    const remoteWait = K.synchronousStandbyNames
+    const remoteWait = K.synchronousStandbyNames !== 'none'
       ? syncStandby.connected
         ? (syncStandby.networkLagMs * 2) / 1000
         : 9999
@@ -5695,7 +5669,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         return fsync + remoteWait
       case 'remote_apply':
         return fsync + remoteWait + (
-          K.synchronousStandbyNames ? REPLICA_APPLY_ACK_DELAY : 0
+          K.synchronousStandbyNames !== 'none' ? REPLICA_APPLY_ACK_DELAY : 0
         )
     }
   }
@@ -6326,8 +6300,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         ckpt.nextInSec += K.checkpointTimeout - previousCheckpointTimeout
         break
       case 'longRunningXact':
-      case 'standbyLongQuery':
-        if (key === 'standbyLongQuery' && K.standbyLongQuery && !standbyFeedbackActive()) {
+      case 'standbyALongQuery':
+      case 'standbyBLongQuery':
+        if (key !== 'longRunningXact' && K[key] && !standbyFeedbackActive()) {
           toast('hot_standby_feedback needs a connected standby — there is none', 'warn', 5000)
         }
         syncHorizonPin()
@@ -6335,14 +6310,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       case 'lockContention':
         if (!K.lockContention) releaseLock()
         break
-      case 'replicaEnabled':
+      case 'standbyAEnabled':
       case 'standbyBEnabled':
       case 'walLevel':
-        rep.logicalEnabled =
-          K.walLevel === 'logical'
-          && K.replicaEnabled
-          && rep.enabled
-          && rep.connected
+        rep.logicalEnabled = K.walLevel === 'logical'
         syncHorizonPin()
         break
       case 'fullPageWrites':
@@ -6358,7 +6329,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
           (K.synchronousCommit === 'remote_write'
             || K.synchronousCommit === 'on'
             || K.synchronousCommit === 'remote_apply')
-          && K.synchronousStandbyNames
+          && K.synchronousStandbyNames !== 'none'
           && !synchronousStandby().connected
         ) {
           toast('commits will wait until the named synchronous standby returns or synchronous_standby_names is cleared and reloaded', 'warn', 7000)
@@ -6366,10 +6337,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         break
       case 'synchronousStandbyNames':
         toast(
-          K.synchronousStandbyNames
-            ? 'synchronous_standby_names loaded — remote commit durability now reduces availability'
+          K.synchronousStandbyNames !== 'none'
+            ? `synchronous_standby_names loaded with ${synchronousStandby().applicationName} — remote commit durability now reduces availability`
             : 'synchronous_standby_names cleared and reloaded — SyncRep waiters released with local durability only',
-          K.synchronousStandbyNames ? 'warn' : 'good',
+          K.synchronousStandbyNames !== 'none' ? 'warn' : 'good',
           7000,
         )
         break
@@ -6846,7 +6817,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
     for (let i = 0 as 0 | 1; i < 2; i = (i + 1) as 0 | 1) {
       const standby = rep.standbys[i]
-      const enabled = i === 0 ? K.replicaEnabled : K.standbyBEnabled
+      const knobKeys = PHYSICAL_STANDBY_KNOBS[i]
+      const enabled = K[knobKeys.enabled]
       standby.enabled = enabled
       standby.connected = enabled
       standby.mode = 'async'
@@ -6854,7 +6826,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       standby.flushedLsn = standby.appliedLsn = lsn0
       standby.lagBytes = 0
       standby.lagSec = 0
-      standby.networkLagMs = i === 0 ? K.replicaNetworkLag : K.standbyBNetworkLag
+      standby.networkLagMs = K[knobKeys.networkLag]
       standby.applyActivity = 0
       standby.inFlight = 0
       standby.walSender = enabled ? 'streaming' : 'stopped'
@@ -6870,8 +6842,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       slot.retainedBytes = 0
       resetPhysicalRuntime(physicalRuntime[i], lsn0)
     }
-    syncLegacyReplication()
-    rep.logicalEnabled = K.walLevel === 'logical' && rep.enabled && rep.connected
+    rep.logicalEnabled = K.walLevel === 'logical'
     rep.logicalSlotLsn = lsn0
     rep.logicalChangesPerSec = 0
     lagSampleHead = 0

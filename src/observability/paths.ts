@@ -18,6 +18,7 @@
 
 import { poolBytes, SHARED_BUFFERS_FULL_SAMPLE_MIB, SHARED_BUFFERS_MIN_MIB } from '../core/types'
 import type { Knobs, SimState } from '../core/types'
+import { configuredSynchronousStandby, worstConnectedStandbyLag } from '../core/replication'
 import { fmtBytes } from '../core/util'
 import type { Collector } from './collector'
 import type { Subsystem } from './catalog'
@@ -216,10 +217,6 @@ function worstSenderStandby(s: SimState) {
   )[0]
 }
 
-function worstLagStandby(s: SimState) {
-  return replicationRows(s).sort((a, b) => b.lagBytes - a.lagBytes)[0]
-}
-
 export function forcedShare(c: Collector): number {
   const t = c.total.ckptTimed + c.total.ckptRequested
   return t > 0 ? c.total.ckptRequested / t : 0
@@ -382,8 +379,15 @@ const KB = {
     choices: ['off', 'local', 'remote_write', 'on', 'remote_apply'],
     help: 'A per-session setting. Money commits with remote_apply; telemetry commits with off.',
   },
-  replicaSlowApply: {
-    key: 'replicaSlowApply',
+  synchronousStandbyNames: {
+    key: 'synchronousStandbyNames',
+    guc: 'synchronous_standby_names',
+    kind: 'choice',
+    choices: ['none', 'standbyA', 'standbyB'],
+    help: 'Selects the named synchronous follower. none releases SyncRep waiters and gives up remote durability.',
+  },
+  standbyASlowApply: {
+    key: 'standbyASlowApply',
     guc: 'a standby that cannot keep up',
     kind: 'toggle',
     help: 'Replay is single-threaded. This models a standby whose one redo process cannot keep up.',
@@ -394,8 +398,8 @@ const KB = {
     kind: 'toggle',
     help: 'Replay is independent per standby. This controls the lagging standby_b row.',
   },
-  replicaNetworkLag: {
-    key: 'replicaNetworkLag',
+  standbyANetworkLag: {
+    key: 'standbyANetworkLag',
     guc: 'network one-way delay',
     kind: 'range',
     min: 0,
@@ -849,8 +853,8 @@ SELECT w.*, b.state AS blocker_state,
     note:
       'The name of the local flush wait changed. PostgreSQL 17 started generating the wait event list from a table and normalised the capitalisation on the way through, so this event is `WALSync` on 16 and older and `WalSync` from 17 on. A monitoring query that greps for the old spelling on a new server matches nothing at all, and reports a healthy zero while doing it.',
     branches: [
-      { label: 'They are waiting on `IPC / SyncRep`.', source: 'activity.rows', next: 'v.sync_remote', test: (s) => s.knobs.synchronousStandbyNames && (s.knobs.synchronousCommit === 'remote_write' || s.knobs.synchronousCommit === 'on' || s.knobs.synchronousCommit === 'remote_apply') && waits(s).commit > 0 },
-      { label: 'They are waiting on `IO / WalSync`.', source: 'activity.rows', next: 'v.sync_local', test: (s) => (!s.knobs.synchronousStandbyNames || s.knobs.synchronousCommit === 'local' || s.knobs.synchronousCommit === 'off') && waits(s).commit > 0 },
+      { label: 'They are waiting on `IPC / SyncRep`.', source: 'activity.rows', next: 'v.sync_remote', test: (s) => s.knobs.synchronousStandbyNames !== 'none' && (s.knobs.synchronousCommit === 'remote_write' || s.knobs.synchronousCommit === 'on' || s.knobs.synchronousCommit === 'remote_apply') && waits(s).commit > 0 },
+      { label: 'They are waiting on `IO / WalSync`.', source: 'activity.rows', next: 'v.sync_local', test: (s) => (s.knobs.synchronousStandbyNames === 'none' || s.knobs.synchronousCommit === 'local' || s.knobs.synchronousCommit === 'off') && waits(s).commit > 0 },
       { label: 'Nobody is waiting to commit.', source: 'activity.rows', next: 'v.commit_ok', test: (s) => waits(s).commit === 0 },
     ],
   },
@@ -1304,7 +1308,7 @@ const VERDICTS: Verdict[] = [
     },
     fix:
       'Reduce the WAL the primary produces, or accept the lag and route reads that need currency to the primary. Track pg_current_wal_lsn() minus replay_lsn in bytes and alert on it. And set max_slot_wal_keep_size, because a slot for a standby that falls far enough behind will otherwise consume the primary\'s whole volume.',
-    knobs: [KB.replicaSlowApply, KB.standbyBSlowApply, KB.replicaNetworkLag, KB.standbyBNetworkLag],
+    knobs: [KB.standbyASlowApply, KB.standbyBSlowApply, KB.standbyANetworkLag, KB.standbyBNetworkLag],
     confirm: {
       projection: 'replication',
       instrument: 'pg_stat_replication',
@@ -1344,7 +1348,7 @@ const VERDICTS: Verdict[] = [
       ]
     },
     fix: 'Inspect the walsender and link together. Fix sender scheduling or WAL-read constraints when they are responsible; fix link throughput or congestion when the transport is responsible. Use byte-rate evidence rather than latency alone.',
-    knobs: [KB.replicaNetworkLag, KB.standbyBNetworkLag],
+    knobs: [KB.standbyANetworkLag, KB.standbyBNetworkLag],
     confirm: {
       projection: 'replication',
       instrument: 'pg_stat_replication',
@@ -1374,7 +1378,7 @@ const VERDICTS: Verdict[] = [
     mechanism:
       'This is what healthy looks like, and it is worth knowing precisely, because the failure mode is silent. Nothing errors when a replica falls behind: it keeps answering queries, with older data.',
     evidence: (s) => {
-      const standby = worstLagStandby(s)
+      const standby = worstConnectedStandbyLag(s)
       if (!standby) return [{ label: 'pg_stat_replication', value: 'no connected rows', tone: 'crit' }]
       return [
         { label: 'worst standby', value: standby.applicationName, tone: 'ok' },
@@ -1385,7 +1389,7 @@ const VERDICTS: Verdict[] = [
     },
     fix:
       'Set up the alert while it is healthy. Check pg_replication_slots for ownership, restart_lsn, wal_status and safe_wal_size; inactive permanent slots retain WAL by default, while configured timeout or max_slot_wal_keep_size can invalidate them.',
-    knobs: [KB.replicaSlowApply, KB.standbyBSlowApply],
+    knobs: [KB.standbyASlowApply, KB.standbyBSlowApply],
     city: 'walsender',
     reading: [DOC('warm-standby.html', 'Log-Shipping Standby Servers')],
   },
@@ -1479,24 +1483,31 @@ const VERDICTS: Verdict[] = [
       'The wait is `IPC / SyncRep`, not `IO / WalSync`. It includes a network round trip and the acknowledgement selected by synchronous_commit: standby write for remote_write, durable standby flush for on, or replay for remote_apply.',
     mechanism:
       'This is the one everybody gets wrong in the other direction: synchronous_commit = on guarantees a **local** flush only. If the primary\'s disk survives but the machine does not, the standby may never have seen that commit. Synchronous replication requires synchronous_standby_names, and once you have it, every commit costs a full round trip.',
-    evidence: (s) => [
-      { label: 'synchronous_commit', value: s.knobs.synchronousCommit, tone: 'warn' },
-      { label: 'waiting to commit', value: String(waits(s).commit), tone: 'warn' },
-      { label: 'one-way delay', value: `${s.replication.networkLagMs} ms` },
-      { label: 'model replay delay', value: `${s.replication.lagSec.toFixed(2)} s` },
-    ],
+    evidence: (s) => {
+      const standby = configuredSynchronousStandby(s)
+      return [
+        { label: 'synchronous_commit', value: s.knobs.synchronousCommit, tone: 'warn' },
+        { label: 'waiting to commit', value: String(waits(s).commit), tone: 'warn' },
+        { label: 'synchronous standby', value: standby?.applicationName ?? 'none' },
+        { label: 'one-way delay', value: standby ? `${standby.networkLagMs} ms` : '—' },
+        { label: 'model replay delay', value: standby ? `${standby.lagSec.toFixed(2)} s` : '—' },
+      ]
+    },
     fix:
       'Confirm the guarantee you meant to buy. remote_write is cheaper but does not survive standby operating-system or power failure; on waits for its durable flush; remote_apply also waits for visibility. Measure commit latency and the selected standby stage directly. If remote durability is not required, local avoids the round trip.',
-    knobs: [KB.synchronousCommit, KB.replicaNetworkLag],
+    knobs: [KB.synchronousCommit, KB.synchronousStandbyNames, KB.standbyANetworkLag, KB.standbyBNetworkLag],
     confirm: {
       projection: 'wal_lsn',
       instrument: 'pg_current_wal_lsn',
       sql: `SELECT pg_current_wal_insert_lsn(), pg_current_wal_lsn(), pg_current_wal_flush_lsn();`,
     },
-    resolved: (s) => ({
-      ok: waits(s).commit === 0,
-      reading: `synchronous_commit = ${s.knobs.synchronousCommit} at ${s.replication.networkLagMs} ms one way · ${waits(s).commit} backend${waits(s).commit === 1 ? '' : 's'} still waiting for the standby`,
-    }),
+    resolved: (s) => {
+      const standby = configuredSynchronousStandby(s)
+      return {
+        ok: waits(s).commit === 0,
+        reading: `synchronous_commit = ${s.knobs.synchronousCommit} with ${standby?.applicationName ?? 'no synchronous standby'}${standby ? ` at ${standby.networkLagMs} ms one way` : ''} · ${waits(s).commit} backend${waits(s).commit === 1 ? '' : 's'} still waiting for the standby`,
+      }
+    },
     city: 'walsender',
     reading: [DOC('runtime-config-replication.html', 'Replication settings')],
   },
@@ -1526,12 +1537,16 @@ const VERDICTS: Verdict[] = [
       'You have read the four views that between them describe a working PostgreSQL server: the workload, the sessions, the write path, and the copy of your data.',
     mechanism:
       'These views mix cumulative counters, current states, gauges and interval estimates. Counters become rates through two samples and a subtraction; current pg_stat_activity state and replication positions are read as snapshots; lag intervals have their own documented semantics. Classify a value before comparing it over time.',
-    evidence: (s, c) => [
-      { label: 'tps', value: s.stats.tps.toFixed(0), tone: 'ok' },
-      { label: 'cache hit', value: `${s.stats.cacheHitPct.toFixed(1)}%`, tone: 'ok' },
-      { label: 'requested checkpoints', value: `${(forcedShare(c) * 100).toFixed(0)}%`, tone: 'ok' },
-      { label: 'model replay delay', value: `${s.replication.lagSec.toFixed(2)} s`, tone: 'ok' },
-    ],
+    evidence: (s, c) => {
+      const standby = worstConnectedStandbyLag(s)
+      return [
+        { label: 'tps', value: s.stats.tps.toFixed(0), tone: 'ok' },
+        { label: 'cache hit', value: `${s.stats.cacheHitPct.toFixed(1)}%`, tone: 'ok' },
+        { label: 'requested checkpoints', value: `${(forcedShare(c) * 100).toFixed(0)}%`, tone: 'ok' },
+        { label: 'worst connected standby', value: standby?.applicationName ?? 'none' },
+        { label: 'model replay delay', value: standby ? `${standby.lagSec.toFixed(2)} s` : '—', tone: 'ok' },
+      ]
+    },
     fix:
       'Pick any other complaint on the left. Each one puts this same server into a state that produces that symptom, and walks you to the column that proves it. The numbers you just learned are the ones that will look wrong.',
     knobs: [KB.tps, KB.sharedBuffers],

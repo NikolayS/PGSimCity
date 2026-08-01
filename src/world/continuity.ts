@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { COLOR, mixHex } from '../core/theme'
+import { configuredSynchronousStandby } from '../core/replication'
 import type { SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, damp, fmtBytes, fmtDuration, fmtLsn } from '../core/util'
 import { ANCHOR, CONTINUITY } from './layout'
@@ -1419,11 +1420,10 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     /* --- 5. Patroni lease, endpoint, roles, and pg_rewind ----------------*/
     const ha = sim.highAvailability
     const leader = ha.currentLeader
-    syncStandbyAPlate.visible = sim.knobs.synchronousStandbyNames
-      && leader !== 'standbyA'
-    syncStandbyBPlate.visible = sim.knobs.synchronousStandbyNames
-      && leader === 'standbyA'
-    syncStandbyNonePlate.visible = !sim.knobs.synchronousStandbyNames
+    const synchronous = configuredSynchronousStandby(sim)
+    syncStandbyAPlate.visible = synchronous?.nodeId === 'standbyA'
+    syncStandbyBPlate.visible = synchronous?.nodeId === 'standbyB'
+    syncStandbyNonePlate.visible = synchronous === undefined
     epArrow.visible = leader !== null
     if (leader) {
       let targetX: number = ANCHOR.postmaster[0]

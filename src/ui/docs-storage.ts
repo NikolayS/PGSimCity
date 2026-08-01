@@ -1,5 +1,6 @@
 import { poolBytes } from '../core/types'
 import type { BookRef, CheckpointPhase, ComponentDoc, DocRef, SimState, TableSim, VacPhase, WalSegment } from '../core/types'
+import { configuredSynchronousStandby, physicalStandby } from '../core/replication'
 import { clamp, fmtBytes, fmtDuration, fmtLsn, fmtNum, fmtPct } from '../core/util'
 
 /* ============================================================================
@@ -25,10 +26,7 @@ function sumTables(s: SimState, pick: (t: TableSim) => number): number {
 
 const ratio = (a: number, b: number): number => (b > 0 ? a / b : 0)
 
-const synchronousStandby = (s: SimState) =>
-  s.highAvailability.currentLeader === 'standbyA'
-    ? s.replication.standbys[1]
-    : s.replication.standbys[0]
+const standbyA = (s: SimState) => physicalStandby(s.replication, 'standbyA')
 
 /** Bytes currently sitting in pg_wal. */
 const walDirBytes = (s: SimState): number => s.wal.segmentCount * s.wal.segmentSize
@@ -553,7 +551,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
           `${s.highAvailability.transition.lossBytes.toLocaleString()} bytes · ${fmtNum(s.highAvailability.transition.lossTransactions)} tx`,
       },
     ],
-    knobs: ['haPartition', 'replicaNetworkLag', 'tps', 'writeRatio'],
+    knobs: ['haPartition', 'standbyANetworkLag', 'tps', 'writeRatio'],
     actions: ['start-switchover', 'trigger-failover'],
     see: ['timeline.yard', 'ha.endpoint', 'ha.rejoin', 'replica.standby'],
     refs: {
@@ -907,7 +905,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         get: (s) => fmtNum(s.replication.standbys[0].inFlight + s.replication.standbys[1].inFlight),
       },
     ],
-    knobs: ['replicaEnabled', 'standbyBEnabled', 'replicaNetworkLag', 'standbyBNetworkLag', 'synchronousCommit', 'walLevel'],
+    knobs: ['standbyAEnabled', 'standbyBEnabled', 'standbyANetworkLag', 'standbyBNetworkLag', 'synchronousCommit', 'walLevel'],
     see: ['net.wire', 'walreceiver', 'standby.b.receiver', 'wal.vault', 'logical.decoder'],
     source: ['src/backend/replication/walsender.c', 'src/backend/replication/slot.c'],
     refs: {
@@ -1945,13 +1943,20 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     metrics: [
       {
         label: 'Mode',
-        get: (s) => s.knobs.synchronousStandbyNames
-          ? synchronousStandby(s).connected
+        get: (s) => s.knobs.synchronousStandbyNames !== 'none'
+          ? configuredSynchronousStandby(s)?.connected
             ? 'synchronous'
             : 'synchronous · waiting for standby'
           : 'asynchronous · names empty',
       },
-      { label: 'Network latency', get: (s) => `${fmtNum(synchronousStandby(s).networkLagMs)} ms`, hint: 'one way to the active synchronous follower' },
+      {
+        label: 'Network latency',
+        get: (s) => {
+          const standby = configuredSynchronousStandby(s)
+          return standby ? `${fmtNum(standby.networkLagMs)} ms` : '—'
+        },
+        hint: 'one way to the configured synchronous follower',
+      },
       {
         label: 'Configured round-trip floor',
         get: (s) => {
@@ -1960,26 +1965,33 @@ export const DOCS_STORAGE: ComponentDoc[] = [
             (s.knobs.synchronousCommit === 'remote_write'
               || s.knobs.synchronousCommit === 'on'
               || s.knobs.synchronousCommit === 'remote_apply')
-            && s.knobs.synchronousStandbyNames
+            && s.knobs.synchronousStandbyNames !== 'none'
           ) {
-            return synchronousStandby(s).connected
-              ? `${fmtNum(synchronousStandby(s).networkLagMs * 2)} ms per commit`
+            const standby = configuredSynchronousStandby(s)
+            return standby?.connected
+              ? `${fmtNum(standby.networkLagMs * 2)} ms per commit`
               : 'unbounded · IPC / SyncRep'
           }
           return 'none — local flush only'
         },
         hint: 'input-derived teaching figure; not measured statement latency',
       },
-      { label: 'In flight', get: (s) => fmtNum(s.replication.inFlight), hint: 'WAL records on the wire' },
+      {
+        label: 'In flight',
+        get: (s) => fmtNum(configuredSynchronousStandby(s)?.inFlight ?? 0),
+        hint: 'WAL records on the configured synchronous follower’s wire',
+      },
       {
         label: 'Lag',
-        get: (s) =>
-          !s.replication.enabled || !s.replication.connected
+        get: (s) => {
+          const standby = configuredSynchronousStandby(s)
+          return !standby?.enabled || !standby.connected
             ? '—'
-            : `${fmtBytes(s.replication.lagBytes)} · ${fmtDuration(s.replication.lagSec)}`,
+            : `${fmtBytes(standby.lagBytes)} · ${fmtDuration(standby.lagSec)}`
+        },
       },
     ],
-    knobs: ['synchronousCommit', 'synchronousStandbyNames', 'replicaNetworkLag', 'replicaEnabled', 'replicaSlowApply'],
+    knobs: ['synchronousCommit', 'synchronousStandbyNames', 'standbyAEnabled', 'standbyANetworkLag', 'standbyASlowApply', 'standbyBEnabled', 'standbyBNetworkLag', 'standbyBSlowApply'],
     see: ['walsender', 'walreceiver', 'replica.standby', 'walwriter'],
     source: ['src/backend/replication/walsender.c', 'src/backend/replication/walreceiver.c'],
     refs: {
@@ -2023,17 +2035,17 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
     ],
     metrics: [
-      { label: 'Link', get: (s) => (s.replication.connected ? 'streaming' : s.replication.enabled ? 'reconnecting' : 'no standby') },
+      { label: 'Link', get: (s) => (standbyA(s).connected ? 'streaming' : standbyA(s).enabled ? 'reconnecting' : 'no standby') },
       { label: 'Received', get: (s) => fmtLsn(s.replication.standbys[0].receivedLsn) },
-      { label: 'Written', get: (s) => fmtLsn(s.replication.writeLsn) },
-      { label: 'Flushed', get: (s) => fmtLsn(s.replication.flushLsn), hint: 'durable on the standby — what synchronous_commit=on waits for, once this standby is in synchronous_standby_names' },
+      { label: 'Written', get: (s) => fmtLsn(standbyA(s).writtenLsn) },
+      { label: 'Flushed', get: (s) => fmtLsn(standbyA(s).flushedLsn), hint: 'durable on the standby — what synchronous_commit=on waits for, once this standby is in synchronous_standby_names' },
       {
         label: 'Not yet applied',
-        get: (s) => fmtBytes(Math.max(0, s.replication.flushLsn - s.replication.replayLsn)),
+        get: (s) => fmtBytes(Math.max(0, standbyA(s).flushedLsn - standbyA(s).appliedLsn)),
         hint: 'modeled visibility frontier; no standby query results are executed',
       },
     ],
-    knobs: ['replicaEnabled', 'replicaNetworkLag', 'replicaSlowApply', 'synchronousCommit'],
+    knobs: ['standbyAEnabled', 'standbyANetworkLag', 'standbyASlowApply', 'synchronousCommit'],
     see: ['startup.proc', 'walsender', 'net.wire', 'replica.storage'],
     source: ['src/backend/replication/walreceiver.c'],
     refs: {
@@ -2074,15 +2086,15 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
     ],
     metrics: [
-      { label: 'Replay LSN', get: (s) => fmtLsn(s.replication.replayLsn) },
+      { label: 'Replay LSN', get: (s) => fmtLsn(standbyA(s).appliedLsn) },
       {
         label: 'Behind by',
         get: (s) =>
-          !s.replication.enabled || !s.replication.connected
+          !standbyA(s).enabled || !standbyA(s).connected
             ? '—'
-            : `${fmtBytes(s.replication.lagBytes)} · ${fmtDuration(s.replication.lagSec)}`,
+            : `${fmtBytes(standbyA(s).lagBytes)} · ${fmtDuration(standbyA(s).lagSec)}`,
       },
-      { label: 'Replay activity', get: (s) => fmtPct(s.replication.applyActivity, 0) },
+      { label: 'Replay activity', get: (s) => fmtPct(standbyA(s).applyActivity, 0) },
       {
         label: 'Crash recovery from',
         get: (s) =>
@@ -2090,7 +2102,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         hint: 'how much the primary would have to replay right now',
       },
     ],
-    knobs: ['replicaSlowApply', 'replicaEnabled', 'checkpointTimeout', 'maxWalSize'],
+    knobs: ['standbyASlowApply', 'standbyAEnabled', 'checkpointTimeout', 'maxWalSize'],
     see: ['walreceiver', 'checkpointer', 'replica.standby', 'object.store'],
     source: ['src/backend/postmaster/startup.c', 'src/backend/access/transam/xlog.c'],
     refs: {
@@ -2135,13 +2147,13 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
     ],
     metrics: [
-      { label: 'State', get: (s) => (!s.replication.enabled ? 'no standby' : s.replication.connected ? `streaming (${s.replication.mode})` : 'disconnected') },
-      { label: 'sent → write', get: (s) => fmtBytes(Math.max(0, s.replication.sentLsn - s.replication.writeLsn)), hint: 'network' },
-      { label: 'write → flush', get: (s) => fmtBytes(Math.max(0, s.replication.writeLsn - s.replication.flushLsn)), hint: 'standby disk' },
-      { label: 'flush → replay', get: (s) => fmtBytes(Math.max(0, s.replication.flushLsn - s.replication.replayLsn)), hint: 'replay speed' },
-      { label: 'Model replay delay', get: (s) => (!s.replication.enabled || !s.replication.connected ? '—' : fmtDuration(s.replication.lagSec)), hint: 'simulation gauge; not pg_stat_replication.replay_lag' },
+      { label: 'State', get: (s) => (!standbyA(s).enabled ? 'no standby' : standbyA(s).connected ? `streaming (${standbyA(s).mode})` : 'disconnected') },
+      { label: 'sent → write', get: (s) => fmtBytes(Math.max(0, standbyA(s).sentLsn - standbyA(s).writtenLsn)), hint: 'network' },
+      { label: 'write → flush', get: (s) => fmtBytes(Math.max(0, standbyA(s).writtenLsn - standbyA(s).flushedLsn)), hint: 'standby disk' },
+      { label: 'flush → replay', get: (s) => fmtBytes(Math.max(0, standbyA(s).flushedLsn - standbyA(s).appliedLsn)), hint: 'replay speed' },
+      { label: 'Model replay delay', get: (s) => (!standbyA(s).enabled || !standbyA(s).connected ? '—' : fmtDuration(standbyA(s).lagSec)), hint: 'simulation gauge; not pg_stat_replication.replay_lag' },
     ],
-    knobs: ['replicaEnabled', 'replicaSlowApply', 'replicaNetworkLag', 'synchronousCommit'],
+    knobs: ['standbyAEnabled', 'standbyASlowApply', 'standbyANetworkLag', 'synchronousCommit'],
     see: ['startup.proc', 'replica.client', 'walsender', 'replica.buffers'],
     source: [
       'src/backend/postmaster/startup.c',
@@ -2186,16 +2198,16 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
     ],
     metrics: [
-      { label: 'Replay activity', get: (s) => fmtPct(s.replication.applyActivity, 0), hint: 'what is warming this cache' },
-      { label: 'Replayed to', get: (s) => fmtLsn(s.replication.replayLsn) },
+      { label: 'Replay activity', get: (s) => fmtPct(standbyA(s).applyActivity, 0), hint: 'what is warming this cache' },
+      { label: 'Replayed to', get: (s) => fmtLsn(standbyA(s).appliedLsn) },
       {
         label: 'Primary hit ratio',
         get: (s) => fmtPct(s.buffers.hitRatio, 1),
         hint: 'shown for contrast — the standby cache holds a different set of pages',
       },
-      { label: 'Standby', get: (s) => (s.replication.enabled ? (s.replication.connected ? 'online' : 'disconnected') : 'not running') },
+      { label: 'Standby', get: (s) => (standbyA(s).enabled ? (standbyA(s).connected ? 'online' : 'disconnected') : 'not running') },
     ],
-    knobs: ['replicaEnabled', 'replicaSlowApply', 'sharedBuffers'],
+    knobs: ['standbyAEnabled', 'standbyASlowApply', 'sharedBuffers'],
     see: ['replica.standby', 'startup.proc', 'os.cache', 'checkpointer'],
     source: ['src/backend/storage/buffer/bufmgr.c', 'src/backend/storage/buffer/freelist.c'],
     refs: {
@@ -2240,12 +2252,12 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
     ],
     metrics: [
-      { label: 'Replayed to', get: (s) => fmtLsn(s.replication.replayLsn) },
+      { label: 'Replayed to', get: (s) => fmtLsn(standbyA(s).appliedLsn) },
       { label: 'Primary at', get: (s) => fmtLsn(s.wal.insertLsn) },
-      { label: 'Divergence', get: (s) => fmtBytes(Math.max(0, s.wal.insertLsn - s.replication.replayLsn)), hint: 'how stale the copy is right now' },
+      { label: 'Divergence', get: (s) => fmtBytes(Math.max(0, s.wal.insertLsn - standbyA(s).appliedLsn)), hint: 'how stale the copy is right now' },
       { label: 'Aggregate size projection', get: (s) => fmtBytes(sumTables(s, (t) => t.pages) * PAGE), hint: 'primary relation-size estimate; no replica files are stored' },
     ],
-    knobs: ['replicaEnabled', 'replicaSlowApply', 'replicaNetworkLag'],
+    knobs: ['standbyAEnabled', 'standbyASlowApply', 'standbyANetworkLag'],
     see: ['storage.datadir', 'replica.standby', 'walreceiver', 'object.store'],
     source: ['src/backend/storage/smgr/md.c', 'src/backend/postmaster/startup.c'],
     refs: {
@@ -2301,7 +2313,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         hint: 'the linearizable DCS leader key, not this local observation, authorizes writes',
       },
     ],
-    knobs: ['standbyBEnabled', 'standbyBNetworkLag', 'standbyBSlowApply'],
+    knobs: ['standbyBEnabled', 'standbyBNetworkLag', 'standbyBSlowApply', 'standbyBLongQuery'],
     see: ['standby.b.receiver', 'standby.b.wal', 'standby.b.startup', 'standby.b.buffers', 'standby.b.storage', 'replica.standby'],
     source: [
       'src/backend/replication/walsender.c',
@@ -2476,13 +2488,13 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
     ],
     metrics: [
-      { label: 'Standby route', get: (s) => (s.replication.enabled ? (s.replication.connected ? 'illustrative reads active' : 'offline') : 'not running'), hint: 'no replica query results are modeled' },
+      { label: 'Standby route', get: (s) => (standbyA(s).enabled ? (standbyA(s).connected ? 'illustrative reads active' : 'offline') : 'not running'), hint: 'no replica query results are modeled' },
       {
         label: 'Staleness',
         get: (s) =>
-          !s.replication.enabled || !s.replication.connected
+          !standbyA(s).enabled || !standbyA(s).connected
             ? '—'
-            : `${fmtDuration(s.replication.lagSec)} · ${fmtBytes(s.replication.lagBytes)}`,
+            : `${fmtDuration(standbyA(s).lagSec)} · ${fmtBytes(standbyA(s).lagBytes)}`,
       },
       {
         label: 'Vacuum horizon held',
@@ -2494,7 +2506,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         get: (s) => fmtNum(sumTables(s, (t) => t.deadTuples)),
       },
     ],
-    knobs: ['replicaEnabled', 'replicaSlowApply', 'standbyLongQuery', 'seqScanRatio'],
+    knobs: ['standbyAEnabled', 'standbyASlowApply', 'standbyALongQuery', 'seqScanRatio'],
     see: ['replica.standby', 'autovac.worker', 'net.wire', 'replica.buffers'],
     source: ['src/backend/storage/ipc/procarray.c', 'src/backend/replication/walsender.c'],
     refs: {
@@ -2552,7 +2564,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         hint: 'model estimate from a collapsed slot position; query restart_lsn for real retained WAL',
       },
     ],
-    knobs: ['walLevel', 'writeRatio', 'updateRatio', 'replicaNetworkLag'],
+    knobs: ['walLevel', 'writeRatio', 'updateRatio', 'standbyANetworkLag'],
     see: ['logical.decoder', 'walsender', 'replica.standby', 'wal.vault'],
     source: [
       'src/backend/replication/logical/decode.c',

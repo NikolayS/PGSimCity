@@ -15,6 +15,7 @@
 
 import { PG_PAGE_BYTES, poolBytes, poolPages } from '../core/types'
 import type { BackendSim, PhysicalStandbyState, SimState, TableSim, VacPhase } from '../core/types'
+import { configuredSynchronousStandby } from '../core/replication'
 import { N_TABLES } from '../world/layout'
 import { fmtBytes, fmtLsn, fmtNum } from '../core/util'
 import type { Collector } from './collector'
@@ -136,12 +137,10 @@ interface ActRow {
  * post into a monitoring query that then silently matches nothing.
  */
 function actOf(b: BackendSim, s: SimState): { state: string; wet: string; we: string; tone: Tone } {
-  const syncStandby = s.highAvailability.currentLeader === 'standbyA'
-    ? s.replication.standbys[1]
-    : s.replication.standbys[0]
+  const syncStandby = configuredSynchronousStandby(s)
   const syncRep =
-    syncStandby.mode === 'sync'
-    && s.knobs.synchronousStandbyNames
+    syncStandby?.mode === 'sync'
+    && s.knobs.synchronousStandbyNames !== 'none'
     && (s.knobs.synchronousCommit === 'remote_write'
       || s.knobs.synchronousCommit === 'on'
       || s.knobs.synchronousCommit === 'remote_apply')

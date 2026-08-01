@@ -1197,7 +1197,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     labelAt: [breakAt.x, breakAt.y + 11, breakAt.z],
     color: COLOR.replication,
     readout: (s: SimState) => {
-      const r = s.replication
+      const r = s.replication.standbys[0]
       if (!r.connected) return 'link down — nothing is being streamed'
       return `${r.networkLagMs.toFixed(0)} ms one way · ${r.inFlight} packet${r.inFlight === 1 ? '' : 's'} in flight`
     },
@@ -1215,9 +1215,9 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     labelAt: [RX, 24, RZ],
     color: COLOR.replication,
     readout: (s: SimState) => {
-      const r = s.replication
+      const r = s.replication.standbys[0]
       if (!r.connected) return 'disconnected'
-      return `receiving ${fmtBytes(recvRate)}/s · write ${fmtLsn(r.writeLsn)} · flush ${fmtLsn(r.flushLsn)}`
+      return `receiving ${fmtBytes(recvRate)}/s · write ${fmtLsn(r.writtenLsn)} · flush ${fmtLsn(r.flushedLsn)}`
     },
   })
 
@@ -1232,10 +1232,12 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     focus: { target: [SX, 9, 246], distance: 72, dir: [-0.58, 0.42, 0.7] },
     labelAt: [SX, 22, 246],
     color: COLOR.replication,
-    readout: (s: SimState) =>
-      `replay ${fmtLsn(s.replication.replayLsn)} · ${fmtBytes(applyRate)}/s · waiting ${fmtBytes(
-        Math.max(0, s.replication.flushLsn - s.replication.replayLsn),
-      )}`,
+    readout: (s: SimState) => {
+      const standbyA = s.replication.standbys[0]
+      return `replay ${fmtLsn(standbyA.appliedLsn)} · ${fmtBytes(applyRate)}/s · waiting ${fmtBytes(
+        Math.max(0, standbyA.flushedLsn - standbyA.appliedLsn),
+      )}`
+    },
   })
 
   ctx.register({
@@ -1306,13 +1308,14 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     labelAt: [RC[0], 13, RC[2]],
     color: COLOR.client,
     readout: (s: SimState) => {
-      if (!s.replication.enabled || !s.replication.connected) {
+      const standbyA = s.replication.standbys[0]
+      if (!standbyA.enabled || !standbyA.connected) {
         return 'no standby — reads unavailable'
       }
-      const pin = s.knobs.standbyLongQuery
+      const pin = s.knobs.standbyALongQuery
       return pin
         ? `illustrative read pins primary xmin ${s.xminHorizon} through feedback`
-        : `visibility frontier ${fmtLsn(s.replication.replayLsn)} · no replica query results modeled`
+        : `visibility frontier ${fmtLsn(standbyA.appliedLsn)} · no replica query results modeled`
     },
   })
 
@@ -1369,7 +1372,8 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     if (prevT < 0) prevT = t
     const dts = clamp(t - prevT, 0, 0.25) // simulated dt — freezes when paused
     prevT = t
-    const rep = sim.replication
+    const replication = sim.replication
+    const rep = replication.standbys[0]
     const wal = sim.wal
     const connected = rep.enabled && rep.connected
     link = damp(link, connected ? 1 : 0, 4, dt)
@@ -1465,14 +1469,14 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     for (let i = 0; i < N_BUSH; i++) bushGlow.setColorAt(i, _c)
     bushGlow.instanceColor!.needsUpdate = true
 
-    if (prevWrite < 0) prevWrite = rep.writeLsn
-    const dWrite = rep.writeLsn - prevWrite
-    prevWrite = rep.writeLsn
+    if (prevWrite < 0) prevWrite = rep.writtenLsn
+    const dWrite = rep.writtenLsn - prevWrite
+    prevWrite = rep.writtenLsn
     if (dts > 0) recvRate = damp(recvRate, dWrite / dts, 2.5, dt)
 
     // Gauge A: arrived but not yet fsynced on the standby. Gauge B: durable.
-    const unflushed = clamp01((rep.writeLsn - rep.flushLsn) / (2 * MB))
-    const behindPrimary = clamp01((wal.flushLsn - rep.flushLsn) / Math.max(1, scaleSpan))
+    const unflushed = clamp01((rep.writtenLsn - rep.flushedLsn) / (2 * MB))
+    const behindPrimary = clamp01((wal.flushLsn - rep.flushedLsn) / Math.max(1, scaleSpan))
     const gwH = Math.max(0.06, unflushed * RG_H)
     setTRS(recvNeon, IX_GW, RX - 4, RG_Y0 + gwH / 2, RZ + 8.06, 4.2, gwH, 0.32)
     const gfH = Math.max(0.06, (1 - behindPrimary) * RG_H * link)
@@ -1496,10 +1500,10 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     // The standby's own segments fill and roll over as WAL arrives.
     {
       const segSize = wal.segmentSize
-      const cur = Math.floor(rep.writeLsn / segSize)
+      const cur = Math.floor(rep.writtenLsn / segSize)
       for (let i = 0; i < N_RSEG; i++) {
         const seg = cur - (N_RSEG - 1 - i)
-        const fill = seg === cur ? (rep.writeLsn % segSize) / segSize : 1
+        const fill = seg === cur ? (rep.writtenLsn % segSize) / segSize : 1
         const h = Math.max(0.2, fill * 4.4)
         setTRS(recvSegs, i, RX + 20, 2.2 + h / 2, RZ - 9 + i * 6, 6.4, h, 3.6)
         _c.setHex(seg === cur ? COLOR.wal : COLOR.walDim).multiplyScalar(link * (seg === cur ? 1.2 : 0.5))
@@ -1511,9 +1515,9 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
 
     /* --- 3. startup process --------------------------------------------- */
 
-    if (prevReplay < 0) prevReplay = rep.replayLsn
-    const dReplay = rep.replayLsn - prevReplay
-    prevReplay = rep.replayLsn
+    if (prevReplay < 0) prevReplay = rep.appliedLsn
+    const dReplay = rep.appliedLsn - prevReplay
+    prevReplay = rep.appliedLsn
     if (dts > 0) applyRate = damp(applyRate, dReplay / dts, 2.5, dt)
     if (dReplay > 0) applyFlash = 1
     applyFlash = Math.max(0, applyFlash - dt * 4.2)
@@ -1534,7 +1538,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
 
     // The queue. This is the whole lesson: when the primary produces WAL
     // faster than one process applies it, the backlog is physical.
-    const waiting = Math.max(0, rep.flushLsn - rep.replayLsn)
+    const waiting = Math.max(0, rep.flushedLsn - rep.appliedLsn)
     queueLevel = damp(queueLevel, clamp01(waiting / (12 * MB)), 3, dt)
     const qN = Math.round(queueLevel * N_QUEUE)
     for (let i = 0; i < N_QUEUE; i++) {
@@ -1545,7 +1549,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     queue.instanceColor!.needsUpdate = true
 
     // The gate narrows when replay cannot keep up: the cap made visible.
-    const slow = sim.knobs.replicaSlowApply ? 1 : 0
+    const slow = sim.knobs.standbyASlowApply ? 1 : 0
     const gateW = lerp(1, 0.42, slow)
     gateGroup.scale.set(gateW, 1, 1)
     gateGroup.position.x = SX * (1 - gateW)
@@ -1627,13 +1631,13 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     /* --- the ruler ------------------------------------------------------ */
 
     const ref = Math.max(wal.flushLsn, rep.sentLsn)
-    const worst = Math.max(ref - rep.replayLsn, 64 * 1024)
+    const worst = Math.max(ref - rep.appliedLsn, 64 * 1024)
     scaleSpan = damp(scaleSpan, Math.max(1.5 * MB, worst * 1.25), 1.2, dt)
 
     const zSent = rulerZ(rep.sentLsn, ref)
-    const zWrite = rulerZ(rep.writeLsn, ref)
-    const zFlush = rulerZ(rep.flushLsn, ref)
-    const zReplay = rulerZ(rep.replayLsn, ref)
+    const zWrite = rulerZ(rep.writtenLsn, ref)
+    const zFlush = rulerZ(rep.flushedLsn, ref)
+    const zReplay = rulerZ(rep.appliedLsn, ref)
     _carZ[0] = zSent; _carZ[1] = zWrite; _carZ[2] = zFlush; _carZ[3] = zReplay; _carZ[4] = RULER_Z1
     for (let i = 0; i < 5; i++) {
       setTRS(carriages, i, RULER_X, RULER_Y - 0.2, _carZ[i], 2.6, 2.6, 1.0)
@@ -1659,7 +1663,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
 
     // This has its own trigger. A primary-side long transaction and a standby
     // snapshot may pin the same horizon, but they are not the same cause.
-    const pinning = sim.knobs.standbyLongQuery && connected
+    const pinning = sim.knobs.standbyALongQuery && connected
     feedback = damp(feedback, pinning ? 1 : 0, 3, dt)
 
     // The terminal itself: lit while there is something to read, dim when the
@@ -1691,8 +1695,8 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
 
     /* --- 6. subscriber --------------------------------------------------- */
 
-    subBeat = damp(subBeat, rep.logicalEnabled ? 1 : 0, 3.5, dt)
-    const changes = rep.logicalEnabled ? clamp01(rep.logicalChangesPerSec / 220) : 0
+    subBeat = damp(subBeat, replication.logicalEnabled ? 1 : 0, 3.5, dt)
+    const changes = replication.logicalEnabled ? clamp01(replication.logicalChangesPerSec / 220) : 0
     for (let i = 0; i < N_BIN; i++) {
       const ph = (t * 1.3 + i * 0.31) % 1
       const flick = 0.3 + 0.7 * Math.abs(Math.sin(ph * Math.PI))
@@ -1722,8 +1726,8 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
       text.setColor(TX_FEEDBACK, COLOR.vacuum, 0.06 + feedback * 1.1)
       text.setColor(TX_SUBOFF, COLOR.warn, 0.1 + (1 - subBeat) * 0.8)
       text.set(TX_LAT, `${rep.networkLagMs.toFixed(0)} ms · ${rep.inFlight} in flight`)
-      text.set(TX_WRITE, fmtLsn(rep.writeLsn))
-      text.set(TX_FLUSH, fmtLsn(rep.flushLsn))
+      text.set(TX_WRITE, fmtLsn(rep.writtenLsn))
+      text.set(TX_FLUSH, fmtLsn(rep.flushedLsn))
       text.set(TX_APPLY, `${fmtBytes(applyRate)}/s`)
       text.set(TX_QUEUE, waiting > 64 * 1024 ? `${fmtBytes(waiting)} queued` : '')
       text.setColor(TX_QUEUE, COLOR.warn, 0.6 + queueLevel * 0.9)
@@ -1731,7 +1735,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
       text.setColor(TX_LAG, connected ? (lagBad > 0.6 ? COLOR.warn : COLOR.replication) : COLOR.warn, 1.1)
       text.set(TX_LAGB, connected ? `${rep.lagSec.toFixed(1)} s behind · apply ${fmtBytes(applyRate)}/s` : 'the wire is down')
       text.set(TX_SCALE, `scale: 0 … ${fmtBytes(scaleSpan)} behind`)
-      _lsn[0] = rep.sentLsn; _lsn[1] = rep.writeLsn; _lsn[2] = rep.flushLsn; _lsn[3] = rep.replayLsn
+      _lsn[0] = rep.sentLsn; _lsn[1] = rep.writtenLsn; _lsn[2] = rep.flushedLsn; _lsn[3] = rep.appliedLsn
       for (let i = 0; i < 4; i++) {
         const behind = Math.max(0, ref - _lsn[i])
         text.set(TX_ROW[i], `${CAR_NAME[i].padEnd(7)}${fmtLsn(_lsn[i])}  -${fmtBytes(behind)}`)
@@ -1739,7 +1743,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
       text.set(TX_LAGBAR, `replication lag = primary flush − replay = ${fmtBytes(rep.lagBytes)}`)
       text.set(
         TX_RCLIENT,
-        connected ? `sees ${fmtLsn(rep.replayLsn)}` : 'stale — no replay',
+        connected ? `sees ${fmtLsn(rep.appliedLsn)}` : 'stale — no replay',
       )
       text.set(
         TX_FEEDBACK,
@@ -1747,7 +1751,9 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
       )
       text.set(
         TX_SUB,
-        rep.logicalEnabled ? `${rep.logicalChangesPerSec.toFixed(0)} derived changes/s · no rows` : 'illustrative route inactive',
+        replication.logicalEnabled
+          ? `${replication.logicalChangesPerSec.toFixed(0)} derived changes/s · no rows`
+          : 'illustrative route inactive',
       )
     }
   }

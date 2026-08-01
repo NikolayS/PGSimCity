@@ -379,7 +379,7 @@ export function createInspector(ctx: UiContext): UiModule {
       if (action === 'start-full-backup') {
         const op = s.disasterRecovery.backup
         const active = op.status === 'copying' || op.status === 'waiting_wal'
-        button.disabled = active || !s.replication.connected || s.knobs.walLevel === 'minimal'
+        button.disabled = active || !s.replication.standbys[0].connected || s.knobs.walLevel === 'minimal'
         setText(
           button,
           op.status === 'copying'

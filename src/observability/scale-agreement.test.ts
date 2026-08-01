@@ -176,13 +176,11 @@ describe('cross-surface scale agreement', () => {
   it('renders replication lag from the same byte and time values', () => {
     const sim = createSim(createBus())
     const standby = sim.state.replication.standbys[0]
-    sim.state.replication.lagBytes = 1_234_567
-    sim.state.replication.lagSec = 3.25
-    standby.lagBytes = sim.state.replication.lagBytes
-    standby.lagSec = sim.state.replication.lagSec
+    standby.lagBytes = 1_234_567
+    standby.lagSec = 3.25
     standby.appliedLsn = sim.state.wal.writeLsn - standby.lagBytes
     const collector = createCollector(sim)
-    const bytes = fmtBytes(sim.state.replication.lagBytes)
+    const bytes = fmtBytes(standby.lagBytes)
     const replication = PROJECTIONS.replication(sim.state, collector, 'total')
 
     expect(metric('net.wire', 'Lag', sim.state)).toContain(bytes)

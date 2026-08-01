@@ -377,10 +377,16 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       { label: 'Children', get: (s) => `${fmtNum(nz(s.stats?.activeBackends))} backends` },
       { label: 'Slots', get: (s) => `${fmtNum(nz(s.stats?.activeBackends))} / ${fmtNum(nz(s.maxConnections))}` },
       { label: 'Autovacuum', get: (s) => (s.autovac?.enabled ? 'launcher running' : 'off'), hint: 'the launcher is a postmaster child' },
-      { label: 'Standby', get: (s) => (s.replication?.connected ? 'streaming' : s.replication?.enabled ? 'disconnected' : 'none') },
+      {
+        label: 'Standby A',
+        get: (s) => {
+          const standbyA = s.replication.standbys[0]
+          return standbyA.connected ? 'streaming' : standbyA.enabled ? 'disconnected' : 'none'
+        },
+      },
       { label: 'Uptime', get: (s) => fmtDuration(nz(s.t)) },
     ],
-    knobs: ['tps', 'autovacuum', 'replicaEnabled'],
+    knobs: ['tps', 'autovacuum', 'standbyAEnabled'],
     see: ['conn.gate', 'backend.row', 'shmem.deck', 'world.ground'],
     source: ['src/backend/postmaster/postmaster.c'],
     refs: {

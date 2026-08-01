@@ -45,9 +45,9 @@ count is therefore **23 `CORRECT`, 0 `WRONG`, 0 `MISSING`**.
 | 12 | `walLevel` | `WRONG` | **CORRECT** | `replication state normalization` verifies that `minimal` removes impossible physical and logical replication state and bounds retained WAL. |
 | 13 | `fullPageWrites` | `WRONG` | **CORRECT** | `autovacuum cost balance` verifies visible full-page-image WAL without the former large throughput reward. |
 | 14 | `autovacuum` | `WRONG` | **CORRECT** | `autovacuum cost balance` and `paces vacuum heap scans instead of discounting their I/O` verify subordinate WAL/I/O and a real pace limit. |
-| 18 | `replicaEnabled` | `WRONG` | **CORRECT** | `replication state normalization` verifies zero lag and no stale replay position when the standby is absent. |
-| 19 | `replicaNetworkLag` | `WRONG` | **CORRECT** | `replication timing units` verifies real seconds in `replay_lag` while packet motion remains visually stretched. |
-| 21 | `standbyLongQuery` | `WRONG` | **CORRECT** | `hot_standby_feedback gating` verifies that no disconnected standby can pin xmin and that disconnect releases an existing pin. |
+| 18 | `standbyAEnabled` | `WRONG` | **CORRECT** | `replication state normalization` verifies that a disconnected standby freezes at its own durable position while its inactive physical slot retains new WAL. |
+| 19 | `standbyANetworkLag` | `WRONG` | **CORRECT** | `replication timing units` verifies real seconds in `replay_lag` while packet motion remains visually stretched. |
+| 21 | `standbyALongQuery` | `WRONG` | **CORRECT** | `hot_standby_feedback gating` verifies that no disconnected standby can pin xmin and that disconnect releases an existing pin. |
 
 The audit's separate RC-5 finding is also fixed: `wal_buffers auto-tuning`
 verifies `shared_buffers / 32` with PostgreSQL's 64 KiB floor and one-segment
@@ -78,10 +78,10 @@ evidence; they are not the current verdicts.
 | 15 | `autovacuumScaleFactor` | `autovacuum_vacuum_scale_factor` | **CORRECT** | Steady-state dead tuples 211k / 312k / 552k and 10 / 8 / 3 runs at 0.01 / 0.02 / 0.5. Formula matches PostgreSQL's. |
 | 16 | `longRunningXact` | an open snapshot | **CORRECT** | Horizon freezes, `oldestSnapshotAge` → 300 s, bloat climbs, release recovers within 300 s, relation size correctly does not shrink. |
 | 17 | `lockContention` | `ACCESS EXCLUSIVE` lock | **CORRECT** | 15 backends blocked, 12 wait edges, throughput → 0; clears completely on release. |
-| 18 | `replicaEnabled` | a streaming standby | **WRONG** | With the standby off, `replay_lag` climbs to 300 s, `lagBytes` to 1.6 GiB and "WAL held by the slot" to 1.6 GiB — all for a standby that is gone. |
-| 19 | `replicaNetworkLag` | network RTT to the standby | **WRONG** | A 400 ms one-way delay is reported as 2.605 s of `replay_lag`. Fixed undisclosed 6× factor, against a documented 100× stretch. |
-| 20 | `replicaSlowApply` | standby apply bottleneck | **CORRECT** | Lag 0.37 s → 168.5 s → 0.43 s; flush/replay gap opens and closes. |
-| 21 | `standbyLongQuery` | `hot_standby_feedback` | **WRONG** | Pins the primary's xmin horizon with `replicaEnabled = false` **and** `wal_level = minimal` — feedback from a standby that cannot exist. |
+| 18 | `standbyAEnabled` | a streaming standby | **WRONG** | With the standby off, `replay_lag` climbs to 300 s, `lagBytes` to 1.6 GiB and "WAL held by the slot" to 1.6 GiB — all for a standby that is gone. |
+| 19 | `standbyANetworkLag` | network RTT to the standby | **WRONG** | A 400 ms one-way delay is reported as 2.605 s of `replay_lag`. Fixed undisclosed 6× factor, against a documented 100× stretch. |
+| 20 | `standbyASlowApply` | standby apply bottleneck | **CORRECT** | Lag 0.37 s → 168.5 s → 0.43 s; flush/replay gap opens and closes. |
+| 21 | `standbyALongQuery` | `hot_standby_feedback` | **WRONG** | Pins the primary's xmin horizon with `standbyAEnabled = false` **and** `wal_level = minimal` — feedback from a standby that cannot exist. |
 | 22 | `timeScale` | (presentation) | **CORRECT** | 300 × `update(1/30)` at `timeScale = 3` advances model time 10.00 s; `realT` divides back out; clamps at 20. |
 | 23 | `paused` | (presentation) | **CORRECT** | Advances 0.0000 s. |
 
@@ -183,7 +183,7 @@ position. `logicalChangesPerSec` behaves the same way — after
 `logical → minimal` it holds 41.6 changes/s indefinitely, beside a card that
 reads "off — wal_level is not logical".
 
-The same freeze fires on `replicaEnabled = false`: measured `lagSec 300.37`,
+The same freeze fires on `standbyAEnabled = false`: measured `lagSec 300.37`,
 `lagBytes 1.6 GiB`, slot retention 1.6 GiB, with `connected = false`.
 
 **Right behaviour.** Restructure `tickReplication()` so the disconnected branch
@@ -216,7 +216,7 @@ guard on `replication.enabled`/`connected` and four do not:
 are already correctly guarded and disagree with the panels — that disagreement
 is the cheapest regression test available.
 
-**Knobs this unblocks:** `walLevel`, `replicaEnabled`.
+**Knobs this unblocks:** `walLevel`, `standbyAEnabled`.
 
 ### RC-3 — the write working set has no repeating middle band
 
@@ -321,7 +321,7 @@ printed number that contradicts the paragraph above it.
 seconds. `src/sim/model.ts:109` exports `MODEL_TIME_STRETCH = 100` for UI
 disclosures. Measured `replay_lag` against the configured one-way delay:
 
-| `replicaNetworkLag` | reported `replay_lag` | ratio |
+| `standbyANetworkLag` | reported `replay_lag` | ratio |
 |---|---|---|
 | 0 ms | 0.107 s | — |
 | 50 ms | 0.542 s | 10.8× |
@@ -604,7 +604,7 @@ standby asserts it is not. The shipped text (`src/ui/content.ts:258`,
 `src/ui/docs-storage.ts:1384`) explains away the first assertion without
 noticing that it contradicts the second.
 
-**Fix.** Declare a synchronous standby whenever `replicaEnabled` is on, and give
+**Fix.** Declare a synchronous standby whenever `standbyAEnabled` is on, and give
 `on` the guarantee it actually has:
 
 ```
@@ -619,7 +619,7 @@ when `rep.flushLsn` advances rather than `rep.replayLsn`. The observable result
 is a three-step ladder — `local` < `on` < `remote_apply` — where `on` costs one
 round trip and `remote_apply` costs one round trip plus apply time. That is the
 lesson, and it is currently a two-step ladder with a false middle. When
-`replicaEnabled` is off, `on` correctly collapses onto `local` and
+`standbyAEnabled` is off, `on` correctly collapses onto `local` and
 `remote_apply` should warn (the "waiting for a synchronous standby that is not
 there" toast at `src/sim/model.ts:3208` already exists).
 
@@ -690,7 +690,7 @@ fall to single-digit percent except on a genuinely WAL-bound workload.
 **Recovery:** symmetric and correct — `wal.fpwBurst` is zeroed on the way down
 (`src/sim/model.ts:3600`) and `fpiGeneration` is bumped on both transitions.
 
-### 18. `replicaEnabled`
+### 18. `standbyAEnabled`
 
 **Real setting.** Whether a physical standby is streaming. If it streams through
 a replication slot, the slot pins WAL on the primary even when the standby is
@@ -708,11 +708,11 @@ them unguarded.
 `slotHold = 0` when `rep.enabled` is false, so pg_wal *shrinks* when the standby
 goes away. The comment three lines above says the opposite: "a slot nobody is
 reading pins WAL on the primary. That is how a replica takes down a primary's
-disk." The model can currently only show that with `replicaSlowApply`, never
+disk." The model can currently only show that with `standbyASlowApply`, never
 with a disconnected consumer — which is the case operators actually hit. The
 honest fix is to make the slot a distinct thing from the standby: keep
 `slotHold` alive while the standby is disconnected (that is what a slot does),
-and let `replicaEnabled = false` mean "the standby is gone, the slot remains" —
+and let `standbyAEnabled = false` mean "the standby is gone, the slot remains" —
 which is exactly the situation roadmap item 10's "drop the slot or add capacity"
 scenario needs.
 
@@ -720,13 +720,13 @@ scenario needs.
 120 s, with the "required WAL had been recycled" fast-forward path). Symmetric
 and right.
 
-### 19. `replicaNetworkLag`
+### 19. `standbyANetworkLag`
 
 Fully covered by RC-6. Direction and down-sweep recovery are correct; only the
 scale and the units are wrong. **Verdict: `WRONG` (magnitude / undisclosed
 unit distortion).**
 
-### 21. `standbyLongQuery`
+### 21. `standbyALongQuery`
 
 **Real setting.** `hot_standby_feedback = on` makes a standby report the xmin of
 its oldest running snapshot back to the primary through the walreceiver's status
@@ -738,9 +738,9 @@ replication connection, and therefore `wal_level >= replica`.
 horizon unconditionally:
 
 ```
-Measured — replicaEnabled = false, walLevel = 'minimal', replication.connected = false:
-  before standbyLongQuery=true : oldestSnapshotAge = 0.72 s
-  after  standbyLongQuery=true : oldestSnapshotAge = 200.00 s   (and climbing)
+Measured — standbyAEnabled = false, walLevel = 'minimal', replication.connected = false:
+  before standbyALongQuery=true : oldestSnapshotAge = 0.72 s
+  after  standbyALongQuery=true : oldestSnapshotAge = 200.00 s   (and climbing)
 ```
 
 A standby that provably cannot exist pins the primary's cleanup horizon. This is
@@ -753,17 +753,17 @@ scaling artefact, a claim that cannot be true.
 than only at `setKnob` time, because the standby can go away afterwards:
 
 - In `setKnob`, treat the effective pin as
-  `K.longRunningXact || (K.standbyLongQuery && rep.enabled && rep.connected && K.walLevel !== 'minimal')`.
+  `K.longRunningXact || (K.standbyALongQuery && rep.enabled && rep.connected && K.walLevel !== 'minimal')`.
 - Add the same check to `tickReplication()`, so that turning off
-  `replicaEnabled` or moving to `wal_level = minimal` while
-  `standbyLongQuery` is on releases the horizon with the existing
+  `standbyAEnabled` or moving to `wal_level = minimal` while
+  `standbyALongQuery` is on releases the horizon with the existing
   "xmin pin released" toast.
 - When the knob is set with no standby present, say so rather than silently
   doing nothing: "hot_standby_feedback needs a connected standby — there is
   none." A knob that refuses with a reason teaches more than one that
   silently succeeds.
 
-`standbyLongQuery` is also the thinnest-documented knob in the project: it has a
+`standbyALongQuery` is also the thinnest-documented knob in the project: it has a
 hint in `src/ui/content.ts:276` and nothing else — no `pg_settings` row, no
 entry in `src/observability/paths.ts`, no mention in either docs file, and no
 test. The `hot_standby_feedback` chapter at `src/ui/docs-storage.ts:1671` does
@@ -785,7 +785,7 @@ A test asserting symmetry would be **wrong** for these:
 |---|---|---|
 | `autovacuum` | relation pages, index pages | Vacuum makes space reusable inside the file. Only a trailing run of wholly empty pages is truncated, under an `ACCESS EXCLUSIVE` lock surrendered on demand. `pg_relation_size` does not come back. |
 | `autovacuumScaleFactor` | accumulated dead tuples at the moment of change | Raising the factor does not create bloat retroactively; lowering it does not erase what accrued. Only the *trigger point* is symmetric. |
-| `longRunningXact`, `standbyLongQuery` | bloat accrued while pinned | Releasing the horizon makes rows removable; it does not remove them. Vacuum has to run. |
+| `longRunningXact`, `standbyALongQuery` | bloat accrued while pinned | Releasing the horizon makes rows removable; it does not remove them. Vacuum has to run. |
 | `updateRatio`, `writeRatio` | relation pages | Same reason as `autovacuum`. Dead tuple *counts* do recover (measured to zero in 1200 s). |
 | `sharedBuffers` | pool contents | Shrinking the pool writes out and drops frames; growing it back gives cold frames. The hit ratio recovers with the working set, not instantly. |
 | `walLevel` | `wal.archived`, LSN counters | Lifetime totals. |
@@ -808,7 +808,7 @@ Ordered by how well the consequence chain reads in-world.
 2. **`longRunningXact`** — the xmin horizon freezes visibly, vacuum workers
    report "0 removable (old snapshot)", bloat climbs, and releasing it produces
    a visible catch-up. The asymmetry is real and is the lesson.
-3. **`replicaSlowApply`** — lag 0.37 s → 168 s → 0.43 s, with the flush/replay
+3. **`standbyASlowApply`** — lag 0.37 s → 168 s → 0.43 s, with the flush/replay
    gap opening and closing in the world. Clean.
 4. **`sharedBuffers`** — the buffer plaza physically resizes and the hit ratio
    moves 34 % → 100 %. Best-tested knob in the project
@@ -838,10 +838,10 @@ Ordered by how badly a newcomer would be misled.
 2. **`autovacuum`** — the roadmap's named priority. Currently teaches that
    turning autovacuum off costs nothing and buys throughput. Four fixes
    required; RC-1 is the largest.
-3. **`standbyLongQuery`** — a standby that cannot exist pins the primary's
+3. **`standbyALongQuery`** — a standby that cannot exist pins the primary's
    cleanup horizon. Cheap to fix, and it is a one-line class of error that a
    test can lock down permanently.
-4. **`replicaEnabled`** — a departed standby keeps reporting growing lag and
+4. **`standbyAEnabled`** — a departed standby keeps reporting growing lag and
    growing slot retention. Same root cause as 1.
 5. **`bgwriterEnabled`** — inverted throughput response. A lever that makes the
    database *faster* when you switch off a helper is the worst possible thing to
@@ -853,7 +853,7 @@ Ordered by how badly a newcomer would be misled.
 8. **`synchronousCommit`** — the `on`/`local` collapse contradicts
    `remote_apply`. Lower rank only because the *direction* of every step is
    right; the ladder is just missing a rung.
-9. **`replicaNetworkLag`** — a fixed, undisclosed 6× on a number labelled in
+9. **`standbyANetworkLag`** — a fixed, undisclosed 6× on a number labelled in
    seconds. Direction and recovery are correct; only the units lie.
 10. **`bgwriterLruMaxpages`** — inert above ~100. Least misleading of the ten,
     because a reader concludes "this does not matter much", which is nearly
@@ -868,7 +868,7 @@ regression tests write themselves. Then RC-1, which is the largest single lever
 — it clears `autovacuum`, `fullPageWrites`, and the WAL-recovery tail behind
 `tps` and `writeRatio`, and it is a prerequisite for `checkpointTimeout`. Then
 RC-4 (small, clears `bgwriterEnabled`), RC-6 and RC-5 (both trivial), the
-`standbyLongQuery` gate (trivial), RC-3 and the `synchronousCommit` ladder
+`standbyALongQuery` gate (trivial), RC-3 and the `synchronousCommit` ladder
 (both structural but contained), and `bgwriterLruMaxpages` last.
 
 ---
@@ -894,9 +894,9 @@ disagrees in seven places:
 
 **Added, previously passed:**
 
-- **`standbyLongQuery`** — passed as "same horizon pin as the local long
+- **`standbyALongQuery`** — passed as "same horizon pin as the local long
   transaction". It is, including when there is no standby.
-- **`replicaEnabled`** — passed on the grounds that the HUD shows `—`. Four
+- **`standbyAEnabled`** — passed on the grounds that the HUD shows `—`. Four
   other readouts do not.
 - **`synchronousCommit`** — explicitly listed as a non-failure. The `on ≡ local`
   simplification is only defensible if `remote_apply` also collapses, and it
@@ -940,16 +940,17 @@ must replay to make the backup consistent.
 ## Three-node replication control addendum — roadmap item 2
 
 Measured with the same seeded direct-model method. `standby_a` retains the
-original `replica*` controls for compatibility; these three controls operate
-only on `standby_b`. Each sweep held `standby_a` connected and verified that its
-positions did not follow `standby_b`'s failure. All three recover symmetrically:
-no deletion or other irreversible operation is hidden behind a toggle.
+same `standbyA*` vocabulary that `standby_b` receives through `standbyB*`.
+Stored `replica*` preferences migrate to their `standbyA*` counterparts. Each
+sweep held `standby_a` connected and verified that its positions did not follow
+`standby_b`'s failure. All three recover symmetrically: no deletion or other
+irreversible operation is hidden behind a toggle.
 
 | # | Knob | Real setting | Verdict | Measured response and recovery |
 |---|---|---|---|---|
-| 27 | `standbyBEnabled` | standby_b streaming connection, not a GUC | **CORRECT** | Off froze standby_b’s durable position at `0/1BACBBE0`, left standby_a connected, made `standby_b_slot.active = false`, and retained 35.96 MiB on the primary after 30 s. Re-enabling and reducing load to 1 tps advanced the slot and recovered to 84.5 KiB retained / 84.4 KiB replay gap after 60 s. The slot surviving disconnection is the intentional asymmetry between connection state and retention state. |
-| 28 | `standbyBNetworkLag` | one-way delay to standby_b, not a GUC | **CORRECT** | At 0 / 100 / 400 ms one way, replay lag measured 0.020 / 0.128 / 0.438 s, the byte gap 64.0 KiB / 385 KiB / 1.75 MiB, and packets in flight 0 / 3 / 18. Returning 400 → 55 ms recovered to 0.073 s, 326 KiB, and 3 packets after 45 s. The 6× packet-animation stretch is converted back out of reported time. |
-| 29 | `standbyBSlowApply` | standby_b replay capacity, not a GUC | **CORRECT** | At 1,200 offered tps / 80% writes, standby_b’s gap moved 542 KiB → 30.47 MiB / 5.20 s over 45 s while received and flushed stayed current. Turning slow replay off recovered to 221 KiB / 0.081 s after 45 s. standby_a remained on its independent healthy replay cursor. |
+| 27 | `standbyBEnabled` | standby_b streaming connection, not a GUC | **CORRECT** | This is the node-B counterpart of `standbyAEnabled`. Off froze standby_b’s durable position at `0/1BACBBE0`, left standby_a connected, made `standby_b_slot.active = false`, and retained 35.96 MiB on the primary after 30 s. Re-enabling and reducing load to 1 tps advanced the slot and recovered to 84.5 KiB retained / 84.4 KiB replay gap after 60 s. The slot surviving disconnection is the intentional distinction between connection state and retention state. |
+| 28 | `standbyBNetworkLag` | one-way delay to standby_b, not a GUC | **CORRECT** | This is the node-B counterpart of `standbyANetworkLag`. At 0 / 100 / 400 ms one way, replay lag measured 0.020 / 0.128 / 0.438 s, the byte gap 64.0 KiB / 385 KiB / 1.75 MiB, and packets in flight 0 / 3 / 18. Returning 400 → 55 ms recovered to 0.073 s, 326 KiB, and 3 packets after 45 s. The 6× packet-animation stretch is converted back out of reported time. |
+| 29 | `standbyBSlowApply` | standby_b replay capacity, not a GUC | **CORRECT** | This is the node-B counterpart of `standbyASlowApply`. At 1,200 offered tps / 80% writes, standby_b’s gap moved 542 KiB → 30.47 MiB / 5.20 s over 45 s while received and flushed stayed current. Turning slow replay off recovered to 221 KiB / 0.081 s after 45 s. standby_a remained on its independent healthy replay cursor. |
 
 The physical-slot failure was also driven to the scaled disk boundary. With
 `standby_a` disconnected, 5,000 offered tps and 100% writes, its frozen slot
@@ -1060,8 +1061,9 @@ worthwhile parts to keep permanently, as CI regression tests, are:
 
 1. `wal_level = minimal` ⇒ `wal.segmentCount × 16 MiB <= max_wal_size × 2` and
    logical slot retention is zero, after 600 simulated seconds.
-2. `replicaEnabled = false` ⇒ `lagSec === 0` and `lagBytes === 0`.
-3. `standbyLongQuery = true` with `replicaEnabled = false` ⇒
+2. `standbyAEnabled = false` ⇒ standby_a is disconnected, its durable LSN is
+   frozen, its slot is inactive, and retained WAL grows as the primary advances.
+3. `standbyALongQuery = true` with `standbyAEnabled = false` ⇒
    `oldestSnapshotAge` stays bounded.
 4. `autovacuum = true` ⇒ WAL rate is within 1.5× of the `autovacuum = false`
    rate for the same workload.
