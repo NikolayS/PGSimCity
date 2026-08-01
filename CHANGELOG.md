@@ -9,6 +9,45 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.31.0] — 2026-08-01
+
+### You can watch a WAL segment fill
+
+Archiving was correctly modelled and effectively invisible. At the shipped
+defaults a real 16 MiB segment fills every **seventy-eight model minutes**, so a
+headline disaster-recovery mechanism fired about once an hour and a reader never
+saw it. The compression made time watchable and left the segment size real, so
+the ratio between them stopped supporting observation.
+
+`WAL_SEG` stays 16 MiB — segment names, `max_wal_size` arithmetic and retention
+all lean on it. What changed is that the **approach** is visible: the archive gate
+shows the current segment filling toward completion, so the lesson that WAL ships
+in whole segments, and nothing is archived until one closes, is legible
+continuously instead of once an hour.
+
+Base backups now run on a schedule. Without a cadence, retention expressed in
+backups never bites and backup age never grows and resets, so neither lesson
+could be felt. `backup-push` runs from the standby and `wal-push` from the
+primary, which was already true and is now visible.
+
+### The two standbys are siblings
+
+Standby A carried the name it had when there was only one — `replicaEnabled`,
+`replicaNetworkLag`, `replicaSlowApply` — while standby B arrived with the
+cluster arc under a different scheme. **Three concepts, two vocabularies, decided
+by build order.**
+
+Worse, the top-level replication fields were copied from the first standby, so
+reading the aggregate silently gave you standby A without the call site saying
+so. **That shadow is what let a Diagnose branch announce "the standby is current"
+while the grid beside it showed the other one 17 MiB behind.** v0.30.0 fixed that
+branch; this removes the thing that made it easy to write.
+
+Differences that are real configuration are kept — which node is synchronous is
+driven by `synchronous_standby_names`, not by history.
+
+---
+
 ## [0.30.0] — 2026-07-31
 
 **The second review round, and it found what the first structurally could not** —
