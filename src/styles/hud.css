@@ -290,6 +290,18 @@
   text-underline-offset: 2px;
 }
 
+.hud-vital[data-vital='latency'] .hud-vital__k,
+#hud-latency-title,
+.hud-latency__quantiles small,
+.hud-latency__anatomy > .pg-eyebrow,
+.hud-latency__note {
+  --pg-disclosure: 1;
+}
+
+.hud-vital[data-vital='latency'] .hud-vital__k {
+  --pg-disclosure: 2;
+}
+
 /* --- right cluster -------------------------------------------------------- */
 
 .hud-right {

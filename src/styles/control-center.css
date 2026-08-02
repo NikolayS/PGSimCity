@@ -410,6 +410,11 @@ body.pg-control-center .touchpad {
   font-weight: 700;
 }
 
+.control-center__statement-title,
+.control-center__sources {
+  --pg-disclosure: 1;
+}
+
 .control-center__prompt {
   display: grid;
   gap: 7px;
@@ -640,7 +645,7 @@ body.pg-control-center .touchpad {
 
   .control-center__sources {
     flex-wrap: wrap;
-    font-size: 6px;
+    font-size: 9px;
   }
 
   .control-center__sql-input {

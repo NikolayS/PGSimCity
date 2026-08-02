@@ -3,6 +3,11 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import {
+  disclosureFailures,
+  measureDisclosurePages,
+} from '../test/disclosure-browser.mjs'
+
+import {
   BOARD_MAX_SCALE,
   DETAIL_HEIGHT,
   DETAIL_WIDTH,
@@ -42,11 +47,6 @@ function blockAfter(source, marker) {
     if (depth === 0) return source.slice(openingBrace + 1, index)
   }
   return ''
-}
-
-function fontSizePx(source, selector) {
-  const declaration = blockAfter(source, selector).match(/font-size:\s*([\d.]+)px/)
-  return declaration ? Number(declaration[1]) : 0
 }
 
 describe('machine room portrait layout', () => {
@@ -149,25 +149,42 @@ describe('machine room portrait layout', () => {
     )
   })
 
-  it('keeps every honesty disclosure visible and legible at 390px', () => {
-    const loadBearingText = [
-      '.comparison-proof__verdict small',
-      '.comparison-contract p',
-      '.comparison-board > p',
-      '.comparison-board__phase',
-      '.comparison-actions span',
-      '.comparison-source-key',
-    ]
+  it('keeps every marked honesty disclosure visible and legible at 390px', async () => {
+    const reports = await measureDisclosurePages([{
+      name: 'Machine',
+      path: '/machine/',
+      readySelector: '[data-disclosure="comparison-framing"]',
+      prepare: `document.querySelector('#comparison').hidden = false`,
+      probeMarker: true,
+    }, {
+      name: 'City',
+      path: '/',
+      readySelector: '.control-center__sources',
+      prepare: `
+        document.querySelector('.control-center').hidden = false
+        document.querySelector('#hud-latency-panel').hidden = false
+      `,
+    }])
 
-    expect(blockAfter(portrait, '.comparison-contract')).not.toMatch(/display:\s*none/)
-    for (const selector of loadBearingText) {
-      const rules = blockAfter(portrait, selector)
-      expect(rules, `${selector} has no 390px rule`).not.toBe('')
-      expect(rules, `${selector} is hidden at 390px`).not.toMatch(/display:\s*none/)
-      expect(fontSizePx(portrait, selector), `${selector} is below the 9px floor`)
-        .toBeGreaterThanOrEqual(9)
+    expect(reports.map((report) => report.viewport)).toEqual([
+      { width: 390, height: 844 },
+      { width: 390, height: 844 },
+    ])
+    for (const report of reports) {
+      expect(report.disclosures.length).toBeGreaterThan(0)
+      expect(report.disclosures.length).toBeGreaterThanOrEqual(
+        report.authoredDisclosureCount,
+      )
     }
-  })
+    expect(reports[0].markerProbe.unmarkedIncluded).toBe(false)
+    expect(disclosureFailures([{
+      name: 'Marker probe',
+      disclosures: [reports[0].markerProbe.marked],
+    }])).toEqual([
+      'Marker probe · TEMPORARY DISCLOSURE PROBE: 1px is below the 9px floor',
+    ])
+    expect(disclosureFailures(reports)).toEqual([])
+  }, 90_000)
 
   it('keeps the deferred-flush risk state readable outside the mobile canvas', () => {
     expect(html).toMatch(

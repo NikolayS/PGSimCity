@@ -11,6 +11,16 @@
    places in the other stylesheets that hardcoded a dark.
    ============================================================ */
 
+@property --pg-disclosure {
+  syntax: '<integer>';
+  inherits: false;
+  initial-value: 0;
+}
+
+[data-disclosure] {
+  --pg-disclosure: 1;
+}
+
 :root {
   /* --- surfaces --- */
   --bg-void: #04060c;
