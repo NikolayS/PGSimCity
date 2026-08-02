@@ -1303,6 +1303,10 @@ button:focus-visible {
     font-size: 9px;
   }
 
+  .comparison-board__phase {
+    font-size: 9px;
+  }
+
   .comparison-board canvas {
     position: absolute;
     top: 0;

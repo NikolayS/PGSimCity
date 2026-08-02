@@ -44,11 +44,13 @@ describe('Machine synchronous_commit modelled replay', () => {
     expect(treatment.setting).toEqual({ synchronous_commit: 'off' })
     expect(control.replay.sql).toBe(treatment.replay.sql)
     expect(control.replay.receipt).toBe(treatment.replay.receipt)
-    expect(control.replay.stages.filter((stage) => stage.id !== 'commit'))
-      .toEqual(treatment.replay.stages.filter((stage) => stage.id !== 'commit'))
+    expect(control.replay.stages.filter((stage) => !['commit', 'return'].includes(stage.id)))
+      .toEqual(treatment.replay.stages.filter((stage) => !['commit', 'return'].includes(stage.id)))
 
     const controlCommit = control.replay.stages.find((stage) => stage.id === 'commit')
     const treatmentCommit = treatment.replay.stages.find((stage) => stage.id === 'commit')
+    const controlReturn = control.replay.stages.find((stage) => stage.id === 'return')
+    const treatmentReturn = treatment.replay.stages.find((stage) => stage.id === 'return')
     expect(controlCommit.source).toBe('model')
     expect(treatmentCommit.source).toBe('model')
     expect(treatmentCommit.durationMs).toBeLessThan(controlCommit.durationMs)
@@ -56,6 +58,9 @@ describe('Machine synchronous_commit modelled replay', () => {
     expect(treatmentCommit.backgroundFlushDurationMs).toBe(controlCommit.durationMs)
     expect(treatmentCommit.measurement).toMatch(/recent ACKs at risk until flush/i)
     expect(treatment.replay.acknowledgementOrigin).toBe('wal_buffers')
+    expect(treatmentReturn.clientReturnDurationMs).toBe(controlReturn.durationMs)
+    expect(treatmentReturn.clientReturnDurationMs)
+      .toBeLessThan(treatment.replay.backgroundFlushDurationMs)
   })
 
   it('names the finding at the first aligned moment the runs diverge', () => {
@@ -72,5 +77,22 @@ describe('Machine synchronous_commit modelled replay', () => {
     expect(comparison.finding).toMatch(/not fsync\s*=\s*off/i)
     expect(comparison.replayDisclosure).toMatch(/not SET or re-executed in PGlite/i)
     expect(comparison.evidenceSource).toBe('model')
+  })
+
+  it('finishes the deferred WAL flush before the off lane ends', () => {
+    const comparison = createSynchronousCommitComparison(WRITE_REPORT)
+    const treatmentReplay = comparison.lanes[1].replay
+    const commitIndex = treatmentReplay.stages.findIndex((stage) => stage.id === 'commit')
+    const commitStage = treatmentReplay.stages[commitIndex]
+    const ackAtMs = treatmentReplay.stages
+      .slice(0, commitIndex + 1)
+      .reduce((total, stage) => total + (stage.skipped ? 0 : stage.durationMs), 0)
+    const flushCompletesAtMs = ackAtMs + commitStage.backgroundFlushDurationMs
+
+    expect(flushCompletesAtMs).toBeLessThan(treatmentReplay.durationMs)
+    expect(comparisonSnapshot(comparison, flushCompletesAtMs).lanes[1]).toMatchObject({
+      stage: { id: 'return' },
+      complete: false,
+    })
   })
 })

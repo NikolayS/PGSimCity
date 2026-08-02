@@ -79,6 +79,7 @@ const comparisonBoardA = document.querySelector('#comparison-board-a')
 const comparisonBoardB = document.querySelector('#comparison-board-b')
 const comparisonPhaseA = document.querySelector('[data-comparison-phase="a"]')
 const comparisonPhaseB = document.querySelector('[data-comparison-phase="b"]')
+const comparisonNoteB = document.querySelector('[data-comparison-note="b"]')
 const comparisonTabA = document.querySelector('[data-comparison-lane="a"]')
 const comparisonTabB = document.querySelector('[data-comparison-lane="b"]')
 let ctx = canvas?.getContext('2d')
@@ -125,6 +126,7 @@ if (
   || !comparisonBoardB
   || !comparisonPhaseA
   || !comparisonPhaseB
+  || !comparisonNoteB
   || !comparisonTabA
   || !comparisonTabB
   || !comparisonCtxA
@@ -365,6 +367,7 @@ const comparisonState = {
   model: null,
   elapsedMs: 0,
   holdReleased: false,
+  flushComplete: false,
   error: null,
   statements: [null, null],
   stagePoints: [
@@ -590,15 +593,31 @@ function syncComparisonStatement(laneIndex) {
     : 'replaying'
 }
 
+function comparisonFlushProgress() {
+  const laneStatement = comparisonState.statements[1]
+  const durationMs = laneStatement?.replay?.backgroundFlushDurationMs
+  if (
+    !durationMs
+    || laneStatement.replay.stages[laneStatement.stageIndex]?.id !== 'return'
+  ) return 0
+  return clamp(laneStatement.stageElapsedMs / durationMs)
+}
+
 function comparisonPhaseText(laneIndex) {
   const laneStatement = comparisonState.statements[laneIndex]
   if (comparisonState.status === 'loading') return 'P MEASURING'
   if (comparisonState.status === 'error') return 'P UNAVAILABLE'
   if (!laneStatement?.replay) return 'READY'
-  if (comparisonState.status === 'finding') {
-    return laneIndex === 0
-      ? 'M · WAITING FOR LOCAL FLUSH'
-      : 'M · ACK SENT; RECENT ACKS AT RISK'
+  if (comparisonState.status === 'finding' && laneIndex === 0) {
+    return 'M · WAITING FOR LOCAL FLUSH'
+  }
+  if (
+    laneIndex === 1
+    && laneStatement.replay.stages[laneStatement.stageIndex].id === 'return'
+  ) {
+    return comparisonState.flushComplete
+      ? 'M · FLUSHED; LOSS WINDOW CLOSED'
+      : 'M · ACK SENT; ACKS AT RISK'
   }
   if (laneStatement.status === 'complete') return 'COMPLETE'
   return `${laneStatement.stageIndex + 1}/${laneStatement.replay.stages.length} · ${laneStatement.replay.stages[laneStatement.stageIndex].label.toUpperCase()}`
@@ -630,6 +649,9 @@ function updateComparisonUi() {
     SYNCHRONOUS_COMMIT_COMPARISON_CLAIM.pgliteDisclosure
   comparisonReplayDisclosure.textContent =
     SYNCHRONOUS_COMMIT_COMPARISON_CLAIM.replayDisclosure
+  comparisonNoteB.textContent = comparisonState.flushComplete
+    ? 'WAL FLUSH COMPLETE; LOSS WINDOW CLOSED'
+    : 'EARLY ACK; CRASH CAN LOSE RECENT ACKS UNTIL WAL FLUSH'
   comparisonSql.textContent = COMPARISON_SQL
   if (comparisonState.error) {
     comparisonFinding.textContent =
@@ -659,6 +681,7 @@ async function runSynchronousCommitComparison() {
   comparisonState.error = null
   comparisonState.elapsedMs = 0
   comparisonState.holdReleased = false
+  comparisonState.flushComplete = false
   comparisonState.lastMobileStage.fill(-1)
   updateComparisonUi()
   queryBusy = true
@@ -730,6 +753,12 @@ function updateComparison(elapsedSeconds) {
   }
   syncComparisonStatement(0)
   syncComparisonStatement(1)
+  const flushComplete = comparisonFlushProgress() >= 1
+  const flushStateChanged = flushComplete !== comparisonState.flushComplete
+  if (flushStateChanged) {
+    comparisonState.flushComplete = flushComplete
+    comparisonState.lastMobileStage[1] = -1
+  }
   if (
     comparisonState.status === 'running'
     && comparisonState.statements[0]?.status === 'complete'
@@ -741,6 +770,7 @@ function updateComparison(elapsedSeconds) {
     previousStatus !== comparisonState.status
     || previousStageA !== comparisonState.statements[0]?.stageIndex
     || previousStageB !== comparisonState.statements[1]?.stageIndex
+    || flushStateChanged
   ) updateComparisonUi()
 }
 
@@ -1993,6 +2023,7 @@ function drawAsyncWalFlush() {
   const durationMs = statement.replay?.backgroundFlushDurationMs
   if (!durationMs) return
   const progress = clamp(statement.stageElapsedMs / durationMs)
+  const complete = progress >= 1
   drawStatementRoute(statementRoutes.commit, ink.copperHi, 3, 0.72)
   pointOnRoute(statementRoutes.commit, smooth(progress), asyncWalStagePoint)
   ctx.save()
@@ -2002,7 +2033,29 @@ function drawAsyncWalFlush() {
   ctx.arc(asyncWalStagePoint.x, asyncWalStagePoint.y, 7, 0, TAU)
   fillStroke(ink.copperHi, '#3d2419', 2)
   ctx.restore()
-  mono('WAL', asyncWalStagePoint.x, asyncWalStagePoint.y + 0.5, 4.8, '#3d2419', 'center', 900)
+  mono(
+    complete ? 'DONE' : 'WAL',
+    asyncWalStagePoint.x,
+    asyncWalStagePoint.y + 0.5,
+    4.8,
+    '#3d2419',
+    'center',
+    900,
+  )
+  pathRoundRect(428, 642, 232, 30, 4)
+  fillStroke(complete ? '#263a2a' : '#38281f', complete ? '#91b978' : ink.copperHi, 2)
+  drawSourceMedallion(443, 657, 'model', 7)
+  mono(
+    complete
+      ? 'WAL FLUSH COMPLETE · LOSS WINDOW CLOSED'
+      : 'DEFERRED WAL FLUSH · ACKS AT RISK',
+    456,
+    657,
+    6.4,
+    complete ? '#d8edcb' : '#ffd0b3',
+    'left',
+    800,
+  )
 }
 
 function drawStatementPipeline(activeId) {
@@ -2266,9 +2319,11 @@ function drawStatementTrace() {
   let progress = 1
   if (statement.replay && statement.status === 'replaying') {
     activeStage = statement.replay.stages[statement.stageIndex]
+    const foregroundDurationMs =
+      activeStage.clientReturnDurationMs ?? activeStage.durationMs
     progress = statement.mode === 'step'
       ? 1
-      : clamp(statement.stageElapsedMs / Math.max(1, activeStage.durationMs))
+      : clamp(statement.stageElapsedMs / Math.max(1, foregroundDurationMs))
   }
 
   const activeId = activeStage?.id ?? 'client'
@@ -2348,11 +2403,16 @@ function drawComparisonCaption(laneIndex) {
   pathRoundRect(12, 696, 696, 34, 4)
   fillStroke('#162423', '#79aeb0', 2)
   drawSourceMedallion(28, 713, 'model', 7)
-  const label = comparisonState.status === 'finding'
-    ? laneIndex === 0
-      ? 'A · ON · WAITING FOR LOCAL WAL FLUSH'
-      : 'B · OFF · ACK SENT EARLY; RECENT ACKS AT RISK UNTIL FLUSH'
-    : `${laneIndex === 0 ? 'A · ON' : 'B · OFF'} · ${activeStage.label.toUpperCase()} · ${activeStage.measurement ?? activeStage.detail}`
+  let label
+  if (laneIndex === 1 && activeStage.id === 'return') {
+    label = comparisonState.flushComplete
+      ? 'B · OFF · WAL FLUSH COMPLETE; LOSS WINDOW CLOSED'
+      : 'B · OFF · ACK SENT EARLY; RECENT ACKS AT RISK UNTIL WAL FLUSH'
+  } else if (comparisonState.status === 'finding') {
+    label = 'A · ON · WAITING FOR LOCAL WAL FLUSH'
+  } else {
+    label = `${laneIndex === 0 ? 'A · ON' : 'B · OFF'} · ${activeStage.label.toUpperCase()} · ${activeStage.measurement ?? activeStage.detail}`
+  }
   mono(`M  ${label}`, 43, 713, 8, '#d9ffff', 'left', 800)
 }
 
@@ -2369,8 +2429,13 @@ function positionComparisonBoard(laneIndex, board) {
   if (!viewport) return
   const point = comparisonState.stagePoints[laneIndex]
   const forkedFinding = comparisonState.status === 'finding' && laneIndex === 1
-  const focusX = forkedFinding ? (point.x + asyncWalStagePoint.x) / 2 : point.x
-  const focusY = forkedFinding ? (point.y + asyncWalStagePoint.y) / 2 : point.y
+  const landedFlush = comparisonState.flushComplete && laneIndex === 1
+  const focusX = landedFlush
+    ? asyncWalStagePoint.x
+    : forkedFinding ? (point.x + asyncWalStagePoint.x) / 2 : point.x
+  const focusY = landedFlush
+    ? asyncWalStagePoint.y
+    : forkedFinding ? (point.y + asyncWalStagePoint.y) / 2 : point.y
   const width = viewport.clientWidth
   const height = viewport.clientHeight
   const x = clamp(width * 0.46 - focusX, width - 720, 0)
@@ -3050,6 +3115,8 @@ window.MAGNUM = Object.freeze({
       visible: comparisonState.visible,
       status: comparisonState.status,
       elapsedMs: comparisonState.elapsedMs,
+      deferredFlushProgress: comparisonFlushProgress(),
+      flushComplete: comparisonState.flushComplete,
       modelledSetting:
         comparisonState.model?.modelledSetting ?? 'synchronous_commit',
       held: comparisonState.model?.held ?? SYNCHRONOUS_COMMIT_COMPARISON_CLAIM.held,

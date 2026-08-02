@@ -154,6 +154,7 @@ describe('machine room portrait layout', () => {
       '.comparison-proof__verdict small',
       '.comparison-contract p',
       '.comparison-board > p',
+      '.comparison-board__phase',
       '.comparison-actions span',
       '.comparison-source-key',
     ]
@@ -166,6 +167,13 @@ describe('machine room portrait layout', () => {
       expect(fontSizePx(portrait, selector), `${selector} is below the 9px floor`)
         .toBeGreaterThanOrEqual(9)
     }
+  })
+
+  it('keeps the deferred-flush risk state readable outside the mobile canvas', () => {
+    expect(html).toMatch(
+      /data-comparison-note="b">EARLY ACK; CRASH CAN LOSE RECENT ACKS UNTIL WAL FLUSH/,
+    )
+    expect(script).toMatch(/WAL FLUSH COMPLETE; LOSS WINDOW CLOSED/)
   })
 })
 

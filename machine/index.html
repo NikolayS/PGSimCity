@@ -268,7 +268,7 @@ EACH SUBMITTED STATEMENT EXECUTES ONCE; DISPLAYED ROWS COME FROM THAT EXECUTION.
               </div>
               <span class="comparison-board__phase" data-comparison-phase="b">READY</span>
             </header>
-            <p><b class="source-medallion postgres-source">P</b> SAME POSTGRESQL REPORT <b class="source-medallion model-source">M</b> EARLY ACK; CRASH CAN LOSE RECENT ACKS</p>
+            <p><b class="source-medallion postgres-source">P</b> SAME POSTGRESQL REPORT <b class="source-medallion model-source">M</b> <span data-comparison-note="b">EARLY ACK; CRASH CAN LOSE RECENT ACKS UNTIL WAL FLUSH</span></p>
             <div class="comparison-board__viewport">
               <canvas
                 id="comparison-board-b"

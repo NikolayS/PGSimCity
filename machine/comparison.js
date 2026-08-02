@@ -7,33 +7,46 @@ export const SYNCHRONOUS_COMMIT_COMPARISON_CLAIM = claim
 
 const OFF_ACK_VIEW_MS = 160
 const OBSERVATION_AFTER_ACK_MS = 180
+const FLUSH_COMPLETE_HOLD_MS = 900
 
 function replaceCommit(replay, setting) {
   const controlCommit = replay.stages.find((stage) => stage.id === 'commit')
+  const backgroundFlushDurationMs = controlCommit?.durationMs ?? 0
   const stages = replay.stages.map((stage) => {
-    if (stage.id !== 'commit') return stage
-    if (setting === 'on') {
+    if (stage.id === 'commit' && setting === 'on') {
       return Object.freeze({
         ...stage,
         measurement: 'M · ACK after local WAL flush',
         flushContinuesAfterAck: false,
       })
     }
-    return Object.freeze({
-      ...stage,
-      detail: 'acknowledge before flush; recent acknowledgements at risk until flush',
-      durationMs: OFF_ACK_VIEW_MS,
-      measurement: 'M · ACK early; recent ACKs at risk until flush',
-      flushContinuesAfterAck: true,
-      backgroundFlushDurationMs: stage.durationMs,
-    })
+    if (stage.id === 'commit') {
+      return Object.freeze({
+        ...stage,
+        detail: 'acknowledge before flush; recent acknowledgements at risk until flush',
+        durationMs: OFF_ACK_VIEW_MS,
+        measurement: 'M · ACK early; recent ACKs at risk until flush',
+        flushContinuesAfterAck: true,
+        backgroundFlushDurationMs,
+      })
+    }
+    if (stage.id === 'return' && setting === 'off') {
+      return Object.freeze({
+        ...stage,
+        clientReturnDurationMs: stage.durationMs,
+        durationMs:
+          Math.max(stage.durationMs, backgroundFlushDurationMs)
+          + FLUSH_COMPLETE_HOLD_MS,
+      })
+    }
+    return stage
   })
   return Object.freeze({
     ...replay,
     synchronousCommit: setting,
     acknowledgementOrigin: setting === 'off' ? 'wal_buffers' : 'durable_storage',
     backgroundFlushDurationMs:
-      setting === 'off' ? controlCommit?.durationMs ?? 0 : 0,
+      setting === 'off' ? backgroundFlushDurationMs : 0,
     stages: Object.freeze(stages),
     durationMs: stages.reduce(
       (total, stage) => total + (stage.skipped ? 0 : stage.durationMs),
