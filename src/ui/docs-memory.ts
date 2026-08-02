@@ -261,7 +261,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'Why poolers exist',
         body:
-          'Applications open connections per worker thread and hold them idle, so a fleet of app servers can easily demand thousands of connections from a database with sixteen cores. Postgres will accept them and then spend its time context switching and taking snapshots instead of running queries. A pooler such as PgBouncer in transaction mode multiplexes many client connections onto a small number of real backends, so the server sees a number of connections in the neighbourhood of its core count while the application keeps its convenient one-connection-per-thread model.',
+          'Applications open connections per worker thread and hold them idle, so a fleet of app servers can easily demand thousands of connections from a database with sixteen cores. Postgres will accept them and then spend its time context switching and taking snapshots instead of running queries. A pooler such as PgBouncer in transaction mode multiplexes many client connections onto a small number of real backends. It is a concurrency limit, not a magic query accelerator: a thousand clients sharing twenty PostgreSQL processes can complete more useful work than a thousand direct processes fighting over the same machine.',
       },
       {
         heading: 'max_connections is a memory commitment',
@@ -276,7 +276,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What the city models',
         body:
-          'The city has sixteen backend slots, a fixed startup cadence, a request queue and achieved TPS. It does not model TCP, authentication, backend memory, catalog or plan-cache warming, operating-system scheduling, ProcArray scans or a pooler, and it has no connection-latency series.',
+          `The city has sixteen backend slots, a fixed startup cadence, direct and pooled client admission, one bounded PgBouncer-shaped pool and achieved TPS. When application clients exceed those slots, it charges an uncalibrated concurrency-pressure curve to active PostgreSQL work and attributes a transaction pool's estimated queue time to the Latency vital. It does not model TCP, authentication, backend memory, catalog or plan-cache warming, real operating-system scheduling or ProcArray scans. ${CLAIM_VALUES.connectionPooler.coverageDisclosure}`,
       },
     ],
     metrics: [
@@ -285,14 +285,65 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       { label: 'Idle', get: (s) => fmtNum(nIn(s, 'idle')), hint: "connected, no query running" },
       { label: 'Idle in transaction', get: (s) => fmtNum(nIn(s, 'idle_in_xact')), hint: 'holding locks and possibly the horizon' },
       { label: 'Offered load', get: (s) => `${fmtNum(nz(s.knobs?.tps))} tps` },
+      { label: 'Application clients', get: (s) => fmtNum(s.pooler.clientConnections) },
+      { label: 'Pool mode', get: (s) => s.pooler.mode },
     ],
-    knobs: ['tps', 'writeRatio'],
-    see: ['conn.gate', 'postmaster', 'backend.row', 'xmin.horizon'],
+    knobs: ['tps', 'clientConnections', 'poolMode', 'defaultPoolSize', 'maxClientConn', 'writeRatio'],
+    see: ['client.pooler', 'conn.gate', 'postmaster', 'backend.row', 'xmin.horizon'],
     source: ['src/backend/postmaster/postmaster.c'],
     refs: {
       docs: [manual('runtime-config-connection.html', '19.3. Connections and Authentication — max_connections')],
       source: [srcFile('src/backend/postmaster/postmaster.c', 'BackendStartup')],
       suzuki: suzuki(2, 'Process and Memory Architecture'),
+    },
+  },
+
+  {
+    id: 'client.pooler',
+    title: 'PgBouncer Pooler',
+    subtitle: 'many client connections, few PostgreSQL server processes',
+    tldr: 'A pooler bounds PostgreSQL concurrency and moves excess work into an explicit client-side queue.',
+    sections: [
+      {
+        heading: 'A concurrency limit, not a speed feature',
+        body:
+          'PgBouncer does not make a statement execute faster. It admits many cheap client sockets while holding the expensive side to a chosen number of PostgreSQL server connections. The cap prevents process churn, private-memory multiplication, scheduler pressure and shared-structure contention from growing with the application fleet. When demand exceeds that cap, clients wait for a pool slot instead of creating another PostgreSQL process.',
+      },
+      {
+        heading: 'Transaction versus session pooling',
+        body: CLAIM_VALUES.connectionPooler.transactionTradeoff,
+      },
+      {
+        heading: 'The three controls',
+        body:
+          `PgBouncer's \`pool_mode\` chooses the release boundary and defaults to \`${CLAIM_VALUES.connectionPooler.pgBouncerDefaults.poolMode}\`. \`default_pool_size\` caps server connections per user/database pair and defaults to ${CLAIM_VALUES.connectionPooler.pgBouncerDefaults.defaultPoolSize}; \`max_client_conn\` caps client connections across the PgBouncer process and defaults to ${CLAIM_VALUES.connectionPooler.pgBouncerDefaults.maxClientConn}. Multiple users and databases can create multiple pools, so real total server connections are not simply one default_pool_size.`,
+      },
+      {
+        heading: 'How an operator sees the boundary',
+        body:
+          'PgBouncer SHOW POOLS separates client_active/client_waiting from server_active/server_idle. PostgreSQL pg_stat_activity still has one row per PostgreSQL server process, not one row per application client. Seeing one thousand clients at PgBouncer and twenty client backends in pg_stat_activity is the proof that multiplexing is working. pgcat and Odyssey are alternatives with different feature sets; this city does not model either implementation.',
+      },
+      {
+        heading: 'What the city leaves absent',
+        body: `${CLAIM_VALUES.connectionPooler.coverageDisclosure} Explicitly absent: ${CLAIM_VALUES.connectionPooler.absent.join('; ')}.`,
+      },
+    ],
+    metrics: [
+      { label: 'Mode', get: (s) => s.pooler.mode },
+      { label: 'Clients', get: (s) => `${fmtNum(s.pooler.acceptedClients)} admitted · ${fmtNum(s.pooler.refusedClients)} refused` },
+      { label: 'Waiting', get: (s) => `${fmtNum(s.pooler.waitingClients)} clients` },
+      { label: 'PostgreSQL backends', get: (s) => `${fmtNum(s.pooler.serverConnections)} / ${fmtNum(s.pooler.serverLimit)}` },
+      { label: 'Pool-slot p99', get: (s) => `${fmtNum(s.stats.latency.p99.waits.poolSlotMs)} model ms`, hint: 'transaction-pool queue estimate; absent in session/direct mode' },
+    ],
+    knobs: ['clientConnections', 'poolMode', 'defaultPoolSize', 'maxClientConn'],
+    see: ['client.pool', 'postmaster', 'backend.row'],
+    refs: {
+      docs: [
+        { label: 'PgBouncer configuration', url: 'https://www.pgbouncer.org/config' },
+        { label: 'PgBouncer feature map by pool mode', url: 'https://www.pgbouncer.org/features.html' },
+        manual('monitoring-stats.html', '27.2.3. pg_stat_activity — one row per server process'),
+      ],
+      source: [],
     },
   },
 
@@ -439,9 +490,9 @@ export const DOCS_MEMORY: ComponentDoc[] = [
           'One row per backend in `pg_stat_activity`, with `state`, `wait_event_type` and `wait_event` telling you what each one is doing right now. Grouping that view by wait event is the fastest diagnostic in Postgres: a wall of `LWLock` says shared memory contention, a wall of `Lock` says one transaction is blocking many, and a wall of `IO` says you have left the memory side of the excavation.',
       },
       {
-        heading: 'What the city does not charge',
+        heading: 'What the city charges and leaves out',
         body:
-          'The city has sixteen fixed slots and a fixed fork cadence. It does not charge backend memory, authentication, scheduler contention, context switches, shared-lock contention or ProcArray scan cost, so its achieved-TPS curve cannot demonstrate PostgreSQL’s connection-scaling cost or latency.',
+          `The city has sixteen fixed slots, a fixed fork cadence and, when the application fleet exceeds max_connections, an uncalibrated pressure curve once more than ${CLAIM_VALUES.connectionPooler.concurrencyTarget} PostgreSQL backends are active. That aggregate curve makes a concurrency cap measurable but does not identify a PostgreSQL wait. Backend memory, authentication, real scheduler/context-switch work, shared-lock contention and ProcArray scans remain absent.`,
       },
     ],
     metrics: [
