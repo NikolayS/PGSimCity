@@ -192,8 +192,12 @@ EACH SUBMITTED STATEMENT EXECUTES ONCE; DISPLAYED ROWS COME FROM THAT EXECUTION.
       >
         <header class="comparison-header">
           <div>
-            <p class="eyebrow">CONTROLLED EXPERIMENT / ONE VARIABLE</p>
-            <h2 id="comparison-title">SAME STATEMENT. ONE SETTING CHANGED.</h2>
+            <p class="eyebrow">DOCUMENTED BEHAVIOUR / MODELLED REPLAY</p>
+            <h2 id="comparison-title">ONE P EXECUTION. TWO M COMMIT POLICIES.</h2>
+            <div class="comparison-source-key" aria-label="Data source key">
+              <span><b class="source-medallion postgres-source">P</b> POSTGRESQL EXECUTION</span>
+              <span><b class="source-medallion model-source">M</b> MODELLED REPLAY</span>
+            </div>
           </div>
           <div class="comparison-header__actions">
             <span id="comparison-status" aria-live="polite">READY</span>
@@ -203,17 +207,12 @@ EACH SUBMITTED STATEMENT EXECUTES ONCE; DISPLAYED ROWS COME FROM THAT EXECUTION.
 
         <section id="comparison-proof" class="comparison-proof" aria-label="Comparison finding">
           <div class="comparison-proof__verdict">
-            <span><b class="source-medallion model-source">M</b> M MODELLED FINDING</span>
-            <strong id="comparison-finding">
-              OFF REMOVES THE LOCAL WAL-FLUSH WAIT — NOT THE FLUSH.
-            </strong>
-            <small>
-              PGLITE CANNOT MEASURE THIS DIFFERENCE: ONE IN-MEMORY CONNECTION,
-              NO STANDBY, NO REAL DEVICE DURABILITY.
-            </small>
+            <span><b class="source-medallion model-source">M</b> MODELLED FINDING</span>
+            <strong id="comparison-finding"></strong>
+            <small id="comparison-pglite-disclosure"></small>
           </div>
           <div class="comparison-contract">
-            <p><b>CHANGED</b> <code>synchronous_commit</code>: <code>on</code> → <code>off</code></p>
+            <p><b>MODELLED</b> <code>synchronous_commit</code>: <code>on</code> vs <code>off</code></p>
             <p><b>HELD</b> SQL · ONE P REPORT · PLAN · BUFFERS · ROUTE · VIEW PACE · NO SYNC STANDBY</p>
             <code id="comparison-sql">UPDATE accounts SET updated_at = updated_at WHERE id = 42;</code>
           </div>
@@ -229,7 +228,7 @@ EACH SUBMITTED STATEMENT EXECUTES ONCE; DISPLAYED ROWS COME FROM THAT EXECUTION.
               <b>B · OFF</b>
               <span class="comparison-timeline__same">SAME ROUTE</span>
               <span class="comparison-timeline__early">ACK</span>
-              <span class="comparison-timeline__flush">WAL FLUSH CONTINUES</span>
+              <span class="comparison-timeline__flush">LOSS WINDOW UNTIL FLUSH</span>
               <span class="comparison-timeline__done">DONE</span>
             </div>
           </div>
@@ -241,16 +240,16 @@ EACH SUBMITTED STATEMENT EXECUTES ONCE; DISPLAYED ROWS COME FROM THAT EXECUTION.
         </nav>
 
         <div class="comparison-lanes">
-          <article class="comparison-board" data-lane="a" aria-label="Control board: synchronous_commit on">
+          <article class="comparison-board" data-lane="a" aria-label="Modelled replay board: synchronous_commit on">
             <header>
               <span class="comparison-board__letter">A</span>
               <div>
-                <b>CONTROL</b>
+                <b>MODELLED ON POLICY</b>
                 <code>synchronous_commit = on</code>
               </div>
               <span class="comparison-board__phase" data-comparison-phase="a">READY</span>
             </header>
-            <p><b class="source-medallion postgres-source">P</b> SAME POSTGRESQL REPORT <b class="source-medallion model-source">M</b> LOCAL FLUSH WAIT</p>
+            <p><b class="source-medallion postgres-source">P</b> SAME POSTGRESQL REPORT <b class="source-medallion model-source">M</b> WAITS FOR LOCAL WAL FLUSH</p>
             <div class="comparison-board__viewport">
               <canvas
                 id="comparison-board-a"
@@ -260,31 +259,31 @@ EACH SUBMITTED STATEMENT EXECUTES ONCE; DISPLAYED ROWS COME FROM THAT EXECUTION.
               ></canvas>
             </div>
           </article>
-          <article class="comparison-board" data-lane="b" aria-label="Changed board: synchronous_commit off">
+          <article class="comparison-board" data-lane="b" aria-label="Modelled replay board: synchronous_commit off">
             <header>
               <span class="comparison-board__letter">B</span>
               <div>
-                <b>ONE CHANGE</b>
+                <b>MODELLED OFF POLICY</b>
                 <code>synchronous_commit = off</code>
               </div>
               <span class="comparison-board__phase" data-comparison-phase="b">READY</span>
             </header>
-            <p><b class="source-medallion postgres-source">P</b> SAME POSTGRESQL REPORT <b class="source-medallion model-source">M</b> EARLY ACK; FLUSH CONTINUES</p>
+            <p><b class="source-medallion postgres-source">P</b> SAME POSTGRESQL REPORT <b class="source-medallion model-source">M</b> EARLY ACK; CRASH CAN LOSE RECENT ACKS</p>
             <div class="comparison-board__viewport">
               <canvas
                 id="comparison-board-b"
                 width="720"
                 height="740"
-                aria-label="Run B architecture board, with synchronous_commit off and a modelled early acknowledgement while WAL flush continues."
+                aria-label="Run B architecture board, with synchronous_commit off and a modelled early acknowledgement whose recent acknowledged commits can be lost in a crash before WAL flush."
               ></canvas>
             </div>
           </article>
         </div>
 
         <footer class="comparison-actions">
-          <button id="comparison-run" type="button">RUN CONTROLLED COMPARISON</button>
+          <button id="comparison-run" type="button">RUN MODELLED REPLAY</button>
           <button id="comparison-continue" type="button" hidden>CONTINUE AFTER FINDING</button>
-          <span>ONE P EXECUTION IS REUSED BY BOTH M REPLAYS, SO P NOISE CANNOT MASQUERADE AS THE SETTING EFFECT.</span>
+          <span id="comparison-replay-disclosure"></span>
         </footer>
       </section>
     </main>

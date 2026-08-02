@@ -641,6 +641,23 @@ button:focus-visible {
   letter-spacing: 0.035em;
 }
 
+.comparison-source-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 12px;
+  margin-top: 7px;
+  color: #9fc8c6;
+  font: 750 8px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.comparison-source-key span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
 .comparison-header__actions {
   display: flex;
   align-items: center;
@@ -680,7 +697,7 @@ button:focus-visible {
 .comparison-actions span {
   margin: 0;
   color: #a9916c;
-  font: 750 7px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font: 750 8px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   letter-spacing: 0.055em;
   text-transform: uppercase;
 }
@@ -713,11 +730,10 @@ button:focus-visible {
 }
 
 .comparison-contract > code {
-  overflow: hidden;
   color: #d7eeee;
   font: 650 9px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .comparison-timeline {
@@ -898,10 +914,9 @@ button:focus-visible {
 }
 
 .comparison-actions span {
-  overflow: hidden;
+  flex: 1 1 auto;
   color: #9fc8c6;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 #comparison-run,
@@ -938,6 +953,14 @@ button:focus-visible {
 
   .clock-control button {
     padding-inline: 6px;
+  }
+
+  .comparison-proof {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .comparison-timeline {
+    grid-column: 1 / -1;
   }
 }
 
@@ -1210,15 +1233,23 @@ button:focus-visible {
   }
 
   .comparison-proof__verdict small {
-    font-size: 6px;
+    font-size: 9px;
   }
 
   .comparison-contract {
-    display: none;
+    display: grid;
+  }
+
+  .comparison-contract p {
+    font-size: 9px;
+  }
+
+  .comparison-contract > code {
+    font-size: 9px;
   }
 
   .comparison-timeline {
-    gap: 3px;
+    display: none;
   }
 
   .comparison-timeline__row {
@@ -1268,8 +1299,8 @@ button:focus-visible {
   }
 
   .comparison-board > p {
-    min-height: 24px;
-    font-size: 6px;
+    min-height: 34px;
+    font-size: 9px;
   }
 
   .comparison-board canvas {
@@ -1285,11 +1316,19 @@ button:focus-visible {
   }
 
   .comparison-actions {
+    flex-direction: column;
+    align-items: stretch;
     min-height: 34px;
   }
 
   .comparison-actions span {
-    display: none;
+    display: block;
+    order: -1;
+    font-size: 9px;
+  }
+
+  .comparison-source-key {
+    font-size: 9px;
   }
 
   #comparison-run,

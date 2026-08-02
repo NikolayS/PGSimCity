@@ -33,11 +33,13 @@ const WRITE_REPORT = Object.freeze({
   },
 })
 
-describe('Machine synchronous_commit experiment', () => {
-  it('holds one PostgreSQL execution fixed and changes only the commit policy', () => {
+describe('Machine synchronous_commit modelled replay', () => {
+  it('holds one PostgreSQL execution fixed and models both commit policies', () => {
     const comparison = createSynchronousCommitComparison(WRITE_REPORT)
     const [control, treatment] = comparison.lanes
 
+    expect(comparison).not.toHaveProperty('changed')
+    expect(comparison.modelledSetting).toBe('synchronous_commit')
     expect(control.setting).toEqual({ synchronous_commit: 'on' })
     expect(treatment.setting).toEqual({ synchronous_commit: 'off' })
     expect(control.replay.sql).toBe(treatment.replay.sql)
@@ -52,6 +54,7 @@ describe('Machine synchronous_commit experiment', () => {
     expect(treatmentCommit.durationMs).toBeLessThan(controlCommit.durationMs)
     expect(treatmentCommit.flushContinuesAfterAck).toBe(true)
     expect(treatmentCommit.backgroundFlushDurationMs).toBe(controlCommit.durationMs)
+    expect(treatmentCommit.measurement).toMatch(/recent ACKs at risk until flush/i)
     expect(treatment.replay.acknowledgementOrigin).toBe('wal_buffers')
   })
 
@@ -63,6 +66,11 @@ describe('Machine synchronous_commit experiment', () => {
     expect(snapshot.findingVisible).toBe(true)
     expect(comparison.finding).toMatch(/acknowledges before the local WAL flush/i)
     expect(comparison.finding).toMatch(/WAL still flushes/i)
+    expect(comparison.finding).toMatch(/crash can lose acknowledged commits/i)
+    expect(comparison.finding).toMatch(/roughly 3.*wal_writer_delay/i)
+    expect(comparison.finding).toMatch(/transactions stay atomic/i)
+    expect(comparison.finding).toMatch(/not fsync\s*=\s*off/i)
+    expect(comparison.replayDisclosure).toMatch(/not SET or re-executed in PGlite/i)
     expect(comparison.evidenceSource).toBe('model')
   })
 })

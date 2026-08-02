@@ -44,6 +44,11 @@ function blockAfter(source, marker) {
   return ''
 }
 
+function fontSizePx(source, selector) {
+  const declaration = blockAfter(source, selector).match(/font-size:\s*([\d.]+)px/)
+  return declaration ? Number(declaration[1]) : 0
+}
+
 describe('machine room portrait layout', () => {
   const portrait = blockAfter(
     css,
@@ -119,13 +124,48 @@ describe('machine room portrait layout', () => {
     expect(blockAfter(portrait, '.comparison-board canvas')).toMatch(/width:\s*720px/)
   })
 
-  it('puts the persistent modelled finding before either animated board', () => {
+  it('puts the persistent modelled finding and source key before either animated board', () => {
     const proofAt = html.indexOf('id="comparison-proof"')
     const boardsAt = html.indexOf('class="comparison-lanes"')
     expect(proofAt).toBeGreaterThan(0)
     expect(boardsAt).toBeGreaterThan(proofAt)
-    expect(html).toMatch(/M MODELLED FINDING/)
-    expect(html).toMatch(/PGLITE CANNOT MEASURE THIS DIFFERENCE/)
+    expect(html).toMatch(/<b class="source-medallion model-source">M<\/b>\s*MODELLED FINDING/)
+    expect(html).toMatch(/class="comparison-source-key"[^>]+aria-label="Data source key"/)
+    expect(html).toMatch(/id="comparison-pglite-disclosure"/)
+    expect(html).toMatch(/id="comparison-replay-disclosure"/)
+    expect(script).toMatch(
+      /comparisonPgliteDisclosure\.textContent\s*=\s*SYNCHRONOUS_COMMIT_COMPARISON_CLAIM\.pgliteDisclosure/,
+    )
+    expect(script).toMatch(
+      /comparisonReplayDisclosure\.textContent\s*=\s*SYNCHRONOUS_COMMIT_COMPARISON_CLAIM\.replayDisclosure/,
+    )
+  })
+
+  it('describes one measured execution replayed through two modelled policies', () => {
+    expect(html).toMatch(/DOCUMENTED BEHAVIOUR \/ MODELLED REPLAY/)
+    expect(html).toMatch(/ONE P EXECUTION\. TWO M COMMIT POLICIES\./)
+    expect(`${html}\n${script}`).not.toMatch(
+      /CONTROLLED EXPERIMENT|ONE SETTING CHANGED|RUN CONTROLLED COMPARISON|EXPERIMENT COMPLETE/,
+    )
+  })
+
+  it('keeps every honesty disclosure visible and legible at 390px', () => {
+    const loadBearingText = [
+      '.comparison-proof__verdict small',
+      '.comparison-contract p',
+      '.comparison-board > p',
+      '.comparison-actions span',
+      '.comparison-source-key',
+    ]
+
+    expect(blockAfter(portrait, '.comparison-contract')).not.toMatch(/display:\s*none/)
+    for (const selector of loadBearingText) {
+      const rules = blockAfter(portrait, selector)
+      expect(rules, `${selector} has no 390px rule`).not.toBe('')
+      expect(rules, `${selector} is hidden at 390px`).not.toMatch(/display:\s*none/)
+      expect(fontSizePx(portrait, selector), `${selector} is below the 9px floor`)
+        .toBeGreaterThanOrEqual(9)
+    }
   })
 })
 
