@@ -78,6 +78,8 @@ export const ANCHOR = {
   controlCenter: [0, 27.8, -217],
   /** The gatehouse in the boundary fence — pg_hba.conf, at ground level. */
   connGate: [0, 0, -252],
+  /** PgBouncer gate on the open approach between the terminal and server fence. */
+  pooler: [0, 0, -276],
   /** Where a connection is handed to the postmaster: its south door. */
   postmasterDoor: [0, 1.8, -206],
 

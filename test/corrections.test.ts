@@ -311,7 +311,7 @@ describe('PostgreSQL correction reports', () => {
     const consoleReports = city.subjects.filter(
       (subject) => subject.label.startsWith('city-console-'),
     )
-    expect(consoleReports).toHaveLength(9)
+    expect(consoleReports).toHaveLength(10)
     const memoryBody = consoleReports
       .find((subject) => subject.label === 'city-console-memory')!
       .links[0].body
@@ -319,6 +319,11 @@ describe('PostgreSQL correction reports', () => {
     expect(memoryBody).toContain('> Per eligible executor node, never per query or connection.')
     expect(memoryBody).not.toContain('How much of the database fits in RAM')
     expect(memoryBody).not.toContain('Everything downstream scales from here')
+    const poolerBody = consoleReports
+      .find((subject) => subject.label === 'city-console-pooler')!
+      .links[0].body
+    expect(poolerBody).toContain('- Panel: Simulation controls / Connection pooler')
+    expect(poolerBody).toContain('> Client admission and the PostgreSQL concurrency ceiling')
 
     const flowBody = reports.find((report) => report.name === 'Query flow')!
       .subjects[0].links[0].body

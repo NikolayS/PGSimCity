@@ -4,7 +4,7 @@ import { createSim } from '../sim/model'
 import { DOCS } from './content'
 
 describe('buffer-pool metrics', () => {
-  it('derive every pool-labelled value from shared_buffers, never the visual sample', () => {
+  it('derives every buffer-pool-labelled value from shared_buffers, never the visual sample', () => {
     const state = createSim(createBus()).state
     const originalSampleSize = state.buffers.sampleFrames
     const originalPoolSize = state.knobs.sharedBuffers
@@ -13,7 +13,7 @@ describe('buffer-pool metrics', () => {
 
     for (const doc of DOCS) {
       for (const metric of doc.metrics ?? []) {
-        if (!/\bpool\b/i.test(metric.label) && !/^shared_buffers$/i.test(metric.label)) continue
+        if (!/(?:buffer pool|pool size)/i.test(metric.label) && !/^shared_buffers$/i.test(metric.label)) continue
         inspected++
 
         const original = metric.get(state)

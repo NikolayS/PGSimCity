@@ -759,6 +759,9 @@ export function createInspector(ctx: UiContext): UiModule {
       data: { correctionSubject: 'city-inspector' },
     })
     if (id === 'backend.localmem') wrap.dataset.disclosure = 'work-mem-model-scope'
+    if (id === 'client.pool' || id === 'client.pooler') {
+      wrap.dataset.disclosure = 'connection-pooler-model-scope'
+    }
     if (id === 'timeline.yard' || id === 'recovery.ground' || id === 'recovery.clock') {
       wrap.dataset.disclosure = 'one-fork-timeline-recovery-scope'
       wrap.append(
