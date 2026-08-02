@@ -11,7 +11,7 @@ import { MACHINE_INDEX_WALK } from '../src/spine/machine-index-walk'
 import type { ClaimId } from '../src/core/claims'
 import { DESTINATIONS } from '../src/core/destinations'
 import { formatModelMilliseconds } from '../src/core/trace-presentation'
-import { N_BUFFERS } from '../src/core/types'
+import { N_BACKEND_SLOTS, N_BUFFERS } from '../src/core/types'
 import { createBus } from '../src/core/bus'
 import { CATALOG } from '../src/observability/catalog'
 import { createCollector } from '../src/observability/collector'
@@ -280,19 +280,27 @@ describe('claims and conventions spine', () => {
       sim.state.knobs.maxClientConn,
       claim.pgBouncerDefaults.maxClientConn,
     )
+    agrees(
+      'connectionPooler',
+      'model:PgBouncer query_wait_timeout default',
+      sim.state.knobs.queryWaitTimeout,
+      claim.pgBouncerDefaults.queryWaitTimeoutSeconds,
+    )
     expect(CONNECTION_POOLER_PLATE_LABEL).toContain('PgBouncer')
     expect(CONNECTION_POOLER_PLATE_LABEL).toContain('pool_mode')
 
     const poolMode = KNOB_META.find((knob) => knob.key === 'poolMode')
     const poolSize = KNOB_META.find((knob) => knob.key === 'defaultPoolSize')
     const clientLimit = KNOB_META.find((knob) => knob.key === 'maxClientConn')
+    const waitTimeout = KNOB_META.find((knob) => knob.key === 'queryWaitTimeout')
     expect(poolMode?.options?.map((option) => option.value))
       .toEqual(['disabled', 'session', 'transaction'])
     expect(poolMode?.hint).toContain(claim.transactionTradeoff)
     expect(poolMode?.hint).toContain(claim.coverageDisclosure)
     expect(poolSize?.hint).toContain(String(claim.pgBouncerDefaults.defaultPoolSize))
     expect(clientLimit?.hint).toContain(String(claim.pgBouncerDefaults.maxClientConn))
-    for (const control of [poolMode, poolSize, clientLimit]) {
+    expect(waitTimeout?.hint).toContain(String(claim.pgBouncerDefaults.queryWaitTimeoutSeconds))
+    for (const control of [poolMode, poolSize, clientLimit, waitTimeout]) {
       expect(control?.disclosure).toBeTruthy()
     }
 
@@ -305,9 +313,15 @@ describe('claims and conventions spine', () => {
     expect(copy).toContain(claim.coverageDisclosure)
     expect(copy).toMatch(/pg_stat_activity.*server process/is)
     expect(copy).toMatch(/pgcat.*Odyssey/is)
+    expect(copy).toMatch(/connect.*authentication.*backend[- ]startup/is)
+    expect(copy).toMatch(/query_wait_timeout.*120.*disconnect/is)
+    expect(copy).toMatch(/cl_active.*cl_waiting.*sv_active.*sv_idle/is)
+    expect(copy).toMatch(/cl_active.*idle clients/is)
+    expect(copy).not.toMatch(/not a speed feature/i)
+    expect(copy).not.toMatch(/client_active|client_waiting|server_active|server_idle/i)
     expect(claim.absent).toEqual([
       'PgBouncer statement pool mode',
-      'client-to-server session binding and disconnect lifetimes',
+      'production session-lifetime distribution and reconnect backoff',
       'session variables and SET/RESET effects',
       'advisory-lock ownership across transactions',
       'prepared-statement tracking',
@@ -320,9 +334,20 @@ describe('claims and conventions spine', () => {
     const scenario = SCENARIOS.find((candidate) => candidate.id === 'connection-storm')
     const scenarioCopy = scenario?.beats?.flatMap((beat) => beat.slice(1)).join('\n') ?? ''
     expect(scenario?.knobs.poolMode).toBe('disabled')
-    expect(scenario?.knobs.clientConnections).toBe(1_000)
+    expect(scenario?.knobs.clientConnections).toBe(N_BACKEND_SLOTS)
     expect(scenarioCopy).toMatch(/Pool-slot queue/i)
     expect(scenarioCopy).toMatch(/SET\/RESET.*advisory lock.*PREPARE.*LISTEN/is)
+    expect(scenarioCopy).toMatch(/cl_active.*cl_waiting.*sv_active.*sv_idle/is)
+    expect(scenarioCopy).not.toMatch(/not a speed feature|client_active|server_active/i)
+
+    const connections = doc('client.pool')
+    const connectionCopy = [
+      connections?.tldr ?? '',
+      ...(connections?.sections.map((section) => section.body) ?? []),
+    ].join('\n')
+    expect(connectionCopy).toMatch(/configured ceiling.*startup allocation/is)
+    expect(connectionCopy).toMatch(/runtime cost.*actually connected backends.*contention/is)
+    expect(connectionCopy).not.toMatch(/every snapshot and every lock lookup more expensive/i)
   })
 
   it('keeps work_mem per-node math and model limits aligned across surfaces', () => {

@@ -260,6 +260,14 @@ const RESPONSE_CONTRACTS = {
       return sim.state.pooler.acceptedClients
     },
   },
+  queryWaitTimeout: {
+    target: 0,
+    measure(value: number) {
+      const sim = createSim(createBus())
+      sim.setKnob('queryWaitTimeout', value)
+      return sim.state.knobs.queryWaitTimeout
+    },
+  },
   writeRatio: {
     target: 1,
     measure(value: number) {

@@ -98,6 +98,8 @@ export interface Knobs {
   defaultPoolSize: number
   /** PgBouncer max_client_conn process-wide admission ceiling. */
   maxClientConn: number
+  /** PgBouncer query_wait_timeout in seconds; zero waits indefinitely. */
+  queryWaitTimeout: number
   /** 0..1 — share of statements that write. */
   writeRatio: number
   /** 0..1 — within writes, share that are UPDATE/DELETE (vs INSERT). */
@@ -184,6 +186,7 @@ export const DEFAULT_KNOBS: Knobs = {
   poolMode: 'disabled',
   defaultPoolSize: 8,
   maxClientConn: 100,
+  queryWaitTimeout: CLAIM_VALUES.connectionPooler.pgBouncerDefaults.queryWaitTimeoutSeconds,
   writeRatio: 0.2,
   updateRatio: 0.6,
   seqScanRatio: 0.15,
@@ -1021,12 +1024,24 @@ export interface PoolerState {
   acceptedClients: number
   /** Client connections rejected at the active admission boundary. */
   refusedClients: number
+  /** Session-mode clients currently bound to a PostgreSQL server connection. */
+  boundClients: number
+  /** Per-backend pending work for the client session bound to that slot. */
+  sessionPendingTransactions: number[]
   /** Clients with modeled work waiting for a pooled server connection. */
   waitingClients: number
+  /** Cumulative client disconnects caused by query_wait_timeout. */
+  disconnectedClients: number
   /** PostgreSQL client backends currently visible in pg_stat_activity. */
   serverConnections: number
-  /** Demand-capped direct clients; default_pool_size capped by max_connections when pooled. */
+  /** Direct demand or PgBouncer's configured default_pool_size. */
   serverLimit: number
+  /** Server connections PostgreSQL can accept in this sixteen-slot model. */
+  serverCapacity: number
+  /** Configured pooled server connections PostgreSQL cannot accept. */
+  serverConnectionErrors: number
+  /** Transactions/sec offered by admitted clients that can reach a server. */
+  serverOfferedTps: number
 }
 
 export interface LatencyQuantile {
@@ -1069,6 +1084,12 @@ export interface SimStats {
   activeBackends: number
   /** Backends whose pg_stat_activity state is active. */
   runningBackends: number
+  /** Transactions currently retained in the modeled PgBouncer queue. */
+  poolerQueuedTransactions: number
+  /** Waiting queries expired by query_wait_timeout since reset. */
+  poolerQueryWaitTimeouts: number
+  /** Synthetic statement-cost multiplier derived only from active backends. */
+  backendConcurrencyMultiplier: number
   /** Rolling weighted transaction quantiles in deliberately stretched model ms. */
   latency: LatencyStats
   /** rolling window for sparklines: newest last */

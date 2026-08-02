@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { DEFAULT_KNOBS } from '../core/types'
+import { DEFAULT_KNOBS, N_BACKEND_SLOTS } from '../core/types'
+import { backendConcurrencyMultiplier } from './model'
 import { createAggregateSim } from './test-support'
 
 function advanceBy(
@@ -22,12 +23,14 @@ describe('connection pooler', () => {
     sim.setKnob('tps', 3_200)
     sim.setKnob('synchronousCommit', 'off')
     sim.setKnob('autovacuum', false)
-    advanceBy(sim, 12)
+    advanceBy(sim, 20)
 
     expect(sim.state.pooler.clientConnections).toBe(1_000)
     expect(sim.state.pooler.acceptedClients).toBe(1_000)
     expect(sim.state.pooler.refusedClients).toBe(0)
     expect(sim.state.pooler.serverLimit).toBe(8)
+    expect(sim.state.pooler.serverCapacity).toBe(8)
+    expect(sim.state.pooler.boundClients).toBe(0)
     expect(sim.state.stats.activeBackends).toBeLessThanOrEqual(8)
     expect(sim.state.pooler.serverConnections).toBe(sim.state.stats.activeBackends)
     expect(sim.state.stats.latency.p99.waits.poolSlotMs).toBeGreaterThan(0)
@@ -47,23 +50,113 @@ describe('connection pooler', () => {
     expect(sim.state.pooler.serverLimit).toBe(8)
   })
 
-  it('caps session pooling without claiming transaction-boundary queue attribution', () => {
+  it('binds session clients until their modeled connection lifetime ends', () => {
     const sim = createAggregateSim()
     sim.setKnob('clientConnections', 1_000)
     sim.setKnob('poolMode', 'session')
     sim.setKnob('defaultPoolSize', 8)
     sim.setKnob('maxClientConn', 1_000)
-    sim.setKnob('tps', 3_200)
-    advanceBy(sim, 12)
+    sim.setKnob('tps', 100)
+    advanceBy(sim, 20)
 
     expect(sim.state.pooler.acceptedClients).toBe(1_000)
     expect(sim.state.pooler.serverLimit).toBe(8)
+    expect(sim.state.pooler.boundClients).toBe(8)
+    expect(sim.state.pooler.waitingClients).toBe(992)
+    expect(sim.state.pooler.serverOfferedTps).toBeCloseTo(0.8)
+    expect(sim.state.pooler.sessionPendingTransactions.slice(8)).toEqual(Array(8).fill(0))
+    expect(sim.state.pooler.sessionPendingTransactions.slice(0, 8).some((count) => count > 0))
     expect(sim.state.stats.activeBackends).toBeLessThanOrEqual(8)
-    expect(sim.state.stats.latency.p99.waits.poolSlotMs).toBe(0)
+    expect(sim.state.stats.latency.p99.waits.poolSlotMs).toBeGreaterThan(0)
+
+    advanceBy(sim, 110)
+    expect(sim.state.stats.poolerQueryWaitTimeouts).toBeGreaterThan(0)
+    expect(sim.state.pooler.disconnectedClients).toBeGreaterThan(0)
   })
 
   it('keeps PgBouncer disabled in the stock city', () => {
     expect(DEFAULT_KNOBS.poolMode).toBe('disabled')
+    expect(DEFAULT_KNOBS.queryWaitTimeout).toBe(120)
+  })
+
+  it('keeps every transaction queued until query_wait_timeout expires', () => {
+    const sim = createAggregateSim()
+    sim.setKnob('clientConnections', 1_000)
+    sim.setKnob('poolMode', 'transaction')
+    sim.setKnob('defaultPoolSize', 8)
+    sim.setKnob('maxClientConn', 1_000)
+    sim.setKnob('queryWaitTimeout', 120)
+    sim.setKnob('tps', 3_200)
+    sim.setKnob('synchronousCommit', 'off')
+    sim.setKnob('autovacuum', false)
+    advanceBy(sim, 35)
+
+    expect(sim.state.stats.poolerQueryWaitTimeouts).toBe(0)
+    expect(sim.state.stats.poolerQueuedTransactions).toBeGreaterThan(3_200 * 10)
+    expect(sim.state.stats.latency.p99.waits.poolSlotMs).toBeGreaterThan(10_500)
+    expect(sim.state.pooler.disconnectedClients).toBe(0)
+  })
+
+  it('disconnects timed-out waiters while zero queues indefinitely', () => {
+    const timed = createAggregateSim()
+    timed.setKnob('clientConnections', 1_000)
+    timed.setKnob('poolMode', 'transaction')
+    timed.setKnob('defaultPoolSize', 8)
+    timed.setKnob('maxClientConn', 1_000)
+    timed.setKnob('queryWaitTimeout', 20)
+    timed.setKnob('tps', 3_200)
+    timed.setKnob('synchronousCommit', 'off')
+    timed.setKnob('autovacuum', false)
+
+    const indefinite = createAggregateSim()
+    indefinite.setKnob('clientConnections', 1_000)
+    indefinite.setKnob('poolMode', 'transaction')
+    indefinite.setKnob('defaultPoolSize', 8)
+    indefinite.setKnob('maxClientConn', 1_000)
+    indefinite.setKnob('queryWaitTimeout', 0)
+    indefinite.setKnob('tps', 3_200)
+    indefinite.setKnob('synchronousCommit', 'off')
+    indefinite.setKnob('autovacuum', false)
+
+    advanceBy(timed, 40, 0.1)
+    advanceBy(indefinite, 40, 0.1)
+
+    expect(timed.state.stats.poolerQueryWaitTimeouts).toBeGreaterThan(0)
+    expect(timed.state.pooler.disconnectedClients).toBeGreaterThan(0)
+    expect(indefinite.state.stats.poolerQueryWaitTimeouts).toBe(0)
+    expect(indefinite.state.pooler.disconnectedClients).toBe(0)
+    expect(indefinite.state.stats.poolerQueuedTransactions)
+      .toBeGreaterThan(timed.state.stats.poolerQueuedTransactions)
+  })
+
+  it('derives statement pressure only from connected PostgreSQL backends', () => {
+    const sim = createAggregateSim()
+    sim.runScenario('connection-storm')
+    advanceBy(sim, 8)
+
+    expect(sim.state.stats.backendConcurrencyMultiplier)
+      .toBe(backendConcurrencyMultiplier(sim.state.stats.activeBackends))
+
+    sim.setKnob('clientConnections', N_BACKEND_SLOTS + 1)
+    advanceBy(sim, 0.1)
+
+    expect(sim.state.pooler.refusedClients).toBe(1)
+    expect(sim.state.stats.backendConcurrencyMultiplier)
+      .toBe(backendConcurrencyMultiplier(sim.state.stats.activeBackends))
+  })
+
+  it('does not make PgBouncer coordinate its server target with max_connections', () => {
+    const sim = createAggregateSim()
+    sim.setKnob('clientConnections', 100)
+    sim.setKnob('poolMode', 'transaction')
+    sim.setKnob('defaultPoolSize', 20)
+    sim.setKnob('tps', 1_000)
+    advanceBy(sim, 8)
+
+    expect(sim.state.pooler.serverLimit).toBe(20)
+    expect(sim.state.pooler.serverCapacity).toBe(N_BACKEND_SLOTS)
+    expect(sim.state.pooler.serverConnectionErrors).toBe(4)
+    expect(sim.state.stats.activeBackends).toBeLessThanOrEqual(N_BACKEND_SLOTS)
   })
 
   function stormReading(sim: ReturnType<typeof createAggregateSim>, seconds: number) {
@@ -81,6 +174,9 @@ describe('connection pooler', () => {
       backends: sim.state.stats.activeBackends,
       acceptedClients: sim.state.pooler.acceptedClients,
       refusedClients: sim.state.pooler.refusedClients,
+      queuedTransactions: sim.state.stats.poolerQueuedTransactions,
+      waitTimeouts: sim.state.stats.poolerQueryWaitTimeouts,
+      pressureMultiplier: sim.state.stats.backendConcurrencyMultiplier,
     }
   }
 
@@ -93,14 +189,14 @@ describe('connection pooler', () => {
     const pooled = stormReading(sim, 19)
     console.info('connection storm pooler measurement', { direct, pooled })
 
-    expect(pooled.tps).toBeGreaterThan(direct.tps)
     expect(pooled.backends).toBeLessThan(direct.backends)
     expect(direct.poolSlotP50).toBe(0)
     expect(direct.poolSlotP99).toBe(0)
-    expect(pooled.poolSlotP50).toBeGreaterThan(pooled.runningP50)
     expect(pooled.poolSlotP99).toBeGreaterThan(0)
-    expect(direct.runningP99 / direct.p99).toBeGreaterThan(pooled.runningP99 / pooled.p99)
-    expect(direct.refusedClients).toBeGreaterThan(0)
+    expect(direct.pressureMultiplier).toBeGreaterThan(pooled.pressureMultiplier)
+    expect(direct.refusedClients).toBe(0)
     expect(pooled.acceptedClients).toBe(1_000)
+    expect(pooled.waitTimeouts).toBe(0)
+    expect(pooled.queuedTransactions).toBeGreaterThan(0)
   })
 })

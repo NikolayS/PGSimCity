@@ -878,7 +878,7 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
     color: COLOR.client,
     readout: (s) => s.pooler.mode === 'disabled'
       ? `direct · ${s.pooler.acceptedClients} of ${s.pooler.clientConnections} clients admitted`
-      : `${s.pooler.acceptedClients} clients → ${s.pooler.serverConnections}/${s.pooler.serverLimit} PostgreSQL backends`,
+      : `${s.pooler.acceptedClients} clients → ${s.pooler.serverConnections}/${s.pooler.serverCapacity} PostgreSQL backends`,
   })
 
   ctx.register({

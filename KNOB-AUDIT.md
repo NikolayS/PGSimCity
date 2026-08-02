@@ -21,16 +21,17 @@ quoted below is measured, not estimated.
 
 ## Connection-pooler addendum — 2026-08-02
 
-The pooler work adds four controls. All four pass the executable response sweep
+The pooler work adds five controls. All five pass the executable response sweep
 in `src/sim/knob-response.test.ts`, and the boundary semantics have focused
 coverage in `src/sim/pooler.test.ts`.
 
 | Knob | Real setting | Verdict | Consequence verified |
 |---|---|---|---|
 | `clientConnections` | application workload, not a GUC | **CORRECT** | Direct mode admits at most the city's sixteen PostgreSQL connections; pooled mode admits up to `max_client_conn` without raising the server-process count. |
-| `poolMode` | PgBouncer `pool_mode` | **CORRECT** | `disabled` is the city's direct comparison; `transaction` attributes the bounded queue to Pool-slot latency; `session` uses the server cap but does not fabricate transaction-boundary queue attribution or session-state behavior. |
-| `defaultPoolSize` | PgBouncer `default_pool_size` | **CORRECT** | Moving the control changes this one modeled user/database pool's PostgreSQL server limit, capped by the city's sixteen backend slots. It does not discount statement cost. |
+| `poolMode` | PgBouncer `pool_mode` | **CORRECT** | `disabled` is the city's direct comparison; `transaction` attributes FIFO queue age to Pool-slot latency; `session` binds only eight clients at a time and records initial assignment wait when a fixed fifteen-model-second client lifetime ends. |
+| `defaultPoolSize` | PgBouncer `default_pool_size` | **CORRECT** | Moving the control changes this one modeled user/database pool's configured server target. A target above the city's sixteen-slot PostgreSQL capacity is exposed as failed server-connection attempts, not silently coordinated downward. |
 | `maxClientConn` | PgBouncer `max_client_conn` | **CORRECT** | At 1,000 application clients, a value of 100 admits 100 and refuses 900 while leaving the PostgreSQL server limit at eight. |
+| `queryWaitTimeout` | PgBouncer `query_wait_timeout` | **CORRECT** | The 120-second default disconnects clients whose FIFO arrival cohorts expire; zero retains the queue indefinitely. Expired queries and cumulative disconnects are public model state and panel metrics. |
 
 **Connection-storm before/after measurement.** The seeded scenario was read at
 30 model steps/s: direct mode over t=28–43 s, then the transaction-pool state
@@ -38,20 +39,25 @@ over t=76–95 s. These are model-time teaching values, not production forecasts
 
 | | Direct | Transaction pool |
 |---|---:|---:|
-| achieved throughput | 8.33 tps | 143.63 tps |
-| rolling p50 | 0.700 s | 11.439 s |
-| rolling p99 | 13.367 s | 14.567 s |
-| Pool-slot component p50 / p99 | 0 / 0 s | 10.003 / 10.010 s |
-| Active / unclassified component p50 / p99 | 0.600 / 10.667 s | 0.866 / 2.033 s |
-| PostgreSQL backends | 16 | 8 |
-| clients admitted / refused | 16 / 984 | 1,000 / 0 |
+| achieved throughput | 1,170.80 tps | 996.05 tps |
+| rolling p50 | 0.933 s | 27.367 s |
+| rolling p99 | 2.467 s | 50.467 s |
+| Pool-slot component p50 / p99 | 0 / 0 s | 26.933 / 49.733 s |
+| Active / unclassified component p50 / p99 | 0.629 / 1.167 s | 0.318 / 0.500 s |
+| PostgreSQL backends at sample | 14 | 8 |
+| clients admitted / refused | 16 / 0 | 1,000 / 0 |
+| queued transactions / wait timeouts | 0 / 0 | 204,304 / 0 |
 
-The pool did not make a statement faster. It held PostgreSQL at the model's
-eight-backend concurrency knee, which raised completed throughput and moved the
-median delay into the explicit client-side pool-slot estimate. The direct run's
-rejected clients are failures, not low-latency completions. Component quantiles
-are computed independently, so their p99 values are not additive. The scenario
-knobs were not moved to produce this comparison.
+Both sides receive the full 3,200 tps offered workload: the direct phase has
+sixteen admitted client connections, while the pooled phase admits 1,000 client
+sockets and targets eight PostgreSQL servers. Connection churn makes the direct
+backend count fluctuate; the sample caught fourteen, so its pressure multiplier
+was 2.406 versus 1.0 at the pooled knee. Pooling removes modeled connection churn
+and lowers backend pressure, but it does not change an assigned statement's plan
+or executor cost. In this run throughput is lower after pooling and the retained
+queue's measured FIFO age dominates latency; no work expires before the
+120-second timeout. Component quantiles are independent, so p99 values are not
+additive.
 
 The roadmap says "eleven of twenty-two". This audit re-grades four of them and
 adds three the earlier sweep passed; see [Changes from the previous
