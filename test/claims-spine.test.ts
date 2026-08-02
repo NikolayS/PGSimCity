@@ -7,6 +7,7 @@ import {
   CLAIM_VALUES,
 } from '../src/core/claims'
 import { MACHINE_SYNCHRONOUS_COMMIT_COMPARISON } from '../src/spine/machine-comparison'
+import { MACHINE_INDEX_WALK } from '../src/spine/machine-index-walk'
 import type { ClaimId } from '../src/core/claims'
 import { DESTINATIONS } from '../src/core/destinations'
 import { formatModelMilliseconds } from '../src/core/trace-presentation'
@@ -69,7 +70,7 @@ function lineOf(text: string, index: number): number {
 }
 
 describe('claims and conventions spine', () => {
-  it('owns exactly the twenty drift-prone contracts across both passes', () => {
+  it('owns exactly the twenty-one drift-prone contracts across both passes', () => {
     expect(Object.keys(CLAIMS)).toEqual([
       'appVersion',
       'walSegment',
@@ -91,6 +92,7 @@ describe('claims and conventions spine', () => {
       'markdownRendering',
       'reviewStatus',
       'machineSynchronousCommitComparison',
+      'machineIndexWalk',
     ])
     for (const claim of Object.values(CLAIMS)) {
       expect(claim.owner).not.toBe('')
@@ -555,6 +557,25 @@ describe('claims and conventions spine', () => {
       .toContain('**Shipped — controlled comparison.**')
     expect(roadmap, 'Machine:comparison roadmap still claims two PostgreSQL executions')
       .toMatch(/one PostgreSQL execution report/i)
+  })
+
+  it('keeps the Machine index walk attached to its sequential P/M boundary', () => {
+    agrees(
+      'machineIndexWalk',
+      'Machine:index walk claim',
+      CLAIMS.machineIndexWalk.value,
+      MACHINE_INDEX_WALK,
+    )
+    expect(MACHINE_INDEX_WALK.finding).toContain('accounts_pkey')
+    expect(MACHINE_INDEX_WALK.finding).toContain('Index Scan')
+    expect(MACHINE_INDEX_WALK.finding).toContain('Seq Scan')
+    expect(MACHINE_INDEX_WALK.sequenceDisclosure).toContain('one after another')
+    expect(MACHINE_INDEX_WALK.sequenceDisclosure).toContain('one in-memory PGlite connection')
+    expect(MACHINE_INDEX_WALK.modelDisclosure).toContain('M board motion')
+    expect(MACHINE_INDEX_WALK.modelDisclosure).toContain('no concurrency')
+    expect(MACHINE_INDEX_WALK.modelDisclosure).toContain('no device latency')
+    expect(read('machine/index-walk.js'), 'Machine:index walk does not consume the owned claim')
+      .toContain('MACHINE_INDEX_WALK as claim')
   })
 
   it('uses each registered destination name as its inspector panel title', async () => {

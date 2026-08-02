@@ -50,6 +50,7 @@
           <div class="header-side">
             <nav class="machine-nav" aria-label="Machine room navigation">
               <a href="../" data-mode-exit="machine-room">← Back to city</a>
+              <button id="index-walk-open" type="button">START HERE</button>
               <details class="machine-legal">
                 <summary>Legal</summary>
                 <p>
@@ -191,6 +192,78 @@ EACH SUBMITTED STATEMENT EXECUTES ONCE; DISPLAYED ROWS COME FROM THAT EXECUTION.
       </section>
 
       <p class="fallback">This prototype needs a browser with Canvas 2D support.</p>
+
+      <section
+        id="index-walk"
+        class="index-walk"
+        data-correction-subject="machine-index-walk"
+        aria-labelledby="index-walk-title"
+        hidden
+      >
+        <header class="index-walk__header">
+          <div id="index-walk-intro">
+            <p class="eyebrow" data-disclosure="index-walk-source">P SEQUENCE / M BOARD REPLAYS</p>
+            <h2 id="index-walk-title">FROM SELECT 1 TO AN ACCESS PATH</h2>
+            <p>Four real PostgreSQL reports answer why two queries returning the same row take different routes.</p>
+          </div>
+          <div class="index-walk__header-actions">
+            <span id="index-walk-status" aria-live="polite">READY · 0/4</span>
+            <button id="index-walk-close" type="button">CLOSE</button>
+          </div>
+        </header>
+
+        <div id="index-walk-steps" class="index-walk__steps">
+          <button type="button" data-index-walk-step="constant">
+            <span class="index-walk__number">01</span>
+            <span class="index-walk__copy">
+              <b>START WITHOUT A TABLE</b>
+              <code>SELECT 1;</code>
+              <small>A result can exist before any relation access.</small>
+            </span>
+            <output data-index-walk-result="constant">RUN FIRST</output>
+          </button>
+          <button type="button" data-index-walk-step="catalog" disabled>
+            <span class="index-walk__number">02</span>
+            <span class="index-walk__copy">
+              <b>ASK THE CATALOGS</b>
+              <code>pg_class + pg_attribute + pg_index</code>
+              <small>Read the indexed path PostgreSQL says exists.</small>
+            </span>
+            <output data-index-walk-result="catalog">LOCKED</output>
+          </button>
+          <button type="button" data-index-walk-step="indexed" disabled>
+            <span class="index-walk__number">03</span>
+            <span class="index-walk__copy">
+              <b>USE THE INDEXED COLUMN</b>
+              <code>WHERE id = 42</code>
+              <small>See whether EXPLAIN reports accounts_pkey.</small>
+            </span>
+            <output data-index-walk-result="indexed">LOCKED</output>
+          </button>
+          <button type="button" data-index-walk-step="unindexed" disabled>
+            <span class="index-walk__number">04</span>
+            <span class="index-walk__copy">
+              <b>ASK FOR THE SAME ROW ANOTHER WAY</b>
+              <code>WHERE owner = 'account-42'</code>
+              <small>Retain both plans instead of replacing the first receipt.</small>
+            </span>
+            <output data-index-walk-result="unindexed">LOCKED</output>
+          </button>
+        </div>
+
+        <footer id="index-walk-footer" class="index-walk__footer">
+          <div id="index-walk-finding" class="index-walk__finding" hidden>
+            <span><b class="source-medallion postgres-source">P</b> MEASURED FINDING</span>
+            <strong id="index-walk-finding-text"></strong>
+          </div>
+          <div id="index-walk-disclosures" class="index-walk__disclosures">
+            <p id="index-walk-sequence" data-disclosure="index-walk-sequence"></p>
+            <p id="index-walk-model" data-disclosure="index-walk-model"></p>
+            <p id="index-walk-comparison" data-disclosure="index-walk-comparison"></p>
+          </div>
+          <button id="index-walk-reset" type="button">RESET WALK</button>
+        </footer>
+      </section>
 
       <section
         id="comparison"

@@ -5,6 +5,7 @@
  */
 
 import { MACHINE_SYNCHRONOUS_COMMIT_COMPARISON } from '../spine/machine-comparison'
+import { MACHINE_INDEX_WALK } from '../spine/machine-index-walk'
 import { BUILD_LABEL } from './build'
 
 const KIB = 1024
@@ -333,6 +334,15 @@ export const CLAIMS = {
       'model:off bypasses commit_wait',
       'Machine:comparison experiment',
       'Machine:comparison finding and P/M disclosure',
+    ],
+  },
+  machineIndexWalk: {
+    owner: 'src/spine/machine-index-walk.ts#MACHINE_INDEX_WALK',
+    value: MACHINE_INDEX_WALK,
+    surfaces: [
+      'Machine:index walk sequence',
+      'Machine:index walk measured finding',
+      'Machine:index walk P/M disclosures',
     ],
   },
 } as const

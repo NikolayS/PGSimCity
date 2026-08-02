@@ -149,12 +149,30 @@ describe('machine room portrait layout', () => {
     )
   })
 
+  it('offers a sequential first-query walk while keeping the board visible', () => {
+    expect(html).toMatch(/<button[^>]+id="index-walk-open"[^>]*>START HERE<\/button>/)
+    expect(html).toMatch(/id="index-walk"[^>]+hidden/)
+    expect(html.match(/data-index-walk-step=/g)).toHaveLength(4)
+    expect(html).toMatch(/data-disclosure="index-walk-sequence"/)
+    expect(html).toMatch(/data-disclosure="index-walk-model"/)
+    expect(html).toMatch(/data-disclosure="index-walk-comparison"/)
+    expect(script).toMatch(/matchingIndexWalkStep\(report\)/)
+    expect(script).toMatch(/createIndexWalkEvidence\(step\.id, report\)/)
+
+    const walk = blockAfter(portrait, '.index-walk')
+    expect(walk).toMatch(/inset:\s*auto\s+0\s+0/)
+    expect(walk).toMatch(/max-height:\s*48dvh/)
+  })
+
   it('keeps every marked honesty disclosure visible and legible at 390px', async () => {
     const reports = await measureDisclosurePages([{
       name: 'Machine',
       path: '/machine/',
       readySelector: '[data-disclosure="comparison-framing"]',
-      prepare: `document.querySelector('#comparison').hidden = false`,
+      prepare: `
+        document.querySelector('#comparison').hidden = false
+        document.querySelector('#index-walk').hidden = false
+      `,
       probeMarker: true,
     }, {
       name: 'City',

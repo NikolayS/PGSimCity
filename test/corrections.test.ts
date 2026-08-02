@@ -182,7 +182,7 @@ describe('PostgreSQL correction reports', () => {
       ['src/ui/control-center.ts', 1, 'control center'],
       ['src/ui/help.ts', 1, 'help and reading guide'],
       ['src/observability/main.ts', 1, 'all Diagnose and Query flow cards'],
-      ['machine/magnum.js', 3, 'Machine workbench, board, and comparison'],
+      ['machine/magnum.js', 4, 'Machine workbench, board, index walk, and comparison'],
     ] as const
 
     for (const [file, expectedPaths, surface] of renderers) {

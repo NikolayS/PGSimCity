@@ -41,6 +41,13 @@ import {
   createSynchronousCommitComparison,
 } from './comparison.js'
 import {
+  INDEX_WALK_CLAIM,
+  INDEX_WALK_STEPS,
+  createIndexWalkEvidence,
+  indexWalkFinding,
+  matchingIndexWalkStep,
+} from './index-walk.js'
+import {
   createCorrectionPath,
   displayedClaim,
 } from '../src/core/corrections.ts'
@@ -91,6 +98,21 @@ const comparisonPhaseB = document.querySelector('[data-comparison-phase="b"]')
 const comparisonNoteB = document.querySelector('[data-comparison-note="b"]')
 const comparisonTabA = document.querySelector('[data-comparison-lane="a"]')
 const comparisonTabB = document.querySelector('[data-comparison-lane="b"]')
+const indexWalkRoot = document.querySelector('#index-walk')
+const indexWalkIntro = document.querySelector('#index-walk-intro')
+const indexWalkOpen = document.querySelector('#index-walk-open')
+const indexWalkClose = document.querySelector('#index-walk-close')
+const indexWalkStatus = document.querySelector('#index-walk-status')
+const indexWalkStepsRoot = document.querySelector('#index-walk-steps')
+const indexWalkStepButtons = [...document.querySelectorAll('[data-index-walk-step]')]
+const indexWalkFindingRoot = document.querySelector('#index-walk-finding')
+const indexWalkFindingText = document.querySelector('#index-walk-finding-text')
+const indexWalkDisclosures = document.querySelector('#index-walk-disclosures')
+const indexWalkSequence = document.querySelector('#index-walk-sequence')
+const indexWalkModel = document.querySelector('#index-walk-model')
+const indexWalkComparison = document.querySelector('#index-walk-comparison')
+const indexWalkReset = document.querySelector('#index-walk-reset')
+const indexWalkFooter = document.querySelector('#index-walk-footer')
 let ctx = canvas?.getContext('2d')
 const comparisonCtxA = comparisonBoardA?.getContext('2d')
 const comparisonCtxB = comparisonBoardB?.getContext('2d')
@@ -143,6 +165,21 @@ if (
   || !comparisonNoteB
   || !comparisonTabA
   || !comparisonTabB
+  || !indexWalkRoot
+  || !indexWalkIntro
+  || !indexWalkOpen
+  || !indexWalkClose
+  || !indexWalkStatus
+  || !indexWalkStepsRoot
+  || indexWalkStepButtons.length !== INDEX_WALK_STEPS.length
+  || !indexWalkFindingRoot
+  || !indexWalkFindingText
+  || !indexWalkDisclosures
+  || !indexWalkSequence
+  || !indexWalkModel
+  || !indexWalkComparison
+  || !indexWalkReset
+  || !indexWalkFooter
   || !comparisonCtxA
   || !comparisonCtxB
 ) {
@@ -471,6 +508,31 @@ const comparisonState = {
   lastMobileStage: new Int16Array([-1, -1]),
 }
 
+const indexWalkEvidence = new Array(INDEX_WALK_STEPS.length).fill(null)
+const indexWalkState = {
+  visible: false,
+  status: 'idle',
+  invited: false,
+  error: null,
+}
+
+createCorrectionPath(indexWalkFooter, {
+  surface: 'Machine / First index walk',
+  panel: 'SELECT 1 to indexed and unindexed access paths',
+  source: 'src/spine/machine-index-walk.ts#MACHINE_INDEX_WALK; machine/index-walk.js',
+  claim: () => displayedClaim(
+    indexWalkIntro,
+    indexWalkStepsRoot,
+    indexWalkFindingRoot,
+    indexWalkDisclosures,
+  ),
+  context: () => [
+    ['Walk status', indexWalkStatus.textContent || 'unknown'],
+    ['Completed PostgreSQL receipts', String(indexWalkEvidence.filter(Boolean).length)],
+  ],
+  disclosure: true,
+})
+
 const params = new URLSearchParams(window.location.search)
 const suppliedTimeParam = params.get('t')
 const suppliedTime = suppliedTimeParam === null ? Number.NaN : Number(suppliedTimeParam)
@@ -637,6 +699,7 @@ function stepStatementReplay() {
     statement.elapsedMs = elapsedAtStatementStage(statement.replay, next)
   }
   updateStatementControls()
+  completeIndexWalkReplayIfReady()
 }
 
 function updateStatementReplay(elapsedSeconds) {
@@ -656,6 +719,7 @@ function updateStatementReplay(elapsedSeconds) {
   if (statement.elapsedMs >= statement.replay.durationMs) {
     statement.status = 'complete'
     completionFollowPending = true
+    completeIndexWalkReplayIfReady()
   }
 }
 
@@ -754,6 +818,10 @@ function updateComparisonUi() {
 }
 
 function openComparison() {
+  if (indexWalkState.visible) {
+    indexWalkState.visible = false
+    updateIndexWalkUi()
+  }
   comparisonState.visible = true
   updateComparisonUi()
   comparisonRun.focus()
@@ -763,6 +831,159 @@ function closeComparison() {
   comparisonState.visible = false
   updateComparisonUi()
   comparisonOpen.focus()
+}
+
+function nextIndexWalkStep() {
+  const index = indexWalkEvidence.findIndex((entry) => entry === null)
+  return index < 0 ? INDEX_WALK_STEPS.length : index
+}
+
+function indexWalkStatusText(completed) {
+  if (indexWalkState.status === 'running') return `P EXECUTING · ${completed}/4`
+  if (indexWalkState.status === 'watching') return `M REPLAY · ${completed}/4`
+  if (indexWalkState.status === 'error') return `RETRY · ${completed}/4`
+  if (completed === INDEX_WALK_STEPS.length) return 'P SEQUENCE COMPLETE · 4/4'
+  return `READY · ${completed}/4`
+}
+
+function updateIndexWalkUi() {
+  const completed = indexWalkEvidence.filter(Boolean).length
+  const next = nextIndexWalkStep()
+  const blocked = indexWalkState.status === 'running' || indexWalkState.status === 'watching'
+  indexWalkRoot.hidden = !indexWalkState.visible
+  indexWalkStatus.textContent = indexWalkStatusText(completed)
+  indexWalkOpen.textContent = completed === INDEX_WALK_STEPS.length
+    ? 'WALK DONE'
+    : indexWalkState.invited
+      ? 'WHAT NEXT?'
+      : completed > 0
+        ? 'CONTINUE WALK'
+        : 'START HERE'
+  indexWalkOpen.dataset.invited = String(indexWalkState.invited && completed < 4)
+
+  for (let index = 0; index < INDEX_WALK_STEPS.length; index += 1) {
+    const step = INDEX_WALK_STEPS[index]
+    const button = indexWalkStepButtons[index]
+    const output = button.querySelector(`[data-index-walk-result="${step.id}"]`)
+    const evidence = indexWalkEvidence[index]
+    const active = index === next
+    button.dataset.state = evidence ? 'complete' : active ? 'active' : 'locked'
+    button.disabled = Boolean(evidence) || blocked || !active
+    if (active) button.setAttribute('aria-current', 'step')
+    else button.removeAttribute('aria-current')
+    if (!output) continue
+    output.textContent = evidence
+      ? `P · ${evidence.summary}`
+      : active && indexWalkState.error
+        ? `RETRY · ${indexWalkState.error}`
+        : active
+          ? blocked ? 'WAIT FOR THIS REPLAY' : 'RUN THIS STATEMENT'
+          : 'LOCKED'
+  }
+
+  const finished = completed === INDEX_WALK_STEPS.length
+  indexWalkFindingRoot.hidden = !finished
+  if (finished) {
+    const finding = indexWalkFinding(indexWalkEvidence)
+    indexWalkFindingRoot.dataset.supported = String(finding.supported)
+    indexWalkFindingText.textContent = finding.text
+  }
+  indexWalkSequence.textContent = INDEX_WALK_CLAIM.sequenceDisclosure
+  indexWalkModel.textContent = INDEX_WALK_CLAIM.modelDisclosure
+  indexWalkComparison.textContent = INDEX_WALK_CLAIM.comparisonDisclosure
+  indexWalkReset.disabled = indexWalkState.status === 'running'
+  if (indexWalkState.visible) {
+    const visibleStep = indexWalkStepButtons[Math.min(next, INDEX_WALK_STEPS.length - 1)]
+    requestAnimationFrame(() => {
+      const firstTop = indexWalkStepButtons[0].offsetTop
+      const stepBottom = visibleStep.offsetTop - firstTop + visibleStep.offsetHeight
+      indexWalkStepsRoot.scrollTo({
+        top: Math.max(0, stepBottom - indexWalkStepsRoot.clientHeight),
+        behavior: 'smooth',
+      })
+    })
+  }
+}
+
+function openIndexWalk() {
+  if (comparisonState.visible) {
+    comparisonState.visible = false
+    updateComparisonUi()
+  }
+  indexWalkState.visible = true
+  updateIndexWalkUi()
+  const next = nextIndexWalkStep()
+  ;(indexWalkStepButtons[next] ?? indexWalkClose).focus()
+}
+
+function closeIndexWalk() {
+  indexWalkState.visible = false
+  updateIndexWalkUi()
+  indexWalkOpen.focus()
+}
+
+function resetIndexWalk() {
+  indexWalkEvidence.fill(null)
+  indexWalkState.status = 'idle'
+  indexWalkState.invited = false
+  indexWalkState.error = null
+  updateIndexWalkUi()
+}
+
+function offerIndexWalk(report) {
+  if (indexWalkEvidence.some(Boolean) || indexWalkState.status !== 'idle') return
+  if (matchingIndexWalkStep(report) !== 'constant') return
+  const evidence = createIndexWalkEvidence('constant', report)
+  if (!evidence) return
+  indexWalkEvidence[0] = evidence
+  indexWalkState.invited = true
+  indexWalkState.status = statement.status === 'replaying' ? 'watching' : 'ready'
+  updateIndexWalkUi()
+}
+
+function completeIndexWalkReplayIfReady() {
+  if (indexWalkState.status !== 'watching') return
+  if (statement.status !== 'complete' && statement.status !== 'error') return
+  indexWalkState.status = nextIndexWalkStep() === INDEX_WALK_STEPS.length
+    ? 'complete'
+    : 'ready'
+  updateIndexWalkUi()
+}
+
+async function runIndexWalkStep(stepId) {
+  const index = INDEX_WALK_STEPS.findIndex((step) => step.id === stepId)
+  if (
+    index < 0
+    || index !== nextIndexWalkStep()
+    || indexWalkState.status === 'running'
+    || indexWalkState.status === 'watching'
+  ) return false
+  const step = INDEX_WALK_STEPS[index]
+  indexWalkState.status = 'running'
+  indexWalkState.error = null
+  updateIndexWalkUi()
+  const report = await submitCommand(step.sql)
+  if (!report || report.error || matchingIndexWalkStep(report) !== step.id) {
+    indexWalkState.status = 'error'
+    indexWalkState.error = report?.error?.message ?? 'PostgreSQL report unavailable'
+    updateIndexWalkUi()
+    return false
+  }
+  const evidence = createIndexWalkEvidence(step.id, report)
+  if (!evidence) {
+    indexWalkState.status = 'error'
+    indexWalkState.error = 'PostgreSQL returned no measured plan'
+    updateIndexWalkUi()
+    return false
+  }
+  indexWalkEvidence[index] = evidence
+  indexWalkState.status = statement.status === 'replaying'
+    ? 'watching'
+    : nextIndexWalkStep() === INDEX_WALK_STEPS.length
+      ? 'complete'
+      : 'ready'
+  updateIndexWalkUi()
+  return true
 }
 
 async function runSynchronousCommitComparison() {
@@ -2989,6 +3210,7 @@ async function executeCommand(command, output) {
       report = await source.query(command)
       setCurrentReport(report)
       startStatementReplay(report)
+      offerIndexWalk(report)
       result = formatReport(report, { maxWidth: terminalWidth() })
     }
   } catch (error) {
@@ -3093,6 +3315,14 @@ comparisonContinue.addEventListener('click', continueComparison)
 comparisonTabA.addEventListener('click', () => selectComparisonLane(0))
 comparisonTabB.addEventListener('click', () => selectComparisonLane(1))
 comparisonLanes.addEventListener('scroll', updateComparisonTabsFromScroll, { passive: true })
+indexWalkOpen.addEventListener('click', openIndexWalk)
+indexWalkClose.addEventListener('click', closeIndexWalk)
+indexWalkReset.addEventListener('click', resetIndexWalk)
+for (const button of indexWalkStepButtons) {
+  button.addEventListener('click', () => {
+    void runIndexWalkStep(button.dataset.indexWalkStep)
+  })
+}
 postgresToggle.addEventListener('click', () => {
   if (postgres.source) {
     terminalInput.focus()
@@ -3119,6 +3349,7 @@ terminalInput.addEventListener('keydown', (event) => {
 })
 window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && comparisonState.visible) closeComparison()
+  else if (event.key === 'Escape' && indexWalkState.visible) closeIndexWalk()
 })
 window.addEventListener('beforeunload', () => {
   if (postgres.source) void postgres.source.close()
@@ -3139,6 +3370,10 @@ window.MAGNUM = Object.freeze({
   runComparison: runSynchronousCommitComparison,
   continueComparison,
   closeComparison,
+  openIndexWalk,
+  closeIndexWalk,
+  resetIndexWalk,
+  runIndexWalkStep,
   runQuery: (sql) => submitCommand(sql),
   replayLast: () => {
     if (!postgres.report) return false
@@ -3224,6 +3459,17 @@ window.MAGNUM = Object.freeze({
           : null,
       error: comparisonState.error,
     },
+    indexWalk: {
+      visible: indexWalkState.visible,
+      status: indexWalkState.status,
+      invited: indexWalkState.invited,
+      completed: indexWalkEvidence.filter(Boolean).length,
+      evidence: indexWalkEvidence.map((entry) => entry ? { ...entry } : null),
+      finding: nextIndexWalkStep() === INDEX_WALK_STEPS.length
+        ? indexWalkFinding(indexWalkEvidence)
+        : null,
+      error: indexWalkState.error,
+    },
   }),
 })
 
@@ -3232,5 +3478,6 @@ resizeTerminalInput()
 updatePostgresUi()
 updateStatementControls()
 updateComparisonUi()
+updateIndexWalkUi()
 setViewingRate(viewingRate)
 requestAnimationFrame(frame)
