@@ -171,6 +171,41 @@ describe('storage anatomy entry points', () => {
   })
 })
 
+describe('restore drill evidence', () => {
+  beforeEach(() => {
+    const dom = installTestDom()
+    dom.mount('hud-right')
+  })
+
+  it('states the supported claim, its limit, cadence, RTO, and modeled cost', () => {
+    const ctx = context()
+    const start = vi.spyOn(ctx.sim, 'startRestoreDrill')
+    const inspector = createInspector(ctx)
+
+    ctx.bus.emit('select', { id: 'recovery.ground' })
+
+    const control = document.querySelector<HTMLElement>('[data-restore-drill="control"]')
+    const level = control?.querySelector<HTMLSelectElement>('select')
+    const button = control?.querySelector<HTMLButtonElement>('button')
+    expect(control).not.toBeNull()
+    expect(level?.querySelectorAll('option')).toHaveLength(3)
+    expect(control?.textContent).toContain('Proved')
+    expect(control?.textContent).toContain('Did not prove')
+    expect(control?.textContent).toContain('Cadence')
+    expect(control?.textContent).toContain('RTO')
+    expect(control?.textContent).toContain('Object-store reads')
+    expect(control?.querySelectorAll('[data-disclosure]')).not.toHaveLength(0)
+
+    level!.value = 'table'
+    level!.dispatchEvent(new Event('change'))
+    button!.click()
+    expect(start).toHaveBeenCalledWith('table')
+    expect(control?.textContent).toMatch(/FAIL.*no retained full backup/i)
+
+    inspector.dispose()
+  })
+})
+
 describe('page anatomy MVCC story', () => {
   beforeEach(() => {
     installTestDom()

@@ -515,6 +515,49 @@
   padding-top: 2px;
 }
 
+/* --- restore-drill evidence --------------------------------------------- */
+.pgc-drill {
+  gap: 8px;
+}
+.pgc-drill__run {
+  justify-content: center;
+}
+.pgc-drill__result {
+  margin: 3px 0 0;
+  padding: 10px 11px;
+  border-left: 2px solid var(--line-hard);
+  background: var(--bg-sunken);
+  color: var(--ink);
+  font-family: var(--f-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.pgc-drill[data-status='passed'] .pgc-drill__result {
+  border-left-color: var(--c-ok);
+  color: var(--c-ok);
+}
+.pgc-drill[data-status='failed'] .pgc-drill__result {
+  border-left-color: var(--c-crit);
+  color: var(--c-crit);
+}
+.pgc-drill__proof,
+.pgc-drill__limits {
+  padding: 8px 10px;
+  border: 1px solid var(--line-hair);
+  background: var(--bg-raise);
+}
+.pgc-drill__proof {
+  color: var(--c-ok);
+}
+.pgc-drill__limits {
+  color: var(--c-warn);
+}
+.pgc-drill__cost {
+  color: var(--c-storage);
+  font-family: var(--f-mono);
+}
+
 /* --- related --- */
 .pgc-see {
   display: flex;

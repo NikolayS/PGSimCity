@@ -298,4 +298,217 @@ describe('disaster recovery', () => {
     expect(sim.state.knobs.recoveryTargetAge).toBe(20)
   })
 
+  it('earns a failed restore-drill verdict from a stalled WAL archive', () => {
+    const sim = createSim(createBus(), { scheduledBackups: false })
+    sim.setKnob('tps', 1600)
+    sim.setKnob('writeRatio', 0.85)
+    takeBackup(sim)
+    advance(sim, 12)
+    advanceUntil(
+      sim,
+      () => sim.state.disasterRecovery.archive.archivedThroughTime >= sim.state.t - 2,
+      180,
+    )
+
+    sim.setKnob('walGArchiveCredentialsValid', false)
+    advanceUntil(sim, () => sim.state.disasterRecovery.archive.queueSegments > 0, 120)
+
+    expect(sim.startRestoreDrill('cluster', 2)).toBe(false)
+    expect(sim.state.disasterRecovery.drill.status).toBe('failed')
+    expect(sim.state.disasterRecovery.drill.failureReason).toMatch(/archived WAL|wal-push|\.ready/i)
+    expect(sim.state.disasterRecovery.drill.backupId).toBeGreaterThan(0)
+    expect(sim.state.disasterRecovery.drill.walBytesRequired).toBeGreaterThan(0)
+  })
+
+  it('earns a failed restore-drill verdict from the retained backup inventory', () => {
+    const sim = createSim(createBus(), { scheduledBackups: false })
+    sim.setKnob('tps', 1200)
+    sim.setKnob('writeRatio', 0.8)
+    sim.setKnob('backupRetention', 1)
+
+    takeBackup(sim)
+    const expiredTarget = sim.state.disasterRecovery.backups[0].completedAt - 1
+    advance(sim, 8)
+    takeBackup(sim)
+
+    expect(sim.startRestoreDrill('cluster', sim.state.t - expiredTarget)).toBe(false)
+    expect(sim.state.disasterRecovery.drill.status).toBe('failed')
+    expect(sim.state.disasterRecovery.drill.failureReason).toMatch(/retention|oldest retained/i)
+    expect(sim.state.disasterRecovery.drill.backupId).toBe(-1)
+  })
+
+  it('makes a passing drill occupy time and charge the bytes it actually reads', () => {
+    const sim = createSim(createBus(), { scheduledBackups: false })
+    sim.setKnob('tps', 1200)
+    sim.setKnob('writeRatio', 0.75)
+    takeBackup(sim)
+    advance(sim, 18)
+    advanceUntil(
+      sim,
+      () => sim.state.disasterRecovery.archive.archivedThroughTime >= sim.state.t - 2,
+      180,
+    )
+
+    expect(sim.startRestoreDrill('verified', 2)).toBe(true)
+    const drill = sim.state.disasterRecovery.drill
+    expect(drill.status).toBe('restoring')
+    expect(drill.estimatedRtoSec).toBeGreaterThan(0)
+    expect(drill.estimatedDurationSec).toBeGreaterThan(drill.estimatedRtoSec)
+
+    advance(sim, drill.estimatedRtoSec / 2)
+    expect(drill.status).not.toBe('passed')
+    expect(drill.objectStoreBytesRead).toBeGreaterThan(0)
+
+    advanceUntil(sim, () => drill.status === 'passed')
+    const selected = sim.state.disasterRecovery.backups.find(
+      (backup) => backup.id === drill.backupId,
+    )
+    expect(selected).toBeDefined()
+    expect(drill.measuredRtoSec).toBeGreaterThan(0)
+    expect(drill.elapsedSec).toBeGreaterThan(drill.measuredRtoSec)
+    expect(drill.objectStoreBytesRead).toBe(
+      selected!.objectStoreBytes + sim.state.disasterRecovery.restore.walBytesRequired,
+    )
+    expect(drill.validationBytesRead).toBeGreaterThan(0)
+    expect(drill.failureReason).toBe('')
+  })
+
+  it('derives drill RTO from the newest usable backup age and replay volume', () => {
+    function estimateAfter(age: number): {
+      backupAge: number
+      rto: number
+      walBytes: number
+    } {
+      const sim = createSim(createBus(), { scheduledBackups: false })
+      sim.setKnob('tps', 1600)
+      sim.setKnob('writeRatio', 0.85)
+      takeBackup(sim)
+      advance(sim, age)
+      advanceUntil(
+        sim,
+        () => sim.state.disasterRecovery.archive.archivedThroughTime >= sim.state.t - 2,
+        180,
+      )
+      expect(sim.startRestoreDrill('cluster', 2)).toBe(true)
+      const drill = sim.state.disasterRecovery.drill
+      return {
+        backupAge: drill.backupAgeSec,
+        rto: drill.estimatedRtoSec,
+        walBytes: drill.walBytesRequired,
+      }
+    }
+
+    const fresh = estimateAfter(12)
+    const old = estimateAfter(52)
+
+    expect(old.backupAge).toBeGreaterThan(fresh.backupAge)
+    expect(old.walBytes).toBeGreaterThan(fresh.walBytes)
+    expect(old.rto).toBeGreaterThan(fresh.rto)
+  })
+
+  it('charges broader and stronger drill levels for strictly more validation work', () => {
+    function estimate(level: 'table' | 'cluster' | 'verified'): {
+      proofRank: number
+      duration: number
+      validationBytes: number
+    } {
+      const sim = createSim(createBus(), { scheduledBackups: false })
+      sim.setKnob('tps', 1200)
+      sim.setKnob('writeRatio', 0.75)
+      takeBackup(sim)
+      advance(sim, 18)
+      advanceUntil(
+        sim,
+        () => sim.state.disasterRecovery.archive.archivedThroughTime >= sim.state.t - 2,
+        180,
+      )
+      expect(sim.startRestoreDrill(level, 2)).toBe(true)
+      const drill = sim.state.disasterRecovery.drill
+      return {
+        proofRank: drill.proofRank,
+        duration: drill.estimatedDurationSec,
+        validationBytes: drill.validationBytesRequired,
+      }
+    }
+
+    const table = estimate('table')
+    const cluster = estimate('cluster')
+    const verified = estimate('verified')
+
+    expect(table.proofRank).toBeLessThan(cluster.proofRank)
+    expect(cluster.proofRank).toBeLessThan(verified.proofRank)
+    expect(table.validationBytes).toBeLessThan(cluster.validationBytes)
+    expect(cluster.validationBytes).toBeLessThan(verified.validationBytes)
+    expect(table.duration).toBeLessThan(cluster.duration)
+    expect(cluster.duration).toBeLessThan(verified.duration)
+  })
+
+  it('fails the strongest drill when retained object bytes disagree with its manifest', () => {
+    const sim = createSim(createBus(), { scheduledBackups: false })
+    sim.setKnob('tps', 1200)
+    sim.setKnob('writeRatio', 0.75)
+    takeBackup(sim)
+    advance(sim, 18)
+    advanceUntil(
+      sim,
+      () => sim.state.disasterRecovery.archive.archivedThroughTime >= sim.state.t - 2,
+      180,
+    )
+    const backup = sim.state.disasterRecovery.backups[0]
+    backup.objectDigest = (backup.objectDigest + 1) >>> 0
+
+    expect(sim.startRestoreDrill('verified', 2)).toBe(true)
+    advanceUntil(sim, () => sim.state.disasterRecovery.drill.status === 'failed')
+
+    expect(sim.state.disasterRecovery.drill.failureReason).toMatch(/digest.*manifest/i)
+    expect(sim.state.disasterRecovery.drill.measuredRtoSec).toBeGreaterThan(0)
+    expect(sim.state.disasterRecovery.drill.checksumBytesRead).toBeGreaterThan(0)
+    expect(sim.state.disasterRecovery.drill.smokeBytesRead).toBe(0)
+  })
+
+  it('fails when retention removes the selected backup before backup-fetch finishes', () => {
+    const sim = createSim(createBus(), { scheduledBackups: false })
+    sim.setKnob('tps', 1200)
+    sim.setKnob('writeRatio', 0.75)
+    sim.setKnob('backupRetention', 1)
+    takeBackup(sim)
+    advance(sim, 18)
+    advanceUntil(
+      sim,
+      () => sim.state.disasterRecovery.archive.archivedThroughTime >= sim.state.t - 2,
+      180,
+    )
+    sim.setKnob('walGDownloadConcurrency', 1)
+    expect(sim.startRestoreDrill('cluster', 2)).toBe(true)
+    const selected = sim.state.disasterRecovery.drill.backupId
+
+    expect(sim.startBaseBackup()).toBe(true)
+    advanceUntil(sim, () => sim.state.disasterRecovery.backups[0]?.id !== selected, 120)
+    advanceUntil(sim, () => sim.state.disasterRecovery.drill.status === 'failed', 5)
+
+    expect(sim.state.disasterRecovery.drill.failureReason).toMatch(/retention.*before backup-fetch/i)
+    expect(sim.state.disasterRecovery.drill.objectStoreBytesRead).toBeGreaterThan(0)
+    expect(sim.state.disasterRecovery.drill.measuredRtoSec).toBe(0)
+  })
+
+  it('keeps the recovery host occupied until drill validation finishes', () => {
+    const sim = createSim(createBus(), { scheduledBackups: false })
+    sim.setKnob('tps', 1200)
+    sim.setKnob('writeRatio', 0.75)
+    takeBackup(sim)
+    advance(sim, 18)
+    advanceUntil(
+      sim,
+      () => sim.state.disasterRecovery.archive.archivedThroughTime >= sim.state.t - 2,
+      180,
+    )
+
+    expect(sim.startRestoreDrill('verified', 2)).toBe(true)
+    advanceUntil(sim, () => sim.state.disasterRecovery.drill.status === 'verifying')
+
+    expect(sim.startPointInTimeRestore(2)).toBe(false)
+    expect(sim.state.disasterRecovery.drill.status).toBe('verifying')
+    expect(sim.state.disasterRecovery.restore.status).toBe('complete')
+  })
+
 })

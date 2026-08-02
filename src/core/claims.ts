@@ -60,6 +60,36 @@ export const CLAIM_VALUES = {
     batchDisclosure: 'transactions carried by one backend trip share one latency observation, so within-batch variance is not modeled',
     resolutionDisclosure: '30 Hz integration quantizes observations to 33.33 model ms steps',
   },
+  restoreDrill: {
+    levels: {
+      table: {
+        label: 'One-table smoke',
+        rank: 1,
+        cadence: 'nightly example',
+        supports: 'The retained physical backup and WAL chain reached the target, the modeled PostgreSQL recovery startup completed, and the accounts smoke check found its modeled row witness.',
+        limits: 'It does not test the other tables, compare every restored file with a manifest, prove every row is correct, or measure production hardware.',
+      },
+      cluster: {
+        label: 'Full-cluster smoke',
+        rank: 2,
+        cadence: 'monthly example',
+        supports: 'The retained physical backup and WAL chain reached the target, the modeled PostgreSQL recovery startup completed, and every modeled table returned its smoke-check row witness.',
+        limits: 'It does not compare every restored file with a manifest, prove every row or business invariant is correct, or measure production hardware.',
+      },
+      verified: {
+        label: 'Checksums + smoke',
+        rank: 3,
+        cadence: 'quarterly example',
+        supports: 'The modeled full-cluster restore passed its manifest check and every modeled table returned its smoke-check row witness.',
+        limits: 'It does not prove every row or business invariant is correct, exercise failover, or measure production hardware.',
+      },
+    },
+    physicalScopeDisclosure: 'All three levels fetch and replay the full WAL-G physical backup. A genuinely selective table restore needs a separate logical archive such as pg_dump custom format for pg_restore --table; that archive is not modeled here.',
+    checksumDisclosure: 'The checksum phase compares a deterministic modeled manifest digest; it does not hash real files. pg_verifybackup applies to a backup_manifest, while WAL-G backup-push --verify checks PostgreSQL page checksums when data checksums are enabled.',
+    smokeDisclosure: 'The smoke phase checks row-witness bits captured from the modeled tables at backup time; it does not execute PostgreSQL or reconstruct every row.',
+    timeDisclosure: 'RTO is model time at fixed teaching rates, not a forecast for production hardware.',
+    cadenceDisclosure: 'Nightly, monthly, and quarterly are comparison examples, not recommendations. The operator must choose, fund, record, and review the cadence against the required recovery objectives.',
+  },
   vacuumReclaim: {
     plateLines: [
       'space usually stays in the table',
@@ -206,6 +236,11 @@ export const CLAIMS = {
     owner: 'src/core/claims.ts#CLAIM_VALUES.modelLatency',
     value: CLAIM_VALUES.modelLatency,
     surfaces: ['model:latency quantiles', 'HUD:latency vital', 'prose:latency observability'],
+  },
+  restoreDrill: {
+    owner: 'src/core/claims.ts#CLAIM_VALUES.restoreDrill',
+    value: CLAIM_VALUES.restoreDrill,
+    surfaces: ['model:restore-drill proof rank', 'inspector:restore-drill evidence', 'prose:restore-drill limits'],
   },
   vacuumReclaim: {
     owner: 'src/core/claims.ts#CLAIM_VALUES.vacuumReclaim',

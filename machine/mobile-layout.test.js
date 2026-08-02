@@ -160,10 +160,15 @@ describe('machine room portrait layout', () => {
       name: 'City',
       path: '/',
       readySelector: '.control-center__sources',
-      prepare: `
+      prepare: `(async () => {
+        for (let attempt = 0; attempt < 120 && !window.PGSIMCITY; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 100))
+        }
+        if (!window.PGSIMCITY) throw new Error('city API did not become ready')
         document.querySelector('.control-center').hidden = false
         document.querySelector('#hud-latency-panel').hidden = false
-      `,
+        window.PGSIMCITY.bus.emit('select', { id: 'recovery.ground' })
+      })()`,
     }])
 
     expect(reports.map((report) => report.viewport)).toEqual([

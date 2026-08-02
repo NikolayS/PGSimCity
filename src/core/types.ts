@@ -771,6 +771,12 @@ export interface BaseBackup {
   source: 'standby_a'
   trigger: 'manual' | 'schedule'
   tool: 'WAL-G'
+  /** Deterministic model digest for the backup manifest captured at backup time. */
+  manifestDigest: number
+  /** Digest of the retained object contents; verification compares this to the manifest. */
+  objectDigest: number
+  /** One bit per declared relation that contained a row witness in this backup. */
+  smokeTableMask: number
 }
 
 export interface BaseBackupOperation {
@@ -820,6 +826,47 @@ export interface PointInTimeRestore {
   promoted: false
 }
 
+export type RestoreDrillLevel = 'table' | 'cluster' | 'verified'
+
+export type RestoreDrillStatus =
+  | 'idle'
+  | 'restoring'
+  | 'verifying'
+  | 'querying'
+  | 'passed'
+  | 'failed'
+
+export interface RestoreDrill {
+  level: RestoreDrillLevel
+  status: RestoreDrillStatus
+  proofRank: number
+  progress: number
+  startedAt: number
+  completedAt: number
+  targetTime: number
+  backupId: number
+  /** Age at drill start of the newest retained backup usable for the target. */
+  backupAgeSec: number
+  /** Compressed backup objects read from storage, before local extraction. */
+  backupObjectBytesRequired: number
+  walBytesRequired: number
+  estimatedRtoSec: number
+  measuredRtoSec: number
+  estimatedDurationSec: number
+  elapsedSec: number
+  objectStoreBytesRead: number
+  checksumBytesRequired: number
+  checksumBytesRead: number
+  smokeBytesRequired: number
+  smokeBytesRead: number
+  validationBytesRequired: number
+  validationBytesRead: number
+  manifestDigest: number
+  restoredDigest: number
+  smokeTableMask: number
+  failureReason: string
+}
+
 export interface ArchiveRecoveryState {
   queueSegments: number
   archivedThroughLsn: number
@@ -846,6 +893,7 @@ export interface DisasterRecoveryState {
   backupSchedule: BaseBackupSchedule
   backup: BaseBackupOperation
   restore: PointInTimeRestore
+  drill: RestoreDrill
 }
 
 export interface LockEdge {
@@ -1032,6 +1080,8 @@ export interface SimApi {
   startBaseBackup(): boolean
   /** Restore to `targetAgeSec` before now, or the recoveryTargetAge control. */
   startPointInTimeRestore(targetAgeSec?: number): boolean
+  /** Exercise the retained backup and archive, then run the selected proof level. */
+  startRestoreDrill(level: RestoreDrillLevel, targetAgeSec?: number): boolean
   /** Record one node's observation; the DCS leader key remains authoritative. */
   setLeaderOpinion(node: ClusterNodeId, leader: ClusterNodeId | null): void
   /** Stop writes, wait for the selected standby, then hand over with no loss. */
@@ -1448,6 +1498,7 @@ export interface ComponentDoc {
   actions?: (
     | 'start-full-backup'
     | 'start-pitr'
+    | 'start-restore-drill'
     | 'start-switchover'
     | 'trigger-failover'
     | 'start-pg-rewind'

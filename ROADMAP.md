@@ -93,11 +93,12 @@ real-PostgreSQL boundary, while the room teaches how this finite model moves.
 Together with the autovacuum lever, it gives first person concrete destinations
 and actions.
 
-## 11. Restore testing — a backup you have never restored is not a backup
+## 11. Restore testing — shipped
 
-The continuity quarter models taking backups, archiving WAL, retention, and
-restoring to a point in time. It does not model **finding out whether any of that
-works**, which is the part organisations actually get wrong.
+The continuity quarter now earns a restore-drill verdict from the retained base
+backups, archived WAL frontier, target time, and age of the newest usable backup.
+The drill occupies the recovery host, reads real modeled object and validation
+bytes, and reports measured restore time separately from total validation time.
 
 Backups fail silently. The archive stops and nobody reads the `.ready` count. A
 retention policy quietly expires the backup someone was relying on. Credentials
@@ -105,24 +106,28 @@ rotate and the push starts failing into a log nobody tails. Object storage
 lifecycle rules move objects to a tier the restore path cannot read. **None of
 these are visible until a restore is attempted**, and by then it is an incident.
 
-What this should teach:
+What this teaches:
 
 - **A restore drill has a cost and a cadence**, and both are decisions. Restoring
-  the full cluster proves the most and costs the most; restoring one table proves
-  less and can run nightly.
+  the physical cluster is common to every level in this model; validating one
+  table proves less and can run nightly, while broader smoke and manifest checks
+  read more and take longer. A genuinely selective table restore needs a separate
+  logical archive and is explicitly outside this model.
 - **What a failed drill looks like**, and that finding out this way is the good
-  outcome. The city already models an archive that can stall, retention that can
-  expire the backup you wanted, and a `pg_rewind` that can fail — those failure
-  modes exist and are currently only reachable deliberately.
+  outcome. A stalled archive, an unreachable target, or retention expiring the
+  selected backup now fails the drill for that actual modeled reason.
 - **What a drill actually proves.** That the backup restores is not that the data
-  is correct; verifying checksums and running a smoke query prove more. Say which
-  claim each level of drill supports.
+  is correct; the panel states what each level proved and did not prove. The
+  strongest level adds a modeled manifest check and per-table smoke witnesses,
+  while disclosing that it does not hash real files, execute PostgreSQL, validate
+  every row, or prove production hardware and failover.
 - **Recovery time is measured, not assumed.** The city already relates backup age
-  to replay volume. A drill turns that relationship into a number an operator can
-  put in a document and be held to.
+  to replay volume. The drill reports restore time from the bytes it actually
+  fetches and replays, so the number grows as the backup ages, then reports the
+  additional verification and query time instead of treating restore as instant.
 
-This is a natural extension of item 10's scenarios: the drill that has not been
-run is a situation with a correct answer, and the answer is unwelcome.
+This extends item 10's scenarios: the drill that has not been run is still a
+situation with a correct answer, and the answer is unwelcome.
 
 ## 5. Swimming that feels like swimming — shipped
 

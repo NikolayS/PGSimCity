@@ -83,6 +83,7 @@ import type {
   PhysicalStandbyState,
   PlanNode,
   QueryKind,
+  RestoreDrillLevel,
   SampleFrames,
   ScenarioChoiceId,
   ScenarioDecisionState,
@@ -172,6 +173,9 @@ const DR_WAL_FETCH_BYTES_PER_STREAM_SEC = 4 * MIB
 export const DR_ARCHIVE_SEGMENT_SECONDS = 0.75
 /** One daily schedule interval on the continuity quarter's compressed clock. */
 export const DR_BACKUP_CADENCE_SECONDS = 60
+/** Sequential local reads performed by checksum and smoke phases. */
+export const DR_DRILL_VERIFY_BYTES_PER_SEC = 768 * MIB
+export const DR_DRILL_SMOKE_BYTES_PER_SEC = 512 * MIB
 /** Teaching-scale pg_wal volume; production capacity is installation-specific. */
 export const DR_PG_WAL_CAPACITY_BYTES = 512 * MIB
 /** Fixed metadata/catalog allowance outside the declared heap and index pages. */
@@ -951,6 +955,34 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         elapsedSec: 0,
         failureReason: '',
         promoted: false,
+      },
+      drill: {
+        level: 'verified',
+        status: 'idle',
+        proofRank: CLAIM_VALUES.restoreDrill.levels.verified.rank,
+        progress: 0,
+        startedAt: 0,
+        completedAt: 0,
+        targetTime: 0,
+        backupId: -1,
+        backupAgeSec: 0,
+        backupObjectBytesRequired: 0,
+        walBytesRequired: 0,
+        estimatedRtoSec: 0,
+        measuredRtoSec: 0,
+        estimatedDurationSec: 0,
+        elapsedSec: 0,
+        objectStoreBytesRead: 0,
+        checksumBytesRequired: 0,
+        checksumBytesRead: 0,
+        smokeBytesRequired: 0,
+        smokeBytesRead: 0,
+        validationBytesRequired: 0,
+        validationBytesRead: 0,
+        manifestDigest: 0,
+        restoredDigest: 0,
+        smokeTableMask: 0,
+        failureReason: '',
       },
     },
     locks: [],
@@ -2737,9 +2769,36 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     )
   }
 
+  function mixBackupDigest(hash: number, value: number): number {
+    return Math.imul(hash ^ (Math.trunc(value) >>> 0), 0x01000193) >>> 0
+  }
+
+  function backupManifestDigest(): number {
+    const op = dr.backup
+    let digest = mixBackupDigest(0x811c9dc5, op.startTimeline)
+    digest = mixBackupDigest(digest, op.startLsn)
+    digest = mixBackupDigest(digest, op.stopLsn)
+    digest = mixBackupDigest(digest, op.dataBytes)
+    for (let i = 0; i < tables.length; i++) {
+      digest = mixBackupDigest(digest, tables[i].pages)
+      digest = mixBackupDigest(digest, tables[i].indexPages)
+      digest = mixBackupDigest(digest, tables[i].liveTuples)
+    }
+    return digest
+  }
+
+  function backupSmokeTableMask(): number {
+    let mask = 0
+    for (let i = 0; i < tables.length; i++) {
+      if (tables[i].liveTuples > 0) mask |= 1 << i
+    }
+    return mask
+  }
+
   function completeBaseBackup(): void {
     const op = dr.backup
     const duration = Math.max(0, state.t - op.startedAt)
+    const manifestDigest = backupManifestDigest()
     dr.backups.push({
       id: backupSeq,
       label: `base_${walSegName(Math.floor(op.startLsn / WAL_SEG), op.startTimeline)}`,
@@ -2754,6 +2813,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       source: 'standby_a',
       trigger: op.trigger,
       tool: 'WAL-G',
+      manifestDigest,
+      objectDigest: manifestDigest,
+      smokeTableMask: backupSmokeTableMask(),
     })
     backupSeq++
     applyBackupRetention()
@@ -2865,6 +2927,50 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     restore.failureReason = ''
   }
 
+  function resetDrill(level: RestoreDrillLevel, targetTime: number): void {
+    const drill = dr.drill
+    drill.level = level
+    drill.status = 'idle'
+    drill.proofRank = CLAIM_VALUES.restoreDrill.levels[level].rank
+    drill.progress = 0
+    drill.startedAt = state.t
+    drill.completedAt = 0
+    drill.targetTime = targetTime
+    drill.backupId = -1
+    drill.backupAgeSec = 0
+    drill.backupObjectBytesRequired = 0
+    drill.walBytesRequired = 0
+    drill.estimatedRtoSec = 0
+    drill.measuredRtoSec = 0
+    drill.estimatedDurationSec = 0
+    drill.elapsedSec = 0
+    drill.objectStoreBytesRead = 0
+    drill.checksumBytesRequired = 0
+    drill.checksumBytesRead = 0
+    drill.smokeBytesRequired = 0
+    drill.smokeBytesRead = 0
+    drill.validationBytesRequired = 0
+    drill.validationBytesRead = 0
+    drill.manifestDigest = 0
+    drill.restoredDigest = 0
+    drill.smokeTableMask = 0
+    drill.failureReason = ''
+  }
+
+  function backupById(id: number): (typeof dr.backups)[number] | undefined {
+    for (let i = 0; i < dr.backups.length; i++) {
+      if (dr.backups[i].id === id) return dr.backups[i]
+    }
+    return undefined
+  }
+
+  function smokeBytesForLevel(level: RestoreDrillLevel): number {
+    if (level === 'table') return (tables[0].pages + tables[0].indexPages) * PAGE
+    let pages = 0
+    for (let i = 0; i < tables.length; i++) pages += tables[i].pages + tables[i].indexPages
+    return pages * PAGE
+  }
+
   function failRestore(reason: string): false {
     dr.restore.status = 'failed'
     dr.restore.failureReason = reason
@@ -2873,6 +2979,11 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   }
 
   function startPointInTimeRestore(targetAgeSec = K.recoveryTargetAge): boolean {
+    if (
+      dr.drill.status === 'restoring'
+      || dr.drill.status === 'verifying'
+      || dr.drill.status === 'querying'
+    ) return false
     const targetTime = state.t - Math.max(0, targetAgeSec)
     resetRestore(targetTime)
     if (dr.backups.length === 0) {
@@ -2897,14 +3008,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     }
 
     const targetLsn = lsnAtTime(targetTime)
-    if (targetLsn <= 0 || targetLsn > dr.archive.archivedThroughLsn) {
-      return failRestore(
-        'PITR impossible: archived WAL does not reach the selected target; repair wal-g wal-push and wait for the .ready queue to drain',
-      )
-    }
-
     const restore = dr.restore
-    restore.status = 'fetching'
     restore.targetLsn = targetLsn
     restore.backupId = selected.id
     restore.backupAgeSec = Math.max(0, targetTime - selected.completedAt)
@@ -2913,12 +3017,150 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     restore.estimatedDurationSec =
       restore.backupBytesRequired / backupFetchBytesPerSec()
       + restore.walBytesRequired / walRecoveryBytesPerSec()
+    if (targetLsn <= 0 || targetLsn > dr.archive.archivedThroughLsn) {
+      return failRestore(
+        'PITR impossible: archived WAL does not reach the selected target; repair wal-g wal-push and wait for the .ready queue to drain',
+      )
+    }
+
+    restore.status = 'fetching'
     toast(
       `PITR started from ${selected.label}: fetch the full backup, then replay archived WAL to recovery_target_time`,
       'info',
       6500,
     )
     return true
+  }
+
+  function startRestoreDrill(
+    level: RestoreDrillLevel,
+    targetAgeSec = K.recoveryTargetAge,
+  ): boolean {
+    const drill = dr.drill
+    if (
+      drill.status === 'restoring'
+      || drill.status === 'verifying'
+      || drill.status === 'querying'
+      || dr.restore.status === 'fetching'
+      || dr.restore.status === 'replaying'
+    ) return false
+
+    const targetTime = state.t - Math.max(0, targetAgeSec)
+    resetDrill(level, targetTime)
+    const started = startPointInTimeRestore(targetAgeSec)
+    const restore = dr.restore
+    drill.targetTime = restore.targetTime
+    drill.backupId = restore.backupId
+    drill.walBytesRequired = restore.walBytesRequired
+    drill.estimatedRtoSec = restore.estimatedDurationSec
+
+    const selected = backupById(restore.backupId)
+    if (selected) {
+      drill.backupAgeSec = Math.max(0, state.t - selected.completedAt)
+      drill.backupObjectBytesRequired = selected.objectStoreBytes
+      drill.manifestDigest = selected.manifestDigest
+      drill.restoredDigest = selected.objectDigest
+      drill.smokeTableMask = selected.smokeTableMask
+    }
+    if (!started) {
+      drill.status = 'failed'
+      drill.failureReason = restore.failureReason
+      return false
+    }
+
+    drill.status = 'restoring'
+    drill.checksumBytesRequired = level === 'verified' ? restore.backupBytesRequired : 0
+    drill.smokeBytesRequired = smokeBytesForLevel(level)
+    drill.validationBytesRequired = drill.checksumBytesRequired + drill.smokeBytesRequired
+    drill.estimatedDurationSec =
+      drill.estimatedRtoSec
+      + drill.checksumBytesRequired / DR_DRILL_VERIFY_BYTES_PER_SEC
+      + drill.smokeBytesRequired / DR_DRILL_SMOKE_BYTES_PER_SEC
+    toast(
+      `${CLAIM_VALUES.restoreDrill.levels[level].label} drill started on the recovery ground — RTO clock running`,
+      'info',
+      6500,
+    )
+    return true
+  }
+
+  function failRestoreDrill(reason: string): void {
+    const drill = dr.drill
+    drill.status = 'failed'
+    drill.completedAt = state.t
+    drill.failureReason = reason
+    toast(`Restore drill failed — ${reason}`, 'warn', 7500)
+  }
+
+  function completeRestoreDrill(): void {
+    const drill = dr.drill
+    drill.status = 'passed'
+    drill.completedAt = state.t
+    drill.progress = 1
+    drill.failureReason = ''
+    toast(
+      `Restore drill passed in ${drill.elapsedSec.toFixed(1)} model s — read the supported claim and its limits`,
+      'good',
+      7500,
+    )
+  }
+
+  function tickRestoreDrill(dt: number): void {
+    const drill = dr.drill
+    if (
+      drill.status !== 'restoring'
+      && drill.status !== 'verifying'
+      && drill.status !== 'querying'
+    ) return
+
+    drill.elapsedSec = Math.max(0, state.t - drill.startedAt)
+    drill.progress = drill.estimatedDurationSec > 0
+      ? Math.min(1, drill.elapsedSec / drill.estimatedDurationSec)
+      : 0
+    if (drill.status === 'restoring') {
+      const restore = dr.restore
+      const backupReadFraction = restore.backupBytesRequired > 0
+        ? Math.min(1, restore.backupBytesFetched / restore.backupBytesRequired)
+        : 0
+      drill.objectStoreBytesRead =
+        drill.backupObjectBytesRequired * backupReadFraction + restore.walBytesReplayed
+      if (restore.status === 'fetching' && !backupById(drill.backupId)) {
+        failRestoreDrill('the selected full backup expired from retention before backup-fetch completed')
+      } else if (restore.status === 'failed') {
+        failRestoreDrill(restore.failureReason)
+      } else if (restore.status === 'complete') {
+        drill.objectStoreBytesRead = drill.backupObjectBytesRequired + restore.walBytesRequired
+        drill.measuredRtoSec = restore.elapsedSec
+        drill.status = drill.checksumBytesRequired > 0 ? 'verifying' : 'querying'
+      }
+    } else if (drill.status === 'verifying') {
+      drill.checksumBytesRead = Math.min(
+        drill.checksumBytesRequired,
+        drill.checksumBytesRead + DR_DRILL_VERIFY_BYTES_PER_SEC * dt,
+      )
+      if (drill.checksumBytesRead >= drill.checksumBytesRequired) {
+        if (drill.restoredDigest !== drill.manifestDigest) {
+          failRestoreDrill('the restored object digest does not match the backup manifest')
+        } else {
+          drill.status = 'querying'
+        }
+      }
+    } else {
+      drill.smokeBytesRead = Math.min(
+        drill.smokeBytesRequired,
+        drill.smokeBytesRead + DR_DRILL_SMOKE_BYTES_PER_SEC * dt,
+      )
+      if (drill.smokeBytesRead >= drill.smokeBytesRequired) {
+        const expectedMask = drill.level === 'table' ? 1 : (1 << N_TABLES) - 1
+        if ((drill.smokeTableMask & expectedMask) !== expectedMask) {
+          failRestoreDrill('the smoke query did not find the expected row witness')
+        } else {
+          completeRestoreDrill()
+        }
+      }
+    }
+
+    drill.validationBytesRead = drill.checksumBytesRead + drill.smokeBytesRead
   }
 
   function tickDisasterRecovery(dt: number): void {
@@ -2954,32 +3196,34 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     }
 
     const restore = dr.restore
-    if (restore.status !== 'fetching' && restore.status !== 'replaying') return
-    restore.elapsedSec += dt
-    if (restore.status === 'fetching') {
-      restore.backupBytesFetched = Math.min(
-        restore.backupBytesRequired,
-        restore.backupBytesFetched + backupFetchBytesPerSec() * dt,
-      )
-      if (restore.backupBytesFetched >= restore.backupBytesRequired) {
-        restore.status = restore.walBytesRequired > 0 ? 'replaying' : 'complete'
+    if (restore.status === 'fetching' || restore.status === 'replaying') {
+      restore.elapsedSec += dt
+      if (restore.status === 'fetching') {
+        restore.backupBytesFetched = Math.min(
+          restore.backupBytesRequired,
+          restore.backupBytesFetched + backupFetchBytesPerSec() * dt,
+        )
+        if (restore.backupBytesFetched >= restore.backupBytesRequired) {
+          restore.status = restore.walBytesRequired > 0 ? 'replaying' : 'complete'
+        }
+      }
+      if (restore.status === 'replaying') {
+        restore.walBytesReplayed = Math.min(
+          restore.walBytesRequired,
+          restore.walBytesReplayed + walRecoveryBytesPerSec() * dt,
+        )
+        if (restore.walBytesReplayed >= restore.walBytesRequired) restore.status = 'complete'
+      }
+      restore.progress =
+        restore.estimatedDurationSec > 0
+          ? Math.min(1, restore.elapsedSec / restore.estimatedDurationSec)
+          : 1
+      if (restore.status === 'complete') {
+        restore.progress = 1
+        toast('recovery_target_time reached — replay stopped; promotion is a separate HA action', 'good', 6500)
       }
     }
-    if (restore.status === 'replaying') {
-      restore.walBytesReplayed = Math.min(
-        restore.walBytesRequired,
-        restore.walBytesReplayed + walRecoveryBytesPerSec() * dt,
-      )
-      if (restore.walBytesReplayed >= restore.walBytesRequired) restore.status = 'complete'
-    }
-    restore.progress =
-      restore.estimatedDurationSec > 0
-        ? Math.min(1, restore.elapsedSec / restore.estimatedDurationSec)
-        : 1
-    if (restore.status === 'complete') {
-      restore.progress = 1
-      toast('recovery_target_time reached — replay stopped; promotion is a separate HA action', 'good', 6500)
-    }
+    tickRestoreDrill(dt)
   }
 
   /* ======================================================================
@@ -7508,6 +7752,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     dr.backup.estimatedDurationSec = 0
     dr.backup.failureReason = ''
     resetRestore(0)
+    resetDrill('verified', 0)
 
     for (let i = 0 as 0 | 1; i < 2; i = (i + 1) as 0 | 1) {
       const standby = rep.standbys[i]
@@ -7690,6 +7935,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     endTrace,
     startBaseBackup,
     startPointInTimeRestore,
+    startRestoreDrill,
     setLeaderOpinion,
     startSwitchover,
     startFailover,
