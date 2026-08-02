@@ -869,6 +869,15 @@ function correctionSource(): string {
 }
 
 function correctionContext(): readonly (readonly [string, string])[] {
+  if (screen.kind === 'flow') {
+    const state = parseFlowQuery(window.location.search)
+    return [
+      ['statement query parameter', state.statement],
+      ['setting query parameter', state.setting],
+      ['a query parameter', String(state.a)],
+      ['b query parameter', String(state.b)],
+    ]
+  }
   if (screen.kind === 'instrument') return [['PostgreSQL version filter', String(pgVersion)]]
   if (screen.kind !== 'console') return []
   return [

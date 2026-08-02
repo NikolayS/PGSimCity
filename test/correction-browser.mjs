@@ -10,10 +10,24 @@ const MEASURE_EXPRESSION = `(() => {
     return element.tagName.toLowerCase() + classes.map((name) => '.' + name).join('')
   }
   const subjects = Array.from(document.querySelectorAll('[data-correction-subject]'))
-    .map((element) => ({
-      label: describe(element),
-      pathCount: element.querySelectorAll('[data-correction-path="true"] > a[data-correction-link="true"]').length,
-    }))
+    .map((element) => {
+      const links = Array.from(
+        element.querySelectorAll('[data-correction-path="true"] > a[data-correction-link="true"]'),
+      ).map((anchor) => {
+        const url = new URL(anchor.href)
+        return {
+          href: anchor.href,
+          length: anchor.href.length,
+          title: url.searchParams.get('title'),
+          body: url.searchParams.get('body'),
+        }
+      })
+      return {
+        label: describe(element),
+        pathCount: links.length,
+        links,
+      }
+    })
   const paths = Array.from(document.querySelectorAll('[data-correction-path="true"]'))
   const orphanPaths = paths
     .filter((path) => !path.closest('[data-correction-subject]'))
@@ -29,6 +43,7 @@ export async function measureCorrectionPages(pages) {
   return inspectRenderedPages(pages, async ({ evaluate, page, viewport }) => {
     const measured = await evaluate(MEASURE_EXPRESSION)
     let markerProbe
+    let sqlSecretProbe
     if (page.probeMarker) {
       await evaluate(`(() => {
         const required = document.createElement('section')
@@ -54,11 +69,21 @@ export async function measureCorrectionPages(pages) {
         ),
       }
     }
+    if (page.sqlSecret) {
+      sqlSecretProbe = await evaluate(`(() => {
+        const secret = ${JSON.stringify(page.sqlSecret)}
+        return {
+          transcript: document.querySelector('#terminal-transcript')?.textContent.includes(secret) ?? false,
+          input: document.querySelector('#terminal-input')?.value.includes(secret) ?? false,
+        }
+      })()`)
+    }
     return {
       name: page.name,
       viewport,
       ...measured,
       markerProbe,
+      sqlSecretProbe,
     }
   })
 }

@@ -628,12 +628,42 @@ export function createControls(ctx: UiContext): UiModule {
     section.head.append(badge)
     groupBadges.push({ metas, node: badge })
 
-    section.body.append(el('p', { class: 'pgc-group__hint', text: group.hint }))
+    const groupHint = el('p', { class: 'pgc-group__hint', text: group.hint })
+    section.body.append(groupHint)
     for (const meta of metas) {
       const control = createKnobControl(ctx, meta)
       controls.push(control)
       section.body.append(control.root)
     }
+
+    let correctionField: HTMLElement | null = null
+    const rememberCorrectionField = (event: Event): void => {
+      if (!(event.target instanceof Element)) return
+      const field = event.target.closest<HTMLElement>('.pg-field')
+      if (field && section.body.contains(field)) correctionField = field
+    }
+    section.body.addEventListener('focusin', rememberCorrectionField)
+    section.body.addEventListener('pointerdown', rememberCorrectionField)
+    section.root.dataset.correctionSubject = `city-console-${group.id}`
+    createCorrectionPath(section.root, {
+      surface: 'City / Console',
+      panel: () => {
+        const label = correctionField
+          ?.querySelector<HTMLElement>('.pg-field__label')
+          ?.textContent
+          ?.trim()
+        return `Simulation controls / ${group.label}${label ? ` / ${label}` : ''}`
+      },
+      source: () => correctionField?.dataset.knob
+        ? `src/ui/content.ts#KNOB_META[${correctionField.dataset.knob}]`
+        : `src/ui/content.ts#KNOB_GROUPS[${group.id}]`,
+      claim: () => correctionField
+        ? displayedClaim(
+            correctionField.querySelector<HTMLElement>('.pg-field__hint')
+              ?? correctionField.querySelector<HTMLElement>('.pg-field__label'),
+          )
+        : displayedClaim(groupHint),
+    })
     body.append(section.root)
   }
 
@@ -664,23 +694,12 @@ export function createControls(ctx: UiContext): UiModule {
     'section',
     {
       class: 'pg-panel pgc-panel pgc-rail',
-      data: { correctionSubject: 'city-console' },
     },
     head,
     body,
     foot,
   )
   panel.setAttribute('aria-label', 'Console')
-  createCorrectionPath(panel, {
-    surface: 'City / Console',
-    panel: () => `Simulation controls / ${presetName.textContent || 'Defaults'}`,
-    source: 'src/ui/content.ts#KNOB_META; src/ui/controls.ts#createControls',
-    claim: () => displayedClaim(
-      ...Array.from(body.querySelectorAll<HTMLElement>(
-        '.pgc-group__hint, .pg-field__label, .pg-field__guc, .pg-field__hint',
-      )).filter((node) => node.offsetParent !== null),
-    ),
-  })
   host.append(tab, panel)
   mount.append(host)
 

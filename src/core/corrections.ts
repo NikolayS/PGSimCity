@@ -4,6 +4,9 @@ export const CORRECTION_ISSUE_TEMPLATE = 'postgresql-mismatch.md'
 export const CORRECTION_ANALYTICS_EVENT = 'Correction Link Click'
 export const CORRECTION_PLAUSIBLE_CLASS =
   'plausible-event-name--Correction+Link+Click'
+export const CORRECTION_URL_MAX_LENGTH = 8_000
+export const CORRECTION_CLAIM_TRUNCATION_MARKER =
+  '[Claim truncated: the correction link reached its safe URL limit. Quote any omitted text in the issue after opening it.]'
 
 const ISSUE_URL = 'https://github.com/NikolayS/PGSimCity/issues/new'
 const NO_STATE =
@@ -21,6 +24,7 @@ export interface CorrectionReport {
   panel: string
   source: string
   claim: string
+  claimCaptureNote?: string
   context?: CorrectionContext
 }
 
@@ -29,6 +33,7 @@ export interface CorrectionPathOptions {
   panel: string | (() => string)
   source: string | (() => string)
   claim: string | (() => string)
+  claimCaptureNote?: string | (() => string)
   context?: CorrectionContext | (() => CorrectionContext)
   /** Mark representative always-visible explanatory paths for the 390px floor. */
   disclosure?: boolean
@@ -71,6 +76,9 @@ export function buildCorrectionBody(report: CorrectionReport): string {
     '## Claim as displayed',
     '',
     quotedClaim(report.claim),
+    ...(report.claimCaptureNote
+      ? ['', `**Claim capture note:** ${oneLine(report.claimCaptureNote)}`]
+      : []),
     '',
     '## Minimum reproduction context',
     '',
@@ -90,7 +98,7 @@ export function buildCorrectionBody(report: CorrectionReport): string {
   ].join('\n')
 }
 
-export function correctionIssueUrl(report: CorrectionReport): string {
+function unguardedCorrectionIssueUrl(report: CorrectionReport): string {
   const url = new URL(ISSUE_URL)
   url.searchParams.set('template', CORRECTION_ISSUE_TEMPLATE)
   url.searchParams.set(
@@ -99,6 +107,53 @@ export function correctionIssueUrl(report: CorrectionReport): string {
   )
   url.searchParams.set('body', buildCorrectionBody(report))
   return url.href
+}
+
+function truncatedClaim(claim: readonly string[], length: number): string {
+  if (length === 0) return CORRECTION_CLAIM_TRUNCATION_MARKER
+  return `${claim.slice(0, length).join('')}\n\n${CORRECTION_CLAIM_TRUNCATION_MARKER}`
+}
+
+/** Keep GitHub's issue prefill below its practical ceiling, measured after URL encoding. */
+export function correctionIssueUrl(report: CorrectionReport): string {
+  const complete = unguardedCorrectionIssueUrl(report)
+  if (complete.length <= CORRECTION_URL_MAX_LENGTH) return complete
+
+  const claim = Array.from(report.claim)
+  let low = 0
+  let high = claim.length
+  let fitted = unguardedCorrectionIssueUrl({
+    ...report,
+    claim: CORRECTION_CLAIM_TRUNCATION_MARKER,
+  })
+
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2)
+    const candidate = unguardedCorrectionIssueUrl({
+      ...report,
+      claim: truncatedClaim(claim, middle),
+    })
+    if (candidate.length <= CORRECTION_URL_MAX_LENGTH) {
+      fitted = candidate
+      low = middle + 1
+    } else {
+      high = middle - 1
+    }
+  }
+
+  if (fitted.length <= CORRECTION_URL_MAX_LENGTH) return fitted
+
+  /* Authored metadata should never approach the limit. This final fixed report
+   * keeps a future bad caller from emitting a dead link while saying visibly
+   * that more than the claim had to be omitted. */
+  return unguardedCorrectionIssueUrl({
+    surface: 'PGSimCity',
+    panel: 'Correction report metadata exceeded the safe link limit',
+    source: 'src/core/corrections.ts#correctionIssueUrl',
+    claim: CORRECTION_CLAIM_TRUNCATION_MARKER,
+    claimCaptureNote:
+      'The report metadata also exceeded the safe link limit. Add the surface and disputed wording manually after opening the issue.',
+  })
 }
 
 /** Read the same plain text the panel presents, keeping panel sections separate. */
@@ -120,6 +175,9 @@ function reportFrom(options: CorrectionPathOptions): CorrectionReport {
     panel: read(options.panel),
     source: read(options.source),
     claim: read(options.claim),
+    ...(options.claimCaptureNote
+      ? { claimCaptureNote: read(options.claimCaptureNote) }
+      : {}),
     ...(context?.length ? { context } : {}),
   }
 }

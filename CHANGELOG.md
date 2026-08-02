@@ -11,6 +11,8 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+## [0.34.0] — 2026-08-02
+
 ### Restore drills now distinguish evidence from claims
 
 Restore drills now distinguish the healthy unarchived tail of the current WAL
@@ -24,6 +26,40 @@ that every smoke query misses. Smoke checks are priced as targeted expected-row
 lookups instead of relation scans. The former RTO label is now
 **restore-to-target time**, explicitly excluding promotion, cutover, client
 reconnection, and service restoration.
+
+### Work memory and correction paths
+
+The city now shows `work_mem` as a per-node allowance for Sort and
+HashAggregate, including `hash_mem_multiplier`, temp-file spill evidence, and
+the resulting model-latency movement. It states that join spills, parallel
+execution, and cost-based replanning are outside the model.
+
+Every claim-bearing panel now offers a pre-filled PostgreSQL correction report
+with its displayed wording, source, app version, and minimum reproduction
+state. Correction anchors opt out of Plausible's outbound-link capture in code,
+so issue bodies are never sent as analytics URLs. Restore-drill review also
+separated a healthy unarchived WAL tail from an archive fault and corrected the
+cost of smoke checks.
+
+## [0.33.0] — 2026-08-02
+
+### Latency becomes an observable model result
+
+The city now reports a rolling distribution of completed backend trips with
+separate quantiles for buffer reads, dirty-victim I/O, eviction WAL flushes,
+commit waits, relation-lock waits, and the remaining modeled work. Dirty page
+writers now obey the write-ahead rule, evictors join in-flight WAL group
+flushes, `synchronous_commit = off` does not accrue commit wait, and vacuum
+throttling appears as `Timeout/VacuumDelay`.
+
+### One measured execution, two modeled commit policies
+
+The Machine comparison replays one PGlite receipt through
+`synchronous_commit = on` and `off`, labels the replay as modeled rather than a
+controlled PostgreSQL experiment, completes the deferred flush, and explains
+the acknowledged-commit loss window. Mobile disclosures now have a tested 9 px
+floor. Registry names, deep-link destinations, and production event routes are
+checked so navigation and claim ownership cannot drift silently.
 
 ## [0.32.0] — 2026-08-02
 
