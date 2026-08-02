@@ -14,7 +14,7 @@ import { N_BUFFERS } from '../src/core/types'
 import { createBus } from '../src/core/bus'
 import { CATALOG } from '../src/observability/catalog'
 import { createCollector } from '../src/observability/collector'
-import { ALL_STEPS, ALL_VERDICTS } from '../src/observability/paths'
+import { ALL_STEPS, ALL_VERDICTS, SYMPTOMS } from '../src/observability/paths'
 import { PROJECTIONS } from '../src/observability/views'
 import { MODEL_BULK_READ_RING_FRAMES, MODEL_LATENCY_WINDOW_TRIPS, createSim } from '../src/sim/model'
 import { SCENARIOS } from '../src/sim/scenarios'
@@ -27,6 +27,7 @@ import type { UiContext } from '../src/ui/uikit'
 import { VACUUM_RECLAIM_PLATE_LINES } from '../src/world/maintenance'
 import { SHARED_BUFFER_SAMPLE_PLATE_LABEL } from '../src/world/shmem'
 import { WAL_SEGMENT_PLATE_LABEL, WAL_SEGMENT_SIZE_PLATE_LABEL } from '../src/world/wal'
+import { installTestDom } from './dom'
 import { createWalkCityHarness } from './walk-harness'
 
 const read = (path: string): string => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8')
@@ -224,6 +225,12 @@ describe('claims and conventions spine', () => {
       .toContain(CLAIM_VALUES.modelLatency.disclosure)
     expect(storageDocCopy('bgwriter'), 'modelLatency: prose omits real-server percentile limits')
       .toContain('production long-tail consequence is not validated')
+    const stall = SYMPTOMS.find((symptom) => symptom.id === 'stall')
+    expect(stall?.sub, 'modelLatency: Diagnose:stall still denies the model quantiles')
+      .toContain(`rolling p50/p99 in ${CLAIM_VALUES.modelLatency.unit}`)
+    const commitChapter = CHAPTERS.find((chapter) => chapter.id === 'commit')
+    expect(commitChapter?.body, 'modelLatency: tour:commit omits the visible quantiles')
+      .toContain(`rolling p50/p99 in ${CLAIM_VALUES.modelLatency.unit}`)
   })
 
   it('keeps vacuum truncation qualified on the model, plate, tour, and docs', () => {
@@ -296,6 +303,11 @@ describe('claims and conventions spine', () => {
     )
     expect(read('machine/comparison.js'), 'Machine:comparison does not consume the owned claim')
       .toContain('MACHINE_SYNCHRONOUS_COMMIT_COMPARISON as claim')
+    const roadmap = read('ROADMAP.md')
+    expect(roadmap, 'Machine:comparison remains described as future work')
+      .toContain('**Shipped — controlled comparison.**')
+    expect(roadmap, 'Machine:comparison roadmap still claims two PostgreSQL executions')
+      .toMatch(/one PostgreSQL execution report/i)
   })
 
   it('uses each registered destination name as its inspector panel title', async () => {
@@ -382,6 +394,7 @@ describe('claims and conventions spine', () => {
   })
 
   it('keeps every production event emitter connected to a source handler', () => {
+    installTestDom()
     const convention = CLAIM_VALUES.eventConvention
     const emitters = new Map<string, string[]>()
     const handlers = new Map<string, string[]>()

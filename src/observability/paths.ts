@@ -414,7 +414,7 @@ export const SYMPTOMS: Symptom[] = [
   {
     id: 'stall',
     complaint: 'Writes stall every few minutes.',
-    sub: 'A PostgreSQL latency complaint; the city will test checkpoint and I/O counters, not latency.',
+    sub: `A PostgreSQL latency complaint; correlate checkpoint and I/O counters with rolling p50/p99 in ${CLAIM_VALUES.modelLatency.unit}.`,
     scenario: 'checkpoint-storm',
     entry: 'stall.1',
     accent: 'checkpoint',

@@ -734,7 +734,7 @@ export function createHud(ctx: UiContext): UiModule {
       { class: 'hud-latency__note' },
       'These are deliberately stretched model-time trips, not production milliseconds. ',
       el('a', {
-        href: 'https://www.postgresql.org/docs/current/pgstatstatements.html',
+        href: `${CLAIM_VALUES.postgresqlVersion.manualBase}pgstatstatements.html`,
         target: '_blank',
         rel: 'noopener',
         text: 'pg_stat_statements',

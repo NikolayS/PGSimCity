@@ -146,7 +146,7 @@ const STEPS: TourStep[] = [
     id: 'commit',
     title: 'Commit, and what fsync costs',
     body:
-      'A durable commit does not wait for data pages; it waits for the WAL record describing the change to be flushed. We have set `synchronous_commit` to off, so PostgreSQL may acknowledge commits before that flush. In the city, watch modeled `commit_wait` occupancy and the deliberately stretched model duration fall; it is not a production latency measurement. The real trade is that the last fraction of a second of acknowledged transactions may be lost after a PostgreSQL server crash, operating-system crash or power failure.',
+      `A durable commit does not wait for data pages; it waits for the WAL record describing the change to be flushed. We have set \`synchronous_commit\` to off, so PostgreSQL may acknowledge commits before that flush. In the city, open Latency and watch modeled \`commit_wait\` occupancy plus the rolling p50/p99 in ${CLAIM_VALUES.modelLatency.unit} fall; the selected p99 trip attributes its commit time. Those values are not production latency measurements. The real trade is that the last fraction of a second of acknowledged transactions may be lost after a PostgreSQL server crash, operating-system crash or power failure.`,
     focus: 'walwriter',
     duration: 20,
     knobs: { synchronousCommit: 'off', tps: 600, writeRatio: 0.7 },
