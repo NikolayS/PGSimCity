@@ -277,6 +277,42 @@ findings that are deliberately left must be stated in the release notes.
    `SimStats` has no latency field. For any claim about mechanism, the code that
    implements it must exist — or the absence must be marked, the way
    `pg_stat_statements` is marked `coverage: 'absent'`.
+
+   **And when prose and model disagree, the model is a suspect too.** Rule 7 says
+   a claim the model cannot support must be withdrawn. It does *not* say the
+   model is the arbiter of what is true about PostgreSQL. Deciding which of the
+   two is wrong is a separate act of judgement that must happen before either is
+   edited, and rewriting the prose is the cheaper move, so it is the one that
+   gets made by mistake.
+
+   This has already cost a release. The "Without the bgwriter" scenario said a
+   backend forced to write its own dirty victim produces a latency spike — true
+   of PostgreSQL, because `FlushBuffer()` calls `XLogFlush()` first under the
+   write-ahead rule. A new instrument measured no spike, and the prose was
+   rewritten to say the consequence was "not validated by this city". The
+   instrument was right and the model was wrong: it priced an eviction as a bare
+   device write, 65–235× below its own WAL flush cost, and never called
+   `requestFlush` from the eviction path. **We shipped a disclaimer that made
+   readers less likely to look for a real production effect** — a worse error
+   than the overclaim it replaced. Withdrawing a true claim is not the safe
+   default; it is a claim of its own, and it needs the same evidence.
+
+9. **Never pin a measurement whose correctness is the open question.** A test
+   asserts intended behaviour. The same release shipped
+   `expect(after.p99).toBeLessThanOrEqual(before.p99)` with the failure message
+   "the shipped claim unexpectedly changed" — a test that goes **red when the
+   model becomes correct**, guarding a single noisy draw. Assert the durable
+   direction the mechanism implies; if the direction is what you are trying to
+   find out, that is an experiment to run and report, not an assertion to freeze.
+
+10. **An honesty disclosure is load-bearing content, not chrome.** Qualifications
+    — `model ms`, "modelled, not measured", "PGlite cannot measure this" — may be
+    shortened for a small screen. They may never be what gets dropped to make
+    room. The comparison view shipped with `display: none` on both plain-language
+    admissions at 390px and the PGlite disclosure surviving at 6px, leaving a
+    phone reader a full-size claim to have watched a controlled experiment with
+    every retraction removed by CSS. **If a viewport cannot fit both the claim and
+    its qualification, cut the claim.** Enforce it with a test, not a review.
 8. **The dependency boundary stays small.** three.js remains the only bundled
    runtime dependency of the 3D application. PGlite is allowed only as a lazy,
    opt-in dependency of Query flow in `observability/` and `machine/`; it must

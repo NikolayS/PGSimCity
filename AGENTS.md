@@ -6,7 +6,12 @@ delivery rules. [`CONTRIBUTING.md`](CONTRIBUTING.md) is the shorter human guide.
 
 ## Codex workflow
 
-- Do not commit or push. Leave the working tree for the project owner.
+- **Never push.** Pushing is the project owner's action, always.
+- **In your own dedicated worktree on your own branch: commit your work.** That
+  is how it reaches the owner for merge — uncommitted work in a worktree is easy
+  to lose and impossible to review as a diff. Commit before you report.
+- **In the primary working tree at `/home/tars/pgcity`, or on `main` anywhere: do
+  not commit.** Leave that tree for the project owner.
 - Preserve unrelated changes. If work touches `src/engine/renderer.ts`,
   `src/main.ts`, `src/world/layout.ts`, or `src/core/types.ts`, follow the
   dedicated-worktree rule in `CLAUDE.md`.
