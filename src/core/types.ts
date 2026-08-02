@@ -7,14 +7,15 @@
  * ==========================================================================*/
 
 import type * as THREE from 'three'
+import { CLAIM_VALUES } from './claims'
 
 /* ---------------------------------------------------------------------------
  * City constants — geometry and simulation must agree on these counts.
  * -------------------------------------------------------------------------*/
 
 /** Shared-buffer visual sample is BUF_GRID x BUF_GRID frame tiles. */
-export const BUF_GRID = 32
-export const N_BUFFERS = BUF_GRID * BUF_GRID
+export const BUF_GRID = CLAIM_VALUES.bufferSample.gridWidth
+export const N_BUFFERS = CLAIM_VALUES.bufferSample.capacityFrames
 export type SampleFrames = number & { readonly __sampleFrames: unique symbol }
 /** PostgreSQL's standard block size. */
 export const PG_PAGE_BYTES = 8 * 1024
@@ -165,9 +166,9 @@ export const DEFAULT_KNOBS: Knobs = {
   updateRatio: 0.6,
   seqScanRatio: 0.15,
   sharedBuffers: 2 * 1024,
-  checkpointTimeout: 60,
+  checkpointTimeout: CLAIM_VALUES.checkpointPolicy.defaultTimeoutSeconds,
   checkpointCompletionTarget: 0.9,
-  maxWalSize: 256,
+  maxWalSize: CLAIM_VALUES.checkpointPolicy.defaultMaxWalSizeMiB,
   bgwriterEnabled: true,
   bgwriterLruMaxpages: 100,
   synchronousCommit: 'on',

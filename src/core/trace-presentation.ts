@@ -1,4 +1,5 @@
 import { traceStopBit } from './model-helpers'
+import { CLAIM_VALUES } from './claims'
 import type { TraceRecord, TraceStop } from './types'
 
 export type TraceStageState = 'wait' | 'now' | 'done' | 'skip'
@@ -21,7 +22,7 @@ export const PRESENTED_TRACE_STAGES: readonly PresentedTraceStage[] = [
 
 /** Statement timings run on the deliberately stretched model clock. */
 export function formatModelMilliseconds(milliseconds: number, fractionDigits = 0): string {
-  return `${milliseconds.toFixed(fractionDigits)} model ms`
+  return `${milliseconds.toFixed(fractionDigits)} ${CLAIM_VALUES.modelDuration.millisecondUnit}`
 }
 
 export function traceStageState(trace: TraceRecord, stop: TraceStop): TraceStageState {

@@ -1,6 +1,8 @@
 import '../styles/tour.css'
 
 import type { Knobs, QueryKind, TracePlayback, TraceStop, TourChapter } from '../core/types'
+import { CLAIM_VALUES } from '../core/claims'
+import { mdToHtml } from './content'
 import { clamp } from '../core/util'
 import { MODEL_TIME_STRETCH, sqlFor } from '../sim/model'
 import { SCENARIO_NARRATION_SECONDS } from '../sim/scenarios'
@@ -173,7 +175,7 @@ const STEPS: TourStep[] = [
     id: 'vacuum',
     title: 'Autovacuum cleans up',
     body:
-      'Vacuum is the other half of that bargain. The launcher never inspects a table — it sends a worker into one database at a time. The worker reads the statistics, finds the tables holding more dead row versions than their threshold allows, and goes to work: one pass over the table, one pass over every index it owns, then back to free the space. Watch a violet worker travel to the table and the bloat bar fall behind it. Notice what does not happen — the file does not shrink. The space inside it becomes reusable, which is all you actually needed.',
+      `Vacuum is the other half of that bargain. The launcher never inspects a table — it sends a worker into one database at a time. The worker reads the statistics, finds the tables holding more dead row versions than their threshold allows, and goes to work: one pass over the table, one pass over every index it owns, then back to free the space. Watch a violet worker travel to the table and the bloat bar fall behind it. ${CLAIM_VALUES.vacuumReclaim.rule} The city uses a tail-density heuristic and does not model the lock needed for real truncation.`,
     focus: 'autovac.worker.0',
     duration: 18,
     knobs: { autovacuum: true, autovacuumScaleFactor: 0.08 },
@@ -298,7 +300,7 @@ export function createTour(ctx: UiContext): UiModule {
   const ofEl = el('span', { class: 'tour-card__of', text: `of ${STEPS.length}` })
   const eyebrow = el('span', { class: 'pg-eyebrow tour-card__eyebrow', text: 'Guided tour' })
   const titleEl = el('h2', { class: 'tour-card__title', text: STEPS[0].title })
-  const bodyEl = el('p', { class: 'pg-body tour-card__body', text: STEPS[0].body })
+  const bodyEl = el('p', { class: 'pg-body tour-card__body', html: mdToHtml(STEPS[0].body) })
   const clockEl = el('span', { class: 'tour-card__clock', text: 'Your pace' })
 
   const deckBtn = (name: string, className: string, label: string, onClick: () => void): HTMLButtonElement =>
@@ -926,7 +928,8 @@ export function createTour(ctx: UiContext): UiModule {
     setText(numEl, String(index + 1))
     setText(ofEl, `of ${STEPS.length}`)
     setText(titleEl, step.title)
-    setText(bodyEl, step.body)
+    const bodyHtml = mdToHtml(step.body)
+    if (bodyEl.innerHTML !== bodyHtml) bodyEl.innerHTML = bodyHtml
     setText(eyebrow, step.scenario ? 'Guided tour · scenario running' : 'Guided tour')
     prevBtn.disabled = index === 0
     const finishing = index === STEPS.length - 1

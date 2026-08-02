@@ -6,6 +6,7 @@ import './styles/ui.css'
 import { startAnalytics } from './core/analytics'
 import { createBus } from './core/bus'
 import { Registry } from './core/registry'
+import { installCityComponentRoutes } from './core/city-route'
 import {
   atmosphere,
   createTheme,
@@ -413,6 +414,12 @@ async function boot(): Promise<void> {
 
   await progress(BOOT_STEPS.firstFrame)
   rig.home(true)
+  const stopCityComponentRoutes = installCityComponentRoutes({
+    bus,
+    registry,
+    location: window.location,
+    target: window,
+  })
   frame()
 
   finishBoot(bootSurface)
@@ -428,6 +435,7 @@ async function boot(): Promise<void> {
     window.removeEventListener('pointerdown', resumePreferredAudio, true)
     window.removeEventListener('keydown', resumePreferredAudio, true)
     offAudioToggle()
+    stopCityComponentRoutes()
     stopAnalytics()
     analytics.dispose()
     timer.disconnect()
