@@ -141,6 +141,8 @@ export interface Verdict {
   resolved?: (s: SimState, c: Collector) => Resolution
   city?: string
   reading: { label: string; url: string }[]
+  /** load-bearing scope qualification retained at narrow widths */
+  disclosure?: string
 }
 
 export interface Symptom {
@@ -385,6 +387,43 @@ const KB = {
     unit: 'tps',
     help: 'What the application is asking for. A pooler is how you keep this above max_connections without forking a process per client.',
   },
+  clientConnections: {
+    key: 'clientConnections',
+    guc: 'application client connections',
+    kind: 'range',
+    min: 1,
+    max: 2000,
+    step: 1,
+    unit: 'clients',
+    help: 'Application-side connections offering the aggregate load; this is workload, not a PostgreSQL setting.',
+  },
+  poolMode: {
+    key: 'poolMode',
+    guc: 'PgBouncer pool_mode',
+    kind: 'choice',
+    choices: ['disabled', 'session', 'transaction'],
+    help: 'Transaction mode reuses a server after each transaction and gives up arbitrary session state. disabled is the city comparison, not a PgBouncer value.',
+  },
+  defaultPoolSize: {
+    key: 'defaultPoolSize',
+    guc: 'PgBouncer default_pool_size',
+    kind: 'range',
+    min: 1,
+    max: 16,
+    step: 1,
+    unit: 'server connections',
+    help: 'The PostgreSQL concurrency limit for this one modeled user/database pool. PgBouncer defaults to 20; the city has only sixteen server slots.',
+  },
+  maxClientConn: {
+    key: 'maxClientConn',
+    guc: 'PgBouncer max_client_conn',
+    kind: 'range',
+    min: 1,
+    max: 2000,
+    step: 1,
+    unit: 'clients',
+    help: 'PgBouncer client admission, not PostgreSQL server capacity. PgBouncer defaults to 100.',
+  },
   fullPageWrites: {
     key: 'fullPageWrites',
     guc: 'full_page_writes',
@@ -499,7 +538,7 @@ const STEPS: Step[] = [
         label: 'Every connection slot is busy; new work is queueing outside PostgreSQL.',
         next: 'v.saturation',
         ...gated('connectionSpareSlots', (s, c) =>
-          activityWaitCounts(s, c).total >= s.maxConnections - DIAGNOSTIC_GATES.connectionSpareSlots.threshold),
+          activityWaitCounts(s, c).total >= s.pooler.serverLimit - DIAGNOSTIC_GATES.connectionSpareSlots.threshold),
       },
       { label: 'Most of them are waiting on `Lock`.', next: 'lock.1', ...gated('lockWaitShare', (s, c) => share(activityWaitCounts(s, c).lock, activityWaitCounts(s, c).total) > DIAGNOSTIC_GATES.lockWaitShare.threshold) },
       { label: 'Most of them are waiting on `IO`.', next: 'io.1', ...gated('ioWaitShare', (s, c) => share(activityWaitCounts(s, c).io, activityWaitCounts(s, c).total) > DIAGNOSTIC_GATES.ioWaitShare.threshold) },
@@ -1366,17 +1405,19 @@ const VERDICTS: Verdict[] = [
     kind: 'verdict',
     title: 'Every connection slot is occupied, and new work is queueing.',
     because:
-      'All server connection slots are in use and throughput is far below the offered load. The wait rows still matter — here many occupied sessions are waiting on I/O — but they do not make another server slot available. New work is queueing outside PostgreSQL. The rolling modeled latency begins at backend statement start, so it excludes this outside queue and understates end-to-end response time.',
+      'All available server connection slots are in use and throughput is far below the offered load. The wait rows still matter, but they do not make another server slot available. Direct work queues outside PostgreSQL and is absent from the rolling latency. With PgBouncer transaction pooling, the city instead includes an estimated pool-slot queue in the end-to-end decomposition.',
     mechanism:
-      'The city models sixteen backend slots, a fixed fork cadence and queued demand. PostgreSQL also pays per-process memory, authentication, snapshot and scheduling costs, but the city does not charge ProcArray scans or context switching and cannot demonstrate a superlinear connection cost.',
+      `The city models sixteen backend slots, a fixed fork cadence, queued demand and, for an oversized application fleet, an uncalibrated active-backend pressure curve with a teaching-scale knee at ${CLAIM_VALUES.connectionPooler.concurrencyTarget}. A pooler never changes statement cost directly; default_pool_size only keeps PostgreSQL below that same curve. ${CLAIM_VALUES.connectionPooler.coverageDisclosure}`,
     evidence: (s) => [
-      { label: 'backends', value: `${s.stats.activeBackends} of ${s.maxConnections}`, tone: 'crit' },
+      { label: 'application clients', value: `${s.pooler.acceptedClients} admitted · ${s.pooler.refusedClients} refused`, tone: s.pooler.refusedClients > 0 ? 'crit' : 'warn' },
+      { label: 'PostgreSQL backends', value: `${s.stats.activeBackends} of ${s.pooler.serverLimit}`, tone: 'crit' },
+      { label: 'pool mode / waiting', value: `${s.pooler.mode} · ${s.pooler.waitingClients} clients` },
       { label: 'achieved tps', value: s.stats.tps.toFixed(0) },
       { label: 'offered tps', value: String(Math.round(s.knobs.tps)), tone: 'warn' },
     ],
     fix:
-      'Put a pooler in front of it — PgBouncer in transaction mode, a few hundred client connections mapped onto a few dozen server connections. As a rule of thumb max_connections should be a small multiple of your core count, not a number chosen to stop your application throwing errors.',
-    knobs: [KB.tps],
+      `Put a measured concurrency limit in front of PostgreSQL. In PgBouncer, pool_mode chooses when a server connection returns to the pool, default_pool_size caps server connections per user/database pair, and max_client_conn caps client sockets for the process. Transaction pooling multiplexes most aggressively but costs session state: ${CLAIM_VALUES.connectionPooler.transactionTradeoff} Compare PgBouncer SHOW POOLS client counts with pg_stat_activity's PostgreSQL backend rows. pgcat and Odyssey are alternatives, not modeled implementations.`,
+    knobs: [KB.clientConnections, KB.poolMode, KB.defaultPoolSize, KB.maxClientConn, KB.tps],
     confirm: {
       projection: 'activity_agg',
       instrument: 'pg_stat_activity',
@@ -1387,11 +1428,16 @@ const VERDICTS: Verdict[] = [
  ORDER BY 4 DESC;`,
     },
     resolved: (s) => ({
-      ok: s.stats.activeBackends < s.maxConnections - DIAGNOSTIC_GATES.connectionSpareSlots.threshold,
-      reading: `${s.stats.activeBackends} of ${s.maxConnections} connection slots in use, achieving ${s.stats.tps.toFixed(0)} tps against ${Math.round(s.knobs.tps)} offered`,
+      ok: s.stats.activeBackends < s.pooler.serverLimit - DIAGNOSTIC_GATES.connectionSpareSlots.threshold,
+      reading: `${s.pooler.acceptedClients} clients admitted by ${s.pooler.mode}; pg_stat_activity sees ${s.stats.activeBackends} of ${s.pooler.serverLimit} PostgreSQL backends, achieving ${s.stats.tps.toFixed(0)} tps against ${Math.round(s.knobs.tps)} offered`,
     }),
-    city: 'postmaster',
-    reading: [DOC('runtime-config-connection.html', 'Connection settings')],
+    city: 'client.pooler',
+    reading: [
+      DOC('runtime-config-connection.html', 'PostgreSQL connection settings'),
+      { label: 'PgBouncer configuration', url: 'https://www.pgbouncer.org/config' },
+      { label: 'PgBouncer feature map by pool mode', url: 'https://www.pgbouncer.org/features.html' },
+    ],
+    disclosure: 'connection-pooler-diagnosis-scope',
   },
   {
     id: 'v.idle',

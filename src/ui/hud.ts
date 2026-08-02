@@ -678,6 +678,7 @@ export function createHud(ctx: UiContext): UiModule {
   const latencyP99 = el('strong', { class: 'hud-latency__number', text: '—' })
   const latencyWindow = el('span', { class: 'hud-latency__window', text: 'No completed trips yet' })
   const latencyCauseDefs = [
+    ['Pool-slot queue', (s: SimState) => s.stats.latency.p99.waits.poolSlotMs],
     ['Buffer-read phase', (s: SimState) => s.stats.latency.p99.waits.bufferReadMs],
     ['Dirty-victim I/O', (s: SimState) => s.stats.latency.p99.waits.dirtyWriteMs],
     ['Temp-file I/O', (s: SimState) => s.stats.latency.p99.waits.tempFileMs],
@@ -727,7 +728,10 @@ export function createHud(ctx: UiContext): UiModule {
       { class: 'hud-latency__anatomy' },
       el('span', { class: 'pg-eyebrow', text: 'p99 modeled component quantiles' }),
       ...latencyCauseDefs.map(([label], index) =>
-        el('div', { class: 'hud-latency__cause' },
+        el('div', {
+          class: 'hud-latency__cause',
+          data: index === 0 ? { disclosure: 'connection-pooler-latency-scope' } : {},
+        },
           el('span', { text: label }),
           latencyCauseValues[index],
         )),
