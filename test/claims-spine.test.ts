@@ -385,6 +385,7 @@ describe('claims and conventions spine', () => {
       'numeric timeline targets',
       'multiple-fork trees',
       'timeline-history parsing',
+      'restore-side credentials and object GET failures',
       'wider recovery_target_* interactions',
     ])
     const sim = createSim(createBus())
@@ -413,7 +414,7 @@ describe('claims and conventions spine', () => {
       'timelineRecovery: the control hint omits the scope of the behavior it presents',
     ).toContain(timeline.coverageDisclosure)
     expect(timeline.defaultDisclosure).toMatch(
-      /current.*base backup.*archived WAL.*reaches the target/i,
+      /current.*base backup.*archived WAL.*transaction-end record.*crosses the target/i,
     )
     expect(timeline.defaultDisclosure).not.toMatch(/timeline mismatch|preflight/i)
 
