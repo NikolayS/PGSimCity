@@ -111,20 +111,27 @@ What this teaches:
 - **A restore drill has a cost and a cadence**, and both are decisions. Restoring
   the physical cluster is common to every level in this model; validating one
   table proves less and can run nightly, while broader smoke and manifest checks
-  read more and take longer. A genuinely selective table restore needs a separate
-  logical archive and is explicitly outside this model.
+  add independently falsifiable evidence. A physical backup cannot restore one
+  table in place, but it can be restored on a scratch host and the table can then
+  be extracted logically; no pre-existing logical archive is required.
 - **What a failed drill looks like**, and that finding out this way is the good
-  outcome. A stalled archive, an unreachable target, or retention expiring the
-  selected backup now fails the drill for that actual modeled reason.
+  outcome. A real archive fault is distinct from the healthy unarchived tail of
+  the current 16 MiB segment. That tail is the archive-only RPO floor;
+  `archive_timeout` can shorten it at the cost of padded segments. An uncovered
+  old target likewise distinguishes expired retention from history for which no
+  earlier base backup was ever taken.
 - **What a drill actually proves.** That the backup restores is not that the data
   is correct; the panel states what each level proved and did not prove. The
-  strongest level adds a modeled manifest check and per-table smoke witnesses,
-  while disclosing that it does not hash real files, execute PostgreSQL, validate
-  every row, or prove production hardware and failover.
-- **Recovery time is measured, not assumed.** The city already relates backup age
-  to replay volume. The drill reports restore time from the bytes it actually
+  full-cluster level can reject an empty restored table that the accounts-only
+  level misses, and the strongest level can reject a restored-object digest
+  mismatch that smoke queries miss. Every level says it does not exercise
+  failover, promotion, or service cutover.
+- **Restore-to-target time is measured, not assumed.** The city already relates
+  backup age to replay volume. The drill reports time from the bytes it actually
   fetches and replays, so the number grows as the backup ages, then reports the
-  additional verification and query time instead of treating restore as instant.
+  additional verification and targeted smoke-query time. It does not call that
+  number RTO because promotion, endpoint cutover, client reconnection, and
+  service restoration are outside the clock.
 
 This extends item 10's scenarios: the drill that has not been run is still a
 situation with a correct answer, and the answer is unwelcome.

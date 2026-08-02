@@ -140,7 +140,15 @@ describe('continuity and three-node projection', () => {
       const text = plateText(object)
       if (text) recoveryPlates.push(text)
     })
-    expect(recoveryPlates.some((text) => /RESTORE DRILL.*RTO.*PROVED/i.test(text))).toBe(true)
+    expect(recoveryPlates.some((text) => /RESTORE DRILL.*RUN.*MEASURE.*PROVED/i.test(text))).toBe(true)
+    expect(recoveryPlates.some((text) => /RTO MEASURED|COST COUNTED/i.test(text))).toBe(false)
+
+    sim.state.disasterRecovery.drill.status = 'passed'
+    sim.state.disasterRecovery.restore.status = 'fetching'
+    expect(recoveryGround?.readout?.(sim.state)).toMatch(/fetching full backup/i)
+    expect(recoveryGround?.readout?.(sim.state)).not.toMatch(/drill PASS/i)
+    sim.state.disasterRecovery.restore.status = 'complete'
+    expect(recoveryGround?.readout?.(sim.state)).toMatch(/target reached.*not promoted/i)
 
     const dcs = defs.find((def) => def.id === 'ha.dcs')
     expect(dcs).toBeDefined()

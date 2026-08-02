@@ -249,10 +249,18 @@ describe('claims and conventions spine', () => {
     const sim = createSim(createBus())
     agrees(
       'restoreDrill',
-      'model:restore-drill proof rank',
-      sim.state.disasterRecovery.drill.proofRank,
+      'model:restore-drill evidence rank',
+      sim.state.disasterRecovery.drill.evidenceRank,
       levels.verified.rank,
     )
+    const restoreDoc = DOCS_STORAGE.find((entry) => entry.id === 'recovery.ground')
+    const timingMetric = restoreDoc?.metrics?.find(
+      (metric) => metric.label === 'Restore-to-target',
+    )
+    expect(timingMetric?.get(sim.state)).toBe('not measured')
+    expect(sim.startRestoreDrill('verified')).toBe(false)
+    expect(sim.state.disasterRecovery.drill.estimatedRestoreToTargetSec).toBe(0)
+    expect(timingMetric?.get(sim.state)).toBe('not measured')
 
     const copy = storageDocCopy('recovery.ground')
     for (const level of Object.values(levels)) {
@@ -265,6 +273,29 @@ describe('claims and conventions spine', () => {
     expect(copy).toContain(CLAIM_VALUES.restoreDrill.checksumDisclosure)
     expect(copy).toContain(CLAIM_VALUES.restoreDrill.smokeDisclosure)
     expect(copy).toContain(CLAIM_VALUES.restoreDrill.cadenceDisclosure)
+
+    expect(levels.table.limits).toContain('business invariant')
+    expect(levels.table.limits).toContain('failover')
+    expect(levels.cluster.limits).toContain('business invariant')
+    expect(levels.cluster.limits).toContain('failover')
+    expect(levels.table.supports).not.toContain('recovery startup')
+    expect(levels.cluster.supports).not.toContain('recovery startup')
+
+    expect(CLAIM_VALUES.restoreDrill.physicalScopeDisclosure).toMatch(/scratch host/i)
+    expect(CLAIM_VALUES.restoreDrill.physicalScopeDisclosure)
+      .toMatch(/does not require a pre-existing logical archive/i)
+    expect(CLAIM_VALUES.restoreDrill.physicalScopeDisclosure).toMatch(/pg_dump -t|COPY/i)
+    expect(CLAIM_VALUES.restoreDrill.physicalScopeDisclosure).toMatch(/no PITR|not a PITR/i)
+    expect(CLAIM_VALUES.restoreDrill.physicalScopeDisclosure)
+      .toMatch(/pg_restore -t.*depend/i)
+
+    expect(CLAIM_VALUES.restoreDrill.checksumDisclosure).toMatch(/pg_verifybackup/i)
+    expect(CLAIM_VALUES.restoreDrill.checksumDisclosure).toMatch(/pgBackRest verify/i)
+    expect(CLAIM_VALUES.restoreDrill.checksumDisclosure)
+      .toMatch(/backup-push --verify.*taking the backup/i)
+    expect(CLAIM_VALUES.restoreDrill.timeDisclosure).toMatch(/restore-to-target time/i)
+    expect(CLAIM_VALUES.restoreDrill.timeDisclosure)
+      .toMatch(/promotion.*endpoint.*client reconnection.*service restoration/i)
 
     installTestDom()
     const mount = document.createElement('div')
@@ -296,6 +327,10 @@ describe('claims and conventions spine', () => {
       expect(evidence?.textContent, 'restoreDrill: inspector omits the default limit')
         .toContain(levels.verified.limits)
       expect(evidence?.querySelectorAll('[data-disclosure]')).not.toHaveLength(0)
+      const proof = evidence?.querySelector<HTMLElement>('.pgc-drill__proof')
+      const limits = evidence?.querySelector<HTMLElement>('.pgc-drill__limits')
+      expect(proof?.dataset.disclosure).toBeUndefined()
+      expect(limits?.dataset.disclosure).toBe('restore-drill-limits')
     } finally {
       inspector.dispose()
     }

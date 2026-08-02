@@ -177,7 +177,7 @@ describe('restore drill evidence', () => {
     dom.mount('hud-right')
   })
 
-  it('states the supported claim, its limit, cadence, RTO, and modeled cost', () => {
+  it('states the supported claim, its limit, cadence, restore time, and modeled cost', () => {
     const ctx = context()
     const start = vi.spyOn(ctx.sim, 'startRestoreDrill')
     const inspector = createInspector(ctx)
@@ -192,7 +192,8 @@ describe('restore drill evidence', () => {
     expect(control?.textContent).toContain('Proved')
     expect(control?.textContent).toContain('Did not prove')
     expect(control?.textContent).toContain('Cadence')
-    expect(control?.textContent).toContain('RTO')
+    expect(control?.textContent).toContain('Restore-to-target')
+    expect(control?.querySelector('.pgc-drill__result')?.textContent).not.toContain('RTO')
     expect(control?.textContent).toContain('Object-store reads')
     expect(control?.querySelectorAll('[data-disclosure]')).not.toHaveLength(0)
 
@@ -201,6 +202,11 @@ describe('restore drill evidence', () => {
     button!.click()
     expect(start).toHaveBeenCalledWith('table')
     expect(control?.textContent).toMatch(/FAIL.*no retained full backup/i)
+
+    level!.value = 'cluster'
+    level!.dispatchEvent(new Event('change'))
+    expect(control?.textContent).toMatch(/One-table smoke.*FAIL.*no retained full backup/i)
+    expect(control?.textContent).not.toMatch(/not measured/i)
 
     inspector.dispose()
   })

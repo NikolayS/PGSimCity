@@ -380,6 +380,18 @@ export const KNOB_META: KnobMeta[] = [
     hint: 'Choose a point before now. PITR fetches the newest retained full backup old enough for that target, then replays archived WAL forward.',
   },
   {
+    key: 'restoreDrillFault',
+    label: 'Next backup evidence',
+    group: 'recovery',
+    kind: 'select',
+    options: [
+      { value: 'none', label: 'healthy retained objects' },
+      { value: 'empty_other_table', label: 'orders restores empty' },
+      { value: 'corrupt_object', label: 'retained object corrupted' },
+    ],
+    hint: 'Injects an explicit teaching fault into the next modeled full backup so the drill levels can produce different evidence. It is not a PostgreSQL setting and does not change existing retained backups.',
+  },
+  {
     key: 'haPartition',
     label: 'HA network partition',
     group: 'replication',

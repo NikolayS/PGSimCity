@@ -9,6 +9,22 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [Unreleased]
+
+### Restore drills now distinguish evidence from claims
+
+Restore drills now distinguish the healthy unarchived tail of the current WAL
+segment from an actual archive fault, and distinguish expired retention from a
+target for which no earlier base backup was ever taken. The normal tail teaches
+the archive-only RPO floor and the `archive_timeout` padded-segment trade-off.
+
+Full-cluster smoke can now catch an empty restored table that the one-table
+level misses, while manifest verification can catch retained-object corruption
+that every smoke query misses. Smoke checks are priced as targeted expected-row
+lookups instead of relation scans. The former RTO label is now
+**restore-to-target time**, explicitly excluding promotion, cutover, client
+reconnection, and service restoration.
+
 ## [0.32.0] — 2026-08-02
 
 ### A spine: claims now have an owner

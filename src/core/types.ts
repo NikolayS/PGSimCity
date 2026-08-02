@@ -82,6 +82,7 @@ export type HaPartition =
   | 'isolate_node'
   | 'isolate_dcs_majority'
   | 'split_dcs'
+export type RestoreDrillFault = 'none' | 'empty_other_table' | 'corrupt_object'
 
 export interface Knobs {
   /** Target transactions/sec offered by clients. */
@@ -139,6 +140,8 @@ export interface Knobs {
   backupRetention: number
   /** Seconds before now selected by the recovery_target_time control. */
   recoveryTargetAge: number
+  /** Explicit evidence fault injected into the next modeled retained backup. */
+  restoreDrillFault: RestoreDrillFault
   /** Which network topology separates Patroni agents and etcd members. */
   haPartition: HaPartition
   /** pg_rewind block-change prerequisite; this model's data checksums are off. */
@@ -196,6 +199,7 @@ export const DEFAULT_KNOBS: Knobs = {
   walGDownloadConcurrency: 10,
   backupRetention: 3,
   recoveryTargetAge: 20,
+  restoreDrillFault: 'none',
   haPartition: 'healthy',
   walLogHints: true,
   oldPrimaryDataIntact: true,
@@ -818,10 +822,14 @@ export interface PointInTimeRestore {
   backupBytesRequired: number
   backupBytesFetched: number
   walBytesRequired: number
+  /** WAL bytes available from the archive frontier captured when the restore began. */
+  walBytesAvailable: number
   walBytesReplayed: number
   estimatedDurationSec: number
   elapsedSec: number
   failureReason: string
+  /** Missing-WAL result discovered after backup fetch and available replay. */
+  pendingWalFailureReason: string
   /** This PITR operation stops at the target; promotion is a separate HA action. */
   promoted: false
 }
@@ -839,19 +847,19 @@ export type RestoreDrillStatus =
 export interface RestoreDrill {
   level: RestoreDrillLevel
   status: RestoreDrillStatus
-  proofRank: number
+  evidenceRank: number
   progress: number
   startedAt: number
   completedAt: number
   targetTime: number
   backupId: number
-  /** Age at drill start of the newest retained backup usable for the target. */
+  /** Age of the selected backup at recovery_target_time. */
   backupAgeSec: number
   /** Compressed backup objects read from storage, before local extraction. */
   backupObjectBytesRequired: number
   walBytesRequired: number
-  estimatedRtoSec: number
-  measuredRtoSec: number
+  estimatedRestoreToTargetSec: number
+  measuredRestoreToTargetSec: number
   estimatedDurationSec: number
   elapsedSec: number
   objectStoreBytesRead: number
