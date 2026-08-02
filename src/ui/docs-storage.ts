@@ -1518,7 +1518,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What the city measures',
-        body: `The city computes sampled dirty-page writes, checkpoint phases, request reasons, full-page-image WAL and shared storage pressure. It retains a ${CLAIM_VALUES.modelLatency.disclosure}, reports weighted p50/p99 in ${CLAIM_VALUES.modelLatency.unit}, and decomposes the selected p99 trip into buffer-read, dirty-write, commit, lock and running time. This is model time, not a calibrated device or production response-time histogram.`,
+        body: `The city computes sampled dirty-page writes, checkpoint phases, request reasons, full-page-image WAL and shared storage pressure. It retains a ${CLAIM_VALUES.modelLatency.disclosure} and reports weighted p50/p99 in ${CLAIM_VALUES.modelLatency.unit}; ${CLAIM_VALUES.modelLatency.componentDisclosure}. In this scale model, ${CLAIM_VALUES.modelLatency.batchDisclosure}, and ${CLAIM_VALUES.modelLatency.resolutionDisclosure}. This is model time, not a calibrated device or production response-time histogram.`,
       },
     ],
     metrics: [
@@ -1579,7 +1579,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What the city measures',
-        body: `The city charges representative dirty-victim write time to a backend and shows sampled client-backend writes, bgwriter cleans, dirty frames, route particles and weighted rolling p50/p99 in ${CLAIM_VALUES.modelLatency.unit}. The selected p99 trip is decomposed by cause. At the shipped calibration, disabling the bgwriter does not reliably raise overall p99, so the mechanism is modeled but the production long-tail consequence is not validated by this city.`,
+        body: `The city models FlushBuffer’s write-ahead rule: a backend evicting a dirty page requests WAL durability through the shared group-flush path and waits when that page’s LSN is ahead of flush_lsn; an already-durable page skips that wait. It then charges the page write to the same query. Sampled client-backend writes, bgwriter cleans, dirty frames, route particles and weighted rolling p50/p99 are shown in ${CLAIM_VALUES.modelLatency.unit}; ${CLAIM_VALUES.modelLatency.componentDisclosure}. In this scale model, ${CLAIM_VALUES.modelLatency.batchDisclosure}, and ${CLAIM_VALUES.modelLatency.resolutionDisclosure}.`,
       },
     ],
     metrics: [
@@ -1591,8 +1591,16 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         get: (s) => fmtNum(s.buffers.dirtyEvictions),
         hint: 'dirty buffers a query had to write itself — the number to keep low',
       },
-      { label: 'Latency p50 / p99', get: (s) => `${fmtNum(s.stats.latency.p50.totalMs)} / ${fmtNum(s.stats.latency.p99.totalMs)} ${CLAIM_VALUES.modelLatency.unit}` },
-      { label: 'p99 dirty-victim wait', get: (s) => `${fmtNum(s.stats.latency.p99.waits.dirtyWriteMs)} ${CLAIM_VALUES.modelLatency.unit}` },
+      {
+        label: 'Latency p50 / p99',
+        get: (s) => `${fmtNum(s.stats.latency.p50.totalMs)} / ${fmtNum(s.stats.latency.p99.totalMs)} ${CLAIM_VALUES.modelLatency.unit}`,
+        hint: `${CLAIM_VALUES.modelLatency.batchDisclosure}; ${CLAIM_VALUES.modelLatency.resolutionDisclosure}`,
+      },
+      {
+        label: 'p99 dirty-victim wait',
+        get: (s) => `${fmtNum(s.stats.latency.p99.waits.dirtyWriteMs)} ${CLAIM_VALUES.modelLatency.unit}`,
+        hint: 'the p99 of dirty-victim wait itself, including any required WAL flush; not one total-p99 trip’s component',
+      },
       { label: 'Dirty sample frames', get: (s) => `${fmtNum(s.buffers.dirtyCount)} / ${fmtNum(s.buffers.sampleFrames)}` },
     ],
     knobs: ['bgwriterEnabled', 'bgwriterLruMaxpages', 'sharedBuffers', 'writeRatio'],

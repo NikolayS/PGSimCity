@@ -155,7 +155,7 @@ const STEPS: TourStep[] = [
     id: 'checkpoint',
     title: 'Checkpoints, WAL and I/O',
     body:
-      `The WAL cannot grow forever, so the checkpointer periodically walks the buffer pool and writes the pages that were dirty when it began. We have deliberately made the WAL ceiling (\`max_wal_size\`) tiny, so modeled checkpoints now fire back to back. Watch the pink checkpoint writes and the amber full-page-image surge, then open Latency to compare p50 and p99 and read the p99 wait anatomy. Those values are deliberately stretched ${CLAIM_VALUES.modelLatency.unit}, not production milliseconds.`,
+      `The WAL cannot grow forever, so the checkpointer periodically walks the buffer pool and writes the pages that were dirty when it began. We have deliberately made the WAL ceiling (\`max_wal_size\`) tiny, so modeled checkpoints now fire back to back. Watch the pink checkpoint writes and the amber full-page-image surge, then open Latency to compare p50 and p99 and read each wait component’s own p99. Those values are deliberately stretched ${CLAIM_VALUES.modelLatency.unit}, not production milliseconds.`,
     focus: 'checkpointer',
     duration: 22,
     scenario: 'checkpoint-storm',

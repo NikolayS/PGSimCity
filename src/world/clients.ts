@@ -212,6 +212,7 @@ function phaseRate(st: BackendState): number {
     case 'sort':
     case 'wal_insert':
       return 1.5
+    case 'eviction_flush':
     case 'commit_wait':
       return 0.5
     case 'sending':
@@ -235,6 +236,7 @@ function litLevel(st: BackendState): number {
       return 0.1
     case 'idle_in_xact':
       return 0.72
+    case 'eviction_flush':
     case 'commit_wait':
     case 'blocked':
       return 0.55

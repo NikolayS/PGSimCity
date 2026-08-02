@@ -113,6 +113,8 @@ const age = (sec: number): string => {
  * pg_stat_activity
  * -------------------------------------------------------------------------*/
 
+type ActivityWaitBucket = 'lock' | 'io' | 'commit' | 'idleTx' | 'cpu' | 'idle'
+
 interface ActRow {
   pid: number
   backendType: string
@@ -124,6 +126,7 @@ interface ActRow {
   xmin: string
   query: string
   tone: Tone
+  bucket?: ActivityWaitBucket
 }
 
 /**
@@ -139,7 +142,10 @@ interface ActRow {
  * 17 on. It is exactly the kind of name that gets copied out of an old blog
  * post into a monitoring query that then silently matches nothing.
  */
-function actOf(b: BackendSim, s: SimState): { state: string; wet: string; we: string; tone: Tone } {
+function actOf(
+  b: BackendSim,
+  s: SimState,
+): { state: string; wet: string; we: string; tone: Tone; bucket: ActivityWaitBucket } {
   const syncStandby = configuredSynchronousStandby(s)
   const syncRep =
     syncStandby?.mode === 'sync'
@@ -149,24 +155,26 @@ function actOf(b: BackendSim, s: SimState): { state: string; wet: string; we: st
       || s.knobs.synchronousCommit === 'remote_apply')
   switch (b.state) {
     case 'idle':
-      return { state: 'idle', wet: 'Client', we: 'ClientRead', tone: 'dim' }
+      return { state: 'idle', wet: 'Client', we: 'ClientRead', tone: 'dim', bucket: 'idle' }
     case 'ending':
-      return { state: 'idle', wet: 'Client', we: 'ClientRead', tone: 'dim' }
+      return { state: 'idle', wet: 'Client', we: 'ClientRead', tone: 'dim', bucket: 'idle' }
     case 'idle_in_xact':
-      return { state: 'idle in transaction', wet: 'Client', we: 'ClientRead', tone: 'warn' }
+      return { state: 'idle in transaction', wet: 'Client', we: 'ClientRead', tone: 'warn', bucket: 'idleTx' }
     case 'exec_io':
-      return { state: 'active', wet: 'IO', we: 'DataFileRead', tone: 'accent' }
+      return { state: 'active', wet: 'IO', we: 'DataFileRead', tone: 'accent', bucket: 'io' }
+    case 'eviction_flush':
+      return { state: 'active', wet: 'IO', we: 'WalSync', tone: 'accent', bucket: 'io' }
     case 'commit_wait':
       return syncRep
-        ? { state: 'active', wet: 'IPC', we: 'SyncRep', tone: 'accent' }
-        : { state: 'active', wet: 'IO', we: 'WalSync', tone: 'accent' }
+        ? { state: 'active', wet: 'IPC', we: 'SyncRep', tone: 'accent', bucket: 'commit' }
+        : { state: 'active', wet: 'IO', we: 'WalSync', tone: 'accent', bucket: 'commit' }
     case 'blocked':
-      return { state: 'active', wet: 'Lock', we: 'relation', tone: 'crit' }
+      return { state: 'active', wet: 'Lock', we: 'relation', tone: 'crit', bucket: 'lock' }
     case 'sending':
-      return { state: 'active', wet: 'Client', we: 'ClientWrite', tone: '' }
+      return { state: 'active', wet: 'Client', we: 'ClientWrite', tone: '', bucket: 'cpu' }
     default:
       // parse, plan, exec_cpu, sort, wal_insert, starting — on CPU, not waiting.
-      return { state: 'active', wet: '', we: '', tone: '' }
+      return { state: 'active', wet: '', we: '', tone: '', bucket: 'cpu' }
   }
 }
 
@@ -188,6 +196,7 @@ function activityRows(s: SimState, c: Collector, opts: { aux: boolean }): ActRow
       xmin: String(s.xminHorizon),
       query: 'BEGIN ISOLATION LEVEL REPEATABLE READ;',
       tone: 'crit',
+      bucket: 'idleTx',
     })
   }
 
@@ -206,6 +215,7 @@ function activityRows(s: SimState, c: Collector, opts: { aux: boolean }): ActRow
       xmin: inXact ? String(s.xminHorizon) : '',
       query: b.sql || 'SELECT 1',
       tone: a.tone,
+      bucket: a.bucket,
     })
   }
 
@@ -317,12 +327,7 @@ export function activityWaitCounts(s: SimState, c: Collector): ActivityWaitCount
   }
   for (const row of activityRows(s, c, { aux: false })) {
     counts.total++
-    if (row.state === 'idle in transaction') counts.idleTx++
-    else if (row.state === 'idle') counts.idle++
-    else if (row.wet === 'Lock') counts.lock++
-    else if (row.we === 'WalSync' || row.we === 'SyncRep') counts.commit++
-    else if (row.wet === 'IO') counts.io++
-    else counts.cpu++
+    counts[row.bucket ?? 'cpu']++
   }
   return counts
 }

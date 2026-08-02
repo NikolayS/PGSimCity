@@ -1039,7 +1039,7 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
       default:
         return (
           st === 'exec_cpu' || st === 'exec_io' || st === 'sort' ||
-          st === 'wal_insert' || st === 'commit_wait' || st === 'sending'
+          st === 'wal_insert' || st === 'eviction_flush' || st === 'commit_wait' || st === 'sending'
         )
     }
   }

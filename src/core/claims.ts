@@ -55,6 +55,9 @@ export const CLAIM_VALUES = {
     quantiles: ['p50', 'p99'],
     windowTrips: 512,
     disclosure: 'weighted rolling window of 512 completed backend trips',
+    componentDisclosure: 'each wait component is its own weighted quantile',
+    batchDisclosure: 'transactions carried by one backend trip share one latency observation, so within-batch variance is not modeled',
+    resolutionDisclosure: '30 Hz integration quantizes observations to 33.33 model ms steps',
   },
   vacuumReclaim: {
     plateLines: [

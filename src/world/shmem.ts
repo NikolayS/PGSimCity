@@ -1525,7 +1525,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
           target = procY(xid, b.xid)
           const old = i === oldest
           const src = old ? (sim.knobs.longRunningXact ? L_CRIT : L_VACUUM) : L_BACKEND
-          const pulse = b.state === 'commit_wait' || b.state === 'wal_insert' ? 0.5 : 0
+          const pulse = b.state === 'eviction_flush' || b.state === 'commit_wait' || b.state === 'wal_insert' ? 0.5 : 0
           const inten = (old ? 1.5 : 0.85) + pulse * 0.4
           r = src[0] * inten
           g = src[1] * inten

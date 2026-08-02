@@ -67,7 +67,7 @@ function countPlanNodes(n: PlanNode | null | undefined, depth = 0): number {
 }
 
 /** States that mean "this backend is doing work right now". */
-const BUSY: BackendState[] = ['parse', 'plan', 'exec_cpu', 'exec_io', 'sort', 'wal_insert', 'commit_wait', 'blocked', 'sending']
+const BUSY: BackendState[] = ['parse', 'plan', 'exec_cpu', 'exec_io', 'sort', 'wal_insert', 'eviction_flush', 'commit_wait', 'blocked', 'sending']
 
 /* ---------------------------- reference helpers ---------------------------
  * The reading list under each component. Every entry here was checked against
@@ -209,7 +209,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What the city measures',
         body:
-          'The excavation receives representative shared-buffer-miss routes and exposes sampled read/write rates, shared storage pressure and rolling model-time latency quantiles. The p99 trip attributes time spent in the modeled buffer-read phase. The OS-cache branch is a renderer choice only: it does not keep kernel-cache contents, change model duration or distinguish a device read. Nothing here is calibrated device latency, and fixed plan templates cannot become slower because estimates changed.',
+          'The excavation receives representative shared-buffer-miss routes and exposes sampled read/write rates, shared storage pressure and rolling model-time latency quantiles. The buffer-read value is the p99 of that component’s own distribution, not one total-p99 trip’s anatomy. The OS-cache branch is a renderer choice only: it does not keep kernel-cache contents, change model duration or distinguish a device read. Nothing here is calibrated device latency, and fixed plan templates cannot become slower because estimates changed.',
       },
     ],
     metrics: [
@@ -503,7 +503,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     metrics: [
       { label: 'Slots in use', get: (s) => `${fmtNum(countBackends(s, (b) => b.active))} / ${fmtNum((s.backends ?? []).length)}` },
       { label: 'Running', get: (s) => fmtNum(nIn(s, ...BUSY)) },
-      { label: 'Waiting on I/O', get: (s) => fmtNum(nIn(s, 'exec_io')) },
+      { label: 'Waiting on I/O', get: (s) => fmtNum(nIn(s, 'exec_io', 'eviction_flush')) },
       { label: 'Committing', get: (s) => fmtNum(nIn(s, 'commit_wait')), hint: 'waiting for WAL flush and any synchronous standby' },
       { label: 'Idle in transaction', get: (s) => fmtNum(nIn(s, 'idle_in_xact')) },
     ],
@@ -669,7 +669,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What the city measures',
         body:
-          'The engine models a representative buffer sample, tags, pins, usage counts, dirty victims, a clock sweep and background cleaning. It does not model content-lock acquisition, cleanup-lock failure or per-page visibility checks. A dirty-victim write adds representative time to that statement’s stretched model trip and increments sampled counters; rolling p50/p99 model-time quantiles expose that charge separately from buffer-read, commit and lock waits. There is no calibrated storage time, and the OS-cache route does not change the cost.',
+          'The engine models a representative buffer sample, tags, pins, usage counts, page LSNs, dirty victims, a clock sweep and background cleaning. It does not model content-lock acquisition, cleanup-lock failure or per-page visibility checks. A backend dirty-victim eviction waits for the shared WAL flush when its page LSN is not durable, then adds representative page-write time to that statement and increments sampled counters; rolling p50/p99 model-time quantiles expose each component’s own distribution. There is no calibrated storage time, and the OS-cache route does not change the cost.',
       },
     ],
     metrics: [
@@ -1404,7 +1404,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     ],
     metrics: [
       { label: 'Model CPU phase', get: (s) => fmtNum(nIn(s, 'exec_cpu')), hint: 'a teaching phase, not a pg_stat_activity CPU-running signal' },
-      { label: 'Waiting on I/O', get: (s) => fmtNum(nIn(s, 'exec_io')) },
+      { label: 'Waiting on I/O', get: (s) => fmtNum(nIn(s, 'exec_io', 'eviction_flush')) },
       { label: 'Sorting or hashing', get: (s) => fmtNum(nIn(s, 'sort')) },
       { label: 'Streaming rows', get: (s) => fmtNum(nIn(s, 'sending')) },
       { label: 'Rows returned', get: (s) => fmtNum(nz(s.stats?.tupReturned)) },

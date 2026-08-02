@@ -908,7 +908,7 @@ const VERDICTS: Verdict[] = [
     because:
       'PGSimCity records max_wal_size pressure as the request cause here. PostgreSQL’s num_requested, wal_fpi and wal_bytes counters alone neither establish that cause nor attribute a byte share to FPIs.',
     mechanism:
-      `After a checkpoint establishes a redo point, the first modification of a page can log a full-page image. The image may omit the page hole and wal_compression may compress it, so wal_fpi cannot be converted into bytes. Time-aligned count and byte rates can establish correlation; WAL-record analysis is required for byte attribution. The city exposes rolling p50/p99 in ${CLAIM_VALUES.modelLatency.unit}, but those model-time quantiles are not a production query trace.`,
+      `After a checkpoint establishes a redo point, the first modification of a page can log a full-page image. The image may omit the page hole and wal_compression may compress it, so wal_fpi cannot be converted into bytes. Time-aligned count and byte rates can establish correlation; WAL-record analysis is required for byte attribution. The city exposes rolling p50/p99 in ${CLAIM_VALUES.modelLatency.unit}; ${CLAIM_VALUES.modelLatency.batchDisclosure}, and ${CLAIM_VALUES.modelLatency.resolutionDisclosure}. Those model-time quantiles are not a production query trace.`,
     evidence: (_s, c) => [
       { label: 'num_timed', value: String(Math.round(c.total.ckptTimed)) },
       { label: 'num_requested', value: String(Math.round(c.total.ckptRequested)), tone: 'crit' },
@@ -1101,7 +1101,7 @@ const VERDICTS: Verdict[] = [
     because:
       'The city’s representative sample—not the blank pg_stat_io write cells above—attributes a large write share to client backends. On PostgreSQL, that proves who performed writes, not which query, relation or unique causal chain produced them.',
     mechanism:
-      'A client backend may write buffers during allocation pressure, relation extension and other write paths. The city charges its modeled dirty-victim write to the backend, exposes sampled backend-write counts, and attributes that time in the selected p99 trip. Establish the workload and context from rates, checkpointer/background-writer behavior, per-backend I/O and query evidence before assigning a remedy.',
+      'A client backend may write buffers during allocation pressure, relation extension and other write paths. The city makes a dirty-victim evictor wait for the shared WAL flush when the page LSN is not durable, charges the following page write to that backend, exposes sampled backend-write counts, and reports the dirty-wait distribution’s own p99. Establish the workload and context from rates, checkpointer/background-writer behavior, per-backend I/O and query evidence before assigning a remedy.',
     evidence: (s, c) => {
       const now = recentBackendWriteShare(c)
       return [
@@ -1418,7 +1418,7 @@ const VERDICTS: Verdict[] = [
     because:
       'Backends are stacked on `IO / WalSync`. Each one is waiting until flush_lsn passes its own commit LSN, which is exactly what synchronous_commit = on promises.',
     mechanism:
-      `Watch modeled \`commit_wait\` backends release together when one flush advances past their commit LSNs. That is the city’s group-commit mechanism. It increases the rolling p50/p99 and appears as commit time in the selected p99 trip. These are ${CLAIM_VALUES.modelLatency.unit}, not a production latency distribution.`,
+      `Watch modeled \`commit_wait\` backends release together when one flush advances past their commit LSNs. Dirty-victim evictors whose page LSN is covered join that same in-flight flush. That is the city’s group-commit mechanism. It increases the rolling p50/p99 and appears in the commit component’s own p99 distribution. ${CLAIM_VALUES.modelLatency.batchDisclosure}, and ${CLAIM_VALUES.modelLatency.resolutionDisclosure}; these are ${CLAIM_VALUES.modelLatency.unit}, not a production latency distribution.`,
     evidence: (s, c) => [
       { label: 'synchronous_commit', value: s.knobs.synchronousCommit },
       { label: 'waiting to commit', value: String(activityWaitCounts(s, c).commit), tone: 'warn' },

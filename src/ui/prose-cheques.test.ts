@@ -56,9 +56,8 @@ describe('prose does not promise behavior absent from the model', () => {
 
   it('marks scenario effects at the model boundary', () => {
     expect(scenario('checkpoint-storm')).toMatch(/modeled p50 and p99/i)
-    expect(scenario('no-bgwriter')).toMatch(/does not reliably raise overall p99/i)
     expect(scenario('lock-pileup')).toMatch(/does not model lock-queue fairness/i)
-    expect(scenario('lock-pileup')).toMatch(/attributes .*Lock wait/i)
+    expect(scenario('lock-pileup')).toMatch(/Lock wait readout.*own rolling p99/i)
     expect(scenario('lock-pileup')).toMatch(/fixed 15 model-second timeout/i)
     expect(scenario('lock-pileup')).toMatch(/no lock_timeout knob/i)
     expect(scenario('connection-storm')).toMatch(/does not charge ProcArray/i)
@@ -130,7 +129,6 @@ describe('prose does not promise behavior absent from the model', () => {
     expect(chapter('checkpoint')).toMatch(/p50 and p99/i)
     expect(chapter('checkpoint')).toMatch(/model ms, not production milliseconds/i)
     expect(doc('checkpointer')).toMatch(/weighted p50\/p99 in model ms/i)
-    expect(doc('bgwriter')).toMatch(/production long-tail consequence is not validated/i)
     expect(source('/world/maintenance.ts')).toMatch(/correlate with model p99/i)
     expect(source('/observability/paths.ts')).toMatch(/not a production query trace/i)
   })

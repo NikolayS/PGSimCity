@@ -37,7 +37,7 @@ describe('latency HUD', () => {
     vi.useRealTimers()
   })
 
-  it('replaces cache hit with p50/p99 model time and opens the p99 wait anatomy', () => {
+  it('replaces cache hit with disclosed p50/p99 model-time distributions', () => {
     const ctx = context()
     const hud = createHud(ctx)
     for (let i = 0; i < 1800; i++) {
@@ -54,10 +54,12 @@ describe('latency HUD', () => {
     latency.click()
     const panel = document.getElementById('hud-latency-panel')!
     expect(panel.hidden).toBe(false)
-    expect(panel.textContent).toContain('p99 trip anatomy')
+    expect(panel.textContent).toContain('p99 component quantiles')
     expect(panel.textContent).toContain('Dirty victim write')
     expect(panel.textContent).toContain('Commit wait')
     expect(panel.textContent).toContain('Lock wait')
+    expect(panel.textContent).toContain('within-batch variance is not modeled')
+    expect(panel.textContent).toContain('33.33 model ms steps')
     expect(panel.textContent).toContain('mean_exec_time and stddev_exec_time, not percentiles')
     expect(panel.querySelector('a[href*="pg-stat-monitor"]')).not.toBeNull()
     hud.dispose()

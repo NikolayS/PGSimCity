@@ -380,7 +380,7 @@ export const CATALOG: CatalogEntry[] = [
     docs: `${MANUAL}pgstatstatements.html`,
     coverage: 'absent',
     coverageNote:
-      'The city retains aggregate rolling p50/p99 model-time trips, not per-normalised-statement history, so this result stays absent. PostgreSQL’s pg_stat_statements exposes mean_exec_time and stddev_exec_time but no percentiles. Production p50/p99 needs request tracing or a metrics histogram; the pg_stat_monitor extension can retain a response-time histogram inside PostgreSQL.',
+      'The city retains aggregate rolling p50/p99 model-time trips, not per-normalised-statement history, so this result stays absent. Transactions carried by one backend trip share one latency observation, so within-batch variance is not modeled, and 30 Hz integration quantizes observations to 33.33 model ms steps. PostgreSQL’s pg_stat_statements exposes mean_exec_time and stddev_exec_time but no percentiles. Production p50/p99 needs request tracing or a metrics histogram; the pg_stat_monitor extension can retain a response-time histogram inside PostgreSQL.',
     version:
       'total_time became total_exec_time in 13 when planning time was split out. The blk timing columns were renamed with a shared_/local_/temp_ prefix in 17.',
   },

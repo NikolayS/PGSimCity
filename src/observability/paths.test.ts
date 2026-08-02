@@ -8,7 +8,7 @@ import { SCENARIOS } from '../sim/scenarios'
 import { createCollector } from './collector'
 import type { Collector } from './collector'
 import { ALL_STEPS, ALL_VERDICTS, NODES, SYMPTOMS } from './paths'
-import { PROJECTIONS, PROJECTION_SOURCES } from './views'
+import { activityWaitCounts, PROJECTIONS, PROJECTION_SOURCES } from './views'
 
 const INTENDED_VERDICT = {
   slow: 'v.saturation',
@@ -110,6 +110,24 @@ function reachableVerdicts(
 }
 
 describe('diagnostic path contracts', () => {
+  it('buckets dirty-victim WAL durability waits as I/O, not commit waits', () => {
+    const sim = createSim(createBus())
+    const collector = createCollector(sim)
+    for (const candidate of sim.state.backends) {
+      candidate.active = false
+      candidate.state = 'free'
+    }
+    const backend = sim.state.backends[0]
+    backend.active = true
+    backend.state = 'eviction_flush'
+
+    expect(activityWaitCounts(sim.state, collector)).toMatchObject({
+      total: 1,
+      io: 1,
+      commit: 0,
+    })
+  })
+
   it('keeps every staged path connected to its intended verdict', () => {
     for (const symptomId of Object.keys(INTENDED_VERDICT) as (keyof typeof INTENDED_VERDICT)[]) {
       const { symptom, sim, collector } = stagedPath(symptomId)

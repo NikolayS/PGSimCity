@@ -170,7 +170,7 @@ export const KNOB_META: KnobMeta[] = [
       { value: 'on', label: 'on — fsync before ack' },
       { value: 'remote_apply', label: 'remote_apply — standby applied it' },
     ],
-    hint: 'Selects the modeled commit-wait path. The Latency vital reports stretched p50/p99 model time and attributes the selected p99 trip’s commit wait; PostgreSQL uses this for a real latency/durability trade-off.',
+    hint: 'Selects the modeled commit-wait path. The Latency vital reports stretched p50/p99 model time and the commit component’s own p99 distribution; PostgreSQL uses this for a real latency/durability trade-off.',
     danger: true,
   },
   {

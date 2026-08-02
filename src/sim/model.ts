@@ -23,6 +23,10 @@
  *     second, one trip through the backend state machine carries `batch`
  *     transactions, and all work (pages touched, WAL bytes, dead tuples) is
  *     multiplied by that batch, so the pool and the WAL see the real pressure.
+ *     The latency instrument retains one weighted observation for that whole
+ *     trip, so it does not model variance among transactions inside a batch.
+ *     At the city's 30 Hz integration step those observations are quantized to
+ *     33.33 model ms.
  *
  *     `batch` is a fixed FUNCTION OF THE OFFERED RATE — `tps / NOMINAL_TRIPS` —
  *     and nothing else. It is deliberately NOT a controller. Sizing it from the
@@ -74,6 +78,7 @@ import type {
   FlowRequest,
   Knobs,
   LatencyQuantile,
+  LatencyWaits,
   PhysicalReplicationSlotState,
   PhysicalStandbyState,
   PlanNode,
@@ -219,6 +224,7 @@ function createBufferPoolState(sharedBuffersMiB: number, hitRatio: number): Buff
     rel: new Uint8Array(N_BUFFERS),
     lastTouch: new Float32Array(N_BUFFERS),
     blk: new Uint32Array(N_BUFFERS),
+    pageLsn: new Float64Array(N_BUFFERS),
     clockHand: 0,
     hits: 0,
     misses: 0,
@@ -405,6 +411,7 @@ interface Extra {
   bufferReadWaitT: number
   dirtyWriteWaitT: number
   dirtyWriteDuringReadT: number
+  evictionWalWaitT: number
   commitWaitT: number
   lockWaitT: number
   idleT: number
@@ -417,6 +424,14 @@ interface Extra {
   walPending: number
   walPendingFpi: number
   walPrepared: boolean
+  evictionBuffer: number
+  evictionFlushLsn: number
+  evictionRel: number
+  evictionBlk: number
+  evictionForWrite: boolean
+  evictionResumeState: 'exec_io' | 'exec_cpu'
+  evictionResumeT: number
+  evictionResumeDur: number
 }
 
 interface TraceRequest {
@@ -448,6 +463,7 @@ function makeExtra(): Extra {
     bufferReadWaitT: 0,
     dirtyWriteWaitT: 0,
     dirtyWriteDuringReadT: 0,
+    evictionWalWaitT: 0,
     commitWaitT: 0,
     lockWaitT: 0,
     idleT: 0,
@@ -460,6 +476,14 @@ function makeExtra(): Extra {
     walPending: 0,
     walPendingFpi: 0,
     walPrepared: false,
+    evictionBuffer: -1,
+    evictionFlushLsn: 0,
+    evictionRel: 0,
+    evictionBlk: 0,
+    evictionForWrite: false,
+    evictionResumeState: 'exec_cpu',
+    evictionResumeT: 0,
+    evictionResumeDur: 0,
   }
 }
 
@@ -472,11 +496,22 @@ export interface SimOptions {
   maxStep?: number
   /** Aggregate mechanism probes may isolate themselves from the daily DR job. */
   scheduledBackups?: boolean
+  /** Test/measurement hook; production leaves this unset and allocates nothing. */
+  latencyObserver?: (observation: Readonly<ModelLatencyObservation>) => void
+}
+
+export interface ModelLatencyObservation {
+  totalMs: number
+  waits: LatencyWaits
+  /** Subset of dirtyWriteMs spent in XLogFlush for a dirty victim. */
+  evictionWalFlushMs: number
+  transactions: number
 }
 
 export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi {
   const maxStep = options.maxStep ?? STEP_MAX
   const scheduledBackups = options.scheduledBackups ?? true
+  const latencyObserver = options.latencyObserver
   if (!isFinite(maxStep) || maxStep <= 0 || maxStep > STEP_MAX * MAX_STEPS) {
     throw new Error(`invalid simulation maxStep: ${maxStep}`)
   }
@@ -922,6 +957,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       latency: {
         observations: 0,
         transactions: 0,
+        mean: {
+          totalMs: 0,
+          waits: { bufferReadMs: 0, dirtyWriteMs: 0, commitMs: 0, lockMs: 0, runningMs: 0 },
+        },
         p50: {
           totalMs: 0,
           waits: { bufferReadMs: 0, dirtyWriteMs: 0, commitMs: 0, lockMs: 0, runningMs: 0 },
@@ -1150,6 +1189,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   const PINS = 4
   const pinRing = new Int32Array(N_BACKEND_SLOTS * PINS).fill(-1)
   const pinPos = new Int32Array(N_BACKEND_SLOTS)
+  /** slot + 1 for a backend victim; 255 for the bgwriter across XLogFlush(). */
+  const evictionOwner = new Uint8Array(N_BUFFERS)
+  /** Backend bitmask for sampled page changes awaiting their aggregate WAL insert. */
+  const pageLsnOwners = new Uint16Array(N_BUFFERS)
   /**
    * Concurrent pins one backend may hold, scaled to the pool. StrategyGetBuffer()
    * raises `ERROR: no unpinned buffers available` when every frame is pinned, and
@@ -1332,9 +1375,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   /*
    * A rolling distribution of completed trips. One trip can stand for several
    * transactions, so nearest-rank quantiles use latencyWeight rather than
-   * treating an animation sample as one real transaction. All storage and the
-   * sorted-slot order are fixed up front: completion and refresh allocate
-   * nothing in the frame loop.
+   * treating an animation sample as one real transaction. Transactions inside
+   * that batch share the trip observation; their within-batch tail is not
+   * modeled. All storage and sorted-slot orders are fixed up front: completion
+   * and refresh allocate nothing in the production frame loop.
    */
   const latencyTotal = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyBufferRead = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
@@ -1343,7 +1387,12 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   const latencyLock = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyRunning = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyWeight = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
-  const latencyOrder = new Uint16Array(MODEL_LATENCY_WINDOW_TRIPS)
+  const latencyOrderTotal = new Uint16Array(MODEL_LATENCY_WINDOW_TRIPS)
+  const latencyOrderBufferRead = new Uint16Array(MODEL_LATENCY_WINDOW_TRIPS)
+  const latencyOrderDirtyWrite = new Uint16Array(MODEL_LATENCY_WINDOW_TRIPS)
+  const latencyOrderCommit = new Uint16Array(MODEL_LATENCY_WINDOW_TRIPS)
+  const latencyOrderLock = new Uint16Array(MODEL_LATENCY_WINDOW_TRIPS)
+  const latencyOrderRunning = new Uint16Array(MODEL_LATENCY_WINDOW_TRIPS)
   let latencyHead = 0
   let latencyCount = 0
   /**
@@ -1415,6 +1464,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   let forkCooldown = 0
   let walWriterT = 0
   let bgwT = 0
+  let bgwriterFlushBuffer = -1
+  let bgwriterFlushLsn = 0
   let flushing = false
   let flushTarget = 0
   let flushCovered = 0
@@ -1618,6 +1669,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       case 'parse':
       case 'plan': return 'parse_plan'
       case 'exec_io': return 'fetch'
+      case 'eviction_flush': return 'fetch'
       case 'exec_cpu':
       case 'sort': return 'work'
       case 'wal_insert': return 'wal'
@@ -1715,24 +1767,67 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     quantile.waits.runningMs = 0
   }
 
-  function readLatencyQuantile(fraction: number, totalWeight: number, out: LatencyQuantile): void {
+  function readLatencyComponentQuantile(
+    values: Float64Array,
+    order: Uint16Array,
+    fraction: number,
+    totalWeight: number,
+  ): number {
     const rank = Math.max(1, Math.ceil(totalWeight * fraction))
     let cumulative = 0
-    let selected = latencyOrder[Math.max(0, latencyCount - 1)]
+    let selected = order[Math.max(0, latencyCount - 1)]
     for (let i = 0; i < latencyCount; i++) {
-      const at = latencyOrder[i]
+      const at = order[i]
       cumulative += latencyWeight[at]
       if (cumulative >= rank) {
         selected = at
         break
       }
     }
-    out.totalMs = latencyTotal[selected] * 1000
-    out.waits.bufferReadMs = latencyBufferRead[selected] * 1000
-    out.waits.dirtyWriteMs = latencyDirtyWrite[selected] * 1000
-    out.waits.commitMs = latencyCommit[selected] * 1000
-    out.waits.lockMs = latencyLock[selected] * 1000
-    out.waits.runningMs = latencyRunning[selected] * 1000
+    return values[selected] * 1000
+  }
+
+  function readLatencyQuantile(fraction: number, totalWeight: number, out: LatencyQuantile): void {
+    out.totalMs = readLatencyComponentQuantile(latencyTotal, latencyOrderTotal, fraction, totalWeight)
+    out.waits.bufferReadMs = readLatencyComponentQuantile(
+      latencyBufferRead, latencyOrderBufferRead, fraction, totalWeight,
+    )
+    out.waits.dirtyWriteMs = readLatencyComponentQuantile(
+      latencyDirtyWrite, latencyOrderDirtyWrite, fraction, totalWeight,
+    )
+    out.waits.commitMs = readLatencyComponentQuantile(
+      latencyCommit, latencyOrderCommit, fraction, totalWeight,
+    )
+    out.waits.lockMs = readLatencyComponentQuantile(latencyLock, latencyOrderLock, fraction, totalWeight)
+    out.waits.runningMs = readLatencyComponentQuantile(
+      latencyRunning, latencyOrderRunning, fraction, totalWeight,
+    )
+  }
+
+  function readLatencyMean(totalWeight: number, out: LatencyQuantile): void {
+    let total = 0
+    let bufferRead = 0
+    let dirtyWrite = 0
+    let commit = 0
+    let lock = 0
+    let running = 0
+    for (let i = 0; i < latencyCount; i++) {
+      const at = latencyOrderTotal[i]
+      const weight = latencyWeight[at]
+      total += latencyTotal[at] * weight
+      bufferRead += latencyBufferRead[at] * weight
+      dirtyWrite += latencyDirtyWrite[at] * weight
+      commit += latencyCommit[at] * weight
+      lock += latencyLock[at] * weight
+      running += latencyRunning[at] * weight
+    }
+    const scale = 1000 / totalWeight
+    out.totalMs = total * scale
+    out.waits.bufferReadMs = bufferRead * scale
+    out.waits.dirtyWriteMs = dirtyWrite * scale
+    out.waits.commitMs = commit * scale
+    out.waits.lockMs = lock * scale
+    out.waits.runningMs = running * scale
   }
 
   function refreshLatencyQuantiles(): void {
@@ -1740,27 +1835,55 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     latency.observations = latencyCount
     if (latencyCount === 0) {
       latency.transactions = 0
+      clearLatencyQuantile(latency.mean)
       clearLatencyQuantile(latency.p50)
       clearLatencyQuantile(latency.p99)
       return
     }
 
     let totalWeight = 0
-    for (let i = 0; i < latencyCount; i++) totalWeight += latencyWeight[latencyOrder[i]]
+    for (let i = 0; i < latencyCount; i++) totalWeight += latencyWeight[latencyOrderTotal[i]]
 
     latency.transactions = totalWeight
+    readLatencyMean(totalWeight, latency.mean)
     readLatencyQuantile(0.5, totalWeight, latency.p50)
     readLatencyQuantile(0.99, totalWeight, latency.p99)
+  }
+
+  function removeLatencySlot(order: Uint16Array, at: number): void {
+    let removeAt = 0
+    while (removeAt < latencyCount && order[removeAt] !== at) removeAt++
+    if (removeAt === latencyCount) throw new Error('latency ring lost its sorted slot')
+    for (let i = removeAt; i < latencyCount - 1; i++) order[i] = order[i + 1]
+  }
+
+  function insertLatencySlot(
+    order: Uint16Array,
+    values: Float64Array,
+    at: number,
+    orderedCount: number,
+  ): void {
+    let lo = 0
+    let hi = orderedCount
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1
+      if (values[order[mid]] <= values[at]) lo = mid + 1
+      else hi = mid
+    }
+    for (let i = orderedCount; i > lo; i--) order[i] = order[i - 1]
+    order[lo] = at
   }
 
   function recordLatency(x: Extra): void {
     const at = latencyHead
     let orderedCount = latencyCount
     if (latencyCount === MODEL_LATENCY_WINDOW_TRIPS) {
-      let removeAt = 0
-      while (removeAt < latencyCount && latencyOrder[removeAt] !== at) removeAt++
-      if (removeAt === latencyCount) throw new Error('latency ring lost its sorted slot')
-      for (let i = removeAt; i < latencyCount - 1; i++) latencyOrder[i] = latencyOrder[i + 1]
+      removeLatencySlot(latencyOrderTotal, at)
+      removeLatencySlot(latencyOrderBufferRead, at)
+      removeLatencySlot(latencyOrderDirtyWrite, at)
+      removeLatencySlot(latencyOrderCommit, at)
+      removeLatencySlot(latencyOrderLock, at)
+      removeLatencySlot(latencyOrderRunning, at)
       orderedCount--
     }
     const total = Math.max(0, x.visitT)
@@ -1786,15 +1909,27 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     latencyWeight[at] = Math.max(1, x.latencyCount)
 
     /* Binary insertion makes every quantile refresh O(window), not O(window²). */
-    let lo = 0
-    let hi = orderedCount
-    while (lo < hi) {
-      const mid = (lo + hi) >>> 1
-      if (latencyTotal[latencyOrder[mid]] <= total) lo = mid + 1
-      else hi = mid
+    insertLatencySlot(latencyOrderTotal, latencyTotal, at, orderedCount)
+    insertLatencySlot(latencyOrderBufferRead, latencyBufferRead, at, orderedCount)
+    insertLatencySlot(latencyOrderDirtyWrite, latencyDirtyWrite, at, orderedCount)
+    insertLatencySlot(latencyOrderCommit, latencyCommit, at, orderedCount)
+    insertLatencySlot(latencyOrderLock, latencyLock, at, orderedCount)
+    insertLatencySlot(latencyOrderRunning, latencyRunning, at, orderedCount)
+
+    if (latencyObserver) {
+      latencyObserver({
+        totalMs: total * 1000,
+        waits: {
+          bufferReadMs: bufferRead * 1000,
+          dirtyWriteMs: dirtyWrite * 1000,
+          commitMs: commit * 1000,
+          lockMs: lock * 1000,
+          runningMs: latencyRunning[at] * 1000,
+        },
+        evictionWalFlushMs: x.evictionWalWaitT * 1000,
+        transactions: latencyWeight[at],
+      })
     }
-    for (let i = orderedCount; i > lo; i--) latencyOrder[i] = latencyOrder[i - 1]
-    latencyOrder[lo] = at
 
     latencyHead = (latencyHead + 1) % MODEL_LATENCY_WINDOW_TRIPS
     if (latencyCount < MODEL_LATENCY_WINDOW_TRIPS) latencyCount++
@@ -1813,6 +1948,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     buf.usage[b] = 0
     buf.rel[b] = 255
     buf.blk[b] = 0
+    buf.pageLsn[b] = 0
+    evictionOwner[b] = 0
+    pageLsnOwners[b] = 0
   }
 
   /** A dirty victim has to hit the disk before the frame can be reused. */
@@ -1887,11 +2025,113 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     return v
   }
 
+  function chargeBackendPageWrite(slot: number, duringRead: boolean): void {
+    const b = backends[slot]
+    const x = extras[slot]
+    const writeSec = ioPressure() / DEVICE_PAGES_PER_SEC
+    x.execTotal += writeSec
+    b.stateDur += writeSec
+    x.dirtyWriteWaitT += writeSec
+    if (duringRead) x.dirtyWriteDuringReadT += writeSec
+  }
+
+  function installBufferMiss(
+    slot: number,
+    v: number,
+    rel: number,
+    blk: number,
+    forWrite: boolean,
+    reserved = false,
+  ): void {
+    const b = backends[slot]
+    buf.valid[v] = 1
+    buf.dirty[v] = 0
+    buf.rel[v] = rel
+    buf.blk[v] = blk
+    buf.pageLsn[v] = wal.flushLsn
+    pageLsnOwners[v] = 0
+    buf.usage[v] = 1
+    if (reserved) {
+      buf.pinned[v] = 1
+      pinT[v] = state.t
+    } else {
+      pinBuffer(slot, v)
+    }
+    buf.lastTouch[v] = state.t
+    bufMap.set(representativeBufKey(rel, blk), v)
+    buf.misses++
+    winMisses++
+    ioReadAcc++
+    b.lastBuffer = v
+    if (++sIoRead >= stride(stats.ioReadPerSec, 40)) {
+      sIoRead = 0
+      const table = rel < N_TABLES ? rel : 0
+      // A shared_buffers miss is not necessarily a device read. Decide the
+      // kernel-cache outcome at the source so motion and drive LEDs consume
+      // one fact rather than independently guessing.
+      const ioPressure = clamp01(stats.ioReadPerSec / 900)
+      const osCacheHit = presentationRng() < 0.74 - ioPressure * 0.29
+      flow(osCacheHit ? rid.ioReadCache(table) : rid.ioRead(table), 1, 'page_read', 1.2)
+    }
+    if (forWrite) markDirty(v, slot)
+  }
+
+  function beginEvictionFlushWait(
+    slot: number,
+    victim: number,
+    rel: number,
+    blk: number,
+    forWrite: boolean,
+  ): void {
+    const b = backends[slot]
+    const x = extras[slot]
+    x.evictionBuffer = victim
+    x.evictionFlushLsn = buf.pageLsn[victim]
+    x.evictionRel = rel
+    x.evictionBlk = blk
+    x.evictionForWrite = forWrite
+    x.evictionResumeState = b.state === 'exec_io' ? 'exec_io' : 'exec_cpu'
+    x.evictionResumeT = b.stateT
+    x.evictionResumeDur = b.stateDur
+    bufMap.delete(representativeBufKey(buf.rel[victim], buf.blk[victim]))
+    pinBuffer(slot, victim)
+    evictionOwner[victim] = slot + 1
+    b.state = 'eviction_flush'
+    b.stateT = 0
+    b.stateDur = Math.max(0.09, flushDur) * 1.5
+    requestFlush(x.evictionFlushLsn)
+  }
+
+  function finishEvictionFlushWait(slot: number): void {
+    const b = backends[slot]
+    const x = extras[slot]
+    const victim = x.evictionBuffer
+    if (victim < 0) return
+    const duringRead = x.evictionResumeState === 'exec_io'
+    b.state = x.evictionResumeState
+    b.stateT = x.evictionResumeT
+    b.stateDur = x.evictionResumeDur
+    if (writeOut(victim, true)) chargeBackendPageWrite(slot, duringRead)
+    buf.evictions++
+    installBufferMiss(slot, victim, x.evictionRel, x.evictionBlk, x.evictionForWrite, true)
+    b.buffersTouched++
+    b.buffersRead++
+    x.evictionBuffer = -1
+    x.evictionFlushLsn = 0
+    evictionOwner[victim] = 0
+  }
+
   /**
-   * Request one page. Returns true on a shared-buffers hit.
-   * `useRing` marks a large sequential read; `forWrite` dirties the page.
+   * Request one page. Returns true on a hit, false on a completed miss, and
+   * null when WAL durability has suspended this backend's dirty-victim miss.
    */
-  function touchPage(slot: number, rel: number, blk: number, forWrite: boolean, useRing: boolean): boolean {
+  function touchPage(
+    slot: number,
+    rel: number,
+    blk: number,
+    forWrite: boolean,
+    useRing: boolean,
+  ): boolean | null {
     const exactKey = bufKey(rel, blk)
     const representativeKey = representativeBufKey(rel, blk)
     accessCounts.set(exactKey, (accessCounts.get(exactKey) ?? 0) + 1)
@@ -1948,47 +2188,31 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       throw new Error(`buffer invariant: attempted to evict pinned frame ${v}`)
     }
     if (buf.valid[v]) {
+      if (buf.dirty[v] && buf.pageLsn[v] > wal.flushLsn) {
+        /* FlushBuffer() enforces the write-ahead rule with XLogFlush(page LSN).
+         * requestFlush joins the existing in-flight flush, so one fsync can
+         * release committers and dirty-victim evictors together. */
+        beginEvictionFlushWait(slot, v, rel, blk, forWrite)
+        return null
+      }
       if (writeOut(v, true)) {
-        // BufferAlloc() cannot reuse a dirty victim until this backend has
-        // synchronously written it. Charge the write and the queue ahead of it
-        // to the statement whose clock sweep selected the frame.
-        const writeSec = ioPressure() / DEVICE_PAGES_PER_SEC
-        x.execTotal += writeSec
-        b.stateDur += writeSec
-        x.dirtyWriteWaitT += writeSec
-        if (b.state === 'exec_io') x.dirtyWriteDuringReadT += writeSec
+        // An already-durable page pays only the device write itself.
+        chargeBackendPageWrite(slot, b.state === 'exec_io')
       }
       bufMap.delete(representativeBufKey(buf.rel[v], buf.blk[v]))
       buf.evictions++
     }
-    buf.valid[v] = 1
-    buf.dirty[v] = 0
-    buf.rel[v] = rel
-    buf.blk[v] = blk
-    buf.usage[v] = 1
-    pinBuffer(slot, v)
-    buf.lastTouch[v] = state.t
-    bufMap.set(representativeKey, v)
-    buf.misses++
-    winMisses++
-    ioReadAcc++
-    b.lastBuffer = v
-    if (++sIoRead >= stride(stats.ioReadPerSec, 40)) {
-      sIoRead = 0
-      const table = rel < N_TABLES ? rel : 0
-      // A shared_buffers miss is not necessarily a device read. Decide the
-      // kernel-cache outcome at the source so motion and drive LEDs consume
-      // one fact rather than independently guessing.
-      const ioPressure = clamp01(stats.ioReadPerSec / 900)
-      const osCacheHit = presentationRng() < 0.74 - ioPressure * 0.29
-      flow(osCacheHit ? rid.ioReadCache(table) : rid.ioRead(table), 1, 'page_read', 1.2)
-    }
-    if (forWrite) markDirty(v, slot)
+    installBufferMiss(slot, v, rel, blk, forWrite)
     return false
   }
 
   function markDirty(b: number, slot: number): void {
     buf.dirty[b] = 1
+    /* Page changes are sampled before this trip drains its aggregate WAL body.
+     * The current insert position is the latest ordered record available to the
+     * representative page; finishStatement preserves the full byte volume. */
+    buf.pageLsn[b] = wal.insertLsn
+    pageLsnOwners[b] |= 1 << slot
     const rel = buf.rel[b]
     if (rel < N_TABLES) {
       if (buf.blk[b] < IDX_BASE) heapWritesSinceVacuum[rel]++
@@ -2096,7 +2320,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     let usedN = 0
     const now = state.t
     for (let b = 0; b < buf.sampleFrames; b++) {
-      if (buf.pinned[b] && now - pinT[b] > 0.12) buf.pinned[b] = 0
+      if (buf.pinned[b] && evictionOwner[b] === 0 && now - pinT[b] > 0.12) buf.pinned[b] = 0
       if (buf.valid[b]) usedN++
       if (buf.dirty[b]) dirtyN++
       if (buf.pinned[b]) pinN++
@@ -2849,7 +3073,14 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
   function tickBgwriter(dt: number): void {
     bgw.enabled = K.bgwriterEnabled
+    let resumedCleaned = 0
     if (!bgw.enabled) {
+      if (bgwriterFlushBuffer >= 0) {
+        buf.pinned[bgwriterFlushBuffer] = 0
+        evictionOwner[bgwriterFlushBuffer] = 0
+        bgwriterFlushBuffer = -1
+        bgwriterFlushLsn = 0
+      }
       bgw.activity = damp(bgw.activity, 0, 4, dt)
       bgw.cleanedPerSec = damp(bgw.cleanedPerSec, 0, 2, dt)
       bgwriterAllocations = 0
@@ -2858,9 +3089,37 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       bgwriterCursorValid = false
       return
     }
+    if (bgwriterFlushBuffer >= 0) {
+      const pending = bgwriterFlushBuffer
+      if (!buf.valid[pending] || !buf.dirty[pending]) {
+        buf.pinned[pending] = 0
+        evictionOwner[pending] = 0
+        bgwriterFlushBuffer = -1
+        bgwriterFlushLsn = 0
+      } else if (wal.flushLsn < bgwriterFlushLsn) {
+        requestFlush(bgwriterFlushLsn)
+        bgw.activity = damp(bgw.activity, 1, 6, dt)
+        return
+      } else {
+        writeOut(pending, false)
+        buf.pinned[pending] = 0
+        evictionOwner[pending] = 0
+        bgwriterFlushBuffer = -1
+        bgwriterFlushLsn = 0
+        resumedCleaned = 1
+        // XLogFlush returned; resume the same BgBufferSync round immediately.
+        bgwT = BGW_DELAY
+      }
+    }
     bgwT += dt
     if (bgwT < BGW_DELAY) return
     bgwT = 0
+
+    let cleaned = resumedCleaned
+    if (resumedCleaned > 0 && ++sBgw >= stride(1 / BGW_DELAY, 16)) {
+      sBgw = 0
+      flow('bgw.sweep', 1, 'page_write', 1.1)
+    }
 
     // BgBufferSync sizes its scan from recent buffer allocations, not physical
     // reads. Keep the estimate in representative frames and apply PostgreSQL's
@@ -2912,7 +3171,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     const cleanLimit = K.bgwriterLruMaxpages <= 0
       ? 0
       : Math.max(1, Math.ceil((K.bgwriterLruMaxpages * buf.sampleFrames) / N_BUFFERS))
-    let cleaned = 0
     let scanned = 0
     while (scanned < lookahead && cleaned < cleanLimit) {
       const b = bgw.scanPos
@@ -2925,8 +3183,16 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       scanned++
       // only frames that are about to be handed out: usage 0, unpinned
       if (buf.dirty[b] && buf.usage[b] === 0 && !buf.pinned[b]) {
-        buf.dirty[b] = 0
-        ioWriteAcc++
+        if (buf.pageLsn[b] > wal.flushLsn) {
+          bgwriterFlushBuffer = b
+          bgwriterFlushLsn = buf.pageLsn[b]
+          buf.pinned[b] = 1
+          pinT[b] = state.t
+          evictionOwner[b] = 255
+          requestFlush(bgwriterFlushLsn)
+          break
+        }
+        writeOut(b, false)
         cleaned++
         if (++sBgw >= stride(cleaned / BGW_DELAY, 16)) {
           sBgw = 0
@@ -5071,10 +5337,13 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     x.walPending = 0
     x.walPendingFpi = 0
     x.walPrepared = false
+    x.evictionBuffer = -1
+    x.evictionFlushLsn = 0
     x.visitT = 0
     x.bufferReadWaitT = 0
     x.dirtyWriteWaitT = 0
     x.dirtyWriteDuringReadT = 0
+    x.evictionWalWaitT = 0
     x.commitWaitT = 0
     x.lockWaitT = 0
     x.idleT = 0
@@ -5353,6 +5622,12 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         if (write && !x.hot && k === 2) forWrite = true
       }
       const hit = touchPage(slot, ti, blk, forWrite, ring)
+      if (hit === null) {
+        const unprocessed = n - i - 1
+        x.pagesLeft += unprocessed
+        pageBudget += unprocessed
+        break
+      }
       b.buffersTouched++
       if (hit) b.buffersHit++
       else b.buffersRead++
@@ -5459,6 +5734,15 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     b.state = 'wal_insert'
     b.stateT = 0
     b.stateDur = rr(0.03, 0.07)
+  }
+
+  function stampBackendPageLsns(slot: number, lsn: number): void {
+    const ownerBit = 1 << slot
+    for (let b = 0; b < buf.sampleFrames; b++) {
+      if ((pageLsnOwners[b] & ownerBit) === 0) continue
+      buf.pageLsn[b] = Math.max(buf.pageLsn[b], lsn)
+      pageLsnOwners[b] &= ~ownerBit
+    }
   }
 
   function rememberCommittedWrites(lsn: number, count: number): void {
@@ -5568,6 +5852,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       if (!b.active) continue
       activeN++
       if (b.state === 'exec_io') x.bufferReadWaitT += dt
+      else if (b.state === 'eviction_flush') {
+        x.dirtyWriteWaitT += dt
+        x.evictionWalWaitT += dt
+      }
       else if (b.state === 'commit_wait') x.commitWaitT += dt
       else if (b.state === 'blocked') x.lockWaitT += dt
       b.age += dt
@@ -5663,6 +5951,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
               if (x.pagesLeft > 0) {
                 drainPages(slot, x.execTotal)
               }
+              if (x.evictionBuffer >= 0) break
               if (x.needsSort) {
                 b.state = 'sort'
                 b.stateT = 0
@@ -5731,12 +6020,17 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
               break
             }
             x.commitLsn = wal.insertLsn
+            stampBackendPageLsns(slot, x.commitLsn)
             x.walPrepared = false
             b.state = 'commit_wait'
             b.stateT = 0
             b.stateDur = commitWaitEstimate()
             if (K.synchronousCommit !== 'off') requestFlush(x.commitLsn)
           }
+          break
+
+        case 'eviction_flush':
+          if (wal.flushLsn >= x.evictionFlushLsn) finishEvictionFlushWait(slot)
           break
 
         case 'commit_wait': {
@@ -6770,8 +7064,11 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     buf.usage.fill(0)
     buf.rel.fill(255)
     buf.blk.fill(0)
+    buf.pageLsn.fill(0)
     buf.lastTouch.fill(-99)
     pinT.fill(-99)
+    evictionOwner.fill(0)
+    pageLsnOwners.fill(0)
     fpiGenerationByPage.clear()
     fpiGeneration = 0
     buf.clockHand = 0
@@ -6793,6 +7090,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       standbyPool.usage.fill(0)
       standbyPool.rel.fill(255)
       standbyPool.blk.fill(0)
+      standbyPool.pageLsn.fill(0)
       standbyPool.lastTouch.fill(-99)
       standbyPool.clockHand = 0
       standbyPool.hits = 0
@@ -7038,6 +7336,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     stats.runningBackends = 0
     stats.latency.observations = 0
     stats.latency.transactions = 0
+    clearLatencyQuantile(stats.latency.mean)
     clearLatencyQuantile(stats.latency.p50)
     clearLatencyQuantile(stats.latency.p99)
     runtimeStats.queueDepth = 0
@@ -7086,6 +7385,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     cleanedAcc = 0
     bgwriterAllocations = 0
     bgwriterAllocationEstimate = 0
+    bgwriterFlushBuffer = -1
+    bgwriterFlushLsn = 0
     lockHolder = -1
     lockTimeout = LOCK_TIMEOUT_DEFAULT
     horizonFrozen = false

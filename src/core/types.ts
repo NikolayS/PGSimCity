@@ -219,6 +219,7 @@ export type BackendState =
   | 'exec_io'     // waiting for a buffer read
   | 'sort'        // work_mem / temp file
   | 'wal_insert'
+  | 'eviction_flush' // FlushBuffer waiting for the victim page's WAL
   | 'commit_wait' // waiting on fsync / sync replication
   | 'blocked'     // waiting on a heavyweight lock
   | 'sending'     // streaming rows back
@@ -340,6 +341,8 @@ export interface BufferPool {
   lastTouch: Float32Array
   /** page number inside the relation (cosmetic) */
   blk: Uint32Array
+  /** Latest WAL position required before each sampled page may be written. */
+  pageLsn: Float64Array
   clockHand: number
   /**
    * hits and misses count the full logical request stream. evictions,
@@ -863,7 +866,7 @@ export interface LatencyWaits {
 export interface LatencyQuantile {
   /** Deliberately stretched backend lifecycle time, never production time. */
   totalMs: number
-  /** Wait anatomy of the weighted observation selected by this quantile. */
+  /** Independent weighted quantile for each component distribution. */
   waits: LatencyWaits
 }
 
@@ -872,6 +875,8 @@ export interface LatencyStats {
   observations: number
   /** Transactions represented by those trips; quantiles are weighted by this. */
   transactions: number
+  /** Weighted mean; unlike component quantiles, its anatomy is additive. */
+  mean: LatencyQuantile
   p50: LatencyQuantile
   p99: LatencyQuantile
 }

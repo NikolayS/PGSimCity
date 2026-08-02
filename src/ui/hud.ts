@@ -108,7 +108,7 @@ const VITALS: VitalDef[] = [
     label: MODEL_LATENCY_VITAL_LABEL,
     focus: 'backend.row',
     color: cssColor('backend'),
-    hint: 'Weighted response-time quantiles over the rolling model window. Click to decompose the p99 trip into buffer-read, dirty-write, commit, lock, and running time.',
+    hint: `Weighted response-time quantiles over the rolling model window; ${CLAIM_VALUES.modelLatency.batchDisclosure}; ${CLAIM_VALUES.modelLatency.resolutionDisclosure}. Click for independent p99 component quantiles.`,
   },
   {
     key: 'wal',
@@ -722,7 +722,7 @@ export function createHud(ctx: UiContext): UiModule {
     el(
       'div',
       { class: 'hud-latency__anatomy' },
-      el('span', { class: 'pg-eyebrow', text: 'p99 trip anatomy' }),
+      el('span', { class: 'pg-eyebrow', text: 'p99 component quantiles' }),
       ...latencyCauseDefs.map(([label], index) =>
         el('div', { class: 'hud-latency__cause' },
           el('span', { text: label }),
@@ -732,7 +732,7 @@ export function createHud(ctx: UiContext): UiModule {
     el(
       'p',
       { class: 'hud-latency__note' },
-      'These are deliberately stretched model-time trips, not production milliseconds. ',
+      `Each component is its own p99 and does not add up to the total p99. In this scale model, ${CLAIM_VALUES.modelLatency.batchDisclosure}; ${CLAIM_VALUES.modelLatency.resolutionDisclosure}. These are deliberately stretched model-time trips, not production milliseconds. `,
       el('a', {
         href: `${CLAIM_VALUES.postgresqlVersion.manualBase}pgstatstatements.html`,
         target: '_blank',

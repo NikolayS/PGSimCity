@@ -732,6 +732,7 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
           tintHex = COLOR.wal
           tintMix = 0.2
           break
+        case 'eviction_flush':
         case 'commit_wait':
           // waiting on fsync: the whole tower dims and holds
           bandHex = COLOR.wal
