@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 import { cityComponentHref, cityComponentId } from '../src/core/city-route'
@@ -8,6 +8,7 @@ import {
 } from '../src/core/claims'
 import { MACHINE_SYNCHRONOUS_COMMIT_COMPARISON } from '../src/spine/machine-comparison'
 import type { ClaimId } from '../src/core/claims'
+import { DESTINATIONS } from '../src/core/destinations'
 import { formatModelMilliseconds } from '../src/core/trace-presentation'
 import { N_BUFFERS } from '../src/core/types'
 import { createBus } from '../src/core/bus'
@@ -16,13 +17,17 @@ import { createCollector } from '../src/observability/collector'
 import { ALL_STEPS, ALL_VERDICTS } from '../src/observability/paths'
 import { PROJECTIONS } from '../src/observability/views'
 import { MODEL_BULK_READ_RING_FRAMES, MODEL_LATENCY_WINDOW_TRIPS, createSim } from '../src/sim/model'
+import { SCENARIOS } from '../src/sim/scenarios'
 import { CHAPTERS } from '../src/ui/tour'
 import { DOCS_STORAGE } from '../src/ui/docs-storage'
 import { KNOB_META, doc, mdToHtml } from '../src/ui/content'
-import { MODEL_LATENCY_VITAL_LABEL } from '../src/ui/hud'
+import { MODEL_LATENCY_VITAL_LABEL, emitLoose } from '../src/ui/hud'
+import { createInspector } from '../src/ui/panel'
+import type { UiContext } from '../src/ui/uikit'
 import { VACUUM_RECLAIM_PLATE_LINES } from '../src/world/maintenance'
 import { SHARED_BUFFER_SAMPLE_PLATE_LABEL } from '../src/world/shmem'
 import { WAL_SEGMENT_PLATE_LABEL, WAL_SEGMENT_SIZE_PLATE_LABEL } from '../src/world/wal'
+import { createWalkCityHarness } from './walk-harness'
 
 const read = (path: string): string => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8')
 
@@ -39,8 +44,30 @@ function storageDocCopy(id: string): string {
   return [entry!.tldr, ...entry!.sections.map((section) => section.body)].join('\n')
 }
 
+interface SourceFile {
+  surface: string
+  text: string
+}
+
+function sourceFiles(directory = new URL('../src/', import.meta.url), prefix = 'src'): SourceFile[] {
+  const files: SourceFile[] = []
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const surface = `${prefix}/${entry.name}`
+    if (entry.isDirectory()) {
+      files.push(...sourceFiles(new URL(`${entry.name}/`, directory), surface))
+    } else if (entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts')) {
+      files.push({ surface, text: readFileSync(new URL(entry.name, directory), 'utf8') })
+    }
+  }
+  return files
+}
+
+function lineOf(text: string, index: number): number {
+  return text.slice(0, index).split('\n').length
+}
+
 describe('claims and conventions spine', () => {
-  it('owns exactly the eleven drift-prone contracts in this pass', () => {
+  it('owns exactly the sixteen drift-prone contracts across both passes', () => {
     expect(Object.keys(CLAIMS)).toEqual([
       'walSegment',
       'bufferSample',
@@ -51,6 +78,10 @@ describe('claims and conventions spine', () => {
       'modelLatency',
       'vacuumReclaim',
       'cityComponentRoute',
+      'componentNaming',
+      'eventConvention',
+      'diagnoseBranchGates',
+      'postgresqlVersion',
       'markdownRendering',
       'reviewStatus',
       'machineSynchronousCommitComparison',
@@ -265,5 +296,267 @@ describe('claims and conventions spine', () => {
     )
     expect(read('machine/comparison.js'), 'Machine:comparison does not consume the owned claim')
       .toContain('MACHINE_SYNCHRONOUS_COMMIT_COMPARISON as claim')
+  })
+
+  it('uses each registered destination name as its inspector panel title', async () => {
+    const city = await createWalkCityHarness()
+    let inspector: ReturnType<typeof createInspector> | undefined
+    try {
+      const mount = document.createElement('div')
+      mount.id = 'hud-right'
+      document.body.append(mount)
+      const bus = createBus()
+      const sim = createSim(bus)
+      const ctx: UiContext = {
+        bus,
+        sim,
+        registry: city.registry,
+        getFps: () => 60,
+        getQuality: () => ({
+          level: 'high',
+          pixelRatio: 1,
+          bloom: true,
+          shadows: true,
+          maxParticles: 1,
+          maxLabels: 1,
+          antialias: true,
+        }),
+        getFlowStats: () => ({ active: 0, dropped: 0 }),
+      }
+      inspector = createInspector(ctx)
+
+      for (const destination of DESTINATIONS) {
+        const registered = city.registry.get(destination.id)
+        expect(registered, `componentNaming: city registry has no ${destination.id} for inspector:panel heading`)
+          .toBeDefined()
+        bus.emit('select', { id: destination.id })
+        expect.soft(
+          document.querySelector('.pgc-insp__title')?.textContent,
+          `componentNaming: inspector:panel heading for ${destination.id} disagrees with ${CLAIMS.componentNaming.owner} "${registered?.name}"`,
+        ).toBe(registered?.name)
+      }
+    } finally {
+      inspector?.dispose()
+      city.dispose()
+    }
+  })
+
+  it('resolves every deep link, tour target, and scenario focus in the city registry', async () => {
+    const city = await createWalkCityHarness()
+    try {
+      const targets: { producer: string; id: string }[] = [
+        ...DESTINATIONS.map((destination) => ({
+          producer: `navigation:destination ${destination.district}`,
+          id: destination.id,
+        })),
+        ...CHAPTERS.flatMap((chapter) => [
+          ...(chapter.focus ? [{ producer: `tour:${chapter.id}.focus`, id: chapter.focus }] : []),
+          ...(chapter.look ?? []).map(([, id], index) => ({
+            producer: `tour:${chapter.id}.look[${index}]`,
+            id,
+          })),
+        ]),
+        ...SCENARIOS.flatMap((scenario) => scenario.focus
+          ? [{ producer: `scenario:${scenario.id}.focus`, id: scenario.focus }]
+          : []),
+        ...ALL_STEPS.flatMap((step) => step.city
+          ? [{ producer: `Diagnose:step ${step.id}.city`, id: step.city }]
+          : []),
+        ...ALL_VERDICTS.flatMap((verdict) => verdict.city
+          ? [{ producer: `Diagnose:verdict ${verdict.id}.city`, id: verdict.city }]
+          : []),
+        ...CATALOG.flatMap((entry) => entry.city
+          ? [{ producer: `Diagnose:catalog ${entry.id}.city`, id: entry.city }]
+          : []),
+      ]
+
+      for (const target of targets) {
+        expect.soft(
+          city.registry.get(target.id),
+          `cityComponentRoute: ${target.producer} emits "${target.id}" but city:component registry has no matching consumer`,
+        ).toBeDefined()
+      }
+    } finally {
+      city.dispose()
+    }
+  })
+
+  it('keeps every production event emitter connected to a source handler', () => {
+    const convention = CLAIM_VALUES.eventConvention
+    const emitters = new Map<string, string[]>()
+    const handlers = new Map<string, string[]>()
+    const record = (map: Map<string, string[]>, event: string, surface: string): void => {
+      const list = map.get(event) ?? []
+      list.push(surface)
+      map.set(event, list)
+    }
+
+    const emitterPattern = new RegExp(`\\.${convention.emitterMethod}\\(\\s*['"]([^'"]+)['"]`, 'g')
+    const handlerPattern = new RegExp(`\\.(?:${convention.handlerMethods.join('|')})\\(\\s*['"]([^'"]+)['"]`, 'g')
+    for (const file of sourceFiles()) {
+      for (const match of file.text.matchAll(emitterPattern)) {
+        record(emitters, match[1], `${file.surface}:${lineOf(file.text, match.index)}`)
+      }
+      for (const match of file.text.matchAll(/emitLoose\(\s*[^,]+,\s*['"]([^'"]+)['"]/g)) {
+        record(emitters, match[1], `${file.surface}:${lineOf(file.text, match.index)}`)
+      }
+      for (const match of file.text.matchAll(handlerPattern)) {
+        record(handlers, match[1], `${file.surface}:${lineOf(file.text, match.index)}`)
+      }
+    }
+
+    for (const [event, surfaces] of emitters) {
+      expect.soft(
+        handlers.get(event),
+        `eventConvention: emitters ${surfaces.join(', ')} publish "${event}" but source:handlers has no matching consumer under ${CLAIMS.eventConvention.owner}`,
+      ).toBeDefined()
+    }
+
+    const bus = createBus()
+    let handled: unknown
+    let bridged: unknown
+    bus.on('ui:palette', (payload) => { handled = payload })
+    window.addEventListener(`${convention.browserPrefix}palette`, (event) => {
+      bridged = (event as CustomEvent).detail
+    }, { once: true })
+    emitLoose(bus, 'ui:palette', { open: true })
+    expect(
+      handled,
+      `eventConvention: source:emitLoose emitter disagrees with source:ui:palette handler under ${CLAIMS.eventConvention.owner}`,
+    ).toEqual({ open: true })
+    expect(
+      bridged,
+      `eventConvention: browser:CustomEvent bridge disagrees with source:emitLoose and ${CLAIMS.eventConvention.owner}.browserPrefix`,
+    ).toEqual({ open: true })
+  })
+
+  it('uses the pg_stat_io warning range for its client-backend-write branch', () => {
+    const sim = createSim(createBus())
+    const collector = createCollector(sim)
+    const warningShare = CLAIM_VALUES.diagnoseBranchGates.clientBackendWriteShare.threshold + 0.01
+    collector.total.backendWrites = warningShare * 100
+    collector.total.ckptBuffers = 0
+    collector.total.bgwClean = (1 - warningShare) * 100
+    const projection = PROJECTIONS.io(sim.state, collector, 'total')
+    const step = ALL_STEPS.find((candidate) => candidate.id === 'io.1')
+    const branch = step?.branches.find((candidate) => candidate.next === 'v.backend_writes')
+
+    expect(projection.rows.find((row) => row.key === 'client')?.tone).toBe('warn')
+    expect(
+      branch?.test(sim.state, collector),
+      'diagnoseBranchGates: Diagnose:io.1 → v.backend_writes disagrees with Diagnose:pg_stat_io client-backend-write warning range',
+    ).toBe(true)
+  })
+
+  it('keeps table and replication evidence boundaries disjoint from healthy verdicts', () => {
+    const tableSim = createSim(createBus())
+    const tableCollector = createCollector(tableSim)
+    for (const table of tableSim.state.tables) {
+      table.deadTuples = 0
+      table.lastVacuum = 0
+    }
+    const table = tableSim.state.tables[0]
+    table.liveTuples = 979
+    table.deadTuples = 21
+    table.lastVacuum = 1
+    const tableRow = PROJECTIONS.tables(tableSim.state, tableCollector, 'total').rows
+      .find((row) => row.key === table.def.id)
+    const bloatBranch = ALL_STEPS.find((step) => step.id === 'bloat.1')?.branches
+      .find((branch) => branch.next === 'bloat.2')
+    expect(
+      tableRow?.tone,
+      'diagnoseBranchGates: Diagnose:pg_stat_all_tables 2% warning disagrees with Diagnose:bloat.1 → bloat.2 dead-tuple gate',
+    ).toBe('warn')
+    expect(
+      bloatBranch?.test(tableSim.state, tableCollector),
+      'diagnoseBranchGates: Diagnose:bloat.1 → bloat.2 disagrees with Diagnose:pg_stat_all_tables dead-tuple warning range',
+    ).toBe(true)
+
+    const replicaSim = createSim(createBus())
+    const replicaCollector = createCollector(replicaSim)
+    const [standby, extra] = replicaSim.state.replication.standbys
+    const primary = replicaSim.state.wal.writeLsn
+    standby.enabled = true
+    standby.connected = true
+    standby.sentLsn = primary
+    standby.writtenLsn = primary
+    standby.flushedLsn = primary
+    standby.appliedLsn = primary - CLAIM_VALUES.diagnoseBranchGates.replayStageGapBytes.threshold - 1
+    extra.enabled = false
+    const replica = ALL_STEPS.find((step) => step.id === 'replica.1')
+    const replay = replica?.branches.find((branch) => branch.next === 'v.replay')
+    const healthy = replica?.branches.find((branch) => branch.next === 'v.rep_ok')
+    expect(
+      replay?.test(replicaSim.state, replicaCollector),
+      'diagnoseBranchGates: Diagnose:replica.1 → v.replay rejects a replay-stage gap above its registered evidence boundary',
+    ).toBe(true)
+    expect(
+      healthy?.test(replicaSim.state, replicaCollector),
+      'diagnoseBranchGates: Diagnose:replica.1 → v.rep_ok overlaps Diagnose:replica.1 → v.replay between its registered stage and position boundaries',
+    ).toBe(false)
+  })
+
+  it('registers every non-zero Diagnose branch range with its evidence source', () => {
+    const actual = new Map(
+      ALL_STEPS.flatMap((step) => step.branches.map((branch) => [
+        `${step.id}→${branch.next}`,
+        branch,
+      ] as const)),
+    )
+
+    for (const [gate, contract] of Object.entries(CLAIM_VALUES.diagnoseBranchGates)) {
+      for (const surface of contract.branches) {
+        const branch = actual.get(surface)
+        expect(branch, `diagnoseBranchGates: Diagnose:${surface} is named by ${CLAIMS.diagnoseBranchGates.owner} but has no branch surface`)
+          .toBeDefined()
+        expect.soft(
+          branch?.gates,
+          `diagnoseBranchGates: Diagnose:${surface} disagrees with ${CLAIMS.diagnoseBranchGates.owner}.${gate}`,
+        ).toContain(gate)
+        expect.soft(
+          branch?.source,
+          `diagnoseBranchGates: Diagnose:${surface} evidence source disagrees with ${CLAIMS.diagnoseBranchGates.owner}.${gate}`,
+        ).toBe(contract.source)
+      }
+    }
+
+    for (const [surface, branch] of actual) {
+      const hasUnownedNonZeroRange = /(?:<|>)=?\s*(?:0\.\d*[1-9]|[1-9]\d*)/.test(branch.test.toString())
+      expect.soft(
+        hasUnownedNonZeroRange && !branch.gates?.length,
+        `diagnoseBranchGates: Diagnose:${surface} has a non-zero range but bypasses ${CLAIMS.diagnoseBranchGates.owner}`,
+      ).toBe(false)
+    }
+  })
+
+  it('pins target-version prose, manual links, and source links to PostgreSQL 18.3', () => {
+    const owner = CLAIMS.postgresqlVersion.owner
+    const version = CLAIM_VALUES.postgresqlVersion
+    const files = [
+      { surface: 'README.md', text: read('README.md') },
+      { surface: 'observability/README.md', text: read('observability/README.md') },
+      ...sourceFiles(),
+    ]
+
+    for (const { surface, text } of files) {
+      for (const match of text.matchAll(/PostgreSQL (\d+\.\d+)/g)) {
+        expect.soft(
+          match[0],
+          `postgresqlVersion: ${surface}:${lineOf(text, match.index)} cites ${match[0]} and disagrees with ${owner}`,
+        ).toBe(version.referenceLabel)
+      }
+      expect.soft(
+        text,
+        `postgresqlVersion: ${surface}:manual links use docs/current and disagree with ${owner}`,
+      ).not.toContain('postgresql.org/docs/current')
+      expect.soft(
+        text,
+        `postgresqlVersion: ${surface}:source links use master and disagree with ${owner}`,
+      ).not.toMatch(/github\.com\/postgres\/postgres\/(?:blob|tree)\/master/)
+    }
+    expect(read('README.md'), `postgresqlVersion: README:source branch disagrees with ${owner}`)
+      .toContain(version.sourceBranch)
+    expect(read('observability/README.md'), `postgresqlVersion: Diagnose:manual path disagrees with ${owner}`)
+      .toContain(`postgresql.org/docs/${version.major}`)
   })
 })

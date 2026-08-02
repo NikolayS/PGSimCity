@@ -6,6 +6,7 @@ import { COLOR, cssColor, onThemeMode, themeMode, toggleThemeMode } from '../cor
 import { clamp, fmtBytes, fmtDuration, fmtNum } from '../core/util'
 import type {
   Bus,
+  BusEvents,
   CameraMode,
   QualityLevel,
   ScenarioChoiceId,
@@ -57,23 +58,15 @@ export function setCompassCamera(x: number, z: number, yaw: number): void {
   camYaw = yaw
 }
 
-/* ---------------------------------------------------------------------------
- * Loose bus channels.
- *
- * BusEvents is frozen and has no entry for "open the command palette" or
- * "toggle labels", so those travel as extra string channels on the same bus
- * (the bus itself is an untyped string map at runtime). They are also mirrored
- * as window CustomEvents so a module that would rather listen to the DOM can.
- * -------------------------------------------------------------------------*/
+/* Mirrored as window CustomEvents for modules that prefer the DOM bridge. */
+type BrowserBusEvent = Extract<keyof BusEvents, `ui:${string}` | 'audio:toggle'>
 
-interface LooseBus {
-  emit(type: string, payload: unknown): void
-  on(type: string, fn: (p: unknown) => void): () => void
-}
-
-export function emitLoose(bus: Bus, type: string, payload: unknown): void {
-  ;(bus as unknown as LooseBus).emit(type, payload)
-  window.dispatchEvent(new CustomEvent(`pgsimcity:${type.replace(/^ui:/, '')}`, { detail: payload }))
+export function emitLoose<K extends BrowserBusEvent>(bus: Bus, type: K, payload: BusEvents[K]): void {
+  bus.emit(type, payload)
+  window.dispatchEvent(new CustomEvent(
+    `${CLAIM_VALUES.eventConvention.browserPrefix}${type.replace(/^ui:/, '')}`,
+    { detail: payload },
+  ))
 }
 
 /* --------------------------------- config -------------------------------- */
@@ -343,7 +336,7 @@ function vitalHistory(key: VitalKey, s: SimState): number[] {
 
 export function createHud(ctx: UiContext): UiModule {
   const bus = ctx.bus
-  const looseBus = bus as unknown as LooseBus
+  const looseBus = bus
   const sim = ctx.sim
   const cleanup: (() => void)[] = []
 
@@ -1494,14 +1487,11 @@ export function createHud(ctx: UiContext): UiModule {
    * N — night, curated golden hour, or local-clock light for the whole city.
    *
    * core/theme.ts does the work (palette, every cached material, the toon ramp)
-   * and remembers the choice; the renderer answers the same notification with
-   * the light rig and the tone mapping curve. The loose 'theme:mode' channel is
-   * here so any module that needs to re-derive something can listen without
-   * BusEvents having to grow an entry.
+   * and remembers the choice; the renderer's theme subscription updates the
+   * light rig and tone mapping curve from that same owned state.
    */
   function toggleTheme(): void {
     const next = toggleThemeMode()
-    emitLoose(bus, 'theme:mode', { mode: next })
     bus.emit('toast', {
       text: next === 'day'
         ? 'Daylight — golden hour'
@@ -1519,7 +1509,6 @@ export function createHud(ctx: UiContext): UiModule {
     setText(labelsViewLabel, labelsOn ? 'Labels on' : 'Labels off')
     labelsViewBtn.setAttribute('aria-pressed', String(labelsOn))
     setClass(labelsViewBtn, 'is-active', labelsOn)
-    emitLoose(bus, 'ui:labels', { on: labelsOn })
     bus.emit('toast', { text: labelsOn ? 'Labels on' : 'Labels hidden', kind: 'info', ms: 1400 })
   }
 
@@ -1689,6 +1678,10 @@ export function createHud(ctx: UiContext): UiModule {
     bus.on('tour:stop', () => {
       tourRunning = false
       setClass(tourBtn, 'is-active', false)
+      tourBtn.title = 'Guided tour  (T)'
+    }),
+    bus.on('tour:chapter', ({ index, total, title }) => {
+      tourBtn.title = `Guided tour — ${index + 1}/${total}: ${title}  (T)`
     }),
     bus.on('quality', ({ level }) => {
       if (qualitySel.value !== level) qualitySel.value = level

@@ -506,9 +506,7 @@ export function createControls(ctx: UiContext): UiModule {
   loadKnobPreferences(ctx.sim)
 
   const host = el('div', { class: 'pgc-host pgc-host--left' })
-  const looseBus = ctx.bus as unknown as {
-    on(type: string, fn: (payload: unknown) => void): () => void
-  }
+  const looseBus = ctx.bus
   const controls: KnobControl[] = []
   const groupBadges: { metas: KnobMeta[]; node: HTMLElement }[] = []
 
@@ -550,7 +548,6 @@ export function createControls(ctx: UiContext): UiModule {
       if (compact) announceSheet('left')
       if (changed) ctx.bus.emit('panel:open', { panel: 'console' })
     }
-    ctx.bus.emit('ui:layout', {})
   }
 
   function setTall(next: boolean): void {
@@ -711,7 +708,6 @@ export function createControls(ctx: UiContext): UiModule {
   const offCameraPreset = ctx.bus.on('camera:preset', ({ preset }) => {
     planPreset = preset === 'plan'
     applyOpen()
-    ctx.bus.emit('ui:layout', {})
   })
   const offConsole = looseBus.on('ui:console', () => setOpen(true))
 

@@ -1,5 +1,6 @@
 import '../styles/anatomy.css'
 
+import { CLAIM_VALUES } from '../core/claims'
 import type { MvccRowStory, MvccTupleVersion, TableSim } from '../core/types'
 import { clamp, fmtBytes, fmtNum, fmtPct } from '../core/util'
 import { MODE_IDS, modeTokens } from './mode-exits'
@@ -47,30 +48,31 @@ const ITEM_ID_BYTES = 4
 const TUPLE_HEADER_BYTES = 23
 
 const DOC = {
-  page: 'https://www.postgresql.org/docs/current/storage-page-layout.html',
-  files: 'https://www.postgresql.org/docs/current/storage-file-layout.html',
-  toast: 'https://www.postgresql.org/docs/current/storage-toast.html',
-  fsm: 'https://www.postgresql.org/docs/current/storage-fsm.html',
-  vm: 'https://www.postgresql.org/docs/current/storage-vm.html',
-  hot: 'https://www.postgresql.org/docs/current/storage-hot.html',
-  mvcc: 'https://www.postgresql.org/docs/current/mvcc-intro.html',
-  isolation: 'https://www.postgresql.org/docs/current/transaction-iso.html',
-  vacuum: 'https://www.postgresql.org/docs/current/routine-vacuuming.html',
+  page: `${CLAIM_VALUES.postgresqlVersion.manualBase}storage-page-layout.html`,
+  files: `${CLAIM_VALUES.postgresqlVersion.manualBase}storage-file-layout.html`,
+  toast: `${CLAIM_VALUES.postgresqlVersion.manualBase}storage-toast.html`,
+  fsm: `${CLAIM_VALUES.postgresqlVersion.manualBase}storage-fsm.html`,
+  vm: `${CLAIM_VALUES.postgresqlVersion.manualBase}storage-vm.html`,
+  hot: `${CLAIM_VALUES.postgresqlVersion.manualBase}storage-hot.html`,
+  mvcc: `${CLAIM_VALUES.postgresqlVersion.manualBase}mvcc-intro.html`,
+  isolation: `${CLAIM_VALUES.postgresqlVersion.manualBase}transaction-iso.html`,
+  vacuum: `${CLAIM_VALUES.postgresqlVersion.manualBase}routine-vacuuming.html`,
 } as const
 
+const PG_SOURCE = `https://github.com/postgres/postgres/blob/${CLAIM_VALUES.postgresqlVersion.sourceBranch}/`
 const SRC = {
-  bufpage: 'https://github.com/postgres/postgres/blob/master/src/include/storage/bufpage.h',
-  itemid: 'https://github.com/postgres/postgres/blob/master/src/include/storage/itemid.h',
-  tuple: 'https://github.com/postgres/postgres/blob/master/src/include/access/htup_details.h',
-  pageCode: 'https://github.com/postgres/postgres/blob/master/src/backend/storage/page/bufpage.c',
-  relpath: 'https://github.com/postgres/postgres/blob/master/src/include/common/relpath.h',
-  md: 'https://github.com/postgres/postgres/blob/master/src/backend/storage/smgr/md.c',
-  miscinit: 'https://github.com/postgres/postgres/blob/master/src/backend/utils/init/miscinit.c',
-  guc: 'https://github.com/postgres/postgres/blob/master/src/backend/utils/misc/guc.c',
-  hba: 'https://github.com/postgres/postgres/blob/master/src/backend/libpq/hba.c',
-  xlog: 'https://github.com/postgres/postgres/blob/master/src/include/access/xlog_internal.h',
-  visibility: 'https://github.com/postgres/postgres/blob/master/src/backend/access/heap/heapam_visibility.c',
-  procarray: 'https://github.com/postgres/postgres/blob/master/src/backend/storage/ipc/procarray.c',
+  bufpage: `${PG_SOURCE}src/include/storage/bufpage.h`,
+  itemid: `${PG_SOURCE}src/include/storage/itemid.h`,
+  tuple: `${PG_SOURCE}src/include/access/htup_details.h`,
+  pageCode: `${PG_SOURCE}src/backend/storage/page/bufpage.c`,
+  relpath: `${PG_SOURCE}src/include/common/relpath.h`,
+  md: `${PG_SOURCE}src/backend/storage/smgr/md.c`,
+  miscinit: `${PG_SOURCE}src/backend/utils/init/miscinit.c`,
+  guc: `${PG_SOURCE}src/backend/utils/misc/guc.c`,
+  hba: `${PG_SOURCE}src/backend/libpq/hba.c`,
+  xlog: `${PG_SOURCE}src/include/access/xlog_internal.h`,
+  visibility: `${PG_SOURCE}src/backend/access/heap/heapam_visibility.c`,
+  procarray: `${PG_SOURCE}src/backend/storage/ipc/procarray.c`,
 } as const
 
 const SUZUKI = {

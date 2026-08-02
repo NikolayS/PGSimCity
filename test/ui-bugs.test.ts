@@ -305,17 +305,9 @@ describe('theme toggle entry point', () => {
 
   it('exposes working touch routes for labels and camera presets', () => {
     const ctx = context()
-    const labels = vi.fn()
     const presets = vi.fn()
     const focuses = vi.fn()
-    ;(ctx.bus as unknown as { on(type: string, fn: (payload: unknown) => void): () => void }).on(
-      'ui:labels',
-      labels,
-    )
-    ;(ctx.bus as unknown as { on(type: string, fn: (payload: unknown) => void): () => void }).on(
-      'ui:camera-preset',
-      presets,
-    )
+    ctx.bus.on('ui:camera-preset', presets)
     ctx.bus.on('focus', focuses)
 
     const hud = createHud(ctx)
@@ -336,7 +328,6 @@ describe('theme toggle entry point', () => {
 
     labelToggle!.dispatchEvent(new Event('click'))
     expect(document.body.classList.contains('pg-labels-off')).toBe(true)
-    expect(labels).toHaveBeenCalledWith({ on: false })
 
     home!.dispatchEvent(new Event('click'))
     expect(focuses).toHaveBeenCalledWith({ id: 'world.ground' })

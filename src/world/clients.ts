@@ -901,7 +901,6 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
   let beaconFlash = 0
   let gateFlash = 0
   let rejectLevel = 0
-  let forkedThisFrame = false
   const prevFree = new Uint8Array(N)
   prevFree.fill(1)
   let primed = false
@@ -938,7 +937,6 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
       // postmaster → new backend: the fork() itself
       ctx.flow({ route: rid.fork(slot), count: 3, kind: 'fork', color: COLOR.postmaster, stagger: 0.06 })
     }
-    forkedThisFrame = true
   }
 
   /* =======================================================================
@@ -954,7 +952,6 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
     const nb = Math.min(N, sim.backends.length)
     let fired = false
     let free = 0
-    forkedThisFrame = false
     for (let i = 0; i < nb; i++) {
       const isFree = sim.backends[i].state === 'free' ? 1 : 0
       free += isFree
@@ -975,15 +972,6 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
     prevPulse = sim.forkPulse
     primed = true
     slotsFree = free
-    // one shockwave per frame however many connections landed at once
-    if (forkedThisFrame) {
-      ctx.bus.emit('fx:pulse', {
-        at: [ANCHOR.postmasterDoor[0], 3, ANCHOR.postmasterDoor[2]],
-        color: COLOR.postmaster,
-        radius: 14,
-      })
-    }
-
     /* --- the conduits ----------------------------------------------------- */
     for (let i = 0; i < N; i++) {
       const b = i < nb ? sim.backends[i] : undefined

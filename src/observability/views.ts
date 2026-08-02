@@ -16,10 +16,13 @@
 import { PG_PAGE_BYTES, poolBytes, poolPages } from '../core/types'
 import type { BackendSim, PhysicalStandbyState, SimState, TableSim, VacPhase } from '../core/types'
 import { configuredSynchronousStandby } from '../core/replication'
+import { CLAIM_VALUES } from '../core/claims'
 import { N_TABLES } from '../world/layout'
 import { fmtBytes, fmtLsn, fmtNum } from '../core/util'
 import type { Collector } from './collector'
 import { PID } from './collector'
+
+const DIAGNOSTIC_GATES = CLAIM_VALUES.diagnoseBranchGates
 
 export type Tone = '' | 'ok' | 'warn' | 'crit' | 'accent' | 'dim'
 export type Mode = 'total' | 'rate'
@@ -291,6 +294,39 @@ function activityRows(s: SimState, c: Collector, opts: { aux: boolean }): ActRow
   return out
 }
 
+export interface ActivityWaitCounts {
+  total: number
+  lock: number
+  io: number
+  commit: number
+  idleTx: number
+  cpu: number
+  idle: number
+}
+
+/** The exact client rows projected by activity_agg, reduced into path buckets. */
+export function activityWaitCounts(s: SimState, c: Collector): ActivityWaitCounts {
+  const counts: ActivityWaitCounts = {
+    total: 0,
+    lock: 0,
+    io: 0,
+    commit: 0,
+    idleTx: 0,
+    cpu: 0,
+    idle: 0,
+  }
+  for (const row of activityRows(s, c, { aux: false })) {
+    counts.total++
+    if (row.state === 'idle in transaction') counts.idleTx++
+    else if (row.state === 'idle') counts.idle++
+    else if (row.wet === 'Lock') counts.lock++
+    else if (row.we === 'WalSync' || row.we === 'SyncRep') counts.commit++
+    else if (row.wet === 'IO') counts.io++
+    else counts.cpu++
+  }
+  return counts
+}
+
 const activity: ProjectionFn = (s, c) => {
   /* Sorted by pid because the query printed above this table says ORDER BY pid.
    * The rows a page shows have to be the rows its own query would return, or
@@ -441,6 +477,12 @@ const database: ProjectionFn = (s, c, mode) => {
   }
 }
 
+/** blks_hit / (blks_hit + blks_read), as rendered by database and read by Diagnose. */
+export function collectorCacheHitPercent(c: Collector): number {
+  const seen = c.total.blksHit + c.total.blksRead
+  return seen > 0 ? (c.total.blksHit / seen) * 100 : 0
+}
+
 /* ---------------------------------------------------------------------------
  * pg_stat_all_tables
  * -------------------------------------------------------------------------*/
@@ -470,7 +512,7 @@ const tables: ProjectionFn = (s) => ({
       const dead = tableDeadRatio(t)
       return {
         key: t.def.id,
-        tone: dead > 0.25 ? 'crit' : dead > 0.12 ? 'warn' : '',
+        tone: dead > 0.25 ? 'crit' : dead >= DIAGNOSTIC_GATES.deadTupleRatio.threshold ? 'warn' : '',
         cells: {
           relname: t.def.name,
           seq_scan: n(t.seqScans),
@@ -480,8 +522,8 @@ const tables: ProjectionFn = (s) => ({
           n_tup_hot_upd: n(t.hotUpdates),
           n_tup_del: n(t.deletes),
           n_live_tup: n(t.liveTuples),
-          n_dead_tup: { v: fmtNum(t.deadTuples), tone: dead > 0.25 ? 'crit' : dead > 0.12 ? 'warn' : '' },
-          dead_pct: { v: `${(dead * 100).toFixed(1)}%`, tone: dead > 0.25 ? 'crit' : dead > 0.12 ? 'warn' : '' },
+          n_dead_tup: { v: fmtNum(t.deadTuples), tone: dead > 0.25 ? 'crit' : dead >= DIAGNOSTIC_GATES.deadTupleRatio.threshold ? 'warn' : '' },
+          dead_pct: { v: `${(dead * 100).toFixed(1)}%`, tone: dead > 0.25 ? 'crit' : dead >= DIAGNOSTIC_GATES.deadTupleRatio.threshold ? 'warn' : '' },
           last_autovacuum:
             t.lastVacuum > 0 ? `${age(s.t - t.lastVacuum)} ago` : NULLC,
         },
@@ -516,11 +558,16 @@ const bgwriter: ProjectionFn = (s, c, mode) => ({
     : 'bgwriter_lru_maxpages is effectively zero. buffers_clean remains blank because the city has a representative-sample counter, not the full-stream PostgreSQL page count.',
 })
 
+export function checkpointRequestedShare(c: Collector): number {
+  const done = c.total.ckptTimed + c.total.ckptRequested
+  return done > 0 ? c.total.ckptRequested / done : 0
+}
+
 const checkpointer: ProjectionFn = (s, c, mode) => {
   const t = c.total
   const done = t.ckptTimed + t.ckptRequested
-  const requested = done > 0 ? t.ckptRequested / done : 0
-  const tone: Tone = done === 0 ? 'dim' : requested > 0.5 ? 'crit' : requested > 0.2 ? 'warn' : 'ok'
+  const requested = checkpointRequestedShare(c)
+  const tone: Tone = done === 0 ? 'dim' : requested > 0.5 ? 'crit' : requested > DIAGNOSTIC_GATES.requestedCheckpointShare.threshold ? 'warn' : 'ok'
   return {
     cols: [
       { key: 'num_timed', label: 'num_timed', num: true },
@@ -537,7 +584,7 @@ const checkpointer: ProjectionFn = (s, c, mode) => {
         cells: {
           num_timed: ctr(t.ckptTimed, c.rate.ckptTimed, mode),
           num_requested: { v: mode === 'rate' ? `${c.rate.ckptRequested.toFixed(2)}/s` : fmtNum(t.ckptRequested), tone },
-          forced: ratio(t.ckptRequested, done, (x) => (x > 0.5 ? 'crit' : x > 0.2 ? 'warn' : 'ok')),
+          forced: ratio(t.ckptRequested, done, (x) => (x > 0.5 ? 'crit' : x > DIAGNOSTIC_GATES.requestedCheckpointShare.threshold ? 'warn' : 'ok')),
           buffers_written: NULLC,
           write_time: n(t.ckptWriteMs),
           phase: {
@@ -643,11 +690,16 @@ const walLsn: ProjectionFn = (s) => {
  * pg_stat_io — who is doing the I/O
  * -------------------------------------------------------------------------*/
 
+export function clientBackendWriteShare(c: Collector): number {
+  const totalWrites = c.total.backendWrites + c.total.ckptBuffers + c.total.bgwClean
+  return totalWrites > 0 ? c.total.backendWrites / totalWrites : 0
+}
+
 const io: ProjectionFn = (s, c, mode) => {
   const t = c.total
   const totalWrites = t.backendWrites + t.ckptBuffers + t.bgwClean
-  const backendShare = totalWrites > 0 ? t.backendWrites / totalWrites : 0
-  const tone: Tone = backendShare > 0.4 ? 'crit' : backendShare > 0.2 ? 'warn' : ''
+  const backendShare = clientBackendWriteShare(c)
+  const tone: Tone = backendShare > 0.4 ? 'crit' : backendShare > DIAGNOSTIC_GATES.clientBackendWriteShare.threshold ? 'warn' : ''
   return {
     cols: [
       { key: 'backend_type', label: 'backend_type' },
@@ -708,6 +760,18 @@ const io: ProjectionFn = (s, c, mode) => {
  * pg_buffercache
  * -------------------------------------------------------------------------*/
 
+export function coldBufferShare(s: SimState): number {
+  const buffers = s.buffers
+  let used = 0
+  let cold = 0
+  for (let i = 0; i < buffers.sampleFrames; i++) {
+    if (!buffers.valid[i]) continue
+    used++
+    if (buffers.usage[i] === 0) cold++
+  }
+  return used > 0 ? cold / used : 0
+}
+
 const buffercache: ProjectionFn = (s) => {
   const b = s.buffers
   const counts = [0, 0, 0, 0, 0, 0]
@@ -724,9 +788,10 @@ const buffercache: ProjectionFn = (s) => {
     if (b.dirty[i]) dirty[u]++
     if (b.pinned[i]) pinned[u]++
   }
+  const coldShare = coldBufferShare(s)
   const rows: Row[] = counts.map((cnt, u) => ({
     key: `u${u}`,
-    tone: u === 0 && cnt > used * 0.6 ? 'warn' : '',
+    tone: u === 0 && coldShare > DIAGNOSTIC_GATES.coldBufferShare.threshold ? 'warn' : '',
     cells: {
       usage_count: String(u),
       buffers: n(cnt),
@@ -792,17 +857,19 @@ const replication: ProjectionFn = (s) => {
   for (const standby of standbys) {
     rows.push({
       key: standby.nodeId,
-      tone: standby.lagSec > 8 ? 'crit' : standby.lagSec > 2 ? 'warn' : '',
+      tone: standby.lagSec > 8 ? 'crit' : standby.lagSec > DIAGNOSTIC_GATES.healthyReplaySeconds.threshold ? 'warn' : '',
       cells: {
         application_name: standby.applicationName,
         state: { v: standby.walSender, tone: standby.walSender === 'streaming' ? 'ok' : 'warn' },
-        sent_lsn: cell(standby.sentLsn, 256 * 1024),
-        write_lsn: cell(standby.writtenLsn, 256 * 1024),
-        flush_lsn: cell(standby.flushedLsn, 512 * 1024),
-        replay_lsn: cell(standby.appliedLsn, 512 * 1024),
+        sent_lsn: cell(standby.sentLsn, DIAGNOSTIC_GATES.senderStageGapBytes.threshold),
+        write_lsn: cell(standby.writtenLsn, DIAGNOSTIC_GATES.currentPositionGapBytes.threshold),
+        flush_lsn: cell(standby.flushedLsn, DIAGNOSTIC_GATES.currentPositionGapBytes.threshold),
+        replay_lsn: cell(standby.appliedLsn, DIAGNOSTIC_GATES.currentPositionGapBytes.threshold),
         behind: {
           v: fmtBytes(standby.lagBytes),
-          tone: standby.lagBytes > 4e6 ? 'crit' : standby.lagBytes > 1e6 ? 'warn' : 'ok',
+          tone: standby.lagBytes > DIAGNOSTIC_GATES.currentPositionGapBytes.threshold * 4
+            ? 'crit'
+            : standby.lagBytes > DIAGNOSTIC_GATES.currentPositionGapBytes.threshold ? 'warn' : 'ok',
         },
         replay_lag: NULLC,
         sync_state: {

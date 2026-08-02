@@ -18,6 +18,7 @@ import './style.css'
 import { ANALYTICS_EVENTS, startAnalytics } from '../core/analytics'
 import { BUILD_LABEL } from '../core/build'
 import { createBus } from '../core/bus'
+import { CLAIM_VALUES } from '../core/claims'
 import { createSim } from '../sim/model'
 import { SCENARIOS } from '../sim/scenarios'
 import { DEFAULT_KNOBS } from '../core/types'
@@ -480,7 +481,7 @@ function renderHome(): HTMLElement {
           text:
             'Catalog names are the other half of that promise. Every view, function, column and enum value on this page was checked against the PostgreSQL 18 manual as it was written, and where the model cannot honestly fill a column, the column is left out and said so.',
         }),
-        el('a', { class: 'extlink', href: 'https://www.postgresql.org/docs/current/monitoring-stats.html', target: '_blank', rel: 'noreferrer noopener', text: 'The Cumulative Statistics System — PostgreSQL manual' }),
+        el('a', { class: 'extlink', href: `${CLAIM_VALUES.postgresqlVersion.manualBase}monitoring-stats.html`, target: '_blank', rel: 'noreferrer noopener', text: 'The Cumulative Statistics System — PostgreSQL manual' }),
       ),
     ),
   )
@@ -830,7 +831,7 @@ function footer(): HTMLElement {
     { class: 'foot' },
     stamp,
     el('p', {
-      html: 'Inspired by <a href="https://pgstats.dev/" target="_blank" rel="noreferrer noopener">Alexey Lesovsky\'s PostgreSQL Observability map</a>. Names verified against the <a href="https://www.postgresql.org/docs/current/monitoring-stats.html" target="_blank" rel="noreferrer noopener">PostgreSQL 18 manual</a>. Apache-2.0.',
+      html: `Inspired by <a href="https://pgstats.dev/" target="_blank" rel="noreferrer noopener">Alexey Lesovsky's PostgreSQL Observability map</a>. Names verified against the <a href="${CLAIM_VALUES.postgresqlVersion.manualBase}monitoring-stats.html" target="_blank" rel="noreferrer noopener">${CLAIM_VALUES.postgresqlVersion.majorLabel} manual</a>. Apache-2.0.`,
     }),
     el('p', { class: 'foot__legal', text: TRADEMARK_NOTICE }),
     el('p', { class: 'foot__legal', text: NO_EA_CONTENT }),

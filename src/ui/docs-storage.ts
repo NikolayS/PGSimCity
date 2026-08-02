@@ -86,21 +86,25 @@ function vacSummary(s: SimState): string {
 
 /* ---------------------------- reference helpers ---------------------------
  * The reading list under each component. Every entry here was checked against
- * the thing it points at — the manual page title, the file on master, the
+ * the thing it points at — the manual page title, the file on the target branch, the
  * function name inside it, the chapter number on interdb.jp. A reference
  * nobody checked is worse than no reference, so where a book genuinely has no
  * chapter on a subject, the field is simply absent.
  * -------------------------------------------------------------------------*/
 
-const DOCS_BASE = 'https://www.postgresql.org/docs/current/'
+const DOCS_BASE = CLAIM_VALUES.postgresqlVersion.manualBase
 const SRC_BASE = 'https://github.com/postgres/postgres/blob/'
 const SUZUKI_BASE = 'https://www.interdb.jp/pg/'
 
 /** A page of the PostgreSQL manual. `page` may carry a #ANCHOR. */
 const manual = (page: string, label: string): DocRef => ({ label, url: DOCS_BASE + page })
 
-/** A file on master, with the functions worth opening it for. */
-const srcFile = (path: string, symbol?: string): DocRef => ({ label: path, url: `${SRC_BASE}master/${path}`, symbol })
+/** A file on the owned PostgreSQL branch, with the functions worth opening. */
+const srcFile = (path: string, symbol?: string): DocRef => ({
+  label: path,
+  url: `${SRC_BASE}${CLAIM_VALUES.postgresqlVersion.sourceBranch}/${path}`,
+  symbol,
+})
 
 /** The same file on a released branch, for code that has since moved on master. */
 const srcFileAt = (branch: string, note: string, path: string, symbol?: string): DocRef => ({
@@ -1804,7 +1808,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       source: [
         srcFile('src/backend/access/heap/vacuumlazy.c', 'lazy_truncate_heap'),
         srcFile('src/backend/commands/repack.c', 'cluster_rel, rebuild_relation, copy_table_data'),
-        srcFileAt('REL_18_STABLE', 'PostgreSQL 18 and earlier', 'src/backend/commands/cluster.c', 'cluster_rel, rebuild_relation, copy_table_data'),
+        srcFileAt(CLAIM_VALUES.postgresqlVersion.sourceBranch, `${CLAIM_VALUES.postgresqlVersion.majorLabel} and earlier`, 'src/backend/commands/cluster.c', 'cluster_rel, rebuild_relation, copy_table_data'),
       ],
       suzuki: suzuki(6, 'VACUUM Processing (§6.6 Reclaiming Bloated Space)'),
       rogov: rogov(R_MVCC, 'Rebuilding Tables and Indexes'),

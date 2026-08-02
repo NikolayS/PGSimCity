@@ -15,6 +15,8 @@
  * Nothing in this project ever invents a number to fill a column.
  * ==========================================================================*/
 
+import { CLAIM_VALUES } from '../core/claims'
+
 export type Subsystem =
   | 'backends'
   | 'buffers'
@@ -52,7 +54,8 @@ export interface CatalogEntry {
   city?: string
 }
 
-const M = 'https://www.postgresql.org/docs/current/monitoring-stats.html'
+const MANUAL = CLAIM_VALUES.postgresqlVersion.manualBase
+const M = `${MANUAL}monitoring-stats.html`
 
 export const CATALOG: CatalogEntry[] = [
   {
@@ -230,7 +233,7 @@ export const CATALOG: CatalogEntry[] = [
       'dead_tuple_bytes', 'num_dead_item_ids', 'indexes_total', 'indexes_processed',
       'delay_time',
     ],
-    docs: 'https://www.postgresql.org/docs/current/progress-reporting.html',
+    docs: `${MANUAL}progress-reporting.html`,
     coverage: 'partial',
     coverageNote:
       'The model runs up to three autovacuum workers through the real phase sequence, so pid, relid, phase, the heap block counters and index_vacuum_count are live. It does not model the dead-tuple store, so the byte columns are blank.',
@@ -250,7 +253,7 @@ export const CATALOG: CatalogEntry[] = [
       'classid', 'objid', 'objsubid', 'virtualtransaction', 'pid', 'mode', 'granted',
       'fastpath', 'waitstart',
     ],
-    docs: 'https://www.postgresql.org/docs/current/view-pg-locks.html',
+    docs: `${MANUAL}view-pg-locks.html`,
     coverage: 'partial',
     coverageNote:
       'The model takes one real relation-level ACCESS EXCLUSIVE lock and queues real waiters behind it, so locktype, relation, pid, mode, granted and waitstart are live. It has no transaction-id or tuple locks.',
@@ -266,7 +269,7 @@ export const CATALOG: CatalogEntry[] = [
     subsystem: 'locks',
     what: 'Given a pid, the pids blocking it. Turns a lock table into a culprit.',
     columns: ['pg_blocking_pids ( integer ) → integer[]'],
-    docs: 'https://www.postgresql.org/docs/current/functions-info.html',
+    docs: `${MANUAL}functions-info.html`,
     coverage: 'live',
     coverageNote: 'The model knows exactly which slot holds the lock every waiter is queued behind.',
     version:
@@ -284,7 +287,7 @@ export const CATALOG: CatalogEntry[] = [
       'bufferid', 'relfilenode', 'reltablespace', 'reldatabase', 'relforknumber',
       'relblocknumber', 'isdirty', 'usagecount', 'pinning_backends',
     ],
-    docs: 'https://www.postgresql.org/docs/current/pgbuffercache.html',
+    docs: `${MANUAL}pgbuffercache.html`,
     coverage: 'live',
     coverageNote:
       'The city\'s 1,024 buffer tiles are a representative sample of the model\'s logical pool. isdirty and usagecount come from those sampled frames, not from a claim that the whole pool is only 1,024 pages.',
@@ -304,7 +307,7 @@ export const CATALOG: CatalogEntry[] = [
       'vartype', 'source', 'min_val', 'max_val', 'enumvals', 'boot_val', 'reset_val',
       'sourcefile', 'sourceline', 'pending_restart',
     ],
-    docs: 'https://www.postgresql.org/docs/current/view-pg-settings.html',
+    docs: `${MANUAL}view-pg-settings.html`,
     coverage: 'partial',
     coverageNote:
       'These are the model\'s own knobs, reported under the real GUC names. Changing one here changes the running model, exactly as a SET or a reload would.',
@@ -323,7 +326,7 @@ export const CATALOG: CatalogEntry[] = [
       'pg_wal_lsn_diff ( lsn1 pg_lsn, lsn2 pg_lsn ) → numeric',
       'pg_walfile_name ( lsn pg_lsn ) → text',
     ],
-    docs: 'https://www.postgresql.org/docs/current/functions-admin.html',
+    docs: `${MANUAL}functions-admin.html`,
     coverage: 'live',
     coverageNote:
       'The model keeps three separate WAL positions — insert, write and flush — because the difference between them is the whole point of the commit path.',
@@ -344,7 +347,7 @@ export const CATALOG: CatalogEntry[] = [
       'wal_status', 'safe_wal_size', 'two_phase', 'two_phase_at', 'inactive_since',
       'conflicting', 'invalidation_reason', 'failover', 'synced',
     ],
-    docs: 'https://www.postgresql.org/docs/current/view-pg-replication-slots.html',
+    docs: `${MANUAL}view-pg-replication-slots.html`,
     coverage: 'partial',
     coverageNote:
       'Diagnose creates a logical slot when wal_level = logical. The model keeps one logical-consumer position and projects it as both restart_lsn and confirmed_flush_lsn; real PostgreSQL tracks them separately, and WAL retention starts at restart_lsn. This projection reports every slot as reserved. The wider operator model can lose a physical standby slot under retention pressure, but that state is not yet exposed in this result grid.',
@@ -374,7 +377,7 @@ export const CATALOG: CatalogEntry[] = [
       'jit_deform_count', 'jit_deform_time', 'parallel_workers_to_launch',
       'parallel_workers_launched', 'stats_since', 'minmax_stats_since',
     ],
-    docs: 'https://www.postgresql.org/docs/current/pgstatstatements.html',
+    docs: `${MANUAL}pgstatstatements.html`,
     coverage: 'absent',
     coverageNote:
       'The city retains aggregate rolling p50/p99 model-time trips, not per-normalised-statement history, so this result stays absent. PostgreSQL’s pg_stat_statements exposes mean_exec_time and stddev_exec_time but no percentiles. Production p50/p99 needs request tracing or a metrics histogram; the pg_stat_monitor extension can retain a response-time histogram inside PostgreSQL.',

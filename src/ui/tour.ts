@@ -236,9 +236,6 @@ const SEEN_KEY = 'pgsimcity.seen'
 const FIRST_RUN_LIFE_MS = 40000
 type KnobKey = keyof Knobs
 type LooseSet = (key: KnobKey, value: Knobs[KnobKey]) => void
-interface LooseBus {
-  on(type: string, fn: (payload: unknown) => void): () => void
-}
 
 function hasSeen(): boolean {
   try {
@@ -955,7 +952,7 @@ export function createTour(ctx: UiContext): UiModule {
    * WIRING
    * =====================================================================*/
 
-  const looseBus = bus as unknown as LooseBus
+  const looseBus = bus
   cleanup.push(
     bus.on('tour:start', (p) => start(p && typeof p.chapter === 'number' ? p.chapter : 0)),
     bus.on('tour:stop', () => stop()),
@@ -975,8 +972,7 @@ export function createTour(ctx: UiContext): UiModule {
     looseBus.on('ui:escape', (payload) => {
       if (tracePicker.hidden) return
       dismissTracePicker()
-      const claim = payload as { handled?: boolean } | undefined
-      if (claim) claim.handled = true
+      payload.handled = true
     }),
   )
 

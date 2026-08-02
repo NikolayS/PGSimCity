@@ -10,6 +10,7 @@ vi.mock('../src/world/slonik', () => ({
 
 import { createBus } from '../src/core/bus'
 import { DESTINATIONS } from '../src/core/destinations'
+import { themeMode } from '../src/core/theme'
 import type { CameraMode } from '../src/core/types'
 import { DEFAULT_KNOBS } from '../src/core/types'
 import { createCameraRig, type CameraRig } from '../src/engine/camera'
@@ -285,15 +286,12 @@ describe('documented city keyboard instructions', () => {
     press(instruction(APP_KEYS, 'labels').keys[0])
     expect(document.body.classList.contains('pg-labels-off')).toBe(true)
 
-    let themes = 0
-    ;(current.ctx.bus as unknown as { on(type: string, fn: () => void): () => void })
-      .on('theme:mode', () => { themes += 1 })
+    const beforeTheme = themeMode()
     press(instruction(APP_KEYS, 'theme').keys[0])
-    expect(themes).toBe(1)
+    expect(themeMode()).not.toBe(beforeTheme)
 
     let audioToggles = 0
-    ;(current.ctx.bus as unknown as { on(type: string, fn: () => void): () => void })
-      .on('audio:toggle', () => { audioToggles += 1 })
+    current.ctx.bus.on('audio:toggle', () => { audioToggles += 1 })
     press(instruction(APP_KEYS, 'sound').keys[0])
     expect(audioToggles).toBe(1)
   })

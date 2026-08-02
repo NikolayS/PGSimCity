@@ -52,10 +52,6 @@ interface ContextMenuOptions {
   host?: HTMLElement
 }
 
-interface LooseBus {
-  emit(type: string, payload: unknown): void
-}
-
 const LABEL: Record<ContextActionId, string> = {
   inspect: 'Open in inspector',
   'fly-to': 'Fly to it',
@@ -94,7 +90,7 @@ export function contextMenuPosition(
 export function createContextMenu(opts: ContextMenuOptions): UiModule {
   const { dom, picker, registry, bus, rig } = opts
   const host = opts.host ?? document.getElementById('hud') ?? document.body
-  const loose = bus as unknown as LooseBus
+  const loose = bus
 
   const root = el('div', {
     class: 'pg-context interactive',
