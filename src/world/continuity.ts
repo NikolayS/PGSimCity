@@ -505,7 +505,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   )
   drillBoard.visible = true
   plate(
-    'RESTORE DRILL · RTO MEASURED · COST COUNTED · PROVED ≠ NOT PROVED',
+    'RESTORE DRILL · RUN IT TO MEASURE · PROVED ≠ NOT PROVED',
     RP[0], 9.2, RP[2] + 17, 0, 1.35, COLOR.bufClean, 0.82,
     gRecovery,
   )
@@ -993,22 +993,22 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     color: COLOR.bufClean,
     readout: (s: SimState) => {
       const drill = s.disasterRecovery.drill
-      if (drill.status === 'failed') return `drill FAIL · ${drill.failureReason}`
-      if (drill.status === 'passed') {
-        return `drill PASS · RTO ${fmtDuration(drill.measuredRtoSec)} · ${fmtBytes(drill.objectStoreBytesRead)} read`
-      }
       if (
         drill.status === 'restoring'
         || drill.status === 'verifying'
         || drill.status === 'querying'
       ) {
-        return `drill ${drill.status} · RTO ${fmtDuration(drill.estimatedRtoSec)} estimate · ${(drill.progress * 100).toFixed(0)}%`
+        return `drill ${drill.status} · restore-to-target ${fmtDuration(drill.estimatedRestoreToTargetSec)} estimate · ${(drill.progress * 100).toFixed(0)}%`
       }
       const r = s.disasterRecovery.restore
-      if (r.status === 'failed') return r.failureReason
       if (r.status === 'fetching') return `fetching full backup · ${(r.progress * 100).toFixed(0)}% of estimated recovery time`
       if (r.status === 'replaying') return `replaying ${fmtBytes(r.walBytesRequired)} of archived WAL`
+      if (r.status === 'failed') return r.failureReason
       if (r.status === 'complete') return 'target reached · replay stopped · not promoted'
+      if (drill.status === 'failed') return `drill FAIL · ${drill.failureReason}`
+      if (drill.status === 'passed') {
+        return `drill PASS · restore-to-target ${fmtDuration(drill.measuredRestoreToTargetSec)} · ${fmtBytes(drill.objectStoreBytesRead)} read`
+      }
       return 'restore drill not run · empty recovery host · choose a target'
     },
   })

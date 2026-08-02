@@ -733,11 +733,11 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Checksum names matter',
-        body: `${CLAIM_VALUES.restoreDrill.checksumDisclosure} ${CLAIM_VALUES.restoreDrill.smokeDisclosure} A checksum match detects changed or missing bytes covered by that manifest; it does not prove the application’s data is semantically correct. A real smoke query adds one expected-result claim, not a proof about every row. WAL-G’s \`wal-verify integrity\` checks whether the required WAL objects exist; pgBackRest’s \`check\` validates its own repository configuration and archive path.`,
+        body: `${CLAIM_VALUES.restoreDrill.checksumDisclosure} ${CLAIM_VALUES.restoreDrill.smokeDisclosure} A checksum match detects changed or missing bytes covered by that manifest; it does not prove the application’s data is semantically correct. A real smoke query adds one expected-result claim, not a proof about every row. WAL-G’s \`wal-verify integrity\` checks whether the required WAL objects exist. pgBackRest’s \`check\` validates its repository and archive path, forces a WAL switch, and confirms that the new segment reaches the repository.`,
       },
       {
         heading: 'Cost and cadence are policy',
-        body: `The RTO clock starts before \`backup-fetch\` and stops when PostgreSQL reaches the target. The drill continues while validation reads local restored bytes. Object-store reads and recovery-host I/O are counted; this off-site ground never reads from the primary. ${CLAIM_VALUES.restoreDrill.physicalScopeDisclosure} ${CLAIM_VALUES.restoreDrill.cadenceDisclosure}`,
+        body: `The restore-to-target clock starts before \`backup-fetch\` and stops when WAL replay reaches the selected target. This is not RTO: promotion, \`recovery_target_action\`, endpoint cutover, client reconnection, and service restoration are outside it. The drill continues while validation reads local restored bytes. Object-store reads and recovery-host I/O are counted; this off-site ground never reads from the primary. ${CLAIM_VALUES.restoreDrill.physicalScopeDisclosure} ${CLAIM_VALUES.restoreDrill.cadenceDisclosure}`,
       },
       {
         heading: 'Replication is not this',
@@ -752,21 +752,27 @@ export const DOCS_STORAGE: ComponentDoc[] = [
           : s.disasterRecovery.drill.status,
       },
       {
-        label: 'Proof level',
-        get: (s) => CLAIM_VALUES.restoreDrill.levels[s.disasterRecovery.drill.level].label,
+        label: 'Last result level',
+        get: (s) => s.disasterRecovery.drill.status === 'idle'
+          ? 'not run'
+          : CLAIM_VALUES.restoreDrill.levels[s.disasterRecovery.drill.level].label,
       },
       {
-        label: 'RTO',
-        get: (s) => s.disasterRecovery.drill.measuredRtoSec > 0
-          ? `${fmtDuration(s.disasterRecovery.drill.measuredRtoSec)} measured`
-          : `${fmtDuration(s.disasterRecovery.drill.estimatedRtoSec)} estimate`,
+        label: 'Restore-to-target',
+        get: (s) => s.disasterRecovery.drill.measuredRestoreToTargetSec > 0
+          ? `${fmtDuration(s.disasterRecovery.drill.measuredRestoreToTargetSec)} measured`
+          : s.disasterRecovery.drill.status === 'restoring'
+              || s.disasterRecovery.drill.status === 'verifying'
+              || s.disasterRecovery.drill.status === 'querying'
+            ? `${fmtDuration(s.disasterRecovery.drill.estimatedRestoreToTargetSec)} estimate`
+            : 'not measured',
         hint: CLAIM_VALUES.restoreDrill.timeDisclosure,
       },
       { label: 'Backup age', get: (s) => fmtDuration(s.disasterRecovery.drill.backupAgeSec) },
       { label: 'WAL to replay', get: (s) => fmtBytes(s.disasterRecovery.drill.walBytesRequired) },
       { label: 'Object reads', get: (s) => fmtBytes(s.disasterRecovery.drill.objectStoreBytesRead) },
     ],
-    knobs: ['recoveryTargetAge', 'walGDownloadConcurrency'],
+    knobs: ['recoveryTargetAge', 'walGDownloadConcurrency', 'restoreDrillFault'],
     actions: ['start-restore-drill'],
     see: ['backup.vault', 'recovery.clock', 'restore.winch', 'recovery.replay'],
     refs: {
@@ -774,8 +780,8 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         manual('continuous-archiving.html', '25.3.4 Recovering Using a Continuous Archive Backup'),
         manual('app-pgverifybackup.html', 'pg_verifybackup — backup-manifest verification'),
         manual('app-pgrestore.html', 'pg_restore — selective logical-archive restore'),
-        { label: 'WAL-G 3.0.8 backup-fetch, wal-fetch, wal-verify and backup-push --verify', url: 'https://wal-g.readthedocs.io/PostgreSQL/' },
-        { label: 'pgBackRest 2.59.0 restore and archive-get alternative', url: 'https://pgbackrest.org/user-guide.html' },
+        { label: 'WAL-G 3.0.8 backup-fetch, wal-fetch, wal-verify and backup-push', url: 'https://wal-g.readthedocs.io/PostgreSQL/' },
+        { label: 'pgBackRest 2.59.0 restore, verify, and archive-get alternative', url: 'https://pgbackrest.org/user-guide.html' },
       ],
       source: [srcFile('src/backend/access/transam/xlogrecovery.c', 'PerformWalRecovery, InitWalRecovery')],
       suzuki: suzuki(10, 'Online Backup and Point-In-Time Recovery (PITR)'),
@@ -795,7 +801,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Two actionable failures',
-        body: 'A target before the oldest retained full backup fails because retention removed the starting point. A target newer than the archived WAL frontier fails because `wal-g wal-push` has not made the required segment available to `restore_command`. The first needs a larger future retention policy; the second needs credentials or another archive fault repaired and the `.ready` queue drained. Neither is fixed by having a streaming replica.',
+        body: 'A target before the oldest retained full backup has two modeled causes. If older backups expired, a larger future `wal-g delete retain FULL` count can preserve a wider window; if no backup was ever taken early enough, changing retention cannot create that missing history. A target newer than the archive frontier also has two causes. With a healthy empty queue and valid credentials, it is inside the current unarchived 16 MiB segment: that normal tail is the archive-only RPO floor, and `archive_timeout` shortens it at the cost of padded segments. Invalid credentials or a disabled archive-recovery chain are actual archive faults that need repair and `.ready`-queue drainage. A streaming replica fixes neither case.',
       },
       {
         heading: 'Where this restore stops',

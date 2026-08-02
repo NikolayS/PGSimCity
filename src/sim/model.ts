@@ -173,8 +173,10 @@ const DR_WAL_FETCH_BYTES_PER_STREAM_SEC = 4 * MIB
 export const DR_ARCHIVE_SEGMENT_SECONDS = 0.75
 /** One daily schedule interval on the continuity quarter's compressed clock. */
 export const DR_BACKUP_CADENCE_SECONDS = 60
-/** Sequential local reads performed by checksum and smoke phases. */
+/** Sequential local reads performed by the manifest verification phase. */
 export const DR_DRILL_VERIFY_BYTES_PER_SEC = 768 * MIB
+/** A modeled expected-row lookup reads an index root, leaf, and heap block. */
+export const DR_DRILL_SMOKE_BLOCKS_PER_TABLE = 3
 export const DR_DRILL_SMOKE_BYTES_PER_SEC = 512 * MIB
 /** Teaching-scale pg_wal volume; production capacity is installation-specific. */
 export const DR_PG_WAL_CAPACITY_BYTES = 512 * MIB
@@ -950,16 +952,18 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         backupBytesRequired: 0,
         backupBytesFetched: 0,
         walBytesRequired: 0,
+        walBytesAvailable: 0,
         walBytesReplayed: 0,
         estimatedDurationSec: 0,
         elapsedSec: 0,
         failureReason: '',
+        pendingWalFailureReason: '',
         promoted: false,
       },
       drill: {
         level: 'verified',
         status: 'idle',
-        proofRank: CLAIM_VALUES.restoreDrill.levels.verified.rank,
+        evidenceRank: CLAIM_VALUES.restoreDrill.levels.verified.rank,
         progress: 0,
         startedAt: 0,
         completedAt: 0,
@@ -968,8 +972,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         backupAgeSec: 0,
         backupObjectBytesRequired: 0,
         walBytesRequired: 0,
-        estimatedRtoSec: 0,
-        measuredRtoSec: 0,
+        estimatedRestoreToTargetSec: 0,
+        measuredRestoreToTargetSec: 0,
         estimatedDurationSec: 0,
         elapsedSec: 0,
         objectStoreBytesRead: 0,
@@ -1532,6 +1536,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   let archiveRetryT = 0
   let lastObservedCurrentSeg = 0
   let backupSeq = 1
+  let earliestBackupCompletedAt = 0
   let backupTrigger: 'manual' | 'schedule' = 'manual'
   const closedSegmentId = new Int32Array(DR_HISTORY_SLOTS)
   const closedSegmentAt = new Float64Array(DR_HISTORY_SLOTS)
@@ -2792,13 +2797,23 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     for (let i = 0; i < tables.length; i++) {
       if (tables[i].liveTuples > 0) mask |= 1 << i
     }
+    if (K.restoreDrillFault === 'empty_other_table' && N_TABLES > 1) mask &= ~(1 << 1)
     return mask
+  }
+
+  function backupObjectDigest(manifestDigest: number): number {
+    return K.restoreDrillFault === 'corrupt_object'
+      ? mixBackupDigest(manifestDigest, 0x434f5252)
+      : manifestDigest
   }
 
   function completeBaseBackup(): void {
     const op = dr.backup
     const duration = Math.max(0, state.t - op.startedAt)
     const manifestDigest = backupManifestDigest()
+    const objectDigest = backupObjectDigest(manifestDigest)
+    const smokeTableMask = backupSmokeTableMask()
+    if (earliestBackupCompletedAt === 0) earliestBackupCompletedAt = state.t
     dr.backups.push({
       id: backupSeq,
       label: `base_${walSegName(Math.floor(op.startLsn / WAL_SEG), op.startTimeline)}`,
@@ -2814,9 +2829,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       trigger: op.trigger,
       tool: 'WAL-G',
       manifestDigest,
-      objectDigest: manifestDigest,
-      smokeTableMask: backupSmokeTableMask(),
+      objectDigest,
+      smokeTableMask,
     })
+    K.restoreDrillFault = 'none'
     backupSeq++
     applyBackupRetention()
     op.status = 'idle'
@@ -2921,17 +2937,19 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     restore.backupBytesRequired = 0
     restore.backupBytesFetched = 0
     restore.walBytesRequired = 0
+    restore.walBytesAvailable = 0
     restore.walBytesReplayed = 0
     restore.estimatedDurationSec = 0
     restore.elapsedSec = 0
     restore.failureReason = ''
+    restore.pendingWalFailureReason = ''
   }
 
   function resetDrill(level: RestoreDrillLevel, targetTime: number): void {
     const drill = dr.drill
     drill.level = level
     drill.status = 'idle'
-    drill.proofRank = CLAIM_VALUES.restoreDrill.levels[level].rank
+    drill.evidenceRank = CLAIM_VALUES.restoreDrill.levels[level].rank
     drill.progress = 0
     drill.startedAt = state.t
     drill.completedAt = 0
@@ -2940,8 +2958,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     drill.backupAgeSec = 0
     drill.backupObjectBytesRequired = 0
     drill.walBytesRequired = 0
-    drill.estimatedRtoSec = 0
-    drill.measuredRtoSec = 0
+    drill.estimatedRestoreToTargetSec = 0
+    drill.measuredRestoreToTargetSec = 0
     drill.estimatedDurationSec = 0
     drill.elapsedSec = 0
     drill.objectStoreBytesRead = 0
@@ -2965,10 +2983,21 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   }
 
   function smokeBytesForLevel(level: RestoreDrillLevel): number {
-    if (level === 'table') return (tables[0].pages + tables[0].indexPages) * PAGE
-    let pages = 0
-    for (let i = 0; i < tables.length; i++) pages += tables[i].pages + tables[i].indexPages
-    return pages * PAGE
+    const tableCount = level === 'table' ? 1 : N_TABLES
+    return tableCount * DR_DRILL_SMOKE_BLOCKS_PER_TABLE * PAGE
+  }
+
+  function archiveGapReason(): string {
+    if (!K.walGArchiveCredentialsValid) {
+      return 'Archive fault: wal-g wal-push credentials are invalid, so completed WAL cannot reach the selected target; repair the credentials and wait for the .ready queue to drain'
+    }
+    if (!archiverOn()) {
+      return 'Archive fault: wal_level=minimal disables this modeled archive-recovery chain, so wal-g wal-push cannot reach the selected target; repair the configuration before relying on PITR'
+    }
+    if (dr.archive.queueSegments > 0) {
+      return 'The selected target is beyond a healthy archive frontier while wal-g wal-push processes completed segments; no archive fault is modeled. Let the .ready queue drain and compare archive throughput with WAL generation; archive_timeout controls segment switching, not push throughput'
+    }
+    return "The selected target is inside the healthy archive's unarchived tail: the .ready queue is empty, credentials are valid, and wal-g wal-push has no current work. PostgreSQL archives a 16 MiB WAL segment only after it closes; this is the archive-only RPO floor. archive_timeout can shorten the tail at the cost of padded segments"
   }
 
   function failRestore(reason: string): false {
@@ -2991,7 +3020,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     }
     if (targetTime < dr.oldestRecoverableTime) {
       return failRestore(
-        'PITR impossible: target is older than the oldest retained full backup; increase the future wal-g delete retain FULL count before the window expires',
+        earliestBackupCompletedAt > 0 && targetTime >= earliestBackupCompletedAt
+          ? 'PITR impossible: retention expired the full backup that could have covered this target; increase the future wal-g delete retain FULL count before the window expires'
+          : 'PITR impossible: no retained full backup was taken early enough to cover the selected target; changing retention cannot recover history that was never backed up',
       )
     }
 
@@ -3014,13 +3045,18 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     restore.backupAgeSec = Math.max(0, targetTime - selected.completedAt)
     restore.backupBytesRequired = selected.dataBytes
     restore.walBytesRequired = Math.max(0, targetLsn - selected.startLsn)
+    restore.walBytesAvailable = Math.min(
+      restore.walBytesRequired,
+      Math.max(0, dr.archive.archivedThroughLsn - selected.startLsn),
+    )
     restore.estimatedDurationSec =
       restore.backupBytesRequired / backupFetchBytesPerSec()
       + restore.walBytesRequired / walRecoveryBytesPerSec()
-    if (targetLsn <= 0 || targetLsn > dr.archive.archivedThroughLsn) {
-      return failRestore(
-        'PITR impossible: archived WAL does not reach the selected target; repair wal-g wal-push and wait for the .ready queue to drain',
-      )
+    if (targetLsn <= 0) {
+      return failRestore('PITR impossible: the selected target falls outside the modeled WAL history')
+    }
+    if (targetLsn > dr.archive.archivedThroughLsn) {
+      restore.pendingWalFailureReason = archiveGapReason()
     }
 
     restore.status = 'fetching'
@@ -3052,32 +3088,31 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     drill.targetTime = restore.targetTime
     drill.backupId = restore.backupId
     drill.walBytesRequired = restore.walBytesRequired
-    drill.estimatedRtoSec = restore.estimatedDurationSec
-
-    const selected = backupById(restore.backupId)
-    if (selected) {
-      drill.backupAgeSec = Math.max(0, state.t - selected.completedAt)
-      drill.backupObjectBytesRequired = selected.objectStoreBytes
-      drill.manifestDigest = selected.manifestDigest
-      drill.restoredDigest = selected.objectDigest
-      drill.smokeTableMask = selected.smokeTableMask
-    }
     if (!started) {
       drill.status = 'failed'
       drill.failureReason = restore.failureReason
       return false
     }
 
+    drill.estimatedRestoreToTargetSec = restore.estimatedDurationSec
+    const selected = backupById(restore.backupId)
+    if (selected) {
+      drill.backupAgeSec = restore.backupAgeSec
+      drill.backupObjectBytesRequired = selected.objectStoreBytes
+      drill.manifestDigest = selected.manifestDigest
+      drill.restoredDigest = selected.objectDigest
+      drill.smokeTableMask = selected.smokeTableMask
+    }
     drill.status = 'restoring'
     drill.checksumBytesRequired = level === 'verified' ? restore.backupBytesRequired : 0
     drill.smokeBytesRequired = smokeBytesForLevel(level)
     drill.validationBytesRequired = drill.checksumBytesRequired + drill.smokeBytesRequired
     drill.estimatedDurationSec =
-      drill.estimatedRtoSec
+      drill.estimatedRestoreToTargetSec
       + drill.checksumBytesRequired / DR_DRILL_VERIFY_BYTES_PER_SEC
       + drill.smokeBytesRequired / DR_DRILL_SMOKE_BYTES_PER_SEC
     toast(
-      `${CLAIM_VALUES.restoreDrill.levels[level].label} drill started on the recovery ground — RTO clock running`,
+      `${CLAIM_VALUES.restoreDrill.levels[level].label} drill started on the recovery ground — restore-to-target clock running`,
       'info',
       6500,
     )
@@ -3089,6 +3124,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     drill.status = 'failed'
     drill.completedAt = state.t
     drill.failureReason = reason
+    if (drill.measuredRestoreToTargetSec === 0) drill.estimatedRestoreToTargetSec = 0
+    dr.restore.status = 'idle'
     toast(`Restore drill failed — ${reason}`, 'warn', 7500)
   }
 
@@ -3098,6 +3135,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     drill.completedAt = state.t
     drill.progress = 1
     drill.failureReason = ''
+    dr.restore.status = 'idle'
     toast(
       `Restore drill passed in ${drill.elapsedSec.toFixed(1)} model s — read the supported claim and its limits`,
       'good',
@@ -3124,13 +3162,16 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         : 0
       drill.objectStoreBytesRead =
         drill.backupObjectBytesRequired * backupReadFraction + restore.walBytesReplayed
-      if (restore.status === 'fetching' && !backupById(drill.backupId)) {
-        failRestoreDrill('the selected full backup expired from retention before backup-fetch completed')
+      if (
+        (restore.status === 'fetching' || restore.status === 'replaying')
+        && !backupById(drill.backupId)
+      ) {
+        failRestoreDrill('the selected full backup expired from retention before the restore reached its target')
       } else if (restore.status === 'failed') {
         failRestoreDrill(restore.failureReason)
       } else if (restore.status === 'complete') {
         drill.objectStoreBytesRead = drill.backupObjectBytesRequired + restore.walBytesRequired
-        drill.measuredRtoSec = restore.elapsedSec
+        drill.measuredRestoreToTargetSec = restore.elapsedSec
         drill.status = drill.checksumBytesRequired > 0 ? 'verifying' : 'querying'
       }
     } else if (drill.status === 'verifying') {
@@ -3153,7 +3194,11 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       if (drill.smokeBytesRead >= drill.smokeBytesRequired) {
         const expectedMask = drill.level === 'table' ? 1 : (1 << N_TABLES) - 1
         if ((drill.smokeTableMask & expectedMask) !== expectedMask) {
-          failRestoreDrill('the smoke query did not find the expected row witness')
+          let missing = 0
+          while (missing < N_TABLES && (drill.smokeTableMask & (1 << missing)) !== 0) missing++
+          failRestoreDrill(
+            `the restored ${tables[missing]?.def.name ?? 'selected'} table is empty; its smoke query found no row witness`,
+          )
         } else {
           completeRestoreDrill()
         }
@@ -3208,11 +3253,17 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         }
       }
       if (restore.status === 'replaying') {
+        const replayLimit = restore.pendingWalFailureReason
+          ? restore.walBytesAvailable
+          : restore.walBytesRequired
         restore.walBytesReplayed = Math.min(
-          restore.walBytesRequired,
+          replayLimit,
           restore.walBytesReplayed + walRecoveryBytesPerSec() * dt,
         )
-        if (restore.walBytesReplayed >= restore.walBytesRequired) restore.status = 'complete'
+        if (restore.walBytesReplayed >= replayLimit) {
+          if (restore.pendingWalFailureReason) failRestore(restore.pendingWalFailureReason)
+          else restore.status = 'complete'
+        }
       }
       restore.progress =
         restore.estimatedDurationSec > 0
@@ -7286,6 +7337,17 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       case 'recoveryTargetAge':
         K.recoveryTargetAge = clamp(Math.round(K.recoveryTargetAge), 0, 300)
         break
+      case 'restoreDrillFault':
+        toast(
+          K.restoreDrillFault === 'none'
+            ? 'The next full backup will retain healthy modeled evidence'
+            : K.restoreDrillFault === 'empty_other_table'
+              ? 'Teaching fault armed: orders will restore without its expected row witness in the next full backup'
+              : 'Teaching fault armed: the next full backup will retain an object whose digest disagrees with its manifest',
+          K.restoreDrillFault === 'none' ? 'good' : 'warn',
+          6000,
+        )
+        break
       case 'haPartition':
         configureHaPartition()
         toast(
@@ -7738,6 +7800,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     dr.backupSchedule.intervalSec = DR_BACKUP_CADENCE_SECONDS
     dr.backupSchedule.nextStartAt = DR_BACKUP_CADENCE_SECONDS
     backupSeq = 1
+    earliestBackupCompletedAt = 0
     backupTrigger = 'manual'
     dr.backup.status = 'idle'
     dr.backup.trigger = 'manual'

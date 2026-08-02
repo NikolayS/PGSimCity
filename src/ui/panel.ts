@@ -535,7 +535,6 @@ export function createInspector(ctx: UiContext): UiModule {
     const result = el('p', { class: 'pgc-drill__result', ariaLive: 'polite' })
     const proof = el('p', {
       class: 'pg-hint pgc-drill__proof',
-      data: { disclosure: 'restore-drill-proof' },
     })
     const limits = el('p', {
       class: 'pg-hint pgc-drill__limits',
@@ -587,7 +586,7 @@ export function createInspector(ctx: UiContext): UiModule {
     function sync(): void {
       const drill = ctx.sim.state.disasterRecovery.drill
       const selected = level.value as RestoreDrillLevel
-      const meta = CLAIM_VALUES.restoreDrill.levels[selected]
+      const selectedMeta = CLAIM_VALUES.restoreDrill.levels[selected]
       const active =
         drill.status === 'restoring'
         || drill.status === 'verifying'
@@ -595,6 +594,10 @@ export function createInspector(ctx: UiContext): UiModule {
       const restoreActive =
         ctx.sim.state.disasterRecovery.restore.status === 'fetching'
         || ctx.sim.state.disasterRecovery.restore.status === 'replaying'
+      const hasResult = drill.status !== 'idle'
+      const resultMeta = hasResult
+        ? CLAIM_VALUES.restoreDrill.levels[drill.level]
+        : selectedMeta
       root.dataset.status = drill.status
       level.disabled = active
       button.disabled = active || restoreActive
@@ -603,30 +606,30 @@ export function createInspector(ctx: UiContext): UiModule {
         active
           ? `${CLAIM_VALUES.restoreDrill.levels[drill.level].label} ${(drill.progress * 100).toFixed(0)}%`
           : drill.status === 'failed' && drill.level === selected
-            ? `Retry ${meta.label}`
-            : `Run ${meta.label}`,
+            ? `Retry ${selectedMeta.label}`
+            : `Run ${selectedMeta.label}`,
       )
 
-      if (drill.status === 'failed' && drill.level === selected) {
-        setText(result, `FAIL — ${drill.failureReason}`)
-        setText(proof, `Proved by this result: the selected recovery claim is not currently met.`)
-      } else if (drill.status === 'passed' && drill.level === selected) {
+      if (drill.status === 'failed') {
+        setText(result, `${resultMeta.label} · FAIL — ${drill.failureReason}`)
+        setText(proof, `Proved by this result: the ${resultMeta.label} recovery claim is not currently met.`)
+      } else if (drill.status === 'passed') {
         setText(
           result,
-          `PASS — RTO ${fmtDuration(drill.measuredRtoSec)} measured · total drill ${fmtDuration(drill.elapsedSec)}`,
+          `${resultMeta.label} · PASS — Restore-to-target ${fmtDuration(drill.measuredRestoreToTargetSec)} measured · total drill ${fmtDuration(drill.elapsedSec)}`,
         )
-        setText(proof, `Proved: ${meta.supports}`)
+        setText(proof, `Proved: ${resultMeta.supports}`)
       } else if (active) {
         setText(
           result,
-          `RUNNING — ${drill.status} · RTO ${fmtDuration(drill.estimatedRtoSec)} estimate · backup ${fmtDuration(drill.backupAgeSec)} old · ${fmtBytes(drill.walBytesRequired)} WAL`,
+          `RUNNING — ${drill.status} · Restore-to-target ${fmtDuration(drill.estimatedRestoreToTargetSec)} estimate · backup ${fmtDuration(drill.backupAgeSec)} old · ${fmtBytes(drill.walBytesRequired)} WAL`,
         )
         setText(proof, `Proved only if this finishes PASS: ${CLAIM_VALUES.restoreDrill.levels[drill.level].supports}`)
       } else {
-        setText(result, 'RTO: not measured — run the drill against the current retained objects.')
-        setText(proof, `Proved only by a PASS: ${meta.supports}`)
+        setText(result, 'Restore-to-target: not measured — run the drill against the current retained objects.')
+        setText(proof, `Proved only by a PASS: ${selectedMeta.supports}`)
       }
-      setText(limits, `Did not prove: ${meta.limits}`)
+      setText(limits, `Did not prove: ${resultMeta.limits}`)
       setText(
         cost,
         `Object-store reads: ${fmtBytes(drill.objectStoreBytesRead)} · recovery-host validation reads: ${fmtBytes(drill.validationBytesRead)}`,

@@ -523,6 +523,16 @@ const RESPONSE_CONTRACTS = {
       return sim.startPointInTimeRestore()
     },
   },
+  restoreDrillFault: {
+    target: 'corrupt_object',
+    measure(value: Knobs['restoreDrillFault']) {
+      const sim = createSim(createBus(), { scheduledBackups: false })
+      sim.setKnob('restoreDrillFault', value)
+      takeBackup(sim)
+      const backup = sim.state.disasterRecovery.backups[0]
+      return backup.objectDigest === backup.manifestDigest
+    },
+  },
   haPartition: {
     target: 'isolate_node',
     measure(value: Knobs['haPartition']) {
