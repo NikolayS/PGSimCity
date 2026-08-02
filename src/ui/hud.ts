@@ -1,6 +1,7 @@
 import '../styles/hud.css'
 
 import { DESTINATIONS, destinationForDistrict } from '../core/destinations'
+import { CLAIM_VALUES } from '../core/claims'
 import { COLOR, cssColor, onThemeMode, themeMode, toggleThemeMode } from '../core/theme'
 import { clamp, fmtBytes, fmtDuration, fmtNum } from '../core/util'
 import type {
@@ -89,7 +90,9 @@ const TRACE_RAIL: readonly TraceStop[] = [
   'done',
 ]
 
-type VitalKey = 'tps' | 'hit' | 'wal' | 'dirty' | 'lag'
+type VitalKey = 'tps' | 'latency' | 'wal' | 'dirty' | 'lag'
+
+export const MODEL_LATENCY_VITAL_LABEL = `Latency p50 / p99 · ${CLAIM_VALUES.modelLatency.unit}`
 
 interface VitalDef {
   key: VitalKey
@@ -108,11 +111,11 @@ const VITALS: VitalDef[] = [
     hint: 'Transactions committed per second. Falls below the offered rate when the server is saturated.',
   },
   {
-    key: 'hit',
-    label: 'Cache hit',
-    focus: 'shared.buffers',
-    color: cssColor('bufClean'),
-    hint: 'Share of page requests served from shared_buffers. A well-tuned OLTP server sits above 99%; here the sequential-scan dial is what moves it, because a scan streams pages this pool cannot keep.',
+    key: 'latency',
+    label: MODEL_LATENCY_VITAL_LABEL,
+    focus: 'backend.row',
+    color: cssColor('backend'),
+    hint: 'Weighted response-time quantiles over the rolling model window. Click to decompose the p99 trip into buffer-read, dirty-write, commit, lock, and running time.',
   },
   {
     key: 'wal',
@@ -199,6 +202,12 @@ function fmtClock(sec: number): string {
   const m = Math.floor(whole / 60)
   const s = whole % 60
   return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+function fmtModelMs(ms: number, compact = false): string {
+  if (ms <= 0) return '—'
+  if (compact && ms >= 1000) return `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)}k`
+  return fmtNum(ms)
 }
 
 function nearestSpeed(v: number): number {
@@ -294,14 +303,13 @@ export function vitalValue(key: VitalKey, s: SimState): { text: string; state: S
       const ratio = s.stats.tps / offered
       return { text: fmtNum(s.stats.tps), state: ratio < 0.4 ? 'crit' : ratio < 0.72 ? 'warn' : '' }
     }
-    case 'hit': {
-      // Banded against what THIS city can actually reach. Its workload runs
-      // sequential scans over relations far larger than a 768-frame sample, so it
-      // lives in the 60-90% range and only approaches 99% once the seq-scan
-      // dial is turned down. Bands tuned to a real server's 99% would leave
-      // this vital stuck on a warning for every visitor, which teaches nothing.
-      const v = s.stats.cacheHitPct
-      return { text: `${v.toFixed(1)}%`, state: v < 50 ? 'crit' : v < 70 ? 'warn' : v >= 90 ? 'ok' : '' }
+    case 'latency': {
+      const { p50, p99 } = s.stats.latency
+      return {
+        text: `${fmtModelMs(p50.totalMs, true)} / ${fmtModelMs(p99.totalMs, true)}`,
+        // Model time has no production SLO, so colour must not invent one.
+        state: '',
+      }
     }
     case 'wal': {
       const bps = s.wal.bytesPerSec
@@ -325,8 +333,8 @@ export function vitalValue(key: VitalKey, s: SimState): { text: string; state: S
 
 function vitalHistory(key: VitalKey, s: SimState): number[] {
   const h = s.stats.history
-  const src = key === 'tps' ? h.tps : key === 'hit' ? h.hit : key === 'wal' ? h.wal : key === 'dirty' ? h.dirty : h.lag
-  return src.length > 64 ? src.slice(-64) : src
+  const src = key === 'tps' ? h.tps : key === 'latency' ? h.latencyP99 : key === 'wal' ? h.wal : key === 'dirty' ? h.dirty : h.lag
+  return src
 }
 
 /* ==========================================================================
@@ -377,6 +385,7 @@ export function createHud(ctx: UiContext): UiModule {
   let tourRunning = false
   let labelsOn = true
   let viewOpen = false
+  let latencyOpen = false
 
   /* =======================================================================
    * TOP BAR
@@ -411,9 +420,17 @@ export function createHud(ctx: UiContext): UiModule {
         // so the stylesheet can drop the least essential tiles on a phone
         'data-vital': def.key,
         type: 'button',
-        title: `${def.hint}\nClick to fly to it.`,
-        'aria-label': `${def.label} — show in the city`,
-        on: { click: () => bus.emit('focus', { id: def.focus }) },
+        title: def.key === 'latency' ? def.hint : `${def.hint}\nClick to fly to it.`,
+        'aria-label': def.key === 'latency' ? 'Latency p50 and p99 — show wait breakdown' : `${def.label} — show in the city`,
+        ...(def.key === 'latency'
+          ? { 'aria-expanded': 'false', 'aria-controls': 'hud-latency-panel' }
+          : {}),
+        on: {
+          click: () => {
+            if (def.key === 'latency') setLatencyOpen(!latencyOpen)
+            else bus.emit('focus', { id: def.focus })
+          },
+        },
       },
       el('div', { class: 'pg-metric__k hud-vital__k', text: def.label }),
       value,
@@ -663,7 +680,92 @@ export function createHud(ctx: UiContext): UiModule {
   const rightCluster = el('div', { class: 'hud-right' }, ckptBtn, el('span', { class: 'hud-sep' }), toolCluster)
 
   const topBar = el('div', { class: 'pg-panel hud-bar' }, brand, vitalsRow, rightCluster)
-  topEl.append(topBar)
+  const latencyP50 = el('strong', { class: 'hud-latency__number', text: '—' })
+  const latencyP99 = el('strong', { class: 'hud-latency__number', text: '—' })
+  const latencyWindow = el('span', { class: 'hud-latency__window', text: 'No completed trips yet' })
+  const latencyCauseDefs = [
+    ['Buffer read', (s: SimState) => s.stats.latency.p99.waits.bufferReadMs],
+    ['Dirty victim write', (s: SimState) => s.stats.latency.p99.waits.dirtyWriteMs],
+    ['Commit wait', (s: SimState) => s.stats.latency.p99.waits.commitMs],
+    ['Lock wait', (s: SimState) => s.stats.latency.p99.waits.lockMs],
+    ['Running / other', (s: SimState) => s.stats.latency.p99.waits.runningMs],
+  ] as const
+  const latencyCauseValues = latencyCauseDefs.map(() =>
+    el('span', { class: 'hud-latency__cause-value', text: '—' }))
+  const latencyClose = el(
+    'button',
+    {
+      class: 'pg-btn pg-btn--icon hud-latency__close',
+      type: 'button',
+      title: 'Close latency breakdown',
+      'aria-label': 'Close latency breakdown',
+      on: { click: () => setLatencyOpen(false) },
+    },
+    icon('close', 14),
+  )
+  const latencyPanel = el(
+    'section',
+    {
+      class: 'pg-panel hud-latency interactive',
+      id: 'hud-latency-panel',
+      'aria-labelledby': 'hud-latency-title',
+      hidden: true,
+    },
+    el(
+      'div',
+      { class: 'hud-latency__head' },
+      el('div', {},
+        el('span', { class: 'pg-eyebrow', id: 'hud-latency-title', text: 'Modeled transaction latency' }),
+        latencyWindow,
+      ),
+      latencyClose,
+    ),
+    el(
+      'div',
+      { class: 'hud-latency__quantiles' },
+      el('div', {}, el('span', { text: 'p50' }), latencyP50, el('small', { text: CLAIM_VALUES.modelLatency.unit })),
+      el('div', {}, el('span', { text: 'p99' }), latencyP99, el('small', { text: CLAIM_VALUES.modelLatency.unit })),
+    ),
+    el(
+      'div',
+      { class: 'hud-latency__anatomy' },
+      el('span', { class: 'pg-eyebrow', text: 'p99 trip anatomy' }),
+      ...latencyCauseDefs.map(([label], index) =>
+        el('div', { class: 'hud-latency__cause' },
+          el('span', { text: label }),
+          latencyCauseValues[index],
+        )),
+    ),
+    el(
+      'p',
+      { class: 'hud-latency__note' },
+      'These are deliberately stretched model-time trips, not production milliseconds. ',
+      el('a', {
+        href: 'https://www.postgresql.org/docs/current/pgstatstatements.html',
+        target: '_blank',
+        rel: 'noopener',
+        text: 'pg_stat_statements',
+      }),
+      ' exposes mean_exec_time and stddev_exec_time, not percentiles. Use request tracing or a metrics histogram; the ',
+      el('a', {
+        href: 'https://docs.percona.com/pg-stat-monitor/user_guide.html#histogram',
+        target: '_blank',
+        rel: 'noopener',
+        text: 'pg_stat_monitor extension',
+      }),
+      ' can retain a response-time histogram inside PostgreSQL.',
+    ),
+  )
+  topEl.append(topBar, latencyPanel)
+
+  const latencyVital = vitals.find((vital) => vital.def.key === 'latency')
+
+  function setLatencyOpen(open: boolean): void {
+    latencyOpen = open
+    latencyPanel.hidden = !open
+    if (open) latencyPanel.scrollTop = 0
+    latencyVital?.root.setAttribute('aria-expanded', String(open))
+  }
 
   const STACKED_TOP_MIN_WIDTH = 701
   const STACKED_TOP_MAX_WIDTH = 1440
@@ -1606,6 +1708,22 @@ export function createHud(ctx: UiContext): UiModule {
 
   let lastHealth: Health | null = null
 
+  function paintLatency(s: SimState): void {
+    const latency = s.stats.latency
+    setText(latencyP50, fmtModelMs(latency.p50.totalMs))
+    setText(latencyP99, fmtModelMs(latency.p99.totalMs))
+    setText(
+      latencyWindow,
+      latency.observations === 0
+        ? 'No completed trips yet'
+        : `${latency.observations}/${CLAIM_VALUES.modelLatency.windowTrips} completed trips · ${fmtNum(latency.transactions)} modeled transactions`,
+    )
+    for (let i = 0; i < latencyCauseDefs.length; i++) {
+      const ms = latencyCauseDefs[i][1](s)
+      setText(latencyCauseValues[i], `${fmtModelMs(ms)} ${CLAIM_VALUES.modelLatency.unit}`)
+    }
+  }
+
   function paintTop(s: SimState): void {
     const h = health(s)
     if (h !== lastHealth) {
@@ -1624,16 +1742,13 @@ export function createHud(ctx: UiContext): UiModule {
         v.value.className = 'pg-metric__v hud-vital__v' + (state ? ` is-${state}` : '')
       }
     }
+    paintLatency(s)
   }
 
   function paintSparks(s: SimState): void {
     for (const v of vitals) {
       const data = vitalHistory(v.def.key, s)
-      if (v.def.key === 'hit') {
-        sparkline(v.canvas, data, { color: v.def.color, fill: true, min: 0, max: 100, baseline: 99 })
-      } else {
-        sparkline(v.canvas, data, { color: v.def.color, fill: true, min: 0 })
-      }
+      sparkline(v.canvas, data, { color: v.def.color, fill: true, min: 0 })
     }
   }
 
@@ -2031,6 +2146,7 @@ export function createHud(ctx: UiContext): UiModule {
     document.body.classList.remove('pg-labels-off')
     document.body.classList.remove('pg-walk')
     topBar.remove()
+    latencyPanel.remove()
     viewPanel.remove()
     decisionRoot.remove()
     transport.remove()

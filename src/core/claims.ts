@@ -8,6 +8,7 @@ import { MACHINE_SYNCHRONOUS_COMMIT_COMPARISON } from '../spine/machine-comparis
 
 const KIB = 1024
 const MIB = KIB * KIB
+const MODEL_MILLISECOND_UNIT = 'model ms'
 
 export const CLAIM_VALUES = {
   walSegment: {
@@ -35,8 +36,14 @@ export const CLAIM_VALUES = {
   },
   modelDuration: {
     shortUnit: 'model s',
-    millisecondUnit: 'model ms',
+    millisecondUnit: MODEL_MILLISECOND_UNIT,
     prose: 'model time',
+  },
+  modelLatency: {
+    unit: MODEL_MILLISECOND_UNIT,
+    quantiles: ['p50', 'p99'],
+    windowTrips: 512,
+    disclosure: 'weighted rolling window of 512 completed backend trips',
   },
   vacuumReclaim: {
     plateLines: [
@@ -88,6 +95,11 @@ export const CLAIMS = {
     owner: 'src/core/claims.ts#CLAIM_VALUES.modelDuration',
     value: CLAIM_VALUES.modelDuration,
     surfaces: ['shared:trace duration formatter', 'Query flow:duration readout', 'Diagnose:lock duration'],
+  },
+  modelLatency: {
+    owner: 'src/core/claims.ts#CLAIM_VALUES.modelLatency',
+    value: CLAIM_VALUES.modelLatency,
+    surfaces: ['model:latency quantiles', 'HUD:latency vital', 'prose:latency observability'],
   },
   vacuumReclaim: {
     owner: 'src/core/claims.ts#CLAIM_VALUES.vacuumReclaim',

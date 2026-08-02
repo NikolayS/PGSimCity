@@ -1296,7 +1296,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   ctx.register({
     id: 'checkpointer',
     name: 'checkpointer',
-    role: 'writes sampled dirty pages, then fsyncs · no latency metric',
+    role: 'writes sampled dirty pages, then fsyncs · correlate with model p99',
     kind: 'process',
     district: 'maintenance',
     object: gCkpt,

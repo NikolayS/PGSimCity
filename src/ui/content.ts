@@ -170,7 +170,7 @@ export const KNOB_META: KnobMeta[] = [
       { value: 'on', label: 'on — fsync before ack' },
       { value: 'remote_apply', label: 'remote_apply — standby applied it' },
     ],
-    hint: 'Selects the modeled commit-wait path and stretched trip duration. PostgreSQL uses it for a real latency/durability trade-off; this city has no latency series.',
+    hint: 'Selects the modeled commit-wait path. The Latency vital reports stretched p50/p99 model time and attributes the selected p99 trip’s commit wait; PostgreSQL uses this for a real latency/durability trade-off.',
     danger: true,
   },
   {
@@ -423,7 +423,7 @@ export const KNOB_META: KnobMeta[] = [
     label: 'Lock contention',
     group: 'chaos',
     kind: 'toggle',
-    hint: 'Creates one scripted holder and direct waiters. The city shows occupied slots, not lock-queue fairness or query latency.',
+    hint: 'Creates one scripted holder and direct waiters. The city shows occupied slots and attributes blocked model time in the latency tail; it does not model lock-queue fairness.',
     danger: true,
   },
   {

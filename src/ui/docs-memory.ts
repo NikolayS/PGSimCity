@@ -204,7 +204,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What the city measures',
         body:
-          'The excavation receives representative shared-buffer-miss routes and exposes sampled read/write rates and shared storage pressure. The OS-cache branch is a renderer choice only: it does not keep kernel-cache contents, change model duration or distinguish a device read. The city has no calibrated device latency or query-latency series, and its fixed plan templates cannot become slower because estimates changed.',
+          'The excavation receives representative shared-buffer-miss routes and exposes sampled read/write rates, shared storage pressure and rolling model-time latency quantiles. The p99 trip attributes time spent in the modeled buffer-read phase. The OS-cache branch is a renderer choice only: it does not keep kernel-cache contents, change model duration or distinguish a device read. Nothing here is calibrated device latency, and fixed plan templates cannot become slower because estimates changed.',
       },
     ],
     metrics: [
@@ -664,7 +664,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What the city measures',
         body:
-          'The engine models a representative buffer sample, tags, pins, usage counts, dirty victims, a clock sweep and background cleaning. It does not model content-lock acquisition, cleanup-lock failure or per-page visibility checks. A dirty-victim write adds representative time to that statement’s stretched model trip and increments sampled counters. There is no calibrated storage time, latency series or p99, and the OS-cache route does not change the cost.',
+          'The engine models a representative buffer sample, tags, pins, usage counts, dirty victims, a clock sweep and background cleaning. It does not model content-lock acquisition, cleanup-lock failure or per-page visibility checks. A dirty-victim write adds representative time to that statement’s stretched model trip and increments sampled counters; rolling p50/p99 model-time quantiles expose that charge separately from buffer-read, commit and lock waits. There is no calibrated storage time, and the OS-cache route does not change the cost.',
       },
     ],
     metrics: [

@@ -54,14 +54,15 @@ describe('prose does not promise behavior absent from the model', () => {
     expect(doc('planner.planner')).toMatch(/statistics do not choose/i)
   })
 
-  it('marks scenario effects that have no modeled latency, lock, or ProcArray signal', () => {
-    expect(scenario('checkpoint-storm')).toMatch(/does not measure (?:query )?latency/i)
-    expect(scenario('no-bgwriter')).toMatch(/does not measure (?:query )?latency/i)
+  it('marks scenario effects at the model boundary', () => {
+    expect(scenario('checkpoint-storm')).toMatch(/modeled p50 and p99/i)
+    expect(scenario('no-bgwriter')).toMatch(/does not reliably raise overall p99/i)
     expect(scenario('lock-pileup')).toMatch(/does not model lock-queue fairness/i)
+    expect(scenario('lock-pileup')).toMatch(/attributes .*Lock wait/i)
     expect(scenario('lock-pileup')).toMatch(/fixed 15 model-second timeout/i)
     expect(scenario('lock-pileup')).toMatch(/no lock_timeout knob/i)
     expect(scenario('connection-storm')).toMatch(/does not charge ProcArray/i)
-    expect(scenario('connection-storm')).toMatch(/has no latency series/i)
+    expect(scenario('connection-storm')).toMatch(/excludes this client-side queue/i)
   })
 
   it('marks renderer-only teaching visuals as illustrative', () => {
@@ -125,12 +126,13 @@ describe('prose does not promise behavior absent from the model', () => {
     expect(source('trace-copy.ts')).toMatch(/process startup and memory are absent/i)
   })
 
-  it('marks latency prose where the city exposes only causal counters', () => {
-    expect(chapter('checkpoint')).toMatch(/no latency series/i)
-    expect(doc('checkpointer')).toMatch(/city has no query-latency series/i)
-    expect(doc('bgwriter')).toMatch(/city has no query-latency series/i)
-    expect(source('/world/maintenance.ts')).toMatch(/no latency metric/i)
-    expect(source('/observability/paths.ts')).toMatch(/model has no latency series/i)
+  it('keeps modeled latency distinct from production latency', () => {
+    expect(chapter('checkpoint')).toMatch(/p50 and p99/i)
+    expect(chapter('checkpoint')).toMatch(/model ms, not production milliseconds/i)
+    expect(doc('checkpointer')).toMatch(/weighted p50\/p99 in model ms/i)
+    expect(doc('bgwriter')).toMatch(/production long-tail consequence is not validated/i)
+    expect(source('/world/maintenance.ts')).toMatch(/correlate with model p99/i)
+    expect(source('/observability/paths.ts')).toMatch(/not a production query trace/i)
   })
 
   it('labels every stretched statement duration as model time', () => {

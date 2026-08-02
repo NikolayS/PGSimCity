@@ -15,10 +15,11 @@ import { CATALOG } from '../src/observability/catalog'
 import { createCollector } from '../src/observability/collector'
 import { ALL_STEPS, ALL_VERDICTS } from '../src/observability/paths'
 import { PROJECTIONS } from '../src/observability/views'
-import { MODEL_BULK_READ_RING_FRAMES, createSim } from '../src/sim/model'
+import { MODEL_BULK_READ_RING_FRAMES, MODEL_LATENCY_WINDOW_TRIPS, createSim } from '../src/sim/model'
 import { CHAPTERS } from '../src/ui/tour'
 import { DOCS_STORAGE } from '../src/ui/docs-storage'
 import { KNOB_META, doc, mdToHtml } from '../src/ui/content'
+import { MODEL_LATENCY_VITAL_LABEL } from '../src/ui/hud'
 import { VACUUM_RECLAIM_PLATE_LINES } from '../src/world/maintenance'
 import { SHARED_BUFFER_SAMPLE_PLATE_LABEL } from '../src/world/shmem'
 import { WAL_SEGMENT_PLATE_LABEL, WAL_SEGMENT_SIZE_PLATE_LABEL } from '../src/world/wal'
@@ -47,6 +48,7 @@ describe('claims and conventions spine', () => {
       'checkpointPolicy',
       'standbyNames',
       'modelDuration',
+      'modelLatency',
       'vacuumReclaim',
       'cityComponentRoute',
       'markdownRendering',
@@ -162,6 +164,35 @@ describe('claims and conventions spine', () => {
       .toBe(`0 ${CLAIM_VALUES.modelDuration.shortUnit}`)
     expect(storageDocCopy('net.wire'), 'modelDuration: prose:network duration omits the convention')
       .toContain(CLAIM_VALUES.modelDuration.prose)
+  })
+
+  it('keeps rolling latency quantiles and units aligned across model, HUD, and prose', () => {
+    agrees(
+      'modelLatency',
+      'shared:model-duration unit',
+      CLAIM_VALUES.modelLatency.unit,
+      CLAIM_VALUES.modelDuration.millisecondUnit,
+    )
+    agrees(
+      'modelLatency',
+      'model:rolling window',
+      MODEL_LATENCY_WINDOW_TRIPS,
+      CLAIM_VALUES.modelLatency.windowTrips,
+    )
+    const sim = createSim(createBus())
+    for (let i = 0; i < 1800; i++) sim.update(1 / 30)
+    agrees(
+      'modelLatency',
+      'model:quantile names',
+      Object.keys(sim.state.stats.latency).filter((key) => key === 'p50' || key === 'p99'),
+      CLAIM_VALUES.modelLatency.quantiles,
+    )
+    expect(MODEL_LATENCY_VITAL_LABEL, 'modelLatency: HUD unit disagrees')
+      .toContain(CLAIM_VALUES.modelLatency.unit)
+    expect(storageDocCopy('checkpointer'), 'modelLatency: prose omits the owned window')
+      .toContain(CLAIM_VALUES.modelLatency.disclosure)
+    expect(storageDocCopy('bgwriter'), 'modelLatency: prose omits real-server percentile limits')
+      .toContain('production long-tail consequence is not validated')
   })
 
   it('keeps vacuum truncation qualified on the model, plate, tour, and docs', () => {
