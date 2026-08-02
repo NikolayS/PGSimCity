@@ -427,6 +427,8 @@ export interface VacWorker {
   table: number
   phase: VacPhase
   progress: number
+  /** true only while cost-based throttling is sleeping */
+  vacuumDelay: boolean
   /** 0..1 along its travel route */
   travel: number
   deadCollected: number

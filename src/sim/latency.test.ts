@@ -10,6 +10,43 @@ function advanceBy(sim: ReturnType<typeof createAggregateSim>, seconds: number):
 }
 
 describe('modeled transaction latency', () => {
+  it('does not accrue commit wait with synchronous_commit off', () => {
+    const observations: number[] = []
+    let collecting = false
+    const sim = createAggregateSim(FRAME_TEST_STEP, (observation) => {
+      if (collecting) observations.push(observation.waits.commitMs)
+    })
+    sim.setKnob('tps', 300)
+    sim.setKnob('writeRatio', 1)
+    sim.setKnob('seqScanRatio', 0)
+    sim.setKnob('autovacuum', false)
+    sim.setKnob('synchronousCommit', 'off')
+
+    advanceBy(sim, 10)
+    collecting = true
+    let commitWaitSeen = false
+    let asynchronouslyFlushedLsn = 0
+    const until = sim.state.t + 60
+    while (sim.state.t < until) {
+      sim.update(Math.min(FRAME_TEST_STEP, until - sim.state.t))
+      commitWaitSeen ||= sim.state.backends.some((backend) => backend.state === 'commit_wait')
+      if (
+        asynchronouslyFlushedLsn === 0
+        && sim.state.wal.insertLsn > sim.state.wal.flushLsn
+      ) {
+        asynchronouslyFlushedLsn = sim.state.wal.insertLsn
+      }
+    }
+
+    expect(observations.length).toBeGreaterThan(0)
+    expect(commitWaitSeen).toBe(false)
+    expect(asynchronouslyFlushedLsn).toBeGreaterThan(0)
+    expect(sim.state.wal.flushLsn).toBeGreaterThanOrEqual(asynchronouslyFlushedLsn)
+    const nonzero = observations.filter((commitMs) => commitMs !== 0)
+    expect(nonzero, `${nonzero.length}/${observations.length}: ${nonzero.slice(0, 8).join(', ')}`)
+      .toHaveLength(0)
+  })
+
   it('keeps independent ordered quantiles and an additive mean anatomy', () => {
     const sim = createAggregateSim()
     sim.setKnob('tps', 300)

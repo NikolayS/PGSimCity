@@ -133,8 +133,8 @@ interface ActRow {
  * The model's backend state machine mapped onto what pg_stat_activity would
  * actually report. Every (wait_event_type, wait_event) pair below is in the
  * manual: IO/DataFileRead, IO/WalSync, IPC/SyncRep, Lock/relation,
- * Client/ClientRead, Client/ClientWrite, and the Activity events the auxiliary
- * processes park in.
+ * Timeout/VacuumDelay, Client/ClientRead, Client/ClientWrite, and the Activity
+ * events the auxiliary processes park in.
  *
  * On the spelling of WalSync: PostgreSQL 17 began generating the wait event
  * names from a table (wait_event_names.txt) and normalised the capitalisation
@@ -276,13 +276,13 @@ function activityRows(s: SimState, c: Collector, opts: { aux: boolean }): ActRow
       pid: PID.avWorker(w.slot),
       backendType: 'autovacuum worker',
       state: 'active',
-      wet: '',
-      we: '',
+      wet: w.vacuumDelay ? 'Timeout' : '',
+      we: w.vacuumDelay ? 'VacuumDelay' : '',
       xactAge: -1,
       xid: '',
       xmin: String(s.xminHorizon),
       query: `autovacuum: VACUUM public.${s.tables[w.table].def.name}`,
-      tone: 'accent',
+      tone: w.vacuumDelay ? 'warn' : 'accent',
     })
   }
   for (let i = 0; i < s.replication.standbys.length; i++) {
@@ -363,7 +363,7 @@ const activity: ProjectionFn = (s, c) => {
     ],
     rows,
     caption:
-      'Background processes report state = null and query = null; only client backends and autovacuum workers carry a statement. xact_age here stands in for now() − xact_start.',
+      'Background processes report state = null and query = null; only client backends and autovacuum workers carry a statement. Cost-throttled workers expose Timeout / VacuumDelay while sleeping. xact_age here stands in for now() − xact_start.',
   }
 }
 

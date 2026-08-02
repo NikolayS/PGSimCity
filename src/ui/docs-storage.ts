@@ -1563,7 +1563,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     sections: [
       {
         heading: 'What it does that the checkpointer does not',
-        body: 'The checkpointer writes the buffers that were dirty at a moment in time, on a schedule, for durability. The background writer writes the buffers that are about to be **evicted**, continuously, for latency. It walks the clock sweep slightly ahead of where allocation is happening and flushes dirty victims, so that when a backend needs a free buffer it finds a clean one and can reuse it immediately instead of writing 8 KiB to disk in the middle of your query.',
+        body: 'The checkpointer writes the buffers that were dirty at a moment in time, on a schedule, for durability. The background writer writes the buffers that are about to be **evicted**, continuously, for latency. It walks the clock sweep slightly ahead of where allocation is happening and flushes dirty victims, so that when a backend needs a free buffer it is more likely to find a clean one instead of issuing an 8 KiB buffered write to the filesystem in the middle of your query. That write normally lands in the kernel cache rather than immediately reaching durable media; writeback pressure determines whether it becomes a long stall.',
       },
       {
         heading: 'It does not reduce I/O',
@@ -1579,7 +1579,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What the city measures',
-        body: `The city models FlushBuffer’s write-ahead rule: a backend evicting a dirty page requests WAL durability through the shared group-flush path and waits when that page’s LSN is ahead of flush_lsn; an already-durable page skips that wait. It then charges the page write to the same query. Sampled client-backend writes, bgwriter cleans, dirty frames, route particles and weighted rolling p50/p99 are shown in ${CLAIM_VALUES.modelLatency.unit}; ${CLAIM_VALUES.modelLatency.componentDisclosure}. In this scale model, ${CLAIM_VALUES.modelLatency.batchDisclosure}, and ${CLAIM_VALUES.modelLatency.resolutionDisclosure}.`,
+        body: `The city models FlushBuffer’s write-ahead rule: a backend evicting a dirty page requests WAL durability through the shared group-flush path and waits when that page’s LSN is ahead of flush_lsn; an already-durable page skips that wait. It then charges the page write to the same query. Sampled client-backend writes, bgwriter cleans, dirty frames, route particles and weighted rolling p50/p99 are shown in ${CLAIM_VALUES.modelLatency.unit}; ${CLAIM_VALUES.modelLatency.componentDisclosure}. ${CLAIM_VALUES.modelLatency.taxonomyDisclosure}. In this scale model, ${CLAIM_VALUES.modelLatency.batchDisclosure}, and ${CLAIM_VALUES.modelLatency.resolutionDisclosure}.`,
       },
     ],
     metrics: [
@@ -1658,7 +1658,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Where this model cheats',
-        body: 'The naptime here is 12 seconds, not 60, and this city has exactly one database — otherwise the yard would sit empty for the length of a visit. The threshold formula and phase order follow PostgreSQL. The city does not implement cost points, delay intervals, or the shared worker budget; it approximates their effect by pacing each worker against an equal share of one quarter of the modeled device throughput.',
+        body: 'The naptime here is 12 seconds, not 60, and this city has exactly one database — otherwise the yard would sit empty for the length of a visit. The threshold formula and phase order follow PostgreSQL. The city does not implement individual page cost points or dynamic rebalancing of the shared worker budget; it gives each worker an equal share of one quarter of modeled device throughput and realizes that ceiling as alternating work and `VacuumDelay` sleep slices.',
       },
     ],
     metrics: [
@@ -1714,7 +1714,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What the city models',
-        body: 'The worker follows one fixed pass through heap scan, one pass per declared index, heap cleanup, truncation, a folded-in analyze stage and return, with representative page I/O and WAL. It does not model `maintenance_work_mem`, repeated index passes, per-page visibility bits, freeze age, anti-wraparound launches, cost points, lock acquisition for truncation or FSM updates. File truncation is a tail-density heuristic, not a lock outcome.',
+        body: 'The worker follows one fixed pass through heap scan, one pass per declared index, heap cleanup, truncation, a folded-in analyze stage and return, with representative page I/O and WAL. Its scaled per-worker I/O ceiling alternates active work with explicit cost-delay sleeps, shown in `pg_stat_activity` as `Timeout / VacuumDelay`; it does not reproduce individual page cost values or PostgreSQL’s real 2 ms delay. It also does not model `maintenance_work_mem`, repeated index passes, per-page visibility bits, freeze age, anti-wraparound launches, lock acquisition for truncation or FSM updates. File truncation is a tail-density heuristic, not a lock outcome.',
       },
     ],
     metrics: [

@@ -110,6 +110,40 @@ function reachableVerdicts(
 }
 
 describe('diagnostic path contracts', () => {
+  it('reports cost-based autovacuum sleeps as Timeout/VacuumDelay', () => {
+    const sim = createSim(createBus())
+    const collector = createCollector(sim)
+    sim.setKnob('tps', 450)
+    sim.setKnob('writeRatio', 1)
+    sim.setKnob('updateRatio', 1)
+    sim.setKnob('seqScanRatio', 0)
+
+    let vacuumDelay = false
+    for (let i = 0; i < 60 * 30 && !vacuumDelay; i++) {
+      const phaseBefore = sim.state.autovac.workers.map((worker) => worker.phase)
+      const progressBefore = sim.state.autovac.workers.map((worker) => worker.progress)
+      sim.update(1 / 30)
+      const delayedWorker = sim.state.autovac.workers.find((worker) => worker.vacuumDelay)
+      if (!delayedWorker) continue
+      expect(delayedWorker.phase).toBe(phaseBefore[delayedWorker.slot])
+      expect(delayedWorker.progress).toBe(progressBefore[delayedWorker.slot])
+      const rows = PROJECTIONS.activity(sim.state, collector, 'total').rows
+      vacuumDelay = rows.some((row) => {
+        const backendType = row.cells.backend_type
+        const waitType = row.cells.wait_event_type
+        const waitEvent = row.cells.wait_event
+        return typeof backendType === 'object'
+          && backendType.v === 'autovacuum worker'
+          && typeof waitType === 'object'
+          && waitType.v === 'Timeout'
+          && typeof waitEvent === 'object'
+          && waitEvent.v === 'VacuumDelay'
+      })
+    }
+
+    expect(vacuumDelay).toBe(true)
+  })
+
   it('buckets dirty-victim WAL durability waits as I/O, not commit waits', () => {
     const sim = createSim(createBus())
     const collector = createCollector(sim)

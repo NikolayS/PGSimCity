@@ -677,14 +677,14 @@ export function createHud(ctx: UiContext): UiModule {
   const latencyP99 = el('strong', { class: 'hud-latency__number', text: '—' })
   const latencyWindow = el('span', { class: 'hud-latency__window', text: 'No completed trips yet' })
   const latencyCauseDefs = [
-    ['Buffer read', (s: SimState) => s.stats.latency.p99.waits.bufferReadMs],
-    ['Dirty victim write', (s: SimState) => s.stats.latency.p99.waits.dirtyWriteMs],
-    ['Commit wait', (s: SimState) => s.stats.latency.p99.waits.commitMs],
-    ['Lock wait', (s: SimState) => s.stats.latency.p99.waits.lockMs],
-    ['Running / other', (s: SimState) => s.stats.latency.p99.waits.runningMs],
+    ['Buffer-read phase', (s: SimState) => s.stats.latency.p99.waits.bufferReadMs],
+    ['Dirty-victim I/O', (s: SimState) => s.stats.latency.p99.waits.dirtyWriteMs],
+    ['Commit durability', (s: SimState) => s.stats.latency.p99.waits.commitMs],
+    ['Relation lock wait', (s: SimState) => s.stats.latency.p99.waits.lockMs],
   ] as const
   const latencyCauseValues = latencyCauseDefs.map(() =>
     el('span', { class: 'hud-latency__cause-value', text: '—' }))
+  const latencyResidualValue = el('span', { class: 'hud-latency__cause-value', text: '—' })
   const latencyClose = el(
     'button',
     {
@@ -708,7 +708,7 @@ export function createHud(ctx: UiContext): UiModule {
       'div',
       { class: 'hud-latency__head' },
       el('div', {},
-        el('span', { class: 'pg-eyebrow', id: 'hud-latency-title', text: 'Modeled transaction latency' }),
+        el('span', { class: 'pg-eyebrow', id: 'hud-latency-title', text: 'Modeled backend-trip latency' }),
         latencyWindow,
       ),
       latencyClose,
@@ -722,17 +722,22 @@ export function createHud(ctx: UiContext): UiModule {
     el(
       'div',
       { class: 'hud-latency__anatomy' },
-      el('span', { class: 'pg-eyebrow', text: 'p99 component quantiles' }),
+      el('span', { class: 'pg-eyebrow', text: 'p99 modeled component quantiles' }),
       ...latencyCauseDefs.map(([label], index) =>
         el('div', { class: 'hud-latency__cause' },
           el('span', { text: label }),
           latencyCauseValues[index],
         )),
+      el('span', { class: 'pg-eyebrow hud-latency__residual-title', text: 'p99 non-wait residual' }),
+      el('div', { class: 'hud-latency__cause' },
+        el('span', { text: 'Active / unclassified' }),
+        latencyResidualValue,
+      ),
     ),
     el(
       'p',
       { class: 'hud-latency__note' },
-      `Each component is its own p99 and does not add up to the total p99. In this scale model, ${CLAIM_VALUES.modelLatency.batchDisclosure}; ${CLAIM_VALUES.modelLatency.resolutionDisclosure}. These are deliberately stretched model-time trips, not production milliseconds. `,
+      `Each component is its own p99 and does not add up to the total p99. ${CLAIM_VALUES.modelLatency.taxonomyDisclosure}. In this scale model, ${CLAIM_VALUES.modelLatency.batchDisclosure}; ${CLAIM_VALUES.modelLatency.resolutionDisclosure}. These are deliberately stretched model-time trips, not production milliseconds. `,
       el('a', {
         href: `${CLAIM_VALUES.postgresqlVersion.manualBase}pgstatstatements.html`,
         target: '_blank',
@@ -1715,6 +1720,10 @@ export function createHud(ctx: UiContext): UiModule {
       const ms = latencyCauseDefs[i][1](s)
       setText(latencyCauseValues[i], `${fmtModelMs(ms)} ${CLAIM_VALUES.modelLatency.unit}`)
     }
+    setText(
+      latencyResidualValue,
+      `${fmtModelMs(latency.p99.waits.runningMs)} ${CLAIM_VALUES.modelLatency.unit}`,
+    )
   }
 
   function paintTop(s: SimState): void {
