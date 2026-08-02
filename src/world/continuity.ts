@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { COLOR, mixHex } from '../core/theme'
+import { CLAIM_VALUES } from '../core/claims'
 import { configuredSynchronousStandby } from '../core/replication'
 import type { SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, damp, fmtBytes, fmtDuration, fmtLsn } from '../core/util'
@@ -34,8 +35,10 @@ import { ANCHOR, CONTINUITY } from './layout'
  *
  * WHAT IS SIMULATED, AND WHAT IS NOT. The model owns archive retries, pg_wal
  * pressure, full backups, WAL-G retention, a restore that fetches one retained
- * backup before replaying archived WAL to recovery_target_time, and a restore
- * drill whose proof level adds modeled validation reads. The world only
+ * backup before replaying archived WAL to recovery_target_time, a one-fork
+ * recovery_target_timeline decision, and a restore drill whose proof level
+ * adds modeled validation reads. Multi-fork trees and history parsing are
+ * absent. The world only
  * projects that state. standby_b is a complete independent physical
  * standby. Three Patroni agents, etcd Raft consensus, the leader-key lease,
  * planned and unplanned promotion, the timeline fork, endpoint move, and
@@ -69,6 +72,8 @@ const cssHex = (c: number) => '#' + (c >>> 0).toString(16).padStart(6, '0')
 
 /** `00000002.history` — a timeline history file name. */
 const historyName = (tli: number) => tli.toString(16).toUpperCase().padStart(8, '0') + '.history'
+
+export const TIMELINE_RECOVERY_PLATE_LABEL = CLAIM_VALUES.timelineRecovery.plate
 
 /* ==========================================================================
  * Factory.
@@ -360,6 +365,10 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   plate(
     'one deck per timeline · a turnout is a fork · the plaque is the .history file · nothing ever rejoins',
     yardMidX, 4.4, Y.z + 15.5, 0, 1.35, COLOR.inkDim, 0.66,
+  )
+  plate(
+    TIMELINE_RECOVERY_PLATE_LABEL,
+    yardMidX, 2.5, Y.z + 15.5, 0, 1.15, COLOR.inkDim, 0.62,
   )
 
   /* ---------------------------------------------------------------------
@@ -1007,7 +1016,10 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
       if (r.status === 'complete') return 'target reached · replay stopped · not promoted'
       if (drill.status === 'failed') return `drill FAIL · ${drill.failureReason}`
       if (drill.status === 'passed') {
-        return `drill PASS · restore-to-target ${fmtDuration(drill.measuredRestoreToTargetSec)} · ${fmtBytes(drill.objectStoreBytesRead)} read`
+        const timelinePath = s.disasterRecovery.restore.crossesTimelineFork
+          ? ` · timeline ${s.disasterRecovery.restore.backupTimeline}→${s.disasterRecovery.restore.targetTimeline} via ${s.disasterRecovery.restore.historyFileName}`
+          : ''
+        return `drill PASS · restore-to-target ${fmtDuration(drill.measuredRestoreToTargetSec)} · ${fmtBytes(drill.objectStoreBytesRead)} read${timelinePath}`
       }
       return 'restore drill not run · empty recovery host · choose a target'
     },
@@ -1329,7 +1341,8 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
 
     for (let k = 0; k < N_HISTORY; k++) {
       const exists = forked && k < timeline.current - 1
-      historyTablet.setColorAt(k, _c.setHex(exists ? COLOR.archive : OFF))
+      const historyArchived = exists && archive.historyFileArchived
+      historyTablet.setColorAt(k, _c.setHex(historyArchived ? COLOR.archive : OFF))
       branchGroup[k].visible = exists
       branchLive[k].visible = exists && k === activeRow - 1
     }

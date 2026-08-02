@@ -109,6 +109,16 @@ export const CLAIM_VALUES = {
     timeDisclosure: 'Restore-to-target time is model time at fixed teaching rates, not production RTO. It stops when WAL replay reaches the selected target and excludes promotion, recovery_target_action, endpoint cutover, client reconnection, and service restoration.',
     cadenceDisclosure: 'Nightly, monthly, and quarterly are comparison examples, not recommendations. The operator must choose, fund, record, and review the cadence against the required recovery objectives.',
   },
+  timelineRecovery: {
+    modeledForkDepth: 1,
+    defaultTarget: 'latest',
+    historyFile: '00000002.history',
+    plate: 'pre-fork backup stays usable · old post-fork WAL is not timeline 2',
+    crossingDisclosure: 'A timeline-1 backup completed before the fork remains usable for a timeline-2 target: recovery_target_timeline=latest follows 00000002.history at the fork. WAL unique to timeline 1 after that fork is not replayed into timeline 2.',
+    defaultDisclosure: 'PostgreSQL 18.3 defaults recovery_target_timeline to latest. The city also exposes current so a drill can demonstrate the timeline mismatch instead of blaming a healthy archive.',
+    absent: ['numeric timeline targets', 'multiple-fork trees', 'timeline-history parsing', 'wider recovery_target_* interactions'],
+    coverageDisclosure: 'PGSimCity models one fork only: timeline 1 to timeline 2. It does not model numeric timeline targets, multiple-fork trees, timeline-history parsing, or the wider interactions among recovery_target_* settings.',
+  },
   vacuumReclaim: {
     plateLines: [
       'space usually stays in the table',
@@ -270,6 +280,11 @@ export const CLAIMS = {
     owner: 'src/core/claims.ts#CLAIM_VALUES.restoreDrill',
     value: CLAIM_VALUES.restoreDrill,
     surfaces: ['model:restore-drill evidence rank', 'inspector:restore-drill evidence', 'prose:restore-drill limits'],
+  },
+  timelineRecovery: {
+    owner: 'src/core/claims.ts#CLAIM_VALUES.timelineRecovery',
+    value: CLAIM_VALUES.timelineRecovery,
+    surfaces: ['model:timeline-aware archive and restore', 'controls:recovery_target_timeline', 'world:timeline switchyard plate', 'prose:timeline recovery scope'],
   },
   vacuumReclaim: {
     owner: 'src/core/claims.ts#CLAIM_VALUES.vacuumReclaim',

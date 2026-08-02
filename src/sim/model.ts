@@ -889,6 +889,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         current: 1,
         parent: 0,
         forkLsn: 0,
+        forkedAt: 0,
         oldHistoryEndLsn: initialLsn,
         newHistoryEndLsn: initialLsn,
       },
@@ -925,6 +926,12 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       tool: 'WAL-G',
       dataDirectoryBytes: 0,
       archive: {
+        timeline: 1,
+        parentTimeline: 0,
+        parentArchivedThroughLsn: 0,
+        parentArchivedThroughTime: 0,
+        historyFileName: '',
+        historyFileArchived: false,
         queueSegments: 0,
         archivedThroughLsn: initialLsn,
         archivedThroughTime: 0,
@@ -960,6 +967,13 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         progress: 0,
         targetTime: 0,
         targetLsn: 0,
+        recoveryTargetTimeline: CLAIM_VALUES.timelineRecovery.defaultTarget,
+        backupTimeline: 0,
+        targetTimeline: 0,
+        crossesTimelineFork: false,
+        historyFileName: '',
+        followedHistoryFile: false,
+        parentReplayEndLsn: 0,
         backupId: -1,
         backupAgeSec: 0,
         backupBytesRequired: 0,
@@ -970,6 +984,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         estimatedDurationSec: 0,
         elapsedSec: 0,
         failureReason: '',
+        resultMessage: '',
         pendingWalFailureReason: '',
         promoted: false,
       },
@@ -2621,6 +2636,14 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   const archiverOn = () => K.walLevel !== 'minimal'
 
   function tickSegments(dt: number): void {
+    if (
+      ha.timeline.forkLsn > 0
+      && !dr.archive.historyFileArchived
+      && archiverOn()
+      && K.walGArchiveCredentialsValid
+    ) {
+      dr.archive.historyFileArchived = true
+    }
     const curSeg = Math.floor(wal.insertLsn / WAL_SEG)
     if (curSeg > lastObservedCurrentSeg) {
       for (let id = lastObservedCurrentSeg; id < curSeg; id++) {
@@ -2647,7 +2670,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       const last = segments[N_WAL_SEG_SLOTS - 1]
       // "recycled": the old file is renamed to a future name, not deleted.
       last.id = base + N_WAL_SEG_SLOTS - 1
-      last.name = walSegName(last.id)
+      last.name = walSegName(last.id, ha.timeline.current)
       last.bytes = 0
       last.fill = 0
       last.state = 'recycled'
@@ -2656,7 +2679,11 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     for (let i = 0; i < N_WAL_SEG_SLOTS; i++) {
       const s = segments[i]
       s.id = base + i
-      s.name = walSegName(s.id)
+      const segmentTimeline = ha.timeline.forkLsn > 0
+        && s.id < Math.floor(ha.timeline.forkLsn / WAL_SEG)
+        ? ha.timeline.parent
+        : ha.timeline.current
+      s.name = walSegName(s.id, segmentTimeline)
       if (s.id < curSeg) {
         s.bytes = WAL_SEG
         s.fill = 1
@@ -2974,6 +3001,13 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     restore.progress = 0
     restore.targetTime = targetTime
     restore.targetLsn = 0
+    restore.recoveryTargetTimeline = K.recoveryTargetTimeline
+    restore.backupTimeline = 0
+    restore.targetTimeline = 0
+    restore.crossesTimelineFork = false
+    restore.historyFileName = ''
+    restore.followedHistoryFile = false
+    restore.parentReplayEndLsn = 0
     restore.backupId = -1
     restore.backupAgeSec = 0
     restore.backupBytesRequired = 0
@@ -2984,6 +3018,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     restore.estimatedDurationSec = 0
     restore.elapsedSec = 0
     restore.failureReason = ''
+    restore.resultMessage = ''
     restore.pendingWalFailureReason = ''
   }
 
@@ -3029,24 +3064,48 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     return tableCount * DR_DRILL_SMOKE_BLOCKS_PER_TABLE * PAGE
   }
 
-  function archiveGapReason(): string {
+  function archiveGapReason(timeline: number): string {
     if (!K.walGArchiveCredentialsValid) {
-      return 'Archive fault: wal-g wal-push credentials are invalid, so completed WAL cannot reach the selected target; repair the credentials and wait for the .ready queue to drain'
+      return `Archive fault: wal-g wal-push credentials are invalid, so completed WAL on timeline ${timeline} cannot reach the selected target; repair the credentials and wait for the .ready queue to drain`
     }
     if (!archiverOn()) {
-      return 'Archive fault: wal_level=minimal disables this modeled archive-recovery chain, so wal-g wal-push cannot reach the selected target; repair the configuration before relying on PITR'
+      return `Archive fault: wal_level=minimal disables this modeled archive-recovery chain, so wal-g wal-push cannot reach the selected target on timeline ${timeline}; repair the configuration before relying on PITR`
     }
     if (dr.archive.queueSegments > 0) {
-      return 'The selected target is beyond a healthy archive frontier while wal-g wal-push processes completed segments; no archive fault is modeled. Let the .ready queue drain and compare archive throughput with WAL generation; archive_timeout controls segment switching, not push throughput'
+      return `The selected target is beyond the healthy timeline ${timeline} archive frontier while wal-g wal-push processes completed segments; no archive fault is modeled. Let the .ready queue drain and compare archive throughput with WAL generation; archive_timeout controls segment switching, not push throughput`
     }
-    return "The selected target is inside the healthy archive's unarchived tail: the .ready queue is empty, credentials are valid, and wal-g wal-push has no current work. PostgreSQL archives a 16 MiB WAL segment only after it closes; this is the archive-only RPO floor. archive_timeout can shorten the tail at the cost of padded segments"
+    return `The selected target is inside timeline ${timeline}'s healthy unarchived tail: the .ready queue is empty, credentials are valid, and wal-g wal-push has no current work. PostgreSQL archives a 16 MiB WAL segment only after it closes; this is the archive-only RPO floor. archive_timeout can shorten the tail at the cost of padded segments`
   }
 
   function failRestore(reason: string): false {
     dr.restore.status = 'failed'
     dr.restore.failureReason = reason
+    dr.restore.resultMessage = ''
     toast(reason, 'warn', 7000)
     return false
+  }
+
+  function restoreTargetTimeline(targetTime: number): number {
+    if (ha.timeline.forkLsn <= 0 || targetTime < ha.timeline.forkedAt) {
+      return ha.timeline.parent > 0 ? ha.timeline.parent : ha.timeline.current
+    }
+    return ha.timeline.current
+  }
+
+  function archivedThroughForTimeline(timeline: number): number {
+    if (timeline === dr.archive.timeline) return dr.archive.archivedThroughLsn
+    if (timeline === dr.archive.parentTimeline) return dr.archive.parentArchivedThroughLsn
+    return 0
+  }
+
+  function completeRestore(): void {
+    const restore = dr.restore
+    restore.status = 'complete'
+    restore.progress = 1
+    restore.resultMessage = restore.crossesTimelineFork
+      ? `PITR complete: recovery_target_timeline=${restore.recoveryTargetTimeline} followed ${restore.historyFileName} from timeline ${restore.backupTimeline} at ${fmtLsn(restore.parentReplayEndLsn)} to timeline ${restore.targetTimeline} and reached recovery_target_time`
+      : `PITR complete on timeline ${restore.targetTimeline}: recovery_target_timeline=${restore.recoveryTargetTimeline} reached recovery_target_time without crossing a fork`
+    toast(restore.resultMessage, 'good', 7500)
   }
 
   function startPointInTimeRestore(targetAgeSec = K.recoveryTargetAge): boolean {
@@ -3083,22 +3142,72 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     const targetLsn = lsnAtTime(targetTime)
     const restore = dr.restore
     restore.targetLsn = targetLsn
+    restore.backupTimeline = selected.startTimeline
+    restore.targetTimeline = restoreTargetTimeline(targetTime)
+    restore.crossesTimelineFork = restore.backupTimeline !== restore.targetTimeline
     restore.backupId = selected.id
     restore.backupAgeSec = Math.max(0, targetTime - selected.completedAt)
     restore.backupBytesRequired = selected.dataBytes
     restore.walBytesRequired = Math.max(0, targetLsn - selected.startLsn)
-    restore.walBytesAvailable = Math.min(
-      restore.walBytesRequired,
-      Math.max(0, dr.archive.archivedThroughLsn - selected.startLsn),
-    )
+    if (ha.timeline.current > 2) {
+      return failRestore(
+        'Timeline model limit: PGSimCity models one fork only (timeline 1 to timeline 2); restore decisions across later or multiple forks are absent',
+      )
+    }
+    if (restore.crossesTimelineFork) {
+      const isModeledFork = restore.backupTimeline === ha.timeline.parent
+        && restore.targetTimeline === ha.timeline.current
+        && ha.timeline.parent === 1
+        && ha.timeline.current === 2
+      if (!isModeledFork) {
+        return failRestore(
+          'Timeline model limit: the selected restore would require a timeline tree beyond the one modeled timeline-1-to-timeline-2 fork',
+        )
+      }
+      restore.historyFileName = dr.archive.historyFileName
+      restore.parentReplayEndLsn = ha.timeline.forkLsn
+      if (restore.recoveryTargetTimeline === 'current') {
+        return failRestore(
+          `Timeline mismatch: recovery_target_timeline=current keeps backup ${selected.label} on timeline ${restore.backupTimeline}, but the selected target is on timeline ${restore.targetTimeline} after fork ${fmtLsn(ha.timeline.forkLsn)}; use latest to follow ${dr.archive.historyFileName}`,
+        )
+      }
+      if (!dr.archive.historyFileArchived) {
+        return failRestore(
+          `Timeline fault: recovery_target_timeline=latest requires ${dr.archive.historyFileName} to follow timeline ${restore.backupTimeline} at ${fmtLsn(ha.timeline.forkLsn)} into timeline ${restore.targetTimeline}, but that history file is not archived`,
+        )
+      }
+      restore.followedHistoryFile = true
+      const parentAvailableEnd = Math.min(
+        ha.timeline.forkLsn,
+        archivedThroughForTimeline(restore.backupTimeline),
+      )
+      const targetAvailableEnd = Math.min(
+        targetLsn,
+        archivedThroughForTimeline(restore.targetTimeline),
+      )
+      restore.walBytesAvailable = Math.min(
+        restore.walBytesRequired,
+        Math.max(0, parentAvailableEnd - selected.startLsn)
+          + Math.max(0, targetAvailableEnd - ha.timeline.forkLsn),
+      )
+    } else {
+      restore.walBytesAvailable = Math.min(
+        restore.walBytesRequired,
+        Math.max(0, archivedThroughForTimeline(restore.targetTimeline) - selected.startLsn),
+      )
+    }
     restore.estimatedDurationSec =
       restore.backupBytesRequired / backupFetchBytesPerSec()
       + restore.walBytesRequired / walRecoveryBytesPerSec()
     if (targetLsn <= 0) {
       return failRestore('PITR impossible: the selected target falls outside the modeled WAL history')
     }
-    if (targetLsn > dr.archive.archivedThroughLsn) {
-      restore.pendingWalFailureReason = archiveGapReason()
+    if (restore.walBytesAvailable < restore.walBytesRequired) {
+      const gapTimeline = restore.crossesTimelineFork
+        && dr.archive.parentArchivedThroughLsn < ha.timeline.forkLsn
+        ? restore.backupTimeline
+        : restore.targetTimeline
+      restore.pendingWalFailureReason = archiveGapReason(gapTimeline)
     }
 
     restore.status = 'fetching'
@@ -3291,7 +3400,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
           restore.backupBytesFetched + backupFetchBytesPerSec() * dt,
         )
         if (restore.backupBytesFetched >= restore.backupBytesRequired) {
-          restore.status = restore.walBytesRequired > 0 ? 'replaying' : 'complete'
+          if (restore.walBytesRequired > 0) restore.status = 'replaying'
+          else completeRestore()
         }
       }
       if (restore.status === 'replaying') {
@@ -3304,17 +3414,13 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         )
         if (restore.walBytesReplayed >= replayLimit) {
           if (restore.pendingWalFailureReason) failRestore(restore.pendingWalFailureReason)
-          else restore.status = 'complete'
+          else completeRestore()
         }
       }
       restore.progress =
         restore.estimatedDurationSec > 0
           ? Math.min(1, restore.elapsedSec / restore.estimatedDurationSec)
           : 1
-      if (restore.status === 'complete') {
-        restore.progress = 1
-        toast('recovery_target_time reached — replay stopped; promotion is a separate HA action', 'good', 6500)
-      }
     }
     tickRestoreDrill(dt)
   }
@@ -4737,6 +4843,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   }
 
   function resetActiveWalAt(lsn: number): void {
+    const parentArchiveTimeline = dr.archive.timeline
+    const parentArchivedThroughLsn = Math.max(dr.archive.archivedThroughLsn, lsn)
+    const parentArchivedThroughTime = Math.max(dr.archive.archivedThroughTime, state.t)
     wal.insertLsn = lsn
     wal.writeLsn = lsn
     wal.flushLsn = lsn
@@ -4756,7 +4865,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     for (let i = 0; i < N_WAL_SEG_SLOTS; i++) {
       const segment = segments[i]
       segment.id = base + i
-      segment.name = walSegName(segment.id, ha.timeline.current)
+      segment.name = walSegName(
+        segment.id,
+        segment.id < seg0 ? ha.timeline.parent : ha.timeline.current,
+      )
       segment.bytes = segment.id < seg0
         ? WAL_SEG
         : segment.id === seg0
@@ -4783,7 +4895,14 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     ckpt.redoLsn = lsn
     ckpt.completedRedoLsn = lsn
     rep.logicalSlotLsn = lsn
-    dr.archive.archivedThroughLsn = Math.min(dr.archive.archivedThroughLsn, lsn)
+    dr.archive.parentTimeline = parentArchiveTimeline
+    dr.archive.parentArchivedThroughLsn = parentArchivedThroughLsn
+    dr.archive.parentArchivedThroughTime = parentArchivedThroughTime
+    dr.archive.timeline = ha.timeline.current
+    dr.archive.archivedThroughLsn = lsn
+    dr.archive.archivedThroughTime = state.t
+    dr.archive.historyFileName = CLAIM_VALUES.timelineRecovery.historyFile
+    dr.archive.historyFileArchived = archiverOn() && K.walGArchiveCredentialsValid
 
     lagSampleHead = 0
     lagSampleCount = 1
@@ -5064,6 +5183,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     ha.timeline.parent = ha.timeline.current
     ha.timeline.current++
     ha.timeline.forkLsn = forkLsn
+    ha.timeline.forkedAt = state.t
     ha.timeline.oldHistoryEndLsn = oldEnd
     ha.timeline.newHistoryEndLsn = forkLsn
 
@@ -7525,6 +7645,15 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       case 'recoveryTargetAge':
         K.recoveryTargetAge = clamp(Math.round(K.recoveryTargetAge), 0, 300)
         break
+      case 'recoveryTargetTimeline':
+        toast(
+          K.recoveryTargetTimeline === 'latest'
+            ? 'recovery_target_timeline=latest — a restore may follow the archived .history file into timeline 2'
+            : 'recovery_target_timeline=current — recovery stays on the backup timeline and cannot reach a post-fork timeline-2 target',
+          K.recoveryTargetTimeline === 'latest' ? 'good' : 'warn',
+          6500,
+        )
+        break
       case 'restoreDrillFault':
         toast(
           K.restoreDrillFault === 'none'
@@ -7728,6 +7857,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     ha.timeline.current = 1
     ha.timeline.parent = 0
     ha.timeline.forkLsn = 0
+    ha.timeline.forkedAt = 0
     ha.timeline.oldHistoryEndLsn = INITIAL_WAL_LSN
     ha.timeline.newHistoryEndLsn = INITIAL_WAL_LSN
     ha.transition.kind = 'none'
@@ -7981,6 +8111,12 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     }
 
     dr.dataDirectoryBytes = dataDirectoryBytes()
+    dr.archive.timeline = 1
+    dr.archive.parentTimeline = 0
+    dr.archive.parentArchivedThroughLsn = 0
+    dr.archive.parentArchivedThroughTime = 0
+    dr.archive.historyFileName = ''
+    dr.archive.historyFileArchived = false
     dr.archive.queueSegments = 0
     dr.archive.archivedThroughLsn = seg0 * WAL_SEG
     dr.archive.archivedThroughTime = 0

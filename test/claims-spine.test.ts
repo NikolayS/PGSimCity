@@ -25,6 +25,7 @@ import { MODEL_LATENCY_VITAL_LABEL, emitLoose } from '../src/ui/hud'
 import { createInspector } from '../src/ui/panel'
 import type { UiContext } from '../src/ui/uikit'
 import { VACUUM_RECLAIM_PLATE_LINES } from '../src/world/maintenance'
+import { TIMELINE_RECOVERY_PLATE_LABEL } from '../src/world/continuity'
 import { SHARED_BUFFER_SAMPLE_PLATE_LABEL } from '../src/world/shmem'
 import { WAL_SEGMENT_PLATE_LABEL, WAL_SEGMENT_SIZE_PLATE_LABEL } from '../src/world/wal'
 import { installTestDom } from './dom'
@@ -68,7 +69,7 @@ function lineOf(text: string, index: number): number {
 }
 
 describe('claims and conventions spine', () => {
-  it('owns exactly the nineteen drift-prone contracts across both passes', () => {
+  it('owns exactly the twenty drift-prone contracts across both passes', () => {
     expect(Object.keys(CLAIMS)).toEqual([
       'appVersion',
       'walSegment',
@@ -80,6 +81,7 @@ describe('claims and conventions spine', () => {
       'modelLatency',
       'workMem',
       'restoreDrill',
+      'timelineRecovery',
       'vacuumReclaim',
       'cityComponentRoute',
       'componentNaming',
@@ -370,6 +372,75 @@ describe('claims and conventions spine', () => {
       const limits = evidence?.querySelector<HTMLElement>('.pgc-drill__limits')
       expect(proof?.dataset.disclosure).toBeUndefined()
       expect(limits?.dataset.disclosure).toBe('restore-drill-limits')
+    } finally {
+      inspector.dispose()
+    }
+  })
+
+  it('keeps one-fork timeline recovery explicit across model, controls, world, and prose', () => {
+    const timeline = CLAIM_VALUES.timelineRecovery
+    expect(timeline.modeledForkDepth).toBe(1)
+    expect(timeline.absent).toEqual([
+      'numeric timeline targets',
+      'multiple-fork trees',
+      'timeline-history parsing',
+      'wider recovery_target_* interactions',
+    ])
+    const sim = createSim(createBus())
+    agrees(
+      'timelineRecovery',
+      'model:recovery_target_timeline default',
+      sim.state.knobs.recoveryTargetTimeline,
+      timeline.defaultTarget,
+    )
+    agrees(
+      'timelineRecovery',
+      'world:timeline switchyard plate',
+      TIMELINE_RECOVERY_PLATE_LABEL,
+      timeline.plate,
+    )
+
+    const control = KNOB_META.find((knob) => knob.key === 'recoveryTargetTimeline')
+    expect(control?.options?.map((option) => option.value)).toEqual(['latest', 'current'])
+    expect(control?.hint).toContain(timeline.historyFile)
+
+    for (const id of ['timeline.yard', 'recovery.ground', 'recovery.clock']) {
+      const copy = storageDocCopy(id)
+      expect(copy, `${id} omits pre-fork backup usability`).toContain(
+        timeline.crossingDisclosure,
+      )
+      expect(copy, `${id} omits one-fork coverage`).toContain(timeline.coverageDisclosure)
+    }
+
+    installTestDom()
+    const mount = document.createElement('div')
+    mount.id = 'hud-right'
+    document.body.append(mount)
+    const bus = createBus()
+    const ctx: UiContext = {
+      bus,
+      sim: createSim(bus),
+      registry: { get: () => undefined } as UiContext['registry'],
+      getFps: () => 60,
+      getQuality: () => ({
+        level: 'high',
+        pixelRatio: 1,
+        bloom: true,
+        shadows: true,
+        maxParticles: 1,
+        maxLabels: 1,
+        antialias: true,
+      }),
+      getFlowStats: () => ({ active: 0, dropped: 0 }),
+    }
+    const inspector = createInspector(ctx)
+    try {
+      bus.emit('select', { id: 'timeline.yard' })
+      const panel = document.querySelector(
+        '[data-disclosure="one-fork-timeline-recovery-scope"]',
+      )
+      expect(panel).not.toBeNull()
+      expect(panel?.querySelector('[data-correction-path="true"]')).not.toBeNull()
     } finally {
       inspector.dispose()
     }

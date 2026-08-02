@@ -83,6 +83,7 @@ export type HaPartition =
   | 'isolate_dcs_majority'
   | 'split_dcs'
 export type RestoreDrillFault = 'none' | 'empty_other_table' | 'corrupt_object'
+export type RecoveryTargetTimeline = 'latest' | 'current'
 
 export interface Knobs {
   /** Target transactions/sec offered by clients. */
@@ -142,6 +143,8 @@ export interface Knobs {
   backupRetention: number
   /** Seconds before now selected by the recovery_target_time control. */
   recoveryTargetAge: number
+  /** Timeline history PostgreSQL may follow while recovering to the target. */
+  recoveryTargetTimeline: RecoveryTargetTimeline
   /** Explicit evidence fault injected into the next modeled retained backup. */
   restoreDrillFault: RestoreDrillFault
   /** Which network topology separates Patroni agents and etcd members. */
@@ -202,6 +205,7 @@ export const DEFAULT_KNOBS: Knobs = {
   walGDownloadConcurrency: 10,
   backupRetention: 3,
   recoveryTargetAge: 20,
+  recoveryTargetTimeline: CLAIM_VALUES.timelineRecovery.defaultTarget,
   restoreDrillFault: 'none',
   haPartition: 'healthy',
   walLogHints: true,
@@ -680,6 +684,8 @@ export interface TimelineForkState {
   current: number
   parent: number
   forkLsn: number
+  /** Simulated time at which the one modeled promotion created the fork. */
+  forkedAt: number
   /** Last durable byte on the former primary's now-divergent history. */
   oldHistoryEndLsn: number
   /** Last byte generated on the promoted node's history. */
@@ -831,6 +837,14 @@ export interface PointInTimeRestore {
   progress: number
   targetTime: number
   targetLsn: number
+  recoveryTargetTimeline: RecoveryTargetTimeline
+  backupTimeline: number
+  targetTimeline: number
+  crossesTimelineFork: boolean
+  historyFileName: string
+  followedHistoryFile: boolean
+  /** Parent-timeline replay is capped here; its divergent tail is excluded. */
+  parentReplayEndLsn: number
   backupId: number
   backupAgeSec: number
   backupBytesRequired: number
@@ -842,6 +856,8 @@ export interface PointInTimeRestore {
   estimatedDurationSec: number
   elapsedSec: number
   failureReason: string
+  /** Exact successful outcome retained after a PITR or drill finishes. */
+  resultMessage: string
   /** Missing-WAL result discovered after backup fetch and available replay. */
   pendingWalFailureReason: string
   /** This PITR operation stops at the target; promotion is a separate HA action. */
@@ -890,6 +906,15 @@ export interface RestoreDrill {
 }
 
 export interface ArchiveRecoveryState {
+  /** Timeline whose live frontier the unqualified fields below describe. */
+  timeline: number
+  /** The one modeled parent timeline, or zero before promotion. */
+  parentTimeline: number
+  /** Retained parent WAL may extend beyond the fork, but restore caps it there. */
+  parentArchivedThroughLsn: number
+  parentArchivedThroughTime: number
+  historyFileName: string
+  historyFileArchived: boolean
   queueSegments: number
   archivedThroughLsn: number
   archivedThroughTime: number

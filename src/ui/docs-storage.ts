@@ -433,6 +433,10 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         body: 'The old primary stopped before this standby was promoted, so only one history is accepting writes. Promotion made timeline 2 at the selected standby’s durable LSN. The former primary needs `pg_rewind` because it has a tail on timeline 1. Any other follower that already replayed past the fork cannot silently move backward either: PostgreSQL rejects timeline 2 because it does not contain that data directory’s minimum recovery point, so Patroni must rewind or reinitialise that follower too. The PostgreSQL manual’s failover and timeline sections describe the branch; the recovery code enforces the minimum recovery point.',
       },
       {
+        heading: 'Restore follows history; it never merges it',
+        body: `${CLAIM_VALUES.timelineRecovery.crossingDisclosure} ${CLAIM_VALUES.timelineRecovery.defaultDisclosure} ${CLAIM_VALUES.timelineRecovery.coverageDisclosure}`,
+      },
+      {
         heading: 'A concurrent fork is split-brain',
         body: 'True split-brain is different: the old primary and the promoted node both keep accepting writes after the same divergence point. Loss is then every transaction committed on whichever side a human rejects, for the full duration of the split—possibly hours—not only the last replication gap. The histories cannot be merged. A human must choose the authoritative history and extract anything salvageable from the loser by hand. Running `pg_rewind` on that loser is destructive rather than merely corrective: it discards work clients were told had committed while both histories were live.',
       },
@@ -483,11 +487,17 @@ export const DOCS_STORAGE: ComponentDoc[] = [
           ? fmtLsn(s.highAvailability.timeline.newHistoryEndLsn)
           : 'not forked',
       },
+      {
+        label: 'History file',
+        get: (s) => s.disasterRecovery.archive.historyFileName
+          ? `${s.disasterRecovery.archive.historyFileName} · ${s.disasterRecovery.archive.historyFileArchived ? 'archived' : 'missing from archive'}`
+          : 'not created',
+      },
     ],
     see: ['ha.dcs', 'ha.rejoin', 'object.store'],
     refs: {
       docs: [
-        manual('continuous-archiving.html', '25.3.5 Timelines'),
+        manual('continuous-archiving.html#BACKUP-TIMELINES', '25.3.6 Timelines'),
         manual('app-pgrewind.html', 'pg_rewind'),
         { label: 'Patroni watchdog support — split-brain fencing', url: 'https://patroni.readthedocs.io/en/latest/watchdog.html' },
         { label: 'Patroni FAQ — leader lock, ttl, loop_wait and retry_timeout', url: 'https://patroni.readthedocs.io/en/latest/faq.html' },
@@ -690,6 +700,12 @@ export const DOCS_STORAGE: ComponentDoc[] = [
           : s.disasterRecovery.backup.status,
       },
       { label: 'Logical bytes', get: (s) => fmtBytes(s.disasterRecovery.backup.dataBytes) },
+      {
+        label: 'Newest backup timeline',
+        get: (s) => s.disasterRecovery.backups.length > 0
+          ? String(s.disasterRecovery.backups[s.disasterRecovery.backups.length - 1].startTimeline)
+          : 'no retained backup',
+      },
       { label: 'Estimated copy', get: (s) => fmtDuration(s.disasterRecovery.backup.estimatedDurationSec) },
     ],
     knobs: ['backupRetention'],
@@ -722,6 +738,10 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       {
         heading: 'Why backup age becomes recovery time',
         body: 'Fetching the full backup costs roughly the same for two restores of the same data directory. The variable part is WAL from that backup’s start LSN through the target: it includes WAL generated while the files were copied because that WAL is required to make the backup consistent. An older backup generally means more objects to fetch and more bytes for PostgreSQL’s startup process to replay.',
+      },
+      {
+        heading: 'Crossing the one modeled fork',
+        body: `${CLAIM_VALUES.timelineRecovery.crossingDisclosure} A missing history file or recovery_target_timeline=current produces a timeline-named FAIL before a healthy archive is blamed. ${CLAIM_VALUES.timelineRecovery.coverageDisclosure}`,
       },
       {
         heading: 'Three drills, three claims',
@@ -770,9 +790,17 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       { label: 'Backup age', get: (s) => fmtDuration(s.disasterRecovery.drill.backupAgeSec) },
       { label: 'WAL to replay', get: (s) => fmtBytes(s.disasterRecovery.drill.walBytesRequired) },
+      {
+        label: 'Timeline path',
+        get: (s) => s.disasterRecovery.restore.crossesTimelineFork
+          ? `${s.disasterRecovery.restore.backupTimeline} → ${s.disasterRecovery.restore.targetTimeline} via ${s.disasterRecovery.restore.historyFileName}`
+          : s.disasterRecovery.restore.targetTimeline > 0
+            ? `timeline ${s.disasterRecovery.restore.targetTimeline} · no fork crossed`
+            : 'not selected',
+      },
       { label: 'Object reads', get: (s) => fmtBytes(s.disasterRecovery.drill.objectStoreBytesRead) },
     ],
-    knobs: ['recoveryTargetAge', 'walGDownloadConcurrency', 'restoreDrillFault'],
+    knobs: ['recoveryTargetAge', 'recoveryTargetTimeline', 'walGDownloadConcurrency', 'restoreDrillFault'],
     actions: ['start-restore-drill'],
     see: ['backup.vault', 'recovery.clock', 'restore.winch', 'recovery.replay'],
     refs: {
@@ -793,7 +821,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     id: 'recovery.clock',
     title: 'recovery_target_time',
     subtitle: 'the selected stop point for PITR',
-    tldr: 'Choose history still covered by a retained backup and an unbroken archived WAL chain.',
+    tldr: 'Choose history still covered by a retained backup, the requested timeline, and an unbroken archived WAL chain.',
     sections: [
       {
         heading: 'Choosing the point',
@@ -804,17 +832,28 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         body: 'A target before the oldest retained full backup has two modeled causes. If older backups expired, a larger future `wal-g delete retain FULL` count can preserve a wider window; if no backup was ever taken early enough, changing retention cannot create that missing history. A target newer than the archive frontier also has two causes. With a healthy empty queue and valid credentials, it is inside the current unarchived 16 MiB segment: that normal tail is the archive-only RPO floor, and `archive_timeout` shortens it at the cost of padded segments. Invalid credentials or a disabled archive-recovery chain are actual archive faults that need repair and `.ready`-queue drainage. A streaming replica fixes neither case.',
       },
       {
+        heading: 'Choosing the history',
+        body: `${CLAIM_VALUES.timelineRecovery.defaultDisclosure} ${CLAIM_VALUES.timelineRecovery.crossingDisclosure} ${CLAIM_VALUES.timelineRecovery.coverageDisclosure}`,
+      },
+      {
         heading: 'Where this restore stops',
         body: 'When replay reaches the target, the belt stops. PostgreSQL could pause, shut down, or promote according to recovery settings and operator procedure, but promotion would fork a timeline and is a separate HA action. The city records `promoted = false` for this restore and does not move the service endpoint.',
       },
     ],
     metrics: [
       { label: 'Target', get: (s) => `${s.knobs.recoveryTargetAge}s ago` },
+      { label: 'Timeline setting', get: (s) => `recovery_target_timeline=${s.knobs.recoveryTargetTimeline}` },
       { label: 'Selected backup age', get: (s) => fmtDuration(s.disasterRecovery.restore.backupAgeSec) },
+      {
+        label: 'Timeline result',
+        get: (s) => s.disasterRecovery.restore.targetTimeline > 0
+          ? `backup ${s.disasterRecovery.restore.backupTimeline} → target ${s.disasterRecovery.restore.targetTimeline}`
+          : 'not selected',
+      },
       { label: 'Progress', get: (s) => fmtPct(s.disasterRecovery.restore.progress) },
-      { label: 'Result', get: (s) => s.disasterRecovery.restore.failureReason || s.disasterRecovery.restore.status },
+      { label: 'Result', get: (s) => s.disasterRecovery.restore.failureReason || s.disasterRecovery.restore.resultMessage || s.disasterRecovery.restore.status },
     ],
-    knobs: ['recoveryTargetAge'],
+    knobs: ['recoveryTargetAge', 'recoveryTargetTimeline'],
     actions: ['start-pitr'],
     see: ['backup.vault', 'object.store', 'recovery.ground', 'recovery.replay'],
     refs: {

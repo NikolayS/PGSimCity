@@ -614,9 +614,10 @@ export function createInspector(ctx: UiContext): UiModule {
         setText(result, `${resultMeta.label} · FAIL — ${drill.failureReason}`)
         setText(proof, `Proved by this result: the ${resultMeta.label} recovery claim is not currently met.`)
       } else if (drill.status === 'passed') {
+        const timelineResult = ctx.sim.state.disasterRecovery.restore.resultMessage
         setText(
           result,
-          `${resultMeta.label} · PASS — Restore-to-target ${fmtDuration(drill.measuredRestoreToTargetSec)} measured · total drill ${fmtDuration(drill.elapsedSec)}`,
+          `${resultMeta.label} · PASS — Restore-to-target ${fmtDuration(drill.measuredRestoreToTargetSec)} measured · total drill ${fmtDuration(drill.elapsedSec)}${timelineResult ? ` · ${timelineResult}` : ''}`,
         )
         setText(proof, `Proved: ${resultMeta.supports}`)
       } else if (active) {
@@ -724,6 +725,9 @@ export function createInspector(ctx: UiContext): UiModule {
       data: { correctionSubject: 'city-inspector' },
     })
     if (id === 'backend.localmem') wrap.dataset.disclosure = 'work-mem-model-scope'
+    if (id === 'timeline.yard' || id === 'recovery.ground' || id === 'recovery.clock') {
+      wrap.dataset.disclosure = 'one-fork-timeline-recovery-scope'
+    }
 
     /* metrics first — the numbers are the reason this feels alive */
     const metrics = info?.metrics ?? []

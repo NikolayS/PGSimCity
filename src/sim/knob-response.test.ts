@@ -536,6 +536,29 @@ const RESPONSE_CONTRACTS = {
       return sim.startPointInTimeRestore()
     },
   },
+  recoveryTargetTimeline: {
+    target: 'current',
+    measure(value: Knobs['recoveryTargetTimeline']) {
+      const sim = createSim(createBus(), { scheduledBackups: false })
+      setWorkload(sim)
+      takeBackup(sim)
+      if (!sim.startFailover('standbyA')) throw new Error('failover did not start')
+      advanceUntil(sim, () => sim.state.highAvailability.transition.status === 'complete')
+      const frontier = sim.state.disasterRecovery.archive.archivedThroughLsn
+      advanceUntil(
+        sim,
+        () => sim.state.disasterRecovery.archive.archivedThroughLsn > frontier,
+      )
+      advanceUntil(
+        sim,
+        () => sim.state.disasterRecovery.archive.archivedThroughTime >= sim.state.t - 2,
+      )
+      sim.setKnob('recoveryTargetTimeline', value)
+      return sim.startPointInTimeRestore(2)
+        ? sim.state.disasterRecovery.restore.status
+        : sim.state.disasterRecovery.restore.failureReason
+    },
+  },
   restoreDrillFault: {
     target: 'corrupt_object',
     measure(value: Knobs['restoreDrillFault']) {
