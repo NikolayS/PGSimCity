@@ -705,7 +705,7 @@ describe('knob-response contract', () => {
       expect(after, `${key} did not change its declared model output`).not.toEqual(before)
     }
   // This deliberately evaluates every knob twice; only the declared outputs are contractual.
-  }, 0)
+  }, 60_000)
 
   it('enforces every declared shared_buffers response', () => {
     const base = snapshots.get('sharedBuffers:base')!

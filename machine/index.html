@@ -226,7 +226,7 @@ EACH SUBMITTED STATEMENT EXECUTES ONCE; DISPLAYED ROWS COME FROM THAT EXECUTION.
             <span class="index-walk__number">02</span>
             <span class="index-walk__copy">
               <b>ASK THE CATALOGS</b>
-              <code>pg_class + pg_attribute + pg_index</code>
+              <code>pg_index + pg_get_indexdef</code>
               <small>Read the indexed path PostgreSQL says exists.</small>
             </span>
             <output data-index-walk-result="catalog">LOCKED</output>

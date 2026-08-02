@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   BOUNCE_PALETTE_KEYS,
   DAY_PALETTE,
+  NIGHT_PALETTE,
   clockAtmosphereAt,
   clockPaletteAt,
 } from '../core/themes'
@@ -12,10 +13,12 @@ import {
   gradeDaylightHex,
   gradeDaylightHexWithHeightFog,
   gradeDaylightHexWithScatter,
+  foggedNightHex,
   heightFogAmount,
   perceptualColorDistance,
 } from './color-grade'
 import { LIGHT_SHAFT_COLOR, LIGHT_SHAFT_PRESETS } from './light-shafts'
+import { FIDELITY_PRESETS } from './renderer'
 
 const SEMANTIC = [
   'wal',
@@ -82,7 +85,7 @@ describe('golden-hour colour grade', () => {
           gradeDaylightHexWithHeightFog(
             DAY_PALETTE[key],
             DAY_PALETTE.fog,
-            HEIGHT_FOG_MAX * 0.82,
+            HEIGHT_FOG_MAX * FIDELITY_PRESETS.ultra.aerialPerspective,
           ),
         ] as const,
     )
@@ -125,6 +128,25 @@ describe('height-sensitive aerial perspective', () => {
 })
 
 describe('local-clock colour separation', () => {
+  for (const [level, fidelity] of Object.entries(FIDELITY_PRESETS)) {
+    it(`keeps night semantic colours above their floor through ${level} height haze`, () => {
+      const colors = SEMANTIC.map((key) =>
+        foggedNightHex(
+          NIGHT_PALETTE[key],
+          NIGHT_PALETTE.fog,
+          HEIGHT_FOG_MAX * fidelity.aerialPerspective,
+        ),
+      )
+
+      for (let i = 0; i < colors.length; i++) {
+        for (let j = i + 1; j < colors.length; j++) {
+          const distance = perceptualColorDistance(colors[i], colors[j])
+          expect(distance, `${SEMANTIC[i]} vs ${SEMANTIC[j]}`).toBeGreaterThanOrEqual(0.038)
+        }
+      }
+    })
+  }
+
   it('keeps all ten semantic colours distinct across the complete sun path', () => {
     for (let minutes = 0; minutes < 1440; minutes += 10) {
       const palette = clockPaletteAt(minutes)

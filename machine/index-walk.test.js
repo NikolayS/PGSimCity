@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
+import { parseExplainJson } from '../src/observability/real-postgres.ts'
+import { createPgliteSource } from '../src/observability/real-postgres-runtime.ts'
+
 import {
   INDEX_WALK_CLAIM,
   INDEX_WALK_STEPS,
@@ -54,11 +57,71 @@ describe('Machine first index walk', () => {
       'unindexed',
     ])
     expect(INDEX_WALK_STEPS[1].sql).toContain('pg_catalog.pg_class')
-    expect(INDEX_WALK_STEPS[1].sql).toContain('pg_catalog.pg_attribute')
     expect(INDEX_WALK_STEPS[1].sql).toContain('pg_catalog.pg_index')
     expect(INDEX_WALK_STEPS[2].sql).toMatch(/WHERE id = 42/)
     expect(INDEX_WALK_STEPS[3].sql).toMatch(/WHERE owner = 'account-42'/)
   })
+
+  it('reports valid index elements in index order with key roles and expressions intact', () => {
+    const sql = INDEX_WALK_STEPS[1].sql
+
+    expect(sql).toMatch(
+      /CROSS JOIN LATERAL\s+unnest\(i\.indkey\)\s+WITH ORDINALITY AS k\(attnum, position\)/,
+    )
+    expect(sql).toMatch(/k\.position <= i\.indnkeyatts THEN 'key'/)
+    expect(sql).toMatch(/ELSE 'include'/)
+    expect(sql).toMatch(/pg_catalog\.pg_get_indexdef\(i\.indexrelid, k\.position::integer, true\)/)
+    expect(sql).toMatch(/AND i\.indisvalid/)
+    expect(sql).toMatch(/ORDER BY c\.relname, k\.position/)
+    expect(sql).not.toMatch(/ORDER BY c\.relname, a\.attnum/)
+  })
+
+  it('shows composite order, INCLUDE payloads, and expressions in seeded PostgreSQL', async () => {
+    const source = await createPgliteSource(parseExplainJson)
+    try {
+      const catalog = await source.query(INDEX_WALK_STEPS[1].sql)
+
+      expect(catalog.error).toBeNull()
+      expect(catalog.results.at(-1)?.rows).toEqual([
+        {
+          index_name: 'accounts_balance_updated_cover_idx',
+          position: 1,
+          column_role: 'key',
+          index_element: 'balance',
+        },
+        {
+          index_name: 'accounts_balance_updated_cover_idx',
+          position: 2,
+          column_role: 'key',
+          index_element: 'updated_at',
+        },
+        {
+          index_name: 'accounts_balance_updated_cover_idx',
+          position: 3,
+          column_role: 'include',
+          index_element: 'owner',
+        },
+        {
+          index_name: 'accounts_lower_owner_idx',
+          position: 1,
+          column_role: 'key',
+          index_element: 'lower(owner)',
+        },
+        {
+          index_name: 'accounts_pkey',
+          position: 1,
+          column_role: 'key',
+          index_element: 'id',
+        },
+      ])
+
+      const unindexed = await source.query(INDEX_WALK_STEPS[3].sql)
+      expect(unindexed.error).toBeNull()
+      expect(unindexed.plan?.root.nodeType).toBe('Seq Scan')
+    } finally {
+      await source.close()
+    }
+  }, 30_000)
 
   it('recognizes a reader-owned SELECT 1 as the first measured step', () => {
     const first = report({ sql: '  SELECT 1; ', nodeType: 'Result', rows: [{ '?column?': 1 }] })
@@ -80,7 +143,12 @@ describe('Machine first index walk', () => {
     const catalog = report({
       sql: INDEX_WALK_STEPS[1].sql,
       nodeType: 'Nested Loop',
-      rows: [{ index_name: 'accounts_pkey', indexed_column: 'id' }],
+      rows: [{
+        index_name: 'accounts_pkey',
+        position: 1,
+        column_role: 'key',
+        index_element: 'id',
+      }],
       hits: 18,
     })
     const indexed = report({
@@ -96,7 +164,7 @@ describe('Machine first index walk', () => {
     })
 
     expect(createIndexWalkEvidence('catalog', catalog).summary)
-      .toBe('accounts_pkey · column id · 1 catalog row')
+      .toBe('accounts_pkey · key 1: id · 1 catalog row')
     expect(createIndexWalkEvidence('indexed', indexed).summary)
       .toBe('Index Scan · accounts_pkey · 1 row · hit 3 / read 0')
     expect(createIndexWalkEvidence('unindexed', unindexed).summary)
@@ -113,7 +181,12 @@ describe('Machine first index walk', () => {
       createIndexWalkEvidence('catalog', report({
         sql: INDEX_WALK_STEPS[1].sql,
         nodeType: 'Nested Loop',
-        rows: [{ index_name: 'accounts_pkey', indexed_column: 'id' }],
+        rows: [{
+          index_name: 'accounts_pkey',
+          position: 1,
+          column_role: 'key',
+          index_element: 'id',
+        }],
       })),
       createIndexWalkEvidence('indexed', report({
         sql: INDEX_WALK_STEPS[2].sql,

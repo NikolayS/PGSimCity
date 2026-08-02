@@ -164,6 +164,13 @@ describe('machine room portrait layout', () => {
     expect(walk).toMatch(/max-height:\s*48dvh/)
   })
 
+  it('keeps START HERE readable and thumb-sized on a phone', () => {
+    const startHere = blockAfter(portrait, '#index-walk-open')
+
+    expect(startHere).toMatch(/min-(?:block-size|height):\s*44px/)
+    expect(startHere).toMatch(/font-size:\s*11px/)
+  })
+
   it('keeps every marked honesty disclosure visible and legible at 390px', async () => {
     const reports = await measureDisclosurePages([{
       name: 'Machine',

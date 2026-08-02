@@ -255,6 +255,18 @@ export function gradeDaylightHexWithHeightFog(hex: number, fogHex: number, amoun
   return linearToHex(neutralToneMap(gradeLinear(hazed, 0)))
 }
 
+/** Semantic palette readout after the linear height-haze blend used at night. */
+export function foggedNightHex(hex: number, fogHex: number, amount: number): number {
+  const base = hexToLinear(hex)
+  const fog = hexToLinear(fogHex)
+  const t = clamp01(amount)
+  return linearToHex([
+    base[0] + (fog[0] - base[0]) * t,
+    base[1] + (fog[1] - base[1]) * t,
+    base[2] + (fog[2] - base[2]) * t,
+  ])
+}
+
 /** Palette readout through the same output path with the grade disabled. */
 export function ungradedDaylightHex(hex: number): number {
   return linearToHex(neutralToneMap(hexToLinear(hex)))

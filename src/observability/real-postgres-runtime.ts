@@ -18,6 +18,9 @@ CREATE TABLE accounts (
   balance numeric(12, 2) NOT NULL,
   updated_at timestamptz NOT NULL
 );
+CREATE INDEX accounts_balance_updated_cover_idx
+  ON accounts(balance, updated_at) INCLUDE (owner);
+CREATE INDEX accounts_lower_owner_idx ON accounts((lower(owner)));
 
 CREATE TABLE orders (
   id integer PRIMARY KEY,

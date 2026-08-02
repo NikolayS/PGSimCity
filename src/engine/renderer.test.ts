@@ -36,8 +36,7 @@ describe('quality degradation ladder', () => {
 
 describe('rendering fidelity ladder', () => {
   it('grounds daylight more strongly while keeping night AO subordinate to neon', () => {
-    expect(AO_BLEND_INTENSITY.day).toBeGreaterThan(AO_BLEND_INTENSITY.night)
-    expect(AO_BLEND_INTENSITY.day).toBeLessThanOrEqual(1)
+    expect(AO_BLEND_INTENSITY.day).toBe(0.9)
     expect(AO_BLEND_INTENSITY.night).toBeLessThan(0.5)
   })
 

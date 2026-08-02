@@ -1292,6 +1292,12 @@ button:focus-visible {
     font-size: 7px;
   }
 
+  #index-walk-open {
+    min-height: 44px;
+    padding-inline: 8px;
+    font-size: 11px;
+  }
+
   .machine-legal p {
     width: min(350px, calc(100vw - 16px));
   }
