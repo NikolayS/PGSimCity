@@ -1,6 +1,7 @@
 import '../styles/walk-up.css'
 
 import type { WalkController } from '../engine/walk'
+import type { HandAction } from '../engine/hands'
 import { el, setText } from './uikit'
 import type { UiModule } from './uikit'
 
@@ -25,6 +26,9 @@ export interface WalkUpInteractionSite {
   approachRadius?: number
   /** CSS colour used by the prompt, for example `var(--c-vacuum)`. */
   accent?: string
+  /** Viewmodel cue; the target stays below the teaching-safe screen centre. */
+  handAction?: HandAction
+  handTarget?: readonly [number, number, number]
   state(): WalkUpState
   action(state: WalkUpState): string
   ariaLabel(state: WalkUpState): string
@@ -36,6 +40,7 @@ export interface WalkUpInteractionOptions {
   sites: readonly WalkUpInteractionSite[]
   keyCode?: string
   keyLabel?: string
+  onOperate?(site: WalkUpInteractionSite): void
 }
 
 /** Kept beyond arm's reach because solid cabinets stop the walker's capsule. */
@@ -132,7 +137,9 @@ export function createWalkUpInteraction(opts: WalkUpInteractionOptions): UiModul
 
   function operate(): void {
     if (active < 0 || !actionable || !walk.enabled) return
-    sites[active].operate()
+    const site = sites[active]
+    opts.onOperate?.(site)
+    site.operate()
     paintState()
   }
 

@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { createBus } from '../core/bus'
 import type { TraceRecord } from '../core/types'
@@ -120,7 +120,8 @@ describe('control-center room hand-off', () => {
         this.openness = value
       },
     }
-    const control = createControlCenter({ ctx, walk, flows, canvas, door })
+    const hands = { perform: vi.fn() }
+    const control = createControlCenter({ ctx, walk, flows, canvas, door, hands })
     const outside = position.clone()
 
     control.update(0)
@@ -128,6 +129,8 @@ describe('control-center room hand-off', () => {
     expect(enter).not.toBeNull()
     expect(enter.textContent).toContain('OPEN')
     enter.click()
+    expect(hands.perform).toHaveBeenCalledTimes(1)
+    expect(hands.perform).toHaveBeenCalledWith('door', 0, 1.8, -206)
     expect(control.inside).toBe(false)
     expect(enter.disabled).toBe(true)
     expect(enter.textContent).toContain('OPENING')
@@ -143,6 +146,7 @@ describe('control-center room hand-off', () => {
     expect(door.openness).toBe(1)
 
     enter.click()
+    expect(hands.perform).toHaveBeenCalledTimes(1)
     expect(control.inside).toBe(true)
     expect(dimmed).toEqual([true])
     control.update(0.9)

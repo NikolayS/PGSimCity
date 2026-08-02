@@ -4,6 +4,7 @@ import type { TraceStop } from '../core/types'
 import { createCorrectionPath, displayedClaim } from '../core/corrections'
 import { fmtBytes } from '../core/util'
 import type { FlowsApi } from '../engine/flows'
+import type { ViewmodelHandsApi } from '../engine/hands'
 import type { WalkController, WalkPose } from '../engine/walk'
 import { traceStopBit } from '../core/model-helpers'
 import {
@@ -33,6 +34,7 @@ export interface ControlCenterOptions {
   door: {
     setOpenness(value: number): void
   }
+  hands?: Pick<ViewmodelHandsApi, 'perform'>
   /** Test override; production reads prefers-reduced-motion once at creation. */
   reducedMotion?: boolean
 }
@@ -463,6 +465,12 @@ export function createControlCenter(options: ControlCenterOptions): ControlCente
 
   function openDoor(): void {
     if (doorState === 'open' || doorState === 'opening') return
+    options.hands?.perform(
+      'door',
+      ANCHOR.postmasterDoor[0],
+      ANCHOR.postmasterDoor[1],
+      ANCHOR.postmasterDoor[2],
+    )
     if (reducedMotion) {
       doorState = 'open'
       doorOpenness = 1

@@ -45,6 +45,8 @@ export function createWorldHandleSites(
       approach: 'Approach the lever',
       approachRadius: WALK_UP_APPROACH_RADIUS,
       accent: 'var(--c-vacuum)',
+      handAction: 'lever',
+      handTarget: handle.handTarget,
       state: () => stateLabel(ctx),
       action: actionLabel,
       ariaLabel,
