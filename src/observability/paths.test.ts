@@ -160,6 +160,12 @@ describe('diagnostic path contracts', () => {
       io: 1,
       commit: 0,
     })
+
+    const commitStep = ALL_STEPS.find((step) => step.id === 'commit.1')
+    const localWalSync = commitStep?.branches.find((branch) => branch.next === 'v.sync_local')
+    const noWait = commitStep?.branches.find((branch) => branch.next === 'v.commit_ok')
+    expect(localWalSync?.test(sim.state, collector)).toBe(true)
+    expect(noWait?.test(sim.state, collector)).toBe(false)
   })
 
   it('keeps every staged path connected to its intended verdict', () => {

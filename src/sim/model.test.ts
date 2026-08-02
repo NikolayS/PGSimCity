@@ -6,6 +6,7 @@ import {
   SHARED_BUFFERS_MIN_MIB,
 } from '../core/types'
 import { createSim } from './model'
+import type { PageWriteObservation } from './model'
 import {
   AGGREGATE_TEST_STEP,
   createAggregateSim,
@@ -108,9 +109,49 @@ describe('buffer cache', () => {
 
     expect(sim.state.buffers.dirtyEvictions).toBeGreaterThan(0)
   })
+
+  it('keeps a dirty victim mapped until its backend write completes', () => {
+    let backendWrites = 0
+    let unmappedWrites = 0
+    const sim = createSim(createBus(), {
+      scheduledBackups: false,
+      pageWriteObserver: (write) => {
+        if (write.path !== 'backend' || !write.afterWalWait) return
+        backendWrites++
+        if (!write.tagMapped) unmappedWrites++
+      },
+    })
+    sim.runScenario('no-bgwriter')
+    sim.setKnob('synchronousCommit', 'off')
+
+    advanceTo(sim, 120, FRAME_TEST_STEP)
+
+    expect(backendWrites).toBeGreaterThan(0)
+    expect(unmappedWrites).toBe(0)
+  })
 })
 
 describe('WAL workload response', () => {
+  it('never writes a page before WAL covers its content on any writer path', { timeout: 15_000 }, () => {
+    const paths = new Set<PageWriteObservation['path']>()
+    const violations: PageWriteObservation[] = []
+    const sim = createSim(createBus(), {
+      scheduledBackups: false,
+      pageWriteObserver: (write) => {
+        paths.add(write.path)
+        if (write.pageLsnOwners !== 0 || write.pageLsn > write.flushLsn) {
+          violations.push({ ...write })
+        }
+      },
+    })
+    sim.runScenario('checkpoint-storm')
+
+    advanceTo(sim, 180, FRAME_TEST_STEP)
+
+    expect.soft([...paths].sort()).toEqual(['backend', 'bgwriter', 'checkpointer'])
+    expect(violations).toEqual([])
+  })
+
   function measuredWalRate(tps: number): number {
     const sim = createAggregateSim()
     sim.setKnob('tps', tps)
