@@ -377,7 +377,7 @@ export const CATALOG: CatalogEntry[] = [
     docs: 'https://www.postgresql.org/docs/current/pgstatstatements.html',
     coverage: 'absent',
     coverageNote:
-      'The model has no per-statement history, and this page will not fake one. That absence is instructive: pg_stat_statements is not installed by default either, and on a server without it every "which query got slow" investigation degrades into sampling pg_stat_activity and hoping you catch the query in the act.',
+      'The city retains aggregate rolling p50/p99 model-time trips, not per-normalised-statement history, so this result stays absent. PostgreSQL’s pg_stat_statements exposes mean_exec_time and stddev_exec_time but no percentiles. Production p50/p99 needs request tracing or a metrics histogram; the pg_stat_monitor extension can retain a response-time histogram inside PostgreSQL.',
     version:
       'total_time became total_exec_time in 13 when planning time was split out. The blk timing columns were renamed with a shared_/local_/temp_ prefix in 17.',
   },

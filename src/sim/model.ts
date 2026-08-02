@@ -73,6 +73,7 @@ import type {
   FlowKind,
   FlowRequest,
   Knobs,
+  LatencyQuantile,
   PhysicalReplicationSlotState,
   PhysicalStandbyState,
   PlanNode,
@@ -309,6 +310,7 @@ const PAGE_OPS_PER_SEC = 60000
  */
 const IDX_BASE = 1 << 20
 const FLOW_BUDGET_PER_SEC = 420
+export const MODEL_LATENCY_WINDOW_TRIPS = CLAIM_VALUES.modelLatency.windowTrips
 const WAL_WRITER_DELAY = 0.2
 const BGW_DELAY = 0.2
 /** BgBufferSync's fixed horizon for scanning the whole pool while idle. */
@@ -386,6 +388,7 @@ const VACUUM_PAGES_PER_WORKER_SEC =
 
 interface Extra {
   txCount: number
+  latencyCount: number
   rowsPerStmt: number
   pagesLeft: number
   pagesTotal: number
@@ -399,6 +402,11 @@ interface Extra {
   seqScan: boolean
   scanBlk: number
   visitT: number
+  bufferReadWaitT: number
+  dirtyWriteWaitT: number
+  dirtyWriteDuringReadT: number
+  commitWaitT: number
+  lockWaitT: number
   idleT: number
   holdsLock: boolean
   ringPos: number
@@ -423,6 +431,7 @@ interface TraceRequest {
 function makeExtra(): Extra {
   return {
     txCount: 0,
+    latencyCount: 0,
     rowsPerStmt: 1,
     pagesLeft: 0,
     pagesTotal: 0,
@@ -436,6 +445,11 @@ function makeExtra(): Extra {
     seqScan: false,
     scanBlk: 0,
     visitT: 0,
+    bufferReadWaitT: 0,
+    dirtyWriteWaitT: 0,
+    dirtyWriteDuringReadT: 0,
+    commitWaitT: 0,
+    lockWaitT: 0,
     idleT: 0,
     holdsLock: false,
     ringPos: 0,
@@ -905,7 +919,19 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       cacheHitPct: 98,
       activeBackends: 0,
       runningBackends: 0,
-      history: { tps: [], hit: [], wal: [], dirty: [], lag: [] },
+      latency: {
+        observations: 0,
+        transactions: 0,
+        p50: {
+          totalMs: 0,
+          waits: { bufferReadMs: 0, dirtyWriteMs: 0, commitMs: 0, lockMs: 0, runningMs: 0 },
+        },
+        p99: {
+          totalMs: 0,
+          waits: { bufferReadMs: 0, dirtyWriteMs: 0, commitMs: 0, lockMs: 0, runningMs: 0 },
+        },
+      },
+      history: { tps: [], hit: [], latencyP50: [], latencyP99: [], wal: [], dirty: [], lag: [] },
     },
     scenario: null,
     scenarioT: 0,
@@ -1303,6 +1329,23 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   /** Arrivals the queue could not hold — pg's "too many clients already". */
   let refusedTx = 0
   let commitsAcc = 0
+  /*
+   * A rolling distribution of completed trips. One trip can stand for several
+   * transactions, so nearest-rank quantiles use latencyWeight rather than
+   * treating an animation sample as one real transaction. All storage and the
+   * sorted-slot order are fixed up front: completion and refresh allocate
+   * nothing in the frame loop.
+   */
+  const latencyTotal = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
+  const latencyBufferRead = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
+  const latencyDirtyWrite = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
+  const latencyCommit = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
+  const latencyLock = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
+  const latencyRunning = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
+  const latencyWeight = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
+  const latencyOrder = new Uint16Array(MODEL_LATENCY_WINDOW_TRIPS)
+  let latencyHead = 0
+  let latencyCount = 0
   /**
    * Bounded commit-position ledger used only to count acknowledged write
    * transactions beyond a failover candidate's durable LSN. Typed arrays keep
@@ -1330,8 +1373,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   /**
    * Representative storage pressure charged to model phase duration. The
    * `syncing` term makes checkpoint sync stall model work at tick resolution
-   * rather than at the 250 ms stats cadence, which would smear it. There is no
-   * latency series or production-time calibration.
+   * rather than at the 250 ms stats cadence, which would smear it. The rolling
+   * latency distribution measures this stretched model time; it is not
+   * production-time calibration.
    *
    * checkpoint_completion_target exists *solely* because an unspread checkpoint
    * is a recognisable I/O latency event. Before this coupling, ckpt.phase was
@@ -1662,6 +1706,100 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     batchSize = Math.max(1, Math.round(K.tps / NOMINAL_TRIPS))
   }
 
+  function clearLatencyQuantile(quantile: LatencyQuantile): void {
+    quantile.totalMs = 0
+    quantile.waits.bufferReadMs = 0
+    quantile.waits.dirtyWriteMs = 0
+    quantile.waits.commitMs = 0
+    quantile.waits.lockMs = 0
+    quantile.waits.runningMs = 0
+  }
+
+  function readLatencyQuantile(fraction: number, totalWeight: number, out: LatencyQuantile): void {
+    const rank = Math.max(1, Math.ceil(totalWeight * fraction))
+    let cumulative = 0
+    let selected = latencyOrder[Math.max(0, latencyCount - 1)]
+    for (let i = 0; i < latencyCount; i++) {
+      const at = latencyOrder[i]
+      cumulative += latencyWeight[at]
+      if (cumulative >= rank) {
+        selected = at
+        break
+      }
+    }
+    out.totalMs = latencyTotal[selected] * 1000
+    out.waits.bufferReadMs = latencyBufferRead[selected] * 1000
+    out.waits.dirtyWriteMs = latencyDirtyWrite[selected] * 1000
+    out.waits.commitMs = latencyCommit[selected] * 1000
+    out.waits.lockMs = latencyLock[selected] * 1000
+    out.waits.runningMs = latencyRunning[selected] * 1000
+  }
+
+  function refreshLatencyQuantiles(): void {
+    const latency = stats.latency
+    latency.observations = latencyCount
+    if (latencyCount === 0) {
+      latency.transactions = 0
+      clearLatencyQuantile(latency.p50)
+      clearLatencyQuantile(latency.p99)
+      return
+    }
+
+    let totalWeight = 0
+    for (let i = 0; i < latencyCount; i++) totalWeight += latencyWeight[latencyOrder[i]]
+
+    latency.transactions = totalWeight
+    readLatencyQuantile(0.5, totalWeight, latency.p50)
+    readLatencyQuantile(0.99, totalWeight, latency.p99)
+  }
+
+  function recordLatency(x: Extra): void {
+    const at = latencyHead
+    let orderedCount = latencyCount
+    if (latencyCount === MODEL_LATENCY_WINDOW_TRIPS) {
+      let removeAt = 0
+      while (removeAt < latencyCount && latencyOrder[removeAt] !== at) removeAt++
+      if (removeAt === latencyCount) throw new Error('latency ring lost its sorted slot')
+      for (let i = removeAt; i < latencyCount - 1; i++) latencyOrder[i] = latencyOrder[i + 1]
+      orderedCount--
+    }
+    const total = Math.max(0, x.visitT)
+    let bufferRead = Math.max(0, x.bufferReadWaitT - x.dirtyWriteDuringReadT)
+    let dirtyWrite = Math.max(0, x.dirtyWriteWaitT)
+    let commit = Math.max(0, x.commitWaitT)
+    let lock = Math.max(0, x.lockWaitT)
+    const waits = bufferRead + dirtyWrite + commit + lock
+    if (waits > total && waits > 0) {
+      const scale = total / waits
+      bufferRead *= scale
+      dirtyWrite *= scale
+      commit *= scale
+      lock *= scale
+    }
+
+    latencyTotal[at] = total
+    latencyBufferRead[at] = bufferRead
+    latencyDirtyWrite[at] = dirtyWrite
+    latencyCommit[at] = commit
+    latencyLock[at] = lock
+    latencyRunning[at] = Math.max(0, total - bufferRead - dirtyWrite - commit - lock)
+    latencyWeight[at] = Math.max(1, x.latencyCount)
+
+    /* Binary insertion makes every quantile refresh O(window), not O(window²). */
+    let lo = 0
+    let hi = orderedCount
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1
+      if (latencyTotal[latencyOrder[mid]] <= total) lo = mid + 1
+      else hi = mid
+    }
+    for (let i = orderedCount; i > lo; i--) latencyOrder[i] = latencyOrder[i - 1]
+    latencyOrder[lo] = at
+
+    latencyHead = (latencyHead + 1) % MODEL_LATENCY_WINDOW_TRIPS
+    if (latencyCount < MODEL_LATENCY_WINDOW_TRIPS) latencyCount++
+  }
+
   /* ======================================================================
    * BUFFER POOL — shared_buffers, the clock sweep, and who pays for the I/O.
    * ====================================================================*/
@@ -1817,6 +1955,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         const writeSec = ioPressure() / DEVICE_PAGES_PER_SEC
         x.execTotal += writeSec
         b.stateDur += writeSec
+        x.dirtyWriteWaitT += writeSec
+        if (b.state === 'exec_io') x.dirtyWriteDuringReadT += writeSec
       }
       bufMap.delete(representativeBufKey(buf.rel[v], buf.blk[v]))
       buf.evictions++
@@ -4872,6 +5012,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     const take = requested ? 1 : Math.max(1, Math.min(randomPending, batchSize))
     pendingTx -= take
     x.txCount = take
+    x.latencyCount = take
 
     // pick the statement
     let kind: QueryKind
@@ -4931,6 +5072,11 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     x.walPendingFpi = 0
     x.walPrepared = false
     x.visitT = 0
+    x.bufferReadWaitT = 0
+    x.dirtyWriteWaitT = 0
+    x.dirtyWriteDuringReadT = 0
+    x.commitWaitT = 0
+    x.lockWaitT = 0
     x.idleT = 0
     x.writes = kind === 'insert' || kind === 'update' || kind === 'delete'
     x.seqScan = kind === 'select_seq' || kind === 'aggregate'
@@ -5337,6 +5483,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   function endVisit(slot: number): void {
     const b = backends[slot]
     const x = extras[slot]
+    recordLatency(x)
     const traced = traceRunning && state.trace.slot === slot
     if (traced) {
       syncTraceBackend(slot)
@@ -5420,6 +5567,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       const x = extras[slot]
       if (!b.active) continue
       activeN++
+      if (b.state === 'exec_io') x.bufferReadWaitT += dt
+      else if (b.state === 'commit_wait') x.commitWaitT += dt
+      else if (b.state === 'blocked') x.lockWaitT += dt
       b.age += dt
       b.stateT += dt
       x.visitT += dt
@@ -5700,8 +5850,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       forkBackend()
       return
     }
-    // At max_connections the request queue is the story; the model has no
-    // latency series. The
+    // At max_connections the request queue is the story. Queue time remains a
+    // separate client-side quantity; the latency distribution begins when a
+    // modeled backend starts the statement. The
     // old cap was `maxConnections * batchSize * 2`, and batchSize was the
     // controller's output — so the backlog grew the ceiling with it, the queue
     // could never get deep, and the "too many clients" toast fired on a
@@ -5735,6 +5886,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       const iv = rateT
       rateT = 0
       stats.tps = damp(stats.tps, commitsAcc / iv, 3, iv)
+      refreshLatencyQuantiles()
       wal.bytesPerSec = damp(wal.bytesPerSec, walAcc / iv, 3, iv)
       stats.walBytesPerSec = wal.bytesPerSec
       stats.ioReadPerSec = damp(stats.ioReadPerSec, ioReadAcc / iv, 3, iv)
@@ -5797,6 +5949,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       const h = stats.history
       pushHistory(h.tps, stats.tps)
       pushHistory(h.hit, stats.cacheHitPct)
+      pushHistory(h.latencyP50, stats.latency.p50.totalMs)
+      pushHistory(h.latencyP99, stats.latency.p99.totalMs)
       pushHistory(h.wal, wal.bytesPerSec)
       pushHistory(h.dirty, buf.dirtyCount)
       pushHistory(h.lag, Math.max(rep.standbys[0].lagSec, rep.standbys[1].lagSec))
@@ -6882,6 +7036,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     stats.cacheHitPct = 90
     stats.activeBackends = 0
     stats.runningBackends = 0
+    stats.latency.observations = 0
+    stats.latency.transactions = 0
+    clearLatencyQuantile(stats.latency.p50)
+    clearLatencyQuantile(stats.latency.p99)
     runtimeStats.queueDepth = 0
     runtimeStats.queueSec = 0
     runtimeStats.refused = 0
@@ -6889,6 +7047,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     runtimeStats.pagesFor90Pct = 0
     stats.history.tps.length = 0
     stats.history.hit.length = 0
+    stats.history.latencyP50.length = 0
+    stats.history.latencyP99.length = 0
     stats.history.wal.length = 0
     stats.history.dirty.length = 0
     stats.history.lag.length = 0
@@ -6897,6 +7057,15 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     nextArrival = 0
     backgroundSeqScans = 0
     nextWideSeqScan = 1
+    latencyTotal.fill(0)
+    latencyBufferRead.fill(0)
+    latencyDirtyWrite.fill(0)
+    latencyCommit.fill(0)
+    latencyLock.fill(0)
+    latencyRunning.fill(0)
+    latencyWeight.fill(0)
+    latencyHead = 0
+    latencyCount = 0
     commitLsn.fill(0)
     commitCount.fill(0)
     commitHead = 0

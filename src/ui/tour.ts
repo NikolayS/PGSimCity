@@ -155,7 +155,7 @@ const STEPS: TourStep[] = [
     id: 'checkpoint',
     title: 'Checkpoints, WAL and I/O',
     body:
-      'The WAL cannot grow forever, so the checkpointer periodically walks the buffer pool and writes the pages that were dirty when it began. We have deliberately made the WAL ceiling (`max_wal_size`) tiny, so modeled checkpoints now fire back to back. Watch the pink checkpoint writes and the amber full-page-image surge; those are the effects this city computes. PostgreSQL can turn this pressure into query-latency spikes, but the city has no latency series and does not display that outcome.',
+      `The WAL cannot grow forever, so the checkpointer periodically walks the buffer pool and writes the pages that were dirty when it began. We have deliberately made the WAL ceiling (\`max_wal_size\`) tiny, so modeled checkpoints now fire back to back. Watch the pink checkpoint writes and the amber full-page-image surge, then open Latency to compare p50 and p99 and read the p99 wait anatomy. Those values are deliberately stretched ${CLAIM_VALUES.modelLatency.unit}, not production milliseconds.`,
     focus: 'checkpointer',
     duration: 22,
     scenario: 'checkpoint-storm',

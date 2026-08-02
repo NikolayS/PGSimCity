@@ -1,4 +1,5 @@
 import { poolBytes } from '../core/types'
+import { CLAIM_VALUES } from '../core/claims'
 import type { BookRef, CheckpointPhase, ComponentDoc, DocRef, SimState, TableSim, VacPhase, WalSegment } from '../core/types'
 import { configuredSynchronousStandby, physicalStandby } from '../core/replication'
 import { clamp, fmtBytes, fmtDuration, fmtLsn, fmtNum, fmtPct } from '../core/util'
@@ -1462,7 +1463,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         get: (s) => fmtNum(s.buffers.dirtyEvictions),
         hint: 'a backend had to write a page before it could reuse the buffer',
       },
-      { label: 'Checkpoint', get: (s) => CKPT_PHASE[s.checkpoint.phase], hint: 'model phase only; the city has no query-latency series' },
+      { label: 'Checkpoint', get: (s) => CKPT_PHASE[s.checkpoint.phase], hint: `correlate with the rolling p99 in ${CLAIM_VALUES.modelLatency.unit}` },
       { label: 'Full-page burst', get: (s) => fmtPct(s.wal.fpwBurst, 0), hint: 'extra WAL from the full-page images owed since this checkpoint began' },
     ],
     knobs: ['fullPageWrites', 'synchronousCommit', 'checkpointTimeout', 'maxWalSize'],
@@ -1513,7 +1514,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What the city measures',
-        body: 'The city computes sampled dirty-page writes, checkpoint phases, request reasons, full-page-image WAL and shared storage pressure. The city has no query-latency series, response-time histogram or p99, so the PostgreSQL latency pattern described above is not a plotted model result.',
+        body: `The city computes sampled dirty-page writes, checkpoint phases, request reasons, full-page-image WAL and shared storage pressure. It retains a ${CLAIM_VALUES.modelLatency.disclosure}, reports weighted p50/p99 in ${CLAIM_VALUES.modelLatency.unit}, and decomposes the selected p99 trip into buffer-read, dirty-write, commit, lock and running time. This is model time, not a calibrated device or production response-time histogram.`,
       },
     ],
     metrics: [
@@ -1574,7 +1575,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What the city measures',
-        body: 'The city charges representative dirty-victim write time to a backend and shows sampled client-backend writes, bgwriter cleans, dirty frames and route particles. The city has no query-latency series or p99, so it cannot display the production latency tail described above.',
+        body: `The city charges representative dirty-victim write time to a backend and shows sampled client-backend writes, bgwriter cleans, dirty frames, route particles and weighted rolling p50/p99 in ${CLAIM_VALUES.modelLatency.unit}. The selected p99 trip is decomposed by cause. At the shipped calibration, disabling the bgwriter does not reliably raise overall p99, so the mechanism is modeled but the production long-tail consequence is not validated by this city.`,
       },
     ],
     metrics: [
@@ -1586,6 +1587,8 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         get: (s) => fmtNum(s.buffers.dirtyEvictions),
         hint: 'dirty buffers a query had to write itself — the number to keep low',
       },
+      { label: 'Latency p50 / p99', get: (s) => `${fmtNum(s.stats.latency.p50.totalMs)} / ${fmtNum(s.stats.latency.p99.totalMs)} ${CLAIM_VALUES.modelLatency.unit}` },
+      { label: 'p99 dirty-victim wait', get: (s) => `${fmtNum(s.stats.latency.p99.waits.dirtyWriteMs)} ${CLAIM_VALUES.modelLatency.unit}` },
       { label: 'Dirty sample frames', get: (s) => `${fmtNum(s.buffers.dirtyCount)} / ${fmtNum(s.buffers.sampleFrames)}` },
     ],
     knobs: ['bgwriterEnabled', 'bgwriterLruMaxpages', 'sharedBuffers', 'writeRatio'],
@@ -1599,6 +1602,8 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       docs: [
         manual('runtime-config-resource.html#RUNTIME-CONFIG-RESOURCE-BACKGROUND-WRITER', '19.4. Resource Consumption — Background Writer'),
         manual('monitoring-stats.html', '27.2. The Cumulative Statistics System — pg_stat_bgwriter, pg_stat_checkpointer, pg_stat_io'),
+        manual('pgstatstatements.html', 'F.32. pg_stat_statements — mean and standard deviation, not percentiles'),
+        { label: 'pg_stat_monitor — response-time histogram', url: 'https://docs.percona.com/pg-stat-monitor/user_guide.html#histogram' },
       ],
       source: [
         srcFile('src/backend/postmaster/bgwriter.c', 'BackgroundWriterMain'),

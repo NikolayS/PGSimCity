@@ -851,6 +851,31 @@ export interface LockEdge {
   ageSec: number
 }
 
+/** Additive anatomy of one completed model-latency observation. */
+export interface LatencyWaits {
+  bufferReadMs: number
+  dirtyWriteMs: number
+  commitMs: number
+  lockMs: number
+  runningMs: number
+}
+
+export interface LatencyQuantile {
+  /** Deliberately stretched backend lifecycle time, never production time. */
+  totalMs: number
+  /** Wait anatomy of the weighted observation selected by this quantile. */
+  waits: LatencyWaits
+}
+
+export interface LatencyStats {
+  /** Completed backend trips currently retained in the fixed rolling window. */
+  observations: number
+  /** Transactions represented by those trips; quantiles are weighted by this. */
+  transactions: number
+  p50: LatencyQuantile
+  p99: LatencyQuantile
+}
+
 export interface SimStats {
   tps: number
   commits: number
@@ -873,10 +898,14 @@ export interface SimStats {
   activeBackends: number
   /** Backends whose pg_stat_activity state is active. */
   runningBackends: number
+  /** Rolling weighted transaction quantiles in deliberately stretched model ms. */
+  latency: LatencyStats
   /** rolling window for sparklines: newest last */
   history: {
     tps: number[]
     hit: number[]
+    latencyP50: number[]
+    latencyP99: number[]
     wal: number[]
     dirty: number[]
     lag: number[]
