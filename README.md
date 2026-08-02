@@ -94,6 +94,9 @@ are pink**, **the background writer is teal**, **replication is orange**,
 - Run **Cache thrash** from the Scenarios menu. It sets `shared_buffers` to
   16 MiB — below the manual control's 128 MiB minimum — so the clock sweep races
   and backends write their own dirty victims before they can read another page.
+- Run **The work_mem cliff**. Its fixed Sort and HashAggregate nodes spill at
+  2 MiB, then fit at 4 MiB without replanning; the private reservoirs,
+  `base/pgsql_tmp`, temp counters and latency breakdown show the consequence.
 - Turn on **Long-running transaction**. The xmin horizon blade sinks and goes
   red; autovacuum still travels to the tables, but reports zero removable rows
   while the `sessions` table keeps bloating. Release the transaction and cleanup

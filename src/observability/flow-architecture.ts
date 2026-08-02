@@ -288,7 +288,7 @@ export function createFlowArchitecture(prefix: string): FlowArchitecture {
   register(components, processLayer, {
     id: 'private-memory',
     label: 'PRIVATE MEMORY',
-    detail: ['illustrative only', 'no work_mem model'],
+    detail: ['per-node work_mem', 'Sort + HashAggregate'],
     x: 294,
     y: 180,
     width: 106,
@@ -442,7 +442,7 @@ export function createFlowArchitecture(prefix: string): FlowArchitecture {
       class: 'flow-architecture__container tone-storage',
       tabindex: '0',
       role: 'group',
-      'aria-label': 'Storage architecture map with aggregate base and pg_wal state; temporary files are illustrative',
+      'aria-label': 'Storage architecture map with aggregate base and pg_wal state; temporary files reflect fixed Sort and HashAggregate spills',
     },
     svgElement('title', {}, 'Durable storage below the operating system page cache'),
     ...boundary(8, 760, 404, 136, 'DISK · data directory and temporary files', 'disk-boundary'),
@@ -461,7 +461,7 @@ export function createFlowArchitecture(prefix: string): FlowArchitecture {
   register(components, diskLayer, {
     id: 'temp-files',
     label: 'TEMP FILES',
-    detail: ['illustrative; no work_mem spill model'],
+    detail: ['modeled spill bytes', 'no join nodes'],
     x: 177,
     y: 797,
     width: 78,

@@ -43,7 +43,6 @@ const SPILL_Z = BZ + 3
 const SPILL_RIM_Z = -102
 const TEMP_BAY_Z = -89
 const TEMP_BAY_Y = CITY.storage.y + 0.35
-const SPILL_AT = 0.62
 
 /* --- module-scope scratch: update() must never allocate ------------------- */
 const _p = new THREE.Vector3()
@@ -549,7 +548,7 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
   ctx.register({
     id: 'backend.row',
     name: 'Backends',
-    role: 'one modeled slot per connection · no process or memory cost',
+    role: 'one modeled slot per connection · process residency is not costed',
     kind: 'process',
     district: 'backends',
     object: group,
@@ -584,7 +583,7 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
   ctx.register({
     id: 'backend.localmem',
     name: 'Private memory ×16',
-    role: 'illustrative private arenas · no modeled work_mem',
+    role: 'per-node work_mem allowances · fixed Sort and HashAggregate nodes only',
     kind: 'memory',
     district: 'backends',
     object: privateMemory,
@@ -592,7 +591,7 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
     focus: { target: [XS[7] + MEM_X_OFF, MEM_BASE_Y + memoryH[7] * 0.5, MEM_Z], distance: 38, dir: [0.35, 0.3, 1] },
     labelAt: [XS[7] + MEM_X_OFF, MEM_BASE_Y + memoryH[7] + 3, MEM_Z],
     color: COLOR.vacuum,
-    readout: () => `${N} illustrative arenas · ${sorting} sorting · no modeled work_mem or temp bytes`,
+    readout: (s) => `${s.workMem.activeNodes} eligible nodes in active statements · ${fmtBytes(s.workMem.activeUsedBytes)} used across ${fmtBytes(s.workMem.activeAllowanceBytes)} of nominal allowances · ${s.workMem.spillingNodes} spilling · ${fmtBytes(s.workMem.liveTempBytes)} live temp`,
   })
 
   /* =======================================================================
@@ -607,8 +606,6 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
   const tempFileBytes = new Float32Array(N)
   const ringPhase = new Float32Array(N)
   const ringLevel = new Float32Array(N)
-  let sorting = 0
-  let tempBytes = 0
   let prevT = -1
   const bufInterval = ctx.quality.level === 'low' ? 1.1 : 0.55
 
@@ -626,8 +623,6 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
     prevT = t
 
     const nb = Math.min(N, sim.backends.length)
-    let sortCount = 0
-    tempBytes = 0
 
     for (let i = 0; i < N; i++) {
       const b = i < nb ? sim.backends[i] : null
@@ -721,7 +716,6 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
           crownBr = 0.7
           tintHex = COLOR.vacuum
           tintMix = 0.2
-          sortCount++
           break
         case 'wal_insert':
           bandHex = COLOR.wal
@@ -800,14 +794,16 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
       _c.setRGB(shaftRgb[i * 3], shaftRgb[i * 3 + 1], shaftRgb[i * 3 + 2])
       shaftMesh.setColorAt(i, _c)
 
-      // Private memory is one independently-sized reservoir per backend. A
-      // sort fills its own reservoir first; only its excess reaches the temp
-      // file below. When the operation ends, that one reservoir drains.
+      // Each reservoir shows the sum of this fixed plan's per-node use against
+      // the sum of its per-node allowances. It is not a per-query cap.
       const sortPhase = st === 'sort' && b
         ? clamp01(b.stateDur > 0 ? b.stateT / b.stateDur : b.progress)
         : 0
+      const memoryRatio = b && b.workMemAllowanceBytes > 0
+        ? clamp01(b.workMemUsedBytes / b.workMemAllowanceBytes)
+        : 0
       const memWant = st === 'sort'
-        ? 0.14 + clamp01(sortPhase / SPILL_AT) * 0.86
+        ? 0.08 + memoryRatio * clamp01(sortPhase / 0.12) * 0.92
         : b && b.active
           ? 0.075
           : 0.035
@@ -856,15 +852,19 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
       }
       ringMesh.setColorAt(i, _c)
 
-      // Temp file: the spill begins only after this backend's reservoir fills.
-      const spillWant = st === 'sort'
-        ? clamp01((sortPhase - SPILL_AT) / (1 - SPILL_AT))
+      // The model decides whether bytes exist; animation only reveals and
+      // drains that state instead of inventing a spill at a timed threshold.
+      const spillWant = st === 'sort' && b && b.tempFileBytes > 0
+        ? clamp01(sortPhase / 0.12)
         : 0
-      tempFileBytes[i] = spillWant > 0
-        ? tempFileBytes[i] + dts * (0.35 + spillWant) * 5.2e6
-        : Math.max(0, tempFileBytes[i] - dts * 9e6)
-      tempBytes += tempFileBytes[i]
-      const lingering = clamp01(tempFileBytes[i] / 1.8e7)
+      const tempTarget = st === 'sort' && b ? b.tempFileBytes * spillWant : 0
+      tempFileBytes[i] = damp(
+        tempFileBytes[i],
+        tempTarget,
+        tempTarget > tempFileBytes[i] ? 12 : 2.5,
+        dt,
+      )
+      const lingering = clamp01(tempFileBytes[i] / (6 * 1024 * 1024))
       const pud = Math.max(spillWant, lingering * 0.72)
       puddle[i] = damp(puddle[i], pud, pud > puddle[i] ? 14 : 1.1, dt)
       const pr = puddle[i]
@@ -1027,7 +1027,6 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
     tempFileMesh.instanceMatrix.needsUpdate = true
     puddleMesh.instanceMatrix.needsUpdate = true
     puddleMesh.instanceColor!.needsUpdate = true
-    sorting = sortCount
   }
 
   function setDetail(level: 0 | 1 | 2): void {

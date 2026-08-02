@@ -64,18 +64,18 @@ describe('prose does not promise behavior absent from the model', () => {
     expect(scenario('connection-storm')).toMatch(/excludes this client-side queue/i)
   })
 
-  it('marks renderer-only teaching visuals as illustrative', () => {
-    expect(doc('backend.localmem')).toMatch(/private-memory and temp-file visuals are illustrative/i)
-    expect(doc('backend.localmem')).toMatch(/does not model .*work_mem/i)
+  it('marks visual teaching mechanisms at their model boundary', () => {
+    expect(doc('backend.localmem')).toMatch(/fixed query templates contain Sort and HashAggregate/i)
+    expect(doc('backend.localmem')).toMatch(/no join nodes.*cost-based plan selection/i)
     expect(doc('os.cache')).toMatch(/route animation is illustrative/i)
     expect(doc('os.cache')).toMatch(/does not change model time/i)
     expect(doc('storage.vm')).toMatch(/no index-only plan/i)
     expect(doc('storage.toast')).toMatch(/does not store TOAST chunks/i)
 
-    expect(source('/world/backends.ts')).toMatch(/illustrative.*no modeled work_mem/i)
+    expect(source('/world/backends.ts')).toMatch(/per-node work_mem allowances.*fixed Sort and HashAggregate/i)
     expect(source('/world/storage.ts')).toMatch(/illustrative TOAST route.*no modeled chunk/i)
     expect(source('/world/storage.ts')).toMatch(/illustrative cache route.*no modeled kernel cache/i)
-    expect(source('/observability/flow-architecture.ts')).toMatch(/illustrative; no work_mem spill model/i)
+    expect(source('/observability/flow-architecture.ts')).toMatch(/modeled spill bytes.*no join nodes/i)
   })
 
   it('marks architectural buildings that have no process, file, or cache mechanism', () => {

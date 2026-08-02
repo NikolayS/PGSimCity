@@ -1260,7 +1260,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
   ctx.register({
     id: 'storage.tempfiles',
     name: 'base/pgsql_tmp',
-    role: 'illustrative temp-file bay · no modeled spill I/O',
+    role: 'modeled Sort and HashAggregate spill files · joins absent',
     kind: 'storage',
     district: 'storage',
     object: tempBayGroup,
@@ -1268,7 +1268,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     color: COLOR.vacuum,
     focus: { target: [0, FLOOR_Y + 2, -89], distance: 150, dir: [0.1, 0.55, -0.83] },
     labelAt: [0, FLOOR_Y + 5, -89],
-    readout: () => 'illustrative spill routes · no modeled work_mem, temp bytes, or spill cost',
+    readout: (s) => `${s.workMem.spillingNodes} nodes spilling now · ${fmtBytes(s.workMem.liveTempBytes)} live · ${fmtNum(s.workMem.tempFiles)} temp_files / ${fmtBytes(s.workMem.tempBytes)} temp_bytes cumulative`,
   })
 
   for (let ti = 0; ti < N_TABLES; ti++) {

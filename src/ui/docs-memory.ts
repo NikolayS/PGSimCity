@@ -533,12 +533,12 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'The unit that catches everyone',
         body:
-          'A backend allocates its private memory in contexts that are reset when a query ends, so leaks are rare. What is not rare is misjudging the multiplier. In PostgreSQL 18.3, `work_mem` defaults to 4 MiB per eligible operation, while a hash operation may use `work_mem × hash_mem_multiplier` and that multiplier defaults to 2.0. Three hash operations plus one sort therefore have nominal allowances around seven times `work_mem`, and concurrently active nodes can overlap. Parallel workers often make their own allocations, but Parallel Hash uses a shared hash table rather than one full private copy per worker. Size for the actual plan nodes, workers and concurrent backends instead of multiplying by one slogan.',
+          'A backend allocates its private memory in contexts that are reset when a query ends, so leaks are rare. What is not rare is misjudging the multiplier. In PostgreSQL 18.3, `work_mem` defaults to 4 MiB per eligible executor node, not per query and not per connection. PostgreSQL 13 added `hash_mem_multiplier`; its default has been 2.0 since PostgreSQL 15, so a hash node may use `work_mem × 2`. Three hash nodes plus one sort therefore have nominal allowances around seven times `work_mem`, and concurrently active nodes can overlap. Parallel workers often make their own allocations, but Parallel Hash uses a shared hash table rather than one full private copy per worker. Size for the actual plan nodes, workers and concurrent backends instead of multiplying by one slogan.',
       },
       {
         heading: 'What happens when it is not enough',
         body:
-          'Nothing fails. A sort that does not fit switches to an external merge, writing runs to temp files under `base/pgsql_tmp` and merging them back; a hash join that does not fit switches to a batched hash join and writes both sides out. Correct results, an order of magnitude slower, and disk I/O that appears from nowhere. `EXPLAIN (ANALYZE)` tells you outright — the Sort node prints its method and either `Memory: nnnkB` or `Disk: nnnnkB`, and a Hash node prints its batch count. Set `log_temp_files` to catch it in production, and `temp_file_limit` to stop one runaway query filling the volume.',
+          'Nothing fails. A sort that does not fit switches from in-memory quicksort to an external merge, writing runs under `base/pgsql_tmp` and merging them back. The same fixed operation can cross that boundary with one more row and become an order of magnitude slower without changing its SQL or plan shape. `EXPLAIN (ANALYZE)` tells you outright: `Sort Method: quicksort  Memory: NkB` becomes `Sort Method: external merge  Disk: NkB`. Hash operations can batch and spill too; in real PostgreSQL that includes hash joins, but this city has no join nodes. Set `log_temp_files` to log completed temp files, watch `pg_stat_database.temp_files` and `temp_bytes` as cumulative totals, and use `temp_file_limit` as a guardrail against one process filling the volume.',
       },
       {
         heading: 'The other two budgets',
@@ -548,21 +548,22 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What you would see in production',
         body:
-          'The failure mode is not a slow query, it is a memory cliff: everything is fine until a plan flips from index scan to hash join across the fleet, and suddenly hundreds of backends each want hundreds of megabytes. Prefer raising `work_mem` for the specific session or role that needs it (`SET LOCAL work_mem` inside the transaction that runs the report) over raising it globally. In PG 17 the vacuum side got better too: dead tuple tracking was rewritten into a compact structure, so `maintenance_work_mem` above 1 GiB is finally useful to `VACUUM`.',
+          'The failure mode is a pair of cliffs. Too little memory makes one node spill; too much global `work_mem` lets several nodes, workers and concurrent backends allocate a multiple large enough to exhaust the server. Prefer raising it for the specific transaction that needs it (`SET LOCAL work_mem` inside the report transaction) over raising it globally. Lower concurrency and fewer memory-hungry plan nodes are equally real levers. In PostgreSQL 17 the vacuum side got better too: dead tuple tracking was rewritten into a compact structure, so `maintenance_work_mem` above 1 GiB is finally useful to `VACUUM`.',
       },
       {
         heading: 'What the city models',
         body:
-          'The private-memory and temp-file visuals are illustrative. The engine does not model `work_mem`, memory bytes, hash batches, spill thresholds, temp-file bytes or spill I/O, and those renderer animations do not change model time or counters.',
+          `${CLAIM_VALUES.workMem.nodeDisclosure}. The fixed query templates contain Sort and HashAggregate nodes with explicit teaching working sets. Each node receives its own allowance; HashAggregate receives \`work_mem × ${CLAIM_VALUES.workMem.hashMemMultiplier.toFixed(1)}\`. Crossing that allowance changes the node’s displayed EXPLAIN-style method, creates modeled temp files and bytes, adds shared storage pressure, and attributes the added model time to temp-file I/O in the Latency vital. One spilling modeled node creates one modeled temp file per represented statement; real PostgreSQL may use several files and passes. ${CLAIM_VALUES.workMem.coverageDisclosure}`,
       },
     ],
     metrics: [
-      { label: 'Sorting or hashing', get: (s) => `${fmtNum(nIn(s, 'sort'))} backends`, hint: 'backends inside a sort or hash node — the model does not simulate work_mem, so it cannot say which of them would spill' },
-      { label: 'Running', get: (s) => fmtNum(nIn(s, ...BUSY)) },
-      { label: 'Seq scan share', get: (s) => fmtPct(nz(s.knobs?.seqScanRatio)), hint: 'more scanning means more to sort and hash' },
-      { label: 'Rows returned', get: (s) => fmtNum(nz(s.stats?.tupReturned)), hint: 'cumulative tuples handed to clients' },
+      { label: 'Eligible nodes', get: (s) => `${fmtNum(s.workMem.activeNodes)} (${fmtNum(s.workMem.activeSortNodes)} sort / ${fmtNum(s.workMem.activeHashNodes)} hash)`, hint: 'fixed-template nodes carried by statements in the combined teaching phase; this is not simultaneous node execution' },
+      { label: 'Private bytes', get: (s) => `${fmtBytes(s.workMem.activeUsedBytes)} / ${fmtBytes(s.workMem.activeAllowanceBytes)} allowances`, hint: 'sum across active eligible nodes; nominal allowances are not a promise that every node peaks together' },
+      { label: 'Spilling nodes', get: (s) => fmtNum(s.workMem.spillingNodes) },
+      { label: 'temp_files', get: (s) => fmtNum(s.workMem.tempFiles), hint: 'modeled cumulative pg_stat_database counter' },
+      { label: 'temp_bytes', get: (s) => fmtBytes(s.workMem.tempBytes), hint: 'modeled cumulative pg_stat_database counter' },
     ],
-    knobs: ['seqScanRatio', 'tps'],
+    knobs: ['workMem', 'seqScanRatio', 'tps'],
     see: ['backend.slot', 'planner.planner', 'planner.executor', 'shared.buffers'],
     refs: {
       docs: [
@@ -1399,7 +1400,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What the city models',
         body:
-          'The executor advances fixed teaching phases and activity through a preselected plan template. It does not pull or materialize tuples node by node, execute joins, launch parallel workers, create dynamic shared memory, allocate work_mem, fire triggers, recheck concurrent updates or measure CPU. Gather and parallel scan labels are illustrative plan shapes only.',
+          `The executor advances fixed teaching phases and activity through a preselected plan template. It prices explicit teaching working sets against per-node work_mem allowances for fixed Sort and HashAggregate nodes, but it does not allocate process memory or pull and materialize tuples node by node. It does not execute joins, launch parallel workers, create dynamic shared memory, fire triggers, recheck concurrent updates or measure CPU. Gather and parallel scan labels are illustrative plan shapes only. ${CLAIM_VALUES.workMem.coverageDisclosure}`,
       },
     ],
     metrics: [
@@ -1457,7 +1458,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What the city shows',
         body:
-          'The tree is a fixed model template. Its row figures and costs are display-only, it has no estimated-versus-actual pair, loops, filters, buffer annotations, heap fetches, sort spill, worker launch, plan instrumentation or EXPLAIN execution. Node time is accumulated on the stretched model clock and is labeled model time, not PostgreSQL execution time.',
+          `The tree is a fixed model template. Its row figures and costs are display-only, and it has no estimated-versus-actual pair, loops, filters, buffer annotations, heap fetches, worker launch or EXPLAIN execution. Fixed Sort and HashAggregate nodes do report the model’s in-memory or spilled method from \`work_mem\`; that never changes the selected template. ${CLAIM_VALUES.workMem.coverageDisclosure} Node time is accumulated on the stretched model clock and is labeled model time, not PostgreSQL execution time.`,
       },
     ],
     metrics: [

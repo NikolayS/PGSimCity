@@ -60,9 +60,24 @@ export const CLAIM_VALUES = {
     windowTrips: 512,
     disclosure: 'weighted rolling window of 512 completed backend trips',
     componentDisclosure: 'each modeled component is its own weighted quantile',
-    taxonomyDisclosure: 'Buffer-read phase is the synthetic exec_io phase, not accumulated DataFileRead events; dirty-victim I/O is trip attribution rather than a distinct live activity state; commit durability is an umbrella for WalSync or SyncRep; relation lock maps directly to Lock/relation; active / unclassified is a non-wait residual containing CPU, parse, result-send and unclassified WAL-buffer stalls, which PostgreSQL reports separately as waits such as LWLock/WALWrite',
+    taxonomyDisclosure: 'Buffer-read phase is the synthetic exec_io phase, not accumulated DataFileRead events; dirty-victim I/O is trip attribution rather than a distinct live activity state; temp-file I/O is attributed inside the fixed sort/hash-aggregate teaching phase rather than projected as live PostgreSQL wait events; commit durability is an umbrella for WalSync or SyncRep; relation lock maps directly to Lock/relation; active / unclassified is a non-wait residual containing CPU, parse, result-send and unclassified WAL-buffer stalls, which PostgreSQL reports separately as waits such as LWLock/WALWrite',
     batchDisclosure: 'transactions carried by one backend trip share one latency observation, so within-batch variance is not modeled',
     resolutionDisclosure: '30 Hz integration quantizes observations to 33.33 model ms steps',
+  },
+  workMem: {
+    defaultMiB: 4,
+    hashMemMultiplier: 2,
+    hashMemMultiplierDefaultSince: 15,
+    spillExample: {
+      lowMiB: 2,
+      highMiB: 4,
+      partialHashWorkingSetMiB: 6,
+      aggregateSortWorkingSetMiB: 3,
+      finalizeHashWorkingSetMiB: 1,
+    },
+    spillSlowdown: 10,
+    nodeDisclosure: 'work_mem is a per-node allowance, not a per-query or per-connection cap; eligible nodes and concurrent backends multiply it',
+    coverageDisclosure: 'The city models fixed Sort and HashAggregate nodes only. It has no join nodes, hash-join spill, parallel workers, cost-based plan selection, or planner response to work_mem.',
   },
   restoreDrill: {
     levels: {
@@ -245,6 +260,11 @@ export const CLAIMS = {
     owner: 'src/core/claims.ts#CLAIM_VALUES.modelLatency',
     value: CLAIM_VALUES.modelLatency,
     surfaces: ['model:latency quantiles', 'HUD:latency vital', 'prose:latency observability'],
+  },
+  workMem: {
+    owner: 'src/core/claims.ts#CLAIM_VALUES.workMem',
+    value: CLAIM_VALUES.workMem,
+    surfaces: ['model:Sort and HashAggregate spill', 'controls:work_mem dial', 'world:private memory and temp files', 'prose:work_mem limits'],
   },
   restoreDrill: {
     owner: 'src/core/claims.ts#CLAIM_VALUES.restoreDrill',

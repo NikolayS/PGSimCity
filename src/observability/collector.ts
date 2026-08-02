@@ -28,6 +28,8 @@ export interface Counters {
   tupInserted: number
   tupUpdated: number
   tupDeleted: number
+  tempFiles: number
+  tempBytes: number
   /** pg_stat_checkpointer */
   ckptTimed: number
   ckptRequested: number
@@ -56,6 +58,8 @@ const ZERO: Counters = {
   tupInserted: 0,
   tupUpdated: 0,
   tupDeleted: 0,
+  tempFiles: 0,
+  tempBytes: 0,
   ckptTimed: 0,
   ckptRequested: 0,
   ckptDone: 0,
@@ -143,6 +147,8 @@ export function createCollector(sim: SimApi): Collector {
       tupInserted: st.stats.tupInserted,
       tupUpdated: st.stats.tupUpdated,
       tupDeleted: st.stats.tupDeleted,
+      tempFiles: st.workMem.tempFiles,
+      tempBytes: st.workMem.tempBytes,
       bgwClean: st.bgwriter.cleanedTotal,
       dirtyEvictions: st.buffers.dirtyEvictions,
       evictions: st.buffers.evictions,
@@ -217,6 +223,8 @@ export function createCollector(sim: SimApi): Collector {
     total.tupInserted = s.stats.tupInserted - base.tupInserted
     total.tupUpdated = s.stats.tupUpdated - base.tupUpdated
     total.tupDeleted = s.stats.tupDeleted - base.tupDeleted
+    total.tempFiles = s.workMem.tempFiles - base.tempFiles
+    total.tempBytes = s.workMem.tempBytes - base.tempBytes
     total.ckptTimed = ckptTimed
     total.ckptRequested = ckptRequested
     total.ckptDone = ckptTimed + ckptRequested

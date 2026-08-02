@@ -159,6 +159,8 @@ const MVCC_SAMPLE_SECONDS = 3
 const MAX_STEPS = 20
 const IDLE_REAP = 22
 const MIB = 1024 * 1024
+const WORK_MEM_HASH_MULTIPLIER = CLAIM_VALUES.workMem.hashMemMultiplier
+const WORK_MEM_SPILL_PENALTY = CLAIM_VALUES.workMem.spillSlowdown - 1
 /** A visible full backup of the ~8 GiB city takes tens of simulated seconds. */
 export const DR_BACKUP_BYTES_PER_SEC = 384 * MIB
 /** Object-store download is faster than the backup's checksum/compress path. */
@@ -417,6 +419,7 @@ interface Extra {
   bufferReadWaitT: number
   dirtyWriteWaitT: number
   dirtyWriteDuringReadT: number
+  tempFileWaitT: number
   evictionWalWaitT: number
   commitWaitT: number
   lockWaitT: number
@@ -440,6 +443,7 @@ interface Extra {
   evictionResumeState: 'exec_io' | 'exec_cpu'
   evictionResumeT: number
   evictionResumeDur: number
+  workMemCountersRecorded: boolean
 }
 
 interface TraceRequest {
@@ -471,6 +475,7 @@ function makeExtra(): Extra {
     bufferReadWaitT: 0,
     dirtyWriteWaitT: 0,
     dirtyWriteDuringReadT: 0,
+    tempFileWaitT: 0,
     evictionWalWaitT: 0,
     commitWaitT: 0,
     lockWaitT: 0,
@@ -494,6 +499,7 @@ function makeExtra(): Extra {
     evictionResumeState: 'exec_cpu',
     evictionResumeT: 0,
     evictionResumeDur: 0,
+    workMemCountersRecorded: false,
   }
 }
 
@@ -565,6 +571,13 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       walBytes: 0,
       walFpiBytes: 0,
       deadMade: 0,
+      workMemNodes: 0,
+      workMemSortNodes: 0,
+      workMemHashNodes: 0,
+      workMemAllowanceBytes: 0,
+      workMemUsedBytes: 0,
+      workMemSpillNodes: 0,
+      tempFileBytes: 0,
       lastBuffer: 0,
       age: 0,
       plan: null,
@@ -990,6 +1003,17 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       },
     },
     locks: [],
+    workMem: {
+      activeNodes: 0,
+      activeSortNodes: 0,
+      activeHashNodes: 0,
+      activeAllowanceBytes: 0,
+      activeUsedBytes: 0,
+      spillingNodes: 0,
+      liveTempBytes: 0,
+      tempFiles: 0,
+      tempBytes: 0,
+    },
     stats: {
       tps: 0,
       commits: 0,
@@ -1012,15 +1036,15 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         transactions: 0,
         mean: {
           totalMs: 0,
-          waits: { bufferReadMs: 0, dirtyWriteMs: 0, commitMs: 0, lockMs: 0, runningMs: 0 },
+          waits: { bufferReadMs: 0, dirtyWriteMs: 0, tempFileMs: 0, commitMs: 0, lockMs: 0, runningMs: 0 },
         },
         p50: {
           totalMs: 0,
-          waits: { bufferReadMs: 0, dirtyWriteMs: 0, commitMs: 0, lockMs: 0, runningMs: 0 },
+          waits: { bufferReadMs: 0, dirtyWriteMs: 0, tempFileMs: 0, commitMs: 0, lockMs: 0, runningMs: 0 },
         },
         p99: {
           totalMs: 0,
-          waits: { bufferReadMs: 0, dirtyWriteMs: 0, commitMs: 0, lockMs: 0, runningMs: 0 },
+          waits: { bufferReadMs: 0, dirtyWriteMs: 0, tempFileMs: 0, commitMs: 0, lockMs: 0, runningMs: 0 },
         },
       },
       history: { tps: [], hit: [], latencyP50: [], latencyP99: [], wal: [], dirty: [], lag: [] },
@@ -1427,6 +1451,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   let traceRunning = false
   let tracePlayback: TracePlayback = 'slow'
   let traceStepArmed = false
+  let scenarioQueryKind: QueryKind | null = null
+  let scenarioQueryTable = -1
   /** Arrivals the queue could not hold — pg's "too many clients already". */
   let refusedTx = 0
   let commitsAcc = 0
@@ -1441,6 +1467,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   const latencyTotal = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyBufferRead = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyDirtyWrite = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
+  const latencyTempFile = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyCommit = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyLock = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyRunning = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
@@ -1448,6 +1475,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   const latencyOrderTotal = new Uint16Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyOrderBufferRead = new Uint16Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyOrderDirtyWrite = new Uint16Array(MODEL_LATENCY_WINDOW_TRIPS)
+  const latencyOrderTempFile = new Uint16Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyOrderCommit = new Uint16Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyOrderLock = new Uint16Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyOrderRunning = new Uint16Array(MODEL_LATENCY_WINDOW_TRIPS)
@@ -1558,6 +1586,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   let refuseWarnT = -100
   let archiveWriteWarnT = -100
   let noBufWarnT = -100
+  let workMemWarnT = -100
   let planSeq = 1
   let patroniRenewT = 0
 
@@ -1821,6 +1850,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     quantile.totalMs = 0
     quantile.waits.bufferReadMs = 0
     quantile.waits.dirtyWriteMs = 0
+    quantile.waits.tempFileMs = 0
     quantile.waits.commitMs = 0
     quantile.waits.lockMs = 0
     quantile.waits.runningMs = 0
@@ -1854,6 +1884,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     out.waits.dirtyWriteMs = readLatencyComponentQuantile(
       latencyDirtyWrite, latencyOrderDirtyWrite, fraction, totalWeight,
     )
+    out.waits.tempFileMs = readLatencyComponentQuantile(
+      latencyTempFile, latencyOrderTempFile, fraction, totalWeight,
+    )
     out.waits.commitMs = readLatencyComponentQuantile(
       latencyCommit, latencyOrderCommit, fraction, totalWeight,
     )
@@ -1867,6 +1900,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     let total = 0
     let bufferRead = 0
     let dirtyWrite = 0
+    let tempFile = 0
     let commit = 0
     let lock = 0
     let running = 0
@@ -1876,6 +1910,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       total += latencyTotal[at] * weight
       bufferRead += latencyBufferRead[at] * weight
       dirtyWrite += latencyDirtyWrite[at] * weight
+      tempFile += latencyTempFile[at] * weight
       commit += latencyCommit[at] * weight
       lock += latencyLock[at] * weight
       running += latencyRunning[at] * weight
@@ -1884,6 +1919,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     out.totalMs = total * scale
     out.waits.bufferReadMs = bufferRead * scale
     out.waits.dirtyWriteMs = dirtyWrite * scale
+    out.waits.tempFileMs = tempFile * scale
     out.waits.commitMs = commit * scale
     out.waits.lockMs = lock * scale
     out.waits.runningMs = running * scale
@@ -1940,6 +1976,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       removeLatencySlot(latencyOrderTotal, at)
       removeLatencySlot(latencyOrderBufferRead, at)
       removeLatencySlot(latencyOrderDirtyWrite, at)
+      removeLatencySlot(latencyOrderTempFile, at)
       removeLatencySlot(latencyOrderCommit, at)
       removeLatencySlot(latencyOrderLock, at)
       removeLatencySlot(latencyOrderRunning, at)
@@ -1948,13 +1985,15 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     const total = Math.max(0, x.visitT)
     let bufferRead = Math.max(0, x.bufferReadWaitT - x.dirtyWriteDuringReadT)
     let dirtyWrite = Math.max(0, x.dirtyWriteWaitT)
+    let tempFile = Math.max(0, x.tempFileWaitT)
     let commit = Math.max(0, x.commitWaitT)
     let lock = Math.max(0, x.lockWaitT)
-    const waits = bufferRead + dirtyWrite + commit + lock
+    const waits = bufferRead + dirtyWrite + tempFile + commit + lock
     if (waits > total && waits > 0) {
       const scale = total / waits
       bufferRead *= scale
       dirtyWrite *= scale
+      tempFile *= scale
       commit *= scale
       lock *= scale
     }
@@ -1962,15 +2001,17 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     latencyTotal[at] = total
     latencyBufferRead[at] = bufferRead
     latencyDirtyWrite[at] = dirtyWrite
+    latencyTempFile[at] = tempFile
     latencyCommit[at] = commit
     latencyLock[at] = lock
-    latencyRunning[at] = Math.max(0, total - bufferRead - dirtyWrite - commit - lock)
+    latencyRunning[at] = Math.max(0, total - bufferRead - dirtyWrite - tempFile - commit - lock)
     latencyWeight[at] = Math.max(1, x.latencyCount)
 
     /* Binary insertion makes every quantile refresh O(window), not O(window²). */
     insertLatencySlot(latencyOrderTotal, latencyTotal, at, orderedCount)
     insertLatencySlot(latencyOrderBufferRead, latencyBufferRead, at, orderedCount)
     insertLatencySlot(latencyOrderDirtyWrite, latencyDirtyWrite, at, orderedCount)
+    insertLatencySlot(latencyOrderTempFile, latencyTempFile, at, orderedCount)
     insertLatencySlot(latencyOrderCommit, latencyCommit, at, orderedCount)
     insertLatencySlot(latencyOrderLock, latencyLock, at, orderedCount)
     insertLatencySlot(latencyOrderRunning, latencyRunning, at, orderedCount)
@@ -1981,6 +2022,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         waits: {
           bufferReadMs: bufferRead * 1000,
           dirtyWriteMs: dirtyWrite * 1000,
+          tempFileMs: tempFile * 1000,
           commitMs: commit * 1000,
           lockMs: lock * 1000,
           runningMs: latencyRunning[at] * 1000,
@@ -5639,7 +5681,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
                 : 'updated_at > $1'
         const s = pn('Seq Scan', `on ${name}  (Filter: ${filter}; row figures are display-only)`, rows, seqCost, [])
         if (name === 'events') {
-          const so = pn('Sort', `(Sort Key: created_at DESC; no work_mem or spill model; display seed ${Math.round(28 + sortMemoryRoll * 60)})`, rows, seqCost * 1.1, [s])
+          const so = pn('Sort', `(Sort Key: created_at DESC; fixed teaching node; display seed ${Math.round(28 + sortMemoryRoll * 60)})`, rows, seqCost * 1.1, [s])
           return pn('Limit', `(display rows=${Math.round(rows)})`, rows, seqCost * 1.12, [so])
         }
         return s
@@ -5649,14 +5691,14 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         // the operating system's read-ahead already amortizes the disk run.
         const parallelSeqCost = diskRunCost + cpuRunCost / 3
         const ps = pn('Parallel Seq Scan', `on ${name}  (illustrative shape; no parallel workers modeled)`, live / 3, parallelSeqCost, [])
-        const pa = pn('Partial HashAggregate', '(Group Key: status; no hash-memory model)', 12, parallelSeqCost + 80, [ps])
+        const pa = pn('Partial HashAggregate', '(Group Key: status; fixed teaching node)', 12, parallelSeqCost + 80, [ps])
         if (rng() < 0.5) {
           const gather = pn('Gather', '(illustrative shape; no workers launched)', 36, parallelSeqCost + 140, [pa])
-          return pn('Finalize HashAggregate', '(Group Key: status; no hash-memory model)', 12, parallelSeqCost + 190, [gather])
+          return pn('Finalize HashAggregate', '(Group Key: status; fixed teaching node)', 12, parallelSeqCost + 190, [gather])
         }
         // create_gather_merge_path() rejects a subpath without matching pathkeys.
         const sortMemory = Math.round(180 + rng() * 900)
-        const sort = pn('Sort', `(Sort Key: status; no memory/spill model; display seed ${sortMemory})`, 12, parallelSeqCost + 120, [pa])
+        const sort = pn('Sort', `(Sort Key: status; fixed teaching node; display seed ${sortMemory})`, 12, parallelSeqCost + 120, [pa])
         const gatherMerge = pn('Gather Merge', '(illustrative shape; no workers launched)', 36, parallelSeqCost + 180, [sort])
         return pn('Finalize GroupAggregate', '(Group Key: status)', 12, parallelSeqCost + 230, [gatherMerge])
       }
@@ -5705,6 +5747,96 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       const a = u < 0 ? 0 : u > 1 ? 0.12 : Math.sin(Math.PI * u) * 0.88 + 0.12
       node.activity = a
       if (a > 0.14) node.actualMs += dt * 1000 * a
+    }
+  }
+
+  function workMemWorkingSet(node: PlanNode, query: QueryKind): number {
+    if (node.label === 'Partial HashAggregate') {
+      return CLAIM_VALUES.workMem.spillExample.partialHashWorkingSetMiB * MIB
+    }
+    if (node.label === 'Finalize HashAggregate') {
+      return CLAIM_VALUES.workMem.spillExample.finalizeHashWorkingSetMiB * MIB
+    }
+    if (node.label === 'Sort') {
+      return query === 'aggregate'
+        ? CLAIM_VALUES.workMem.spillExample.aggregateSortWorkingSetMiB * MIB
+        : CLAIM_VALUES.workMem.spillExample.partialHashWorkingSetMiB * MIB
+    }
+    return 0
+  }
+
+  /** Price only fixed Sort/HashAggregate nodes; work_mem never selects a plan. */
+  function configureWorkMem(slot: number): void {
+    const b = backends[slot]
+    const x = extras[slot]
+    b.workMemNodes = 0
+    b.workMemSortNodes = 0
+    b.workMemHashNodes = 0
+    b.workMemAllowanceBytes = 0
+    b.workMemUsedBytes = 0
+    b.workMemSpillNodes = 0
+    b.tempFileBytes = 0
+    x.workMemCountersRecorded = false
+
+    const sortAllowance = K.workMem * MIB
+    const hashAllowance = sortAllowance * WORK_MEM_HASH_MULTIPLIER
+    for (let i = 0; i < x.planFlat.length; i++) {
+      const node = x.planFlat[i]
+      const workingSet = workMemWorkingSet(node, b.query)
+      if (workingSet <= 0) continue
+      const hash = node.label.includes('HashAggregate')
+      const allowance = hash ? hashAllowance : sortAllowance
+      const spilled = workingSet > allowance
+      const retained = Math.min(workingSet, allowance)
+      b.workMemNodes++
+      if (hash) b.workMemHashNodes++
+      else b.workMemSortNodes++
+      b.workMemAllowanceBytes += allowance
+      b.workMemUsedBytes += retained
+      if (spilled) {
+        b.workMemSpillNodes++
+        b.tempFileBytes += workingSet
+      }
+
+      const workingKiB = Math.round(workingSet / 1024)
+      const retainedKiB = Math.round(retained / 1024)
+      if (hash) {
+        const batches = Math.max(2, Math.ceil(workingSet / allowance))
+        node.detail += spilled
+          ? `; Batches: ${batches}  Memory Usage: ${retainedKiB}kB  Disk Usage: ${workingKiB}kB`
+          : `; Batches: 1  Memory Usage: ${workingKiB}kB`
+      } else {
+        node.detail += spilled
+          ? `; Sort Method: external merge  Disk: ${workingKiB}kB`
+          : `; Sort Method: quicksort  Memory: ${workingKiB}kB`
+      }
+    }
+  }
+
+  function beginWorkMem(slot: number): void {
+    const b = backends[slot]
+    const x = extras[slot]
+    b.state = 'sort'
+    b.stateT = 0
+    const inMemoryDuration = rr(0.12, 0.34)
+    // The fixed teaching example makes the spill trip approximately 10× its
+    // in-memory twin. visitT is the work already paid; the final 75 ms is the
+    // representative send phase both twins still have ahead of them.
+    const fittedTripEstimate = x.visitT + inMemoryDuration + 0.075
+    b.stateDur = inMemoryDuration
+      + (b.workMemSpillNodes > 0 ? fittedTripEstimate * WORK_MEM_SPILL_PENALTY : 0)
+    if (b.workMemSpillNodes === 0 || x.workMemCountersRecorded) return
+
+    x.workMemCountersRecorded = true
+    state.workMem.tempFiles += b.workMemSpillNodes * x.txCount
+    state.workMem.tempBytes += b.tempFileBytes * x.txCount
+    if (state.t - workMemWarnT > 15) {
+      workMemWarnT = state.t
+      toast(
+        `${b.workMemSpillNodes} work_mem node${b.workMemSpillNodes === 1 ? '' : 's'} spilled ${fmtBytes(b.tempFileBytes)} per statement to base/pgsql_tmp`,
+        'warn',
+        5000,
+      )
     }
   }
 
@@ -5794,6 +5926,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       kind = requested.kind
       ti = requested.table
       state.trace.slot = slot
+    } else if (scenarioQueryKind && scenarioQueryTable >= 0) {
+      kind = scenarioQueryKind
+      ti = scenarioQueryTable
     } else if (rng() < K.writeRatio) {
       // Steady state: rows that leave have to be replaced. The workload tilts
       // towards inserts exactly as far as the tables are short of their natural
@@ -5838,6 +5973,13 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     b.walBytes = 0
     b.walFpiBytes = 0
     b.deadMade = 0
+    b.workMemNodes = 0
+    b.workMemSortNodes = 0
+    b.workMemHashNodes = 0
+    b.workMemAllowanceBytes = 0
+    b.workMemUsedBytes = 0
+    b.workMemSpillNodes = 0
+    b.tempFileBytes = 0
     b.waitOn = -1
     b.plan = null
     x.fpiBytes = 0
@@ -5850,9 +5992,11 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     x.bufferReadWaitT = 0
     x.dirtyWriteWaitT = 0
     x.dirtyWriteDuringReadT = 0
+    x.tempFileWaitT = 0
     x.evictionWalWaitT = 0
     x.commitWaitT = 0
     x.lockWaitT = 0
+    x.workMemCountersRecorded = false
     x.idleT = 0
     x.writes = kind === 'insert' || kind === 'update' || kind === 'delete'
     x.seqScan = kind === 'select_seq' || kind === 'aggregate'
@@ -6019,6 +6163,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     const cacheThrash = Math.max(0.65, (1 + 2 * missFrac) / 1.8)
     const dur = (ioDur + base * (1 - ioShare)) * cacheThrash
     x.execTotal = dur
+    configureWorkMem(slot)
 
     const traced = traceRunning && state.trace.slot === slot
     if (ioShare > 0 || traced) {
@@ -6353,6 +6498,13 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     announceTraceRequest()
     let activeN = 0
     let runningN = 0
+    let workMemNodes = 0
+    let workMemSortNodes = 0
+    let workMemHashNodes = 0
+    let workMemAllowanceBytes = 0
+    let workMemUsedBytes = 0
+    let workMemSpillNodes = 0
+    let liveTempBytes = 0
     for (let slot = 0; slot < N_BACKEND_SLOTS; slot++) {
       const b = backends[slot]
       const x = extras[slot]
@@ -6365,6 +6517,16 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       }
       else if (b.state === 'commit_wait' && K.synchronousCommit !== 'off') x.commitWaitT += dt
       else if (b.state === 'blocked') x.lockWaitT += dt
+      else if (b.state === 'sort' && b.tempFileBytes > 0) {
+        x.tempFileWaitT += dt
+        /* One external pass writes and rereads the modeled temp bytes. These
+         * pages affect shared device pressure, but never shared-buffer hit or
+         * miss counters. */
+        const ioPages = (b.tempFileBytes * x.txCount) / PAGE
+        const share = b.stateDur > 0 ? dt / b.stateDur : 1
+        ioWriteAcc += ioPages * share
+        ioReadAcc += ioPages * share
+      }
       b.age += dt
       b.stateT += dt
       x.visitT += dt
@@ -6460,9 +6622,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
               }
               if (x.evictionBuffer >= 0) break
               if (x.needsSort) {
-                b.state = 'sort'
-                b.stateT = 0
-                b.stateDur = rr(0.12, 0.34)
+                beginWorkMem(slot)
               } else if (x.postFilterCpu) {
                 x.postFilterCpu = false
                 b.state = 'exec_cpu'
@@ -6614,10 +6774,26 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
           break
       }
       if (b.active && isRunningState(b.state)) runningN++
+      if (b.state === 'sort') {
+        workMemNodes += b.workMemNodes
+        workMemSortNodes += b.workMemSortNodes
+        workMemHashNodes += b.workMemHashNodes
+        workMemAllowanceBytes += b.workMemAllowanceBytes
+        workMemUsedBytes += b.workMemUsedBytes
+        workMemSpillNodes += b.workMemSpillNodes
+        liveTempBytes += b.tempFileBytes
+      }
       syncTraceBackend(slot)
     }
     stats.activeBackends = activeN
     stats.runningBackends = runningN
+    state.workMem.activeNodes = workMemNodes
+    state.workMem.activeSortNodes = workMemSortNodes
+    state.workMem.activeHashNodes = workMemHashNodes
+    state.workMem.activeAllowanceBytes = workMemAllowanceBytes
+    state.workMem.activeUsedBytes = workMemUsedBytes
+    state.workMem.spillingNodes = workMemSpillNodes
+    state.workMem.liveTempBytes = liveTempBytes
   }
 
   function commitWaitEstimate(): number {
@@ -7032,6 +7208,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     state.scenario = null
     state.scenarioT = 0
     state.scenarioDecision = null
+    scenarioQueryKind = null
+    scenarioQueryTable = -1
     beatIdx = 0
     bus.emit('scenario', { id: null })
     bus.emit('narrate', null)
@@ -7060,6 +7238,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     state.scenario = def.id
     state.scenarioT = 0
     state.scenarioDecision = createScenarioDecision(def.id)
+    scenarioQueryKind = def.query?.kind ?? null
+    scenarioQueryTable = def.query
+      ? TABLES.findIndex((table) => table.id === def.query!.table)
+      : -1
     beatIdx = 0
     bus.emit('scenario', { id: def.id })
     if (def.focus) bus.emit('focus', { id: def.focus })
@@ -7091,6 +7273,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     }
     if (def.id === 'no-bgwriter' && previousScenarioT < 64 && state.scenarioT >= 64) {
       setKnob('bgwriterEnabled', true)
+    }
+    if (def.id === 'work-mem-spill' && previousScenarioT < 52 && state.scenarioT >= 52) {
+      setKnob('workMem', CLAIM_VALUES.workMem.spillExample.highMiB)
     }
     // Stands in for a `lockTimeout` knob this scenario would set at a beat.
     const lt = SCENARIO_LOCK_TIMEOUT[def.id]
@@ -7250,6 +7435,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     switch (key) {
       case 'sharedBuffers':
         resizePool(K.sharedBuffers)
+        break
+      case 'workMem':
+        K.workMem = clamp(Math.round(K.workMem), 1, 256)
         break
       case 'tps':
         K.tps = Math.max(0, K.tps)
@@ -7585,6 +7773,13 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       b.walBytes = 0
       b.walFpiBytes = 0
       b.deadMade = 0
+      b.workMemNodes = 0
+      b.workMemSortNodes = 0
+      b.workMemHashNodes = 0
+      b.workMemAllowanceBytes = 0
+      b.workMemUsedBytes = 0
+      b.workMemSpillNodes = 0
+      b.tempFileBytes = 0
       b.lastBuffer = 0
       b.age = 0
       b.plan = null
@@ -7882,6 +8077,15 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     stats.cacheHitPct = 90
     stats.activeBackends = 0
     stats.runningBackends = 0
+    state.workMem.activeNodes = 0
+    state.workMem.activeSortNodes = 0
+    state.workMem.activeHashNodes = 0
+    state.workMem.activeAllowanceBytes = 0
+    state.workMem.activeUsedBytes = 0
+    state.workMem.spillingNodes = 0
+    state.workMem.liveTempBytes = 0
+    state.workMem.tempFiles = 0
+    state.workMem.tempBytes = 0
     stats.latency.observations = 0
     stats.latency.transactions = 0
     clearLatencyQuantile(stats.latency.mean)
@@ -7907,6 +8111,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     latencyTotal.fill(0)
     latencyBufferRead.fill(0)
     latencyDirtyWrite.fill(0)
+    latencyTempFile.fill(0)
     latencyCommit.fill(0)
     latencyLock.fill(0)
     latencyRunning.fill(0)
@@ -7921,6 +8126,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     traceRunning = false
     tracePlayback = 'slow'
     traceStepArmed = false
+    scenarioQueryKind = null
+    scenarioQueryTable = -1
     resetTraceRecord()
     refusedTx = 0
     sizeBatch()
@@ -7944,6 +8151,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     refuseWarnT = -100
     archiveWriteWarnT = -100
     noBufWarnT = -100
+    workMemWarnT = -100
     patroniRenewT = 0
     savedKeys = []
     beatIdx = 0

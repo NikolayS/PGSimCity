@@ -723,6 +723,7 @@ export function createInspector(ctx: UiContext): UiModule {
       class: 'pgc-content pg-enter',
       data: { correctionSubject: 'city-inspector' },
     })
+    if (id === 'backend.localmem') wrap.dataset.disclosure = 'work-mem-model-scope'
 
     /* metrics first — the numbers are the reason this feels alive */
     const metrics = info?.metrics ?? []

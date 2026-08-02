@@ -147,6 +147,19 @@ describe('cross-surface scale agreement', () => {
     expect(text(row(io, 'client').hits)).not.toBe('null')
   })
 
+  it('projects modeled spills through pg_stat_database temp counters', () => {
+    const sim = createSim(createBus())
+    const collector = createCollector(sim)
+    sim.state.workMem.tempFiles += 3
+    sim.state.workMem.tempBytes += 9 * 1024 * 1024
+    collector.sample()
+    const database = PROJECTIONS.database(sim.state, collector, 'total')
+
+    expect(text(row(database, 'pgsimcity').temp_files)).toBe('3')
+    expect(text(row(database, 'pgsimcity').temp_bytes)).toBe(fmtBytes(9 * 1024 * 1024))
+    expect(database.caption).toContain('log_temp_files')
+  })
+
   it('uses current insert LSN for every logical-slot retained-WAL rendering', () => {
     const sim = createSim(createBus())
     sim.setKnob('walLevel', 'logical')

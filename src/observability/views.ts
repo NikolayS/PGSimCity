@@ -461,6 +461,8 @@ const database: ProjectionFn = (s, c, mode) => {
       { key: 'tup_inserted', label: 'tup_inserted', num: true },
       { key: 'tup_updated', label: 'tup_updated', num: true },
       { key: 'tup_deleted', label: 'tup_deleted', num: true },
+      { key: 'temp_files', label: 'temp_files', num: true },
+      { key: 'temp_bytes', label: 'temp_bytes', num: true },
     ],
     rows: [
       {
@@ -477,11 +479,15 @@ const database: ProjectionFn = (s, c, mode) => {
           tup_inserted: ctr(t.tupInserted, r.tupInserted, mode),
           tup_updated: ctr(t.tupUpdated, r.tupUpdated, mode),
           tup_deleted: ctr(t.tupDeleted, r.tupDeleted, mode),
+          temp_files: ctr(t.tempFiles, r.tempFiles, mode),
+          temp_bytes: mode === 'rate'
+            ? { v: `${fmtBytes(r.tempBytes)}/s`, tone: 'dim' }
+            : { v: fmtBytes(t.tempBytes), tone: t.tempBytes > 0 ? 'warn' : 'dim' },
         },
       },
     ],
     caption:
-      'hit % is not a column — it is blks_hit / (blks_hit + blks_read), computed by hand, and it is the reason blks_read alone tells you nothing. Everything here is cumulative since stats_reset, so a hand-computed ratio reads "—" until there is something to divide.',
+      'hit % is not a column — it is blks_hit / (blks_hit + blks_read), computed by hand. temp_files and temp_bytes are modeled cumulative spill counters, just like PostgreSQL’s columns; use their deltas and log_temp_files to find the statements. Everything here is cumulative since stats_reset, so a hand-computed ratio reads "—" until there is something to divide.',
   }
 }
 

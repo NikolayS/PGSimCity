@@ -68,7 +68,7 @@ function lineOf(text: string, index: number): number {
 }
 
 describe('claims and conventions spine', () => {
-  it('owns exactly the seventeen drift-prone contracts across both passes', () => {
+  it('owns exactly the nineteen drift-prone contracts across both passes', () => {
     expect(Object.keys(CLAIMS)).toEqual([
       'appVersion',
       'walSegment',
@@ -78,6 +78,7 @@ describe('claims and conventions spine', () => {
       'standbyNames',
       'modelDuration',
       'modelLatency',
+      'workMem',
       'restoreDrill',
       'vacuumReclaim',
       'cityComponentRoute',
@@ -239,6 +240,44 @@ describe('claims and conventions spine', () => {
     const commitChapter = CHAPTERS.find((chapter) => chapter.id === 'commit')
     expect(commitChapter?.body, 'modelLatency: tour:commit omits the visible quantiles')
       .toContain(`rolling p50/p99 in ${CLAIM_VALUES.modelLatency.unit}`)
+  })
+
+  it('keeps work_mem per-node math and model limits aligned across surfaces', () => {
+    const sim = createSim(createBus())
+    agrees(
+      'workMem',
+      'model:work_mem default',
+      sim.state.knobs.workMem,
+      CLAIM_VALUES.workMem.defaultMiB,
+    )
+    expect(CLAIM_VALUES.workMem.hashMemMultiplier).toBe(2)
+    expect(CLAIM_VALUES.workMem.hashMemMultiplierDefaultSince).toBe(15)
+
+    const control = KNOB_META.find((knob) => knob.key === 'workMem')
+    expect(control?.hint, 'workMem: controls omit the per-node allowance')
+      .toContain('Per eligible executor node')
+    expect(control?.hint, 'workMem: controls omit hash_mem_multiplier')
+      .toContain('hash_mem_multiplier')
+
+    const localMemory = doc('backend.localmem')
+    const copy = [
+      localMemory?.tldr ?? '',
+      ...(localMemory?.sections.map((section) => section.body) ?? []),
+    ].join('\n')
+    expect(copy, 'workMem: prose omits the owned per-node disclosure')
+      .toContain(CLAIM_VALUES.workMem.nodeDisclosure.split(';')[0])
+    expect(copy, 'workMem: prose omits model coverage limits')
+      .toContain(CLAIM_VALUES.workMem.coverageDisclosure)
+    expect(copy, 'workMem: prose omits log_temp_files').toContain('log_temp_files')
+    expect(copy, 'workMem: prose omits pg_stat_database temp counters')
+      .toContain('pg_stat_database.temp_files')
+
+    expect(read('src/world/backends.ts'), 'workMem: world still invents timed spills')
+      .toContain('The model decides whether bytes exist')
+    expect(read('src/world/storage.ts'), 'workMem: temp bay omits cumulative counters')
+      .toContain('temp_files /')
+    expect(read('src/ui/docs-memory.ts'), 'workMem: planner limitation was removed')
+      .toContain('no SQL grammar, catalog analysis, rewrite rules, prepared-plan cache or cost-based plan selection')
   })
 
   it('keeps restore-drill proof levels ordered and explicit on every surface', () => {

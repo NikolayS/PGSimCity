@@ -40,7 +40,7 @@ export const TRACE_COPY: Record<TraceStop, StopCopy> = {
     line: (trace) => trace.lastPlanLabel
       ? `${trace.lastPlanLabel} is running against ${tableName(trace)}.`
       : `The executor applies the fixed model operations to ${tableName(trace)}.`,
-    hint: 'CPU and sort are teaching phases; work_mem is not modeled.',
+    hint: 'Per-node work_mem applies to fixed Sort/HashAggregate only.',
   },
   wal: {
     title: 'Write the change to WAL',

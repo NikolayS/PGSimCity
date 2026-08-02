@@ -97,7 +97,7 @@ export const CATALOG: CatalogEntry[] = [
     docs: `${M}#MONITORING-PG-STAT-DATABASE-VIEW`,
     coverage: 'partial',
     coverageNote:
-      'numbackends, xact_commit, xact_rollback, blks_read, blks_hit and the tup_* counters are real model output. The model has no temp files, no deadlocks, no checksums and no session timers.',
+      'numbackends, xact_commit, xact_rollback, blks_read, blks_hit, the tup_* counters, temp_files and temp_bytes are real model output. Temp counters cover fixed Sort and HashAggregate spills only; the city has no join nodes or planner selection. It has no deadlocks, checksums or session timers.',
     version:
       'blk_read_time and blk_write_time only move when track_io_timing is on, and it is off by default. session_time and the sessions_* counters arrived in 14; the parallel_workers_* counters in 18.',
     projection: 'database',

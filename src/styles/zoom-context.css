@@ -23,6 +23,12 @@
   display: none;
 }
 
+/* Scenario narration already names and explains the focused component. On a
+ * phone the second caption would sit directly over that teaching card. */
+body.pg-narrating .zoom-context {
+  display: none;
+}
+
 .zoom-context[data-district='clients'] { --zoom-context-accent: var(--c-client); }
 .zoom-context[data-district='backends'] { --zoom-context-accent: var(--c-backend); }
 .zoom-context[data-district='shmem'] { --zoom-context-accent: var(--c-shmem); }
