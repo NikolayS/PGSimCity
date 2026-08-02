@@ -1,6 +1,7 @@
 import '../styles/control-center.css'
 
 import type { TraceStop } from '../core/types'
+import { createCorrectionPath, displayedClaim } from '../core/corrections'
 import { fmtBytes } from '../core/util'
 import type { FlowsApi } from '../engine/flows'
 import type { WalkController, WalkPose } from '../engine/walk'
@@ -416,6 +417,26 @@ export function createControlCenter(options: ControlCenterOptions): ControlCente
   let lastWal = -1
   let lastRows = -1
   let lastTime = -1
+  createCorrectionPath(root, {
+    surface: 'City / Control center',
+    panel: () => `Postmaster control center / ${title.textContent || 'no statement'}`,
+    source: 'src/ui/control-center.ts#createControlCenter; src/ui/trace-copy.ts#TRACE_COPY',
+    claim: () => displayedClaim(
+      title,
+      narrative,
+      receipt.querySelector<HTMLElement>('.control-center__metrics'),
+      receipt.querySelector<HTMLElement>('.control-center__sources'),
+    ),
+    context: () => {
+      if (!sim.state.trace.sql) return []
+      const table = TABLES[sim.state.trace.table]?.id ?? 'none'
+      return [
+        ['Model statement', `${sim.state.trace.query} on ${table}`],
+        ['Trace stop', sim.state.trace.stop],
+      ]
+    },
+    disclosure: true,
+  })
   door.setOpenness(0)
 
   function syncDoorPrompt(): void {

@@ -7,6 +7,7 @@ import {
   createPlausibleDispatcher,
   createPlausibleQueue,
   listenForAnalyticsInteractions,
+  outboundTrackingAllowed,
   panelSlug,
 } from './analytics'
 import { createBus } from './bus'
@@ -36,6 +37,11 @@ describe('analytics attribution', () => {
     const page = 'https://nikolays.github.io/PGSimCity/'
     expect(attributedOutboundUrl('../observability/', 'city', page)).toBeNull()
     expect(attributedOutboundUrl('mailto:owner@example.com', 'city', page)).toBeNull()
+  })
+
+  it('keeps correction report bodies out of outbound analytics', () => {
+    expect(outboundTrackingAllowed({ dataset: { noAnalytics: 'true' } })).toBe(false)
+    expect(outboundTrackingAllowed({ dataset: {} })).toBe(true)
   })
 
   it('normalizes component ids into stable attribution slugs', () => {

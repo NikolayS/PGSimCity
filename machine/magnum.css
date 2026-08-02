@@ -15,6 +15,44 @@
   --pg-disclosure: 1;
 }
 
+.pg-correction {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+  margin: 0;
+  color: #8c795c;
+  font: 650 9px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.pg-correction__link {
+  color: #bda57b;
+  text-underline-offset: 2px;
+}
+
+.pg-correction__link:hover,
+.pg-correction__link:focus-visible {
+  color: #f1dfba;
+  outline: none;
+}
+
+.architecture-pane > .pg-correction {
+  position: absolute;
+  z-index: 2;
+  right: 18px;
+  bottom: 14px;
+  max-width: calc(100% - 36px);
+  padding: 5px 7px;
+  background: rgb(24 18 14 / 82%);
+  pointer-events: auto;
+}
+
+.comparison-actions > .pg-correction {
+  margin-left: auto;
+}
+
 * {
   box-sizing: border-box;
 }

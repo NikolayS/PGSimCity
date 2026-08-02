@@ -40,6 +40,10 @@ import {
   SYNCHRONOUS_COMMIT_COMPARISON_CLAIM,
   createSynchronousCommitComparison,
 } from './comparison.js'
+import {
+  createCorrectionPath,
+  displayedClaim,
+} from '../src/core/corrections.ts'
 
 const canvas = document.querySelector('#machine')
 const architecturePane = document.querySelector('.architecture-pane')
@@ -60,11 +64,16 @@ const statementState = document.querySelector('#statement-state')
 const postgresToggle = document.querySelector('#postgres-toggle')
 const postgresStatus = document.querySelector('#postgres-status')
 const postgresMeasurement = document.querySelector('#postgres-measurement')
+const measurementRack = document.querySelector('.measurement-rack')
+const terminalBanner = document.querySelector('.terminal-banner')
+const machineDeck = document.querySelector('.deck')
 const terminalState = document.querySelector('#terminal-state')
 const terminalTranscript = document.querySelector('#terminal-transcript')
 const terminalForm = document.querySelector('#terminal-form')
 const terminalInput = document.querySelector('#terminal-input')
 const comparisonRoot = document.querySelector('#comparison')
+const comparisonProof = document.querySelector('#comparison-proof')
+const comparisonActions = document.querySelector('.comparison-actions')
 const comparisonOpen = document.querySelector('#comparison-open')
 const comparisonClose = document.querySelector('#comparison-close')
 const comparisonRun = document.querySelector('#comparison-run')
@@ -107,11 +116,16 @@ if (
   || !postgresToggle
   || !postgresStatus
   || !postgresMeasurement
+  || !measurementRack
+  || !terminalBanner
+  || !machineDeck
   || !terminalState
   || !terminalTranscript
   || !terminalForm
   || !terminalInput
   || !comparisonRoot
+  || !comparisonProof
+  || !comparisonActions
   || !comparisonOpen
   || !comparisonClose
   || !comparisonRun
@@ -134,6 +148,35 @@ if (
 ) {
   throw new Error('The Magnum workbench is missing a required browser element')
 }
+
+createCorrectionPath(measurementRack, {
+  surface: 'Machine / Workbench',
+  panel: 'psql terminal and modelled machine',
+  source: 'machine/index.html#console-pane; machine/magnum.js; machine/postgres.js',
+  claim: () => displayedClaim(machineDeck, terminalBanner, postgresMeasurement),
+})
+
+createCorrectionPath(architecturePane, {
+  surface: 'Machine / Architecture board',
+  panel: 'Layered PostgreSQL architecture',
+  source: 'machine/architecture.js#ARCHITECTURE_LAYOUT; machine/magnum.js#drawMachine',
+  claim: () => [
+    canvas.getAttribute('aria-label'),
+    displayedClaim(statementState, runState),
+  ].filter(Boolean).join('\n'),
+})
+
+createCorrectionPath(comparisonActions, {
+  surface: 'Machine / Comparison',
+  panel: 'synchronous_commit on versus off',
+  source: 'src/spine/machine-comparison.ts#MACHINE_SYNCHRONOUS_COMMIT_COMPARISON',
+  claim: () => displayedClaim(comparisonProof),
+  context: () => [
+    ['Modelled setting', 'synchronous_commit: on vs off'],
+    ['Comparison status', comparisonStatus.textContent || 'unknown'],
+  ],
+  disclosure: true,
+})
 
 const VIEW_W = DETAIL_WIDTH
 const VIEW_H = DETAIL_HEIGHT

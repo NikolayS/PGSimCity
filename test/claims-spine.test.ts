@@ -68,8 +68,9 @@ function lineOf(text: string, index: number): number {
 }
 
 describe('claims and conventions spine', () => {
-  it('owns exactly the sixteen drift-prone contracts across both passes', () => {
+  it('owns exactly the seventeen drift-prone contracts across both passes', () => {
     expect(Object.keys(CLAIMS)).toEqual([
+      'appVersion',
       'walSegment',
       'bufferSample',
       'bulkReadRing',

@@ -1,5 +1,6 @@
 import type { Knobs, SimApi } from '../core/types'
 import { DEFAULT_KNOBS } from '../core/types'
+import { createCorrectionPath, displayedClaim } from '../core/corrections'
 import { fmtBytes, fmtDuration, fmtNum } from '../core/util'
 import { SCENARIOS } from '../sim/scenarios'
 import { KNOB_GROUPS, KNOB_META, knobsInGroup } from './content'
@@ -661,6 +662,16 @@ export function createControls(ctx: UiContext): UiModule {
 
   const panel = el('section', { class: 'pg-panel pgc-panel pgc-rail' }, head, body, foot)
   panel.setAttribute('aria-label', 'Console')
+  createCorrectionPath(panel, {
+    surface: 'City / Console',
+    panel: () => `Simulation controls / ${presetName.textContent || 'Defaults'}`,
+    source: 'src/ui/content.ts#KNOB_META; src/ui/controls.ts#createControls',
+    claim: () => displayedClaim(
+      ...Array.from(body.querySelectorAll<HTMLElement>(
+        '.pgc-group__hint, .pg-field__label, .pg-field__guc, .pg-field__hint',
+      )).filter((node) => node.offsetParent !== null),
+    ),
+  })
   host.append(tab, panel)
   mount.append(host)
 

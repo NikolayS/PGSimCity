@@ -32,6 +32,14 @@ export function doc(id: string | null | undefined): ComponentDoc | undefined {
   return undefined
 }
 
+/** Exact content owner used by correction reports; instance ids resolve first. */
+export function docSource(id: string): string {
+  const entry = doc(id)
+  if (!entry) return `src/ui/content.ts#doc(${id})`
+  const file = DOCS_MEMORY.includes(entry) ? 'docs-memory.ts' : 'docs-storage.ts'
+  return `src/ui/${file}#ComponentDoc[id=${entry.id}]`
+}
+
 export function hasDoc(id: string | null | undefined): boolean {
   return !!doc(id)
 }

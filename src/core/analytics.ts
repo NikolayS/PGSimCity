@@ -86,6 +86,10 @@ export function panelSlug(panel: string): string {
     .replace(/^-+|-+$/g, '') || 'unknown'
 }
 
+export function outboundTrackingAllowed(anchor: Pick<HTMLAnchorElement, 'dataset'>): boolean {
+  return anchor.dataset.noAnalytics !== 'true'
+}
+
 /**
  * Return an attributed external URL, or null when a link must remain local.
  * URLSearchParams owns encoding and makes a second pass idempotent.
@@ -130,6 +134,7 @@ function installOutboundTracking(
     )
 
   const decorate = (anchor: HTMLAnchorElement): string | null => {
+    if (!outboundTrackingAllowed(anchor)) return null
     const href = attributedOutboundUrl(anchor.href, panelFor(anchor), window.location.href)
     if (href && anchor.href !== href) anchor.href = href
     return href

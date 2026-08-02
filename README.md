@@ -56,7 +56,7 @@ audio, or game content.
 >
 > Mistakes have been found and fixed throughout; the commit history records them. Known limitation:
 > touch controls have been verified only in Chrome's mobile emulation. Corrections from people who
-> know the engine are exactly what this needs: [open an issue](https://github.com/NikolayS/PGSimCity/issues/new)
+> know the engine are exactly what this needs: [open the correction template](https://github.com/NikolayS/PGSimCity/issues/new?template=postgresql-mismatch.md)
 > or send a [pull request](https://github.com/NikolayS/PGSimCity/pulls).
 
 ---

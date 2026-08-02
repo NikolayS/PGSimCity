@@ -1,9 +1,10 @@
 import '../styles/panel.css'
 
 import { destinationForId } from '../core/destinations'
+import { createCorrectionPath, displayedClaim } from '../core/corrections'
 import type { ComponentDef, ComponentDoc, ComponentKind, DocRef, DocReferences, Knobs, SimState } from '../core/types'
 import { fmtBytes, fmtDuration } from '../core/util'
-import { doc, knobMeta, mdToHtml } from './content'
+import { doc, docSource, knobMeta, mdToHtml } from './content'
 import {
   SHEET_EVENT,
   announceSheet,
@@ -707,6 +708,17 @@ export function createInspector(ctx: UiContext): UiModule {
       const block = renderRefs(info.refs)
       if (block) wrap.append(block)
     }
+
+    createCorrectionPath(wrap, {
+      surface: 'City / Inspector',
+      panel: () => `${title.textContent || info?.title || id} (${id})`,
+      source: docSource(id),
+      claim: () => displayedClaim(
+        title,
+        subtitle,
+        ...wrap.querySelectorAll<HTMLElement>('.pgc-block--prose'),
+      ),
+    })
 
     return wrap
   }

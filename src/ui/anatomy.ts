@@ -1,6 +1,7 @@
 import '../styles/anatomy.css'
 
 import { CLAIM_VALUES } from '../core/claims'
+import { createCorrectionPath, displayedClaim } from '../core/corrections'
 import type { MvccRowStory, MvccTupleVersion, TableSim } from '../core/types'
 import { clamp, fmtBytes, fmtNum, fmtPct } from '../core/util'
 import { MODE_IDS, modeTokens } from './mode-exits'
@@ -1345,6 +1346,29 @@ export function createAnatomy(ctx: UiContext): UiModule {
   let lastUpdate = -Infinity
   let lastShape = ''
   let lastMvccShape = ''
+
+  createCorrectionPath(panel, {
+    surface: 'City / Physical anatomy',
+    panel: () => `${title.textContent} (${view})`,
+    source: () => view === 'page'
+      ? `src/ui/anatomy.ts#PAGE_DETAILS.${pagePinned}`
+      : `src/ui/anatomy.ts#DIRECTORY_DETAILS.${directoryPinned}`,
+    claim: () => displayedClaim(
+      title,
+      subtitle,
+      view === 'page' ? page.detail : directory.detail,
+    ),
+    context: () => view === 'page'
+      ? [
+          ['View', view],
+          ['Detail', pagePinned],
+          ['Relation', ctx.sim.state.tables[tableIndex]?.def.id ?? 'none'],
+        ]
+      : [
+          ['View', view],
+          ['Detail', directoryPinned],
+        ],
+  })
 
   const applyPageDetail = (key: string) => {
     const detail = PAGE_DETAILS[key] ?? PAGE_DETAILS.overview

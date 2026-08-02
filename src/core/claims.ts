@@ -5,6 +5,7 @@
  */
 
 import { MACHINE_SYNCHRONOUS_COMMIT_COMPARISON } from '../spine/machine-comparison'
+import { BUILD_LABEL } from './build'
 
 const KIB = 1024
 const MIB = KIB * KIB
@@ -22,6 +23,9 @@ const POSTGRESQL_VERSION = {
 } as const
 
 export const CLAIM_VALUES = {
+  appVersion: {
+    label: BUILD_LABEL,
+  },
   walSegment: {
     bytes: 16 * MIB,
     label: '16 MiB',
@@ -172,6 +176,11 @@ export const CLAIM_VALUES = {
 } as const
 
 export const CLAIMS = {
+  appVersion: {
+    owner: 'src/core/build.ts#BUILD_LABEL',
+    value: CLAIM_VALUES.appVersion,
+    surfaces: ['help:build marker', 'Diagnose:build marker', 'corrections:issue body'],
+  },
   walSegment: {
     owner: 'src/core/claims.ts#CLAIM_VALUES.walSegment',
     value: CLAIM_VALUES.walSegment,

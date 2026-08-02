@@ -2,10 +2,11 @@ import '../styles/tour.css'
 
 import type { Knobs, QueryKind, TracePlayback, TraceStop, TourChapter } from '../core/types'
 import { CLAIM_VALUES } from '../core/claims'
+import { createCorrectionPath, displayedClaim } from '../core/corrections'
 import { mdToHtml } from './content'
 import { clamp } from '../core/util'
 import { MODEL_TIME_STRETCH, sqlFor } from '../sim/model'
-import { SCENARIO_NARRATION_SECONDS } from '../sim/scenarios'
+import { SCENARIOS, SCENARIO_NARRATION_SECONDS } from '../sim/scenarios'
 import { MODE_IDS } from './mode-exits'
 import { TABLES } from '../world/layout'
 import { TRACE_COPY } from './trace-copy'
@@ -390,6 +391,16 @@ export function createTour(ctx: UiContext): UiModule {
     stepStrip,
     el('div', { class: 'tour-bar' }, barFill),
   )
+  createCorrectionPath(card, {
+    surface: 'City / Guided tour',
+    panel: () => `${STEPS[index].title} (${STEPS[index].id})`,
+    source: () => `src/ui/tour.ts#CHAPTERS[${STEPS[index].id}]`,
+    claim: () => displayedClaim(titleEl, bodyEl),
+    context: () => [
+      ['Chapter', `${index + 1} of ${STEPS.length} (${STEPS[index].id})`] as const,
+      ...(sim.state.scenario ? [['Scenario', sim.state.scenario] as const] : []),
+    ],
+  })
 
   /* =======================================================================
    * THE NARRATION CARD — scenario beats, when the tour is not running
@@ -463,6 +474,67 @@ export function createTour(ctx: UiContext): UiModule {
   let traceBaseline: Knobs | null = null
   const traceTouched = new Set<KnobKey>()
   const traceDwell = createTraceDwell(sim.state.trace)
+
+  const currentScenarioBeat = () => {
+    if (traceActive) return null
+    const scenario = sim.state.scenario
+      ? SCENARIOS.find((candidate) => candidate.id === sim.state.scenario)
+      : undefined
+    const beats = scenario?.beats ?? []
+    const beatIndex = beats.findIndex(
+      ([, beatTitle]) => beatTitle === narrateTitle.textContent,
+    )
+    return scenario && beatIndex >= 0 ? { scenario, beats, beatIndex } : null
+  }
+
+  const currentScenario = () => !traceActive && sim.state.scenario
+    ? SCENARIOS.find((candidate) => candidate.id === sim.state.scenario)
+    : undefined
+
+  createCorrectionPath(narrateCard, {
+    surface: () => currentScenario() ? 'City / Scenario' : 'City / Query trace',
+    panel: () => {
+      const beat = currentScenarioBeat()
+      const scenario = currentScenario()
+      return beat
+        ? `${beat.scenario.name} (${beat.scenario.id}) / ${narrateTitle.textContent}`
+        : scenario
+          ? `${scenario.name} (${scenario.id}) / ${narrateTitle.textContent}`
+          : `${narrateTitle.textContent || 'Query trace'} (${sim.state.trace.stop})`
+    },
+    source: () => {
+      const beat = currentScenarioBeat()
+      const scenario = currentScenario()
+      return beat
+        ? `src/sim/scenarios.ts#SCENARIOS[${beat.scenario.id}].beats[${beat.beatIndex}]`
+        : scenario
+          ? 'src/sim/model.ts#scenario narration'
+          : `src/ui/trace-copy.ts#TRACE_COPY.${sim.state.trace.stop}`
+    },
+    claim: () => displayedClaim(narrateTitle, narrateBody, traceHint),
+    context: () => {
+      const beat = currentScenarioBeat()
+      if (beat) {
+        const [at] = beat.beats[beat.beatIndex]
+        return [
+          ['Scenario', beat.scenario.id],
+          ['Beat', `${beat.beatIndex} at ${at} model s`],
+        ]
+      }
+      const scenario = currentScenario()
+      if (scenario) {
+        return [
+          ['Scenario', scenario.id],
+          ['Scenario time', `${sim.state.scenarioT.toFixed(1)} model s`],
+        ]
+      }
+      const table = TABLES[sim.state.trace.table]?.id ?? 'none'
+      return [
+        ['Trace stop', sim.state.trace.stop],
+        ['Model statement', `${sim.state.trace.query} on ${table}`],
+      ]
+    },
+  })
 
   const traceChoiceButtons = TRACE_CHOICES.map((choice) =>
     el(

@@ -1,6 +1,7 @@
 import '../styles/hud.css'
 
 import { BUILD_LABEL } from '../core/build'
+import { createCorrectionPath, displayedClaim } from '../core/corrections'
 import { DESTINATIONS } from '../core/destinations'
 import { COLOR, onThemeMode } from '../core/theme'
 import type { Bus, ColorKey } from '../core/types'
@@ -284,8 +285,7 @@ export function createHelp(ctx: UiContext): UiModule {
         'Mistakes have been found and fixed throughout. ' +
         "Touch controls have been verified only in Chrome's mobile emulation. " +
         '<a href="https://github.com/NikolayS/PGSimCity#how-much-to-trust-this" target="_blank" rel="noopener">See exactly what was checked.</a>' +
-        '<br><br>Found one? Corrections from people who know the engine are exactly what this needs — please ' +
-        '<a href="https://github.com/NikolayS/PGSimCity/issues/new" target="_blank" rel="noopener">open an issue</a> or send a ' +
+        '<br><br>Found one? Use “This does not match PostgreSQL” at the foot of the panel so its exact claim and source arrive with the report, or send a ' +
         '<a href="https://github.com/NikolayS/PGSimCity/pulls" target="_blank" rel="noopener">pull request</a>.',
     }),
     el('p', {
@@ -293,6 +293,7 @@ export function createHelp(ctx: UiContext): UiModule {
       html:
         '<strong>Analytics & privacy.</strong> PGSimCity uses Plausible to count aggregate visits, referring sites, ' +
         'bounce rate and visit duration, plus named interface actions and outbound clicks tagged with the panel that sent them. ' +
+        'Correction links are excluded so their pre-filled issue bodies never enter analytics. ' +
         'Its event payload contains no names, email addresses, free-form input, browser fingerprint or personal data supplied ' +
         'by the application. Plausible briefly derives a daily visitor count from request IP and user agent without storing ' +
         'either raw value or a persistent identifier. There are no analytics cookies, ad networks or session recordings. ' +
@@ -354,6 +355,17 @@ export function createHelp(ctx: UiContext): UiModule {
     ),
     helpBody,
   )
+  createCorrectionPath(dialog, {
+    surface: 'City / Help',
+    panel: 'How to read the city',
+    source: 'src/ui/help.ts#READING; src/ui/help.ts#createHelp',
+    claim: () => displayedClaim(
+      dialog.querySelector<HTMLElement>('#help-title'),
+      dialog.querySelector<HTMLElement>('.pg-sub'),
+      dialog.querySelector<HTMLElement>('.help-reading'),
+      ...dialog.querySelectorAll<HTMLElement>('.help-disclaimer'),
+    ),
+  })
 
   root.classList.add('help-overlay')
   root.hidden = true

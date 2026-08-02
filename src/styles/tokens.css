@@ -21,6 +21,35 @@
   --pg-disclosure: 1;
 }
 
+.pg-correction {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 0.35em;
+  margin: auto 0 0;
+  padding: 10px 14px;
+  border-top: 1px solid var(--line-hair);
+  color: var(--ink-faint);
+  font-family: var(--f-mono);
+  font-size: max(10px, var(--fs-micro));
+  line-height: 1.4;
+}
+
+.pg-correction__link {
+  color: var(--ink-dim);
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 3px;
+}
+
+.pg-correction__link:hover,
+.pg-correction__link:focus-visible {
+  color: var(--ink);
+  outline: none;
+  text-decoration-color: currentColor;
+}
+
 :root {
   /* --- surfaces --- */
   --bg-void: #04060c;

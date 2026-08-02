@@ -19,6 +19,7 @@ import { ANALYTICS_EVENTS, startAnalytics } from '../core/analytics'
 import { BUILD_LABEL } from '../core/build'
 import { createBus } from '../core/bus'
 import { CLAIM_VALUES } from '../core/claims'
+import { createCorrectionPath, displayedClaim } from '../core/corrections'
 import { createSim } from '../sim/model'
 import { SCENARIOS } from '../sim/scenarios'
 import { DEFAULT_KNOBS } from '../core/types'
@@ -838,13 +839,59 @@ function footer(): HTMLElement {
     el('p', {
       class: 'foot__legal',
       text:
-        'Privacy: cookie-free Plausible analytics counts aggregate visits and named interactions, including outbound links tagged by this panel. Its event payload contains no form input, browser fingerprint or personal data supplied by the application; Plausible derives a daily count from request IP and user agent without storing either raw value or a persistent identifier. There are no ad networks or session recordings, and blocking analytics does not affect this page.',
+        'Privacy: cookie-free Plausible analytics counts aggregate visits and named interactions, including ordinary outbound links tagged by this panel. Correction links are excluded so their pre-filled issue bodies never enter analytics. Its event payload contains no form input, browser fingerprint or personal data supplied by the application; Plausible derives a daily count from request IP and user agent without storing either raw value or a persistent identifier. There are no ad networks or session recordings, and blocking analytics does not affect this page.',
     }),
     el('p', {
       class: 'build-marker',
       text: `PGSimCity ${BUILD_LABEL}`,
       'aria-label': `PGSimCity build ${BUILD_LABEL}`,
     }),
+  )
+}
+
+function correctionPanel(): string {
+  if (screen.kind === 'flow') return 'Query flow'
+  if (screen.kind === 'home') return 'Diagnose home'
+  if (screen.kind === 'instrument') return `${screen.id} (instrument)`
+  const node = NODES.get(screen.nodeId)
+  return `${screen.nodeId} — ${node?.title ?? 'unknown diagnostic node'}`
+}
+
+function correctionSource(): string {
+  if (screen.kind === 'flow') return 'src/observability/flow2d.ts#createFlow2dView'
+  if (screen.kind === 'home') return 'src/observability/main.ts#renderHome'
+  if (screen.kind === 'instrument') {
+    return `src/observability/catalog.ts#CATALOG[${screen.id}]`
+  }
+  const node = NODES.get(screen.nodeId)
+  const collection = node?.kind === 'verdict' ? 'VERDICTS' : 'STEPS'
+  return `src/observability/paths.ts#${collection}[${screen.nodeId}]`
+}
+
+function correctionContext(): readonly (readonly [string, string])[] {
+  if (screen.kind === 'instrument') return [['PostgreSQL version filter', String(pgVersion)]]
+  if (screen.kind !== 'console') return []
+  return [
+    ['Staged scenario', screen.symptom.scenario ?? 'none'],
+    ['Decision path', [...screen.trail, screen.nodeId].join(' → ')],
+    ['PostgreSQL version filter', String(pgVersion)],
+  ]
+}
+
+function correctionClaim(content: HTMLElement): string {
+  if (screen.kind === 'console') {
+    const blocks = content.querySelectorAll<HTMLElement>(':scope > .block')
+    return displayedClaim(
+      content.querySelector<HTMLElement>(':scope > .card__head'),
+      blocks[0],
+      blocks[1],
+    )
+  }
+  return displayedClaim(
+    ...Array.from(content.children)
+      .filter((child): child is HTMLElement => (
+        child instanceof HTMLElement && child.dataset.correctionPath !== 'true'
+      )),
   )
 }
 
@@ -891,6 +938,13 @@ function render(): void {
     else content = renderVerdict(screen, node)
   }
 
+  createCorrectionPath(content, {
+    surface: screen.kind === 'flow' ? 'Query flow' : 'Diagnose',
+    panel: correctionPanel,
+    source: correctionSource,
+    claim: () => correctionClaim(content),
+    context: correctionContext,
+  })
   pane.replaceChildren(...[banner, content, footer()].filter(Boolean).map((x) => x as HTMLElement))
 }
 

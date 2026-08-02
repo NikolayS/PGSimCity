@@ -2,6 +2,7 @@ import '../styles/hud.css'
 
 import { DESTINATIONS, destinationForDistrict } from '../core/destinations'
 import { CLAIM_VALUES } from '../core/claims'
+import { createCorrectionPath, displayedClaim } from '../core/corrections'
 import { COLOR, cssColor, onThemeMode, themeMode, toggleThemeMode } from '../core/theme'
 import { clamp, fmtBytes, fmtDuration, fmtNum } from '../core/util'
 import type {
@@ -754,6 +755,23 @@ export function createHud(ctx: UiContext): UiModule {
       ' can retain a response-time histogram inside PostgreSQL.',
     ),
   )
+  createCorrectionPath(latencyPanel, {
+    surface: 'City / Latency vital',
+    panel: 'Modeled backend-trip latency',
+    source: 'src/ui/hud.ts#latencyPanel; src/core/claims.ts#CLAIM_VALUES.modelLatency',
+    claim: () => displayedClaim(
+      latencyPanel.querySelector<HTMLElement>('.hud-latency__head'),
+      latencyPanel.querySelector<HTMLElement>('.hud-latency__quantiles'),
+      latencyPanel.querySelector<HTMLElement>('.hud-latency__anatomy'),
+      latencyPanel.querySelector<HTMLElement>('.hud-latency__note'),
+    ),
+    context: () => [
+      ['Scenario', sim.state.scenario ?? 'free running'],
+      ['Scenario time', `${sim.state.scenarioT.toFixed(1)} model s`],
+      ['Latency window', CLAIM_VALUES.modelLatency.disclosure],
+    ],
+    disclosure: true,
+  })
   topEl.append(topBar, latencyPanel)
 
   const latencyVital = vitals.find((vital) => vital.def.key === 'latency')
@@ -1153,6 +1171,26 @@ export function createHud(ctx: UiContext): UiModule {
     decisionResult,
     decisionActions,
   )
+  createCorrectionPath(decisionRoot, {
+    surface: 'City / Operator scenario',
+    panel: () => decisionTitle.textContent || 'Operator decision',
+    source: () => `src/sim/scenarios.ts#SCENARIOS[${sim.state.scenario ?? 'none'}].decision`,
+    claim: () => displayedClaim(
+      decisionTitle,
+      decisionState,
+      ...decisionFacts.map((fact) => fact.root),
+      decisionResult,
+    ),
+    context: () => {
+      const decision = sim.state.scenarioDecision
+      if (!decision || !sim.state.scenario) return []
+      return [
+        ['Scenario', sim.state.scenario],
+        ['Decision phase', decision.phase],
+        ['Choice', decision.choice ?? 'not chosen'],
+      ]
+    },
+  })
   bottomEl.append(decisionRoot, transport)
 
   let scenariosOpen = false
