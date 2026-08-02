@@ -9,6 +9,50 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## [0.32.0] — 2026-08-02
+
+### A spine: claims now have an owner
+
+Four review rounds found dozens of real errors. A coherence review then named the
+pattern behind most of them, and was explicit that more review would not fix it:
+
+> *"Nothing in this project owns a claim, a convention, or a link across the
+>  surfaces that carry it. Every failure is one shape — a fix, a feature, or a
+>  convention landed on some surfaces and not the rest."*
+>
+> *"More review will not fix this; three rounds already found dozens of genuine
+>  errors **and produced most of the drift**, because each fix was scoped to a
+>  file."*
+
+The evidence was concrete. `standby_b` reached the model, the world and the views
+projection — and not the Diagnose branch logic, so the tool announced "the
+standby is current" with 17 MiB of lag on screen. The `max_wal_size` fix reached
+the model **with a comment explaining why** and not the dial. A truncation fix
+reached four prose surfaces and not the plate painted in the world.
+
+Claims now have one source, and surfaces that restate them are checked against
+it. Proven by deliberate breakage: changing a model value makes the tests name
+the surfaces that disagree —
+
+```
+bufferSample: model:default active frames disagrees with ...
+bulkReadRing:  model:bulk-read ring disagrees with ...
+```
+
+— rather than leaving them quietly wrong until someone runs the app and notices.
+
+### Three links nobody owned
+
+The **deep links into the city did nothing** — around thirty-six of them, and the
+only edge joining a symptom to the mechanism that causes it. The **tour rendered
+raw markdown** while `mdToHtml()` sat unused. And the **boot screen still said
+"unreviewed"** after four review rounds.
+
+Each is the same shape: a convention that existed on one surface and not the one
+that needed it.
+
+---
+
 ## [0.31.0] — 2026-08-01
 
 ### You can watch a WAL segment fill
