@@ -5,6 +5,16 @@
   font-family: Georgia, "Times New Roman", serif;
 }
 
+@property --pg-disclosure {
+  syntax: '<integer>';
+  inherits: false;
+  initial-value: 0;
+}
+
+[data-disclosure] {
+  --pg-disclosure: 1;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -1207,6 +1217,10 @@ button:focus-visible {
     font-size: 13px;
   }
 
+  .comparison-header .eyebrow {
+    font-size: 9px;
+  }
+
   .comparison-header__actions {
     gap: 4px;
   }
@@ -1232,6 +1246,10 @@ button:focus-visible {
     font-size: 10px;
   }
 
+  .comparison-proof__verdict span {
+    font-size: 9px;
+  }
+
   .comparison-proof__verdict small {
     font-size: 9px;
   }
@@ -1249,14 +1267,18 @@ button:focus-visible {
   }
 
   .comparison-timeline {
-    display: none;
+    display: grid;
+  }
+
+  .comparison-timeline > p {
+    font-size: 9px;
   }
 
   .comparison-timeline__row {
     grid-template-columns: 40px minmax(76px, 2.2fr) 35px minmax(86px, 1.4fr) 37px;
     min-height: 21px;
     gap: 2px;
-    font-size: 6px;
+    font-size: 9px;
   }
 
   .comparison-timeline__row > * {

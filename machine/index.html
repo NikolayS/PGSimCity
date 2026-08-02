@@ -192,9 +192,13 @@ EACH SUBMITTED STATEMENT EXECUTES ONCE; DISPLAYED ROWS COME FROM THAT EXECUTION.
       >
         <header class="comparison-header">
           <div>
-            <p class="eyebrow">DOCUMENTED BEHAVIOUR / MODELLED REPLAY</p>
+            <p class="eyebrow" data-disclosure="comparison-framing">DOCUMENTED BEHAVIOUR / MODELLED REPLAY</p>
             <h2 id="comparison-title">ONE P EXECUTION. TWO M COMMIT POLICIES.</h2>
-            <div class="comparison-source-key" aria-label="Data source key">
+            <div
+              class="comparison-source-key"
+              data-disclosure="comparison-source-key"
+              aria-label="Data source key"
+            >
               <span><b class="source-medallion postgres-source">P</b> POSTGRESQL EXECUTION</span>
               <span><b class="source-medallion model-source">M</b> MODELLED REPLAY</span>
             </div>
@@ -207,17 +211,20 @@ EACH SUBMITTED STATEMENT EXECUTES ONCE; DISPLAYED ROWS COME FROM THAT EXECUTION.
 
         <section id="comparison-proof" class="comparison-proof" aria-label="Comparison finding">
           <div class="comparison-proof__verdict">
-            <span><b class="source-medallion model-source">M</b> MODELLED FINDING</span>
+            <span data-disclosure="comparison-finding-source"><b class="source-medallion model-source">M</b> MODELLED FINDING</span>
             <strong id="comparison-finding"></strong>
-            <small id="comparison-pglite-disclosure"></small>
+            <small
+              id="comparison-pglite-disclosure"
+              data-disclosure="comparison-pglite-limitation"
+            ></small>
           </div>
           <div class="comparison-contract">
-            <p><b>MODELLED</b> <code>synchronous_commit</code>: <code>on</code> vs <code>off</code></p>
-            <p><b>HELD</b> SQL · ONE P REPORT · PLAN · BUFFERS · ROUTE · VIEW PACE · NO SYNC STANDBY</p>
+            <p data-disclosure="comparison-modelled-setting"><b>MODELLED</b> <code>synchronous_commit</code>: <code>on</code> vs <code>off</code></p>
+            <p data-disclosure="comparison-held-constant"><b>HELD</b> SQL · ONE P REPORT · PLAN · BUFFERS · ROUTE · VIEW PACE · NO SYNC STANDBY</p>
             <code id="comparison-sql">UPDATE accounts SET updated_at = updated_at WHERE id = 42;</code>
           </div>
           <div class="comparison-timeline" aria-label="Aligned commit acknowledgement timeline">
-            <p>ALIGNED COMMIT WINDOW · VIEW PACE, NOT LATENCY</p>
+            <p data-disclosure="comparison-pace-limitation">ALIGNED COMMIT WINDOW · VIEW PACE, NOT LATENCY</p>
             <div class="comparison-timeline__row" data-lane="a">
               <b>A · ON</b>
               <span class="comparison-timeline__same">SAME ROUTE</span>
@@ -247,9 +254,13 @@ EACH SUBMITTED STATEMENT EXECUTES ONCE; DISPLAYED ROWS COME FROM THAT EXECUTION.
                 <b>MODELLED ON POLICY</b>
                 <code>synchronous_commit = on</code>
               </div>
-              <span class="comparison-board__phase" data-comparison-phase="a">READY</span>
+              <span
+                class="comparison-board__phase"
+                data-comparison-phase="a"
+                data-disclosure="comparison-phase-a"
+              >READY</span>
             </header>
-            <p><b class="source-medallion postgres-source">P</b> SAME POSTGRESQL REPORT <b class="source-medallion model-source">M</b> WAITS FOR LOCAL WAL FLUSH</p>
+            <p data-disclosure="comparison-on-source"><b class="source-medallion postgres-source">P</b> SAME POSTGRESQL REPORT <b class="source-medallion model-source">M</b> WAITS FOR LOCAL WAL FLUSH</p>
             <div class="comparison-board__viewport">
               <canvas
                 id="comparison-board-a"
@@ -266,9 +277,13 @@ EACH SUBMITTED STATEMENT EXECUTES ONCE; DISPLAYED ROWS COME FROM THAT EXECUTION.
                 <b>MODELLED OFF POLICY</b>
                 <code>synchronous_commit = off</code>
               </div>
-              <span class="comparison-board__phase" data-comparison-phase="b">READY</span>
+              <span
+                class="comparison-board__phase"
+                data-comparison-phase="b"
+                data-disclosure="comparison-phase-b"
+              >READY</span>
             </header>
-            <p><b class="source-medallion postgres-source">P</b> SAME POSTGRESQL REPORT <b class="source-medallion model-source">M</b> <span data-comparison-note="b">EARLY ACK; CRASH CAN LOSE RECENT ACKS UNTIL WAL FLUSH</span></p>
+            <p data-disclosure="comparison-off-source"><b class="source-medallion postgres-source">P</b> SAME POSTGRESQL REPORT <b class="source-medallion model-source">M</b> <span data-comparison-note="b">EARLY ACK; CRASH CAN LOSE RECENT ACKS UNTIL WAL FLUSH</span></p>
             <div class="comparison-board__viewport">
               <canvas
                 id="comparison-board-b"
@@ -283,7 +298,10 @@ EACH SUBMITTED STATEMENT EXECUTES ONCE; DISPLAYED ROWS COME FROM THAT EXECUTION.
         <footer class="comparison-actions">
           <button id="comparison-run" type="button">RUN MODELLED REPLAY</button>
           <button id="comparison-continue" type="button" hidden>CONTINUE AFTER FINDING</button>
-          <span id="comparison-replay-disclosure"></span>
+          <span
+            id="comparison-replay-disclosure"
+            data-disclosure="comparison-replay-limitation"
+          ></span>
         </footer>
       </section>
     </main>
