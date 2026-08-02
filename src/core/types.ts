@@ -860,6 +860,8 @@ export interface PointInTimeRestore {
   resultMessage: string
   /** Missing-WAL result discovered after backup fetch and available replay. */
   pendingWalFailureReason: string
+  /** Backup/control-file incompatibility discovered when recovery starts. */
+  pendingStartupFailureReason: string
   /** This PITR operation stops at the target; promotion is a separate HA action. */
   promoted: false
 }

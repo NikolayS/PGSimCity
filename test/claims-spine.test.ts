@@ -296,7 +296,7 @@ describe('claims and conventions spine', () => {
     )
     const restoreDoc = DOCS_STORAGE.find((entry) => entry.id === 'recovery.ground')
     const timingMetric = restoreDoc?.metrics?.find(
-      (metric) => metric.label === 'Restore replay time',
+      (metric) => metric.label === 'Restore-to-target time',
     )
     expect(timingMetric?.get(sim.state)).toBe('not measured')
     expect(sim.startRestoreDrill('verified')).toBe(false)
@@ -334,7 +334,8 @@ describe('claims and conventions spine', () => {
     expect(CLAIM_VALUES.restoreDrill.checksumDisclosure).toMatch(/pgBackRest verify/i)
     expect(CLAIM_VALUES.restoreDrill.checksumDisclosure)
       .toMatch(/backup-push --verify.*taking the backup/i)
-    expect(CLAIM_VALUES.restoreDrill.timeDisclosure).toMatch(/restore replay time/i)
+    expect(CLAIM_VALUES.restoreDrill.timeDisclosure).toMatch(/restore-to-target time/i)
+    expect(CLAIM_VALUES.restoreDrill.timeDisclosure).toMatch(/starts before.*backup-fetch/i)
     expect(CLAIM_VALUES.restoreDrill.timeDisclosure)
       .toMatch(/promotion.*endpoint.*client reconnection.*service restoration/i)
 

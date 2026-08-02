@@ -98,9 +98,9 @@ function inspectorCorrectionContext(
       ? 'not run'
       : `${CLAIM_VALUES.restoreDrill.levels[drill.level].label} (${drill.level})`
     const restoreTime = drill.measuredRestoreToTargetSec > 0
-      ? `${drill.measuredRestoreToTargetSec} model s measured`
+      ? `${fmtDuration(drill.measuredRestoreToTargetSec)} measured`
       : active
-        ? `${drill.estimatedRestoreToTargetSec} model s estimated`
+        ? `${fmtDuration(drill.estimatedRestoreToTargetSec)} estimated`
         : 'not measured'
     return [
       ['Drill verdict', verdict],
@@ -651,17 +651,17 @@ export function createInspector(ctx: UiContext): UiModule {
         const timelineResult = ctx.sim.state.disasterRecovery.restore.resultMessage
         setText(
           result,
-          `${resultMeta.label} · PASS — Restore-to-target ${fmtDuration(drill.measuredRestoreToTargetSec)} measured · total drill ${fmtDuration(drill.elapsedSec)}${timelineResult ? ` · ${timelineResult}` : ''}`,
+          `${resultMeta.label} · PASS — Restore-to-target time ${fmtDuration(drill.measuredRestoreToTargetSec)} measured · total drill ${fmtDuration(drill.elapsedSec)}${timelineResult ? ` · ${timelineResult}` : ''}`,
         )
         setText(proof, `Proved: ${resultMeta.supports}`)
       } else if (active) {
         setText(
           result,
-          `RUNNING — ${drill.status} · Restore-to-target ${fmtDuration(drill.estimatedRestoreToTargetSec)} estimate · backup ${fmtDuration(drill.backupAgeSec)} old · ${fmtBytes(drill.walBytesRequired)} WAL`,
+          `RUNNING — ${drill.status} · Restore-to-target time ${fmtDuration(drill.estimatedRestoreToTargetSec)} estimate · backup ${fmtDuration(drill.backupAgeSec)} old · ${fmtBytes(drill.walBytesRequired)} WAL`,
         )
         setText(proof, `Proved only if this finishes PASS: ${CLAIM_VALUES.restoreDrill.levels[drill.level].supports}`)
       } else {
-        setText(result, 'Restore-to-target: not measured — run the drill against the current retained objects.')
+        setText(result, 'Restore-to-target time: not measured — run the drill against the current retained objects.')
         setText(proof, `Proved only by a PASS: ${selectedMeta.supports}`)
       }
       setText(limits, `Did not prove: ${resultMeta.limits}`)

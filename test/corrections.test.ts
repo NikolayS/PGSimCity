@@ -269,7 +269,7 @@ describe('PostgreSQL correction reports', () => {
       .links[0].body
     expect(inspectorBody).toContain('- Drill verdict: `passed`')
     expect(inspectorBody).toContain('- Drill level: `Full-cluster smoke (cluster)`')
-    expect(inspectorBody).toContain('- Restore-to-target time: `12.5 model s measured`')
+    expect(inspectorBody).toContain('- Restore-to-target time: `12.5 s measured`')
     expect(inspectorBody).toContain('- recoveryTargetAge: `40 s`')
     expect(inspectorBody).toContain('- walGDownloadConcurrency: `4 workers`')
     expect(inspectorBody).not.toContain('restoreDrillFault')

@@ -51,6 +51,19 @@ function plateText(object: THREE.Object3D): string | undefined {
   return image?.dataset.plateText
 }
 
+type Sim = ReturnType<typeof createSim>
+
+function advanceUntil(sim: Sim, done: () => boolean, limit = 240): void {
+  const end = sim.state.t + limit
+  while (!done() && sim.state.t < end) sim.update(1 / 15)
+  expect(done(), `condition was not reached within ${limit}s`).toBe(true)
+}
+
+function takeBackup(sim: Sim): void {
+  expect(sim.startBaseBackup()).toBe(true)
+  advanceUntil(sim, () => sim.state.disasterRecovery.backup.status === 'idle')
+}
+
 describe('continuity and three-node projection', () => {
   const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document')
 
@@ -371,6 +384,143 @@ describe('continuity and three-node projection', () => {
       if (color.getHex() !== 0x0a1120) litParentSilos++
     }
     expect(litParentSilos).toBe(CONTINUITY.silo.cols - parentGapSegments)
+
+    continuity.dispose?.()
+    theme.dispose()
+  })
+
+  it('reports the actual recovery stop for latest and current timeline restores', () => {
+    const bus = createBus()
+    const latest = createSim(bus, { scheduledBackups: false })
+    const theme = createTheme()
+    const defs: ComponentDef[] = []
+    const ctx: WorldContext = {
+      scene: new THREE.Scene(),
+      camera: new THREE.PerspectiveCamera(),
+      bus,
+      sim: latest.state,
+      quality: {
+        level: 'low',
+        pixelRatio: 1,
+        bloom: false,
+        shadows: false,
+        maxParticles: 64,
+        maxLabels: 32,
+        antialias: false,
+      },
+      theme,
+      register: (def) => defs.push(def),
+      flow: () => undefined,
+    }
+    const continuity = createContinuity(ctx)
+    const readout = (id: string, sim: Sim): string => {
+      const value = defs.find((def) => def.id === id)?.readout?.(sim.state)
+      if (!value) throw new Error(`${id} has no readout`)
+      return value
+    }
+
+    latest.setKnob('tps', 6_000)
+    latest.setKnob('writeRatio', 1)
+    latest.setKnob('synchronousCommit', 'local')
+    latest.setKnob('standbyANetworkLag', 400)
+    takeBackup(latest)
+    const latestBackup = latest.state.disasterRecovery.backups[0]
+    advanceUntil(
+      latest,
+      () => latest.state.disasterRecovery.archive.archivedThroughLsn
+        > latest.state.replication.standbys[0].flushedLsn
+        && latest.state.disasterRecovery.archive.archivedThroughTime > latestBackup.completedAt,
+      180,
+    )
+    const latestTargetTime = latest.state.disasterRecovery.archive.archivedThroughTime
+    expect(latest.startFailover('standbyA')).toBe(true)
+    advanceUntil(latest, () => latest.state.highAvailability.transition.status === 'complete')
+    expect(latest.startPointInTimeRestore(latest.state.t - latestTargetTime)).toBe(true)
+    advanceUntil(
+      latest,
+      () => latest.state.disasterRecovery.restore.status === 'complete'
+        || latest.state.disasterRecovery.restore.status === 'failed',
+    )
+    expect(
+      latest.state.disasterRecovery.restore.status,
+      latest.state.disasterRecovery.restore.failureReason,
+    ).toBe('complete')
+    expect(readout('recovery.ground', latest)).toMatch(/fork reached.*transactions absent/i)
+    expect(readout('recovery.clock', latest)).toMatch(/fork reached.*replay stopped/i)
+    expect(readout('recovery.replay', latest)).toMatch(/stopped.*fork/i)
+
+    const current = createSim(createBus(), { scheduledBackups: false })
+    current.setKnob('tps', 6_000)
+    current.setKnob('writeRatio', 1)
+    current.setKnob('synchronousCommit', 'local')
+    current.setKnob('standbyANetworkLag', 400)
+    takeBackup(current)
+    const backup = current.state.disasterRecovery.backups[0]
+    advanceUntil(
+      current,
+      () => current.state.disasterRecovery.archive.archivedThroughLsn
+        > current.state.replication.standbys[0].flushedLsn
+        && current.state.disasterRecovery.archive.archivedThroughTime > backup.completedAt,
+      180,
+    )
+    const targetTime = current.state.disasterRecovery.archive.archivedThroughTime
+    expect(current.startFailover('standbyA')).toBe(true)
+    advanceUntil(current, () => current.state.highAvailability.transition.status === 'complete')
+    current.setKnob('recoveryTargetTimeline', 'current')
+    expect(current.startPointInTimeRestore(current.state.t - targetTime)).toBe(true)
+    advanceUntil(
+      current,
+      () => current.state.disasterRecovery.restore.status === 'complete'
+        || current.state.disasterRecovery.restore.status === 'failed',
+    )
+    expect(
+      current.state.disasterRecovery.restore.status,
+      current.state.disasterRecovery.restore.failureReason,
+    ).toBe('complete')
+    expect(readout('recovery.ground', current)).toMatch(/target reached.*not promoted/i)
+    expect(readout('recovery.ground', current)).not.toMatch(/fork|absent/i)
+    expect(readout('recovery.clock', current)).toMatch(/recovery_target_time reached/i)
+    expect(readout('recovery.replay', current)).toMatch(/selected recovery_target_time/i)
+
+    continuity.dispose?.()
+    theme.dispose()
+  })
+
+  it('shows only the two modeled timeline rows and qualifies the PITR stop plate', () => {
+    const bus = createBus()
+    const sim = createSim(bus)
+    const theme = createTheme()
+    const ctx: WorldContext = {
+      scene: new THREE.Scene(),
+      camera: new THREE.PerspectiveCamera(),
+      bus,
+      sim: sim.state,
+      quality: {
+        level: 'low',
+        pixelRatio: 1,
+        bloom: false,
+        shadows: false,
+        maxParticles: 64,
+        maxLabels: 32,
+        antialias: false,
+      },
+      theme,
+      register: () => undefined,
+      flow: () => undefined,
+    }
+    const continuity = createContinuity(ctx)
+    const plates: string[] = []
+    continuity.group.traverse((object) => {
+      const text = plateText(object)
+      if (text) plates.push(text)
+    })
+
+    expect(CONTINUITY.silo.rows).toBe(2)
+    expect(plates).toContain('tl 1')
+    expect(plates).toContain('tl 2')
+    expect(plates).not.toContain('tl 3')
+    expect(plates).not.toContain('tl 4')
+    expect(plates.some((text) => /PITR STOP.*FORK.*latest/i.test(text))).toBe(true)
 
     continuity.dispose?.()
     theme.dispose()

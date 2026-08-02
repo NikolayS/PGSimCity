@@ -246,7 +246,7 @@ export const CONTINUITY = {
     { forkX: 344, z: -2, deckY: 10.5 },
   ],
   /** Object-store silos: rows are timelines, columns are segments. */
-  silo: { rows: 4, cols: 8, pitchX: 6.4, pitchZ: 7, radius: 2.4, height: 6 },
+  silo: { rows: 2, cols: 8, pitchX: 6.4, pitchZ: 7, radius: 2.4, height: 6 },
   /** Base backups kept in the vault, newest last. */
   backupSlots: 5,
 } as const

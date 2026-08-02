@@ -75,6 +75,14 @@ const historyName = (tli: number) => tli.toString(16).toUpperCase().padStart(8, 
 
 export const TIMELINE_RECOVERY_PLATE_LABEL = CLAIM_VALUES.timelineRecovery.plate
 
+function latestDivergentTailTarget(s: SimState): boolean {
+  const restore = s.disasterRecovery.restore
+  return restore.recoveryTargetTimeline === 'latest'
+    && restore.targetTime <= s.highAvailability.timeline.forkedAt
+    && restore.targetLsn > s.highAvailability.timeline.forkLsn
+    && s.highAvailability.timeline.forkLsn > 0
+}
+
 /* ==========================================================================
  * Factory.
  * ========================================================================*/
@@ -509,7 +517,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
 
   /** PITR stopping does not itself promote; HA is operated separately. */
   const drillBoard = plate(
-    'PITR STOPS AT recovery_target_time · HA promotion is a separate operation',
+    'PITR STOP: TARGET · OR FORK FOR A DISCARDED TAIL UNDER latest · HA PROMOTION SEPARATE',
     RP[0], 12, RP[2] + 17, 0, 1.5, COLOR.warn, 0.85,
   )
   drillBoard.visible = true
@@ -1003,10 +1011,8 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     readout: (s: SimState) => {
       const drill = s.disasterRecovery.drill
       const r = s.disasterRecovery.restore
-      const divergentTailTarget = r.targetTime <= s.highAvailability.timeline.forkedAt
-        && r.targetLsn > s.highAvailability.timeline.forkLsn
-        && s.highAvailability.timeline.forkLsn > 0
-      const replayLabel = divergentTailTarget ? 'restore-to-fork' : 'restore-to-target'
+      const divergentTailTarget = latestDivergentTailTarget(s)
+      const replayLabel = divergentTailTarget ? 'restore-to-fork time' : 'restore-to-target time'
       if (
         drill.status === 'restoring'
         || drill.status === 'verifying'
@@ -1049,6 +1055,9 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     color: COLOR.warn,
     readout: (s: SimState) => {
       const r = s.disasterRecovery.restore
+      if (r.status === 'complete' && latestDivergentTailTarget(s)) {
+        return 'fork reached before recovery_target_time · replay stopped'
+      }
       if (r.status === 'complete') return 'recovery_target_time reached · replay stopped'
       if (r.status === 'failed') return r.failureReason
       return `${s.knobs.recoveryTargetAge}s before now · ${(r.progress * 100).toFixed(0)}% restored`
@@ -1085,7 +1094,9 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     color: COLOR.bufClean,
     readout: (s: SimState) =>
       s.disasterRecovery.restore.status === 'complete'
-        ? 'stopped on the selected recovery_target_time'
+        ? latestDivergentTailTarget(s)
+          ? 'stopped at the timeline fork before the selected recovery_target_time'
+          : 'stopped on the selected recovery_target_time'
         : s.disasterRecovery.restore.status === 'replaying'
           ? 'startup process replaying archived WAL'
           : 'stopped',

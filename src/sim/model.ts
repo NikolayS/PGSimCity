@@ -986,6 +986,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         failureReason: '',
         resultMessage: '',
         pendingWalFailureReason: '',
+        pendingStartupFailureReason: '',
         promoted: false,
       },
       drill: {
@@ -2946,7 +2947,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     op.progress = 0
     op.startedAt = state.t
     op.startTimeline = state.highAvailability.timeline.current
-    op.startLsn = wal.insertLsn
+    op.startLsn = standbyA.appliedLsn
     op.stopLsn = 0
     op.dataBytes = dr.dataDirectoryBytes
     op.objectStoreBytes = Math.round(op.dataBytes * DR_OBJECT_STORE_RATIO)
@@ -3040,6 +3041,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     restore.failureReason = ''
     restore.resultMessage = ''
     restore.pendingWalFailureReason = ''
+    restore.pendingStartupFailureReason = ''
   }
 
   function resetDrill(level: RestoreDrillLevel, targetTime: number): void {
@@ -3220,6 +3222,14 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     restore.backupId = selected.id
     restore.backupAgeSec = Math.max(0, targetTime - selected.completedAt)
     restore.backupBytesRequired = selected.dataBytes
+    if (
+      restore.crossesTimelineFork
+      && selected.startTimeline === ha.timeline.parent
+      && restore.targetTimeline === ha.timeline.current
+      && selected.stopLsn > ha.timeline.forkLsn
+    ) {
+      restore.pendingStartupFailureReason = `Recovery startup failed: requested timeline ${restore.targetTimeline} does not contain backup ${selected.label}'s minimum recovery point ${fmtLsn(selected.stopLsn)} on timeline ${selected.startTimeline}; that point is past the fork ${fmtLsn(ha.timeline.forkLsn)}`
+    }
     const archiveEndLsn = archivedThroughForTimeline(restore.targetTimeline)
     const archiveEndTime = archivedThroughTimeForTimeline(restore.targetTimeline)
     const currentTargetReached = restore.recoveryTargetTimeline === 'current'
@@ -3270,7 +3280,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       return failRestore('PITR impossible: the selected target falls outside the modeled WAL history')
     }
     if (currentTargetUnreachable) {
-      restore.pendingWalFailureReason = `Recovery target not reached: recovery_target_timeline=current kept backup ${selected.label} on timeline ${restore.backupTimeline} and replayed its archived WAL through ${fmtLsn(archiveEndLsn)} (modeled archive-content time ${archiveEndTime.toFixed(1)}s), before the selected recovery_target_time ${targetTime.toFixed(1)}s`
+      restore.pendingWalFailureReason = targetLsn > archiveEndLsn
+        ? archiveGapReason(restore.targetTimeline)
+        : `Recovery target not reached: recovery_target_timeline=current kept backup ${selected.label} on timeline ${restore.backupTimeline} and replayed its archived WAL through ${fmtLsn(archiveEndLsn)} (modeled archive-content time ${archiveEndTime.toFixed(1)}s), before the selected recovery_target_time ${targetTime.toFixed(1)}s`
     } else if (restore.walBytesAvailable < restore.walBytesRequired) {
       const gapTimeline = restore.crossesTimelineFork
         && dr.archive.parentArchivedThroughLsn < ha.timeline.forkLsn
@@ -3332,7 +3344,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       + drill.checksumBytesRequired / DR_DRILL_VERIFY_BYTES_PER_SEC
       + drill.smokeBytesRequired / DR_DRILL_SMOKE_BYTES_PER_SEC
     toast(
-      `${CLAIM_VALUES.restoreDrill.levels[level].label} drill started on the recovery ground — restore-to-target clock running`,
+      `${CLAIM_VALUES.restoreDrill.levels[level].label} drill started on the recovery ground — restore-to-target time is running`,
       'info',
       6500,
     )
@@ -3382,12 +3394,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         : 0
       drill.objectStoreBytesRead =
         drill.backupObjectBytesRequired * backupReadFraction + restore.walBytesReplayed
-      if (
-        (restore.status === 'fetching' || restore.status === 'replaying')
-        && !backupById(drill.backupId)
-      ) {
-        failRestoreDrill('the selected full backup expired from retention before the restore reached its target')
-      } else if (restore.status === 'failed') {
+      if (restore.status === 'failed') {
         failRestoreDrill(restore.failureReason)
       } else if (restore.status === 'complete') {
         drill.objectStoreBytesRead = drill.backupObjectBytesRequired + restore.walBytesRequired
@@ -3435,8 +3442,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
     const backup = dr.backup
     if (backup.status === 'copying') {
-      if (!rep.standbys[0].connected) {
-        failBaseBackup('Full backup failed: standby_a disconnected while WAL-G was reading its data directory')
+      const sourceNode = state.cluster.nodes[1]
+      if (!sourceNode.online) {
+        failBaseBackup('Full backup failed: standby_a went offline while WAL-G was reading its data directory')
       } else {
         backup.copiedBytes = Math.min(
           backup.dataBytes,
@@ -3444,14 +3452,18 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         )
         backup.progress = backup.dataBytes > 0 ? backup.copiedBytes / backup.dataBytes : 1
         if (backup.copiedBytes >= backup.dataBytes) {
-          backup.stopLsn = wal.insertLsn
-          const requiredArchiveLsn = backupArchiveBoundary(backup.stopLsn)
-          // WAL-G waits for the backup stop WAL to be archived. Model the
-          // segment switch PostgreSQL requests at backup stop, then let the
-          // ordinary wal-push queue decide when completion is durable.
-          wal.insertLsn = Math.max(wal.insertLsn, requiredArchiveLsn)
-          if (dr.archive.archivedThroughLsn >= requiredArchiveLsn) completeBaseBackup()
-          else backup.status = 'waiting_wal'
+          if (ha.currentLeader === 'standbyA') {
+            failBaseBackup('Full backup failed: standby_a was promoted during the online backup, so pg_backup_stop cannot finish it')
+          } else {
+            backup.stopLsn = rep.standbys[0].appliedLsn
+            const requiredArchiveLsn = backupArchiveBoundary(backup.stopLsn)
+            // WAL-G waits for the backup stop WAL to be archived. Model the
+            // segment switch PostgreSQL requests at backup stop, then let the
+            // ordinary wal-push queue decide when completion is durable.
+            wal.insertLsn = Math.max(wal.insertLsn, requiredArchiveLsn)
+            if (dr.archive.archivedThroughLsn >= requiredArchiveLsn) completeBaseBackup()
+            else backup.status = 'waiting_wal'
+          }
         }
       }
     } else if (backup.status === 'waiting_wal') {
@@ -3462,35 +3474,41 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
     const restore = dr.restore
     if (restore.status === 'fetching' || restore.status === 'replaying') {
-      restore.elapsedSec += dt
-      if (restore.status === 'fetching') {
-        restore.backupBytesFetched = Math.min(
-          restore.backupBytesRequired,
-          restore.backupBytesFetched + backupFetchBytesPerSec() * dt,
-        )
-        if (restore.backupBytesFetched >= restore.backupBytesRequired) {
-          if (restore.walBytesRequired > 0) restore.status = 'replaying'
-          else if (restore.pendingWalFailureReason) failRestore(restore.pendingWalFailureReason)
-          else completeRestore()
+      if (!backupById(restore.backupId)) {
+        failRestore('The selected full backup expired from retention before the restore reached its target')
+      } else {
+        restore.elapsedSec += dt
+        if (restore.status === 'fetching') {
+          restore.backupBytesFetched = Math.min(
+            restore.backupBytesRequired,
+            restore.backupBytesFetched + backupFetchBytesPerSec() * dt,
+          )
+          if (restore.backupBytesFetched >= restore.backupBytesRequired) {
+            if (restore.pendingStartupFailureReason) {
+              failRestore(restore.pendingStartupFailureReason)
+            } else if (restore.walBytesRequired > 0) restore.status = 'replaying'
+            else if (restore.pendingWalFailureReason) failRestore(restore.pendingWalFailureReason)
+            else completeRestore()
+          }
         }
-      }
-      if (restore.status === 'replaying') {
-        const replayLimit = restore.pendingWalFailureReason
-          ? restore.walBytesAvailable
-          : restore.walBytesRequired
-        restore.walBytesReplayed = Math.min(
-          replayLimit,
-          restore.walBytesReplayed + walRecoveryBytesPerSec() * dt,
-        )
-        if (restore.walBytesReplayed >= replayLimit) {
-          if (restore.pendingWalFailureReason) failRestore(restore.pendingWalFailureReason)
-          else completeRestore()
+        if (restore.status === 'replaying') {
+          const replayLimit = restore.pendingWalFailureReason
+            ? restore.walBytesAvailable
+            : restore.walBytesRequired
+          restore.walBytesReplayed = Math.min(
+            replayLimit,
+            restore.walBytesReplayed + walRecoveryBytesPerSec() * dt,
+          )
+          if (restore.walBytesReplayed >= replayLimit) {
+            if (restore.pendingWalFailureReason) failRestore(restore.pendingWalFailureReason)
+            else completeRestore()
+          }
         }
+        restore.progress =
+          restore.estimatedDurationSec > 0
+            ? Math.min(1, restore.elapsedSec / restore.estimatedDurationSec)
+            : 1
       }
-      restore.progress =
-        restore.estimatedDurationSec > 0
-          ? Math.min(1, restore.elapsedSec / restore.estimatedDurationSec)
-          : 1
     }
     tickRestoreDrill(dt)
   }

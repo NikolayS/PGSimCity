@@ -757,7 +757,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Cost and cadence are policy',
-        body: `The restore replay clock starts before \`backup-fetch\` and stops at the modeled recovery stop. Normally that is the selected target. Under \`latest\`, a selected time inside the discarded timeline-1 tail lands at the fork on timeline 2 and reports the missing transactions instead. This is not RTO: promotion, \`recovery_target_action\`, endpoint cutover, client reconnection, and service restoration are outside it. The drill continues while validation reads local restored bytes. Object-store reads and recovery-host I/O are counted; this off-site ground never reads from the primary. ${CLAIM_VALUES.restoreDrill.physicalScopeDisclosure} ${CLAIM_VALUES.restoreDrill.cadenceDisclosure}`,
+        body: `The restore-to-target time starts before \`backup-fetch\` and stops at the modeled recovery stop. Normally that is the selected target. Under \`latest\`, a selected time inside the discarded timeline-1 tail lands at the fork on timeline 2 and reports the missing transactions instead. This is not RTO: promotion, \`recovery_target_action\`, endpoint cutover, client reconnection, and service restoration are outside it. The drill continues while validation reads local restored bytes. Object-store reads and recovery-host I/O are counted; this off-site ground never reads from the primary. ${CLAIM_VALUES.restoreDrill.physicalScopeDisclosure} ${CLAIM_VALUES.restoreDrill.cadenceDisclosure}`,
       },
       {
         heading: 'Replication is not this',
@@ -778,7 +778,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
           : CLAIM_VALUES.restoreDrill.levels[s.disasterRecovery.drill.level].label,
       },
       {
-        label: 'Restore replay time',
+        label: 'Restore-to-target time',
         get: (s) => s.disasterRecovery.drill.measuredRestoreToTargetSec > 0
           ? `${fmtDuration(s.disasterRecovery.drill.measuredRestoreToTargetSec)} measured`
           : s.disasterRecovery.drill.status === 'restoring'

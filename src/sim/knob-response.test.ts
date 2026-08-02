@@ -541,7 +541,13 @@ const RESPONSE_CONTRACTS = {
     measure(value: Knobs['recoveryTargetTimeline']) {
       const sim = createSim(createBus(), { scheduledBackups: false })
       setWorkload(sim)
+      sim.setKnob('standbyANetworkLag', 400)
       takeBackup(sim)
+      advanceUntil(
+        sim,
+        () => sim.state.disasterRecovery.archive.archivedThroughLsn
+          > sim.state.replication.standbys[0].flushedLsn,
+      )
       if (!sim.startFailover('standbyA')) throw new Error('failover did not start')
       advanceUntil(sim, () => sim.state.highAvailability.transition.status === 'complete')
       const frontier = sim.state.disasterRecovery.archive.archivedThroughLsn
