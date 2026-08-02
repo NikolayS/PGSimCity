@@ -305,6 +305,15 @@ findings that are deliberately left must be stated in the release notes.
    direction the mechanism implies; if the direction is what you are trying to
    find out, that is an experiment to run and report, not an assertion to freeze.
 
+   **And the mirror: never move a knob to keep an assertion green.** The commit
+   that added the write-ahead rule to eviction also raised a scenario's `tps`
+   from 2200 to 2600, because the fix cost ~4% throughput and
+   `operator-scenarios.test.ts` asserted absolute byte and transaction counts.
+   The model got more correct and the scenario's load was raised to hide it.
+   When a test breaks because the model improved, the assertion is what is
+   wrong — restate it as the durable property the scenario teaches. A calibration
+   change is a result to report, not a number to absorb.
+
 10. **An honesty disclosure is load-bearing content, not chrome.** Qualifications
     — `model ms`, "modelled, not measured", "PGlite cannot measure this" — may be
     shortened for a small screen. They may never be what gets dropped to make
