@@ -78,6 +78,7 @@ describe('claims and conventions spine', () => {
       'standbyNames',
       'modelDuration',
       'modelLatency',
+      'restoreDrill',
       'vacuumReclaim',
       'cityComponentRoute',
       'componentNaming',
@@ -238,6 +239,66 @@ describe('claims and conventions spine', () => {
     const commitChapter = CHAPTERS.find((chapter) => chapter.id === 'commit')
     expect(commitChapter?.body, 'modelLatency: tour:commit omits the visible quantiles')
       .toContain(`rolling p50/p99 in ${CLAIM_VALUES.modelLatency.unit}`)
+  })
+
+  it('keeps restore-drill proof levels ordered and explicit on every surface', () => {
+    const levels = CLAIM_VALUES.restoreDrill.levels
+    expect(levels.table.rank).toBeLessThan(levels.cluster.rank)
+    expect(levels.cluster.rank).toBeLessThan(levels.verified.rank)
+
+    const sim = createSim(createBus())
+    agrees(
+      'restoreDrill',
+      'model:restore-drill proof rank',
+      sim.state.disasterRecovery.drill.proofRank,
+      levels.verified.rank,
+    )
+
+    const copy = storageDocCopy('recovery.ground')
+    for (const level of Object.values(levels)) {
+      expect(copy, `restoreDrill: prose omits the supported claim for ${level.label}`)
+        .toContain(level.supports)
+      expect(copy, `restoreDrill: prose omits the limit for ${level.label}`)
+        .toContain(level.limits)
+    }
+    expect(copy).toContain(CLAIM_VALUES.restoreDrill.physicalScopeDisclosure)
+    expect(copy).toContain(CLAIM_VALUES.restoreDrill.checksumDisclosure)
+    expect(copy).toContain(CLAIM_VALUES.restoreDrill.smokeDisclosure)
+    expect(copy).toContain(CLAIM_VALUES.restoreDrill.cadenceDisclosure)
+
+    installTestDom()
+    const mount = document.createElement('div')
+    mount.id = 'hud-right'
+    document.body.append(mount)
+    const bus = createBus()
+    const ctx: UiContext = {
+      bus,
+      sim: createSim(bus),
+      registry: { get: () => undefined } as UiContext['registry'],
+      getFps: () => 60,
+      getQuality: () => ({
+        level: 'high',
+        pixelRatio: 1,
+        bloom: true,
+        shadows: true,
+        maxParticles: 1,
+        maxLabels: 1,
+        antialias: true,
+      }),
+      getFlowStats: () => ({ active: 0, dropped: 0 }),
+    }
+    const inspector = createInspector(ctx)
+    try {
+      bus.emit('select', { id: 'recovery.ground' })
+      const evidence = document.querySelector('[data-restore-drill="control"]')
+      expect(evidence?.textContent, 'restoreDrill: inspector omits the default supported claim')
+        .toContain(levels.verified.supports)
+      expect(evidence?.textContent, 'restoreDrill: inspector omits the default limit')
+        .toContain(levels.verified.limits)
+      expect(evidence?.querySelectorAll('[data-disclosure]')).not.toHaveLength(0)
+    } finally {
+      inspector.dispose()
+    }
   })
 
   it('keeps vacuum truncation qualified on the model, plate, tour, and docs', () => {

@@ -33,9 +33,10 @@ import { ANCHOR, CONTINUITY } from './layout'
  * timeline ever does.
  *
  * WHAT IS SIMULATED, AND WHAT IS NOT. The model owns archive retries, pg_wal
- * pressure, full backups, WAL-G retention, and a restore that fetches one
- * retained backup before replaying archived WAL to recovery_target_time. The
- * world only projects that state. standby_b is a complete independent physical
+ * pressure, full backups, WAL-G retention, a restore that fetches one retained
+ * backup before replaying archived WAL to recovery_target_time, and a restore
+ * drill whose proof level adds modeled validation reads. The world only
+ * projects that state. standby_b is a complete independent physical
  * standby. Three Patroni agents, etcd Raft consensus, the leader-key lease,
  * planned and unplanned promotion, the timeline fork, endpoint move, and
  * pg_rewind rejoin are projected across the failure-domain platforms.
@@ -503,6 +504,11 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     RP[0], 12, RP[2] + 17, 0, 1.5, COLOR.warn, 0.85,
   )
   drillBoard.visible = true
+  plate(
+    'RESTORE DRILL · RTO MEASURED · COST COUNTED · PROVED ≠ NOT PROVED',
+    RP[0], 9.2, RP[2] + 17, 0, 1.35, COLOR.bufClean, 0.82,
+    gRecovery,
+  )
 
   // One hook means ordered PostgreSQL consumption, not serial object GETs.
   const gWinch = new THREE.Group()
@@ -986,12 +992,24 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     labelAt: [RP[0], 22, RP[2]],
     color: COLOR.bufClean,
     readout: (s: SimState) => {
+      const drill = s.disasterRecovery.drill
+      if (drill.status === 'failed') return `drill FAIL · ${drill.failureReason}`
+      if (drill.status === 'passed') {
+        return `drill PASS · RTO ${fmtDuration(drill.measuredRtoSec)} · ${fmtBytes(drill.objectStoreBytesRead)} read`
+      }
+      if (
+        drill.status === 'restoring'
+        || drill.status === 'verifying'
+        || drill.status === 'querying'
+      ) {
+        return `drill ${drill.status} · RTO ${fmtDuration(drill.estimatedRtoSec)} estimate · ${(drill.progress * 100).toFixed(0)}%`
+      }
       const r = s.disasterRecovery.restore
       if (r.status === 'failed') return r.failureReason
       if (r.status === 'fetching') return `fetching full backup · ${(r.progress * 100).toFixed(0)}% of estimated recovery time`
       if (r.status === 'replaying') return `replaying ${fmtBytes(r.walBytesRequired)} of archived WAL`
       if (r.status === 'complete') return 'target reached · replay stopped · not promoted'
-      return 'empty recovery host · choose a target and start PITR'
+      return 'restore drill not run · empty recovery host · choose a target'
     },
   })
 

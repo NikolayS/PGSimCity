@@ -1,8 +1,9 @@
 import '../styles/panel.css'
 
 import { destinationForId } from '../core/destinations'
+import { CLAIM_VALUES } from '../core/claims'
 import { createCorrectionPath, displayedClaim } from '../core/corrections'
-import type { ComponentDef, ComponentDoc, ComponentKind, DocRef, DocReferences, Knobs, SimState } from '../core/types'
+import type { ComponentDef, ComponentDoc, ComponentKind, DocRef, DocReferences, Knobs, RestoreDrillLevel, SimState } from '../core/types'
 import { fmtBytes, fmtDuration } from '../core/util'
 import { doc, docSource, knobMeta, mdToHtml } from './content'
 import {
@@ -361,6 +362,8 @@ export function createInspector(ctx: UiContext): UiModule {
   }
 
   function componentAction(action: ActionId): ActionControl {
+    if (action === 'start-restore-drill') return restoreDrillAction()
+
     const button = el('button', { class: 'pg-btn', type: 'button' })
     const hint = el('p', { class: 'pg-hint' })
     const root = el('div', { class: 'pg-field' }, button, hint)
@@ -402,7 +405,11 @@ export function createInspector(ctx: UiContext): UiModule {
       if (action === 'start-pitr') {
         const restore = s.disasterRecovery.restore
         const active = restore.status === 'fetching' || restore.status === 'replaying'
-        button.disabled = active || s.disasterRecovery.backups.length === 0
+        const drillActive =
+          s.disasterRecovery.drill.status === 'restoring'
+          || s.disasterRecovery.drill.status === 'verifying'
+          || s.disasterRecovery.drill.status === 'querying'
+        button.disabled = active || drillActive || s.disasterRecovery.backups.length === 0
         setText(
           button,
           active
@@ -413,7 +420,9 @@ export function createInspector(ctx: UiContext): UiModule {
         )
         setText(
           hint,
-          restore.status === 'failed'
+          drillActive
+            ? 'The recovery host remains occupied until the restore drill finishes validation.'
+            : restore.status === 'failed'
             ? restore.failureReason
             : `Target: ${s.knobs.recoveryTargetAge}s before now. This fetches a retained full backup, then replays archived WAL; it never promotes.`,
         )
@@ -501,6 +510,133 @@ export function createInspector(ctx: UiContext): UiModule {
     return { root, sync }
   }
 
+  function restoreDrillAction(): ActionControl {
+    const level = el(
+      'select',
+      {
+        class: 'pg-select pgc-drill__level',
+        ariaLabel: 'Restore drill proof level',
+      },
+      el('option', {
+        value: 'table',
+        text: `${CLAIM_VALUES.restoreDrill.levels.table.label} · ${CLAIM_VALUES.restoreDrill.levels.table.cadence}`,
+      }),
+      el('option', {
+        value: 'cluster',
+        text: `${CLAIM_VALUES.restoreDrill.levels.cluster.label} · ${CLAIM_VALUES.restoreDrill.levels.cluster.cadence}`,
+      }),
+      el('option', {
+        value: 'verified',
+        text: `${CLAIM_VALUES.restoreDrill.levels.verified.label} · ${CLAIM_VALUES.restoreDrill.levels.verified.cadence}`,
+      }),
+    )
+    level.value = 'verified'
+    const button = el('button', { class: 'pg-btn pgc-drill__run', type: 'button' })
+    const result = el('p', { class: 'pgc-drill__result', ariaLive: 'polite' })
+    const proof = el('p', {
+      class: 'pg-hint pgc-drill__proof',
+      data: { disclosure: 'restore-drill-proof' },
+    })
+    const limits = el('p', {
+      class: 'pg-hint pgc-drill__limits',
+      data: { disclosure: 'restore-drill-limits' },
+    })
+    const cost = el('p', { class: 'pg-hint pgc-drill__cost' })
+    const cadence = el('p', {
+      class: 'pg-hint pgc-drill__cadence',
+      data: { disclosure: 'restore-drill-cadence' },
+      text: `Cadence: ${CLAIM_VALUES.restoreDrill.cadenceDisclosure}`,
+    })
+    const physical = el('p', {
+      class: 'pg-hint pgc-drill__scope',
+      data: { disclosure: 'restore-drill-physical-scope' },
+      text: CLAIM_VALUES.restoreDrill.physicalScopeDisclosure,
+    })
+    const smoke = el('p', {
+      class: 'pg-hint pgc-drill__smoke',
+      data: { disclosure: 'restore-drill-smoke' },
+      text: CLAIM_VALUES.restoreDrill.smokeDisclosure,
+    })
+    const timing = el('p', {
+      class: 'pg-hint pgc-drill__time',
+      data: { disclosure: 'restore-drill-time' },
+      text: CLAIM_VALUES.restoreDrill.timeDisclosure,
+    })
+    const root = el(
+      'div',
+      { class: 'pg-field pgc-drill', data: { restoreDrill: 'control' } },
+      el('label', { class: 'pg-field__label', text: 'Proof level' }),
+      level,
+      button,
+      result,
+      proof,
+      limits,
+      cost,
+      cadence,
+      physical,
+      smoke,
+      timing,
+    )
+
+    button.addEventListener('click', () => {
+      ctx.sim.startRestoreDrill(level.value as RestoreDrillLevel)
+      sync()
+    })
+    level.addEventListener('change', sync)
+
+    function sync(): void {
+      const drill = ctx.sim.state.disasterRecovery.drill
+      const selected = level.value as RestoreDrillLevel
+      const meta = CLAIM_VALUES.restoreDrill.levels[selected]
+      const active =
+        drill.status === 'restoring'
+        || drill.status === 'verifying'
+        || drill.status === 'querying'
+      const restoreActive =
+        ctx.sim.state.disasterRecovery.restore.status === 'fetching'
+        || ctx.sim.state.disasterRecovery.restore.status === 'replaying'
+      root.dataset.status = drill.status
+      level.disabled = active
+      button.disabled = active || restoreActive
+      setText(
+        button,
+        active
+          ? `${CLAIM_VALUES.restoreDrill.levels[drill.level].label} ${(drill.progress * 100).toFixed(0)}%`
+          : drill.status === 'failed' && drill.level === selected
+            ? `Retry ${meta.label}`
+            : `Run ${meta.label}`,
+      )
+
+      if (drill.status === 'failed' && drill.level === selected) {
+        setText(result, `FAIL — ${drill.failureReason}`)
+        setText(proof, `Proved by this result: the selected recovery claim is not currently met.`)
+      } else if (drill.status === 'passed' && drill.level === selected) {
+        setText(
+          result,
+          `PASS — RTO ${fmtDuration(drill.measuredRtoSec)} measured · total drill ${fmtDuration(drill.elapsedSec)}`,
+        )
+        setText(proof, `Proved: ${meta.supports}`)
+      } else if (active) {
+        setText(
+          result,
+          `RUNNING — ${drill.status} · RTO ${fmtDuration(drill.estimatedRtoSec)} estimate · backup ${fmtDuration(drill.backupAgeSec)} old · ${fmtBytes(drill.walBytesRequired)} WAL`,
+        )
+        setText(proof, `Proved only if this finishes PASS: ${CLAIM_VALUES.restoreDrill.levels[drill.level].supports}`)
+      } else {
+        setText(result, 'RTO: not measured — run the drill against the current retained objects.')
+        setText(proof, `Proved only by a PASS: ${meta.supports}`)
+      }
+      setText(limits, `Did not prove: ${meta.limits}`)
+      setText(
+        cost,
+        `Object-store reads: ${fmtBytes(drill.objectStoreBytesRead)} · recovery-host validation reads: ${fmtBytes(drill.validationBytesRead)}`,
+      )
+    }
+
+    sync()
+    return { root, sync }
+  }
+
   /* --- empty state ------------------------------------------------------- */
 
   function renderEmpty(): HTMLElement {
@@ -565,6 +701,20 @@ export function createInspector(ctx: UiContext): UiModule {
 
   /* --- populated state --------------------------------------------------- */
 
+  function actionBlock(actionIds: ActionId[]): HTMLElement {
+    const block = el(
+      'div',
+      { class: 'pgc-block pgc-block--actions' },
+      el('div', { class: 'pgc-eyebrow-row' }, el('span', { class: 'pg-eyebrow', text: 'Operate it' })),
+    )
+    for (const action of actionIds) {
+      const control = componentAction(action)
+      actions.push(control)
+      block.append(control.root)
+    }
+    return block
+  }
+
   function renderDoc(id: string, info: ComponentDoc | undefined): HTMLElement {
     const wrap = el('div', {
       class: 'pgc-content pg-enter',
@@ -587,6 +737,9 @@ export function createInspector(ctx: UiContext): UiModule {
         el('div', { class: 'pgc-block pgc-block--metrics' }, el('div', { class: 'pgc-eyebrow-row' }, el('span', { class: 'pg-eyebrow', text: 'Live' }), dot), grid),
       )
     }
+
+    const earlyActions = (info?.actions ?? []).filter((action) => action === 'start-restore-drill')
+    if (earlyActions.length) wrap.append(actionBlock(earlyActions))
 
     /* prose */
     if (info?.sections?.length) {
@@ -649,19 +802,8 @@ export function createInspector(ctx: UiContext): UiModule {
       if (added) wrap.append(block)
     }
 
-    if (info?.actions?.length) {
-      const block = el(
-        'div',
-        { class: 'pgc-block pgc-block--actions' },
-        el('div', { class: 'pgc-eyebrow-row' }, el('span', { class: 'pg-eyebrow', text: 'Operate it' })),
-      )
-      for (const action of info.actions) {
-        const control = componentAction(action)
-        actions.push(control)
-        block.append(control.root)
-      }
-      wrap.append(block)
-    }
+    const trailingActions = (info?.actions ?? []).filter((action) => action !== 'start-restore-drill')
+    if (trailingActions.length) wrap.append(actionBlock(trailingActions))
 
     /* related */
     const see = info?.see ?? []

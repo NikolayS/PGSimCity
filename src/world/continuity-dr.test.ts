@@ -133,6 +133,14 @@ describe('continuity and three-node projection', () => {
     expect(archiveGate?.readout?.(sim.state)).toMatch(/primary.*16\.0 MiB.*%.*wal-push/i)
     const backupVault = defs.find((def) => def.id === 'backup.vault')
     expect(backupVault?.readout?.(sim.state)).toMatch(/daily.*standby_a/i)
+    const recoveryGround = defs.find((def) => def.id === 'recovery.ground')
+    expect(recoveryGround?.readout?.(sim.state)).toMatch(/drill.*not run/i)
+    const recoveryPlates: string[] = []
+    recoveryGround?.object.traverse((object) => {
+      const text = plateText(object)
+      if (text) recoveryPlates.push(text)
+    })
+    expect(recoveryPlates.some((text) => /RESTORE DRILL.*RTO.*PROVED/i.test(text))).toBe(true)
 
     const dcs = defs.find((def) => def.id === 'ha.dcs')
     expect(dcs).toBeDefined()

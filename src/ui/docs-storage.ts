@@ -713,7 +713,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     id: 'recovery.ground',
     title: 'Recovery ground',
     subtitle: 'a different host rebuilt from object storage',
-    tldr: 'Fetch a full backup first, then replay archived WAL; neither half can substitute for the other.',
+    tldr: 'A restore drill earns evidence from the retained backup and WAL chain, then says exactly what that evidence supports.',
     sections: [
       {
         heading: 'The restore sequence',
@@ -724,21 +724,57 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         body: 'Fetching the full backup costs roughly the same for two restores of the same data directory. The variable part is WAL from that backup’s start LSN through the target: it includes WAL generated while the files were copied because that WAL is required to make the backup consistent. An older backup generally means more objects to fetch and more bytes for PostgreSQL’s startup process to replay.',
       },
       {
+        heading: 'Three drills, three claims',
+        body: `**${CLAIM_VALUES.restoreDrill.levels.table.label} supports:** ${CLAIM_VALUES.restoreDrill.levels.table.supports} **It does not:** ${CLAIM_VALUES.restoreDrill.levels.table.limits}
+
+**${CLAIM_VALUES.restoreDrill.levels.cluster.label} supports:** ${CLAIM_VALUES.restoreDrill.levels.cluster.supports} **It does not:** ${CLAIM_VALUES.restoreDrill.levels.cluster.limits}
+
+**${CLAIM_VALUES.restoreDrill.levels.verified.label} supports:** ${CLAIM_VALUES.restoreDrill.levels.verified.supports} **It does not:** ${CLAIM_VALUES.restoreDrill.levels.verified.limits}`,
+      },
+      {
+        heading: 'Checksum names matter',
+        body: `${CLAIM_VALUES.restoreDrill.checksumDisclosure} ${CLAIM_VALUES.restoreDrill.smokeDisclosure} A checksum match detects changed or missing bytes covered by that manifest; it does not prove the application’s data is semantically correct. A real smoke query adds one expected-result claim, not a proof about every row. WAL-G’s \`wal-verify integrity\` checks whether the required WAL objects exist; pgBackRest’s \`check\` validates its own repository configuration and archive path.`,
+      },
+      {
+        heading: 'Cost and cadence are policy',
+        body: `The RTO clock starts before \`backup-fetch\` and stops when PostgreSQL reaches the target. The drill continues while validation reads local restored bytes. Object-store reads and recovery-host I/O are counted; this off-site ground never reads from the primary. ${CLAIM_VALUES.restoreDrill.physicalScopeDisclosure} ${CLAIM_VALUES.restoreDrill.cadenceDisclosure}`,
+      },
+      {
         heading: 'Replication is not this',
         body: 'A replica continuously replays the newest WAL and can take traffic quickly after separate HA work promotes it. This recovery host intentionally walks backward into retained history, so it can escape a destructive transaction that every replica already applied. It protects data history at the cost of recovery time; it does not provide failover, and this PITR operation never promotes it.',
       },
     ],
     metrics: [
-      { label: 'Phase', get: (s) => s.disasterRecovery.restore.status },
-      { label: 'Estimated recovery', get: (s) => fmtDuration(s.disasterRecovery.restore.estimatedDurationSec) },
-      { label: 'Backup age', get: (s) => fmtDuration(s.disasterRecovery.restore.backupAgeSec) },
-      { label: 'WAL to replay', get: (s) => fmtBytes(s.disasterRecovery.restore.walBytesRequired) },
+      {
+        label: 'Drill verdict',
+        get: (s) => s.disasterRecovery.drill.status === 'idle'
+          ? 'not run'
+          : s.disasterRecovery.drill.status,
+      },
+      {
+        label: 'Proof level',
+        get: (s) => CLAIM_VALUES.restoreDrill.levels[s.disasterRecovery.drill.level].label,
+      },
+      {
+        label: 'RTO',
+        get: (s) => s.disasterRecovery.drill.measuredRtoSec > 0
+          ? `${fmtDuration(s.disasterRecovery.drill.measuredRtoSec)} measured`
+          : `${fmtDuration(s.disasterRecovery.drill.estimatedRtoSec)} estimate`,
+        hint: CLAIM_VALUES.restoreDrill.timeDisclosure,
+      },
+      { label: 'Backup age', get: (s) => fmtDuration(s.disasterRecovery.drill.backupAgeSec) },
+      { label: 'WAL to replay', get: (s) => fmtBytes(s.disasterRecovery.drill.walBytesRequired) },
+      { label: 'Object reads', get: (s) => fmtBytes(s.disasterRecovery.drill.objectStoreBytesRead) },
     ],
+    knobs: ['recoveryTargetAge', 'walGDownloadConcurrency'],
+    actions: ['start-restore-drill'],
     see: ['backup.vault', 'recovery.clock', 'restore.winch', 'recovery.replay'],
     refs: {
       docs: [
         manual('continuous-archiving.html', '25.3.4 Recovering Using a Continuous Archive Backup'),
-        { label: 'WAL-G 3.0.8 backup-fetch and wal-fetch', url: 'https://wal-g.readthedocs.io/PostgreSQL/' },
+        manual('app-pgverifybackup.html', 'pg_verifybackup — backup-manifest verification'),
+        manual('app-pgrestore.html', 'pg_restore — selective logical-archive restore'),
+        { label: 'WAL-G 3.0.8 backup-fetch, wal-fetch, wal-verify and backup-push --verify', url: 'https://wal-g.readthedocs.io/PostgreSQL/' },
         { label: 'pgBackRest 2.59.0 restore and archive-get alternative', url: 'https://pgbackrest.org/user-guide.html' },
       ],
       source: [srcFile('src/backend/access/transam/xlogrecovery.c', 'PerformWalRecovery, InitWalRecovery')],
