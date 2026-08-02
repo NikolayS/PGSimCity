@@ -105,9 +105,12 @@ describe('reusable walk-up interaction', () => {
   it('owns the E binding and a touch-operable action button', () => {
     installTestDom()
     const operate = vi.fn()
+    const onOperate = vi.fn()
+    const target = site('switch', 0, 0, operate)
     const interaction = createWalkUpInteraction({
       walk: walk(new THREE.Vector3(1, 0, 0)),
-      sites: [site('switch', 0, 0, operate)],
+      sites: [target],
+      onOperate,
     })
     interaction.update(0)
 
@@ -115,12 +118,14 @@ describe('reusable walk-up interaction', () => {
     window.dispatchEvent(keyboard)
     expect(keyboard.defaultPrevented).toBe(true)
     expect(operate).toHaveBeenCalledTimes(1)
+    expect(onOperate).toHaveBeenLastCalledWith(target)
 
     const button = document.querySelector<HTMLButtonElement>('.walk-up-prompt__action')!
     expect(button.type).toBe('button')
     expect(button.getAttribute('aria-label')).toBe('Operate switch')
     button.click()
     expect(operate).toHaveBeenCalledTimes(2)
+    expect(onOperate).toHaveBeenCalledTimes(2)
 
     interaction.dispose()
   })

@@ -34,6 +34,7 @@ import { createCollisionWorld, DEFAULT_EXCLUDE_IDS } from './engine/collision'
 import { createAudio } from './engine/audio'
 import { createBufferWater } from './engine/water'
 import { createWalkController } from './engine/walk'
+import { createViewmodelHands } from './engine/hands'
 
 import { createSim } from './sim/model'
 
@@ -215,6 +216,13 @@ async function boot(): Promise<void> {
     bus,
     overlayRoot: canvasRoot,
   })
+  const hands = createViewmodelHands({
+    scene,
+    camera,
+    theme,
+    walk,
+    quality: gfx.quality.level,
+  })
 
   await progress(BOOT_STEPS.roads)
   scene.add(createRoads(theme))
@@ -244,12 +252,25 @@ async function boot(): Promise<void> {
     flows,
     canvas: renderer.domElement,
     door: controlCenterWorld.door,
+    hands,
   })
   const ui: UiModule[] = [
     createHud(uiCtx),
     createTouchpad({ bus, walk }),
     controlCenter,
-    createWalkUpInteraction({ walk, sites: createWorldHandleSites(uiCtx, handlesMod.handles) }),
+    createWalkUpInteraction({
+      walk,
+      sites: createWorldHandleSites(uiCtx, handlesMod.handles),
+      onOperate: (site) => {
+        if (!site.handAction || !site.handTarget) return
+        hands.perform(
+          site.handAction,
+          site.handTarget[0],
+          site.handTarget[1],
+          site.handTarget[2],
+        )
+      },
+    }),
     createHelp(uiCtx),
     createControls(uiCtx),
     createInspector(uiCtx),
@@ -345,6 +366,7 @@ async function boot(): Promise<void> {
     }
     flows.setQuality(gfx.quality)
     labels.setQuality(gfx.quality)
+    hands.setQuality(gfx.quality.level)
   })
 
   bus.on('sim:reset', () => sim.reset())
@@ -390,6 +412,7 @@ async function boot(): Promise<void> {
     // 2. camera, then everything that depends on where the camera is
     rig.update(dt)
     walk.update(dt)
+    hands.update(dt)
     water.update(cityDt, walk.enabled && walk.submerged)
     // On foot you are always up against the detail, wherever you stand.
     const nextDetail: 0 | 1 | 2 = walk.enabled ? 2 : detailFor(rig.altitude)
@@ -445,6 +468,7 @@ async function boot(): Promise<void> {
     flows.dispose()
     labels.dispose()
     picker.dispose()
+    hands.dispose()
     walk.dispose()
     water.dispose()
     audio.dispose()
@@ -480,6 +504,7 @@ async function boot(): Promise<void> {
     gfx,
     flows,
     walk,
+    hands,
     controlCenter,
     collision,
     audio,

@@ -15,6 +15,8 @@ export interface WorldHandleBinding {
   /** Ground-plane interaction point; proximity checks intentionally ignore Y. */
   x: number
   z: number
+  /** World-space knob position used by the first-person reach projection. */
+  handTarget: readonly [number, number, number]
 }
 
 export interface WorldHandlesModule extends WorldModule {
@@ -201,6 +203,11 @@ export function createWorldHandles(ctx: WorldContext): WorldHandlesModule {
       owner: spec.owner,
       x: spec.at[0],
       z: spec.at[2],
+      handTarget: [
+        spec.at[0] + Math.sin(spec.yaw) * 0.65,
+        spec.at[1] + 3.99,
+        spec.at[2] + Math.cos(spec.yaw) * 0.65,
+      ],
     })
     visuals.push({
       key: spec.key,
