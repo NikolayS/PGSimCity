@@ -565,6 +565,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       table: 0,
       phase: 'idle',
       progress: 0,
+      vacuumDelay: false,
       travel: 0,
       deadCollected: 0,
       stalledByHorizon: false,
@@ -3285,14 +3286,35 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   const vacFpiGeneration: number[] = new Array(N_VAC_WORKERS).fill(0)
   const vacPageAcc: number[] = new Array(N_VAC_WORKERS).fill(0)
   const vacPageCursor: number[] = new Array(N_VAC_WORKERS).fill(0)
+  const vacActiveShare: number[] = new Array(N_VAC_WORKERS).fill(1)
+  const vacWorkCredit: number[] = new Array(N_VAC_WORKERS).fill(0)
 
   function vacNext(w: VacWorker, phase: VacPhase, dur: number): void {
     w.phase = phase
     w.progress = 0
+    w.vacuumDelay = false
     vacPhaseT[w.slot] = 0
     vacPhaseDur[w.slot] = Math.max(0.05, dur)
     vacPageAcc[w.slot] = 0
     vacPageCursor[w.slot] = 0
+    vacActiveShare[w.slot] = 1
+    vacWorkCredit[w.slot] = 0
+  }
+
+  function vacNextPaced(
+    w: VacWorker,
+    phase: VacPhase,
+    readPages: number,
+    writePages: number,
+    unthrottledDuration: number,
+  ): void {
+    vacNext(w, phase, unthrottledDuration)
+    const workDuration = vacPhaseDur[w.slot]
+    const pacedDuration = Math.max(
+      workDuration,
+      (readPages + writePages) / VACUUM_PAGES_PER_WORKER_SEC,
+    )
+    vacActiveShare[w.slot] = workDuration / pacedDuration
   }
 
   /**
@@ -3343,6 +3365,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       w.active = true
       w.table = best
       w.deadCollected = 0
+      w.vacuumDelay = false
       w.travel = 0
       w.stalledByHorizon = false
       vacTarget[slot] = Math.floor(deadRemovable[best])
@@ -3427,21 +3450,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     while (n-- > 0 && vacPageCursor[worker] < total) visit(vacPageCursor[worker]++)
   }
 
-  /**
-   * PostgreSQL's vacuum_delay_point() sleeps after the cost limit is crossed.
-   * The city models that elapsed time as a per-worker I/O pace ceiling; it does
-   * not model cost points, delay intervals or dynamic worker rebalancing.
-   */
-  function pacedVacuumDuration(
-    readPages: number,
-    writePages: number,
-    unthrottledDuration: number,
-  ): number {
-    const pacedDuration = (readPages + writePages) / VACUUM_PAGES_PER_WORKER_SEC
-    return Math.max(unthrottledDuration, pacedDuration)
-  }
-
-  /** Account every physical page; pacedVacuumDuration() throttles the work. */
+  /** Account every physical page while active work slices are running. */
   function chargeVacuumIo(readPagesPerSec: number, writePagesPerSec: number, dt: number): void {
     ioReadAcc += readPagesPerSec * dt
     ioWriteAcc += writePagesPerSec * dt
@@ -3491,10 +3500,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     )
   }
 
-  function vacuumIndexDuration(worker: number, tableIndex: number, indexNo: number): number {
+  function vacNextIndex(w: VacWorker, worker: number, tableIndex: number, indexNo: number): void {
     const pages = indexPagesFor(tableIndex, indexNo)
     const modified = vacuumIndexModifiedPages(worker, tableIndex, indexNo)
-    return pacedVacuumDuration(pages, modified, 1 + pages / 260)
+    vacNextPaced(w, 'vacuum_index', pages, modified, 1 + pages / 260)
   }
 
   function tickAutovac(dt: number): void {
@@ -3513,9 +3522,26 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       // A maintenance worker that cannot reserve WAL space waits on
       // WALWriteLock just like a backend. Do not let the phase clock keep
       // running while its page records pile up in an unbounded side queue.
-      if (maintenanceWalPending >= wal.bufferCapacity) continue
+      if (maintenanceWalPending >= wal.bufferCapacity) {
+        w.vacuumDelay = false
+        continue
+      }
       const ti = w.table
       const t = tables[ti]
+      /* PostgreSQL calls vacuum_delay_point() after spending its cost budget.
+       * Credit admits whole work slices at the scaled pace, leaving explicit
+       * zero-progress VacuumDelay slices between them. Individual page costs
+       * and the real 2 ms delay are not modeled. */
+      const activeShare = vacActiveShare[i]
+      if (activeShare < 1) {
+        vacWorkCredit[i] += dt * activeShare
+        if (vacWorkCredit[i] + Number.EPSILON < dt) {
+          w.vacuumDelay = true
+          continue
+        }
+        vacWorkCredit[i] -= dt
+      }
+      w.vacuumDelay = false
       vacPhaseT[i] += dt
       w.progress = clamp01(vacPhaseT[i] / vacPhaseDur[i])
       const done = vacPhaseT[i] >= vacPhaseDur[i]
@@ -3529,14 +3555,12 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
             // vacuum skip all-visible pages, so append-only tables are cheap.
             const skip = t.def.id === 'events' ? 0.15 : 1
             const readPages = Math.max(1, Math.round(t.pages * skip))
-            vacNext(
+            vacNextPaced(
               w,
               'scan_heap',
-              pacedVacuumDuration(
-                readPages,
-                vacScanModified[i],
-                Math.max((t.pages / 900) * skip, 1.2),
-              ),
+              readPages,
+              vacScanModified[i],
+              Math.max((t.pages / 900) * skip, 1.2),
             )
           }
           break
@@ -3568,7 +3592,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
               vacNext(w, 'analyze', 1.0)
             } else {
               vacIdxLeft[i] = t.def.indexes.length
-              vacNext(w, 'vacuum_index', vacuumIndexDuration(i, ti, 0))
+              vacNextIndex(w, i, ti, 0)
             }
           }
           break
@@ -3593,19 +3617,17 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
             vacIdxLeft[i]--
             if (vacIdxLeft[i] > 0) {
               const nextIndex = t.def.indexes.length - vacIdxLeft[i]
-              vacNext(w, 'vacuum_index', vacuumIndexDuration(i, ti, nextIndex))
+              vacNextIndex(w, i, ti, nextIndex)
             } else {
               deadIndexTuples[ti] = Math.max(0, deadIndexTuples[ti] - vacIndexTarget[i])
               refreshIndexPages(ti)
               const modified = Math.max(0, vacHeapModified[i] - vacScanModified[i])
-              vacNext(
+              vacNextPaced(
                 w,
                 'vacuum_heap',
-                pacedVacuumDuration(
-                  modified,
-                  modified,
-                  Math.max(t.pages / 1600, 0.8),
-                ),
+                modified,
+                modified,
+                Math.max(t.pages / 1600, 0.8),
               )
             }
           }
@@ -3688,6 +3710,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
             w.active = false
             w.phase = 'idle'
             w.progress = 0
+            w.vacuumDelay = false
             w.travel = 0
             if (w.stalledByHorizon) {
               toast(
@@ -5856,7 +5879,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         x.dirtyWriteWaitT += dt
         x.evictionWalWaitT += dt
       }
-      else if (b.state === 'commit_wait') x.commitWaitT += dt
+      else if (b.state === 'commit_wait' && K.synchronousCommit !== 'off') x.commitWaitT += dt
       else if (b.state === 'blocked') x.lockWaitT += dt
       b.age += dt
       b.stateT += dt
@@ -6022,10 +6045,18 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
             x.commitLsn = wal.insertLsn
             stampBackendPageLsns(slot, x.commitLsn)
             x.walPrepared = false
-            b.state = 'commit_wait'
             b.stateT = 0
-            b.stateDur = commitWaitEstimate()
-            if (K.synchronousCommit !== 'off') requestFlush(x.commitLsn)
+            if (K.synchronousCommit === 'off') {
+              // Acknowledgement bypasses the durability wait. WAL remains in
+              // the shared ring for walwriter, unless ring pressure already
+              // forced this backend to request a write while inserting it.
+              b.state = 'sending'
+              b.stateDur = rr(0.03, 0.12) + Math.min(0.25, x.rowsPerStmt / 2400)
+            } else {
+              b.state = 'commit_wait'
+              b.stateDur = commitWaitEstimate()
+              requestFlush(x.commitLsn)
+            }
           }
           break
 
@@ -6037,9 +6068,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
           const sc = K.synchronousCommit
           let done = false
           if (sc === 'off') {
-            // Commit returns immediately; the WAL is written by walwriter later.
-            // Crash here and you lose the last few hundred ms of transactions.
-            done = b.stateT >= 0.012
+            done = true
           } else if (
             (sc === 'remote_write' || sc === 'on' || sc === 'remote_apply')
             && K.synchronousStandbyNames !== 'none'
@@ -6106,7 +6135,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       : 0
     switch (K.synchronousCommit) {
       case 'off':
-        return 0.012
+        return 0
       case 'local':
         return fsync
       case 'remote_write':
@@ -7181,6 +7210,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       w.table = 0
       w.phase = 'idle'
       w.progress = 0
+      w.vacuumDelay = false
       w.travel = 0
       w.deadCollected = 0
       w.stalledByHorizon = false
@@ -7197,6 +7227,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       vacFpiGeneration[i] = 0
       vacPageAcc[i] = 0
       vacPageCursor[i] = 0
+      vacActiveShare[i] = 1
+      vacWorkCredit[i] = 0
     }
 
     for (let i = 0; i < N_TABLES; i++) {

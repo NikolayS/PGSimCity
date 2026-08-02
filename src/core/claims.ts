@@ -55,7 +55,8 @@ export const CLAIM_VALUES = {
     quantiles: ['p50', 'p99'],
     windowTrips: 512,
     disclosure: 'weighted rolling window of 512 completed backend trips',
-    componentDisclosure: 'each wait component is its own weighted quantile',
+    componentDisclosure: 'each modeled component is its own weighted quantile',
+    taxonomyDisclosure: 'Buffer-read phase is the synthetic exec_io phase, not accumulated DataFileRead events; dirty-victim I/O is trip attribution rather than a distinct live activity state; commit durability is an umbrella for WalSync or SyncRep; relation lock maps directly to Lock/relation; active / unclassified is a non-wait residual containing CPU, parse, result-send and unclassified WAL-buffer stalls, which PostgreSQL reports separately as waits such as LWLock/WALWrite',
     batchDisclosure: 'transactions carried by one backend trip share one latency observation, so within-batch variance is not modeled',
     resolutionDisclosure: '30 Hz integration quantizes observations to 33.33 model ms steps',
   },
@@ -245,7 +246,7 @@ export const CLAIMS = {
     owner: 'src/spine/machine-comparison.ts#MACHINE_SYNCHRONOUS_COMMIT_COMPARISON',
     value: MACHINE_SYNCHRONOUS_COMMIT_COMPARISON,
     surfaces: [
-      'model:commit_wait transition',
+      'model:off bypasses commit_wait',
       'Machine:comparison experiment',
       'Machine:comparison finding and P/M disclosure',
     ],

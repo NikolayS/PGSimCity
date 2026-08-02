@@ -134,8 +134,17 @@ export function walSegName(seg: number, timeline = 1): string {
 
 /** Push a value onto a fixed-length rolling history array. */
 export function pushHistory(arr: number[], v: number, max = 120): void {
-  arr.push(v)
-  if (arr.length > max) arr.splice(0, arr.length - max)
+  if (max <= 0) {
+    arr.length = 0
+    return
+  }
+  if (arr.length < max) {
+    arr.push(v)
+    return
+  }
+  arr.copyWithin(0, arr.length - max + 1)
+  arr.length = max
+  arr[max - 1] = v
 }
 
 /** Rolling average helper. */

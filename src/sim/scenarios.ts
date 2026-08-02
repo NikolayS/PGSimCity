@@ -336,7 +336,7 @@ export const SCENARIOS: ScenarioDef[] = [
       maxWalSize: 512,
     },
     beats: [
-      [0, 'The bgwriter is off', 'It is the least glamorous process in Postgres and the easiest to ignore. It does exactly one thing: write out dirty pages that are about to be reused, so a backend never has to.'],
+      [0, 'The bgwriter is off', 'It is the least glamorous process in Postgres and the easiest to ignore. It writes out dirty pages that are about to be reused, reducing the likelihood that a backend has to write one itself.'],
       [14, 'Dirty pages accumulate', 'With a long checkpoint interval and no bgwriter, dirty count climbs and stays there. Nothing is cleaning ahead of the clock hand any more.'],
       [30, 'Backends pay the bill', 'Every time the sweep lands on a dirty victim, the backend that wanted that frame writes it out first. Watch the red page-write particles now leaving the plaza on the *backend* path rather than the teal bgwriter path.'],
       [48, 'Measure the claim', 'Open the Latency vital and compare modeled p50, p99 and TPS. Its p99 components are independent distributions: dirty-victim wait now includes XLogFlush when the victim page LSN is ahead of durable WAL, followed by the page write. That is synchronous I/O in the middle of a user query; when the page LSN is already flushed, the WAL part costs nothing. Compare that component with sampled backend writes instead of treating the components as one total-p99 trip.'],

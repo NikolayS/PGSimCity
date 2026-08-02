@@ -225,6 +225,8 @@ describe('claims and conventions spine', () => {
       .toContain(CLAIM_VALUES.modelLatency.disclosure)
     expect(storageDocCopy('bgwriter'), 'modelLatency: prose omits per-component quantiles')
       .toContain(CLAIM_VALUES.modelLatency.componentDisclosure)
+    expect(storageDocCopy('bgwriter'), 'modelLatency: prose omits component taxonomy')
+      .toContain(CLAIM_VALUES.modelLatency.taxonomyDisclosure)
     expect(storageDocCopy('bgwriter'), 'modelLatency: prose omits within-batch limitation')
       .toContain(CLAIM_VALUES.modelLatency.batchDisclosure)
     expect(storageDocCopy('bgwriter'), 'modelLatency: prose omits integration resolution')
@@ -291,7 +293,7 @@ describe('claims and conventions spine', () => {
       .toContain(`<strong>${CLAIM_VALUES.reviewStatus.bootLabel}</strong>`)
   })
 
-  it('keeps the Machine comparison attached to the modelled commit-wait claim', () => {
+  it('keeps the Machine comparison attached to the modeled asynchronous acknowledgement claim', () => {
     agrees(
       'machineSynchronousCommitComparison',
       'Machine:comparison claim',

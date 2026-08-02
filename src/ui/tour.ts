@@ -146,7 +146,7 @@ const STEPS: TourStep[] = [
     id: 'commit',
     title: 'Commit, and what fsync costs',
     body:
-      `A durable commit does not wait for data pages; it waits for the WAL record describing the change to be flushed. We have set \`synchronous_commit\` to off, so PostgreSQL may acknowledge commits before that flush. In the city, open Latency and watch modeled \`commit_wait\` occupancy plus the rolling p50/p99 in ${CLAIM_VALUES.modelLatency.unit} fall; the selected p99 trip attributes its commit time. Those values are not production latency measurements. The real trade is that the last fraction of a second of acknowledged transactions may be lost after a PostgreSQL server crash, operating-system crash or power failure.`,
+      `A durable commit does not wait for data pages; it waits for the WAL record describing the change to be flushed. We have set \`synchronous_commit\` to off, so PostgreSQL acknowledges without waiting for that flush. In the city, open Latency and watch modeled \`commit_wait\` occupancy disappear while the rolling p50/p99 in ${CLAIM_VALUES.modelLatency.unit} falls and the commit-durability component reaches zero. WAL still flushes later. Those values are not production latency measurements. The real trade is that the last fraction of a second of acknowledged transactions may be lost after a PostgreSQL server crash, operating-system crash or power failure.`,
     focus: 'walwriter',
     duration: 20,
     knobs: { synchronousCommit: 'off', tps: 600, writeRatio: 0.7 },
@@ -155,7 +155,7 @@ const STEPS: TourStep[] = [
     id: 'checkpoint',
     title: 'Checkpoints, WAL and I/O',
     body:
-      `The WAL cannot grow forever, so the checkpointer periodically walks the buffer pool and writes the pages that were dirty when it began. We have deliberately made the WAL ceiling (\`max_wal_size\`) tiny, so modeled checkpoints now fire back to back. Watch the pink checkpoint writes and the amber full-page-image surge, then open Latency to compare p50 and p99 and read each wait component’s own p99. Those values are deliberately stretched ${CLAIM_VALUES.modelLatency.unit}, not production milliseconds.`,
+      `The WAL cannot grow forever, so the checkpointer periodically walks the buffer pool and writes the pages that were dirty when it began. We have deliberately made the WAL ceiling (\`max_wal_size\`) tiny, so modeled checkpoints now fire back to back. Watch the pink checkpoint writes and the amber full-page-image surge, then open Latency to compare p50 and p99 and read each modeled component’s own p99. Those values are deliberately stretched ${CLAIM_VALUES.modelLatency.unit}, not production milliseconds.`,
     focus: 'checkpointer',
     duration: 22,
     scenario: 'checkpoint-storm',

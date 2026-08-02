@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createBus } from '../core/bus'
+import { CLAIM_VALUES } from '../core/claims'
 import { createSim } from '../sim/model'
 import { installTestDom } from '../../test/dom'
 import { createHud } from './hud'
@@ -54,10 +55,16 @@ describe('latency HUD', () => {
     latency.click()
     const panel = document.getElementById('hud-latency-panel')!
     expect(panel.hidden).toBe(false)
-    expect(panel.textContent).toContain('p99 component quantiles')
-    expect(panel.textContent).toContain('Dirty victim write')
-    expect(panel.textContent).toContain('Commit wait')
-    expect(panel.textContent).toContain('Lock wait')
+    expect(panel.textContent).toContain('Modeled backend-trip latency')
+    expect(panel.textContent).toContain('p99 modeled component quantiles')
+    expect(panel.textContent).toContain('Buffer-read phase')
+    expect(panel.textContent).toContain('Dirty-victim I/O')
+    expect(panel.textContent).toContain('Commit durability')
+    expect(panel.textContent).toContain('Relation lock wait')
+    expect(panel.textContent).toContain('p99 non-wait residual')
+    expect(panel.textContent).toContain('Active / unclassified')
+    expect(panel.textContent).not.toContain('Running / other')
+    expect(panel.textContent).toContain(CLAIM_VALUES.modelLatency.taxonomyDisclosure)
     expect(panel.textContent).toContain('within-batch variance is not modeled')
     expect(panel.textContent).toContain('33.33 model ms steps')
     expect(panel.textContent).toContain('mean_exec_time and stddev_exec_time, not percentiles')

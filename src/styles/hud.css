@@ -257,6 +257,11 @@
   grid-column: 1 / -1;
   margin-bottom: 3px;
 }
+.hud-latency__anatomy > .hud-latency__residual-title {
+  margin-top: 4px;
+  padding-top: 7px;
+  border-top: 1px solid var(--line-hair);
+}
 .hud-latency__cause {
   display: contents;
 }
