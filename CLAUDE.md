@@ -322,6 +322,20 @@ findings that are deliberately left must be stated in the release notes.
     phone reader a full-size claim to have watched a controlled experiment with
     every retraction removed by CSS. **If a viewport cannot fit both the claim and
     its qualification, cut the claim.** Enforce it with a test, not a review.
+11. **A guarantee that rests on someone's dashboard is not a guarantee.** The
+    correction-link feature shipped telling readers "correction links are
+    excluded so their pre-filled issue bodies never enter analytics". Our code
+    was correct — it never tags or tracks those links. But the Plausible script
+    is served with `outboundLinks` enabled *dashboard-side*, its click handler
+    sends `props.url = href` for any cross-host link, and its only opt-out is a
+    class matching `/plausible-event-name(=|--)/`. Our anchors carried
+    `pg-correction__link` and relied on `data-no-analytics`, which Plausible does
+    not honour. **Every correction click was shipping the whole issue body.**
+    A review can only report that such a claim is unverifiable from the repo; the
+    fix is neither to verify the setting nor to soften the sentence, but to make
+    the code enforce the promise so the external setting stops mattering. When a
+    user-facing claim depends on a third party's configuration, either bring it
+    under code control or do not make the claim.
 8. **The dependency boundary stays small.** three.js remains the only bundled
    runtime dependency of the 3D application. PGlite is allowed only as a lazy,
    opt-in dependency of Query flow in `observability/` and `machine/`; it must
