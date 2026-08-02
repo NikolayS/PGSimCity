@@ -286,7 +286,6 @@ export function createInspector(ctx: UiContext): UiModule {
     saveFlag(OPEN_KEY, next)
     applyOpen()
     if (next && compact) announceSheet('right')
-    ctx.bus.emit('ui:layout', {})
   }
 
   function setTall(next: boolean): void {
@@ -751,7 +750,7 @@ export function createInspector(ctx: UiContext): UiModule {
     if (def?.color != null) kindBadge.style.setProperty('--kind', hex6(def.color))
     else kindBadge.style.removeProperty('--kind')
 
-    setText(title, destinationForId(id)?.name ?? def?.name ?? info?.title ?? id)
+    setText(title, def?.name ?? destinationForId(id)?.name ?? info?.title ?? id)
     const sub = def?.role ?? info?.subtitle ?? ''
     setText(subtitle, sub)
     subtitle.hidden = !sub
@@ -775,7 +774,6 @@ export function createInspector(ctx: UiContext): UiModule {
   const offCameraPreset = ctx.bus.on('camera:preset', ({ preset }) => {
     planPreset = preset === 'plan'
     applyOpen()
-    ctx.bus.emit('ui:layout', {})
   })
 
   const onNarrow = (): void => {

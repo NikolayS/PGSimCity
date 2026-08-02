@@ -9,6 +9,17 @@ import { MACHINE_SYNCHRONOUS_COMMIT_COMPARISON } from '../spine/machine-comparis
 const KIB = 1024
 const MIB = KIB * KIB
 const MODEL_MILLISECOND_UNIT = 'model ms'
+const POSTGRESQL_MAJOR = 18
+const POSTGRESQL_REFERENCE_MINOR = 3
+
+const POSTGRESQL_VERSION = {
+  major: POSTGRESQL_MAJOR,
+  referenceMinor: POSTGRESQL_REFERENCE_MINOR,
+  majorLabel: `PostgreSQL ${POSTGRESQL_MAJOR}`,
+  referenceLabel: `PostgreSQL ${POSTGRESQL_MAJOR}.${POSTGRESQL_REFERENCE_MINOR}`,
+  manualBase: `https://www.postgresql.org/docs/${POSTGRESQL_MAJOR}/`,
+  sourceBranch: `REL_${POSTGRESQL_MAJOR}_STABLE`,
+} as const
 
 export const CLAIM_VALUES = {
   walSegment: {
@@ -55,6 +66,92 @@ export const CLAIM_VALUES = {
   cityComponentRoute: {
     hashPrefix: '#/c/',
   },
+  componentNaming: {
+    panelTitleOwner: 'registry.name',
+  },
+  eventConvention: {
+    emitterMethod: 'emit',
+    handlerMethods: ['on', 'once'],
+    browserPrefix: 'pgsimcity:',
+  },
+  diagnoseBranchGates: {
+    connectionSpareSlots: {
+      threshold: 1,
+      source: 'activity.rows',
+      branches: ['slow.1→v.saturation'],
+    },
+    lockWaitShare: {
+      threshold: 0.25,
+      source: 'activity.rows',
+      branches: ['slow.1→lock.1'],
+    },
+    ioWaitShare: {
+      threshold: 0.3,
+      source: 'activity.rows',
+      branches: ['slow.1→io.1'],
+    },
+    commitWaitShare: {
+      threshold: 0.25,
+      source: 'activity.rows',
+      branches: ['slow.1→commit.1'],
+    },
+    activeWorkFloor: {
+      threshold: 3,
+      source: 'activity.rows',
+      branches: ['slow.1→v.idle'],
+    },
+    requestedCheckpointShare: {
+      threshold: 0.2,
+      source: 'checkpointer.counters',
+      branches: ['stall.1→stall.2', 'stall.1→v.ckpt_ok'],
+    },
+    deadTupleRatio: {
+      threshold: 0.02,
+      source: 'tables.rows',
+      branches: ['bloat.1→bloat.2', 'bloat.1→bloat.autovacuum', 'bloat.1→v.no_bloat'],
+    },
+    clientBackendWriteShare: {
+      threshold: 0.2,
+      source: 'io.rows',
+      branches: ['io.1→v.backend_writes', 'io.1→v.io_ok'],
+    },
+    cacheHitPercent: {
+      threshold: 92,
+      source: 'io.rows',
+      branches: ['io.1→io.2', 'io.1→v.io_ok'],
+    },
+    coldBufferShare: {
+      threshold: 0.55,
+      source: 'buffercache.rows',
+      branches: ['io.2→v.small_pool', 'io.2→v.io_ok'],
+    },
+    replayStageGapBytes: {
+      threshold: 256 * KIB,
+      source: 'replication.standbys',
+      branches: ['replica.1→v.replay', 'replica.1→v.rep_ok'],
+    },
+    senderStageGapBytes: {
+      threshold: 512 * KIB,
+      source: 'replication.standbys',
+      branches: ['replica.1→v.network'],
+    },
+    currentPositionGapBytes: {
+      threshold: 512 * KIB,
+      source: 'replication.standbys',
+      branches: ['replica.1→v.rep_ok'],
+    },
+    healthyReplaySeconds: {
+      threshold: 2,
+      source: 'replication.standbys',
+      branches: [],
+    },
+    resolvedSenderGapBytes: {
+      threshold: 256 * KIB,
+      source: 'replication.standbys',
+      branches: [],
+    },
+  },
+  postgresqlVersion: POSTGRESQL_VERSION,
   markdownRendering: {
     owner: 'mdToHtml',
   },
@@ -109,7 +206,27 @@ export const CLAIMS = {
   cityComponentRoute: {
     owner: 'src/core/claims.ts#CLAIM_VALUES.cityComponentRoute',
     value: CLAIM_VALUES.cityComponentRoute,
-    surfaces: ['Diagnose:city links', 'city:hash consumer'],
+    surfaces: ['Diagnose:city links', 'tour:component targets', 'scenario:focus targets', 'city:component registry'],
+  },
+  componentNaming: {
+    owner: 'src/core/registry.ts#ComponentDef.name',
+    value: CLAIM_VALUES.componentNaming,
+    surfaces: ['city:component registry names', 'inspector:panel headings'],
+  },
+  eventConvention: {
+    owner: 'src/core/types.ts#BusEvents',
+    value: CLAIM_VALUES.eventConvention,
+    surfaces: ['source:event emitters', 'source:event handlers', 'browser:CustomEvent bridge'],
+  },
+  diagnoseBranchGates: {
+    owner: 'src/core/claims.ts#CLAIM_VALUES.diagnoseBranchGates',
+    value: CLAIM_VALUES.diagnoseBranchGates,
+    surfaces: ['Diagnose:result-grid warning ranges', 'Diagnose:path branch predicates', 'Diagnose:verdict resolution'],
+  },
+  postgresqlVersion: {
+    owner: 'src/core/claims.ts#CLAIM_VALUES.postgresqlVersion',
+    value: CLAIM_VALUES.postgresqlVersion,
+    surfaces: ['README:target declaration', 'Diagnose:catalog and prose', 'tour:version-specific claims', 'docs:manual and source links'],
   },
   markdownRendering: {
     owner: 'src/ui/content.ts#mdToHtml',

@@ -23,10 +23,6 @@ import type { UiContext, UiModule } from './uikit'
  * the 3D city can never disagree with the explanation of it.
  * ==========================================================================*/
 
-interface LooseBus {
-  on(type: string, fn: (p: unknown) => void): () => void
-}
-
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
@@ -413,10 +409,9 @@ export function createHelp(ctx: UiContext): UiModule {
     }
   })
 
-  const loose = bus as unknown as LooseBus
+  const loose = bus
   cleanup.push(
-    loose.on('ui:help', (p) => {
-      const req = p as { open?: boolean; section?: 'controls' | 'legend' | 'reading' | 'legal' } | undefined
+    loose.on('ui:help', (req) => {
       setOpen(req && typeof req.open === 'boolean' ? req.open : !open)
       if (req?.section) {
         const section = {
@@ -428,11 +423,10 @@ export function createHelp(ctx: UiContext): UiModule {
         requestAnimationFrame(() => section.scrollIntoView({ block: 'start' }))
       }
     }),
-    loose.on('ui:escape', (p) => {
+    loose.on('ui:escape', (payload) => {
       if (!open) return
       setOpen(false)
-      const payload = p as { handled?: boolean } | undefined
-      if (payload) payload.handled = true
+      payload.handled = true
     }),
     // A tour or a scenario taking over the screen should not be read through
     // a modal sitting on top of it.

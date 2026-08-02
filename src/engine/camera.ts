@@ -34,10 +34,6 @@ export interface CameraRig extends CameraApi {
   readonly speed: number
 }
 
-interface LooseBus {
-  on(type: string, fn: (payload: unknown) => void): () => void
-}
-
 /* --------------------------------------------------------------------------
  * Tuning. Every number here is a feel decision.
  * ------------------------------------------------------------------------*/
@@ -660,8 +656,8 @@ export function createCameraRig(
   window.addEventListener('keyup', onKeyUp)
   window.addEventListener('blur', onBlur)
   document.addEventListener('pointerlockchange', onLockChange)
-  const offCameraPresetRequest = (bus as unknown as LooseBus).on('ui:camera-preset', (payload) => {
-    if ((payload as { preset?: unknown } | null)?.preset === 'plan') plan()
+  const offCameraPresetRequest = bus.on('ui:camera-preset', ({ preset }) => {
+    if (preset === 'plan') plan()
   })
 
   const prevTouchAction = domElement.style.touchAction

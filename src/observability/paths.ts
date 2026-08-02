@@ -23,10 +23,20 @@ import { CLAIM_VALUES } from '../core/claims'
 import { fmtBytes } from '../core/util'
 import type { Collector } from './collector'
 import type { Subsystem } from './catalog'
-import { replicationRows, tableDeadRatio } from './views'
+import {
+  activityWaitCounts,
+  checkpointRequestedShare,
+  clientBackendWriteShare,
+  coldBufferShare,
+  collectorCacheHitPercent,
+  replicationRows,
+  tableDeadRatio,
+} from './views'
 import type { ProjectionSource } from './views'
 
 const MIB = 1024 * 1024
+const DIAGNOSTIC_GATES = CLAIM_VALUES.diagnoseBranchGates
+export type DiagnosticGateId = keyof typeof DIAGNOSTIC_GATES
 
 /* ---------------------------------------------------------------------------
  * Types
@@ -39,6 +49,8 @@ export interface Branch {
   source: ProjectionSource
   /** true right now? */
   test: (s: SimState, c: Collector) => boolean
+  /** registered non-zero model-range gates, when this predicate has any */
+  gates?: DiagnosticGateId[]
   /** step id or verdict id */
   next: string
 }
@@ -149,62 +161,28 @@ export interface Symptom {
 
 export type Node = Step | Verdict
 
+function gated(
+  gates: DiagnosticGateId | DiagnosticGateId[],
+  test: Branch['test'],
+): Pick<Branch, 'gates' | 'source' | 'test'> {
+  const registered = Array.isArray(gates) ? gates : [gates]
+  const source = DIAGNOSTIC_GATES[registered[0]].source
+  for (const gate of registered) {
+    if (DIAGNOSTIC_GATES[gate].source !== source) {
+      throw new Error(`diagnostic gate ${gate} reads ${DIAGNOSTIC_GATES[gate].source}, not ${source}`)
+    }
+  }
+  return { gates: registered, source, test }
+}
+
 /* ---------------------------------------------------------------------------
  * Live helpers used by branch predicates
  * -------------------------------------------------------------------------*/
 
-interface Waits {
-  total: number
-  lock: number
-  io: number
-  commit: number
-  idleTx: number
-  cpu: number
-  idle: number
-}
-
-export function waits(s: SimState): Waits {
-  const w: Waits = { total: 0, lock: 0, io: 0, commit: 0, idleTx: 0, cpu: 0, idle: 0 }
-  if (s.knobs.longRunningXact) {
-    w.total++
-    w.idleTx++
-  }
-  for (const b of s.backends) {
-    if (!b.active || b.state === 'free') continue
-    w.total++
-    switch (b.state) {
-      case 'blocked':
-        w.lock++
-        break
-      case 'exec_io':
-        w.io++
-        break
-      case 'commit_wait':
-        w.commit++
-        break
-      case 'idle_in_xact':
-        w.idleTx++
-        break
-      case 'idle':
-      case 'ending':
-        w.idle++
-        break
-      default:
-        w.cpu++
-    }
-  }
-  return w
-}
-
 const share = (part: number, whole: number) => (whole > 0 ? part / whole : 0)
 
 /** The model's scaled relations make xmin trouble visible around 2–3% dead. */
-export const DIAGNOSTIC_BLOAT_RATIO = 0.02
-
-function collectorCacheHitPct(c: Collector): number {
-  const seen = c.total.blksHit + c.total.blksRead
-  return seen > 0 ? (c.total.blksHit / seen) * 100 : 0
-}
+export const DIAGNOSTIC_BLOAT_RATIO = DIAGNOSTIC_GATES.deadTupleRatio.threshold
 
 function worstReplayStandby(s: SimState) {
   return replicationRows(s).sort(
@@ -216,11 +194,6 @@ function worstSenderStandby(s: SimState) {
   return replicationRows(s).sort(
     (a, b) => s.wal.writeLsn - b.sentLsn - (s.wal.writeLsn - a.sentLsn),
   )[0]
-}
-
-export function forcedShare(c: Collector): number {
-  const t = c.total.ckptTimed + c.total.ckptRequested
-  return t > 0 ? c.total.ckptRequested / t : 0
 }
 
 /** How long the counters must have been running before an absence means anything. */
@@ -264,11 +237,6 @@ function ckptResolved(c: Collector): Resolution {
   }
 }
 
-export function backendWriteShare(c: Collector): number {
-  const t = c.total.backendWrites + c.total.ckptBuffers + c.total.bgwClean
-  return t > 0 ? c.total.backendWrites / t : 0
-}
-
 /**
  * The same ratio over the last couple of seconds rather than since the reset.
  *
@@ -281,18 +249,6 @@ export function backendWriteShare(c: Collector): number {
 export function recentBackendWriteShare(c: Collector): number {
   const t = c.rate.backendWrites + c.rate.ckptBuffers + c.rate.bgwClean
   return t > 0.01 ? c.rate.backendWrites / t : 0
-}
-
-export function coldShare(s: SimState): number {
-  const b = s.buffers
-  let used = 0
-  let cold = 0
-  for (let i = 0; i < b.sampleFrames; i++) {
-    if (!b.valid[i]) continue
-    used++
-    if (b.usage[i] === 0) cold++
-  }
-  return used > 0 ? cold / used : 0
 }
 
 /* ---------------------------------------------------------------------------
@@ -437,7 +393,10 @@ const KB = {
   },
 } as const satisfies Record<string, KnobSpec>
 
-const DOC = (slug: string, label: string) => ({ label, url: `https://www.postgresql.org/docs/current/${slug}` })
+const DOC = (slug: string, label: string) => ({
+  label,
+  url: `${CLAIM_VALUES.postgresqlVersion.manualBase}${slug}`,
+})
 
 /* ---------------------------------------------------------------------------
  * The symptoms
@@ -455,7 +414,7 @@ export const SYMPTOMS: Symptom[] = [
   {
     id: 'stall',
     complaint: 'Writes stall every few minutes.',
-    sub: 'A PostgreSQL latency complaint; the city will test checkpoint and I/O counters, not latency.',
+    sub: `A PostgreSQL latency complaint; correlate checkpoint and I/O counters with rolling p50/p99 in ${CLAIM_VALUES.modelLatency.unit}.`,
     scenario: 'checkpoint-storm',
     entry: 'stall.1',
     accent: 'checkpoint',
@@ -538,15 +497,15 @@ const STEPS: Step[] = [
     branches: [
       {
         label: 'Every connection slot is busy; new work is queueing outside PostgreSQL.',
-        source: 'activity.rows',
         next: 'v.saturation',
-        test: (s) => waits(s).total >= s.maxConnections - 1,
+        ...gated('connectionSpareSlots', (s, c) =>
+          activityWaitCounts(s, c).total >= s.maxConnections - DIAGNOSTIC_GATES.connectionSpareSlots.threshold),
       },
-      { label: 'Most of them are waiting on `Lock`.', source: 'activity.rows', next: 'lock.1', test: (s) => share(waits(s).lock, waits(s).total) > 0.25 },
-      { label: 'Most of them are waiting on `IO`.', source: 'activity.rows', next: 'io.1', test: (s) => share(waits(s).io, waits(s).total) > 0.3 },
-      { label: 'They are waiting to commit — `IO / WalSync` or `IPC / SyncRep`.', source: 'activity.rows', next: 'commit.1', test: (s) => share(waits(s).commit, waits(s).total) > 0.25 },
-      { label: 'Sessions are sitting in `idle in transaction`.', source: 'activity.rows', next: 'bloat.2', test: (s) => waits(s).idleTx > 0 },
-      { label: 'Hardly anything is running at all.', source: 'activity.rows', next: 'v.idle', test: (s) => waits(s).total - waits(s).idle < 3 },
+      { label: 'Most of them are waiting on `Lock`.', next: 'lock.1', ...gated('lockWaitShare', (s, c) => share(activityWaitCounts(s, c).lock, activityWaitCounts(s, c).total) > DIAGNOSTIC_GATES.lockWaitShare.threshold) },
+      { label: 'Most of them are waiting on `IO`.', next: 'io.1', ...gated('ioWaitShare', (s, c) => share(activityWaitCounts(s, c).io, activityWaitCounts(s, c).total) > DIAGNOSTIC_GATES.ioWaitShare.threshold) },
+      { label: 'They are waiting to commit — `IO / WalSync` or `IPC / SyncRep`.', next: 'commit.1', ...gated('commitWaitShare', (s, c) => share(activityWaitCounts(s, c).commit, activityWaitCounts(s, c).total) > DIAGNOSTIC_GATES.commitWaitShare.threshold) },
+      { label: 'Sessions are sitting in `idle in transaction`.', source: 'activity.rows', next: 'bloat.2', test: (s, c) => activityWaitCounts(s, c).idleTx > 0 },
+      { label: 'Hardly anything is running at all.', next: 'v.idle', ...gated('activeWorkFloor', (s, c) => activityWaitCounts(s, c).total - activityWaitCounts(s, c).idle < DIAGNOSTIC_GATES.activeWorkFloor.threshold) },
     ],
   },
 
@@ -567,8 +526,8 @@ const STEPS: Step[] = [
     note:
       'pg_stat_checkpointer is new in PostgreSQL 17. On 16 and older these two counters live in pg_stat_bgwriter and are called `checkpoints_timed` and `checkpoints_req` — same numbers, older home. Most tuning guides still name the old columns.',
     branches: [
-      { label: '`num_requested` is a serious share; investigate the request sources.', source: 'checkpointer.counters', next: 'stall.2', test: (_s, c) => c.total.ckptDone > 0 && forcedShare(c) > 0.2 },
-      { label: 'Almost every checkpoint is timed.', source: 'checkpointer.counters', next: 'v.ckpt_ok', test: (_s, c) => c.total.ckptDone > 0 && forcedShare(c) <= 0.2 },
+      { label: '`num_requested` is a serious share; investigate the request sources.', next: 'stall.2', ...gated('requestedCheckpointShare', (_s, c) => c.total.ckptDone > 0 && checkpointRequestedShare(c) > DIAGNOSTIC_GATES.requestedCheckpointShare.threshold) },
+      { label: 'Almost every checkpoint is timed.', next: 'v.ckpt_ok', ...gated('requestedCheckpointShare', (_s, c) => c.total.ckptDone > 0 && checkpointRequestedShare(c) <= DIAGNOSTIC_GATES.requestedCheckpointShare.threshold) },
     ],
   },
   {
@@ -613,17 +572,15 @@ const STEPS: Step[] = [
     branches: [
       {
         label: 'Estimated dead-tuple pressure exceeds this model’s alert threshold, and `last_autovacuum` has a value.',
-        source: 'tables.rows',
         next: 'bloat.2',
-        test: (s) => s.tables.some((t) => tableDeadRatio(t) >= DIAGNOSTIC_BLOAT_RATIO && t.lastVacuum > 0),
+        ...gated('deadTupleRatio', (s) => s.tables.some((t) => tableDeadRatio(t) >= DIAGNOSTIC_BLOAT_RATIO && t.lastVacuum > 0)),
       },
       {
         label: 'Dead tuples exceed the alert threshold, but `last_autovacuum` is null.',
-        source: 'tables.rows',
         next: 'bloat.autovacuum',
-        test: (s) => s.tables.some((t) => tableDeadRatio(t) >= DIAGNOSTIC_BLOAT_RATIO && t.lastVacuum === 0),
+        ...gated('deadTupleRatio', (s) => s.tables.some((t) => tableDeadRatio(t) >= DIAGNOSTIC_BLOAT_RATIO && t.lastVacuum === 0)),
       },
-      { label: 'The current dead-tuple estimate is low; check physical size trends.', source: 'tables.rows', next: 'v.no_bloat', test: (s) => s.tables.every((t) => tableDeadRatio(t) < DIAGNOSTIC_BLOAT_RATIO) },
+      { label: 'The current dead-tuple estimate is low; check physical size trends.', next: 'v.no_bloat', ...gated('deadTupleRatio', (s) => s.tables.every((t) => tableDeadRatio(t) < DIAGNOSTIC_BLOAT_RATIO)) },
     ],
   },
   {
@@ -725,9 +682,15 @@ SELECT pid, application_name, state, backend_xmin,
     note:
       'PostgreSQL 18 adds pg_stat_get_backend_io(pid) for one backend; join it laterally to pg_stat_activity when PID/query attribution is needed. It still does not identify a relation. Before 18, pg_stat_io can only supply backend-type aggregates.',
     branches: [
-      { label: 'The city’s separate representative sample has a high client-backend write share.', source: 'io.rows', next: 'v.backend_writes', test: (_s, c) => backendWriteShare(c) > 0.25 },
-      { label: 'Reads dominate and the hit ratio is poor.', source: 'io.rows', next: 'io.2', test: (_s, c) => collectorCacheHitPct(c) < 92 },
-      { label: 'Reads are mostly hits and writes are spread sensibly.', source: 'io.rows', next: 'v.io_ok', test: (_s, c) => collectorCacheHitPct(c) >= 92 && backendWriteShare(c) <= 0.25 },
+      { label: 'The city’s separate representative sample has a high client-backend write share.', next: 'v.backend_writes', ...gated('clientBackendWriteShare', (_s, c) => clientBackendWriteShare(c) > DIAGNOSTIC_GATES.clientBackendWriteShare.threshold) },
+      { label: 'Reads dominate and the hit ratio is poor.', next: 'io.2', ...gated('cacheHitPercent', (_s, c) => collectorCacheHitPercent(c) < DIAGNOSTIC_GATES.cacheHitPercent.threshold) },
+      {
+        label: 'Reads are mostly hits and writes are spread sensibly.',
+        next: 'v.io_ok',
+        ...gated(['cacheHitPercent', 'clientBackendWriteShare'], (_s, c) =>
+          collectorCacheHitPercent(c) >= DIAGNOSTIC_GATES.cacheHitPercent.threshold
+          && clientBackendWriteShare(c) <= DIAGNOSTIC_GATES.clientBackendWriteShare.threshold),
+      },
     ],
   },
   {
@@ -746,8 +709,8 @@ SELECT * FROM pg_buffercache_usage_counts();`,
     note:
       'pg_buffercache_usage_counts() and pg_buffercache_summary() arrived in 16 and are cheaper than scanning the full view. The pg_buffercache view and functions do not acquire buffer-manager locks, so their values can be slightly inconsistent under concurrent activity.',
     branches: [
-      { label: 'Almost everything sits at usage_count 0.', source: 'buffercache.rows', next: 'v.small_pool', test: (s) => coldShare(s) > 0.55 },
-      { label: 'The pool is holding a real working set.', source: 'buffercache.rows', next: 'v.io_ok', test: (s) => coldShare(s) <= 0.55 },
+      { label: 'Almost everything sits at usage_count 0.', next: 'v.small_pool', ...gated('coldBufferShare', (s) => coldBufferShare(s) > DIAGNOSTIC_GATES.coldBufferShare.threshold) },
+      { label: 'The pool is holding a real working set.', next: 'v.io_ok', ...gated('coldBufferShare', (s) => coldBufferShare(s) <= DIAGNOSTIC_GATES.coldBufferShare.threshold) },
     ],
   },
 
@@ -807,30 +770,30 @@ SELECT w.*, b.state AS blocker_state,
     branches: [
       {
         label: 'Received and flushed are fine; only replay is sliding.',
-        source: 'replication.standbys',
         next: 'v.replay',
-        test: (s) => replicationRows(s).some(
-          (standby) => standby.flushedLsn - standby.appliedLsn > 256 * 1024,
-        ),
+        ...gated('replayStageGapBytes', (s) => replicationRows(s).some(
+          (standby) => standby.flushedLsn - standby.appliedLsn > DIAGNOSTIC_GATES.replayStageGapBytes.threshold,
+        )),
       },
       {
         label: 'Even sent_lsn is far behind the primary.',
-        source: 'replication.standbys',
         next: 'v.network',
-        test: (s) => replicationRows(s).some((standby) => s.wal.writeLsn - standby.sentLsn > 512 * 1024),
+        ...gated('senderStageGapBytes', (s) => replicationRows(s).some(
+          (standby) => s.wal.writeLsn - standby.sentLsn > DIAGNOSTIC_GATES.senderStageGapBytes.threshold,
+        )),
       },
       {
         label: 'Every connected standby has all four positions within a few kilobytes of the primary.',
-        source: 'replication.standbys',
         next: 'v.rep_ok',
-        test: (s) => {
+        ...gated(['currentPositionGapBytes', 'replayStageGapBytes'], (s) => {
           const standbys = replicationRows(s)
           return standbys.length > 0 && standbys.every((standby) =>
-            s.wal.writeLsn - standby.sentLsn < 512 * 1024
-            && s.wal.writeLsn - standby.writtenLsn < 512 * 1024
-            && s.wal.writeLsn - standby.flushedLsn < 512 * 1024
-            && s.wal.writeLsn - standby.appliedLsn < 512 * 1024)
-        },
+            s.wal.writeLsn - standby.sentLsn <= DIAGNOSTIC_GATES.currentPositionGapBytes.threshold
+            && s.wal.writeLsn - standby.writtenLsn <= DIAGNOSTIC_GATES.currentPositionGapBytes.threshold
+            && s.wal.writeLsn - standby.flushedLsn <= DIAGNOSTIC_GATES.currentPositionGapBytes.threshold
+            && s.wal.writeLsn - standby.appliedLsn <= DIAGNOSTIC_GATES.currentPositionGapBytes.threshold
+            && standby.flushedLsn - standby.appliedLsn <= DIAGNOSTIC_GATES.replayStageGapBytes.threshold)
+        }),
       },
     ],
   },
@@ -854,9 +817,9 @@ SELECT w.*, b.state AS blocker_state,
     note:
       'The name of the local flush wait changed. PostgreSQL 17 started generating the wait event list from a table and normalised the capitalisation on the way through, so this event is `WALSync` on 16 and older and `WalSync` from 17 on. A monitoring query that greps for the old spelling on a new server matches nothing at all, and reports a healthy zero while doing it.',
     branches: [
-      { label: 'They are waiting on `IPC / SyncRep`.', source: 'activity.rows', next: 'v.sync_remote', test: (s) => s.knobs.synchronousStandbyNames !== 'none' && (s.knobs.synchronousCommit === 'remote_write' || s.knobs.synchronousCommit === 'on' || s.knobs.synchronousCommit === 'remote_apply') && waits(s).commit > 0 },
-      { label: 'They are waiting on `IO / WalSync`.', source: 'activity.rows', next: 'v.sync_local', test: (s) => (s.knobs.synchronousStandbyNames === 'none' || s.knobs.synchronousCommit === 'local' || s.knobs.synchronousCommit === 'off') && waits(s).commit > 0 },
-      { label: 'Nobody is waiting to commit.', source: 'activity.rows', next: 'v.commit_ok', test: (s) => waits(s).commit === 0 },
+      { label: 'They are waiting on `IPC / SyncRep`.', source: 'activity.rows', next: 'v.sync_remote', test: (s, c) => s.knobs.synchronousStandbyNames !== 'none' && (s.knobs.synchronousCommit === 'remote_write' || s.knobs.synchronousCommit === 'on' || s.knobs.synchronousCommit === 'remote_apply') && activityWaitCounts(s, c).commit > 0 },
+      { label: 'They are waiting on `IO / WalSync`.', source: 'activity.rows', next: 'v.sync_local', test: (s, c) => (s.knobs.synchronousStandbyNames === 'none' || s.knobs.synchronousCommit === 'local' || s.knobs.synchronousCommit === 'off') && activityWaitCounts(s, c).commit > 0 },
+      { label: 'Nobody is waiting to commit.', source: 'activity.rows', next: 'v.commit_ok', test: (s, c) => activityWaitCounts(s, c).commit === 0 },
     ],
   },
 
@@ -949,7 +912,7 @@ const VERDICTS: Verdict[] = [
     evidence: (_s, c) => [
       { label: 'num_timed', value: String(Math.round(c.total.ckptTimed)) },
       { label: 'num_requested', value: String(Math.round(c.total.ckptRequested)), tone: 'crit' },
-      { label: 'requested share', value: `${(forcedShare(c) * 100).toFixed(0)}%`, tone: 'crit' },
+      { label: 'requested share', value: `${(checkpointRequestedShare(c) * 100).toFixed(0)}%`, tone: 'crit' },
       { label: 'wal_fpi rate', value: `${c.rate.walFpi.toFixed(1)}/s`, tone: 'warn' },
       { label: 'wal_bytes rate', value: `${fmtBytes(c.rate.walBytes)}/s`, tone: 'warn' },
     ],
@@ -979,7 +942,7 @@ const VERDICTS: Verdict[] = [
     evidence: (s, c) => [
       { label: 'wal_bytes/sec', value: `${fmtBytes(c.rate.walBytes)}/s` },
       { label: 'max_wal_size', value: `${s.knobs.maxWalSize} MB` },
-      { label: 'requested share', value: `${(forcedShare(c) * 100).toFixed(0)}%`, tone: 'warn' },
+      { label: 'requested share', value: `${(checkpointRequestedShare(c) * 100).toFixed(0)}%`, tone: 'warn' },
     ],
     fix:
       'For this modeled cause, size max_wal_size from measured peak WAL rate, available disk and recovery objectives, then confirm the WAL-triggered requests stop. In production, confirm the request reason from checkpoint messages and surrounding activity rather than treating num_requested as a cause code.',
@@ -1143,11 +1106,11 @@ const VERDICTS: Verdict[] = [
       const now = recentBackendWriteShare(c)
       return [
         { label: 'sample client-backend writes', value: Math.round(c.total.backendWrites).toLocaleString(), tone: 'crit' as const },
-        { label: 'sample share since reset', value: `${(backendWriteShare(c) * 100).toFixed(0)}%`, tone: 'crit' as const },
+        { label: 'sample share since reset', value: `${(clientBackendWriteShare(c) * 100).toFixed(0)}%`, tone: 'crit' as const },
         {
           label: 'sample share in the last 2 s',
           value: `${(now * 100).toFixed(0)}%`,
-          tone: (now > 0.4 ? 'crit' : now > 0.2 ? 'warn' : 'ok') as 'ok' | 'warn' | 'crit',
+          tone: (now > 0.4 ? 'crit' : now > DIAGNOSTIC_GATES.clientBackendWriteShare.threshold ? 'warn' : 'ok') as 'ok' | 'warn' | 'crit',
         },
         { label: 'sample bgwriter cleans/s', value: c.rate.bgwClean.toFixed(1), tone: (s.knobs.bgwriterEnabled ? 'warn' : 'crit') as 'warn' | 'crit' },
       ]
@@ -1173,8 +1136,8 @@ const VERDICTS: Verdict[] = [
       if (moving < 0.05) return { ok: null, reading: 'nothing is being written this second — no rate to judge yet' }
       const now = recentBackendWriteShare(c)
       return {
-        ok: now <= 0.2,
-        reading: `${(now * 100).toFixed(0)}% of writes in the last two seconds are still charged to client backends (cumulative share is ${(backendWriteShare(c) * 100).toFixed(0)}%, and lags badly)`,
+        ok: now <= DIAGNOSTIC_GATES.clientBackendWriteShare.threshold,
+        reading: `${(now * 100).toFixed(0)}% of writes in the last two seconds are still charged to client backends (cumulative share is ${(clientBackendWriteShare(c) * 100).toFixed(0)}%, and lags badly)`,
       }
     },
     city: 'bgwriter',
@@ -1194,7 +1157,7 @@ const VERDICTS: Verdict[] = [
     evidence: (s) => [
       { label: 'shared_buffers', value: fmtBytes(poolBytes(s.knobs)), tone: 'warn' },
       { label: 'cache hit ratio', value: `${s.stats.cacheHitPct.toFixed(1)}%`, tone: s.stats.cacheHitPct < 90 ? 'crit' : 'warn' },
-      { label: 'sampled frames at usage_count 0', value: `${(coldShare(s) * 100).toFixed(0)}%`, tone: 'crit' },
+      { label: 'sampled frames at usage_count 0', value: `${(coldBufferShare(s) * 100).toFixed(0)}%`, tone: 'crit' },
       { label: 'reads/sec', value: s.stats.ioReadPerSec.toFixed(0) },
     ],
     fix:
@@ -1206,8 +1169,9 @@ const VERDICTS: Verdict[] = [
       sql: `SELECT * FROM pg_buffercache_usage_counts();`,
     },
     resolved: (s) => ({
-      ok: coldShare(s) <= 0.55 && s.stats.cacheHitPct >= 92,
-      reading: `shared_buffers ${fmtBytes(poolBytes(s.knobs))} · ${(coldShare(s) * 100).toFixed(0)}% of sampled frames still at usage_count 0 · hit ratio ${s.stats.cacheHitPct.toFixed(1)}%`,
+      ok: coldBufferShare(s) <= DIAGNOSTIC_GATES.coldBufferShare.threshold
+        && s.stats.cacheHitPct >= DIAGNOSTIC_GATES.cacheHitPercent.threshold,
+      reading: `shared_buffers ${fmtBytes(poolBytes(s.knobs))} · ${(coldBufferShare(s) * 100).toFixed(0)}% of sampled frames still at usage_count 0 · hit ratio ${s.stats.cacheHitPct.toFixed(1)}%`,
     }),
     city: 'shared.buffers',
     reading: [DOC('runtime-config-resource.html', 'Resource Consumption settings')],
@@ -1221,7 +1185,7 @@ const VERDICTS: Verdict[] = [
       'A high hit ratio does not mean zero I/O or prove that the remaining reads are necessary. PostgreSQL 18 gives sequential scans of relations larger than a quarter of shared_buffers a bulk-read ring that starts at 256 KiB, grows with io_combine_limit × effective_io_concurrency and is capped. The ring limits cache pollution; it does not guarantee zero displacement or prove physical device reads. The current city model uses a historical fixed 32-frame approximation, so its sampled cache cannot validate PostgreSQL 18’s ring size.',
     evidence: (s) => [
       { label: 'cache hit ratio', value: `${s.stats.cacheHitPct.toFixed(1)}%`, tone: 'ok' },
-      { label: 'sampled frames at usage_count 0', value: `${(coldShare(s) * 100).toFixed(0)}%`, tone: 'ok' },
+      { label: 'sampled frames at usage_count 0', value: `${(coldBufferShare(s) * 100).toFixed(0)}%`, tone: 'ok' },
       { label: 'reads/sec', value: s.stats.ioReadPerSec.toFixed(0) },
     ],
     fix:
@@ -1321,7 +1285,9 @@ const VERDICTS: Verdict[] = [
         return { ok: false, reading: 'pg_stat_replication is empty — no walsender is connected, which is worse than lag' }
       const standby = worstReplayStandby(s)!
       return {
-        ok: standbys.every((row) => row.lagSec <= 2 && row.lagBytes < 512 * 1024),
+        ok: standbys.every((row) =>
+          row.lagSec <= DIAGNOSTIC_GATES.healthyReplaySeconds.threshold
+          && row.lagBytes <= DIAGNOSTIC_GATES.currentPositionGapBytes.threshold),
         reading: `${standby.applicationName} has the worst replay delay at ${standby.lagSec.toFixed(2)} s · current byte backlog ${fmtBytes(standby.lagBytes)}`,
       }
     },
@@ -1364,7 +1330,8 @@ const VERDICTS: Verdict[] = [
       const standby = worstSenderStandby(s)!
       const behind = s.wal.writeLsn - standby.sentLsn
       return {
-        ok: standbys.every((row) => s.wal.writeLsn - row.sentLsn < 256 * 1024),
+        ok: standbys.every((row) =>
+          s.wal.writeLsn - row.sentLsn <= DIAGNOSTIC_GATES.resolvedSenderGapBytes.threshold),
         reading: `${standby.applicationName} has the worst primary − sent_lsn gap at ${fmtBytes(Math.max(0, behind))}, with ${standby.networkLagMs} ms one way`,
       }
     },
@@ -1420,7 +1387,7 @@ const VERDICTS: Verdict[] = [
  ORDER BY 4 DESC;`,
     },
     resolved: (s) => ({
-      ok: s.stats.activeBackends < s.maxConnections - 1,
+      ok: s.stats.activeBackends < s.maxConnections - DIAGNOSTIC_GATES.connectionSpareSlots.threshold,
       reading: `${s.stats.activeBackends} of ${s.maxConnections} connection slots in use, achieving ${s.stats.tps.toFixed(0)} tps against ${Math.round(s.knobs.tps)} offered`,
     }),
     city: 'postmaster',
@@ -1452,9 +1419,9 @@ const VERDICTS: Verdict[] = [
       'Backends are stacked on `IO / WalSync`. Each one is waiting until flush_lsn passes its own commit LSN, which is exactly what synchronous_commit = on promises.',
     mechanism:
       `Watch modeled \`commit_wait\` backends release together when one flush advances past their commit LSNs. That is the city’s group-commit mechanism. It increases the rolling p50/p99 and appears as commit time in the selected p99 trip. These are ${CLAIM_VALUES.modelLatency.unit}, not a production latency distribution.`,
-    evidence: (s) => [
+    evidence: (s, c) => [
       { label: 'synchronous_commit', value: s.knobs.synchronousCommit },
-      { label: 'waiting to commit', value: String(waits(s).commit), tone: 'warn' },
+      { label: 'waiting to commit', value: String(activityWaitCounts(s, c).commit), tone: 'warn' },
       { label: 'insert − flush', value: fmtBytes(s.wal.insertLsn - s.wal.flushLsn) },
     ],
     fix:
@@ -1469,10 +1436,13 @@ const VERDICTS: Verdict[] = [
      * synchronous_commit off empties the queue by giving up a durability
      * guarantee, so the reading names the setting that bought the result rather
      * than congratulating the reader on an empty column. */
-    resolved: (s) => ({
-      ok: waits(s).commit === 0,
-      reading: `synchronous_commit = ${s.knobs.synchronousCommit} · ${waits(s).commit} backend${waits(s).commit === 1 ? '' : 's'} waiting on the flush, insert − flush ${fmtBytes(Math.max(0, s.wal.insertLsn - s.wal.flushLsn))}`,
-    }),
+    resolved: (s, c) => {
+      const commitWaits = activityWaitCounts(s, c).commit
+      return {
+        ok: commitWaits === 0,
+        reading: `synchronous_commit = ${s.knobs.synchronousCommit} · ${commitWaits} backend${commitWaits === 1 ? '' : 's'} waiting on the flush, insert − flush ${fmtBytes(Math.max(0, s.wal.insertLsn - s.wal.flushLsn))}`,
+      }
+    },
     city: 'walwriter',
     reading: [DOC('runtime-config-wal.html', 'Write Ahead Log settings')],
   },
@@ -1484,11 +1454,11 @@ const VERDICTS: Verdict[] = [
       'The wait is `IPC / SyncRep`, not `IO / WalSync`. It includes a network round trip and the acknowledgement selected by synchronous_commit: standby write for remote_write, durable standby flush for on, or replay for remote_apply.',
     mechanism:
       'This is the one everybody gets wrong in the other direction: synchronous_commit = on guarantees a **local** flush only. If the primary\'s disk survives but the machine does not, the standby may never have seen that commit. Synchronous replication requires synchronous_standby_names, and once you have it, every commit costs a full round trip.',
-    evidence: (s) => {
+    evidence: (s, c) => {
       const standby = configuredSynchronousStandby(s)
       return [
         { label: 'synchronous_commit', value: s.knobs.synchronousCommit, tone: 'warn' },
-        { label: 'waiting to commit', value: String(waits(s).commit), tone: 'warn' },
+        { label: 'waiting to commit', value: String(activityWaitCounts(s, c).commit), tone: 'warn' },
         { label: 'synchronous standby', value: standby?.applicationName ?? 'none' },
         { label: 'one-way delay', value: standby ? `${standby.networkLagMs} ms` : '—' },
         { label: 'model replay delay', value: standby ? `${standby.lagSec.toFixed(2)} s` : '—' },
@@ -1502,11 +1472,12 @@ const VERDICTS: Verdict[] = [
       instrument: 'pg_current_wal_lsn',
       sql: `SELECT pg_current_wal_insert_lsn(), pg_current_wal_lsn(), pg_current_wal_flush_lsn();`,
     },
-    resolved: (s) => {
+    resolved: (s, c) => {
       const standby = configuredSynchronousStandby(s)
+      const commitWaits = activityWaitCounts(s, c).commit
       return {
-        ok: waits(s).commit === 0,
-        reading: `synchronous_commit = ${s.knobs.synchronousCommit} with ${standby?.applicationName ?? 'no synchronous standby'}${standby ? ` at ${standby.networkLagMs} ms one way` : ''} · ${waits(s).commit} backend${waits(s).commit === 1 ? '' : 's'} still waiting for the standby`,
+        ok: commitWaits === 0,
+        reading: `synchronous_commit = ${s.knobs.synchronousCommit} with ${standby?.applicationName ?? 'no synchronous standby'}${standby ? ` at ${standby.networkLagMs} ms one way` : ''} · ${commitWaits} backend${commitWaits === 1 ? '' : 's'} still waiting for the standby`,
       }
     },
     city: 'walsender',
@@ -1543,7 +1514,7 @@ const VERDICTS: Verdict[] = [
       return [
         { label: 'tps', value: s.stats.tps.toFixed(0), tone: 'ok' },
         { label: 'cache hit', value: `${s.stats.cacheHitPct.toFixed(1)}%`, tone: 'ok' },
-        { label: 'requested checkpoints', value: `${(forcedShare(c) * 100).toFixed(0)}%`, tone: 'ok' },
+        { label: 'requested checkpoints', value: `${(checkpointRequestedShare(c) * 100).toFixed(0)}%`, tone: 'ok' },
         { label: 'worst connected standby', value: standby?.applicationName ?? 'none' },
         { label: 'model replay delay', value: standby ? `${standby.lagSec.toFixed(2)} s` : '—', tone: 'ok' },
       ]

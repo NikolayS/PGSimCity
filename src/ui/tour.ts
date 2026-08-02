@@ -146,7 +146,7 @@ const STEPS: TourStep[] = [
     id: 'commit',
     title: 'Commit, and what fsync costs',
     body:
-      'A durable commit does not wait for data pages; it waits for the WAL record describing the change to be flushed. We have set `synchronous_commit` to off, so PostgreSQL may acknowledge commits before that flush. In the city, watch modeled `commit_wait` occupancy and the deliberately stretched model duration fall; it is not a production latency measurement. The real trade is that the last fraction of a second of acknowledged transactions may be lost after a PostgreSQL server crash, operating-system crash or power failure.',
+      `A durable commit does not wait for data pages; it waits for the WAL record describing the change to be flushed. We have set \`synchronous_commit\` to off, so PostgreSQL may acknowledge commits before that flush. In the city, open Latency and watch modeled \`commit_wait\` occupancy plus the rolling p50/p99 in ${CLAIM_VALUES.modelLatency.unit} fall; the selected p99 trip attributes its commit time. Those values are not production latency measurements. The real trade is that the last fraction of a second of acknowledged transactions may be lost after a PostgreSQL server crash, operating-system crash or power failure.`,
     focus: 'walwriter',
     duration: 20,
     knobs: { synchronousCommit: 'off', tps: 600, writeRatio: 0.7 },
@@ -236,9 +236,6 @@ const SEEN_KEY = 'pgsimcity.seen'
 const FIRST_RUN_LIFE_MS = 40000
 type KnobKey = keyof Knobs
 type LooseSet = (key: KnobKey, value: Knobs[KnobKey]) => void
-interface LooseBus {
-  on(type: string, fn: (payload: unknown) => void): () => void
-}
 
 function hasSeen(): boolean {
   try {
@@ -955,7 +952,7 @@ export function createTour(ctx: UiContext): UiModule {
    * WIRING
    * =====================================================================*/
 
-  const looseBus = bus as unknown as LooseBus
+  const looseBus = bus
   cleanup.push(
     bus.on('tour:start', (p) => start(p && typeof p.chapter === 'number' ? p.chapter : 0)),
     bus.on('tour:stop', () => stop()),
@@ -975,8 +972,7 @@ export function createTour(ctx: UiContext): UiModule {
     looseBus.on('ui:escape', (payload) => {
       if (tracePicker.hidden) return
       dismissTracePicker()
-      const claim = payload as { handled?: boolean } | undefined
-      if (claim) claim.handled = true
+      payload.handled = true
     }),
   )
 

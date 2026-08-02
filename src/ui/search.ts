@@ -29,10 +29,6 @@ import type { UiContext, UiModule } from './uikit'
  * does not also dismiss the inspector or the tour behind us.
  * ==========================================================================*/
 
-interface LooseBus {
-  on(type: string, fn: (p: unknown) => void): () => void
-}
-
 type ItemKind = 'component' | 'setting' | 'scenario' | 'chapter' | 'anatomy'
 
 interface Item {
@@ -189,7 +185,6 @@ export function createSearch(ctx: UiContext): UiModule {
    */
   function revealKnob(meta: KnobMeta): void {
     emitLoose(bus, 'ui:console', { open: true, key: meta.key })
-    bus.emit('ui:layout', {})
     bus.emit('toast', {
       text: `${meta.label} — highlighted in the console`,
       kind: 'info',
@@ -677,17 +672,15 @@ export function createSearch(ctx: UiContext): UiModule {
    * BUS
    * =====================================================================*/
 
-  const loose = bus as unknown as LooseBus
+  const loose = bus
   cleanup.push(
-    loose.on('ui:palette', (p) => {
-      const req = p as { open?: boolean } | undefined
+    loose.on('ui:palette', (req) => {
       setOpen(req && typeof req.open === 'boolean' ? req.open : !open)
     }),
-    loose.on('ui:escape', (p) => {
+    loose.on('ui:escape', (payload) => {
       if (!open) return
       setOpen(false)
-      const payload = p as { handled?: boolean } | undefined
-      if (payload) payload.handled = true
+      payload.handled = true
     }),
     // The city taking over the screen closes the palette in front of it.
     bus.on('tour:start', () => setOpen(false)),

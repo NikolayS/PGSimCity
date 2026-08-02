@@ -1,4 +1,5 @@
 import { poolBytes, poolPages } from '../core/types'
+import { CLAIM_VALUES } from '../core/claims'
 import type { BackendSim, BackendState, BookRef, ComponentDoc, DocRef, PlanNode, SimState, TableSim } from '../core/types'
 import { fmtBytes, fmtDuration, fmtLsn, fmtNum, fmtPct } from '../core/util'
 
@@ -70,21 +71,25 @@ const BUSY: BackendState[] = ['parse', 'plan', 'exec_cpu', 'exec_io', 'sort', 'w
 
 /* ---------------------------- reference helpers ---------------------------
  * The reading list under each component. Every entry here was checked against
- * the thing it points at — the manual page title, the file on master, the
+ * the thing it points at — the manual page title, the file on the target branch, the
  * function name inside it, the chapter number on interdb.jp. A reference
  * nobody checked is worse than no reference, so where a book genuinely has no
  * chapter on a subject, the field is simply absent.
  * -------------------------------------------------------------------------*/
 
-const DOCS_BASE = 'https://www.postgresql.org/docs/current/'
+const DOCS_BASE = CLAIM_VALUES.postgresqlVersion.manualBase
 const SRC_BASE = 'https://github.com/postgres/postgres/blob/'
 const SUZUKI_BASE = 'https://www.interdb.jp/pg/'
 
 /** A page of the PostgreSQL manual. `page` may carry a #ANCHOR. */
 const manual = (page: string, label: string): DocRef => ({ label, url: DOCS_BASE + page })
 
-/** A file on master, with the functions worth opening it for. */
-const srcFile = (path: string, symbol?: string): DocRef => ({ label: path, url: `${SRC_BASE}master/${path}`, symbol })
+/** A file on the owned PostgreSQL branch, with the functions worth opening. */
+const srcFile = (path: string, symbol?: string): DocRef => ({
+  label: path,
+  url: `${SRC_BASE}${CLAIM_VALUES.postgresqlVersion.sourceBranch}/${path}`,
+  symbol,
+})
 
 /** A chapter of Hironobu Suzuki's *The Internals of PostgreSQL*, free online. */
 const suzuki = (n: number, label: string): DocRef & { chapter: string } => ({

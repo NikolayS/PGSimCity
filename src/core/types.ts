@@ -1101,11 +1101,16 @@ export interface BusEvents {
   'camera:gesture': { kind: 'pan' | 'rotate'; pointer: 'mouse' | 'touch' }
   'quality': { level: QualityLevel }
   'sim:reset': Record<string, never>
-  /** something dramatic happened — shake / flash */
-  'fx:pulse': { at: [number, number, number]; color?: number; radius?: number }
   'checkpoint:start': { reason: string }
   'checkpoint:end': { duration: number }
-  'ui:layout': Record<string, never>
+  'audio:toggle': Record<string, never>
+  'ui:camera-preset': { preset: 'plan' }
+  'ui:console': { open?: boolean; key?: string }
+  'ui:escape': { handled: boolean }
+  'ui:help': { open?: boolean; section?: 'controls' | 'legend' | 'reading' | 'legal' }
+  'ui:labels-toggle': Record<string, never>
+  'ui:palette': { open?: boolean }
+  'ui:theme-toggle': Record<string, never>
 }
 
 export type BusHandler<K extends keyof BusEvents> = (payload: BusEvents[K]) => void
@@ -1410,7 +1415,7 @@ export interface BookRef {
 
 /** The reading list behind one component. Every field is optional. */
 export interface DocReferences {
-  /** postgresql.org/docs/current — the manual */
+  /** postgresql.org/docs/18 — the reviewed manual */
   docs?: DocRef[]
   /** github.com/postgres/postgres — the source */
   source?: DocRef[]

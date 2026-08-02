@@ -21,7 +21,8 @@ export const VACUUM_RECLAIM_PLATE_LINES = CLAIM_VALUES.vacuumReclaim.plateLines
  * server which keeps running happens out here, west of the excavation:
  *
  *   CHECKPOINTER   walks the whole buffer pool, writes dirty pages, then
- *                  fsyncs; the city shows the phases and I/O, not latency.
+ *                  fsyncs; correlate phases and I/O with model p99, not
+ *                  calibrated storage latency.
  *   BGWRITER       trickles out the pages the clock hand is about to hand over,
  *                  so neither the checkpointer nor a user's backend has to.
  *   AUTOVACUUM     a launcher watching dead-tuple thresholds, and workers that

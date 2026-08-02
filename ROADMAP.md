@@ -221,9 +221,12 @@ fast you watch without touching the modelled periods or the measured values.
 The page is called **The Machine**, and PGlite by ElectricSQL is credited where
 the real-PostgreSQL claim is made.
 
-**Then:** comparison — the same statement run twice with one setting changed,
-side by side. `synchronous_commit` on and off, collapsing the commit wait. The
-value of this view is the experiment, not the playthrough.
+**Shipped — controlled comparison.** One PostgreSQL execution report feeds two
+aligned model replays of the same write statement, side by side. The control
+keeps `synchronous_commit` on; the treatment turns it off, so acknowledgement
+moves ahead of the local WAL flush while that flush continues. The view labels
+this difference as model evidence because PGlite cannot measure a real durability
+wait. The value is the controlled experiment, not two noisy executions.
 
 ---
 

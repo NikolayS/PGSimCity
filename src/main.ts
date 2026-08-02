@@ -259,11 +259,7 @@ async function boot(): Promise<void> {
 
   /* --- bus wiring ---------------------------------------------------------- */
 
-  interface LooseBus {
-    on(type: string, fn: (payload: unknown) => void): () => void
-  }
-  const looseBus = bus as unknown as LooseBus
-  const offAudioToggle = looseBus.on('audio:toggle', () => {
+  const offAudioToggle = bus.on('audio:toggle', () => {
     if (audio.enabled) {
       audio.disable()
       bus.emit('toast', { text: 'Sound off', kind: 'info', ms: 1600 })
