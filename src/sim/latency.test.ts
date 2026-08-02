@@ -61,6 +61,7 @@ describe('modeled transaction latency', () => {
     expect(
       meanWaits.bufferReadMs
       + meanWaits.dirtyWriteMs
+      + meanWaits.tempFileMs
       + meanWaits.commitMs
       + meanWaits.lockMs
       + meanWaits.runningMs,

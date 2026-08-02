@@ -147,6 +147,18 @@ export const KNOB_META: KnobMeta[] = [
     hint: `Postgres's own page cache, sized here in real MiB/GiB. The plaza has capacity for ${CLAIM_VALUES.bufferSample.capacityFrames.toLocaleString('en-US')} representative frames; the default 2 GiB pool activates ${CLAIM_VALUES.bufferSample.defaultActiveFrames}. Each MiB implies 128 8 KiB buffers.`,
   },
   {
+    key: 'workMem',
+    label: 'work_mem',
+    guc: 'work_mem',
+    group: 'memory',
+    kind: 'range',
+    min: 1,
+    max: 256,
+    step: 1,
+    unit: 'MiB / node',
+    hint: `Per eligible executor node, never per query or connection. This city prices fixed Sort and HashAggregate nodes; hash nodes receive work_mem × hash_mem_multiplier (${CLAIM_VALUES.workMem.hashMemMultiplier.toFixed(1)} by default since PostgreSQL ${CLAIM_VALUES.workMem.hashMemMultiplierDefaultSince}). Watch private reservoirs, base/pgsql_tmp, temp counters, and the Latency vital when a node spills.`,
+  },
+  {
     key: 'bgwriterEnabled',
     label: 'Background writer',
     group: 'memory',

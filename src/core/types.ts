@@ -94,6 +94,8 @@ export interface Knobs {
   seqScanRatio: number
   /** Logical shared_buffers pool size in MiB. The plaza is only a sample. */
   sharedBuffers: number
+  /** MiB per eligible executor node; hash nodes receive the fixed multiplier. */
+  workMem: number
   /** seconds */
   checkpointTimeout: number
   /** 0..1 */
@@ -166,6 +168,7 @@ export const DEFAULT_KNOBS: Knobs = {
   updateRatio: 0.6,
   seqScanRatio: 0.15,
   sharedBuffers: 2 * 1024,
+  workMem: CLAIM_VALUES.workMem.defaultMiB,
   checkpointTimeout: CLAIM_VALUES.checkpointPolicy.defaultTimeoutSeconds,
   checkpointCompletionTarget: 0.9,
   maxWalSize: CLAIM_VALUES.checkpointPolicy.defaultMaxWalSizeMiB,
@@ -318,6 +321,17 @@ export interface BackendSim {
   walFpiBytes: number
   /** dead row versions created by this trip */
   deadMade: number
+  /** Eligible fixed-template nodes; work_mem is an allowance for each one. */
+  workMemNodes: number
+  workMemSortNodes: number
+  workMemHashNodes: number
+  /** Sum of node allowances, not a claim that every node peaks simultaneously. */
+  workMemAllowanceBytes: number
+  /** Sum of modeled working bytes retained by the eligible nodes. */
+  workMemUsedBytes: number
+  workMemSpillNodes: number
+  /** Per represented statement; cumulative counters account for batched trips. */
+  tempFileBytes: number
   /** last shared-buffer index this backend touched (for flow targeting) */
   lastBuffer: number
   /** total lifetime in seconds (connections are recycled) */
@@ -908,9 +922,24 @@ export interface LockEdge {
 export interface LatencyWaits {
   bufferReadMs: number
   dirtyWriteMs: number
+  tempFileMs: number
   commitMs: number
   lockMs: number
   runningMs: number
+}
+
+export interface WorkMemState {
+  activeNodes: number
+  activeSortNodes: number
+  activeHashNodes: number
+  activeAllowanceBytes: number
+  activeUsedBytes: number
+  spillingNodes: number
+  /** Current representative bytes visible under active backend slots. */
+  liveTempBytes: number
+  /** Cumulative pg_stat_database-shaped counters since model reset. */
+  tempFiles: number
+  tempBytes: number
 }
 
 export interface LatencyQuantile {
@@ -1051,6 +1080,7 @@ export interface SimState {
   highAvailability: HighAvailabilityState
   disasterRecovery: DisasterRecoveryState
   locks: LockEdge[]
+  workMem: WorkMemState
   stats: SimStats
   /** id of the running scenario, if any */
   scenario: string | null
@@ -1545,6 +1575,8 @@ export interface ScenarioDef {
   focus?: string
   /** scenario seconds at 1×; 0 = runs until cancelled */
   duration: number
+  /** Optional fixed statement stream; this selects a template, never a plan. */
+  query?: { kind: QueryKind; table: string }
   /** narration beats: [atSecond, title, body] */
   beats?: [number, string, string][]
   /** A non-modal operator decision shown only after its instrument threshold. */

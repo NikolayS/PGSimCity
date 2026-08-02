@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createBus } from '../core/bus'
+import { CLAIM_VALUES } from '../core/claims'
 import { createTheme } from '../core/theme'
 import { DEFAULT_KNOBS, N_BUFFERS } from '../core/types'
 import type { ComponentDef, Knobs, QualitySettings, SimState, WorldContext, WorldModule } from '../core/types'
@@ -261,6 +262,18 @@ const RESPONSE_CONTRACTS = {
       const sim = createSim(createBus())
       sim.setKnob('sharedBuffers', value)
       return sim.state.buffers.sampleFrames
+    },
+  },
+  workMem: {
+    target: CLAIM_VALUES.workMem.spillExample.lowMiB,
+    measure(value: number) {
+      const sim = createSim(createBus())
+      const table = sim.state.tables.findIndex((candidate) => candidate.def.id === 'sessions')
+      sim.setKnob('tps', 0)
+      sim.setKnob('workMem', value)
+      sim.request('aggregate', table)
+      advanceUntil(sim, () => sim.state.trace.trips > 0, 180)
+      return sim.state.workMem.tempBytes
     },
   },
   checkpointTimeout: {

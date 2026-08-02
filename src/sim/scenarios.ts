@@ -61,6 +61,35 @@ export const SCENARIOS: ScenarioDef[] = [
 
   /* ---------------------------------------------------------------------- */
   {
+    id: 'work-mem-spill',
+    name: 'The work_mem cliff',
+    blurb: 'The same fixed aggregate nodes spill at 2 MiB and fit at 4 MiB; temp I/O owns the latency jump.',
+    icon: '▤',
+    focus: 'backend.localmem',
+    duration: 90,
+    query: { kind: 'aggregate', table: 'sessions' },
+    knobs: {
+      tps: 1.5,
+      writeRatio: 0,
+      seqScanRatio: 1,
+      workMem: 2,
+      sharedBuffers: 2048,
+      synchronousCommit: 'off',
+      autovacuum: false,
+    },
+    beats: [
+      [0, 'A fixed aggregate, not a planner demo', 'Every arriving statement uses the city’s fixed aggregate templates against sessions. The city does not choose a plan from work_mem, and it has no join node: only fixed Sort and HashAggregate working sets are in scope. Watch the violet private reservoirs beside the backend towers.'],
+      [12, 'The node crosses its allowance', 'work_mem is 2 MiB per eligible node. The modeled Partial HashAggregate needs 6 MiB and may use 4 MiB because hash_mem_multiplier is 2.0, so it batches and writes a modeled temp file. A template containing the 3 MiB Sort spills that node too. The query still returns the same result.'],
+      [24, 'The spill is a latency event', 'The overflow path now ends in base/pgsql_tmp, storage demand rises, and the Latency vital attributes the added model time to Temp-file I/O. That cause is why a p99 alone is not enough: open the breakdown and read what stretched it.'],
+      [38, 'Per node, then concurrency', 'Each aggregate template has two eligible nodes. Their nominal allowances add to 6–8 MiB per query at this setting, depending on whether its second node is Sort or Finalize HashAggregate; they are not one shared query budget, and the model does not claim every node peaks together. Every active backend repeats the same arithmetic.'],
+      [52, 'Raise work_mem to 4 MiB', 'The scenario changes work_mem to 4 MiB now. It does not replan or rescue an operation already spilling. Newly started Partial HashAggregate nodes receive an 8 MiB hash allowance, and the modeled 6 MiB working set fits; the 3 MiB Sort fits its own 4 MiB allowance.'],
+      [64, 'Same mechanism, no new temp file', 'New executions keep their selected fixed template and stay in memory. Watch live temp bytes drain while completed-trip latency gradually replaces the older spilled observations. The cumulative temp counters do not fall: counters need deltas or a reset, not wishful reading.'],
+      [78, 'Use the real observables', 'On PostgreSQL, enable log_temp_files at a threshold you can afford, and graph pg_stat_database.temp_files and temp_bytes as deltas. Then inspect EXPLAIN (ANALYZE): quicksort plus Memory means the Sort fit; external merge plus Disk means it spilled. Hash-join spill and planner response to work_mem remain absent from this city.'],
+    ],
+  },
+
+  /* ---------------------------------------------------------------------- */
+  {
     id: 'checkpoint-storm',
     name: 'Checkpoint storm',
     blurb: 'max_wal_size too small under a write flood: checkpoints fire back to back.',

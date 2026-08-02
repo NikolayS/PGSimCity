@@ -9,8 +9,8 @@ Original scope: the 23 fields of `Knobs` in `src/core/types.ts:75`. The
 disaster-recovery addendum below audits the four controls added by roadmap
 item 1, and the three-node addendum audits the three controls added by roadmap
 item 2. The failover addendum audits four controls added by roadmap item 3,
-and the synchronous-replication availability fix adds one control, bringing the
-current contract to 35 fields. Method: read every
+and the synchronous-replication availability fix adds one control. The
+`work_mem` addendum adds the thirty-sixth field. Method: read every
 consumer, then drive the model directly — `createSim()` with a stub bus,
 `setKnob()`, `update(1/30)`, seeded RNG, 300–400 s of warm-up before every
 reading, and an explicit down-sweep afterwards to test recovery. Every number
@@ -1024,8 +1024,9 @@ network timing depend on Patroni and etcd configuration.
 
 ## Operator-scenario addendum — roadmap item 10
 
-The three operator situations add no further `Knobs` fields, so the contract
-ends at verdict 35. Adding storage, dropping a replication slot,
+The three operator situations added no further `Knobs` fields, so that addendum
+ended at verdict 35; the `work_mem` addendum below adds verdict 36. Adding
+storage, dropping a replication slot,
 terminating a backend, promoting a named node, rebuilding a standby and running
 `pg_rewind` are operations with consequences, not configuration policy. They
 therefore use the existing model state and operation APIs rather than disguising
@@ -1055,6 +1056,37 @@ commits and invalidates standby_a as a follower. This follows the PostgreSQL
 manual's High Availability timeline rules and the minimum-recovery-point check
 in `checkTimeLineSwitch()` / `rescanLatestTimeLine()`; Patroni makes the same
 rewind-or-reinitialise decision for every node ahead of the selected leader.
+
+---
+
+## `work_mem` spill addendum
+
+The new control is a real modeled consequence but deliberately not a planner
+control. Both sides of the sweep requested the same seeded aggregate against
+`sessions`; its preselected template was byte-for-byte the same five labels:
+Parallel Seq Scan → Partial HashAggregate → Sort → Gather Merge → Finalize
+GroupAggregate. Only the executor-node method annotations and consequences
+changed.
+
+| # | Knob | Real setting | Verdict | Measured response and recovery |
+|---|---|---|---|---|
+| 36 | `workMem` | `work_mem` | **CORRECT** | At 2 MiB, the Partial HashAggregate received a 4 MiB allowance from the default `hash_mem_multiplier = 2.0`, its 6 MiB teaching working set batched, and the 3 MiB Sort exceeded its separate 2 MiB allowance. The trip created 2 modeled temp files / 9.00 MiB, attributed 7,933 model ms to temp-file I/O, and completed in 8,600 model ms. At 4 MiB, the same nodes used `Batches: 1` and `quicksort`, created 0 temp files / 0 bytes, attributed 0 ms to temp-file I/O, and completed in 933 model ms: a measured **9.2× cliff** that returns to the in-memory path when the knob is restored. |
+
+The per-node sum is part of the regression: the 2 MiB run exposed 6 MiB of
+nominal allowance across its two eligible nodes, already greater than the knob
+itself. Hash nodes use `work_mem × hash_mem_multiplier`; the default multiplier
+has been 2.0 since PostgreSQL 15. Concurrent backends repeat those allowances.
+The sums are nominal limits, not a claim that every executor node peaks at the
+same instant.
+
+Scope is intentionally smaller than PostgreSQL. The city has no join nodes,
+hash-join spill, parallel worker execution, or cost-based plan selection. It
+models only fixed Sort and HashAggregate working sets and never lets `work_mem`
+select a plan. The cumulative model counters project as
+`pg_stat_database.temp_files` and `temp_bytes`; the production investigation
+path also names `log_temp_files`. One modeled spilling node creates one modeled
+temp file per represented statement, while PostgreSQL can use multiple files
+and passes.
 
 ---
 

@@ -100,7 +100,7 @@ const STEPS: TourStep[] = [
     id: 'backend',
     title: 'One process per connection',
     body:
-      'On PostgreSQL that fork is a whole operating-system process with private memory and a mapping of the shared segment. The city models one occupied slot and activity phase per connection; it does not allocate process memory, charge scheduler or ProcArray costs, or model work_mem. Watch the colour of each block — it tells you the modeled phase or wait.',
+      `On PostgreSQL that fork is a whole operating-system process with private memory and a mapping of the shared segment. The city models one occupied slot and activity phase per connection; it does not allocate process memory or charge scheduler or ProcArray costs. It prices only the fixed Sort and HashAggregate working sets described in Local Memory. ${CLAIM_VALUES.workMem.coverageDisclosure} Watch the colour of each block — it tells you the modeled phase or wait.`,
     focus: 'backend.row',
     duration: 16,
   },
@@ -714,6 +714,7 @@ export function createTour(ctx: UiContext): UiModule {
     setText(narrateTitle, copy.title)
     setText(narrateBody, copy.line(sim.state.trace))
     setText(traceHint, copy.hint)
+    traceHint.dataset.disclosure = 'work-mem-trace-scope'
     traceAgainBtn.hidden = stop !== 'done'
     paintedTraceStop = stop
   }
@@ -740,6 +741,9 @@ export function createTour(ctx: UiContext): UiModule {
     window.clearTimeout(narrateTimer)
     narrateTimer = 0
     narrateUntil = 0
+    delete narrateBody.dataset.disclosure
+    delete traceHint.dataset.disclosure
+    document.body.classList.remove('pg-narrating')
     if (!narrateCard.classList.contains('is-live')) return
     if (instant) {
       setClass(narrateCard, 'is-live', false)
@@ -762,9 +766,16 @@ export function createTour(ctx: UiContext): UiModule {
     if (firstLive) hideFirstRun()
     window.clearTimeout(narrateTimer)
     setClass(narrateCard, 'is-trace', false)
+    document.body.classList.add('pg-narrating')
     setText(narrateEyebrow, 'Scenario')
     setText(narrateTitle, title)
     setText(narrateBody, body)
+    delete traceHint.dataset.disclosure
+    if (sim.state.scenario === 'work-mem-spill') {
+      narrateBody.dataset.disclosure = 'work-mem-scenario-narration'
+    } else {
+      delete narrateBody.dataset.disclosure
+    }
     setClass(narrateCard, 'is-out', false)
     if (!narrateCard.classList.contains('is-live')) {
       narrateCard.classList.remove('is-enter')
@@ -1137,6 +1148,7 @@ export function createTour(ctx: UiContext): UiModule {
     document.body.classList.remove('pg-tour')
     document.body.classList.remove('pg-invite')
     document.body.classList.remove('pg-trace')
+    document.body.classList.remove('pg-narrating')
     card.remove()
     narrateCard.remove()
     firstRun.remove()

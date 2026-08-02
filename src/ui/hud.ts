@@ -680,6 +680,7 @@ export function createHud(ctx: UiContext): UiModule {
   const latencyCauseDefs = [
     ['Buffer-read phase', (s: SimState) => s.stats.latency.p99.waits.bufferReadMs],
     ['Dirty-victim I/O', (s: SimState) => s.stats.latency.p99.waits.dirtyWriteMs],
+    ['Temp-file I/O', (s: SimState) => s.stats.latency.p99.waits.tempFileMs],
     ['Commit durability', (s: SimState) => s.stats.latency.p99.waits.commitMs],
     ['Relation lock wait', (s: SimState) => s.stats.latency.p99.waits.lockMs],
   ] as const
@@ -738,7 +739,7 @@ export function createHud(ctx: UiContext): UiModule {
     ),
     el(
       'p',
-      { class: 'hud-latency__note' },
+      { class: 'hud-latency__note', data: { disclosure: 'work-mem-latency-scope' } },
       `Each component is its own p99 and does not add up to the total p99. ${CLAIM_VALUES.modelLatency.taxonomyDisclosure}. In this scale model, ${CLAIM_VALUES.modelLatency.batchDisclosure}; ${CLAIM_VALUES.modelLatency.resolutionDisclosure}. These are deliberately stretched model-time trips, not production milliseconds. `,
       el('a', {
         href: `${CLAIM_VALUES.postgresqlVersion.manualBase}pgstatstatements.html`,
