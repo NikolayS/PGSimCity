@@ -741,7 +741,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Crossing the one modeled fork',
-        body: `${CLAIM_VALUES.timelineRecovery.crossingDisclosure} A missing history file blocks latest from crossing the fork. current does not seek that file: it replays the base backup’s timeline to the target when that timeline’s archived WAL contains it, or to the archived frontier before reporting that the target was not reached. ${CLAIM_VALUES.timelineRecovery.coverageDisclosure}`,
+        body: `${CLAIM_VALUES.timelineRecovery.crossingDisclosure} current does not seek a newer history file: it replays the timeline current when the base backup was taken to a crossing transaction-end record when that timeline’s archived WAL contains one, or to the archived frontier before reporting that the target was not reached. ${CLAIM_VALUES.timelineRecovery.coverageDisclosure}`,
       },
       {
         heading: 'Three drills, three claims',
@@ -757,7 +757,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Cost and cadence are policy',
-        body: `The restore-to-target time starts before \`backup-fetch\` and stops at the modeled recovery stop. Normally that is the selected target. Under \`latest\`, a selected time inside the discarded timeline-1 tail lands at the fork on timeline 2 and reports the missing transactions instead. This is not RTO: promotion, \`recovery_target_action\`, endpoint cutover, client reconnection, and service restoration are outside it. The drill continues while validation reads local restored bytes. Object-store reads and recovery-host I/O are counted; this off-site ground never reads from the primary. ${CLAIM_VALUES.restoreDrill.physicalScopeDisclosure} ${CLAIM_VALUES.restoreDrill.cadenceDisclosure}`,
+        body: `The restore-to-target time starts before \`backup-fetch\` and stops only after archived-WAL replay encounters a transaction-end record whose timestamp crosses the selected target. If the selected history ends first, recovery fails instead of inferring time from an unchanged LSN. This is not RTO: promotion, \`recovery_target_action\`, endpoint cutover, client reconnection, and service restoration are outside it. The drill continues while validation reads local restored bytes. Object-store reads and recovery-host I/O are counted; this off-site ground never reads from the primary. ${CLAIM_VALUES.restoreDrill.physicalScopeDisclosure} ${CLAIM_VALUES.restoreDrill.cadenceDisclosure}`,
       },
       {
         heading: 'Replication is not this',
@@ -825,7 +825,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     sections: [
       {
         heading: 'Choosing the point',
-        body: 'Set the target to a number of seconds before now, then start the restore. The model chooses the newest retained full backup that completed before that target and computes the WAL distance from the backup’s **start LSN** to the target LSN. That includes WAL written during the copy, which is what makes the files consistent. In production use PostgreSQL 18’s timestamp including its time-zone offset, and investigate the destructive transaction carefully: finding the right instant is often harder than running the restore.',
+        body: 'Set the target to a number of seconds before now, then start the restore. The model chooses the newest retained full backup that completed before that target and computes the WAL distance from the backup’s **start LSN** to the first transaction-end record on the selected history whose timestamp crosses the target. That includes WAL written during the copy, which is what makes the files consistent. In production use PostgreSQL 18’s timestamp including its time-zone offset, and investigate the destructive transaction carefully: finding the right instant is often harder than running the restore.',
       },
       {
         heading: 'Three distinct gaps',
@@ -837,7 +837,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Where this restore stops',
-        body: 'Normally the belt stops when replay reaches the target. If `latest` encounters a selected time inside the discarded timeline-1 tail, recovery follows the history file, lands at the fork on timeline 2, and reports the transactions that are absent instead of inventing a failure or replaying discarded WAL. PostgreSQL could then pause, shut down, or promote according to recovery settings and operator procedure, but promotion would fork another timeline and is a separate HA action. The city records `promoted = false` for this restore and does not move the service endpoint.',
+        body: 'The belt stops only when replay encounters a transaction-end record whose timestamp crosses the target. A history file alone is not that evidence: if the selected history ends first, PostgreSQL reports that recovery ended before the configured recovery target was reached. PostgreSQL could then pause, shut down, or promote according to recovery settings and operator procedure after a successful stop, but promotion would fork another timeline and is a separate HA action. The city records `promoted = false` for this restore and does not move the service endpoint.',
       },
     ],
     metrics: [
@@ -855,13 +855,6 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         label: 'Result',
         get: (s) => {
           const restore = s.disasterRecovery.restore
-          const divergentTailResult = restore.resultMessage.length > 0
-            && restore.recoveryTargetTimeline === 'latest'
-            && restore.targetTime <= s.highAvailability.timeline.forkedAt
-            && restore.targetLsn > s.highAvailability.timeline.forkLsn
-          if (divergentTailResult) {
-            return `complete at fork · ${fmtNum(s.highAvailability.transition.lossBytes)} bytes · ${fmtNum(s.highAvailability.transition.lossTransactions)} tx absent`
-          }
           return restore.failureReason || restore.resultMessage || restore.status
         },
       },

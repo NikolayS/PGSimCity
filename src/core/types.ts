@@ -836,6 +836,8 @@ export interface PointInTimeRestore {
   status: PointInTimeRestoreStatus
   progress: number
   targetTime: number
+  /** Transaction-end record proving that recovery can cross targetTime; zero if absent. */
+  targetRecordLsn: number
   targetLsn: number
   recoveryTargetTimeline: RecoveryTargetTimeline
   backupTimeline: number
@@ -850,15 +852,17 @@ export interface PointInTimeRestore {
   backupBytesRequired: number
   backupBytesFetched: number
   walBytesRequired: number
-  /** WAL bytes available from the archive frontier captured when the restore began. */
+  /** WAL bytes currently available on the contiguous selected archive history. */
   walBytesAvailable: number
   walBytesReplayed: number
+  /** Latest transaction-end timestamp reached in the available selected history. */
+  lastReachedTime: number
   estimatedDurationSec: number
   elapsedSec: number
   failureReason: string
   /** Exact successful outcome retained after a PITR or drill finishes. */
   resultMessage: string
-  /** Missing-WAL result discovered after backup fetch and available replay. */
+  /** Missing-WAL result from the latest archive evaluation. */
   pendingWalFailureReason: string
   /** Backup/control-file incompatibility discovered when recovery starts. */
   pendingStartupFailureReason: string

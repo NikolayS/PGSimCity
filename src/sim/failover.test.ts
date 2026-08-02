@@ -223,6 +223,10 @@ describe('Patroni switchover and failover', () => {
 
       sim.setKnob('tps', 0)
       advanceBy(sim, 4)
+      advanceUntil(
+        sim,
+        () => !sim.state.backends.some((backend) => backend.state === 'commit_wait'),
+      )
       sim.setKnob('standbyBNetworkLag', networkLagMs)
       sim.setKnob('synchronousCommit', 'remote_apply')
       sim.setKnob('tps', 200)
@@ -240,7 +244,7 @@ describe('Patroni switchover and failover', () => {
     const nearby = firstCommitWaitEstimate(20)
     const distant = firstCommitWaitEstimate(400)
 
-    expect(distant - nearby).toBeGreaterThan(0.7)
+    expect(distant - nearby, `near=${nearby}, distant=${distant}`).toBeGreaterThan(0.7)
   })
 
   it('does not acknowledge writes that a synchronous failover target lacks', () => {

@@ -432,7 +432,7 @@ describe('continuity and three-node projection', () => {
         && latest.state.disasterRecovery.archive.archivedThroughTime > latestBackup.completedAt,
       180,
     )
-    const latestTargetTime = latest.state.disasterRecovery.archive.archivedThroughTime
+    const latestTargetTime = latest.state.disasterRecovery.archive.archivedThroughTime - 0.5
     expect(latest.startFailover('standbyA')).toBe(true)
     advanceUntil(latest, () => latest.state.highAvailability.transition.status === 'complete')
     expect(latest.startPointInTimeRestore(latest.state.t - latestTargetTime)).toBe(true)
@@ -445,9 +445,9 @@ describe('continuity and three-node projection', () => {
       latest.state.disasterRecovery.restore.status,
       latest.state.disasterRecovery.restore.failureReason,
     ).toBe('complete')
-    expect(readout('recovery.ground', latest)).toMatch(/fork reached.*transactions absent/i)
-    expect(readout('recovery.clock', latest)).toMatch(/fork reached.*replay stopped/i)
-    expect(readout('recovery.replay', latest)).toMatch(/stopped.*fork/i)
+    expect(readout('recovery.ground', latest)).toMatch(/target reached.*not promoted/i)
+    expect(readout('recovery.clock', latest)).toMatch(/recovery_target_time reached/i)
+    expect(readout('recovery.replay', latest)).toMatch(/selected recovery_target_time/i)
 
     const current = createSim(createBus(), { scheduledBackups: false })
     current.setKnob('tps', 6_000)
@@ -463,7 +463,7 @@ describe('continuity and three-node projection', () => {
         && current.state.disasterRecovery.archive.archivedThroughTime > backup.completedAt,
       180,
     )
-    const targetTime = current.state.disasterRecovery.archive.archivedThroughTime
+    const targetTime = current.state.disasterRecovery.archive.archivedThroughTime - 0.5
     expect(current.startFailover('standbyA')).toBe(true)
     advanceUntil(current, () => current.state.highAvailability.transition.status === 'complete')
     current.setKnob('recoveryTargetTimeline', 'current')
@@ -520,7 +520,8 @@ describe('continuity and three-node projection', () => {
     expect(plates).toContain('tl 2')
     expect(plates).not.toContain('tl 3')
     expect(plates).not.toContain('tl 4')
-    expect(plates.some((text) => /PITR STOP.*FORK.*latest/i.test(text))).toBe(true)
+    expect(plates.some((text) => /PITR STOP.*CROSSING TRANSACTION RECORD/i.test(text)))
+      .toBe(true)
 
     continuity.dispose?.()
     theme.dispose()

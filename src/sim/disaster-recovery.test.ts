@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createBus } from '../core/bus'
 import { N_TABLES } from '../core/catalog'
-import { createSim } from './model'
+import { createSim, DR_ARCHIVE_SEGMENT_SECONDS } from './model'
 
 type Sim = ReturnType<typeof createSim>
 
@@ -516,7 +516,7 @@ describe('disaster recovery', () => {
     expect(restore.failureReason).not.toMatch(/healthy unarchived tail|\.ready queue/i)
   })
 
-  it('lands a latest divergent-tail target at the fork and reports the loss', () => {
+  it('reaches a divergent-tail time only through an archived timeline-2 crossing record', () => {
     const sim = createSim(createBus(), { scheduledBackups: false })
     sim.setKnob('tps', 2_000)
     sim.setKnob('writeRatio', 1)
@@ -537,26 +537,29 @@ describe('disaster recovery', () => {
       () => sim.state.highAvailability.transition.status === 'complete',
     )
     const timeline = sim.state.highAvailability.timeline
-    const loss = sim.state.highAvailability.transition
-    expect(loss.lossBytes).toBeGreaterThan(0)
-    expect(loss.lossTransactions).toBeGreaterThan(0)
+    expect(sim.state.highAvailability.transition.lossBytes).toBeGreaterThan(0)
+    expect(sim.state.highAvailability.transition.lossTransactions).toBeGreaterThan(0)
+    advanceUntil(sim, () => sim.state.disasterRecovery.archive.historyFileArchived)
+    advanceUntil(
+      sim,
+      () => sim.state.disasterRecovery.archive.archivedThroughLsn > timeline.forkLsn,
+      180,
+    )
+    const targetTime = timeline.forkedAt - 1
 
-    expect(sim.startRestoreDrill('cluster', 2)).toBe(true)
+    expect(sim.startRestoreDrill('cluster', sim.state.t - targetTime)).toBe(true)
     const restore = sim.state.disasterRecovery.restore
     const drill = sim.state.disasterRecovery.drill
-    expect(restore.targetLsn).toBeGreaterThan(timeline.forkLsn)
+    expect(restore.targetRecordLsn).toBeGreaterThan(timeline.forkLsn)
     expect(restore.targetTime).toBeLessThanOrEqual(timeline.forkedAt)
     expect(restore.targetTimeline).toBe(2)
     expect(restore.crossesTimelineFork).toBe(true)
     expect(restore.parentReplayEndLsn).toBe(timeline.forkLsn)
-    expect(restore.walBytesRequired).toBe(timeline.forkLsn - backup.startLsn)
+    expect(restore.walBytesRequired).toBe(restore.targetRecordLsn - backup.startLsn)
     advanceUntil(sim, () => drill.status === 'passed' || drill.status === 'failed')
 
     expect(drill.status, drill.failureReason).toBe('passed')
-    expect(restore.resultMessage).toMatch(/selected target.*divergent tail.*stopped at the fork/i)
-    expect(restore.resultMessage).toContain(String(loss.lossBytes))
-    expect(restore.resultMessage).toContain(String(loss.lossTransactions))
-    expect(restore.resultMessage).not.toMatch(/archive_timeout|unarchived tail/i)
+    expect(restore.resultMessage).toMatch(/transaction-end record.*crossed recovery_target_time/i)
   })
 
   it('replays an archived divergent parent tail with recovery_target_timeline=current', () => {
@@ -574,7 +577,7 @@ describe('disaster recovery', () => {
         && sim.state.disasterRecovery.archive.archivedThroughTime > backup.completedAt,
       180,
     )
-    const targetTime = sim.state.disasterRecovery.archive.archivedThroughTime
+    const targetTime = sim.state.disasterRecovery.archive.archivedThroughTime - 0.5
     expect(sim.startFailover('standbyA')).toBe(true)
     advanceUntil(
       sim,
@@ -599,11 +602,11 @@ describe('disaster recovery', () => {
     expect(restore.status).toBe('complete')
     expect(restore.walBytesReplayed).toBe(restore.walBytesRequired)
     expect(restore.resultMessage).toMatch(
-      /complete on timeline 1.*recovery_target_timeline=current.*reached recovery_target_time/i,
+      /complete on timeline 1.*recovery_target_timeline=current.*transaction-end record.*crossed recovery_target_time/i,
     )
   })
 
-  it('replays the parent archive before current reports its unrecoverable parent gap', () => {
+  it('replays the parent archive before current reports that no record crossed the target', () => {
     const sim = createSim(createBus(), { scheduledBackups: false })
     sim.setKnob('tps', 2_000)
     sim.setKnob('writeRatio', 1)
@@ -641,23 +644,23 @@ describe('disaster recovery', () => {
     expect(restore.status).toBe('failed')
     expect(restore.walBytesReplayed).toBe(Math.max(0, parentFrontier - backup.startLsn))
     expect(restore.failureReason).toMatch(
-      /archive gap.*timeline 1.*before the fork.*cannot repair/i,
+      /recovery ended before configured recovery target was reached.*last transaction-end/i,
     )
     expect(restore.failureReason).not.toMatch(/timeline mismatch|before fetching/i)
   })
 
   it('gives four distinct current-timeline messages for four archive states', () => {
     function failureFor(
-      prepare: (sim: Sim) => void,
+      prepare: (sim: Sim) => number | void,
     ): string {
       const sim = createSim(createBus(), { scheduledBackups: false })
       sim.setKnob('tps', 1_200)
       sim.setKnob('writeRatio', 1)
       takeBackup(sim)
       sim.setKnob('recoveryTargetTimeline', 'current')
-      prepare(sim)
+      const targetAge = prepare(sim) ?? 0
 
-      expect(sim.startPointInTimeRestore(0)).toBe(true)
+      expect(sim.startPointInTimeRestore(targetAge)).toBe(true)
       const restore = sim.state.disasterRecovery.restore
       advanceUntil(sim, () => restore.status === 'complete' || restore.status === 'failed')
       expect(restore.status).toBe('failed')
@@ -670,8 +673,11 @@ describe('disaster recovery', () => {
         advanceUntil(sim, () => sim.state.disasterRecovery.archive.queueSegments > 0, 120)
       }),
       minimal: failureFor((sim) => {
+        const targetTime = sim.state.t
+        advance(sim, 2)
         sim.setKnob('walLevel', 'minimal')
         advance(sim, 3)
+        return sim.state.t - targetTime
       }),
       queue: failureFor((sim) => {
         sim.setKnob('tps', 6_000)
@@ -690,7 +696,7 @@ describe('disaster recovery', () => {
     expect(messages.healthyTail).toMatch(/healthy unarchived tail.*RPO floor/i)
   })
 
-  it('requires the archived history file before latest can cross the fork', () => {
+  it('does not cross the fork when latest cannot find the history file in the archive', () => {
     const sim = createSim(createBus(), { scheduledBackups: false })
     sim.setKnob('tps', 2_000)
     sim.setKnob('writeRatio', 1)
@@ -705,13 +711,14 @@ describe('disaster recovery', () => {
     advance(sim, 1)
 
     expect(sim.state.disasterRecovery.archive.historyFileArchived).toBe(false)
-    expect(sim.startPointInTimeRestore(0)).toBe(false)
-    expect(sim.state.disasterRecovery.restore.failureReason).toMatch(
-      /archive fault.*credentials.*00000002\.history.*not archived/i,
-    )
-    expect(sim.state.disasterRecovery.restore.failureReason).not.toMatch(
-      /timeline fault|archive frontier|unarchived tail/i,
-    )
+    expect(sim.startPointInTimeRestore(0)).toBe(true)
+    const restore = sim.state.disasterRecovery.restore
+    expect(restore.targetTimeline).toBe(1)
+    expect(restore.crossesTimelineFork).toBe(false)
+    expect(restore.followedHistoryFile).toBe(false)
+    advanceUntil(sim, () => restore.status === 'complete' || restore.status === 'failed')
+    expect(restore.status).toBe('failed')
+    expect(restore.failureReason).toMatch(/recovery ended before configured recovery target/i)
   })
 
   it('earns a failed restore-drill verdict from a stalled WAL archive', () => {
@@ -1132,6 +1139,246 @@ describe('disaster recovery', () => {
     expect(sim.startPointInTimeRestore(2)).toBe(false)
     expect(sim.state.disasterRecovery.drill.status).toBe('verifying')
     expect(sim.state.disasterRecovery.restore.status).toBe('complete')
+  })
+
+  it('does not call a latest target reached without a crossing record on timeline 2', () => {
+    const sim = createSim(createBus(), { scheduledBackups: false })
+    sim.setKnob('tps', 6_000)
+    sim.setKnob('writeRatio', 1)
+    sim.setKnob('synchronousCommit', 'local')
+    sim.setKnob('standbyANetworkLag', 400)
+    takeBackup(sim)
+    advance(sim, 20)
+
+    sim.setKnob('tps', 0)
+    expect(sim.startFailover('standbyA')).toBe(true)
+    advanceUntil(sim, () => sim.state.highAvailability.transition.status === 'complete')
+    advanceUntil(sim, () => sim.state.disasterRecovery.archive.historyFileArchived)
+    const fork = sim.state.highAvailability.timeline.forkLsn
+
+    expect(sim.state.disasterRecovery.archive.archivedThroughLsn - fork).toBe(0)
+    expect(sim.startRestoreDrill('cluster', 2)).toBe(true)
+    advanceUntil(
+      sim,
+      () => sim.state.disasterRecovery.drill.status === 'passed'
+        || sim.state.disasterRecovery.drill.status === 'failed',
+    )
+
+    expect(sim.state.disasterRecovery.drill.status).toBe('failed')
+    expect(sim.state.disasterRecovery.drill.failureReason).toMatch(
+      /recovery ended before configured recovery target was reached.*transaction-end/i,
+    )
+  })
+
+  it('does not infer a time target from an unchanged archived LSN', () => {
+    const sim = createSim(createBus(), { scheduledBackups: false })
+    sim.setKnob('tps', 1_200)
+    sim.setKnob('writeRatio', 1)
+    advance(sim, 12)
+    sim.setKnob('tps', 0)
+    advance(sim, 3)
+    takeBackup(sim)
+    advanceUntil(sim, () => sim.state.disasterRecovery.archive.queueSegments === 0)
+    const lastArchivedLsn = sim.state.disasterRecovery.archive.archivedThroughLsn
+    const lastArchivedTime = sim.state.disasterRecovery.archive.archivedThroughTime
+    advance(sim, 12)
+
+    expect(sim.state.disasterRecovery.archive.archivedThroughLsn).toBe(lastArchivedLsn)
+    expect(sim.state.disasterRecovery.archive.archivedThroughTime).toBe(lastArchivedTime)
+    expect(sim.startPointInTimeRestore(0)).toBe(true)
+    const restore = sim.state.disasterRecovery.restore
+    advanceUntil(sim, () => restore.status === 'complete' || restore.status === 'failed')
+
+    expect(restore.status).toBe('failed')
+    expect(restore.failureReason).toMatch(
+      /recovery ended before configured recovery target was reached.*last transaction-end.*s/i,
+    )
+    expect(restore.failureReason).toContain(restore.targetTime.toFixed(1))
+  })
+
+  it('uses the archive frontier reached during backup-fetch', () => {
+    const sim = createSim(createBus(), { scheduledBackups: false })
+    sim.setKnob('tps', 6_000)
+    sim.setKnob('writeRatio', 1)
+    takeBackup(sim)
+    sim.setKnob('walGArchiveCredentialsValid', false)
+    advance(sim, 12)
+    const targetTime = sim.state.t - 2
+    advance(sim, 3)
+    sim.setKnob('walGArchiveCredentialsValid', true)
+    sim.setKnob('walGDownloadConcurrency', 1)
+
+    expect(sim.startPointInTimeRestore(sim.state.t - targetTime)).toBe(true)
+    const restore = sim.state.disasterRecovery.restore
+    const frontierAtStart = sim.state.disasterRecovery.archive.archivedThroughLsn
+    expect(restore.targetLsn).toBeGreaterThan(frontierAtStart)
+    advanceUntil(
+      sim,
+      () => sim.state.disasterRecovery.archive.archivedThroughLsn >= restore.targetLsn,
+      180,
+    )
+    expect(restore.status).toBe('fetching')
+    advanceUntil(sim, () => restore.status === 'complete' || restore.status === 'failed')
+
+    expect(restore.status, restore.failureReason).toBe('complete')
+  })
+
+  it('drops a stale credentials failure when wal-push is repaired during backup-fetch', () => {
+    const sim = createSim(createBus(), { scheduledBackups: false })
+    sim.setKnob('tps', 6_000)
+    sim.setKnob('writeRatio', 1)
+    takeBackup(sim)
+    sim.setKnob('walGArchiveCredentialsValid', false)
+    advance(sim, 12)
+    const targetTime = sim.state.t - 2
+    advance(sim, 3)
+    sim.setKnob('walGDownloadConcurrency', 1)
+
+    expect(sim.startPointInTimeRestore(sim.state.t - targetTime)).toBe(true)
+    const restore = sim.state.disasterRecovery.restore
+    expect(restore.status).toBe('fetching')
+    expect(sim.state.disasterRecovery.archive.archivedThroughLsn).toBeLessThan(
+      restore.targetLsn,
+    )
+    advance(sim, 1)
+    sim.setKnob('walGArchiveCredentialsValid', true)
+    advanceUntil(
+      sim,
+      () => sim.state.disasterRecovery.archive.archivedThroughLsn >= restore.targetLsn,
+      180,
+    )
+    expect(restore.status).toBe('fetching')
+    advanceUntil(sim, () => restore.status === 'complete' || restore.status === 'failed')
+
+    expect(restore.status, restore.failureReason).toBe('complete')
+    expect(restore.failureReason).not.toMatch(/credentials/i)
+  })
+
+  it('attributes a restore that loses its live archive supply during backup-fetch', () => {
+    const sim = createSim(createBus(), { scheduledBackups: false })
+    sim.setKnob('tps', 6_000)
+    sim.setKnob('writeRatio', 1)
+    takeBackup(sim)
+    sim.setKnob('walGDownloadConcurrency', 1)
+
+    expect(sim.startPointInTimeRestore(0)).toBe(true)
+    const restore = sim.state.disasterRecovery.restore
+    advance(sim, 1)
+    sim.setKnob('walGArchiveCredentialsValid', false)
+    advanceUntil(sim, () => restore.status === 'complete' || restore.status === 'failed')
+
+    expect(restore.status).toBe('failed')
+    expect(restore.failureReason).toMatch(/credentials.*invalid/i)
+    expect(restore.failureReason).not.toMatch(/healthy unarchived tail/i)
+  })
+
+  it('freezes the parent archive frontier as soon as the primary is declared gone', () => {
+    const sim = createSim(createBus(), { scheduledBackups: false })
+    sim.setKnob('tps', 6_000)
+    sim.setKnob('writeRatio', 1)
+    sim.setKnob('walGArchiveCredentialsValid', false)
+    advanceUntil(sim, () => sim.state.disasterRecovery.archive.queueSegments >= 6)
+    sim.setKnob('tps', 0)
+    sim.setKnob('walGArchiveCredentialsValid', true)
+    const frontierAtDeath = sim.state.disasterRecovery.archive.archivedThroughLsn
+
+    expect(sim.startFailover('standbyA')).toBe(true)
+    expect(sim.state.cluster.nodes[0].online).toBe(false)
+    advanceUntil(sim, () => sim.state.highAvailability.transition.status === 'complete')
+
+    expect(sim.state.disasterRecovery.archive.parentArchivedThroughLsn)
+      .toBe(frontierAtDeath)
+  })
+
+  it('archives a timeline history file only after an archive-command attempt', () => {
+    const healthy = createSim(createBus(), { scheduledBackups: false })
+    healthy.setKnob('tps', 0)
+    expect(healthy.startFailover('standbyA')).toBe(true)
+    advanceUntil(healthy, () => healthy.state.highAvailability.transition.status === 'complete')
+
+    expect(healthy.state.disasterRecovery.archive.historyFileArchived).toBe(false)
+    advance(healthy, DR_ARCHIVE_SEGMENT_SECONDS / 2)
+    expect(healthy.state.disasterRecovery.archive.historyFileArchived).toBe(false)
+    advanceUntil(healthy, () => healthy.state.disasterRecovery.archive.historyFileArchived)
+
+    const repaired = createSim(createBus(), { scheduledBackups: false })
+    repaired.setKnob('tps', 0)
+    repaired.setKnob('walGArchiveCredentialsValid', false)
+    expect(repaired.startFailover('standbyA')).toBe(true)
+    advanceUntil(repaired, () => repaired.state.highAvailability.transition.status === 'complete')
+    expect(repaired.state.disasterRecovery.archive.queueSegments).toBe(0)
+    expect(repaired.state.disasterRecovery.archive.historyFileArchived).toBe(false)
+
+    repaired.setKnob('walGArchiveCredentialsValid', true)
+    repaired.update(1 / 15)
+    expect(repaired.state.disasterRecovery.archive.historyFileArchived).toBe(false)
+    expect(repaired.state.disasterRecovery.archive.queueSegments).toBe(0)
+    advanceUntil(repaired, () => repaired.state.disasterRecovery.archive.historyFileArchived)
+  })
+
+  it('keeps latest on timeline 1 when the archive has no timeline-2 history file', () => {
+    const sim = createSim(createBus(), { scheduledBackups: false })
+    sim.setKnob('tps', 6_000)
+    sim.setKnob('writeRatio', 1)
+    sim.setKnob('synchronousCommit', 'local')
+    sim.setKnob('standbyANetworkLag', 400)
+    takeBackup(sim)
+    const backup = sim.state.disasterRecovery.backups[0]
+    advanceUntil(
+      sim,
+      () => sim.state.disasterRecovery.archive.archivedThroughLsn
+        > sim.state.replication.standbys[0].flushedLsn
+        && sim.state.disasterRecovery.archive.archivedThroughTime > backup.completedAt + 1,
+      180,
+    )
+    const targetTime = sim.state.disasterRecovery.archive.archivedThroughTime - 0.5
+    sim.setKnob('walGArchiveCredentialsValid', false)
+
+    expect(sim.startFailover('standbyA')).toBe(true)
+    advanceUntil(sim, () => sim.state.highAvailability.transition.status === 'complete')
+    expect(sim.state.disasterRecovery.archive.parentArchivedThroughLsn)
+      .toBeGreaterThan(sim.state.highAvailability.timeline.forkLsn)
+    expect(sim.state.disasterRecovery.archive.historyFileArchived).toBe(false)
+
+    expect(sim.startPointInTimeRestore(sim.state.t - targetTime)).toBe(true)
+    const restore = sim.state.disasterRecovery.restore
+    expect(restore.targetTimeline).toBe(1)
+    expect(restore.crossesTimelineFork).toBe(false)
+    advanceUntil(sim, () => restore.status === 'complete' || restore.status === 'failed')
+
+    expect(restore.status, restore.failureReason).toBe('complete')
+    expect(restore.followedHistoryFile).toBe(false)
+  })
+
+  it('describes current as the timeline of the selected base backup', () => {
+    const bus = createBus()
+    const messages: string[] = []
+    bus.on('toast', ({ text }) => messages.push(text))
+    const sim = createSim(bus, { scheduledBackups: false })
+    sim.setKnob('tps', 1_200)
+    sim.setKnob('writeRatio', 1)
+    expect(sim.startSwitchover('standbyB')).toBe(true)
+    advanceUntil(sim, () => sim.state.highAvailability.transition.status === 'complete')
+    takeBackup(sim)
+    const backup = sim.state.disasterRecovery.backups[0]
+    expect(backup.startTimeline).toBe(2)
+    advance(sim, 12)
+    advanceUntil(
+      sim,
+      () => sim.state.disasterRecovery.archive.archivedThroughTime >= sim.state.t - 2,
+      180,
+    )
+
+    sim.setKnob('recoveryTargetTimeline', 'current')
+    expect(messages.at(-1)).toMatch(/timeline current when the base backup was taken/i)
+    expect(messages.at(-1)).not.toMatch(/cannot reach.*timeline-2/i)
+    expect(sim.startPointInTimeRestore(2)).toBe(true)
+    const restore = sim.state.disasterRecovery.restore
+    advanceUntil(sim, () => restore.status === 'complete' || restore.status === 'failed')
+
+    expect(restore.status, restore.failureReason).toBe('complete')
+    expect(restore.backupTimeline).toBe(2)
+    expect(restore.targetTimeline).toBe(2)
   })
 
 })
