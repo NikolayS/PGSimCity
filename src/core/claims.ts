@@ -113,7 +113,7 @@ export const CLAIM_VALUES = {
     modeledForkDepth: 1,
     defaultTarget: 'latest',
     historyFile: '00000002.history',
-    plate: 'one-fork model · pre-fork backup stays usable · parent tail ≠ timeline 2',
+    plate: 'one-fork model · pre-fork backup stays usable · fork-segment copy carries parent tail',
     crossingDisclosure: 'recovery_target_timeline=latest means the latest timeline found in the archive. From a timeline-1 backup, an archived 00000002.history makes timeline 2 discoverable; if that file is absent, timeline 1 remains latest and its archived divergent tail can still contain the target. When recovery does follow timeline 2, WAL unique to timeline 1 after the fork is not part of that history.',
     defaultDisclosure: 'PostgreSQL 18.3 defaults recovery_target_timeline to latest. With current, PostgreSQL stays on the timeline current when the base backup was taken and replays that timeline’s archived WAL: if it encounters a transaction-end record whose timestamp crosses the target, recovery succeeds; otherwise it reports that the target was not reached after replaying as far as the archive goes.',
     absent: ['numeric timeline targets', 'multiple-fork trees', 'timeline-history parsing', 'restore-side credentials and object GET failures', 'wider recovery_target_* interactions'],

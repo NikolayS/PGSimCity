@@ -1309,10 +1309,19 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     const timeline = sim.highAvailability.timeline
     const activeRow = Math.min(S.rows - 1, Math.max(0, timeline.current - 1))
     const forked = timeline.forkLsn > 0
+    const forkSegmentStart = Math.floor(timeline.forkLsn / sim.wal.segmentSize)
+      * sim.wal.segmentSize
+    const forkCopyArchived = forked
+      && archive.timeline === timeline.current
+      && archive.archivedThroughLsn >= forkSegmentStart + sim.wal.segmentSize
     const parentGapSegments = Math.min(
       S.cols,
       Math.ceil(
-        Math.max(0, timeline.forkLsn - archive.parentArchivedThroughLsn)
+        Math.max(
+          0,
+          (forkCopyArchived ? forkSegmentStart : timeline.forkLsn)
+            - archive.parentArchivedThroughLsn,
+        )
           / sim.wal.segmentSize,
       ),
     )

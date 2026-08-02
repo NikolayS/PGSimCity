@@ -3068,13 +3068,23 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
   function archiveGapReason(timeline: number): string {
     if (timeline === dr.archive.parentTimeline) {
+      const forkSegmentStart = Math.floor(ha.timeline.forkLsn / WAL_SEG) * WAL_SEG
+      if (
+        dr.archive.parentArchivedThroughLsn >= forkSegmentStart
+        && dr.archive.parentArchivedThroughLsn < ha.timeline.forkLsn
+      ) {
+        return `Archive gap: recovery_target_timeline=current searches only timeline ${timeline}, whose partial fork segment was not archived under that timeline. Timeline ${dr.archive.timeline}'s copied fork segment belongs to a newer history and is not eligible for current`
+      }
+      if (dr.archive.parentArchivedThroughLsn >= ha.timeline.forkLsn) {
+        return `Archive gap: recovery_target_timeline=current searches only timeline ${timeline}, whose archived divergent tail ends before the selected transaction record. Timeline ${dr.archive.timeline}'s newer history is not eligible for current`
+      }
       if (!K.walGArchiveCredentialsValid) {
-        return `Archive fault and parent gap: wal-g wal-push credentials are invalid, and timeline ${timeline} ends before the fork in object storage. The promoted standby used archive_mode=on while it was in recovery and will not archive the missing timeline-${timeline} segments it received by streaming; repairing timeline ${dr.archive.timeline}'s archiver cannot recreate this parent gap`
+        return `Archive fault and parent gap: wal-g wal-push credentials are invalid, and timeline ${timeline} is missing complete segments before the fork segment in object storage. The promoted standby used archive_mode=on while it was in recovery and will not archive those segments it received by streaming; repairing timeline ${dr.archive.timeline}'s archiver can archive its copied fork segment but cannot recreate this earlier parent gap`
       }
       if (!archiverOn()) {
-        return `Archive fault: wal_level=minimal left timeline ${timeline} short of the fork in object storage before promotion. The promoted standby cannot recreate that missing parent chain from timeline ${dr.archive.timeline}`
+        return `Archive fault: wal_level=minimal left complete timeline-${timeline} segments missing before the fork segment in object storage. The promoted standby's timeline-${dr.archive.timeline} fork-segment copy cannot recreate that earlier parent chain`
       }
-      return `Archive gap: timeline ${timeline} ends before the fork in object storage. The promoted standby used archive_mode=on while it was in recovery, so it will not archive the complete timeline-${timeline} segments it received by streaming; archive_timeout on timeline ${dr.archive.timeline} cannot repair this lost parent chain`
+      return `Archive gap: timeline ${timeline} is missing complete segments before the fork segment in object storage. The promoted standby used archive_mode=on while it was in recovery, so it will not archive those segments it received by streaming; archive_timeout and timeline ${dr.archive.timeline}'s copied fork segment cannot repair this earlier lost parent chain`
     }
     if (!K.walGArchiveCredentialsValid) {
       return `Archive fault: wal-g wal-push credentials are invalid, so completed WAL on timeline ${timeline} cannot reach the selected target; repair the credentials and wait for the .ready queue to drain`
@@ -3097,7 +3107,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   }
 
   function restoreTargetTimeline(backupTimeline: number): number {
-    if (K.recoveryTargetTimeline === 'current') return backupTimeline
+    if (dr.restore.recoveryTargetTimeline === 'current') return backupTimeline
     if (
       ha.timeline.forkLsn > 0
       && backupTimeline === ha.timeline.parent
@@ -3110,6 +3120,46 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     if (timeline === dr.archive.timeline) return dr.archive.archivedThroughLsn
     if (timeline === dr.archive.parentTimeline) return dr.archive.parentArchivedThroughLsn
     return 0
+  }
+
+  function archiveHasLsn(timeline: number, lsn: number): boolean {
+    return archivedThroughForTimeline(timeline) >= lsn
+  }
+
+  function forkSegmentStartLsn(): number {
+    return Math.floor(ha.timeline.forkLsn / WAL_SEG) * WAL_SEG
+  }
+
+  function forkSegmentCopyArchived(): boolean {
+    return ha.timeline.forkLsn > 0
+      && dr.archive.timeline === ha.timeline.current
+      && dr.archive.archivedThroughLsn >= forkSegmentStartLsn() + WAL_SEG
+  }
+
+  function restoreFollowsForkHistory(): boolean {
+    const restore = dr.restore
+    return restore.targetTimeline === ha.timeline.current
+      && restore.backupTimeline === ha.timeline.parent
+      && dr.archive.historyFileArchived
+  }
+
+  function parentArchivedThroughForRestore(): number {
+    const parentEnd = dr.archive.parentArchivedThroughLsn
+    /* The copied file closes only the parent tail in the fork segment; it
+     * cannot bridge an earlier complete segment missing from object storage. */
+    if (
+      parentEnd >= ha.timeline.forkLsn
+      || !restoreFollowsForkHistory()
+      || parentEnd < forkSegmentStartLsn()
+      || !forkSegmentCopyArchived()
+    ) return parentEnd
+    return ha.timeline.forkLsn
+  }
+
+  function archivedThroughForRestoreTimeline(timeline: number): number {
+    return timeline === dr.restore.backupTimeline && restoreFollowsForkHistory()
+      ? parentArchivedThroughForRestore()
+      : archivedThroughForTimeline(timeline)
   }
 
   function firstCrossingCommitLsn(
@@ -3136,7 +3186,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
   function lastReachedCommitTime(replayEndLsn: number): number {
     const restore = dr.restore
-    const parentFrontier = archivedThroughForTimeline(restore.backupTimeline)
+    const parentFrontier = parentArchivedThroughForRestore()
     const parentComplete = !restore.crossesTimelineFork
       || parentFrontier >= ha.timeline.forkLsn
     let last = 0
@@ -3154,13 +3204,13 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
           reached = lsn >= ha.timeline.forkLsn
             && lsn <= Math.min(
               replayEndLsn,
-              archivedThroughForTimeline(restoreReplayTimeline),
+              archivedThroughForRestoreTimeline(restoreReplayTimeline),
             )
         }
       } else if (timeline === restoreReplayTimeline) {
         reached = lsn <= Math.min(
           replayEndLsn,
-          archivedThroughForTimeline(restoreReplayTimeline),
+          archivedThroughForRestoreTimeline(restoreReplayTimeline),
         )
       }
       if (reached) last = Math.max(last, recoveryCommitAt[slot])
@@ -3178,7 +3228,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         restore.walBytesRequired,
         Math.max(
           0,
-          Math.min(replayEndLsn, archivedThroughForTimeline(restoreReplayTimeline))
+          Math.min(replayEndLsn, archivedThroughForRestoreTimeline(restoreReplayTimeline))
             - selected.startLsn,
         ),
       )
@@ -3186,7 +3236,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     const parentEnd = Math.min(
       replayEndLsn,
       ha.timeline.forkLsn,
-      archivedThroughForTimeline(selected.startTimeline),
+      parentArchivedThroughForRestore(),
     )
     const parentBytes = Math.max(0, parentEnd - selected.startLsn)
     if (parentEnd < ha.timeline.forkLsn) return parentBytes
@@ -3293,9 +3343,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
   function liveArchiveGapReason(): string {
     const restore = dr.restore
-    const gapTimeline = restore.crossesTimelineFork
-      && dr.archive.parentArchivedThroughLsn < ha.timeline.forkLsn
-      ? restore.backupTimeline
+    const gapTimeline = restoreFollowsForkHistory()
+      ? dr.archive.parentArchivedThroughLsn < forkSegmentStartLsn()
+        ? restore.backupTimeline
+        : restore.targetTimeline
       : restoreReplayTimeline
     return archiveGapReason(gapTimeline)
   }
@@ -3523,22 +3574,33 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
             // segment switch PostgreSQL requests at backup stop, then let the
             // ordinary wal-push queue decide when completion is durable.
             wal.insertLsn = Math.max(wal.insertLsn, requiredArchiveLsn)
-            if (dr.archive.archivedThroughLsn >= requiredArchiveLsn) completeBaseBackup()
-            else backup.status = 'waiting_wal'
+            if (archiveHasLsn(backup.startTimeline, requiredArchiveLsn)) {
+              completeBaseBackup()
+            } else backup.status = 'waiting_wal'
           }
         }
       }
     } else if (backup.status === 'waiting_wal') {
       backup.progress = 1
       const requiredArchiveLsn = backupArchiveBoundary(backup.stopLsn)
-      if (dr.archive.archivedThroughLsn >= requiredArchiveLsn) completeBaseBackup()
+      if (dr.archive.timeline !== backup.startTimeline) {
+        failBaseBackup(
+          `Full backup failed: archive recovery moved from timeline ${backup.startTimeline} to timeline ${dr.archive.timeline} before the backup stop WAL reached timeline ${backup.startTimeline}'s archive`,
+        )
+      } else if (archiveHasLsn(backup.startTimeline, requiredArchiveLsn)) {
+        completeBaseBackup()
+      }
     }
 
     const restore = dr.restore
     if (restore.status === 'fetching' || restore.status === 'replaying') {
       const selected = backupById(restore.backupId)
       if (!selected) {
-        failRestore('The selected full backup expired from retention before the restore reached its target')
+        failRestore(
+          restore.status === 'fetching'
+            ? 'The selected full backup expired from retention before the restore reached its target'
+            : 'Archived WAL needed to finish replay expired from retention before the restore reached its target',
+        )
       } else {
         restore.elapsedSec += dt
         if (restore.status === 'fetching') {

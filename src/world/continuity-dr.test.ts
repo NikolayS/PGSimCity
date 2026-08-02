@@ -385,6 +385,32 @@ describe('continuity and three-node projection', () => {
     }
     expect(litParentSilos).toBe(CONTINUITY.silo.cols - parentGapSegments)
 
+    sim.setKnob('walGArchiveCredentialsValid', true)
+    const forkSegmentStart = Math.floor(
+      sim.state.highAvailability.timeline.forkLsn / sim.state.wal.segmentSize,
+    ) * sim.state.wal.segmentSize
+    advanceUntil(
+      sim,
+      () => sim.state.disasterRecovery.archive.archivedThroughLsn
+        >= forkSegmentStart + sim.state.wal.segmentSize,
+      180,
+    )
+    continuity.update(1 / 30, sim.state, sim.state.t)
+    const missingCompleteParentSegments = Math.min(
+      CONTINUITY.silo.cols,
+      Math.ceil(
+        (forkSegmentStart - parentFrontierBeforeOutage) / sim.state.wal.segmentSize,
+      ),
+    )
+    litParentSilos = 0
+    for (let c = 0; c < CONTINUITY.silo.cols; c++) {
+      siloCaps.getColorAt(c, color)
+      if (color.getHex() !== 0x0a1120) litParentSilos++
+    }
+    expect(litParentSilos).toBe(
+      CONTINUITY.silo.cols - missingCompleteParentSegments,
+    )
+
     continuity.dispose?.()
     theme.dispose()
   })
