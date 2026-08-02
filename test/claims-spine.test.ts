@@ -257,11 +257,21 @@ describe('claims and conventions spine', () => {
       MACHINE_SYNCHRONOUS_COMMIT_COMPARISON,
     )
     expect(MACHINE_SYNCHRONOUS_COMMIT_COMPARISON.evidenceSource).toBe('model')
+    expect(MACHINE_SYNCHRONOUS_COMMIT_COMPARISON.finding).toContain('WAL still flushes later')
     expect(MACHINE_SYNCHRONOUS_COMMIT_COMPARISON.finding).toContain(
-      'WAL still flushes later',
+      'crash can lose acknowledged commits',
+    )
+    expect(MACHINE_SYNCHRONOUS_COMMIT_COMPARISON.finding).toContain(
+      'roughly 3 × wal_writer_delay',
+    )
+    expect(MACHINE_SYNCHRONOUS_COMMIT_COMPARISON.finding).toContain(
+      'Transactions stay atomic',
     )
     expect(MACHINE_SYNCHRONOUS_COMMIT_COMPARISON.pgliteDisclosure).toContain(
-      'cannot measure this durability-wait difference',
+      'cannot measure this difference',
+    )
+    expect(MACHINE_SYNCHRONOUS_COMMIT_COMPARISON.replayDisclosure).toContain(
+      'not SET or re-executed in PGlite',
     )
     expect(read('machine/comparison.js'), 'Machine:comparison does not consume the owned claim')
       .toContain('MACHINE_SYNCHRONOUS_COMMIT_COMPARISON as claim')

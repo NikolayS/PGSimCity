@@ -21,9 +21,9 @@ function replaceCommit(replay, setting) {
     }
     return Object.freeze({
       ...stage,
-      detail: 'acknowledge without waiting for flush',
+      detail: 'acknowledge before flush; recent acknowledgements at risk until flush',
       durationMs: OFF_ACK_VIEW_MS,
-      measurement: 'M · ACK early; WAL flush continues',
+      measurement: 'M · ACK early; recent ACKs at risk until flush',
       flushContinuesAfterAck: true,
       backgroundFlushDurationMs: stage.durationMs,
     })
@@ -64,11 +64,12 @@ export function createSynchronousCommitComparison(report) {
   return Object.freeze({
     claimId: 'machineSynchronousCommitComparison',
     sql: measuredReplay.sql,
-    changed: claim.setting,
+    modelledSetting: claim.setting,
     held: claim.held,
     evidenceSource: claim.evidenceSource,
     finding: claim.finding,
     pgliteDisclosure: claim.pgliteDisclosure,
+    replayDisclosure: claim.replayDisclosure,
     commitStartMs,
     observationAtMs:
       commitStartMs + OFF_ACK_VIEW_MS + OBSERVATION_AFTER_ACK_MS,
@@ -81,7 +82,7 @@ export function createSynchronousCommitComparison(report) {
       }),
       Object.freeze({
         id: 'B',
-        role: 'ONE CHANGE',
+        role: 'MODELLED OFF POLICY',
         setting: Object.freeze({ synchronous_commit: claim.treatment }),
         replay: treatmentReplay,
       }),

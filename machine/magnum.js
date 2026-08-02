@@ -71,6 +71,8 @@ const comparisonRun = document.querySelector('#comparison-run')
 const comparisonContinue = document.querySelector('#comparison-continue')
 const comparisonStatus = document.querySelector('#comparison-status')
 const comparisonFinding = document.querySelector('#comparison-finding')
+const comparisonPgliteDisclosure = document.querySelector('#comparison-pglite-disclosure')
+const comparisonReplayDisclosure = document.querySelector('#comparison-replay-disclosure')
 const comparisonSql = document.querySelector('#comparison-sql')
 const comparisonLanes = document.querySelector('.comparison-lanes')
 const comparisonBoardA = document.querySelector('#comparison-board-a')
@@ -115,6 +117,8 @@ if (
   || !comparisonContinue
   || !comparisonStatus
   || !comparisonFinding
+  || !comparisonPgliteDisclosure
+  || !comparisonReplayDisclosure
   || !comparisonSql
   || !comparisonLanes
   || !comparisonBoardA
@@ -594,7 +598,7 @@ function comparisonPhaseText(laneIndex) {
   if (comparisonState.status === 'finding') {
     return laneIndex === 0
       ? 'M · WAITING FOR LOCAL FLUSH'
-      : 'M · ACK SENT; FLUSH CONTINUES'
+      : 'M · ACK SENT; RECENT ACKS AT RISK'
   }
   if (laneStatement.status === 'complete') return 'COMPLETE'
   return `${laneStatement.stageIndex + 1}/${laneStatement.replay.stages.length} · ${laneStatement.replay.stages[laneStatement.stageIndex].label.toUpperCase()}`
@@ -604,13 +608,13 @@ function updateComparisonUi() {
   comparisonRoot.hidden = !comparisonState.visible
   comparisonStatus.textContent =
     comparisonState.status === 'loading'
-      ? 'P MEASURING ONE EXECUTION'
+      ? 'P RECORDING ONE EXECUTION'
       : comparisonState.status === 'running'
-        ? 'RUNNING IN LOCKSTEP'
+        ? 'M REPLAYS IN LOCKSTEP'
         : comparisonState.status === 'finding'
           ? 'HELD AT THE DIFFERENCE'
           : comparisonState.status === 'complete'
-            ? 'EXPERIMENT COMPLETE'
+            ? 'REPLAY COMPLETE'
             : comparisonState.status === 'error'
               ? 'P REPORT UNAVAILABLE'
               : 'READY'
@@ -620,8 +624,12 @@ function updateComparisonUi() {
   comparisonRun.disabled = comparisonState.status === 'loading'
   comparisonRun.textContent = comparisonState.model
     ? 'RUN AGAIN'
-    : 'RUN CONTROLLED COMPARISON'
+    : 'RUN MODELLED REPLAY'
   comparisonFinding.textContent = SYNCHRONOUS_COMMIT_COMPARISON_CLAIM.finding
+  comparisonPgliteDisclosure.textContent =
+    SYNCHRONOUS_COMMIT_COMPARISON_CLAIM.pgliteDisclosure
+  comparisonReplayDisclosure.textContent =
+    SYNCHRONOUS_COMMIT_COMPARISON_CLAIM.replayDisclosure
   comparisonSql.textContent = COMPARISON_SQL
   if (comparisonState.error) {
     comparisonFinding.textContent =
@@ -2343,7 +2351,7 @@ function drawComparisonCaption(laneIndex) {
   const label = comparisonState.status === 'finding'
     ? laneIndex === 0
       ? 'A · ON · WAITING FOR LOCAL WAL FLUSH'
-      : 'B · OFF · ACK SENT EARLY; WAL FLUSH CONTINUES'
+      : 'B · OFF · ACK SENT EARLY; RECENT ACKS AT RISK UNTIL FLUSH'
     : `${laneIndex === 0 ? 'A · ON' : 'B · OFF'} · ${activeStage.label.toUpperCase()} · ${activeStage.measurement ?? activeStage.detail}`
   mono(`M  ${label}`, 43, 713, 8, '#d9ffff', 'left', 800)
 }
@@ -2387,7 +2395,7 @@ function drawComparisonBoards() {
       drawArchitecture()
       comparisonState.stagePoints[laneIndex].x = statementStagePoint.x
       comparisonState.stagePoints[laneIndex].y = statementStagePoint.y
-      if (!mobileBoard) drawComparisonCaption(laneIndex)
+      drawComparisonCaption(laneIndex)
       positionComparisonBoard(laneIndex, board)
     }
   } finally {
@@ -3042,7 +3050,8 @@ window.MAGNUM = Object.freeze({
       visible: comparisonState.visible,
       status: comparisonState.status,
       elapsedMs: comparisonState.elapsedMs,
-      changed: comparisonState.model?.changed ?? 'synchronous_commit',
+      modelledSetting:
+        comparisonState.model?.modelledSetting ?? 'synchronous_commit',
       held: comparisonState.model?.held ?? SYNCHRONOUS_COMMIT_COMPARISON_CLAIM.held,
       evidenceSource: comparisonState.model?.evidenceSource ?? 'model',
       stages: comparisonState.statements.map((lane) =>
