@@ -335,7 +335,10 @@ export function createHelp(ctx: UiContext): UiModule {
     'div',
     {
       class: 'help-dialog pg-panel',
-      data: { analyticsPanel: 'help' },
+      data: {
+        analyticsPanel: 'help',
+        correctionSubject: 'city-help',
+      },
       role: 'dialog',
       'aria-modal': 'true',
       'aria-labelledby': 'help-title',

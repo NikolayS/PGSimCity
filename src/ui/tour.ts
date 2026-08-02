@@ -372,6 +372,7 @@ export function createTour(ctx: UiContext): UiModule {
     'section',
     {
       class: 'tour-card pg-panel',
+      'data-correction-subject': 'city-guided-tour',
       role: 'region',
       'aria-label': 'Guided tour',
       'aria-live': 'polite',
@@ -454,7 +455,12 @@ export function createTour(ctx: UiContext): UiModule {
   )
   const narrateCard = el(
     'aside',
-    { class: 'tour-narrate pg-panel', role: 'status', 'aria-live': 'polite' },
+    {
+      class: 'tour-narrate pg-panel',
+      'data-correction-subject': 'city-scenario-or-query-trace',
+      role: 'status',
+      'aria-live': 'polite',
+    },
     narrateEyebrow,
     narrateTitle,
     narrateBody,

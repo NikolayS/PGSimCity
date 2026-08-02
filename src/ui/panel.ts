@@ -566,7 +566,10 @@ export function createInspector(ctx: UiContext): UiModule {
   /* --- populated state --------------------------------------------------- */
 
   function renderDoc(id: string, info: ComponentDoc | undefined): HTMLElement {
-    const wrap = el('div', { class: 'pgc-content pg-enter' })
+    const wrap = el('div', {
+      class: 'pgc-content pg-enter',
+      data: { correctionSubject: 'city-inspector' },
+    })
 
     /* metrics first — the numbers are the reason this feels alive */
     const metrics = info?.metrics ?? []

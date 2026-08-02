@@ -1,0 +1,79 @@
+import { inspectRenderedPages } from './disclosure-browser.mjs'
+
+const MEASURE_EXPRESSION = `(() => {
+  const describe = (element) => {
+    if (element.dataset.correctionSubject) return element.dataset.correctionSubject
+    if (element.id) return '#' + element.id
+    const ariaLabel = element.getAttribute('aria-label')
+    if (ariaLabel) return ariaLabel
+    const classes = Array.from(element.classList || []).slice(0, 2)
+    return element.tagName.toLowerCase() + classes.map((name) => '.' + name).join('')
+  }
+  const subjects = Array.from(document.querySelectorAll('[data-correction-subject]'))
+    .map((element) => ({
+      label: describe(element),
+      pathCount: element.querySelectorAll('[data-correction-path="true"] > a[data-correction-link="true"]').length,
+    }))
+  const orphanPaths = Array.from(document.querySelectorAll('[data-correction-path="true"]'))
+    .filter((path) => !path.closest('[data-correction-subject]'))
+    .map((path) => describe(path.parentElement || path))
+  return { subjects, orphanPaths }
+})()`
+
+/** Enumerate authored correction subjects from the DOM of real rendered pages. */
+export async function measureCorrectionPages(pages) {
+  return inspectRenderedPages(pages, async ({ evaluate, page, viewport }) => {
+    const measured = await evaluate(MEASURE_EXPRESSION)
+    let markerProbe
+    if (page.probeMarker) {
+      await evaluate(`(() => {
+        const required = document.createElement('section')
+        required.className = 'pg-panel'
+        required.dataset.correctionSubject = 'TEMPORARY CLAIM-BEARING PROBE'
+        const exempt = document.createElement('section')
+        exempt.className = 'pg-panel'
+        exempt.id = 'temporary-non-claim-probe'
+        exempt.textContent = 'TEMPORARY NON-CLAIM PROBE'
+        document.body.append(required, exempt)
+      })()`)
+      const probed = await evaluate(MEASURE_EXPRESSION)
+      await evaluate(`
+        document.querySelector('[data-correction-subject="TEMPORARY CLAIM-BEARING PROBE"]')?.remove()
+        document.querySelector('#temporary-non-claim-probe')?.remove()
+      `)
+      markerProbe = {
+        required: probed.subjects.find(
+          (subject) => subject.label === 'TEMPORARY CLAIM-BEARING PROBE',
+        ),
+        nonClaim: probed.subjects.filter(
+          (subject) => subject.label === '#temporary-non-claim-probe',
+        ),
+      }
+    }
+    return {
+      name: page.name,
+      viewport,
+      ...measured,
+      markerProbe,
+    }
+  })
+}
+
+export function correctionCoverageFailures(reports) {
+  const failures = []
+  for (const report of reports) {
+    for (const subject of report.subjects) {
+      if (subject.pathCount !== 1) {
+        failures.push(
+          `${report.name} · ${subject.label}: expected 1 correction path, found ${subject.pathCount}`,
+        )
+      }
+    }
+    for (const label of report.orphanPaths) {
+      failures.push(
+        `${report.name} · ${label}: correction path has no claim-bearing panel marker`,
+      )
+    }
+  }
+  return failures
+}

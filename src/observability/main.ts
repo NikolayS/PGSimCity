@@ -938,6 +938,9 @@ function render(): void {
     else content = renderVerdict(screen, node)
   }
 
+  content.dataset.correctionSubject = screen.kind === 'flow'
+    ? 'query-flow-card'
+    : 'diagnose-card'
   createCorrectionPath(content, {
     surface: screen.kind === 'flow' ? 'Query flow' : 'Diagnose',
     panel: correctionPanel,

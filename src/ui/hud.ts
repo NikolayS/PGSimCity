@@ -702,6 +702,7 @@ export function createHud(ctx: UiContext): UiModule {
     {
       class: 'pg-panel hud-latency interactive',
       id: 'hud-latency-panel',
+      'data-correction-subject': 'city-latency-vital',
       'aria-labelledby': 'hud-latency-title',
       hidden: true,
     },
@@ -1156,6 +1157,7 @@ export function createHud(ctx: UiContext): UiModule {
     'section',
     {
       class: 'pg-panel hud-decision',
+      'data-correction-subject': 'city-operator-scenario',
       hidden: true,
       'aria-label': 'Operator decision',
     },

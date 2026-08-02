@@ -1314,7 +1314,11 @@ export function createAnatomy(ctx: UiContext): UiModule {
 
   const panel = el(
     'section',
-    { class: 'an-overlay__panel pg-panel', role: 'document' },
+    {
+      class: 'an-overlay__panel pg-panel',
+      data: { correctionSubject: 'city-physical-anatomy' },
+      role: 'document',
+    },
     el(
       'header',
       { class: 'an-overlay__head pg-panel__head' },

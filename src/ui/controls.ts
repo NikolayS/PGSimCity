@@ -660,7 +660,16 @@ export function createControls(ctx: UiContext): UiModule {
   )
   const foot = el('footer', { class: 'pg-panel__foot pgc-rail__foot' }, resetBtn, changedText)
 
-  const panel = el('section', { class: 'pg-panel pgc-panel pgc-rail' }, head, body, foot)
+  const panel = el(
+    'section',
+    {
+      class: 'pg-panel pgc-panel pgc-rail',
+      data: { correctionSubject: 'city-console' },
+    },
+    head,
+    body,
+    foot,
+  )
   panel.setAttribute('aria-label', 'Console')
   createCorrectionPath(panel, {
     surface: 'City / Console',

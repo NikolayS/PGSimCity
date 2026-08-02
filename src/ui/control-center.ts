@@ -352,6 +352,7 @@ export function createControlCenter(options: ControlCenterOptions): ControlCente
     'section',
     {
       class: 'control-center',
+      'data-correction-subject': 'city-control-center',
       role: 'dialog',
       'aria-modal': 'true',
       'aria-label': 'Postmaster control center',

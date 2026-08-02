@@ -10,6 +10,10 @@ import {
 } from '../src/core/corrections'
 import { el } from '../src/ui/uikit'
 import { installTestDom } from './dom'
+import {
+  correctionCoverageFailures,
+  measureCorrectionPages,
+} from './correction-browser.mjs'
 
 const read = (path: string): string =>
   readFileSync(new URL(`../${path}`, import.meta.url), 'utf8')
@@ -135,4 +139,50 @@ describe('PostgreSQL correction reports', () => {
       expect(count, `${surface} has no shared correction path in ${file}`).toBe(expectedPaths)
     }
   })
+
+  it('covers every claim-bearing panel rendered by each browser surface', async () => {
+    const reports = await measureCorrectionPages([{
+      name: 'City',
+      path: '/',
+      readySelector: '.an-overlay',
+      prepare: `window.PGSIMCITY.bus.emit('select', { id: 'shared.buffers' })`,
+    }, {
+      name: 'Diagnose',
+      path: '/observability/',
+      readySelector: '[data-correction-path]',
+    }, {
+      name: 'Query flow',
+      path: '/observability/?view=flow',
+      readySelector: '[data-correction-path]',
+    }, {
+      name: 'Machine',
+      path: '/machine/',
+      readySelector: '.comparison-actions [data-correction-path]',
+      probeMarker: true,
+    }])
+
+    expect(reports.map((report) => report.viewport)).toEqual([
+      { width: 390, height: 844 },
+      { width: 390, height: 844 },
+      { width: 390, height: 844 },
+      { width: 390, height: 844 },
+    ])
+    for (const report of reports) expect(report.subjects.length).toBeGreaterThan(0)
+
+    const markerProbe = reports.find((report) => report.name === 'Machine')!.markerProbe
+    expect(markerProbe.required).toBeDefined()
+    expect(correctionCoverageFailures([{
+      name: 'Required probe',
+      subjects: [markerProbe.required],
+      orphanPaths: [],
+    }])).toEqual([
+      'Required probe · TEMPORARY CLAIM-BEARING PROBE: expected 1 correction path, found 0',
+    ])
+    expect(correctionCoverageFailures([{
+      name: 'Non-claim probe',
+      subjects: markerProbe.nonClaim,
+      orphanPaths: [],
+    }])).toEqual([])
+    expect(correctionCoverageFailures(reports)).toEqual([])
+  }, 90_000)
 })
