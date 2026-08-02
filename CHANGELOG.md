@@ -11,6 +11,32 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+## [0.36.2] - 2026-08-02
+
+### Fixed
+
+- **The flake recorded as unexplained since 0.33.0 is diagnosed and fixed at the
+  root.** `vite.config.ts` set no `testTimeout`, so all 754 tests ran on Vitest's
+  5 s default — including 55 disaster-recovery tests with no per-test override,
+  several of which already take 3–5 s alone. Under the suite's own worker
+  parallelism on a 4-core box they crossed the deadline and failed at
+  5436–5743 ms, while passing 55/55 in isolation *at the same load average*. The
+  trigger was inter-worker parallelism, not ambient load, which is why an earlier
+  hunt using CPU-busy loops missed it across fifteen runs.
+
+  The fix is a 60 s `testTimeout`/`hookTimeout`, not shorter tests. These are
+  deterministic model tests — no `Date.now`, no `Math.random`, no `setTimeout`
+  anywhere in `src/sim` — so a wall-clock deadline measures the host rather than
+  the code. Trimming them to fit is how the vacuum-blockade lesson was lost once
+  already.
+
+### Note
+
+- 0.36.1 was never red. Its apparent failures were produced by a review agent
+  running the full suite while its own browser audits saturated the machine at
+  load average 25 — the reviewer diagnosed and reported this against itself.
+
+
 ## [0.36.1] - 2026-08-02
 
 ### Fixed

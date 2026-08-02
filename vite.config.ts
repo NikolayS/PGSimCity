@@ -111,5 +111,21 @@ export default defineConfig({
    * 12 failures in a working tree that was clean. dist/ is built output. */
   test: {
     exclude: ['**/node_modules/**', '**/dist/**', '.claude/**'],
+    /*
+     * Vitest's default is 5 s. These are deterministic model tests — no
+     * `Date.now`, no `Math.random`, no `setTimeout` anywhere in `src/sim` — so a
+     * wall-clock deadline measures the host, not the code. Several
+     * disaster-recovery tests already take 3–5 s alone; under the suite's own
+     * worker parallelism on a 4-core box they crossed 5 s and failed at
+     * 5436–5743 ms while passing 55/55 in isolation at the same load average.
+     *
+     * That was the flake recorded as unexplained since v0.33.0. The wrong fix is
+     * to shorten the tests: their assertions ARE the recovery coverage, and
+     * trimming them to fit a deadline is how the vacuum-blockade lesson was lost
+     * once already. Give deterministic work a deadline generous enough that
+     * failure means "wrong", never "busy".
+     */
+    testTimeout: 60_000,
+    hookTimeout: 60_000,
   },
 })
