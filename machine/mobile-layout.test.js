@@ -3,6 +3,11 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import {
+  disclosureFailures,
+  measureDisclosurePages,
+} from '../test/disclosure-browser.mjs'
+
+import {
   BOARD_MAX_SCALE,
   DETAIL_HEIGHT,
   DETAIL_WIDTH,
@@ -165,8 +170,8 @@ describe('machine room portrait layout', () => {
       path: '/machine/',
       readySelector: '[data-disclosure="comparison-framing"]',
       prepare: `
+        document.querySelector('#index-walk-open').click()
         document.querySelector('#comparison').hidden = false
-        document.querySelector('#index-walk').hidden = false
       `,
       probeMarker: true,
     }, {

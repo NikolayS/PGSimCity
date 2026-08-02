@@ -236,6 +236,7 @@ describe('PostgreSQL correction reports', () => {
       readySelector: '.comparison-actions [data-correction-path]',
       prepare: `(async () => {
         await window.MAGNUM.runQuery("SELECT '${SQL_SECRET}' AS private_input;")
+        document.querySelector('#index-walk-open').click()
         document.querySelector('#comparison').hidden = false
         document.querySelector('.measurement-rack [data-correction-link]')
           ?.dispatchEvent(new Event('pointerdown'))
