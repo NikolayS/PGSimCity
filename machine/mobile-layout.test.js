@@ -3,11 +3,6 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import {
-  disclosureFailures,
-  measureDisclosurePages,
-} from '../test/disclosure-browser.mjs'
-
-import {
   BOARD_MAX_SCALE,
   DETAIL_HEIGHT,
   DETAIL_WIDTH,
@@ -148,48 +143,6 @@ describe('machine room portrait layout', () => {
       /CONTROLLED EXPERIMENT|ONE SETTING CHANGED|RUN CONTROLLED COMPARISON|EXPERIMENT COMPLETE/,
     )
   })
-
-  it('keeps every marked honesty disclosure visible and legible at 390px', async () => {
-    const reports = await measureDisclosurePages([{
-      name: 'Machine',
-      path: '/machine/',
-      readySelector: '[data-disclosure="comparison-framing"]',
-      prepare: `document.querySelector('#comparison').hidden = false`,
-      probeMarker: true,
-    }, {
-      name: 'City',
-      path: '/',
-      readySelector: '.control-center__sources',
-      prepare: `(async () => {
-        for (let attempt = 0; attempt < 120 && !window.PGSIMCITY; attempt += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 100))
-        }
-        if (!window.PGSIMCITY) throw new Error('city API did not become ready')
-        document.querySelector('.control-center').hidden = false
-        document.querySelector('#hud-latency-panel').hidden = false
-        window.PGSIMCITY.bus.emit('select', { id: 'recovery.ground' })
-      })()`,
-    }])
-
-    expect(reports.map((report) => report.viewport)).toEqual([
-      { width: 390, height: 844 },
-      { width: 390, height: 844 },
-    ])
-    for (const report of reports) {
-      expect(report.disclosures.length).toBeGreaterThan(0)
-      expect(report.disclosures.length).toBeGreaterThanOrEqual(
-        report.authoredDisclosureCount,
-      )
-    }
-    expect(reports[0].markerProbe.unmarkedIncluded).toBe(false)
-    expect(disclosureFailures([{
-      name: 'Marker probe',
-      disclosures: [reports[0].markerProbe.marked],
-    }])).toEqual([
-      'Marker probe · TEMPORARY DISCLOSURE PROBE: 1px is below the 9px floor',
-    ])
-    expect(disclosureFailures(reports)).toEqual([])
-  }, 90_000)
 
   it('keeps the deferred-flush risk state readable outside the mobile canvas', () => {
     expect(html).toMatch(

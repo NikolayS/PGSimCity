@@ -5,21 +5,21 @@ import { createSim, DR_ARCHIVE_SEGMENT_SECONDS } from './model'
 
 type Sim = ReturnType<typeof createSim>
 
-function advance(sim: Sim, seconds: number): void {
+function advance(sim: Sim, seconds: number, step = 1 / 15): void {
   const end = sim.state.t + seconds
-  while (sim.state.t < end) sim.update(1 / 15)
+  while (sim.state.t < end) sim.update(step)
 }
 
-function advanceUntil(sim: Sim, done: () => boolean, limit = 240): void {
+function advanceUntil(sim: Sim, done: () => boolean, limit = 240, step = 1 / 15): void {
   const end = sim.state.t + limit
-  while (!done() && sim.state.t < end) sim.update(1 / 15)
+  while (!done() && sim.state.t < end) sim.update(step)
   expect(done(), `condition was not reached within ${limit}s`).toBe(true)
 }
 
-function takeBackup(sim: Sim): void {
+function takeBackup(sim: Sim, step = 1 / 15): void {
   expect(sim.startBaseBackup()).toBe(true)
   expect(sim.state.disasterRecovery.backup.status).toBe('copying')
-  advanceUntil(sim, () => sim.state.disasterRecovery.backup.status === 'idle')
+  advanceUntil(sim, () => sim.state.disasterRecovery.backup.status === 'idle', 240, step)
 }
 
 function setRestoreDrillFault(
@@ -1347,14 +1347,15 @@ describe('disaster recovery', () => {
   })
 
   it('uses the archive frontier reached during backup-fetch', () => {
-    const sim = createSim(createBus(), { scheduledBackups: false })
+    const step = 1 / 3
+    const sim = createSim(createBus(), { maxStep: step, scheduledBackups: false })
     sim.setKnob('tps', 6_000)
     sim.setKnob('writeRatio', 1)
-    takeBackup(sim)
+    takeBackup(sim, step)
     sim.setKnob('walGArchiveCredentialsValid', false)
-    advance(sim, 12)
+    advance(sim, 12, step)
     const targetTime = sim.state.t - 2
-    advance(sim, 3)
+    advance(sim, 3, step)
     sim.setKnob('walGArchiveCredentialsValid', true)
     sim.setKnob('walGDownloadConcurrency', 1)
 
@@ -1366,22 +1367,24 @@ describe('disaster recovery', () => {
       sim,
       () => sim.state.disasterRecovery.archive.archivedThroughLsn >= restore.targetLsn,
       180,
+      step,
     )
     expect(restore.status).toBe('fetching')
-    advanceUntil(sim, () => restore.status === 'complete' || restore.status === 'failed')
+    advanceUntil(sim, () => restore.status === 'complete' || restore.status === 'failed', 240, step)
 
     expect(restore.status, restore.failureReason).toBe('complete')
   })
 
   it('drops a stale credentials failure when wal-push is repaired during backup-fetch', () => {
-    const sim = createSim(createBus(), { scheduledBackups: false })
+    const step = 1 / 3
+    const sim = createSim(createBus(), { maxStep: step, scheduledBackups: false })
     sim.setKnob('tps', 6_000)
     sim.setKnob('writeRatio', 1)
-    takeBackup(sim)
+    takeBackup(sim, step)
     sim.setKnob('walGArchiveCredentialsValid', false)
-    advance(sim, 12)
+    advance(sim, 12, step)
     const targetTime = sim.state.t - 2
-    advance(sim, 3)
+    advance(sim, 3, step)
     sim.setKnob('walGDownloadConcurrency', 1)
 
     expect(sim.startPointInTimeRestore(sim.state.t - targetTime)).toBe(true)
@@ -1390,15 +1393,16 @@ describe('disaster recovery', () => {
     expect(sim.state.disasterRecovery.archive.archivedThroughLsn).toBeLessThan(
       restore.targetLsn,
     )
-    advance(sim, 1)
+    advance(sim, 1, step)
     sim.setKnob('walGArchiveCredentialsValid', true)
     advanceUntil(
       sim,
       () => sim.state.disasterRecovery.archive.archivedThroughLsn >= restore.targetLsn,
       180,
+      step,
     )
     expect(restore.status).toBe('fetching')
-    advanceUntil(sim, () => restore.status === 'complete' || restore.status === 'failed')
+    advanceUntil(sim, () => restore.status === 'complete' || restore.status === 'failed', 240, step)
 
     expect(restore.status, restore.failureReason).toBe('complete')
     expect(restore.failureReason).not.toMatch(/credentials/i)
