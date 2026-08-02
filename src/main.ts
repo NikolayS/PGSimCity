@@ -5,6 +5,7 @@ import './styles/ui.css'
 
 import { startAnalytics } from './core/analytics'
 import { createBus } from './core/bus'
+import { protectCorrectionLink } from './core/corrections'
 import { Registry } from './core/registry'
 import { installCityComponentRoutes } from './core/city-route'
 import {
@@ -68,6 +69,10 @@ import { createWorldHandleSites } from './ui/world-handles'
 import { BOOT_STEPS, failBoot, finishBoot, presentBootStep } from './ui/boot'
 import type { UiContext, UiModule } from './ui/uikit'
 
+const bootCorrectionLink = document.querySelector<HTMLAnchorElement>(
+  '#boot a[data-correction-link="true"]',
+)
+if (bootCorrectionLink) protectCorrectionLink(bootCorrectionLink)
 const analytics = startAnalytics('city')
 
 /* ============================================================================

@@ -293,7 +293,8 @@ export function createHelp(ctx: UiContext): UiModule {
       html:
         '<strong>Analytics & privacy.</strong> PGSimCity uses Plausible to count aggregate visits, referring sites, ' +
         'bounce rate and visit duration, plus named interface actions and outbound clicks tagged with the panel that sent them. ' +
-        'Correction links are excluded so their pre-filled issue bodies never enter analytics. ' +
+        'Pre-filled correction reports are counted only as the named “Correction Link Click” action; the application blocks ' +
+        'Plausible’s dashboard-controlled outbound tracking for those links and sends neither their issue URL nor body. ' +
         'Its event payload contains no names, email addresses, free-form input, browser fingerprint or personal data supplied ' +
         'by the application. Plausible briefly derives a daily visitor count from request IP and user agent without storing ' +
         'either raw value or a persistent identifier. There are no analytics cookies, ad networks or session recordings. ' +

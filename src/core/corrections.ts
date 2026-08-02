@@ -1,10 +1,18 @@
 import { CLAIM_VALUES } from './claims'
 
 export const CORRECTION_ISSUE_TEMPLATE = 'postgresql-mismatch.md'
+export const CORRECTION_ANALYTICS_EVENT = 'Correction Link Click'
+export const CORRECTION_PLAUSIBLE_CLASS =
+  'plausible-event-name--Correction+Link+Click'
 
 const ISSUE_URL = 'https://github.com/NikolayS/PGSimCity/issues/new'
 const NO_STATE =
   'No model state included: this displayed claim does not depend on live controls.'
+const protectedCorrectionLinks = new WeakSet<HTMLAnchorElement>()
+
+interface CorrectionAnalyticsWindow extends Window {
+  plausible?: (name: string) => void
+}
 
 export type CorrectionContext = readonly (readonly [label: string, value: string])[]
 
@@ -117,6 +125,31 @@ function reportFrom(options: CorrectionPathOptions): CorrectionReport {
 }
 
 /**
+ * Plausible's outboundLinks setting is dashboard-controlled, and its served custom-event
+ * handler adds an anchor's full href even for named classes. Keep the provider opt-out class,
+ * stop those document handlers, and submit the property-free named count ourselves.
+ */
+export function protectCorrectionLink(anchor: HTMLAnchorElement): void {
+  anchor.dataset.correctionLink = 'true'
+  anchor.dataset.noAnalytics = 'true'
+  anchor.classList.add(CORRECTION_PLAUSIBLE_CLASS)
+  if (protectedCorrectionLinks.has(anchor)) return
+  protectedCorrectionLinks.add(anchor)
+
+  const countWithoutHref = (event: Event): void => {
+    if (event.type === 'auxclick' && (event as MouseEvent).button !== 1) return
+    event.stopPropagation()
+    try {
+      ;(window as CorrectionAnalyticsWindow).plausible?.(CORRECTION_ANALYTICS_EVENT)
+    } catch {
+      // Analytics failure must not interfere with the correction path.
+    }
+  }
+  anchor.addEventListener('click', countWithoutHref)
+  anchor.addEventListener('auxclick', countWithoutHref)
+}
+
+/**
  * Add the one shared, ordinary-href correction path to a claim-bearing panel.
  * Getters are read again before navigation so live verdicts and beats stay exact.
  */
@@ -128,8 +161,6 @@ export function createCorrectionPath(
   if (existing) return existing
 
   const anchor = document.createElement('a')
-  anchor.dataset.correctionLink = 'true'
-  anchor.dataset.noAnalytics = 'true'
   anchor.className = 'pg-correction__link'
   anchor.target = '_blank'
   anchor.rel = 'noreferrer noopener'
@@ -143,6 +174,7 @@ export function createCorrectionPath(
   anchor.addEventListener('focus', refresh)
   anchor.addEventListener('keydown', refresh)
   anchor.addEventListener('click', refresh)
+  protectCorrectionLink(anchor)
 
   const path = document.createElement('p')
   path.className = 'pg-correction'

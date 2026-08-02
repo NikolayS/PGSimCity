@@ -14,10 +14,14 @@ const MEASURE_EXPRESSION = `(() => {
       label: describe(element),
       pathCount: element.querySelectorAll('[data-correction-path="true"] > a[data-correction-link="true"]').length,
     }))
-  const orphanPaths = Array.from(document.querySelectorAll('[data-correction-path="true"]'))
+  const paths = Array.from(document.querySelectorAll('[data-correction-path="true"]'))
+  const orphanPaths = paths
     .filter((path) => !path.closest('[data-correction-subject]'))
     .map((path) => describe(path.parentElement || path))
-  return { subjects, orphanPaths }
+  const unprotectedPaths = paths
+    .filter((path) => !path.querySelector('a.plausible-event-name--Correction\\\\+Link\\\\+Click'))
+    .map((path) => describe(path.parentElement || path))
+  return { subjects, orphanPaths, unprotectedPaths }
 })()`
 
 /** Enumerate authored correction subjects from the DOM of real rendered pages. */
@@ -72,6 +76,11 @@ export function correctionCoverageFailures(reports) {
     for (const label of report.orphanPaths) {
       failures.push(
         `${report.name} · ${label}: correction path has no claim-bearing panel marker`,
+      )
+    }
+    for (const label of report.unprotectedPaths ?? []) {
+      failures.push(
+        `${report.name} · ${label}: correction path lacks the Plausible opt-out class`,
       )
     }
   }

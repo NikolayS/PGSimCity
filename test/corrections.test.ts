@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { CLAIM_VALUES } from '../src/core/claims'
 import {
@@ -100,6 +100,7 @@ describe('PostgreSQL correction reports', () => {
     expect(link).not.toBeNull()
     expect(link!.href).toContain('template=postgresql-mismatch.md')
     expect(link!.dataset.noAnalytics).toBe('true')
+    expect(link!.classList.contains('plausible-event-name--Correction+Link+Click')).toBe(true)
     expect(link!.closest('[data-disclosure]')).not.toBeNull()
 
     claim.textContent = 'PostgreSQL scans usage_count and selects a zero-valued victim.'
@@ -109,6 +110,33 @@ describe('PostgreSQL correction reports', () => {
       '> PostgreSQL scans usage_count and selects a zero-valued victim.',
     )
     expect(decoded).not.toContain('until it finds zero')
+  })
+
+  it('counts a correction click without exposing it to document-level auto-capture', () => {
+    installTestDom()
+    const plausible = vi.fn()
+    Object.assign(window, { plausible })
+    const panel = el('section')
+    document.body.append(panel)
+    const link = createCorrectionPath(panel, {
+      surface: 'City / Inspector',
+      panel: 'WAL writer',
+      source: 'src/ui/docs-storage.ts#DOCS_STORAGE[wal.writer]',
+      claim: 'The WAL writer flushes completed WAL pages.',
+    })
+    const click = new Event('click')
+    const stopPropagation = vi.spyOn(click, 'stopPropagation')
+
+    link.dispatchEvent(click)
+
+    expect(stopPropagation).toHaveBeenCalledOnce()
+    expect(plausible.mock.calls).toEqual([['Correction Link Click']])
+  })
+
+  it('protects the static correction-template link with the same provider opt-out', () => {
+    expect(read('index.html')).toMatch(
+      /<a[^>]+class="plausible-event-name--Correction\+Link\+Click"[^>]+data-correction-link="true"/,
+    )
   })
 
   it('keeps the issue template aligned with the generated report questions', () => {

@@ -839,7 +839,7 @@ function footer(): HTMLElement {
     el('p', {
       class: 'foot__legal',
       text:
-        'Privacy: cookie-free Plausible analytics counts aggregate visits and named interactions, including ordinary outbound links tagged by this panel. Correction links are excluded so their pre-filled issue bodies never enter analytics. Its event payload contains no form input, browser fingerprint or personal data supplied by the application; Plausible derives a daily count from request IP and user agent without storing either raw value or a persistent identifier. There are no ad networks or session recordings, and blocking analytics does not affect this page.',
+        'Privacy: cookie-free Plausible analytics counts aggregate visits and named interactions, including ordinary outbound links tagged by this panel. Pre-filled correction reports are counted only as the named “Correction Link Click” action; the application blocks Plausible’s dashboard-controlled outbound tracking for those links and sends neither their issue URL nor body. Its event payload contains no form input, browser fingerprint or personal data supplied by the application; Plausible derives a daily count from request IP and user agent without storing either raw value or a persistent identifier. There are no ad networks or session recordings, and blocking analytics does not affect this page.',
     }),
     el('p', {
       class: 'build-marker',
