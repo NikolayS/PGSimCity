@@ -3,11 +3,6 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import {
-  disclosureFailures,
-  measureDisclosurePages,
-} from '../test/disclosure-browser.mjs'
-
-import {
   BOARD_MAX_SCALE,
   DETAIL_HEIGHT,
   DETAIL_WIDTH,

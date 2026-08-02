@@ -1,4 +1,7 @@
-import { inspectRenderedPages } from './disclosure-browser.mjs'
+import {
+  inspectRenderedPages,
+  measureDisclosurePage,
+} from './disclosure-browser.mjs'
 
 const MEASURE_EXPRESSION = `(() => {
   const describe = (element) => {
@@ -42,6 +45,9 @@ const MEASURE_EXPRESSION = `(() => {
 export async function measureCorrectionPages(pages) {
   return inspectRenderedPages(pages, async ({ evaluate, page, viewport }) => {
     const measured = await evaluate(MEASURE_EXPRESSION)
+    const disclosureReport = page.measureDisclosures
+      ? await measureDisclosurePage(evaluate, page, viewport)
+      : undefined
     let markerProbe
     let sqlSecretProbe
     if (page.probeMarker) {
@@ -84,6 +90,7 @@ export async function measureCorrectionPages(pages) {
       ...measured,
       markerProbe,
       sqlSecretProbe,
+      disclosureReport,
     }
   })
 }

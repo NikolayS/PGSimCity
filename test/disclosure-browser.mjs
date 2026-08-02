@@ -246,39 +246,44 @@ export async function inspectRenderedPages(pages, inspect) {
   }
 }
 
+/** Measure marked disclosure nodes on a page already owned by a browser audit. */
+export async function measureDisclosurePage(evaluatePage, page, viewport) {
+  const authoredDisclosureCount = await evaluatePage(
+    `document.querySelectorAll('[data-disclosure]').length`,
+  )
+  const disclosures = await evaluatePage(MEASURE_EXPRESSION)
+  let markerProbe
+  if (page.probeMarker) {
+    await evaluatePage(`(() => {
+      const probe = document.createElement('span')
+      probe.id = 'temporary-disclosure-probe'
+      probe.textContent = 'TEMPORARY DISCLOSURE PROBE'
+      probe.style.cssText = 'display:block;visibility:visible;font-size:1px'
+      document.body.append(probe)
+    })()`)
+    const unmarked = await evaluatePage(MEASURE_EXPRESSION)
+    await evaluatePage(`document.querySelector('#temporary-disclosure-probe').dataset.disclosure = 'temporary-probe'`)
+    const marked = await evaluatePage(MEASURE_EXPRESSION)
+    await evaluatePage(`document.querySelector('#temporary-disclosure-probe').remove()`)
+    markerProbe = {
+      unmarkedIncluded: unmarked.some((item) => item.text === 'TEMPORARY DISCLOSURE PROBE'),
+      marked: marked.find((item) => item.id === 'temporary-probe'),
+    }
+  }
+  return {
+    name: page.name,
+    viewport,
+    authoredDisclosureCount,
+    disclosures,
+    markerProbe,
+  }
+}
+
 /** Measure marked disclosure nodes after a real 390x844 browser layout. */
 export async function measureDisclosurePages(pages) {
-  return inspectRenderedPages(pages, async ({ evaluate: evaluatePage, page, viewport }) => {
-    const authoredDisclosureCount = await evaluatePage(
-      `document.querySelectorAll('[data-disclosure]').length`,
-    )
-    const disclosures = await evaluatePage(MEASURE_EXPRESSION)
-    let markerProbe
-    if (page.probeMarker) {
-      await evaluatePage(`(() => {
-        const probe = document.createElement('span')
-        probe.id = 'temporary-disclosure-probe'
-        probe.textContent = 'TEMPORARY DISCLOSURE PROBE'
-        probe.style.cssText = 'display:block;visibility:visible;font-size:1px'
-        document.body.append(probe)
-      })()`)
-      const unmarked = await evaluatePage(MEASURE_EXPRESSION)
-      await evaluatePage(`document.querySelector('#temporary-disclosure-probe').dataset.disclosure = 'temporary-probe'`)
-      const marked = await evaluatePage(MEASURE_EXPRESSION)
-      await evaluatePage(`document.querySelector('#temporary-disclosure-probe').remove()`)
-      markerProbe = {
-        unmarkedIncluded: unmarked.some((item) => item.text === 'TEMPORARY DISCLOSURE PROBE'),
-        marked: marked.find((item) => item.id === 'temporary-probe'),
-      }
-    }
-    return {
-      name: page.name,
-      viewport,
-      authoredDisclosureCount,
-      disclosures,
-      markerProbe,
-    }
-  })
+  return inspectRenderedPages(pages, ({ evaluate, page, viewport }) => (
+    measureDisclosurePage(evaluate, page, viewport)
+  ))
 }
 
 export function disclosureFailures(reports, floor = 9) {

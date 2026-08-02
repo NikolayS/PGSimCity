@@ -2473,6 +2473,14 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     ],
     knobs: ['standbyBEnabled', 'standbyBNetworkLag'],
     see: ['standby.b.wal', 'standby.b.startup', 'walsender'],
+    refs: {
+      docs: [
+        manual('warm-standby.html', '26.2. Log-Shipping Standby Servers'),
+        manual('monitoring-stats.html', '27.2. The Cumulative Statistics System — pg_stat_wal_receiver'),
+      ],
+      source: [srcFile('src/backend/replication/walreceiver.c', 'WalReceiverMain, XLogWalRcvFlush, XLogWalRcvSendHSFeedback')],
+      suzuki: suzuki(11, 'Streaming Replication (§11.1)'),
+    },
   },
 
   {
@@ -2497,6 +2505,14 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     ],
     knobs: ['standbyBEnabled', 'standbyBSlowApply'],
     see: ['standby.b.receiver', 'standby.b.startup', 'wal.vault'],
+    refs: {
+      docs: [
+        manual('warm-standby.html', '26.2. Log-Shipping Standby Servers'),
+        manual('wal-internals.html', '28.6. WAL Internals'),
+      ],
+      source: [srcFile('src/backend/replication/walreceiver.c', 'XLogWalRcvWrite, XLogWalRcvFlush')],
+      suzuki: suzuki(11, 'Streaming Replication (§11.1)'),
+    },
   },
 
   {
@@ -2524,6 +2540,18 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     ],
     knobs: ['standbyBSlowApply', 'standbyBEnabled'],
     see: ['standby.b.wal', 'standby.b.buffers', 'startup.proc'],
+    refs: {
+      docs: [
+        manual('wal-intro.html', '28.3. Write-Ahead Logging (WAL)'),
+        manual('wal-configuration.html', '28.5. WAL Configuration — restartpoints'),
+      ],
+      source: [
+        srcFile('src/backend/postmaster/startup.c', 'StartupProcessMain'),
+        srcFile('src/backend/access/transam/xlogrecovery.c', 'PerformWalRecovery, WaitForWALToBecomeAvailable'),
+      ],
+      suzuki: suzuki(9, 'Write Ahead Logging (WAL) (§9.8 Database Recovery)'),
+      rogov: rogov(R_WAL, 'Write-Ahead Log — recovery and checkpoint mechanics', 'the nearest honest chapter; Rogov does not cover replication'),
+    },
   },
 
   {
@@ -2549,6 +2577,18 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     ],
     knobs: ['sharedBuffers', 'standbyBSlowApply'],
     see: ['standby.b.startup', 'standby.b.storage', 'replica.buffers'],
+    refs: {
+      docs: [
+        manual('pgprewarm.html', 'F.30. pg_prewarm'),
+        manual('wal-configuration.html', '28.5. WAL Configuration — restartpoints'),
+      ],
+      source: [
+        srcFile('src/backend/storage/buffer/bufmgr.c', 'BufferAlloc'),
+        srcFile('src/backend/access/transam/xlog.c', 'CreateRestartPoint'),
+      ],
+      suzuki: suzuki(8, 'Buffer Manager'),
+      rogov: rogov(R_WAL, 'Buffer Cache'),
+    },
   },
 
   {
@@ -2573,6 +2613,14 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     ],
     knobs: ['standbyBEnabled', 'standbyBSlowApply'],
     see: ['standby.b', 'standby.b.buffers', 'storage.datadir'],
+    refs: {
+      docs: [
+        manual('app-pgbasebackup.html', 'pg_basebackup'),
+        manual('continuous-archiving.html', '25.3. Continuous Archiving and Point-in-Time Recovery (PITR)'),
+      ],
+      source: [srcFile('src/backend/backup/basebackup.c', 'SendBaseBackup')],
+      suzuki: suzuki(10, 'Online Backup and Point-In-Time Recovery (PITR) (§10.1 Base Backup)'),
+    },
   },
 
   {

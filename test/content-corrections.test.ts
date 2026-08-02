@@ -22,6 +22,22 @@ const diagnosticCopy = [...ALL_STEPS, ...ALL_VERDICTS]
   .join('\n')
 
 describe('PostgreSQL 18 content corrections', () => {
+  it('keeps every storage entry cited with current recovery section numbering', () => {
+    expect(
+      DOCS_STORAGE.filter((doc) => !doc.refs).map((doc) => doc.id),
+    ).toEqual([])
+
+    const recoveryLabels = DOCS_STORAGE
+      .flatMap((doc) => doc.refs?.docs ?? [])
+      .map((ref) => ref.label)
+      .filter((label) => label.includes('Recovering Using a Continuous Archive Backup'))
+
+    expect(recoveryLabels).not.toHaveLength(0)
+    expect(new Set(recoveryLabels)).toEqual(
+      new Set(['25.3.5 Recovering Using a Continuous Archive Backup']),
+    )
+  })
+
   it('records the major-version target and current bulk-read strategy durably', () => {
     const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8')
 

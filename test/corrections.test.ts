@@ -15,6 +15,7 @@ import {
   correctionCoverageFailures,
   measureCorrectionPages,
 } from './correction-browser.mjs'
+import { disclosureFailures } from './disclosure-browser.mjs'
 
 const read = (path: string): string =>
   readFileSync(new URL(`../${path}`, import.meta.url), 'utf8')
@@ -196,8 +197,11 @@ describe('PostgreSQL correction reports', () => {
       name: 'City',
       path: '/',
       readySelector: '.an-overlay',
+      measureDisclosures: true,
       prepare: `(() => {
         const { sim, bus } = window.PGSIMCITY
+        document.querySelector('.control-center').hidden = false
+        document.querySelector('#hud-latency-panel').hidden = false
         sim.setKnob('recoveryTargetAge', 40)
         sim.setKnob('walGDownloadConcurrency', 4)
         Object.assign(sim.state.disasterRecovery.drill, {
@@ -232,11 +236,13 @@ describe('PostgreSQL correction reports', () => {
       readySelector: '.comparison-actions [data-correction-path]',
       prepare: `(async () => {
         await window.MAGNUM.runQuery("SELECT '${SQL_SECRET}' AS private_input;")
+        document.querySelector('#comparison').hidden = false
         document.querySelector('.measurement-rack [data-correction-link]')
           ?.dispatchEvent(new Event('pointerdown'))
       })()`,
       sqlSecret: SQL_SECRET,
       probeMarker: true,
+      measureDisclosures: true,
     }])
 
     expect(reports.map((report) => report.viewport)).toEqual([
@@ -262,6 +268,32 @@ describe('PostgreSQL correction reports', () => {
       orphanPaths: [],
     }])).toEqual([])
     expect(correctionCoverageFailures(reports)).toEqual([])
+
+    const disclosureReports = reports.flatMap(
+      (report) => report.disclosureReport ? [report.disclosureReport] : [],
+    )
+    expect(disclosureReports.map((report) => report.name)).toEqual(['City', 'Machine'])
+    expect(disclosureReports.map((report) => report.viewport)).toEqual([
+      { width: 390, height: 844 },
+      { width: 390, height: 844 },
+    ])
+    for (const report of disclosureReports) {
+      expect(report.disclosures.length).toBeGreaterThan(0)
+      expect(report.disclosures.length).toBeGreaterThanOrEqual(
+        report.authoredDisclosureCount,
+      )
+    }
+    const machineDisclosures = disclosureReports.find(
+      (report) => report.name === 'Machine',
+    )!
+    expect(machineDisclosures.markerProbe.unmarkedIncluded).toBe(false)
+    expect(disclosureFailures([{
+      name: 'Marker probe',
+      disclosures: [machineDisclosures.markerProbe.marked],
+    }])).toEqual([
+      'Marker probe · TEMPORARY DISCLOSURE PROBE: 1px is below the 9px floor',
+    ])
+    expect(disclosureFailures(disclosureReports)).toEqual([])
 
     const city = reports.find((report) => report.name === 'City')!
     const inspectorBody = city.subjects
@@ -315,5 +347,6 @@ describe('PostgreSQL correction reports', () => {
         }
       }
     }
-  }, 120_000)
+  // Browser-slot queue time is not claim behavior; the CDP helper bounds its own waits.
+  }, 0)
 })
