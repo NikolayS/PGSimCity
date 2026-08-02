@@ -104,6 +104,29 @@ describe('machine room portrait layout', () => {
   it('documents the city rate keys beside the existing board pause hint', () => {
     expect(html).toMatch(/SPACE[^<]+PAUSES[^<]+,[^<]+\/[^<]+\.[^<]+VIEW SPEED/)
   })
+
+  it('keeps comparison boards readable as a labelled swipe pair', () => {
+    expect(html).toMatch(/id="comparison-open"/)
+    expect(html).toMatch(/id="comparison"[^>]+hidden/)
+    expect(html).toMatch(/class="comparison-lanes"/)
+    expect(html.match(/class="comparison-board"/g)).toHaveLength(2)
+    expect(html).toMatch(/aria-label="Choose comparison board"/)
+
+    const lanes = blockAfter(portrait, '.comparison-lanes')
+    expect(lanes).toMatch(/grid-auto-flow:\s*column/)
+    expect(lanes).toMatch(/overflow-x:\s*auto/)
+    expect(lanes).toMatch(/scroll-snap-type:\s*x\s+mandatory/)
+    expect(blockAfter(portrait, '.comparison-board canvas')).toMatch(/width:\s*720px/)
+  })
+
+  it('puts the persistent modelled finding before either animated board', () => {
+    const proofAt = html.indexOf('id="comparison-proof"')
+    const boardsAt = html.indexOf('class="comparison-lanes"')
+    expect(proofAt).toBeGreaterThan(0)
+    expect(boardsAt).toBeGreaterThan(proofAt)
+    expect(html).toMatch(/M MODELLED FINDING/)
+    expect(html).toMatch(/PGLITE CANNOT MEASURE THIS DIFFERENCE/)
+  })
 })
 
 describe('machine room landscape layout', () => {

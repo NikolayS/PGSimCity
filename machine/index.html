@@ -79,6 +79,7 @@
             <span id="postgres-status">NOT LOADED · FIRST QUERY MAY START IT</span>
           </div>
           <div class="clock-control">
+            <button id="comparison-open" type="button">COMPARE</button>
             <button id="machine-toggle" type="button">PAUSE</button>
             <button id="machine-reset" type="button">RESET</button>
             <output id="clock">00.0 / 36s MODEL</output>
@@ -182,6 +183,110 @@ EACH SUBMITTED STATEMENT EXECUTES ONCE; DISPLAYED ROWS COME FROM THAT EXECUTION.
       </section>
 
       <p class="fallback">This prototype needs a browser with Canvas 2D support.</p>
+
+      <section
+        id="comparison"
+        class="comparison"
+        aria-labelledby="comparison-title"
+        hidden
+      >
+        <header class="comparison-header">
+          <div>
+            <p class="eyebrow">CONTROLLED EXPERIMENT / ONE VARIABLE</p>
+            <h2 id="comparison-title">SAME STATEMENT. ONE SETTING CHANGED.</h2>
+          </div>
+          <div class="comparison-header__actions">
+            <span id="comparison-status" aria-live="polite">READY</span>
+            <button id="comparison-close" type="button">CLOSE</button>
+          </div>
+        </header>
+
+        <section id="comparison-proof" class="comparison-proof" aria-label="Comparison finding">
+          <div class="comparison-proof__verdict">
+            <span><b class="source-medallion model-source">M</b> M MODELLED FINDING</span>
+            <strong id="comparison-finding">
+              OFF REMOVES THE LOCAL WAL-FLUSH WAIT — NOT THE FLUSH.
+            </strong>
+            <small>
+              PGLITE CANNOT MEASURE THIS DIFFERENCE: ONE IN-MEMORY CONNECTION,
+              NO STANDBY, NO REAL DEVICE DURABILITY.
+            </small>
+          </div>
+          <div class="comparison-contract">
+            <p><b>CHANGED</b> <code>synchronous_commit</code>: <code>on</code> → <code>off</code></p>
+            <p><b>HELD</b> SQL · ONE P REPORT · PLAN · BUFFERS · ROUTE · VIEW PACE · NO SYNC STANDBY</p>
+            <code id="comparison-sql">UPDATE accounts SET updated_at = updated_at WHERE id = 42;</code>
+          </div>
+          <div class="comparison-timeline" aria-label="Aligned commit acknowledgement timeline">
+            <p>ALIGNED COMMIT WINDOW · VIEW PACE, NOT LATENCY</p>
+            <div class="comparison-timeline__row" data-lane="a">
+              <b>A · ON</b>
+              <span class="comparison-timeline__same">SAME ROUTE</span>
+              <span class="comparison-timeline__wait">M · WAIT FOR LOCAL FLUSH</span>
+              <span class="comparison-timeline__ack">ACK</span>
+            </div>
+            <div class="comparison-timeline__row" data-lane="b">
+              <b>B · OFF</b>
+              <span class="comparison-timeline__same">SAME ROUTE</span>
+              <span class="comparison-timeline__early">ACK</span>
+              <span class="comparison-timeline__flush">WAL FLUSH CONTINUES</span>
+              <span class="comparison-timeline__done">DONE</span>
+            </div>
+          </div>
+        </section>
+
+        <nav class="comparison-tabs" aria-label="Choose comparison board">
+          <button type="button" data-comparison-lane="a" aria-pressed="true">A · ON</button>
+          <button type="button" data-comparison-lane="b" aria-pressed="false">B · OFF</button>
+        </nav>
+
+        <div class="comparison-lanes">
+          <article class="comparison-board" data-lane="a" aria-label="Control board: synchronous_commit on">
+            <header>
+              <span class="comparison-board__letter">A</span>
+              <div>
+                <b>CONTROL</b>
+                <code>synchronous_commit = on</code>
+              </div>
+              <span class="comparison-board__phase" data-comparison-phase="a">READY</span>
+            </header>
+            <p><b class="source-medallion postgres-source">P</b> SAME POSTGRESQL REPORT <b class="source-medallion model-source">M</b> LOCAL FLUSH WAIT</p>
+            <div class="comparison-board__viewport">
+              <canvas
+                id="comparison-board-a"
+                width="720"
+                height="740"
+                aria-label="Run A architecture board, with synchronous_commit on and a modelled local WAL flush wait."
+              ></canvas>
+            </div>
+          </article>
+          <article class="comparison-board" data-lane="b" aria-label="Changed board: synchronous_commit off">
+            <header>
+              <span class="comparison-board__letter">B</span>
+              <div>
+                <b>ONE CHANGE</b>
+                <code>synchronous_commit = off</code>
+              </div>
+              <span class="comparison-board__phase" data-comparison-phase="b">READY</span>
+            </header>
+            <p><b class="source-medallion postgres-source">P</b> SAME POSTGRESQL REPORT <b class="source-medallion model-source">M</b> EARLY ACK; FLUSH CONTINUES</p>
+            <div class="comparison-board__viewport">
+              <canvas
+                id="comparison-board-b"
+                width="720"
+                height="740"
+                aria-label="Run B architecture board, with synchronous_commit off and a modelled early acknowledgement while WAL flush continues."
+              ></canvas>
+            </div>
+          </article>
+        </div>
+
+        <footer class="comparison-actions">
+          <button id="comparison-run" type="button">RUN CONTROLLED COMPARISON</button>
+          <button id="comparison-continue" type="button" hidden>CONTINUE AFTER FINDING</button>
+          <span>ONE P EXECUTION IS REUSED BY BOTH M REPLAYS, SO P NOISE CANNOT MASQUERADE AS THE SETTING EFFECT.</span>
+        </footer>
+      </section>
     </main>
     <script type="module" src="./magnum.js"></script>
   </body>

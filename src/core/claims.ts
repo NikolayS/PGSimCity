@@ -4,6 +4,8 @@
  * Keep this list deliberately small and evidence-led.
  */
 
+import { MACHINE_SYNCHRONOUS_COMMIT_COMPARISON } from '../spine/machine-comparison'
+
 const KIB = 1024
 const MIB = KIB * KIB
 
@@ -106,6 +108,15 @@ export const CLAIMS = {
     owner: 'src/core/claims.ts#CLAIM_VALUES.reviewStatus',
     value: CLAIM_VALUES.reviewStatus,
     surfaces: ['README:trust statement', 'index:boot honesty'],
+  },
+  machineSynchronousCommitComparison: {
+    owner: 'src/spine/machine-comparison.ts#MACHINE_SYNCHRONOUS_COMMIT_COMPARISON',
+    value: MACHINE_SYNCHRONOUS_COMMIT_COMPARISON,
+    surfaces: [
+      'model:commit_wait transition',
+      'Machine:comparison experiment',
+      'Machine:comparison finding and P/M disclosure',
+    ],
   },
 } as const
 

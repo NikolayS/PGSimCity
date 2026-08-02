@@ -2,7 +2,11 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 import { cityComponentHref, cityComponentId } from '../src/core/city-route'
-import { CLAIMS, CLAIM_VALUES } from '../src/core/claims'
+import {
+  CLAIMS,
+  CLAIM_VALUES,
+} from '../src/core/claims'
+import { MACHINE_SYNCHRONOUS_COMMIT_COMPARISON } from '../src/spine/machine-comparison'
 import type { ClaimId } from '../src/core/claims'
 import { formatModelMilliseconds } from '../src/core/trace-presentation'
 import { N_BUFFERS } from '../src/core/types'
@@ -35,7 +39,7 @@ function storageDocCopy(id: string): string {
 }
 
 describe('claims and conventions spine', () => {
-  it('owns exactly the ten drift-prone contracts in this pass', () => {
+  it('owns exactly the eleven drift-prone contracts in this pass', () => {
     expect(Object.keys(CLAIMS)).toEqual([
       'walSegment',
       'bufferSample',
@@ -47,6 +51,7 @@ describe('claims and conventions spine', () => {
       'cityComponentRoute',
       'markdownRendering',
       'reviewStatus',
+      'machineSynchronousCommitComparison',
     ])
     for (const claim of Object.values(CLAIMS)) {
       expect(claim.owner).not.toBe('')
@@ -211,5 +216,23 @@ describe('claims and conventions spine', () => {
     expect(index, 'reviewStatus: index:boot honesty still says unreviewed').not.toMatch(/unreviewed/i)
     expect(index, 'reviewStatus: index:boot honesty disagrees')
       .toContain(`<strong>${CLAIM_VALUES.reviewStatus.bootLabel}</strong>`)
+  })
+
+  it('keeps the Machine comparison attached to the modelled commit-wait claim', () => {
+    agrees(
+      'machineSynchronousCommitComparison',
+      'Machine:comparison claim',
+      CLAIMS.machineSynchronousCommitComparison.value,
+      MACHINE_SYNCHRONOUS_COMMIT_COMPARISON,
+    )
+    expect(MACHINE_SYNCHRONOUS_COMMIT_COMPARISON.evidenceSource).toBe('model')
+    expect(MACHINE_SYNCHRONOUS_COMMIT_COMPARISON.finding).toContain(
+      'WAL still flushes later',
+    )
+    expect(MACHINE_SYNCHRONOUS_COMMIT_COMPARISON.pgliteDisclosure).toContain(
+      'cannot measure this durability-wait difference',
+    )
+    expect(read('machine/comparison.js'), 'Machine:comparison does not consume the owned claim')
+      .toContain('MACHINE_SYNCHRONOUS_COMMIT_COMPARISON as claim')
   })
 })

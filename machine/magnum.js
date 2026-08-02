@@ -35,6 +35,11 @@ import {
   handleBoardInstruction,
   handleTerminalInstruction,
 } from './instructions.js'
+import {
+  COMPARISON_SQL,
+  SYNCHRONOUS_COMMIT_COMPARISON_CLAIM,
+  createSynchronousCommitComparison,
+} from './comparison.js'
 
 const canvas = document.querySelector('#machine')
 const architecturePane = document.querySelector('.architecture-pane')
@@ -59,7 +64,24 @@ const terminalState = document.querySelector('#terminal-state')
 const terminalTranscript = document.querySelector('#terminal-transcript')
 const terminalForm = document.querySelector('#terminal-form')
 const terminalInput = document.querySelector('#terminal-input')
-const ctx = canvas?.getContext('2d')
+const comparisonRoot = document.querySelector('#comparison')
+const comparisonOpen = document.querySelector('#comparison-open')
+const comparisonClose = document.querySelector('#comparison-close')
+const comparisonRun = document.querySelector('#comparison-run')
+const comparisonContinue = document.querySelector('#comparison-continue')
+const comparisonStatus = document.querySelector('#comparison-status')
+const comparisonFinding = document.querySelector('#comparison-finding')
+const comparisonSql = document.querySelector('#comparison-sql')
+const comparisonLanes = document.querySelector('.comparison-lanes')
+const comparisonBoardA = document.querySelector('#comparison-board-a')
+const comparisonBoardB = document.querySelector('#comparison-board-b')
+const comparisonPhaseA = document.querySelector('[data-comparison-phase="a"]')
+const comparisonPhaseB = document.querySelector('[data-comparison-phase="b"]')
+const comparisonTabA = document.querySelector('[data-comparison-lane="a"]')
+const comparisonTabB = document.querySelector('[data-comparison-lane="b"]')
+let ctx = canvas?.getContext('2d')
+const comparisonCtxA = comparisonBoardA?.getContext('2d')
+const comparisonCtxB = comparisonBoardB?.getContext('2d')
 
 if (
   !canvas
@@ -86,6 +108,23 @@ if (
   || !terminalTranscript
   || !terminalForm
   || !terminalInput
+  || !comparisonRoot
+  || !comparisonOpen
+  || !comparisonClose
+  || !comparisonRun
+  || !comparisonContinue
+  || !comparisonStatus
+  || !comparisonFinding
+  || !comparisonSql
+  || !comparisonLanes
+  || !comparisonBoardA
+  || !comparisonBoardB
+  || !comparisonPhaseA
+  || !comparisonPhaseB
+  || !comparisonTabA
+  || !comparisonTabB
+  || !comparisonCtxA
+  || !comparisonCtxB
 ) {
   throw new Error('The Magnum workbench is missing a required browser element')
 }
@@ -246,6 +285,35 @@ const statementRoutes = Object.freeze({
     Object.freeze([36, 128]),
     Object.freeze([124, 128]),
   ]),
+  wal: Object.freeze([
+    Object.freeze([252, 402]),
+    Object.freeze([396, 402]),
+    Object.freeze([458, 373]),
+    Object.freeze([526, 373]),
+  ]),
+  commit: Object.freeze([
+    Object.freeze([526, 373]),
+    Object.freeze([661, 373]),
+    Object.freeze([661, 625]),
+    Object.freeze([590, 625]),
+    Object.freeze([590, 704]),
+  ]),
+  returnFromCommit: Object.freeze([
+    Object.freeze([590, 704]),
+    Object.freeze([36, 704]),
+    Object.freeze([36, 128]),
+    Object.freeze([124, 128]),
+  ]),
+  earlyAck: Object.freeze([
+    Object.freeze([526, 373]),
+    Object.freeze([500, 373]),
+  ]),
+  returnFromWal: Object.freeze([
+    Object.freeze([500, 373]),
+    Object.freeze([36, 373]),
+    Object.freeze([36, 128]),
+    Object.freeze([124, 128]),
+  ]),
 })
 
 const statementPipeline = Object.freeze([
@@ -256,6 +324,7 @@ const statementPipeline = Object.freeze([
 ])
 
 const statementStagePoint = { x: 124, y: 128 }
+const asyncWalStagePoint = { x: 526, y: 373 }
 const pendingStatementStage = Object.freeze({
   source: 'model',
   label: 'Client',
@@ -273,7 +342,7 @@ const postgres = {
   timing: false,
 }
 
-const statement = {
+const primaryStatement = {
   status: 'idle',
   mode: 'auto',
   sql: '',
@@ -283,6 +352,22 @@ const statement = {
   stageElapsedMs: 0,
   stageIndex: 0,
   error: null,
+}
+let statement = primaryStatement
+
+const comparisonState = {
+  visible: false,
+  status: 'idle',
+  model: null,
+  elapsedMs: 0,
+  holdReleased: false,
+  error: null,
+  statements: [null, null],
+  stagePoints: [
+    { x: 124, y: 128 },
+    { x: 124, y: 128 },
+  ],
+  lastMobileStage: new Int16Array([-1, -1]),
 }
 
 const params = new URLSearchParams(window.location.search)
@@ -473,6 +558,184 @@ function updateStatementReplay(elapsedSeconds) {
   }
 }
 
+function makeComparisonStatement(replay) {
+  return {
+    status: 'replaying',
+    mode: 'auto',
+    sql: replay.sql,
+    shortSql: shortenSql(replay.sql),
+    replay,
+    elapsedMs: 0,
+    stageElapsedMs: 0,
+    stageIndex: activeStatementStageIndex(replay, 0),
+    error: null,
+  }
+}
+
+function syncComparisonStatement(laneIndex) {
+  const lane = comparisonState.model?.lanes[laneIndex]
+  const laneStatement = comparisonState.statements[laneIndex]
+  if (!lane || !laneStatement) return
+  const elapsedMs = Math.min(comparisonState.elapsedMs, lane.replay.durationMs)
+  laneStatement.elapsedMs = elapsedMs
+  laneStatement.stageIndex = activeStatementStageIndex(lane.replay, elapsedMs)
+  laneStatement.stageElapsedMs =
+    elapsedMs - elapsedAtStatementStage(lane.replay, laneStatement.stageIndex)
+  laneStatement.status = comparisonState.elapsedMs >= lane.replay.durationMs
+    ? 'complete'
+    : 'replaying'
+}
+
+function comparisonPhaseText(laneIndex) {
+  const laneStatement = comparisonState.statements[laneIndex]
+  if (comparisonState.status === 'loading') return 'P MEASURING'
+  if (comparisonState.status === 'error') return 'P UNAVAILABLE'
+  if (!laneStatement?.replay) return 'READY'
+  if (comparisonState.status === 'finding') {
+    return laneIndex === 0
+      ? 'M · WAITING FOR LOCAL FLUSH'
+      : 'M · ACK SENT; FLUSH CONTINUES'
+  }
+  if (laneStatement.status === 'complete') return 'COMPLETE'
+  return `${laneStatement.stageIndex + 1}/${laneStatement.replay.stages.length} · ${laneStatement.replay.stages[laneStatement.stageIndex].label.toUpperCase()}`
+}
+
+function updateComparisonUi() {
+  comparisonRoot.hidden = !comparisonState.visible
+  comparisonStatus.textContent =
+    comparisonState.status === 'loading'
+      ? 'P MEASURING ONE EXECUTION'
+      : comparisonState.status === 'running'
+        ? 'RUNNING IN LOCKSTEP'
+        : comparisonState.status === 'finding'
+          ? 'HELD AT THE DIFFERENCE'
+          : comparisonState.status === 'complete'
+            ? 'EXPERIMENT COMPLETE'
+            : comparisonState.status === 'error'
+              ? 'P REPORT UNAVAILABLE'
+              : 'READY'
+  comparisonPhaseA.textContent = comparisonPhaseText(0)
+  comparisonPhaseB.textContent = comparisonPhaseText(1)
+  comparisonContinue.hidden = comparisonState.status !== 'finding'
+  comparisonRun.disabled = comparisonState.status === 'loading'
+  comparisonRun.textContent = comparisonState.model
+    ? 'RUN AGAIN'
+    : 'RUN CONTROLLED COMPARISON'
+  comparisonFinding.textContent = SYNCHRONOUS_COMMIT_COMPARISON_CLAIM.finding
+  comparisonSql.textContent = COMPARISON_SQL
+  if (comparisonState.error) {
+    comparisonFinding.textContent =
+      `P report unavailable: ${comparisonState.error} The modelled comparison did not run.`
+  }
+}
+
+function openComparison() {
+  comparisonState.visible = true
+  updateComparisonUi()
+  comparisonRun.focus()
+}
+
+function closeComparison() {
+  comparisonState.visible = false
+  updateComparisonUi()
+  comparisonOpen.focus()
+}
+
+async function runSynchronousCommitComparison() {
+  if (queryBusy || comparisonState.status === 'loading') return false
+  openComparison()
+  comparisonState.status = 'loading'
+  comparisonState.model = null
+  comparisonState.statements[0] = null
+  comparisonState.statements[1] = null
+  comparisonState.error = null
+  comparisonState.elapsedMs = 0
+  comparisonState.holdReleased = false
+  comparisonState.lastMobileStage.fill(-1)
+  updateComparisonUi()
+  queryBusy = true
+  try {
+    const source = await loadPostgres(false)
+    if (!source) throw new Error(postgres.initError ?? 'PostgreSQL could not start')
+    const report = await source.query(COMPARISON_SQL)
+    if (report.error) throw new Error(report.error.message)
+    const model = createSynchronousCommitComparison(report)
+    comparisonState.model = model
+    comparisonState.statements[0] = makeComparisonStatement(model.lanes[0].replay)
+    comparisonState.statements[1] = makeComparisonStatement(model.lanes[1].replay)
+    comparisonState.elapsedMs = 0
+    comparisonState.status = 'running'
+    setCurrentReport(report)
+    updateComparisonUi()
+    return true
+  } catch (error) {
+    comparisonState.status = 'error'
+    comparisonState.error = error instanceof Error ? error.message : String(error)
+    updateComparisonUi()
+    return false
+  } finally {
+    queryBusy = false
+  }
+}
+
+function continueComparison() {
+  if (comparisonState.status !== 'finding') return
+  comparisonState.holdReleased = true
+  comparisonState.status = 'running'
+  updateComparisonUi()
+}
+
+function selectComparisonLane(laneIndex) {
+  const board = comparisonLanes.children[laneIndex]
+  if (!(board instanceof HTMLElement)) return
+  comparisonLanes.scrollTo({
+    left: board.offsetLeft - comparisonLanes.offsetLeft,
+    behavior: 'smooth',
+  })
+  comparisonTabA.setAttribute('aria-pressed', String(laneIndex === 0))
+  comparisonTabB.setAttribute('aria-pressed', String(laneIndex === 1))
+}
+
+function updateComparisonTabsFromScroll() {
+  const laneIndex = comparisonLanes.scrollLeft > comparisonLanes.clientWidth / 2 ? 1 : 0
+  comparisonTabA.setAttribute('aria-pressed', String(laneIndex === 0))
+  comparisonTabB.setAttribute('aria-pressed', String(laneIndex === 1))
+}
+
+function updateComparison(elapsedSeconds) {
+  const model = comparisonState.model
+  if (!model || comparisonState.status !== 'running') return
+  const previousStatus = comparisonState.status
+  const previousStageA = comparisonState.statements[0]?.stageIndex
+  const previousStageB = comparisonState.statements[1]?.stageIndex
+  const nextElapsedMs = comparisonState.elapsedMs + elapsedSeconds * 1000
+  if (
+    !comparisonState.holdReleased
+    && comparisonState.elapsedMs < model.observationAtMs
+    && nextElapsedMs >= model.observationAtMs
+  ) {
+    comparisonState.elapsedMs = model.observationAtMs
+    comparisonState.status = 'finding'
+    comparisonState.lastMobileStage.fill(-1)
+  } else {
+    comparisonState.elapsedMs = nextElapsedMs
+  }
+  syncComparisonStatement(0)
+  syncComparisonStatement(1)
+  if (
+    comparisonState.status === 'running'
+    && comparisonState.statements[0]?.status === 'complete'
+    && comparisonState.statements[1]?.status === 'complete'
+  ) {
+    comparisonState.status = 'complete'
+  }
+  if (
+    previousStatus !== comparisonState.status
+    || previousStageA !== comparisonState.statements[0]?.stageIndex
+    || previousStageB !== comparisonState.statements[1]?.stageIndex
+  ) updateComparisonUi()
+}
+
 function updateStatementControls() {
   statementMode.textContent = statement.mode === 'auto' ? 'TRACE: AUTO' : 'TRACE: STEP'
   statementMode.setAttribute('aria-pressed', String(statement.mode === 'step'))
@@ -502,6 +765,7 @@ function resize() {
   const wasMobileBoard = mobileBoard
   const wasFit = boardCameraReady && isBoardFit()
   mobileBoard = mobileBoardMedia.matches
+  if (mobileBoard !== wasMobileBoard) comparisonState.lastMobileStage.fill(-1)
   const ratio = Math.min(window.devicePixelRatio || 1, 2)
   const bounds = architectureStage.getBoundingClientRect()
   const viewportBounds = architectureScroll.getBoundingClientRect()
@@ -1681,7 +1945,15 @@ function drawRhythmStrip(time) {
 }
 
 function statementRouteForStage(stageId) {
+  if (stageId === 'commit' && statement.replay?.synchronousCommit === 'off') {
+    return statementRoutes.earlyAck
+  }
   if (stageId === 'return') {
+    if (statement.replay?.writes) {
+      return statement.replay.synchronousCommit === 'off'
+        ? statementRoutes.returnFromWal
+        : statementRoutes.returnFromCommit
+    }
     return statement.replay?.receipt?.sharedReads > 0
       ? statementRoutes.returnFromDisk
       : statementRoutes.returnFromBuffer
@@ -1707,6 +1979,22 @@ function drawStatementRoute(points, color, width, alpha = 1) {
   ctx.lineWidth = width
   ctx.stroke()
   ctx.restore()
+}
+
+function drawAsyncWalFlush() {
+  const durationMs = statement.replay?.backgroundFlushDurationMs
+  if (!durationMs) return
+  const progress = clamp(statement.stageElapsedMs / durationMs)
+  drawStatementRoute(statementRoutes.commit, ink.copperHi, 3, 0.72)
+  pointOnRoute(statementRoutes.commit, smooth(progress), asyncWalStagePoint)
+  ctx.save()
+  ctx.shadowColor = ink.copperHi
+  ctx.shadowBlur = 14
+  ctx.beginPath()
+  ctx.arc(asyncWalStagePoint.x, asyncWalStagePoint.y, 7, 0, TAU)
+  fillStroke(ink.copperHi, '#3d2419', 2)
+  ctx.restore()
+  mono('WAL', asyncWalStagePoint.x, asyncWalStagePoint.y + 0.5, 4.8, '#3d2419', 'center', 900)
 }
 
 function drawStatementPipeline(activeId) {
@@ -1775,6 +2063,24 @@ function drawStatementStageOutline(stageId, progress) {
       9,
     )
     ctx.stroke()
+  } else if (stageId === 'wal') {
+    pathRoundRect(
+      layout.walBuffers.x - 5,
+      layout.walBuffers.y - 5,
+      layout.walBuffers.width + 10,
+      layout.walBuffers.height + 10,
+      9,
+    )
+    ctx.stroke()
+  } else if (stageId === 'commit') {
+    pathRoundRect(
+      layout.disk.x - 5,
+      layout.disk.y - 5,
+      layout.disk.width + 10,
+      layout.disk.height + 10,
+      9,
+    )
+    ctx.stroke()
   }
   ctx.restore()
 }
@@ -1803,13 +2109,13 @@ function drawStatementStageRail(activeIndex) {
   const replay = statement.replay
   if (!replay) return
   const startX = 36
-  const width = 64
+  const width = Math.min(64, 648 / replay.stages.length)
   for (let index = 0; index < replay.stages.length; index += 1) {
     const stage = replay.stages[index]
     const x = startX + index * width
     const current = index === activeIndex
     const done = !stage.skipped && index < activeIndex
-    pathRoundRect(x, 824, 57, 36, 3)
+    pathRoundRect(x, 824, width - 7, 36, 3)
     fillStroke(
       current ? '#315f62' : done ? '#263e3e' : '#211c19',
       current ? '#d2ffff' : done ? '#6aa5a7' : '#5c4937',
@@ -1817,23 +2123,23 @@ function drawStatementStageRail(activeIndex) {
     )
     mono(
       stage.label.toUpperCase(),
-      x + 28.5,
+      x + (width - 7) / 2,
       839,
-      stage.label.length > 9 ? 5.2 : 5.8,
+      stage.label.length > 9 || width < 60 ? 5.2 : 5.8,
       stage.skipped ? '#715f4d' : current ? '#efffff' : done ? '#abd1d0' : ink.paperDim,
       'center',
       800,
     )
     mono(
       stage.skipped ? 'SKIP' : current ? 'NOW' : done ? 'DONE' : 'WAIT',
-      x + 28.5,
+      x + (width - 7) / 2,
       851,
       5.2,
       stage.skipped ? ink.red : current ? '#b9ffff' : ink.paperDim,
       'center',
       750,
     )
-    if (stage.skipped) line(x + 5, 855, x + 52, 829, ink.red, 1.2)
+    if (stage.skipped) line(x + 5, 855, x + width - 12, 829, ink.red, 1.2)
   }
 }
 
@@ -1967,6 +2273,10 @@ function drawStatementTrace() {
       const route = statementRouteForStage(stage.id)
       drawStatementRoute(route, '#8fe5e7', index === statement.stageIndex ? 4 : 3, index === statement.stageIndex ? 0.58 : 0.38)
     }
+    if (
+      statement.replay.synchronousCommit === 'off'
+      && activeStage.id === 'return'
+    ) drawAsyncWalFlush()
     const route = statementRouteForStage(activeStage.id)
     if (route) {
       pointOnRoute(route, smooth(progress), statementStagePoint)
@@ -1987,7 +2297,15 @@ function drawStatementTrace() {
   ctx.arc(statementStagePoint.x, statementStagePoint.y, 8, 0, TAU)
   fillStroke('#d9ffff', '#173b3d', 2)
   ctx.restore()
-  mono('SQL', statementStagePoint.x, statementStagePoint.y + 0.5, 5.5, '#173b3d', 'center', 900)
+  mono(
+    activeId === 'return' && statement.replay?.writes ? 'ACK' : 'SQL',
+    statementStagePoint.x,
+    statementStagePoint.y + 0.5,
+    5.2,
+    '#173b3d',
+    'center',
+    900,
+  )
   drawStatementPanel(activeStage ?? pendingStatementStage, progress)
 }
 
@@ -2015,6 +2333,69 @@ function drawArchitecture() {
   drawStatementTrace()
 }
 
+function drawComparisonCaption(laneIndex) {
+  const laneStatement = comparisonState.statements[laneIndex]
+  if (!laneStatement?.replay) return
+  const activeStage = laneStatement.replay.stages[laneStatement.stageIndex]
+  pathRoundRect(12, 696, 696, 34, 4)
+  fillStroke('#162423', '#79aeb0', 2)
+  drawSourceMedallion(28, 713, 'model', 7)
+  const label = comparisonState.status === 'finding'
+    ? laneIndex === 0
+      ? 'A · ON · WAITING FOR LOCAL WAL FLUSH'
+      : 'B · OFF · ACK SENT EARLY; WAL FLUSH CONTINUES'
+    : `${laneIndex === 0 ? 'A · ON' : 'B · OFF'} · ${activeStage.label.toUpperCase()} · ${activeStage.measurement ?? activeStage.detail}`
+  mono(`M  ${label}`, 43, 713, 8, '#d9ffff', 'left', 800)
+}
+
+function positionComparisonBoard(laneIndex, board) {
+  if (!mobileBoard) {
+    if (board.style.transform) board.style.transform = ''
+    return
+  }
+  const laneStatement = comparisonState.statements[laneIndex]
+  if (!laneStatement) return
+  if (comparisonState.lastMobileStage[laneIndex] === laneStatement.stageIndex) return
+  comparisonState.lastMobileStage[laneIndex] = laneStatement.stageIndex
+  const viewport = board.parentElement
+  if (!viewport) return
+  const point = comparisonState.stagePoints[laneIndex]
+  const forkedFinding = comparisonState.status === 'finding' && laneIndex === 1
+  const focusX = forkedFinding ? (point.x + asyncWalStagePoint.x) / 2 : point.x
+  const focusY = forkedFinding ? (point.y + asyncWalStagePoint.y) / 2 : point.y
+  const width = viewport.clientWidth
+  const height = viewport.clientHeight
+  const x = clamp(width * 0.46 - focusX, width - 720, 0)
+  const y = clamp(height * 0.42 - focusY, height - 740, 0)
+  board.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`
+}
+
+function drawComparisonBoards() {
+  if (!comparisonState.visible || !comparisonState.model) return
+  const primaryContext = ctx
+  const activeStatement = statement
+  try {
+    for (let laneIndex = 0; laneIndex < 2; laneIndex += 1) {
+      const laneContext = laneIndex === 0 ? comparisonCtxA : comparisonCtxB
+      const board = laneIndex === 0 ? comparisonBoardA : comparisonBoardB
+      const laneStatement = comparisonState.statements[laneIndex]
+      if (!laneStatement) continue
+      ctx = laneContext
+      statement = laneStatement
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+      ctx.clearRect(0, 0, board.width, board.height)
+      drawArchitecture()
+      comparisonState.stagePoints[laneIndex].x = statementStagePoint.x
+      comparisonState.stagePoints[laneIndex].y = statementStagePoint.y
+      if (!mobileBoard) drawComparisonCaption(laneIndex)
+      positionComparisonBoard(laneIndex, board)
+    }
+  } finally {
+    ctx = primaryContext
+    statement = activeStatement
+  }
+}
+
 function updateReadout() {
   clock.textContent = `${manualTime.toFixed(1).padStart(4, '0')} / 36s MODEL`
   runState.textContent = paused ? 'VIEW PAUSED' : 'VIEW RUNNING'
@@ -2037,6 +2418,7 @@ function draw() {
   )
   drawArchitecture()
   ctx.restore()
+  drawComparisonBoards()
   followMobileStatement()
   updateReadout()
 }
@@ -2045,8 +2427,10 @@ function frame(now) {
   const elapsed = (now - lastFrame) / 1000
   lastFrame = now
   const viewedElapsed = viewingElapsed(elapsed, viewingRate, paused)
+  const comparisonElapsed = viewingElapsed(elapsed, viewingRate, false)
   manualTime = wrap(manualTime + viewedElapsed, MASTER_PERIOD)
   updateStatementReplay(viewedElapsed)
+  updateComparison(comparisonElapsed)
   draw()
   requestAnimationFrame(frame)
 }
@@ -2535,6 +2919,13 @@ boardView.addEventListener('click', toggleBoardFit)
 boardFollow.addEventListener('click', enableBoardFollow)
 statementMode.addEventListener('click', toggleStatementMode)
 statementNext.addEventListener('click', stepStatementReplay)
+comparisonOpen.addEventListener('click', openComparison)
+comparisonClose.addEventListener('click', closeComparison)
+comparisonRun.addEventListener('click', () => { void runSynchronousCommitComparison() })
+comparisonContinue.addEventListener('click', continueComparison)
+comparisonTabA.addEventListener('click', () => selectComparisonLane(0))
+comparisonTabB.addEventListener('click', () => selectComparisonLane(1))
+comparisonLanes.addEventListener('scroll', updateComparisonTabsFromScroll, { passive: true })
 postgresToggle.addEventListener('click', () => {
   if (postgres.source) {
     terminalInput.focus()
@@ -2559,6 +2950,9 @@ terminalInput.addEventListener('keydown', (event) => {
     recallHistory(1)
   }
 })
+window.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && comparisonState.visible) closeComparison()
+})
 window.addEventListener('beforeunload', () => {
   if (postgres.source) void postgres.source.close()
 })
@@ -2574,6 +2968,10 @@ window.MAGNUM = Object.freeze({
     draw()
   },
   loadPostgres,
+  openComparison,
+  runComparison: runSynchronousCommitComparison,
+  continueComparison,
+  closeComparison,
   runQuery: (sql) => submitCommand(sql),
   replayLast: () => {
     if (!postgres.report) return false
@@ -2640,6 +3038,22 @@ window.MAGNUM = Object.freeze({
       timing: postgres.timing,
       error: postgres.report?.error ?? postgres.initError,
     },
+    comparison: {
+      visible: comparisonState.visible,
+      status: comparisonState.status,
+      elapsedMs: comparisonState.elapsedMs,
+      changed: comparisonState.model?.changed ?? 'synchronous_commit',
+      held: comparisonState.model?.held ?? SYNCHRONOUS_COMMIT_COMPARISON_CLAIM.held,
+      evidenceSource: comparisonState.model?.evidenceSource ?? 'model',
+      stages: comparisonState.statements.map((lane) =>
+        lane?.replay?.stages[lane.stageIndex]?.id ?? null),
+      samePostgresReceipt:
+        comparisonState.model
+          ? comparisonState.model.lanes[0].replay.receipt
+            === comparisonState.model.lanes[1].replay.receipt
+          : null,
+      error: comparisonState.error,
+    },
   }),
 })
 
@@ -2647,5 +3061,6 @@ resize()
 resizeTerminalInput()
 updatePostgresUi()
 updateStatementControls()
+updateComparisonUi()
 setViewingRate(viewingRate)
 requestAnimationFrame(frame)

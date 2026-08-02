@@ -120,6 +120,13 @@ describe('Magnum statement replay', () => {
 
     expect(replay.receipt.rows).toBe(1)
     expect(replay.receipt.rowLabel).toBe('ROWS AFFECTED')
+    expect(replay.stages.slice(-3).map((stage) => stage.id)).toEqual([
+      'wal',
+      'commit',
+      'return',
+    ])
+    expect(replay.stages.find((stage) => stage.id === 'wal')?.source).toBe('model')
+    expect(replay.stages.find((stage) => stage.id === 'commit')?.source).toBe('model')
     expect(replay.stages.find((stage) => stage.id === 'return')?.measurement).toBe(
       '1 row affected',
     )

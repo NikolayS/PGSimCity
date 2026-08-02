@@ -87,6 +87,20 @@ const STATEMENT_STAGE_SPECS = Object.freeze([
     source: 'model',
   }),
   Object.freeze({
+    id: 'wal',
+    label: 'WAL insert',
+    detail: 'record the change',
+    durationMs: 850,
+    source: 'model',
+  }),
+  Object.freeze({
+    id: 'commit',
+    label: 'Commit wait',
+    detail: 'wait for local WAL flush',
+    durationMs: 1800,
+    source: 'model',
+  }),
+  Object.freeze({
     id: 'return',
     label: 'Rows → client',
     detail: 'send the result',
@@ -154,12 +168,15 @@ function measuredPacing(plan) {
  */
 export function createStatementReplay(report) {
   const plan = report.plan
+  const writes = modifiesRows(plan)
   const sharedHits = finiteNumber(plan?.buffers?.sharedHits)
   const sharedReads = finiteNumber(plan?.buffers?.sharedReads)
   const pacing = measuredPacing(plan)
   const rowMeasurement = resultMeasurement(report)
   const rows = rowMeasurement.count
-  const stages = STATEMENT_STAGE_SPECS.map((spec) => {
+  const stages = STATEMENT_STAGE_SPECS
+    .filter((spec) => writes || (spec.id !== 'wal' && spec.id !== 'commit'))
+    .map((spec) => {
     const skipped = (spec.id === 'kernel' || spec.id === 'disk') && sharedReads === 0
     let durationMs = spec.durationMs
     let measurement = null
@@ -181,6 +198,10 @@ export function createStatementReplay(report) {
       measurement = skipped
         ? 'skipped · 0 shared reads'
         : `${sharedReads} shared reads · route modelled`
+    } else if (spec.id === 'wal') {
+      measurement = 'WAL path modelled'
+    } else if (spec.id === 'commit') {
+      measurement = 'local flush wait modelled'
     } else if (spec.id === 'return') {
       measurement = `${rows} ${rowMeasurement.stageLabel}${rows === 1 ? '' : 's'}`
     }
@@ -197,6 +218,7 @@ export function createStatementReplay(report) {
   )
   return Object.freeze({
     sql: String(report.sql ?? ''),
+    writes,
     stages: Object.freeze(stages),
     durationMs,
     receipt: plan
