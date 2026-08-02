@@ -773,8 +773,6 @@ export function createTour(ctx: UiContext): UiModule {
     delete traceHint.dataset.disclosure
     if (sim.state.scenario === 'work-mem-spill') {
       narrateBody.dataset.disclosure = 'work-mem-scenario-narration'
-    } else if (sim.state.scenario === 'connection-storm') {
-      narrateBody.dataset.disclosure = 'connection-pooler-scenario-narration'
     } else {
       delete narrateBody.dataset.disclosure
     }

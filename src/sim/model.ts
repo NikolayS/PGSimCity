@@ -311,18 +311,6 @@ const SCENARIO_LOCK_TIMEOUT: Readonly<Record<string, { atSec: number; sec: numbe
  * slowdown in the trip loop shows up one-for-one in achieved tps.
  */
 const NOMINAL_TRIPS = 35
-/** Teaching-scale concurrency knee; it is not a claim about a production core count. */
-export const MODEL_BACKEND_CONCURRENCY_TARGET = 8
-
-/**
- * PostgreSQL work slows after the modeled concurrency knee regardless of who
- * admitted the connections. A pooler only keeps the input below this curve.
- */
-export function backendConcurrencyMultiplier(serverConnections: number): number {
-  const excess = Math.max(0, serverConnections - MODEL_BACKEND_CONCURRENCY_TARGET)
-    / MODEL_BACKEND_CONCURRENCY_TARGET
-  return 1 + 2.5 * excess * excess
-}
 /**
  * Ceiling on the pages one vacuum pass may hand back. Real truncation needs an
  * ACCESS EXCLUSIVE lock and gives it up the moment anyone else wants the table,
@@ -429,7 +417,6 @@ interface Extra {
   seqScan: boolean
   scanBlk: number
   visitT: number
-  poolSlotWaitT: number
   bufferReadWaitT: number
   dirtyWriteWaitT: number
   dirtyWriteDuringReadT: number
@@ -486,7 +473,6 @@ function makeExtra(): Extra {
     seqScan: false,
     scanBlk: 0,
     visitT: 0,
-    poolSlotWaitT: 0,
     bufferReadWaitT: 0,
     dirtyWriteWaitT: 0,
     dirtyWriteDuringReadT: 0,
@@ -723,15 +709,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     xminHorizon: 100000,
     oldestSnapshotAge: 0,
     maxConnections: N_BACKEND_SLOTS,
-    pooler: {
-      mode: DEFAULT_KNOBS.poolMode,
-      clientConnections: DEFAULT_KNOBS.clientConnections,
-      acceptedClients: DEFAULT_KNOBS.clientConnections,
-      refusedClients: 0,
-      waitingClients: 0,
-      serverConnections: 0,
-      serverLimit: N_BACKEND_SLOTS,
-    },
     backends,
     buffers: primaryBuffers,
     wal: {
@@ -1080,15 +1057,15 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         transactions: 0,
         mean: {
           totalMs: 0,
-          waits: { poolSlotMs: 0, bufferReadMs: 0, dirtyWriteMs: 0, tempFileMs: 0, commitMs: 0, lockMs: 0, runningMs: 0 },
+          waits: { bufferReadMs: 0, dirtyWriteMs: 0, tempFileMs: 0, commitMs: 0, lockMs: 0, runningMs: 0 },
         },
         p50: {
           totalMs: 0,
-          waits: { poolSlotMs: 0, bufferReadMs: 0, dirtyWriteMs: 0, tempFileMs: 0, commitMs: 0, lockMs: 0, runningMs: 0 },
+          waits: { bufferReadMs: 0, dirtyWriteMs: 0, tempFileMs: 0, commitMs: 0, lockMs: 0, runningMs: 0 },
         },
         p99: {
           totalMs: 0,
-          waits: { poolSlotMs: 0, bufferReadMs: 0, dirtyWriteMs: 0, tempFileMs: 0, commitMs: 0, lockMs: 0, runningMs: 0 },
+          waits: { bufferReadMs: 0, dirtyWriteMs: 0, tempFileMs: 0, commitMs: 0, lockMs: 0, runningMs: 0 },
         },
       },
       history: { tps: [], hit: [], latencyP50: [], latencyP99: [], wal: [], dirty: [], lag: [] },
@@ -1509,7 +1486,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
    * and refresh allocate nothing in the production frame loop.
    */
   const latencyTotal = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
-  const latencyPoolSlot = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyBufferRead = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyDirtyWrite = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyTempFile = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
@@ -1518,7 +1494,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   const latencyRunning = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyWeight = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyOrderTotal = new Uint16Array(MODEL_LATENCY_WINDOW_TRIPS)
-  const latencyOrderPoolSlot = new Uint16Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyOrderBufferRead = new Uint16Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyOrderDirtyWrite = new Uint16Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyOrderTempFile = new Uint16Array(MODEL_LATENCY_WINDOW_TRIPS)
@@ -1527,7 +1502,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   const latencyOrderRunning = new Uint16Array(MODEL_LATENCY_WINDOW_TRIPS)
   let latencyHead = 0
   let latencyCount = 0
-  let latencyPoolSlotSeen = false
   /**
    * Bounded commit-position ledger used only to count acknowledged write
    * transactions beyond a failover candidate's durable LSN. Typed arrays keep
@@ -1884,42 +1858,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     return Math.max(1, Math.ceil(ratePerSec / targetPerSec))
   }
 
-  function acceptedClientConnections(): number {
-    const admissionLimit = K.poolMode === 'disabled'
-      ? state.maxConnections
-      : K.maxClientConn
-    return Math.min(K.clientConnections, admissionLimit)
-  }
-
-  function serverConnectionLimit(): number {
-    const requested = K.poolMode === 'disabled'
-      ? acceptedClientConnections()
-      : K.defaultPoolSize
-    return Math.max(1, Math.min(state.maxConnections, requested))
-  }
-
-  /** Transactions offered by clients that passed the active connection gate. */
-  function admittedTps(): number {
-    if (K.clientConnections <= 0) return 0
-    return K.tps * acceptedClientConnections() / K.clientConnections
-  }
-
-  function syncPoolerState(): void {
-    const pooler = state.pooler
-    pooler.mode = K.poolMode
-    pooler.clientConnections = K.clientConnections
-    pooler.acceptedClients = acceptedClientConnections()
-    pooler.refusedClients = Math.max(0, K.clientConnections - pooler.acceptedClients)
-    pooler.serverConnections = stats.activeBackends
-    pooler.serverLimit = serverConnectionLimit()
-    pooler.waitingClients = K.poolMode === 'disabled'
-      ? 0
-      : Math.min(
-          pooler.acceptedClients,
-          Math.ceil(pendingTx / Math.max(1, batchSize)),
-        )
-  }
-
   /**
    * How many transactions one backend trip stands for. Purely a function of the
    * OFFERED rate: a healthy fleet turns over NOMINAL_TRIPS trips per second, so
@@ -1930,12 +1868,11 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
    * that cancelled every bottleneck in the model — see the file header.
    */
   function sizeBatch(): void {
-    batchSize = Math.max(1, Math.round(admittedTps() / NOMINAL_TRIPS))
+    batchSize = Math.max(1, Math.round(K.tps / NOMINAL_TRIPS))
   }
 
   function clearLatencyQuantile(quantile: LatencyQuantile): void {
     quantile.totalMs = 0
-    quantile.waits.poolSlotMs = 0
     quantile.waits.bufferReadMs = 0
     quantile.waits.dirtyWriteMs = 0
     quantile.waits.tempFileMs = 0
@@ -1966,9 +1903,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
   function readLatencyQuantile(fraction: number, totalWeight: number, out: LatencyQuantile): void {
     out.totalMs = readLatencyComponentQuantile(latencyTotal, latencyOrderTotal, fraction, totalWeight)
-    out.waits.poolSlotMs = latencyPoolSlotSeen
-      ? readLatencyComponentQuantile(latencyPoolSlot, latencyOrderPoolSlot, fraction, totalWeight)
-      : 0
     out.waits.bufferReadMs = readLatencyComponentQuantile(
       latencyBufferRead, latencyOrderBufferRead, fraction, totalWeight,
     )
@@ -1989,7 +1923,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
   function readLatencyMean(totalWeight: number, out: LatencyQuantile): void {
     let total = 0
-    let poolSlot = 0
     let bufferRead = 0
     let dirtyWrite = 0
     let tempFile = 0
@@ -2000,7 +1933,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       const at = latencyOrderTotal[i]
       const weight = latencyWeight[at]
       total += latencyTotal[at] * weight
-      if (latencyPoolSlotSeen) poolSlot += latencyPoolSlot[at] * weight
       bufferRead += latencyBufferRead[at] * weight
       dirtyWrite += latencyDirtyWrite[at] * weight
       tempFile += latencyTempFile[at] * weight
@@ -2010,7 +1942,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     }
     const scale = 1000 / totalWeight
     out.totalMs = total * scale
-    out.waits.poolSlotMs = poolSlot * scale
     out.waits.bufferReadMs = bufferRead * scale
     out.waits.dirtyWriteMs = dirtyWrite * scale
     out.waits.tempFileMs = tempFile * scale
@@ -2068,7 +1999,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     let orderedCount = latencyCount
     if (latencyCount === MODEL_LATENCY_WINDOW_TRIPS) {
       removeLatencySlot(latencyOrderTotal, at)
-      if (latencyPoolSlotSeen) removeLatencySlot(latencyOrderPoolSlot, at)
       removeLatencySlot(latencyOrderBufferRead, at)
       removeLatencySlot(latencyOrderDirtyWrite, at)
       removeLatencySlot(latencyOrderTempFile, at)
@@ -2078,16 +2008,14 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       orderedCount--
     }
     const total = Math.max(0, x.visitT)
-    let poolSlot = Math.max(0, x.poolSlotWaitT)
     let bufferRead = Math.max(0, x.bufferReadWaitT - x.dirtyWriteDuringReadT)
     let dirtyWrite = Math.max(0, x.dirtyWriteWaitT)
     let tempFile = Math.max(0, x.tempFileWaitT)
     let commit = Math.max(0, x.commitWaitT)
     let lock = Math.max(0, x.lockWaitT)
-    const waits = poolSlot + bufferRead + dirtyWrite + tempFile + commit + lock
+    const waits = bufferRead + dirtyWrite + tempFile + commit + lock
     if (waits > total && waits > 0) {
       const scale = total / waits
-      poolSlot *= scale
       bufferRead *= scale
       dirtyWrite *= scale
       tempFile *= scale
@@ -2096,29 +2024,16 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     }
 
     latencyTotal[at] = total
-    latencyPoolSlot[at] = poolSlot
     latencyBufferRead[at] = bufferRead
     latencyDirtyWrite[at] = dirtyWrite
     latencyTempFile[at] = tempFile
     latencyCommit[at] = commit
     latencyLock[at] = lock
-    latencyRunning[at] = Math.max(
-      0,
-      total - poolSlot - bufferRead - dirtyWrite - tempFile - commit - lock,
-    )
+    latencyRunning[at] = Math.max(0, total - bufferRead - dirtyWrite - tempFile - commit - lock)
     latencyWeight[at] = Math.max(1, x.latencyCount)
 
     /* Binary insertion makes every quantile refresh O(window), not O(window²). */
-    if (!latencyPoolSlotSeen && poolSlot > 0) {
-      latencyPoolSlotSeen = true
-      // Every older value is zero, so total-latency order is a valid fixed,
-      // allocation-free seed before the first positive pool-slot insertion.
-      for (let i = 0; i < orderedCount; i++) latencyOrderPoolSlot[i] = latencyOrderTotal[i]
-    }
     insertLatencySlot(latencyOrderTotal, latencyTotal, at, orderedCount)
-    if (latencyPoolSlotSeen) {
-      insertLatencySlot(latencyOrderPoolSlot, latencyPoolSlot, at, orderedCount)
-    }
     insertLatencySlot(latencyOrderBufferRead, latencyBufferRead, at, orderedCount)
     insertLatencySlot(latencyOrderDirtyWrite, latencyDirtyWrite, at, orderedCount)
     insertLatencySlot(latencyOrderTempFile, latencyTempFile, at, orderedCount)
@@ -2130,7 +2045,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       latencyObserver({
         totalMs: total * 1000,
         waits: {
-          poolSlotMs: poolSlot * 1000,
           bufferReadMs: bufferRead * 1000,
           dirtyWriteMs: dirtyWrite * 1000,
           tempFileMs: tempFile * 1000,
@@ -6453,9 +6367,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       : undefined
     const randomPending = Math.max(0, pendingTx - traceQueue.length)
     const take = requested ? 1 : Math.max(1, Math.min(randomPending, batchSize))
-    const poolSlotWait = K.poolMode === 'transaction'
-      ? Math.max(0, (pendingTx - take) / Math.max(1, admittedTps()))
-      : 0
     pendingTx -= take
     x.txCount = take
     x.latencyCount = take
@@ -6529,8 +6440,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     x.walPrepared = false
     x.evictionBuffer = -1
     x.evictionFlushLsn = 0
-    x.visitT = poolSlotWait
-    x.poolSlotWaitT = poolSlotWait
+    x.visitT = 0
     x.bufferReadWaitT = 0
     x.dirtyWriteWaitT = 0
     x.dirtyWriteDuringReadT = 0
@@ -6703,12 +6613,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     // healthy ~40% miss point so the scale constant remains stable, while a
     // 32-frame thrash run pays the nonlinear latency a real device would.
     const cacheThrash = Math.max(0.65, (1 + 2 * missFrac) / 1.8)
-    /* The pooler is not a speed multiplier. It can only hold server-process
-     * concurrency below the same pressure curve direct connections pay. */
-    const oversizedClientFleet = K.clientConnections > state.maxConnections
-    const dur = (ioDur + base * (1 - ioShare))
-      * cacheThrash
-      * (oversizedClientFleet ? backendConcurrencyMultiplier(stats.activeBackends) : 1)
+    const dur = (ioDur + base * (1 - ioShare)) * cacheThrash
     x.execTotal = dur
     configureWorkMem(slot)
 
@@ -7017,12 +6922,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     // hundred transactions and then closes it, so the postmaster is forking
     // continuously — and the higher the transaction rate, the more processes
     // per second it has to create. This is the cost a pooler removes.
-    const pooledExcess = K.poolMode !== 'disabled'
-      && stats.activeBackends > serverConnectionLimit()
-    const directChurn = K.poolMode === 'disabled'
-      && stats.activeBackends > 3
-      && rng() < clamp(x.txCount / 300, 0.004, 0.6)
-    if (!x.holdsLock && (pooledExcess || directChurn)) {
+    if (!x.holdsLock && stats.activeBackends > 3 && rng() < clamp(x.txCount / 300, 0.004, 0.6)) {
       b.state = 'ending'
       b.stateDur = 0.18
     }
@@ -7039,7 +6939,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     for (let i = 0; i < N_BACKEND_SLOTS; i++) {
       if (!backends[i].active) { slot = i; break }
     }
-    if (slot < 0 || slot >= serverConnectionLimit()) return false
+    if (slot < 0 || slot >= state.maxConnections) return false
     const b = backends[slot]
     b.active = true
     b.state = 'starting'
@@ -7352,7 +7252,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     }
     stats.activeBackends = activeN
     stats.runningBackends = runningN
-    syncPoolerState()
     state.workMem.activeNodes = workMemNodes
     state.workMem.activeSortNodes = workMemSortNodes
     state.workMem.activeHashNodes = workMemHashNodes
@@ -7394,7 +7293,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     forkCooldown -= dt
     state.forkPulse = damp(state.forkPulse, 0, 3.2, dt)
     runtimeStats.queueDepth = pendingTx
-    runtimeStats.queueSec = pendingTx / Math.max(1, admittedTps())
+    runtimeStats.queueSec = pendingTx / Math.max(1, K.tps)
     runtimeStats.refused = refusedTx
     if (pendingTx <= 0) return
     let idle = 0
@@ -7406,7 +7305,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       if (b.state === 'idle') idle++
     }
     if (idle > 0) return
-    if (active < serverConnectionLimit()) {
+    if (active < state.maxConnections) {
       forkBackend()
       return
     }
@@ -7418,12 +7317,12 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     // could never get deep, and the "too many clients" toast fired on a
     // quantity that could not grow. Ten seconds of offered load is a real
     // client-side queue; past that the clients are being refused.
-    const cap = Math.max(serverConnectionLimit() * batchSize * 2, admittedTps() * 10)
+    const cap = Math.max(state.maxConnections * batchSize * 2, K.tps * 10)
     if (pendingTx > cap) {
       refusedTx += pendingTx - cap
       pendingTx = cap
       runtimeStats.queueDepth = pendingTx
-      runtimeStats.queueSec = pendingTx / Math.max(1, admittedTps())
+      runtimeStats.queueSec = pendingTx / Math.max(1, K.tps)
       runtimeStats.refused = refusedTx
       if (state.t - refuseWarnT > 15) {
         refuseWarnT = state.t
@@ -7843,9 +7742,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     if (def.id === 'work-mem-spill' && previousScenarioT < 52 && state.scenarioT >= 52) {
       setKnob('workMem', CLAIM_VALUES.workMem.spillExample.highMiB)
     }
-    if (def.id === 'connection-storm' && previousScenarioT < 44 && state.scenarioT >= 44) {
-      setKnob('poolMode', 'transaction')
-    }
     // Stands in for a `lockTimeout` knob this scenario would set at a beat.
     const lt = SCENARIO_LOCK_TIMEOUT[def.id]
     if (lt && lockTimeout !== lt.sec && state.scenarioT >= lt.atSec) {
@@ -8014,27 +7910,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         // The batch scale follows the offered rate, so it moves with the slider
         // rather than 250ms later.
         sizeBatch()
-        break
-      case 'clientConnections':
-        K.clientConnections = clamp(Math.round(K.clientConnections), 1, 2_000)
-        nextArrival = 0
-        sizeBatch()
-        syncPoolerState()
-        break
-      case 'poolMode':
-        sizeBatch()
-        syncPoolerState()
-        break
-      case 'defaultPoolSize':
-        K.defaultPoolSize = clamp(Math.round(K.defaultPoolSize), 1, N_BACKEND_SLOTS)
-        sizeBatch()
-        syncPoolerState()
-        break
-      case 'maxClientConn':
-        K.maxClientConn = clamp(Math.round(K.maxClientConn), 1, 2_000)
-        nextArrival = 0
-        sizeBatch()
-        syncPoolerState()
         break
       case 'bgwriterEnabled':
         bgw.enabled = K.bgwriterEnabled
@@ -8207,7 +8082,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       nextArrival -= dt
       let guard = 900
       while (nextArrival <= 0 && guard-- > 0) {
-        const d = expDelay(admittedTps(), rng)
+        const d = expDelay(K.tps, rng)
         if (!isFinite(d)) { nextArrival = 1e9; break }
         pendingTx++
         runtimeStats.arrivals++
@@ -8290,13 +8165,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     state.xminHorizon = 100000
     state.oldestSnapshotAge = 0
     state.maxConnections = N_BACKEND_SLOTS
-    state.pooler.mode = DEFAULT_KNOBS.poolMode
-    state.pooler.clientConnections = DEFAULT_KNOBS.clientConnections
-    state.pooler.acceptedClients = DEFAULT_KNOBS.clientConnections
-    state.pooler.refusedClients = 0
-    state.pooler.waitingClients = 0
-    state.pooler.serverConnections = 0
-    state.pooler.serverLimit = N_BACKEND_SLOTS
     state.scenario = null
     state.scenarioT = 0
     state.scenarioDecision = null
@@ -8724,7 +8592,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     backgroundSeqScans = 0
     nextWideSeqScan = 1
     latencyTotal.fill(0)
-    latencyPoolSlot.fill(0)
     latencyBufferRead.fill(0)
     latencyDirtyWrite.fill(0)
     latencyTempFile.fill(0)
@@ -8734,7 +8601,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     latencyWeight.fill(0)
     latencyHead = 0
     latencyCount = 0
-    latencyPoolSlotSeen = false
     commitLsn.fill(0)
     commitCount.fill(0)
     commitHead = 0
@@ -8753,7 +8619,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     resetTraceRecord()
     refusedTx = 0
     sizeBatch()
-    syncPoolerState()
     commitsAcc = walAcc = fpiAcc = ioReadAcc = ioWriteAcc = 0
     maintenanceWalPending = maintenanceFpiPending = 0
     maintenanceWalQueued = maintenanceWalDrained = 0

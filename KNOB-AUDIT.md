@@ -19,40 +19,6 @@ quoted below is measured, not estimated.
 **Original verdict count (2026-07-29 snapshot): 13 `CORRECT`, 10 `WRONG`,
 0 `MISSING`.**
 
-## Connection-pooler addendum — 2026-08-02
-
-The pooler work adds four controls. All four pass the executable response sweep
-in `src/sim/knob-response.test.ts`, and the boundary semantics have focused
-coverage in `src/sim/pooler.test.ts`.
-
-| Knob | Real setting | Verdict | Consequence verified |
-|---|---|---|---|
-| `clientConnections` | application workload, not a GUC | **CORRECT** | Direct mode admits at most the city's sixteen PostgreSQL connections; pooled mode admits up to `max_client_conn` without raising the server-process count. |
-| `poolMode` | PgBouncer `pool_mode` | **CORRECT** | `disabled` is the city's direct comparison; `transaction` attributes the bounded queue to Pool-slot latency; `session` uses the server cap but does not fabricate transaction-boundary queue attribution or session-state behavior. |
-| `defaultPoolSize` | PgBouncer `default_pool_size` | **CORRECT** | Moving the control changes this one modeled user/database pool's PostgreSQL server limit, capped by the city's sixteen backend slots. It does not discount statement cost. |
-| `maxClientConn` | PgBouncer `max_client_conn` | **CORRECT** | At 1,000 application clients, a value of 100 admits 100 and refuses 900 while leaving the PostgreSQL server limit at eight. |
-
-**Connection-storm before/after measurement.** The seeded scenario was read at
-30 model steps/s: direct mode over t=28–43 s, then the transaction-pool state
-over t=76–95 s. These are model-time teaching values, not production forecasts.
-
-| | Direct | Transaction pool |
-|---|---:|---:|
-| achieved throughput | 8.33 tps | 143.63 tps |
-| rolling p50 | 0.700 s | 11.439 s |
-| rolling p99 | 13.367 s | 14.567 s |
-| Pool-slot component p50 / p99 | 0 / 0 s | 10.003 / 10.010 s |
-| Active / unclassified component p50 / p99 | 0.600 / 10.667 s | 0.866 / 2.033 s |
-| PostgreSQL backends | 16 | 8 |
-| clients admitted / refused | 16 / 984 | 1,000 / 0 |
-
-The pool did not make a statement faster. It held PostgreSQL at the model's
-eight-backend concurrency knee, which raised completed throughput and moved the
-median delay into the explicit client-side pool-slot estimate. The direct run's
-rejected clients are failures, not low-latency completions. Component quantiles
-are computed independently, so their p99 values are not additive. The scenario
-knobs were not moved to produce this comparison.
-
 The roadmap says "eleven of twenty-two". This audit re-grades four of them and
 adds three the earlier sweep passed; see [Changes from the previous
 sweep](#changes-from-the-previous-sweep).

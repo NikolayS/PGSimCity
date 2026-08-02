@@ -57,7 +57,6 @@ describe('latency HUD', () => {
     expect(panel.hidden).toBe(false)
     expect(panel.textContent).toContain('Modeled backend-trip latency')
     expect(panel.textContent).toContain('p99 modeled component quantiles')
-    expect(panel.textContent).toContain('Pool-slot queue')
     expect(panel.textContent).toContain('Buffer-read phase')
     expect(panel.textContent).toContain('Dirty-victim I/O')
     expect(panel.textContent).toContain('Temp-file I/O')

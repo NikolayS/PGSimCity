@@ -75,8 +75,6 @@ export interface TableDef {
  * -------------------------------------------------------------------------*/
 
 export type SyncCommit = 'off' | 'local' | 'remote_write' | 'on' | 'remote_apply'
-/** `disabled` is PGSimCity's direct-connection comparison, not a PgBouncer value. */
-export type PoolMode = 'disabled' | 'session' | 'transaction'
 export type WalLevel = 'minimal' | 'replica' | 'logical'
 export type SynchronousStandbyNames = 'none' | 'standbyA' | 'standbyB'
 export type HaPartition =
@@ -90,14 +88,6 @@ export type RecoveryTargetTimeline = 'latest' | 'current'
 export interface Knobs {
   /** Target transactions/sec offered by clients. */
   tps: number
-  /** Concurrent application connections offering that aggregate load. */
-  clientConnections: number
-  /** PgBouncer pool_mode, plus a direct-connection comparison state. */
-  poolMode: PoolMode
-  /** PgBouncer default_pool_size for this model's one user/database pool. */
-  defaultPoolSize: number
-  /** PgBouncer max_client_conn process-wide admission ceiling. */
-  maxClientConn: number
   /** 0..1 — share of statements that write. */
   writeRatio: number
   /** 0..1 — within writes, share that are UPDATE/DELETE (vs INSERT). */
@@ -180,10 +170,6 @@ export function poolBytes(knobs: Pick<Knobs, 'sharedBuffers'>): number {
 
 export const DEFAULT_KNOBS: Knobs = {
   tps: 10,
-  clientConnections: N_BACKEND_SLOTS,
-  poolMode: 'disabled',
-  defaultPoolSize: 8,
-  maxClientConn: 100,
   writeRatio: 0.2,
   updateRatio: 0.6,
   seqScanRatio: 0.15,
@@ -989,7 +975,6 @@ export interface LockEdge {
 
 /** Additive anatomy of one completed model-latency observation. */
 export interface LatencyWaits {
-  poolSlotMs: number
   bufferReadMs: number
   dirtyWriteMs: number
   tempFileMs: number
@@ -1010,23 +995,6 @@ export interface WorkMemState {
   /** Cumulative pg_stat_database-shaped counters since model reset. */
   tempFiles: number
   tempBytes: number
-}
-
-export interface PoolerState {
-  /** Direct comparison or the active PgBouncer pool_mode. */
-  mode: PoolMode
-  /** Application-side connections, including clients waiting at PgBouncer. */
-  clientConnections: number
-  /** Connections admitted by max_client_conn (or max_connections when direct). */
-  acceptedClients: number
-  /** Client connections rejected at the active admission boundary. */
-  refusedClients: number
-  /** Clients with modeled work waiting for a pooled server connection. */
-  waitingClients: number
-  /** PostgreSQL client backends currently visible in pg_stat_activity. */
-  serverConnections: number
-  /** Demand-capped direct clients; default_pool_size capped by max_connections when pooled. */
-  serverLimit: number
 }
 
 export interface LatencyQuantile {
@@ -1155,7 +1123,6 @@ export interface SimState {
   xminHorizon: number
   oldestSnapshotAge: number
   maxConnections: number
-  pooler: PoolerState
   backends: BackendSim[]
   buffers: BufferPool
   wal: WalState

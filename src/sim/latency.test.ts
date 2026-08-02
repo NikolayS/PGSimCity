@@ -59,8 +59,7 @@ describe('modeled transaction latency', () => {
     expect(latency.p99.totalMs).toBeGreaterThanOrEqual(latency.p50.totalMs)
     const meanWaits = latency.mean.waits
     expect(
-      meanWaits.poolSlotMs
-      + meanWaits.bufferReadMs
+      meanWaits.bufferReadMs
       + meanWaits.dirtyWriteMs
       + meanWaits.tempFileMs
       + meanWaits.commitMs

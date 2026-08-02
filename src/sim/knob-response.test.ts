@@ -225,41 +225,6 @@ const RESPONSE_CONTRACTS = {
       return sim.state.stats.commits
     },
   },
-  clientConnections: {
-    target: 1_000,
-    measure(value: number) {
-      const sim = createSim(createBus())
-      sim.setKnob('clientConnections', value)
-      return sim.state.pooler.clientConnections
-    },
-  },
-  poolMode: {
-    target: 'transaction',
-    measure(value: Knobs['poolMode']) {
-      const sim = createSim(createBus())
-      sim.setKnob('poolMode', value)
-      return sim.state.pooler.serverLimit
-    },
-  },
-  defaultPoolSize: {
-    target: 4,
-    measure(value: number) {
-      const sim = createSim(createBus())
-      sim.setKnob('poolMode', 'transaction')
-      sim.setKnob('defaultPoolSize', value)
-      return sim.state.pooler.serverLimit
-    },
-  },
-  maxClientConn: {
-    target: 1_000,
-    measure(value: number) {
-      const sim = createSim(createBus())
-      sim.setKnob('clientConnections', 1_000)
-      sim.setKnob('poolMode', 'transaction')
-      sim.setKnob('maxClientConn', value)
-      return sim.state.pooler.acceptedClients
-    },
-  },
   writeRatio: {
     target: 1,
     measure(value: number) {
@@ -285,10 +250,6 @@ const RESPONSE_CONTRACTS = {
     measure(value: number) {
       const sim = createSim(createBus())
       sim.setKnob('tps', 1_000)
-      sim.setKnob('clientConnections', 1_000)
-      sim.setKnob('poolMode', 'transaction')
-      sim.setKnob('defaultPoolSize', CLAIM_VALUES.connectionPooler.modelDefaultPoolSize)
-      sim.setKnob('maxClientConn', 1_000)
       sim.setKnob('writeRatio', 0)
       sim.setKnob('seqScanRatio', value)
       advance(sim, 20)
@@ -777,7 +738,7 @@ describe('knob-response contract', () => {
     let inspected = 0
     for (const [key, before] of base.metrics) {
       const label = key.slice(key.indexOf('::') + 2)
-      if (!/(?:buffer pool|pool size)/i.test(label) && label !== 'shared_buffers') continue
+      if (!/\bpool\b/i.test(label) && label !== 'shared_buffers') continue
       inspected++
       expect(metricContract(key), `${key} needs a moves-with declaration`).toBe('moves-with: sharedBuffers')
       expect(target.metrics.get(key), `${key} must move with sharedBuffers`).not.toBe(before)

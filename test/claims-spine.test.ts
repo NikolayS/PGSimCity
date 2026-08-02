@@ -17,12 +17,7 @@ import { CATALOG } from '../src/observability/catalog'
 import { createCollector } from '../src/observability/collector'
 import { ALL_STEPS, ALL_VERDICTS, SYMPTOMS } from '../src/observability/paths'
 import { PROJECTIONS } from '../src/observability/views'
-import {
-  MODEL_BACKEND_CONCURRENCY_TARGET,
-  MODEL_BULK_READ_RING_FRAMES,
-  MODEL_LATENCY_WINDOW_TRIPS,
-  createSim,
-} from '../src/sim/model'
+import { MODEL_BULK_READ_RING_FRAMES, MODEL_LATENCY_WINDOW_TRIPS, createSim } from '../src/sim/model'
 import { SCENARIOS } from '../src/sim/scenarios'
 import { CHAPTERS } from '../src/ui/tour'
 import { DOCS_STORAGE } from '../src/ui/docs-storage'
@@ -31,7 +26,6 @@ import { MODEL_LATENCY_VITAL_LABEL, emitLoose } from '../src/ui/hud'
 import { createInspector } from '../src/ui/panel'
 import type { UiContext } from '../src/ui/uikit'
 import { VACUUM_RECLAIM_PLATE_LINES } from '../src/world/maintenance'
-import { CONNECTION_POOLER_PLATE_LABEL } from '../src/world/clients'
 import { TIMELINE_RECOVERY_PLATE_LABEL } from '../src/world/continuity'
 import { SHARED_BUFFER_SAMPLE_PLATE_LABEL } from '../src/world/shmem'
 import { WAL_SEGMENT_PLATE_LABEL, WAL_SEGMENT_SIZE_PLATE_LABEL } from '../src/world/wal'
@@ -86,7 +80,6 @@ describe('claims and conventions spine', () => {
       'standbyNames',
       'modelDuration',
       'modelLatency',
-      'connectionPooler',
       'workMem',
       'restoreDrill',
       'timelineRecovery',
@@ -251,78 +244,6 @@ describe('claims and conventions spine', () => {
     const commitChapter = CHAPTERS.find((chapter) => chapter.id === 'commit')
     expect(commitChapter?.body, 'modelLatency: tour:commit omits the visible quantiles')
       .toContain(`rolling p50/p99 in ${CLAIM_VALUES.modelLatency.unit}`)
-  })
-
-  it('keeps the pooler cap, costs, absences, controls, world, and scenario aligned', () => {
-    const claim = CLAIM_VALUES.connectionPooler
-    const sim = createSim(createBus())
-    agrees(
-      'connectionPooler',
-      'model:stock pool mode',
-      sim.state.knobs.poolMode,
-      'disabled',
-    )
-    agrees(
-      'connectionPooler',
-      'model:teaching pool size',
-      sim.state.knobs.defaultPoolSize,
-      claim.modelDefaultPoolSize,
-    )
-    agrees(
-      'connectionPooler',
-      'model:backend-concurrency knee',
-      MODEL_BACKEND_CONCURRENCY_TARGET,
-      claim.concurrencyTarget,
-    )
-    agrees(
-      'connectionPooler',
-      'model:PgBouncer max_client_conn default',
-      sim.state.knobs.maxClientConn,
-      claim.pgBouncerDefaults.maxClientConn,
-    )
-    expect(CONNECTION_POOLER_PLATE_LABEL).toContain('PgBouncer')
-    expect(CONNECTION_POOLER_PLATE_LABEL).toContain('pool_mode')
-
-    const poolMode = KNOB_META.find((knob) => knob.key === 'poolMode')
-    const poolSize = KNOB_META.find((knob) => knob.key === 'defaultPoolSize')
-    const clientLimit = KNOB_META.find((knob) => knob.key === 'maxClientConn')
-    expect(poolMode?.options?.map((option) => option.value))
-      .toEqual(['disabled', 'session', 'transaction'])
-    expect(poolMode?.hint).toContain(claim.transactionTradeoff)
-    expect(poolMode?.hint).toContain(claim.coverageDisclosure)
-    expect(poolSize?.hint).toContain(String(claim.pgBouncerDefaults.defaultPoolSize))
-    expect(clientLimit?.hint).toContain(String(claim.pgBouncerDefaults.maxClientConn))
-    for (const control of [poolMode, poolSize, clientLimit]) {
-      expect(control?.disclosure).toBeTruthy()
-    }
-
-    const pooler = doc('client.pooler')
-    const copy = [
-      pooler?.tldr ?? '',
-      ...(pooler?.sections.map((section) => section.body) ?? []),
-    ].join('\n')
-    expect(copy).toContain(claim.transactionTradeoff)
-    expect(copy).toContain(claim.coverageDisclosure)
-    expect(copy).toMatch(/pg_stat_activity.*server process/is)
-    expect(copy).toMatch(/pgcat.*Odyssey/is)
-    expect(claim.absent).toEqual([
-      'PgBouncer statement pool mode',
-      'client-to-server session binding and disconnect lifetimes',
-      'session variables and SET/RESET effects',
-      'advisory-lock ownership across transactions',
-      'prepared-statement tracking',
-      'LISTEN registrations and NOTIFY delivery',
-      'per-user and per-database pools, reserve pools and pool queues',
-      'PgBouncer authentication, TLS, DNS, cancellation forwarding and admin console',
-      'pgcat and Odyssey runtime behavior',
-    ])
-
-    const scenario = SCENARIOS.find((candidate) => candidate.id === 'connection-storm')
-    const scenarioCopy = scenario?.beats?.flatMap((beat) => beat.slice(1)).join('\n') ?? ''
-    expect(scenario?.knobs.poolMode).toBe('disabled')
-    expect(scenario?.knobs.clientConnections).toBe(1_000)
-    expect(scenarioCopy).toMatch(/Pool-slot queue/i)
-    expect(scenarioCopy).toMatch(/SET\/RESET.*advisory lock.*PREPARE.*LISTEN/is)
   })
 
   it('keeps work_mem per-node math and model limits aligned across surfaces', () => {
