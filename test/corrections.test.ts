@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { CLAIM_VALUES } from '../src/core/claims'
 import {
+  CORRECTION_URL_MAX_LENGTH,
   CORRECTION_ISSUE_TEMPLATE,
   buildCorrectionBody,
   correctionIssueUrl,
@@ -17,6 +18,8 @@ import {
 
 const read = (path: string): string =>
   readFileSync(new URL(`../${path}`, import.meta.url), 'utf8')
+
+const SQL_SECRET = 'CORRECTION_SQL_SECRET_9E2A'
 
 describe('PostgreSQL correction reports', () => {
   it('prefills an actionable, editable report without dumping model state', () => {
@@ -79,6 +82,26 @@ describe('PostgreSQL correction reports', () => {
         ],
       }),
     )
+  })
+
+  it('visibly truncates a constructed worst-case claim before the safe URL ceiling', () => {
+    const claim = Array.from(
+      { length: 12_000 },
+      (_value, index) => `${index % 10} % / ? ⚠\n`,
+    ).join('')
+    const href = correctionIssueUrl({
+      surface: 'City / Console',
+      panel: 'Disaster recovery / recovery_target_time',
+      source: 'src/ui/content.ts#KNOB_META[recoveryTargetAge]',
+      claim,
+      context: [['recoveryTargetAge', '300 s ago']],
+    })
+    const body = new URL(href).searchParams.get('body') ?? ''
+
+    expect(CORRECTION_URL_MAX_LENGTH).toBe(8_000)
+    expect(href.length).toBeLessThanOrEqual(CORRECTION_URL_MAX_LENGTH)
+    expect(body).toMatch(/claim truncated/i)
+    expect(body).not.toContain(claim)
   })
 
   it('renders one honest href for a claim-bearing surface and refreshes live text', () => {
@@ -173,19 +196,46 @@ describe('PostgreSQL correction reports', () => {
       name: 'City',
       path: '/',
       readySelector: '.an-overlay',
-      prepare: `window.PGSIMCITY.bus.emit('select', { id: 'shared.buffers' })`,
+      prepare: `(() => {
+        const { sim, bus } = window.PGSIMCITY
+        sim.setKnob('recoveryTargetAge', 40)
+        sim.setKnob('walGDownloadConcurrency', 4)
+        Object.assign(sim.state.disasterRecovery.drill, {
+          status: 'passed',
+          level: 'cluster',
+          measuredRestoreToTargetSec: 12.5,
+          failureReason: '',
+        })
+        bus.emit('select', { id: 'recovery.ground' })
+        document.querySelector('.pgc-tab--left')?.click()
+        const memory = Array.from(document.querySelectorAll('.pgc-group'))
+          .find((node) => node.dataset.correctionSubject === 'city-console-memory')
+        if (memory && !memory.classList.contains('is-open')) {
+          memory.querySelector('.pgc-collapse__head')?.click()
+        }
+        memory?.querySelector('[data-knob="workMem"] input')
+          ?.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+        memory?.querySelector('[data-correction-link]')
+          ?.dispatchEvent(new Event('pointerdown'))
+      })()`,
     }, {
       name: 'Diagnose',
       path: '/observability/',
       readySelector: '[data-correction-path]',
     }, {
       name: 'Query flow',
-      path: '/observability/?view=flow',
+      path: '/observability/?view=flow&statement=aggregate&setting=shared_buffers&a=4096&b=64',
       readySelector: '[data-correction-path]',
     }, {
       name: 'Machine',
       path: '/machine/',
       readySelector: '.comparison-actions [data-correction-path]',
+      prepare: `(async () => {
+        await window.MAGNUM.runQuery("SELECT '${SQL_SECRET}' AS private_input;")
+        document.querySelector('.measurement-rack [data-correction-link]')
+          ?.dispatchEvent(new Event('pointerdown'))
+      })()`,
+      sqlSecret: SQL_SECRET,
       probeMarker: true,
     }])
 
@@ -212,5 +262,58 @@ describe('PostgreSQL correction reports', () => {
       orphanPaths: [],
     }])).toEqual([])
     expect(correctionCoverageFailures(reports)).toEqual([])
-  }, 90_000)
+
+    const city = reports.find((report) => report.name === 'City')!
+    const inspectorBody = city.subjects
+      .find((subject) => subject.label === 'city-inspector')!
+      .links[0].body
+    expect(inspectorBody).toContain('- Drill verdict: `passed`')
+    expect(inspectorBody).toContain('- Drill level: `Full-cluster smoke (cluster)`')
+    expect(inspectorBody).toContain('- Restore-to-target time: `12.5 model s measured`')
+    expect(inspectorBody).toContain('- recoveryTargetAge: `40 s`')
+    expect(inspectorBody).toContain('- walGDownloadConcurrency: `4 workers`')
+    expect(inspectorBody).not.toContain('restoreDrillFault')
+    expect(inspectorBody).not.toContain('sharedBuffers')
+
+    const consoleReports = city.subjects.filter(
+      (subject) => subject.label.startsWith('city-console-'),
+    )
+    expect(consoleReports).toHaveLength(9)
+    const memoryBody = consoleReports
+      .find((subject) => subject.label === 'city-console-memory')!
+      .links[0].body
+    expect(memoryBody).toContain('- Panel: Simulation controls / Memory / work_mem')
+    expect(memoryBody).toContain('> Per eligible executor node, never per query or connection.')
+    expect(memoryBody).not.toContain('How much of the database fits in RAM')
+    expect(memoryBody).not.toContain('Everything downstream scales from here')
+
+    const flowBody = reports.find((report) => report.name === 'Query flow')!
+      .subjects[0].links[0].body
+    expect(flowBody).toContain('- statement query parameter: `aggregate`')
+    expect(flowBody).toContain('- setting query parameter: `shared_buffers`')
+    expect(flowBody).toContain('- a query parameter: `4096`')
+    expect(flowBody).toContain('- b query parameter: `64`')
+    expect(flowBody).not.toContain('No model state included')
+
+    const machineReport = reports.find((report) => report.name === 'Machine')!
+    const machineLink = machineReport.subjects
+      .find((subject) => subject.label === 'machine-workbench')!
+      .links[0]
+    const machineBody = machineLink.body
+    expect(machineReport.sqlSecretProbe).toEqual({ transcript: true, input: false })
+    expect(machineBody).toContain('Board labels: CLIENT')
+    expect(machineBody).toMatch(/P measured.*shared buffer hits/i)
+    expect(machineBody).toMatch(/M modelled.*stage/i)
+    expect(machineBody).toMatch(/psql transcript.*not included/i)
+    expect(machineBody).not.toContain(SQL_SECRET)
+    expect(decodeURIComponent(machineLink.href)).not.toContain(SQL_SECRET)
+
+    for (const report of reports) {
+      for (const subject of report.subjects) {
+        for (const link of subject.links) {
+          expect(link.length).toBeLessThanOrEqual(CORRECTION_URL_MAX_LENGTH)
+        }
+      }
+    }
+  }, 120_000)
 })

@@ -149,13 +149,6 @@ if (
   throw new Error('The Magnum workbench is missing a required browser element')
 }
 
-createCorrectionPath(measurementRack, {
-  surface: 'Machine / Workbench',
-  panel: 'psql terminal and modelled machine',
-  source: 'machine/index.html#console-pane; machine/magnum.js; machine/postgres.js',
-  claim: () => displayedClaim(machineDeck, terminalBanner, postgresMeasurement),
-})
-
 createCorrectionPath(architecturePane, {
   surface: 'Machine / Architecture board',
   panel: 'Layered PostgreSQL architecture',
@@ -403,6 +396,64 @@ const primaryStatement = {
   error: null,
 }
 let statement = primaryStatement
+
+const MACHINE_BOARD_LABELS = Object.freeze([
+  'CLIENT',
+  'POSTMASTER',
+  'BACKENDS',
+  'PRIVATE MEMORY',
+  'SHARED MEMORY SEGMENT',
+  'BUFFER POOL (shared_buffers)',
+  'WAL BUFFERS',
+  'PROCARRAY',
+  'LOCK TABLE',
+  'pg_xact / SLRU BUFFERS',
+  'KERNEL PAGE CACHE',
+  'DATA FILES',
+  'WAL',
+  'pg_xact FILES',
+  'WALSENDER',
+  'STANDBY',
+])
+
+function safeWorkbenchClaim() {
+  const replay = statement.replay
+  const stage = replay?.stages[statement.stageIndex]
+  const receipt = replay?.receipt
+  const stageNarration = stage
+    ? `M modelled stage narration: ${stage.label} · source marker ${stage.source === 'postgres' ? 'P' : 'M'} · ${stage.measurement ?? stage.detail}`
+    : statement.status === 'measuring'
+      ? 'M modelled stage narration: client is waiting for PostgreSQL measurements.'
+      : statement.status === 'error'
+        ? 'M modelled stage narration: the statement stopped; error details remain in the omitted transcript.'
+        : 'M modelled stage narration: no foreground statement replay is active.'
+  const measured = receipt
+    ? `P measured receipt: ${receipt.sharedHits} shared buffer hits · ${receipt.sharedReads} shared reads · ${receipt.planningTimeMs.toFixed(3)} ms planning · ${receipt.executionTimeMs.toFixed(3)} ms execution · ${receipt.rowLabel} ${receipt.rows} · plan node ${receipt.planNode}`
+    : 'P measured receipt: not available.'
+
+  return [
+    displayedClaim(machineDeck, terminalBanner, postgresMeasurement),
+    `Board labels: ${MACHINE_BOARD_LABELS.join(' · ')}`,
+    stageNarration,
+    measured,
+  ].filter(Boolean).join('\n')
+}
+
+createCorrectionPath(measurementRack, {
+  surface: 'Machine / Workbench',
+  panel: 'psql terminal and modelled machine',
+  source: 'machine/index.html#console-pane; machine/magnum.js; machine/postgres.js',
+  claim: safeWorkbenchClaim,
+  claimCaptureNote:
+    'The psql transcript is intentionally not included because it can contain user-typed SQL and result values. If the disputed sentence appears only there, quote it manually after opening the issue.',
+  context: () => {
+    const stage = statement.replay?.stages[statement.stageIndex]
+    return [
+      ['Foreground replay', stage ? `${statement.status}: ${stage.id}` : statement.status],
+      ['PostgreSQL receipt', statement.replay?.receipt ? 'numeric measurements included' : 'not available'],
+    ]
+  },
+})
 
 const comparisonState = {
   visible: false,

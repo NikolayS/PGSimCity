@@ -81,6 +81,40 @@ function discussesPageLayout(id: string, heading: string, body: string, sectionI
   return /\b(?:page layout|8\s*KiB\s+pages?)\b/i.test(copy)
 }
 
+function inspectorCorrectionContext(
+  id: string,
+  info: ComponentDoc | undefined,
+  state: SimState,
+): readonly (readonly [string, string])[] {
+  if (id === 'recovery.ground') {
+    const drill = state.disasterRecovery.drill
+    const active = drill.status === 'restoring'
+      || drill.status === 'verifying'
+      || drill.status === 'querying'
+    const verdict = drill.status === 'failed' && drill.failureReason
+      ? `failed — ${drill.failureReason}`
+      : drill.status
+    const level = drill.status === 'idle'
+      ? 'not run'
+      : `${CLAIM_VALUES.restoreDrill.levels[drill.level].label} (${drill.level})`
+    const restoreTime = drill.measuredRestoreToTargetSec > 0
+      ? `${drill.measuredRestoreToTargetSec} model s measured`
+      : active
+        ? `${drill.estimatedRestoreToTargetSec} model s estimated`
+        : 'not measured'
+    return [
+      ['Drill verdict', verdict],
+      ['Drill level', level],
+      ['Restore-to-target time', restoreTime],
+      ['recoveryTargetAge', `${state.knobs.recoveryTargetAge} s`],
+      ['walGDownloadConcurrency', `${state.knobs.walGDownloadConcurrency} workers`],
+    ]
+  }
+
+  const keys = [...new Set(info?.knobs ?? [])]
+  return keys.map((key) => [String(key), String(state.knobs[key])] as const)
+}
+
 /* ---------------------------------------------------------------------------
  * References — the reading list behind each component.
  *
@@ -867,6 +901,7 @@ export function createInspector(ctx: UiContext): UiModule {
         subtitle,
         ...wrap.querySelectorAll<HTMLElement>('.pgc-block--prose'),
       ),
+      context: () => inspectorCorrectionContext(id, info, ctx.sim.state),
     })
 
     return wrap

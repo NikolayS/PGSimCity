@@ -328,6 +328,16 @@
   max-width: 40ch;
 }
 
+.pgc-group > .pg-correction {
+  margin: 0;
+  padding: 4px 2px 8px 20px;
+  border-top: 0;
+}
+
+.pgc-group:not(.is-open) > .pg-correction {
+  display: none;
+}
+
 .pgc-rail__foot {
   display: flex;
   align-items: center;
