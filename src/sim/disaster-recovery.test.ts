@@ -490,29 +490,51 @@ describe('disaster recovery', () => {
     expect(restore.resultMessage).not.toMatch(/archive_timeout|unarchived tail/i)
   })
 
-  it('rejects a divergent-tail target for recovery_target_timeline=current', () => {
+  it('replays an archived divergent parent tail with recovery_target_timeline=current', () => {
     const sim = createSim(createBus(), { scheduledBackups: false })
-    sim.setKnob('tps', 2_000)
+    sim.setKnob('tps', 6_000)
     sim.setKnob('writeRatio', 1)
     sim.setKnob('synchronousCommit', 'local')
+    sim.setKnob('standbyANetworkLag', 400)
     takeBackup(sim)
+    const backup = sim.state.disasterRecovery.backups[0]
+    advanceUntil(
+      sim,
+      () => sim.state.disasterRecovery.archive.archivedThroughLsn
+        > sim.state.replication.standbys[0].flushedLsn
+        && sim.state.disasterRecovery.archive.archivedThroughTime > backup.completedAt,
+      180,
+    )
+    const targetTime = sim.state.disasterRecovery.archive.archivedThroughTime
     expect(sim.startFailover('standbyA')).toBe(true)
     advanceUntil(
       sim,
       () => sim.state.highAvailability.transition.status === 'complete',
     )
+    const timeline = sim.state.highAvailability.timeline
+    const archive = sim.state.disasterRecovery.archive
+    expect(archive.parentArchivedThroughLsn).toBeGreaterThan(timeline.forkLsn)
     sim.setKnob('recoveryTargetTimeline', 'current')
 
-    expect(sim.startRestoreDrill('cluster', 2)).toBe(false)
+    const started = sim.startPointInTimeRestore(sim.state.t - targetTime)
     const restore = sim.state.disasterRecovery.restore
-    expect(restore.targetLsn).toBeGreaterThan(sim.state.highAvailability.timeline.forkLsn)
-    expect(restore.failureReason).toMatch(
-      /timeline mismatch.*divergent tail.*recovery_target_timeline=current/i,
+    expect(started, restore.failureReason).toBe(true)
+    expect(restore.status).toBe('fetching')
+    expect(restore.targetLsn).toBeGreaterThan(timeline.forkLsn)
+    expect(restore.targetTimeline).toBe(1)
+    expect(restore.crossesTimelineFork).toBe(false)
+    expect(restore.followedHistoryFile).toBe(false)
+    expect(restore.failureReason).toBe('')
+    advanceUntil(sim, () => restore.status === 'complete' || restore.status === 'failed')
+
+    expect(restore.status).toBe('complete')
+    expect(restore.walBytesReplayed).toBe(restore.walBytesRequired)
+    expect(restore.resultMessage).toMatch(
+      /complete on timeline 1.*recovery_target_timeline=current.*reached recovery_target_time/i,
     )
-    expect(restore.failureReason).not.toMatch(/archive_timeout|unarchived tail/i)
   })
 
-  it('fails for a timeline reason when recovery_target_timeline cannot cross the fork', () => {
+  it('replays the parent archive before current reports a post-fork target was not reached', () => {
     const sim = createSim(createBus(), { scheduledBackups: false })
     sim.setKnob('tps', 2_000)
     sim.setKnob('writeRatio', 1)
@@ -536,13 +558,23 @@ describe('disaster recovery', () => {
     )
     sim.setKnob('recoveryTargetTimeline', 'current')
 
-    expect(sim.startPointInTimeRestore(2)).toBe(false)
+    expect(sim.startPointInTimeRestore(2)).toBe(true)
     const restore = sim.state.disasterRecovery.restore
+    const backup = sim.state.disasterRecovery.backups[0]
+    const parentFrontier = sim.state.disasterRecovery.archive.parentArchivedThroughLsn
+    expect(restore.status).toBe('fetching')
+    expect(restore.targetTimeline).toBe(1)
+    expect(restore.crossesTimelineFork).toBe(false)
+    expect(restore.followedHistoryFile).toBe(false)
+    expect(restore.failureReason).toBe('')
+    advanceUntil(sim, () => restore.status === 'complete' || restore.status === 'failed')
+
     expect(restore.status).toBe('failed')
+    expect(restore.walBytesReplayed).toBe(Math.max(0, parentFrontier - backup.startLsn))
     expect(restore.failureReason).toMatch(
-      /timeline mismatch.*recovery_target_timeline=current.*timeline 1.*timeline 2/i,
+      /recovery target not reached.*recovery_target_timeline=current.*timeline 1.*replayed.*through 0\/[0-9A-F]+/i,
     )
-    expect(restore.failureReason).not.toMatch(/archive frontier|unarchived tail/i)
+    expect(restore.failureReason).not.toMatch(/timeline mismatch|before fetching/i)
   })
 
   it('requires the archived history file before latest can cross the fork', () => {

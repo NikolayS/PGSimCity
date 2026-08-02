@@ -843,7 +843,7 @@ export interface PointInTimeRestore {
   crossesTimelineFork: boolean
   historyFileName: string
   followedHistoryFile: boolean
-  /** Parent-timeline replay is capped here; its divergent tail is excluded. */
+  /** Parent replay end; latest caps at the fork, while current may use its archived tail. */
   parentReplayEndLsn: number
   backupId: number
   backupAgeSec: number
@@ -910,7 +910,7 @@ export interface ArchiveRecoveryState {
   timeline: number
   /** The one modeled parent timeline, or zero before promotion. */
   parentTimeline: number
-  /** Retained parent WAL may extend beyond the fork, but restore caps it there. */
+  /** Retained parent WAL may extend beyond the fork for current-timeline recovery. */
   parentArchivedThroughLsn: number
   parentArchivedThroughTime: number
   historyFileName: string

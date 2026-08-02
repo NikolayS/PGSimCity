@@ -554,9 +554,12 @@ const RESPONSE_CONTRACTS = {
         () => sim.state.disasterRecovery.archive.archivedThroughTime >= sim.state.t - 2,
       )
       sim.setKnob('recoveryTargetTimeline', value)
-      return sim.startPointInTimeRestore(2)
-        ? sim.state.disasterRecovery.restore.status
-        : sim.state.disasterRecovery.restore.failureReason
+      if (!sim.startPointInTimeRestore(2)) {
+        return sim.state.disasterRecovery.restore.failureReason
+      }
+      const restore = sim.state.disasterRecovery.restore
+      advanceUntil(sim, () => restore.status === 'complete' || restore.status === 'failed')
+      return restore.failureReason || restore.resultMessage
     },
   },
   restoreDrillFault: {

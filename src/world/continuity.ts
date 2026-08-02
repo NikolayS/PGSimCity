@@ -368,7 +368,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   )
   plate(
     TIMELINE_RECOVERY_PLATE_LABEL,
-    yardMidX, 2.5, Y.z + 15.5, 0, 1.15, COLOR.inkDim, 0.62,
+    yardMidX, 2.5, Y.z + 15.5, 0, 1.35, COLOR.inkDim, 0.62,
   )
 
   /* ---------------------------------------------------------------------

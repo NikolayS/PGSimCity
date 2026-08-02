@@ -741,7 +741,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Crossing the one modeled fork',
-        body: `${CLAIM_VALUES.timelineRecovery.crossingDisclosure} A missing history file or recovery_target_timeline=current produces a timeline-named FAIL before a healthy archive is blamed. ${CLAIM_VALUES.timelineRecovery.coverageDisclosure}`,
+        body: `${CLAIM_VALUES.timelineRecovery.crossingDisclosure} A missing history file blocks latest from crossing the fork. current does not seek that file: it replays the base backup’s timeline to the target when that timeline’s archived WAL contains it, or to the archived frontier before reporting that the target was not reached. ${CLAIM_VALUES.timelineRecovery.coverageDisclosure}`,
       },
       {
         heading: 'Three drills, three claims',
@@ -856,6 +856,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         get: (s) => {
           const restore = s.disasterRecovery.restore
           const divergentTailResult = restore.resultMessage.length > 0
+            && restore.recoveryTargetTimeline === 'latest'
             && restore.targetTime <= s.highAvailability.timeline.forkedAt
             && restore.targetLsn > s.highAvailability.timeline.forkLsn
           if (divergentTailResult) {

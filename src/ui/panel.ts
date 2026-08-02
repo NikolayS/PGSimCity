@@ -761,6 +761,13 @@ export function createInspector(ctx: UiContext): UiModule {
     if (id === 'backend.localmem') wrap.dataset.disclosure = 'work-mem-model-scope'
     if (id === 'timeline.yard' || id === 'recovery.ground' || id === 'recovery.clock') {
       wrap.dataset.disclosure = 'one-fork-timeline-recovery-scope'
+      wrap.append(
+        el('p', {
+          class: 'pgc-block pg-hint',
+          data: { disclosure: 'one-fork-timeline-recovery-visible-scope' },
+          text: CLAIM_VALUES.timelineRecovery.coverageDisclosure,
+        }),
+      )
     }
 
     /* metrics first — the numbers are the reason this feels alive */

@@ -399,10 +399,22 @@ describe('claims and conventions spine', () => {
       TIMELINE_RECOVERY_PLATE_LABEL,
       timeline.plate,
     )
+    expect(
+      TIMELINE_RECOVERY_PLATE_LABEL,
+      'timelineRecovery: the plate qualifies backup usability only in collapsed prose',
+    ).toMatch(/one-fork model.*pre-fork backup stays usable/i)
 
     const control = KNOB_META.find((knob) => knob.key === 'recoveryTargetTimeline')
     expect(control?.options?.map((option) => option.value)).toEqual(['latest', 'current'])
     expect(control?.hint).toContain(timeline.historyFile)
+    expect(
+      control?.hint,
+      'timelineRecovery: the control hint omits the scope of the behavior it presents',
+    ).toContain(timeline.coverageDisclosure)
+    expect(timeline.defaultDisclosure).toMatch(
+      /current.*base backup.*archived WAL.*reaches the target/i,
+    )
+    expect(timeline.defaultDisclosure).not.toMatch(/timeline mismatch|preflight/i)
 
     for (const id of ['timeline.yard', 'recovery.ground', 'recovery.clock']) {
       const copy = storageDocCopy(id)
@@ -410,6 +422,9 @@ describe('claims and conventions spine', () => {
         timeline.crossingDisclosure,
       )
       expect(copy, `${id} omits one-fork coverage`).toContain(timeline.coverageDisclosure)
+      expect(copy, `${id} still teaches the false current preflight rejection`).not.toMatch(
+        /current produces a timeline-named FAIL before|timeline mismatch.*current/i,
+      )
     }
 
     installTestDom()
@@ -440,6 +455,12 @@ describe('claims and conventions spine', () => {
         '[data-disclosure="one-fork-timeline-recovery-scope"]',
       )
       expect(panel).not.toBeNull()
+      const visibleScope = panel?.querySelector(
+        '[data-disclosure="one-fork-timeline-recovery-visible-scope"]',
+      )
+      expect(visibleScope?.textContent).toBe(timeline.coverageDisclosure)
+      expect(visibleScope?.closest('details')).toBeNull()
+      expect(panel?.childNodes[0]).toBe(visibleScope)
       expect(panel?.querySelector('[data-correction-path="true"]')).not.toBeNull()
     } finally {
       inspector.dispose()
