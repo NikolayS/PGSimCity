@@ -214,6 +214,21 @@ silently replace another worktree's version of a file.
 agent that wrote the code, and not only the orchestrator who specified it — a
 team of veteran reviewers with distinct lenses, run across models.
 
+**"Has read it" means the panel has *reported*, not been *dispatched*.** v0.36.0
+was tagged and deployed while its panel was still running, because the
+orchestrator was racing a time window. The panel then returned two blocking
+defects that were by then live: a catalog query teaching index key order as table
+column order, and a colour-contrast floor broken at night by a change whose test
+only measured day. Dispatching a review and shipping before it lands is not
+review — it is review theatre with a worse audit trail, because the findings
+arrive as regressions instead of as gates.
+
+If a deadline and the panel conflict, **ship less**. Cutting a feature from a
+release is cheap and reversible; shipping a falsehood about PostgreSQL to readers
+who trust the city as their mental model is neither. When a feature is held back,
+record *why* in the revert message and in `CHANGELOG.md` — a bare
+auto-generated revert erases the most useful thing the cycle produced.
+
 Why this rule exists: twenty-one releases shipped in a single session, most of
 them written by one agent to another's specification, with no independent expert
 ever reading the result. The orchestrator's own PostgreSQL terminology was
