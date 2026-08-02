@@ -156,6 +156,8 @@ export interface FidelitySettings {
   /** Fraction of the drawing buffer used by the planar water pass. */
   reflectionScale: number
   ambientOcclusion: boolean
+  /** Strength of the fused depth/height aerial perspective. */
+  aerialPerspective: number
   /** Fraction of the device framebuffer used by GTAO's normal/depth buffers. */
   aoScale: number
   aoSamples: number
@@ -165,14 +167,15 @@ export interface FidelitySettings {
 }
 
 /**
- * Fidelity is a separate ladder so the low/reduced rendering paths stay
- * byte-for-byte free of extra per-frame work.
+ * Fidelity is a separate ladder so low/reduced skip every optional texture
+ * sample and scene pass added here.
  */
 export const FIDELITY_PRESETS: Record<QualityLevel, FidelitySettings> = {
   low: {
     environment: false,
     reflectionScale: waterReflectionScale('low'),
     ambientOcclusion: false,
+    aerialPerspective: 0,
     aoScale: 0,
     aoSamples: 0,
     aoDenoiseSamples: 0,
@@ -183,6 +186,7 @@ export const FIDELITY_PRESETS: Record<QualityLevel, FidelitySettings> = {
     environment: false,
     reflectionScale: waterReflectionScale('reduced'),
     ambientOcclusion: false,
+    aerialPerspective: 0,
     aoScale: 0,
     aoSamples: 0,
     aoDenoiseSamples: 0,
@@ -193,6 +197,7 @@ export const FIDELITY_PRESETS: Record<QualityLevel, FidelitySettings> = {
     environment: true,
     reflectionScale: waterReflectionScale('medium'),
     ambientOcclusion: true,
+    aerialPerspective: 0.55,
     aoScale: 0.25,
     aoSamples: 3,
     aoDenoiseSamples: 4,
@@ -203,6 +208,7 @@ export const FIDELITY_PRESETS: Record<QualityLevel, FidelitySettings> = {
     environment: true,
     reflectionScale: waterReflectionScale('high'),
     ambientOcclusion: true,
+    aerialPerspective: 0.82,
     aoScale: 0.35,
     aoSamples: 4,
     aoDenoiseSamples: 6,
@@ -213,6 +219,7 @@ export const FIDELITY_PRESETS: Record<QualityLevel, FidelitySettings> = {
     environment: true,
     reflectionScale: waterReflectionScale('ultra'),
     ambientOcclusion: true,
+    aerialPerspective: 1,
     aoScale: 0.5,
     aoSamples: 6,
     aoDenoiseSamples: 8,
@@ -241,6 +248,12 @@ function toneMappingFor(a: Atmosphere): THREE.ToneMapping {
 /* Module-scope scratch — nothing is allocated inside render(). */
 const _size = new THREE.Vector2()
 const AO_SCENE_BOX = new THREE.Box3(new THREE.Vector3(-540, -90, -430), new THREE.Vector3(540, 150, 430))
+
+/** Existing GTAO samples, weighted for grounding without flattening night neon. */
+export const AO_BLEND_INTENSITY = {
+  night: 0.34,
+  day: 0.9,
+} as const
 
 /**
  * The beauty pass already rasterises every opaque mesh and writes depth.
@@ -609,7 +622,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     composer.addPass(smaaPass)
 
     // Day grade, tone mapping and colour conversion happen here, exactly once.
-    outputPass = new GoldenHourOutputPass()
+    outputPass = new GoldenHourOutputPass(camera, gtaoPass)
     composer.addPass(outputPass)
 
     applyPassToggles()
@@ -625,7 +638,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
       gtaoPass.enabled = fidelity.ambientOcclusion
       // AO is a solidity cue, not a new night-time black channel. Keeping the
       // night blend restrained preserves neon value and its bloom threshold.
-      gtaoPass.blendIntensity = air.daylight ? 0.78 : 0.34
+      gtaoPass.blendIntensity = air.daylight ? AO_BLEND_INTENSITY.day : AO_BLEND_INTENSITY.night
       if (fidelity.ambientOcclusion) {
         gtaoPass.updateGtaoMaterial({ samples: fidelity.aoSamples })
         gtaoPass.updatePdMaterial({ samples: fidelity.aoDenoiseSamples })
@@ -646,7 +659,15 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
       bloomPass.threshold = air.bloomThreshold
     }
     if (smaaPass) smaaPass.enabled = wantsSmaa(quality.level)
-    outputPass?.setDaylight(air.daylight)
+    if (outputPass) {
+      outputPass.setDaylight(air.daylight)
+      outputPass.setAerialPerspective(
+        air.fogColor,
+        air.heightFogDensity,
+        air.heightFogFalloff,
+        fidelity.aerialPerspective,
+      )
+    }
   }
 
   /**
