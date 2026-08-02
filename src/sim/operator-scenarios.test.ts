@@ -118,6 +118,13 @@ describe('operator scenario: an old transaction pins xmin', () => {
     terminate.update(step)
     expect(terminate.state.xminHorizon).toBeGreaterThan(terminatePinnedXmin)
     expect(terminate.state.oldestSnapshotAge).toBeLessThanOrEqual(2)
+    advanceUntil(
+      terminate,
+      () => terminate.state.scenarioDecision?.phase === 'recovered',
+      900,
+      step,
+    )
+    expect(killed.deadTuplesReclaimed).toBeGreaterThan(0)
 
     const wait = createAggregateSim(step)
     wait.runScenario('vacuum-blockade')
@@ -130,6 +137,7 @@ describe('operator scenario: an old transaction pins xmin', () => {
     expect(waited.correct).toBe(false)
     expect(waited.deadTuplesAdded).toBeGreaterThan(0)
     expect(waited.pagesAdded).toBeGreaterThan(0)
+    expect(waited.deadTuplesReclaimed).toBe(0)
     expect(waited.blockedVacuumWorkers).toBe(3)
     expect(wait.state.knobs.longRunningXact).toBe(true)
     const waitPinnedXmin = wait.state.xminHorizon
@@ -141,7 +149,15 @@ describe('operator scenario: an old transaction pins xmin', () => {
     wait.update(step)
     expect(wait.state.xminHorizon).toBeGreaterThan(waitPinnedXmin)
     expect(wait.state.oldestSnapshotAge).toBeLessThanOrEqual(2)
+    advanceUntil(
+      wait,
+      () => wait.state.scenarioDecision?.phase === 'recovered',
+      900,
+      step,
+    )
+    expect(waited.deadTuplesReclaimed).toBeGreaterThan(0)
     expect(waited.deadTuplesAdded).toBeGreaterThan(killed.deadTuplesAdded)
+    expect(waited.pagesAdded).toBeGreaterThan(killed.pagesAdded)
   })
 })
 

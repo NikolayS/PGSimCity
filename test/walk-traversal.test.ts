@@ -258,7 +258,7 @@ describe('real-city first-person traversal', () => {
     expect(result.minFeetY).toBeGreaterThan(-0.1)
     expect(result.steps.at(-1)?.grounded).toBe(true)
   // The fixed slow-frame route is the contract; host speed is not.
-  }, 0)
+  }, 60_000)
 
   it.each(DISTRICT_BOUNDARIES)('$id traverses both sides', (route) => {
     const result = city.run(route)

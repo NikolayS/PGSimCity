@@ -4,13 +4,19 @@ export const INDEX_WALK_CLAIM = claim
 
 const CATALOG_SQL = `SELECT
   c.relname AS index_name,
-  a.attname AS indexed_column
+  k.position::integer AS position,
+  CASE
+    WHEN k.position <= i.indnkeyatts THEN 'key'
+    ELSE 'include'
+  END AS column_role,
+  pg_catalog.pg_get_indexdef(i.indexrelid, k.position::integer, true) AS index_element
 FROM pg_catalog.pg_index AS i
 JOIN pg_catalog.pg_class AS c ON c.oid = i.indexrelid
-JOIN pg_catalog.pg_attribute AS a
-  ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+CROSS JOIN LATERAL
+  unnest(i.indkey) WITH ORDINALITY AS k(attnum, position)
 WHERE i.indrelid = 'accounts'::regclass
-ORDER BY c.relname, a.attnum;`
+  AND i.indisvalid
+ORDER BY c.relname, k.position;`
 
 export const INDEX_WALK_STEPS = Object.freeze([
   Object.freeze({
@@ -25,7 +31,7 @@ export const INDEX_WALK_STEPS = Object.freeze([
     id: 'catalog',
     number: '02',
     title: 'Ask the catalogs',
-    displaySql: 'pg_class + pg_attribute + pg_index',
+    displaySql: 'pg_index + pg_get_indexdef',
     sql: CATALOG_SQL,
     lesson: 'The catalogs report which indexed path exists before a lookup runs.',
   }),
@@ -94,8 +100,11 @@ export function createIndexWalkEvidence(stepId, report) {
   const { sharedHits, sharedReads } = measuredBlocks(report)
 
   if (stepId === 'catalog') {
-    const index = String(rows[0]?.index_name ?? '')
-    const column = String(rows[0]?.indexed_column ?? '')
+    const primaryKey = rows.find((row) => row.index_name === 'accounts_pkey')
+    const index = String(primaryKey?.index_name ?? '')
+    const column = String(primaryKey?.index_element ?? '')
+    const role = String(primaryKey?.column_role ?? '')
+    const position = Number(primaryKey?.position) || 0
     return Object.freeze({
       source: 'postgres',
       stepId,
@@ -106,7 +115,7 @@ export function createIndexWalkEvidence(stepId, report) {
       sharedHits,
       sharedReads,
       summary:
-        `${index || 'no index row'} · column ${column || 'unknown'}`
+        `${index || 'no valid primary-key row'} · ${role || 'unknown role'} ${position || '?'}: ${column || 'unknown'}`
         + ` · ${rows.length} catalog ${rows.length === 1 ? 'row' : 'rows'}`,
     })
   }
