@@ -2687,7 +2687,11 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       if (s.id < curSeg) {
         s.bytes = WAL_SEG
         s.fill = 1
-        if (s.id < archiveNextSeg) s.state = 'archived'
+        if (segmentTimeline === dr.archive.parentTimeline) {
+          s.state = (s.id + 1) * WAL_SEG <= dr.archive.parentArchivedThroughLsn
+            ? 'archived'
+            : 'streamed'
+        } else if (s.id < archiveNextSeg) s.state = 'archived'
         else if (s.id === archiveInFlight) s.state = 'archiving'
         else s.state = 'full'
       } else if (s.id === curSeg) {
@@ -3065,6 +3069,15 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   }
 
   function archiveGapReason(timeline: number): string {
+    if (timeline === dr.archive.parentTimeline) {
+      if (!K.walGArchiveCredentialsValid) {
+        return `Archive fault and parent gap: wal-g wal-push credentials are invalid, and timeline ${timeline} ends before the fork in object storage. The promoted standby used archive_mode=on while it was in recovery and will not archive the missing timeline-${timeline} segments it received by streaming; repairing timeline ${dr.archive.timeline}'s archiver cannot recreate this parent gap`
+      }
+      if (!archiverOn()) {
+        return `Archive fault: wal_level=minimal left timeline ${timeline} short of the fork in object storage before promotion. The promoted standby cannot recreate that missing parent chain from timeline ${dr.archive.timeline}`
+      }
+      return `Archive gap: timeline ${timeline} ends before the fork in object storage. The promoted standby used archive_mode=on while it was in recovery, so it will not archive the complete timeline-${timeline} segments it received by streaming; archive_timeout on timeline ${dr.archive.timeline} cannot repair this lost parent chain`
+    }
     if (!K.walGArchiveCredentialsValid) {
       return `Archive fault: wal-g wal-push credentials are invalid, so completed WAL on timeline ${timeline} cannot reach the selected target; repair the credentials and wait for the .ready queue to drain`
     }
@@ -3077,6 +3090,16 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     return `The selected target is inside timeline ${timeline}'s healthy unarchived tail: the .ready queue is empty, credentials are valid, and wal-g wal-push has no current work. PostgreSQL archives a 16 MiB WAL segment only after it closes; this is the archive-only RPO floor. archive_timeout can shorten the tail at the cost of padded segments`
   }
 
+  function historyFileGapReason(): string {
+    if (!K.walGArchiveCredentialsValid) {
+      return `Archive fault: wal-g wal-push credentials are invalid, so ${dr.archive.historyFileName} is not archived and recovery_target_timeline=latest cannot follow timeline ${ha.timeline.parent} into timeline ${ha.timeline.current}`
+    }
+    if (!archiverOn()) {
+      return `Archive fault: wal_level=minimal disables this modeled archive-recovery chain, so ${dr.archive.historyFileName} is not archived and recovery_target_timeline=latest cannot follow timeline ${ha.timeline.parent} into timeline ${ha.timeline.current}`
+    }
+    return `Timeline fault: recovery_target_timeline=latest requires ${dr.archive.historyFileName} to follow timeline ${ha.timeline.parent} at ${fmtLsn(ha.timeline.forkLsn)} into timeline ${ha.timeline.current}, but that history file is not archived`
+  }
+
   function failRestore(reason: string): false {
     dr.restore.status = 'failed'
     dr.restore.failureReason = reason
@@ -3085,11 +3108,22 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     return false
   }
 
-  function restoreTargetTimeline(targetTime: number): number {
-    if (ha.timeline.forkLsn <= 0 || targetTime < ha.timeline.forkedAt) {
-      return ha.timeline.parent > 0 ? ha.timeline.parent : ha.timeline.current
+  function isDivergentTailTarget(targetTime: number, targetLsn: number): boolean {
+    return ha.timeline.forkLsn > 0
+      && targetTime <= ha.timeline.forkedAt
+      && targetLsn > ha.timeline.forkLsn
+  }
+
+  function restoreTargetTimeline(targetTime: number, targetLsn: number): number {
+    if (ha.timeline.forkLsn <= 0) return ha.timeline.current
+    if (targetTime > ha.timeline.forkedAt) return ha.timeline.current
+    if (
+      K.recoveryTargetTimeline === 'latest'
+      && isDivergentTailTarget(targetTime, targetLsn)
+    ) {
+      return ha.timeline.current
     }
-    return ha.timeline.current
+    return ha.timeline.parent > 0 ? ha.timeline.parent : ha.timeline.current
   }
 
   function archivedThroughForTimeline(timeline: number): number {
@@ -3102,9 +3136,13 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     const restore = dr.restore
     restore.status = 'complete'
     restore.progress = 1
-    restore.resultMessage = restore.crossesTimelineFork
-      ? `PITR complete: recovery_target_timeline=${restore.recoveryTargetTimeline} followed ${restore.historyFileName} from timeline ${restore.backupTimeline} at ${fmtLsn(restore.parentReplayEndLsn)} to timeline ${restore.targetTimeline} and reached recovery_target_time`
-      : `PITR complete on timeline ${restore.targetTimeline}: recovery_target_timeline=${restore.recoveryTargetTimeline} reached recovery_target_time without crossing a fork`
+    if (isDivergentTailTarget(restore.targetTime, restore.targetLsn)) {
+      restore.resultMessage = `PITR complete: the selected target was inside timeline ${ha.timeline.parent}'s divergent tail. recovery_target_timeline=latest followed ${restore.historyFileName}, stopped at the fork ${fmtLsn(ha.timeline.forkLsn)} on timeline ${restore.targetTimeline}, and reports the failover loss: ${ha.transition.lossBytes} bytes and ${ha.transition.lossTransactions} committed write transactions are absent`
+    } else {
+      restore.resultMessage = restore.crossesTimelineFork
+        ? `PITR complete: recovery_target_timeline=${restore.recoveryTargetTimeline} followed ${restore.historyFileName} from timeline ${restore.backupTimeline} at ${fmtLsn(restore.parentReplayEndLsn)} to timeline ${restore.targetTimeline} and reached recovery_target_time`
+        : `PITR complete on timeline ${restore.targetTimeline}: recovery_target_timeline=${restore.recoveryTargetTimeline} reached recovery_target_time without crossing a fork`
+    }
     toast(restore.resultMessage, 'good', 7500)
   }
 
@@ -3141,29 +3179,26 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
     const targetLsn = lsnAtTime(targetTime)
     const restore = dr.restore
+    const divergentTailTarget = isDivergentTailTarget(targetTime, targetLsn)
     restore.targetLsn = targetLsn
     restore.backupTimeline = selected.startTimeline
-    restore.targetTimeline = restoreTargetTimeline(targetTime)
+    restore.targetTimeline = restoreTargetTimeline(targetTime, targetLsn)
     restore.crossesTimelineFork = restore.backupTimeline !== restore.targetTimeline
     restore.backupId = selected.id
     restore.backupAgeSec = Math.max(0, targetTime - selected.completedAt)
     restore.backupBytesRequired = selected.dataBytes
-    restore.walBytesRequired = Math.max(0, targetLsn - selected.startLsn)
-    if (ha.timeline.current > 2) {
+    const replayEndLsn = divergentTailTarget
+      && restore.recoveryTargetTimeline === 'latest'
+      ? ha.timeline.forkLsn
+      : targetLsn
+    restore.walBytesRequired = Math.max(0, replayEndLsn - selected.startLsn)
+    if (divergentTailTarget && restore.recoveryTargetTimeline === 'current') {
+      restore.parentReplayEndLsn = ha.timeline.forkLsn
       return failRestore(
-        'Timeline model limit: PGSimCity models one fork only (timeline 1 to timeline 2); restore decisions across later or multiple forks are absent',
+        `Timeline mismatch: the selected target is inside timeline ${ha.timeline.parent}'s divergent tail after fork ${fmtLsn(ha.timeline.forkLsn)}, but recovery_target_timeline=current cannot follow ${dr.archive.historyFileName} into timeline ${ha.timeline.current}; those discarded transactions are absent from the surviving history`,
       )
     }
     if (restore.crossesTimelineFork) {
-      const isModeledFork = restore.backupTimeline === ha.timeline.parent
-        && restore.targetTimeline === ha.timeline.current
-        && ha.timeline.parent === 1
-        && ha.timeline.current === 2
-      if (!isModeledFork) {
-        return failRestore(
-          'Timeline model limit: the selected restore would require a timeline tree beyond the one modeled timeline-1-to-timeline-2 fork',
-        )
-      }
       restore.historyFileName = dr.archive.historyFileName
       restore.parentReplayEndLsn = ha.timeline.forkLsn
       if (restore.recoveryTargetTimeline === 'current') {
@@ -3172,9 +3207,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         )
       }
       if (!dr.archive.historyFileArchived) {
-        return failRestore(
-          `Timeline fault: recovery_target_timeline=latest requires ${dr.archive.historyFileName} to follow timeline ${restore.backupTimeline} at ${fmtLsn(ha.timeline.forkLsn)} into timeline ${restore.targetTimeline}, but that history file is not archived`,
-        )
+        return failRestore(historyFileGapReason())
       }
       restore.followedHistoryFile = true
       const parentAvailableEnd = Math.min(
@@ -3182,7 +3215,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         archivedThroughForTimeline(restore.backupTimeline),
       )
       const targetAvailableEnd = Math.min(
-        targetLsn,
+        replayEndLsn,
         archivedThroughForTimeline(restore.targetTimeline),
       )
       restore.walBytesAvailable = Math.min(
@@ -4844,8 +4877,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
   function resetActiveWalAt(lsn: number): void {
     const parentArchiveTimeline = dr.archive.timeline
-    const parentArchivedThroughLsn = Math.max(dr.archive.archivedThroughLsn, lsn)
-    const parentArchivedThroughTime = Math.max(dr.archive.archivedThroughTime, state.t)
+    const parentArchivedThroughLsn = dr.archive.archivedThroughLsn
+    const parentArchivedThroughTime = dr.archive.archivedThroughTime
     wal.insertLsn = lsn
     wal.writeLsn = lsn
     wal.flushLsn = lsn
@@ -4879,10 +4912,13 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         : segment.id === seg0
           ? segment.bytes / WAL_SEG
           : 0
-      segment.state =
-        segment.id < seg0 ? 'archived'
-        : segment.id === seg0 ? 'current'
-        : 'recycled'
+      segment.state = segment.id < seg0
+        ? (segment.id + 1) * WAL_SEG <= parentArchivedThroughLsn
+          ? 'archived'
+          : 'streamed'
+        : segment.id === seg0
+          ? 'current'
+          : 'recycled'
     }
     archiveNextSeg = seg0
     archiveInFlight = -1
@@ -4900,7 +4936,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     dr.archive.parentArchivedThroughTime = parentArchivedThroughTime
     dr.archive.timeline = ha.timeline.current
     dr.archive.archivedThroughLsn = lsn
-    dr.archive.archivedThroughTime = state.t
+    dr.archive.archivedThroughTime = parentArchivedThroughTime
     dr.archive.historyFileName = CLAIM_VALUES.timelineRecovery.historyFile
     dr.archive.historyFileArchived = archiverOn() && K.walGArchiveCredentialsValid
 

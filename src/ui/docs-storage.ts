@@ -757,7 +757,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Cost and cadence are policy',
-        body: `The restore-to-target clock starts before \`backup-fetch\` and stops when WAL replay reaches the selected target. This is not RTO: promotion, \`recovery_target_action\`, endpoint cutover, client reconnection, and service restoration are outside it. The drill continues while validation reads local restored bytes. Object-store reads and recovery-host I/O are counted; this off-site ground never reads from the primary. ${CLAIM_VALUES.restoreDrill.physicalScopeDisclosure} ${CLAIM_VALUES.restoreDrill.cadenceDisclosure}`,
+        body: `The restore replay clock starts before \`backup-fetch\` and stops at the modeled recovery stop. Normally that is the selected target. Under \`latest\`, a selected time inside the discarded timeline-1 tail lands at the fork on timeline 2 and reports the missing transactions instead. This is not RTO: promotion, \`recovery_target_action\`, endpoint cutover, client reconnection, and service restoration are outside it. The drill continues while validation reads local restored bytes. Object-store reads and recovery-host I/O are counted; this off-site ground never reads from the primary. ${CLAIM_VALUES.restoreDrill.physicalScopeDisclosure} ${CLAIM_VALUES.restoreDrill.cadenceDisclosure}`,
       },
       {
         heading: 'Replication is not this',
@@ -778,7 +778,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
           : CLAIM_VALUES.restoreDrill.levels[s.disasterRecovery.drill.level].label,
       },
       {
-        label: 'Restore-to-target',
+        label: 'Restore replay time',
         get: (s) => s.disasterRecovery.drill.measuredRestoreToTargetSec > 0
           ? `${fmtDuration(s.disasterRecovery.drill.measuredRestoreToTargetSec)} measured`
           : s.disasterRecovery.drill.status === 'restoring'
@@ -805,7 +805,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     see: ['backup.vault', 'recovery.clock', 'restore.winch', 'recovery.replay'],
     refs: {
       docs: [
-        manual('continuous-archiving.html', '25.3.4 Recovering Using a Continuous Archive Backup'),
+        manual('continuous-archiving.html', '25.3.5 Recovering Using a Continuous Archive Backup'),
         manual('app-pgverifybackup.html', 'pg_verifybackup — backup-manifest verification'),
         manual('app-pgrestore.html', 'pg_restore — selective logical-archive restore'),
         { label: 'WAL-G 3.0.8 backup-fetch, wal-fetch, wal-verify and backup-push', url: 'https://wal-g.readthedocs.io/PostgreSQL/' },
@@ -828,8 +828,8 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         body: 'Set the target to a number of seconds before now, then start the restore. The model chooses the newest retained full backup that completed before that target and computes the WAL distance from the backup’s **start LSN** to the target LSN. That includes WAL written during the copy, which is what makes the files consistent. In production use PostgreSQL 18’s timestamp including its time-zone offset, and investigate the destructive transaction carefully: finding the right instant is often harder than running the restore.',
       },
       {
-        heading: 'Two actionable failures',
-        body: 'A target before the oldest retained full backup has two modeled causes. If older backups expired, a larger future `wal-g delete retain FULL` count can preserve a wider window; if no backup was ever taken early enough, changing retention cannot create that missing history. A target newer than the archive frontier also has two causes. With a healthy empty queue and valid credentials, it is inside the current unarchived 16 MiB segment: that normal tail is the archive-only RPO floor, and `archive_timeout` shortens it at the cost of padded segments. Invalid credentials or a disabled archive-recovery chain are actual archive faults that need repair and `.ready`-queue drainage. A streaming replica fixes neither case.',
+        heading: 'Three distinct gaps',
+        body: 'A target before the oldest retained full backup has two modeled causes. If older backups expired, a larger future `wal-g delete retain FULL` count can preserve a wider window; if no backup was ever taken early enough, changing retention cannot create that missing history. A target newer than the live archive frontier also has two causes. With a healthy empty queue and valid credentials, it is inside the current unarchived 16 MiB segment: that normal tail is the archive-only RPO floor, and `archive_timeout` shortens it at the cost of padded segments. Invalid credentials or a disabled archive-recovery chain are actual archive faults that need repair and `.ready`-queue drainage. After failover, a timeline-1 frontier short of the fork is different again: this archive_mode=on standby did not archive complete timeline-1 segments received during recovery, and no timeline-2 archive setting can recreate that parent gap. A streaming replica fixes none of these archive gaps.',
       },
       {
         heading: 'Choosing the history',
@@ -837,7 +837,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Where this restore stops',
-        body: 'When replay reaches the target, the belt stops. PostgreSQL could pause, shut down, or promote according to recovery settings and operator procedure, but promotion would fork a timeline and is a separate HA action. The city records `promoted = false` for this restore and does not move the service endpoint.',
+        body: 'Normally the belt stops when replay reaches the target. If `latest` encounters a selected time inside the discarded timeline-1 tail, recovery follows the history file, lands at the fork on timeline 2, and reports the transactions that are absent instead of inventing a failure or replaying discarded WAL. PostgreSQL could then pause, shut down, or promote according to recovery settings and operator procedure, but promotion would fork another timeline and is a separate HA action. The city records `promoted = false` for this restore and does not move the service endpoint.',
       },
     ],
     metrics: [
@@ -851,7 +851,19 @@ export const DOCS_STORAGE: ComponentDoc[] = [
           : 'not selected',
       },
       { label: 'Progress', get: (s) => fmtPct(s.disasterRecovery.restore.progress) },
-      { label: 'Result', get: (s) => s.disasterRecovery.restore.failureReason || s.disasterRecovery.restore.resultMessage || s.disasterRecovery.restore.status },
+      {
+        label: 'Result',
+        get: (s) => {
+          const restore = s.disasterRecovery.restore
+          const divergentTailResult = restore.resultMessage.length > 0
+            && restore.targetTime <= s.highAvailability.timeline.forkedAt
+            && restore.targetLsn > s.highAvailability.timeline.forkLsn
+          if (divergentTailResult) {
+            return `complete at fork · ${fmtNum(s.highAvailability.transition.lossBytes)} bytes · ${fmtNum(s.highAvailability.transition.lossTransactions)} tx absent`
+          }
+          return restore.failureReason || restore.resultMessage || restore.status
+        },
+      },
     ],
     knobs: ['recoveryTargetAge', 'recoveryTargetTimeline'],
     actions: ['start-pitr'],
@@ -890,22 +902,33 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         get: (s) => {
           const backup = s.disasterRecovery.backups.find((item) => item.id === s.disasterRecovery.restore.backupId)
           if (!backup || s.disasterRecovery.restore.targetLsn <= 0) return '0'
+          const replayEndLsn = backup.startLsn + s.disasterRecovery.restore.walBytesRequired
           return fmtNum(Math.max(
             0,
-            Math.floor(s.disasterRecovery.restore.targetLsn / s.wal.segmentSize)
+            Math.floor(replayEndLsn / s.wal.segmentSize)
               - Math.floor(backup.startLsn / s.wal.segmentSize)
               + 1,
           ))
         },
-        hint: 'segment-object GETs from backup start through target; retries, metadata and base-backup objects add more requests',
+        hint: 'segment-object GETs from backup start through the actual replay end; retries, metadata and base-backup objects add more requests',
       },
-      { label: 'Archive frontier', get: (s) => fmtLsn(s.disasterRecovery.archive.archivedThroughLsn) },
+      {
+        label: 'Live-timeline frontier',
+        get: (s) => `timeline ${s.disasterRecovery.archive.timeline} · ${fmtLsn(s.disasterRecovery.archive.archivedThroughLsn)}`,
+      },
+      {
+        label: 'Parent frontier',
+        get: (s) => s.disasterRecovery.archive.parentTimeline > 0
+          ? `timeline ${s.disasterRecovery.archive.parentTimeline} · ${fmtLsn(s.disasterRecovery.archive.parentArchivedThroughLsn)}`
+          : 'no fork',
+        hint: 'what object storage actually held at promotion; a shortfall to the fork remains a real recovery gap',
+      },
     ],
     knobs: ['walGDownloadConcurrency'],
     see: ['object.store', 'recovery.replay', 'recovery.clock'],
     refs: {
       docs: [
-        manual('continuous-archiving.html', '25.3.4 Recovering Using a Continuous Archive Backup'),
+        manual('continuous-archiving.html', '25.3.5 Recovering Using a Continuous Archive Backup'),
         { label: 'WAL-G 3.0.8 wal-fetch and download concurrency', url: 'https://wal-g.readthedocs.io/PostgreSQL/' },
         { label: 'pgBackRest 2.59.0 archive-get alternative', url: 'https://pgbackrest.org/user-guide.html' },
       ],
@@ -937,7 +960,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     ],
     see: ['restore.winch', 'recovery.clock', 'recovery.ground'],
     refs: {
-      docs: [manual('continuous-archiving.html', '25.3.4 Recovering Using a Continuous Archive Backup')],
+      docs: [manual('continuous-archiving.html', '25.3.5 Recovering Using a Continuous Archive Backup')],
       source: [srcFile('src/backend/access/transam/xlogrecovery.c', 'PerformWalRecovery')],
       suzuki: suzuki(10, 'Online Backup and Point-In-Time Recovery (PITR)'),
       rogov: rogov(R_WAL, 'Write-Ahead Log — recovery and checkpoint mechanics'),

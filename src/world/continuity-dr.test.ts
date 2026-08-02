@@ -5,7 +5,7 @@ import { createTheme } from '../core/theme'
 import type { ComponentDef, FlowRequest, QualitySettings, WorldContext } from '../core/types'
 import { createSim } from '../sim/model'
 import { createContinuity } from './continuity'
-import { ANCHOR, ROUTES } from './layout'
+import { ANCHOR, CONTINUITY, ROUTES } from './layout'
 
 function fakeCanvas(): HTMLCanvasElement {
   const gradient = { addColorStop: () => undefined }
@@ -315,6 +315,7 @@ describe('continuity and three-node projection', () => {
     const firstBranch = continuity.group.getObjectByName('timeline.branch.0')
     const oldTail = continuity.group.getObjectByName('timeline.old-divergent-tail')
     const forkBeacon = continuity.group.getObjectByName('timeline.fork-beacon')
+    const siloCaps = continuity.group.getObjectByName('object.store.caps') as THREE.InstancedMesh
     const syncStandbyA = continuity.group.getObjectByName('sync-standby-name.a')
     const syncStandbyB = continuity.group.getObjectByName('sync-standby-name.b')
     const syncStandbyNone = continuity.group.getObjectByName('sync-standby-name.none')
@@ -337,6 +338,8 @@ describe('continuity and three-node projection', () => {
     sim.setKnob('tps', 2_000)
     sim.setKnob('writeRatio', 1)
     sim.setKnob('standbyANetworkLag', 400)
+    sim.setKnob('walGArchiveCredentialsValid', false)
+    const parentFrontierBeforeOutage = sim.state.disasterRecovery.archive.archivedThroughLsn
     for (let i = 0; i < 1_050; i++) sim.update(1 / 30)
     expect(sim.startFailover()).toBe(true)
     for (let i = 0; i < 300; i++) {
@@ -346,12 +349,28 @@ describe('continuity and three-node projection', () => {
     }
 
     expect(sim.state.highAvailability.transition.status).toBe('complete')
+    expect(sim.state.highAvailability.timeline.forkLsn).toBeGreaterThan(parentFrontierBeforeOutage)
     expect(firstBranch?.visible).toBe(true)
     expect(oldTail?.visible).toBe(true)
     expect(syncStandbyA?.visible).toBe(false)
     expect(syncStandbyB?.visible).toBe(true)
     expect(defs.find((def) => def.id === 'timeline.yard')?.readout?.(sim.state))
       .toContain('fork')
+
+    const parentGapSegments = Math.min(
+      CONTINUITY.silo.cols,
+      Math.ceil(
+        (sim.state.highAvailability.timeline.forkLsn - parentFrontierBeforeOutage)
+          / sim.state.wal.segmentSize,
+      ),
+    )
+    const color = new THREE.Color()
+    let litParentSilos = 0
+    for (let c = 0; c < CONTINUITY.silo.cols; c++) {
+      siloCaps.getColorAt(c, color)
+      if (color.getHex() !== 0x0a1120) litParentSilos++
+    }
+    expect(litParentSilos).toBe(CONTINUITY.silo.cols - parentGapSegments)
 
     continuity.dispose?.()
     theme.dispose()

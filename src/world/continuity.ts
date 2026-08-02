@@ -1002,24 +1002,35 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     color: COLOR.bufClean,
     readout: (s: SimState) => {
       const drill = s.disasterRecovery.drill
+      const r = s.disasterRecovery.restore
+      const divergentTailTarget = r.targetTime <= s.highAvailability.timeline.forkedAt
+        && r.targetLsn > s.highAvailability.timeline.forkLsn
+        && s.highAvailability.timeline.forkLsn > 0
+      const replayLabel = divergentTailTarget ? 'restore-to-fork' : 'restore-to-target'
       if (
         drill.status === 'restoring'
         || drill.status === 'verifying'
         || drill.status === 'querying'
       ) {
-        return `drill ${drill.status} · restore-to-target ${fmtDuration(drill.estimatedRestoreToTargetSec)} estimate · ${(drill.progress * 100).toFixed(0)}%`
+        return `drill ${drill.status} · ${replayLabel} ${fmtDuration(drill.estimatedRestoreToTargetSec)} estimate · ${(drill.progress * 100).toFixed(0)}%`
       }
-      const r = s.disasterRecovery.restore
       if (r.status === 'fetching') return `fetching full backup · ${(r.progress * 100).toFixed(0)}% of estimated recovery time`
       if (r.status === 'replaying') return `replaying ${fmtBytes(r.walBytesRequired)} of archived WAL`
       if (r.status === 'failed') return r.failureReason
-      if (r.status === 'complete') return 'target reached · replay stopped · not promoted'
+      if (r.status === 'complete') {
+        return divergentTailTarget
+          ? `fork reached · ${s.highAvailability.transition.lossTransactions} transactions absent · not promoted`
+          : 'target reached · replay stopped · not promoted'
+      }
       if (drill.status === 'failed') return `drill FAIL · ${drill.failureReason}`
       if (drill.status === 'passed') {
         const timelinePath = s.disasterRecovery.restore.crossesTimelineFork
           ? ` · timeline ${s.disasterRecovery.restore.backupTimeline}→${s.disasterRecovery.restore.targetTimeline} via ${s.disasterRecovery.restore.historyFileName}`
           : ''
-        return `drill PASS · restore-to-target ${fmtDuration(drill.measuredRestoreToTargetSec)} · ${fmtBytes(drill.objectStoreBytesRead)} read${timelinePath}`
+        const loss = divergentTailTarget
+          ? ` · ${s.highAvailability.transition.lossTransactions} transactions absent`
+          : ''
+        return `drill PASS · ${replayLabel} ${fmtDuration(drill.measuredRestoreToTargetSec)} · ${fmtBytes(drill.objectStoreBytesRead)} read${timelinePath}${loss}`
       }
       return 'restore drill not run · empty recovery host · choose a target'
     },
@@ -1309,18 +1320,26 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     const timeline = sim.highAvailability.timeline
     const activeRow = Math.min(S.rows - 1, Math.max(0, timeline.current - 1))
     const forked = timeline.forkLsn > 0
+    const parentGapSegments = Math.min(
+      S.cols,
+      Math.ceil(
+        Math.max(0, timeline.forkLsn - archive.parentArchivedThroughLsn)
+          / sim.wal.segmentSize,
+      ),
+    )
+    const parentFill = S.cols - parentGapSegments
     const liveFill = Math.min(
       S.cols,
       forked
-        ? Math.max(1, Math.ceil(
-          Math.max(0, timeline.newHistoryEndLsn - timeline.forkLsn)
-          / sim.wal.segmentSize,
-        ))
+        ? Math.ceil(
+          Math.max(0, archive.archivedThroughLsn - timeline.forkLsn)
+            / sim.wal.segmentSize,
+        )
         : sim.wal.archived,
     )
     for (let r = 0; r < S.rows; r++) {
       const exists = r === 0 || (forked && r === activeRow)
-      const fill = r === 0 && forked ? S.cols : r === activeRow ? liveFill : 0
+      const fill = r === 0 && forked ? parentFill : r === activeRow ? liveFill : 0
       for (let c = 0; c < S.cols; c++) {
         const lit = exists && c < fill
         const newest = r === activeRow && liveFill > 0 && c === liveFill - 1
