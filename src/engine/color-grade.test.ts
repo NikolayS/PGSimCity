@@ -7,9 +7,12 @@ import {
   clockPaletteAt,
 } from '../core/themes'
 import {
+  HEIGHT_FOG_MAX,
   GOLDEN_HOUR_GRADE,
   gradeDaylightHex,
+  gradeDaylightHexWithHeightFog,
   gradeDaylightHexWithScatter,
+  heightFogAmount,
   perceptualColorDistance,
 } from './color-grade'
 import { LIGHT_SHAFT_COLOR, LIGHT_SHAFT_PRESETS } from './light-shafts'
@@ -71,6 +74,27 @@ describe('golden-hour colour grade', () => {
     }
   })
 
+  it('keeps every semantic colour identifiable through the strongest high-tier height haze', () => {
+    const graded = SEMANTIC.map(
+      (key) =>
+        [
+          key,
+          gradeDaylightHexWithHeightFog(
+            DAY_PALETTE[key],
+            DAY_PALETTE.fog,
+            HEIGHT_FOG_MAX * 0.82,
+          ),
+        ] as const,
+    )
+
+    for (let i = 0; i < graded.length; i++) {
+      for (let j = i + 1; j < graded.length; j++) {
+        const distance = perceptualColorDistance(graded[i][1], graded[j][1])
+        expect(distance, `${graded[i][0]} vs ${graded[j][0]}`).toBeGreaterThan(0.045)
+      }
+    }
+  })
+
   it('does not turn a neutral surface into orange soup', () => {
     const hex = gradeDaylightHex(0x808080)
     const channels = [(hex >> 16) & 255, (hex >> 8) & 255, hex & 255]
@@ -83,6 +107,20 @@ describe('golden-hour colour grade', () => {
     const luma = (hex: number): number =>
       0.2126 * ((hex >> 16) & 255) + 0.7152 * ((hex >> 8) & 255) + 0.0722 * (hex & 255)
     expect(luma(corner)).toBeLessThan(luma(center))
+  })
+})
+
+describe('height-sensitive aerial perspective', () => {
+  it('thickens with distance near grade, thins with altitude, and stays capped', () => {
+    const nearby = heightFogAmount(40, 1.7, 0, 0.0014, 0.018)
+    const distant = heightFogAmount(360, 1.7, 0, 0.0014, 0.018)
+    const elevated = heightFogAmount(360, 180, 120, 0.0014, 0.018)
+    const extreme = heightFogAmount(4000, 1.7, 0, 0.0014, 0.018)
+
+    expect(nearby).toBeGreaterThan(0)
+    expect(distant).toBeGreaterThan(nearby)
+    expect(elevated).toBeLessThan(distant)
+    expect(extreme).toBe(HEIGHT_FOG_MAX)
   })
 })
 

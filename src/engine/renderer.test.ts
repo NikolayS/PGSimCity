@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { FIDELITY_PRESETS, QUALITY_PRESETS } from './renderer'
+import { AO_BLEND_INTENSITY, FIDELITY_PRESETS, QUALITY_PRESETS } from './renderer'
 import { LIGHT_SHAFT_PRESETS } from './light-shafts'
 import type { QualitySettings } from '../core/types'
 
@@ -35,6 +35,12 @@ describe('quality degradation ladder', () => {
 })
 
 describe('rendering fidelity ladder', () => {
+  it('grounds daylight more strongly while keeping night AO subordinate to neon', () => {
+    expect(AO_BLEND_INTENSITY.day).toBeGreaterThan(AO_BLEND_INTENSITY.night)
+    expect(AO_BLEND_INTENSITY.day).toBeLessThanOrEqual(1)
+    expect(AO_BLEND_INTENSITY.night).toBeLessThan(0.5)
+  })
+
   it('keeps low and reduced on the existing rendering path', () => {
     for (const level of ['low', 'reduced'] as const) {
       expect(FIDELITY_PRESETS[level]).toEqual(
@@ -42,6 +48,7 @@ describe('rendering fidelity ladder', () => {
           environment: false,
           reflectionScale: 0,
           ambientOcclusion: false,
+          aerialPerspective: 0,
           aoScale: 0,
           aoSamples: 0,
           shadowMapSize: 1024,
@@ -61,6 +68,9 @@ describe('rendering fidelity ladder', () => {
     expect(high.reflectionScale).toBe(0.5)
     expect(ultra.reflectionScale).toBe(0.5)
     expect(medium.ambientOcclusion).toBe(true)
+    expect(medium.aerialPerspective).toBeGreaterThan(0)
+    expect(high.aerialPerspective).toBeGreaterThan(medium.aerialPerspective)
+    expect(ultra.aerialPerspective).toBeGreaterThanOrEqual(high.aerialPerspective)
     expect(medium.aoScale).toBeGreaterThan(0)
     expect(medium.aoSamples).toBeGreaterThan(0)
     expect(high.aoScale).toBeGreaterThan(medium.aoScale)

@@ -192,6 +192,9 @@ export interface Atmosphere {
   /** Multipliers on the city plan's fog distances. */
   fogNearScale: number
   fogFarScale: number
+  /** Ground-layer density and exponential falloff used by the fused depth haze. */
+  heightFogDensity: number
+  heightFogFalloff: number
   /**
    * What distance dissolves INTO. Pinned to the sky's below-horizon haze so a
    * fading building lands on the backdrop that is actually behind it; three
@@ -258,6 +261,8 @@ export const ATMOSPHERE: Record<CuratedThemeMode, Atmosphere> = {
     exposure: 1.06,
     fogNearScale: 1,
     fogFarScale: 1,
+    heightFogDensity: 0.00032,
+    heightFogFalloff: 0.026,
     fogColor: NIGHT_PALETTE.fog,
     // Do not move this. The Slonik plate silhouette in the overview shot rots
     // silently when it changes, and no test caught it across four commits.
@@ -319,6 +324,8 @@ export const ATMOSPHERE: Record<CuratedThemeMode, Atmosphere> = {
      */
     fogNearScale: 1.2,
     fogFarScale: 1.65,
+    heightFogDensity: 0.0014,
+    heightFogFalloff: 0.018,
     fogColor: DAY_PALETTE.fog,
     plateFogScale: 0.84,
     hemiSky: 0xa7c6e8,
@@ -535,6 +542,8 @@ export function clockAtmosphereAt(minutes: number): Atmosphere {
     exposure: lerp(night.exposure, day.exposure, t),
     fogNearScale: lerp(night.fogNearScale, day.fogNearScale, t),
     fogFarScale: lerp(night.fogFarScale, day.fogFarScale, t),
+    heightFogDensity: lerp(night.heightFogDensity, day.heightFogDensity, t),
+    heightFogFalloff: lerp(night.heightFogFalloff, day.heightFogFalloff, t),
     fogColor: mix(night.fogColor, day.fogColor, t),
     plateFogScale: lerp(night.plateFogScale, day.plateFogScale, t),
     hemiSky: mix(night.hemiSky, day.hemiSky, t),
