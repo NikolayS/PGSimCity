@@ -70,6 +70,7 @@ import { rid } from '../core/route-ids'
 import type {
   BackendSim,
   BackendState,
+  BaseBackupWalRange,
   BufferPool,
   Bus,
   ClusterNodeId,
@@ -954,6 +955,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         progress: 0,
         startedAt: 0,
         startTimeline: 1,
+        stopTimeline: 0,
         startLsn: 0,
         stopLsn: 0,
         dataBytes: 0,
@@ -983,6 +985,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         walBytesAvailable: 0,
         walBytesReplayed: 0,
         lastReachedTime: 0,
+        lastReachedTimeline: 0,
         estimatedDurationSec: 0,
         elapsedSec: 0,
         failureReason: '',
@@ -2735,6 +2738,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         if (archiveRetryT >= DR_ARCHIVE_SEGMENT_SECONDS) {
           archiveRetryT -= DR_ARCHIVE_SEGMENT_SECONDS
           dr.archive.failedAttempts++
+          archT = 0
         }
       } else {
         archiveRetryT = 0
@@ -2751,6 +2755,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         if (archiveRetryT >= DR_ARCHIVE_SEGMENT_SECONDS) {
           archiveRetryT -= DR_ARCHIVE_SEGMENT_SECONDS
           dr.archive.failedAttempts++
+          archT = 0
         }
       } else {
         archiveRetryT = 0
@@ -2873,6 +2878,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     let digest = mixBackupDigest(0x811c9dc5, op.startTimeline)
     digest = mixBackupDigest(digest, op.startLsn)
     digest = mixBackupDigest(digest, op.stopLsn)
+    if (op.stopTimeline !== op.startTimeline) {
+      digest = mixBackupDigest(digest, ha.timeline.forkLsn)
+      digest = mixBackupDigest(digest, op.stopTimeline)
+    }
     digest = mixBackupDigest(digest, op.dataBytes)
     for (let i = 0; i < tables.length; i++) {
       digest = mixBackupDigest(digest, tables[i].pages)
@@ -2897,6 +2906,31 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       : manifestDigest
   }
 
+  function completedBackupWalRanges(): BaseBackupWalRange[] {
+    const op = dr.backup
+    if (op.stopTimeline === op.startTimeline) {
+      return [{
+        timeline: op.startTimeline,
+        startLsn: op.startLsn,
+        endLsn: op.stopLsn,
+      }]
+    }
+    /* The city has one fork, so the only supported multi-range manifest is
+     * the parent range followed by the child range created during backup. */
+    return [
+      {
+        timeline: op.startTimeline,
+        startLsn: op.startLsn,
+        endLsn: ha.timeline.forkLsn,
+      },
+      {
+        timeline: op.stopTimeline,
+        startLsn: ha.timeline.forkLsn,
+        endLsn: op.stopLsn,
+      },
+    ]
+  }
+
   function completeBaseBackup(): void {
     const op = dr.backup
     const duration = Math.max(0, state.t - op.startedAt)
@@ -2912,6 +2946,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       startTimeline: op.startTimeline,
       startLsn: op.startLsn,
       stopLsn: op.stopLsn,
+      walRanges: completedBackupWalRanges(),
       dataBytes: op.dataBytes,
       objectStoreBytes: op.objectStoreBytes,
       durationSec: duration,
@@ -2943,6 +2978,30 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     return Math.ceil(stopLsn / WAL_SEG) * WAL_SEG
   }
 
+  function parentArchivedThroughForSpanningBackup(): number {
+    const parentEnd = dr.archive.parentArchivedThroughLsn
+    if (
+      parentEnd >= ha.timeline.forkLsn
+      || parentEnd < forkSegmentStartLsn()
+      || !forkSegmentCopyArchived()
+    ) return parentEnd
+    return ha.timeline.forkLsn
+  }
+
+  function backupWalRangesArchived(): boolean {
+    const op = dr.backup
+    const stopBoundary = backupArchiveBoundary(op.stopLsn)
+    if (op.stopTimeline === op.startTimeline) {
+      return archiveHasLsn(op.startTimeline, stopBoundary)
+    }
+    return op.startTimeline === ha.timeline.parent
+      && op.stopTimeline === ha.timeline.current
+      && op.startLsn <= ha.timeline.forkLsn
+      && op.stopLsn >= ha.timeline.forkLsn
+      && parentArchivedThroughForSpanningBackup() >= ha.timeline.forkLsn
+      && archiveHasLsn(op.stopTimeline, stopBoundary)
+  }
+
   function startBaseBackup(): boolean {
     const op = dr.backup
     const standbyA = rep.standbys[0]
@@ -2962,6 +3021,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     op.progress = 0
     op.startedAt = state.t
     op.startTimeline = state.highAvailability.timeline.current
+    op.stopTimeline = 0
     op.startLsn = standbyA.appliedLsn
     op.stopLsn = 0
     op.dataBytes = dr.dataDirectoryBytes
@@ -3014,6 +3074,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     restore.walBytesAvailable = 0
     restore.walBytesReplayed = 0
     restore.lastReachedTime = 0
+    restore.lastReachedTimeline = 0
     restore.estimatedDurationSec = 0
     restore.elapsedSec = 0
     restore.failureReason = ''
@@ -3184,12 +3245,13 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     return Number.isFinite(first) ? first : 0
   }
 
-  function lastReachedCommitTime(replayEndLsn: number): number {
+  function refreshLastReachedCommit(replayEndLsn: number): void {
     const restore = dr.restore
     const parentFrontier = parentArchivedThroughForRestore()
     const parentComplete = !restore.crossesTimelineFork
       || parentFrontier >= ha.timeline.forkLsn
-    let last = 0
+    restore.lastReachedTime = 0
+    restore.lastReachedTimeline = 0
     for (let i = 0; i < recoveryCommitSlots; i++) {
       const slot = (
         recoveryCommitHead - 1 - i + COMMIT_HISTORY_SLOTS
@@ -3213,9 +3275,22 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
           archivedThroughForRestoreTimeline(restoreReplayTimeline),
         )
       }
-      if (reached) last = Math.max(last, recoveryCommitAt[slot])
+      if (reached && recoveryCommitAt[slot] > restore.lastReachedTime) {
+        restore.lastReachedTime = recoveryCommitAt[slot]
+        restore.lastReachedTimeline = timeline
+      }
     }
-    return last
+  }
+
+  function availableWalRangeBytes(
+    timeline: number,
+    startLsn: number,
+    endLsn: number,
+  ): number {
+    return Math.max(
+      0,
+      Math.min(endLsn, archivedThroughForRestoreTimeline(timeline)) - startLsn,
+    )
   }
 
   function liveRestoreWalBytesAvailable(
@@ -3223,31 +3298,53 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     replayEndLsn: number,
   ): number {
     const restore = dr.restore
-    if (!restore.crossesTimelineFork) {
-      return Math.min(
-        restore.walBytesRequired,
-        Math.max(
-          0,
-          Math.min(replayEndLsn, archivedThroughForRestoreTimeline(restoreReplayTimeline))
-            - selected.startLsn,
-        ),
+    let available = 0
+    for (let i = 0; i < selected.walRanges.length; i++) {
+      const range = selected.walRanges[i]
+      const rangeEnd = Math.min(range.endLsn, replayEndLsn)
+      if (rangeEnd <= range.startLsn) continue
+      const required = rangeEnd - range.startLsn
+      const rangeAvailable = availableWalRangeBytes(
+        range.timeline,
+        range.startLsn,
+        rangeEnd,
       )
+      available += rangeAvailable
+      if (rangeAvailable < required || replayEndLsn <= range.endLsn) {
+        return Math.min(restore.walBytesRequired, available)
+      }
     }
-    const parentEnd = Math.min(
-      replayEndLsn,
+
+    const finalRange = selected.walRanges[selected.walRanges.length - 1]
+    if (!finalRange || replayEndLsn <= finalRange.endLsn) {
+      return Math.min(restore.walBytesRequired, available)
+    }
+    if (finalRange.timeline === restoreReplayTimeline) {
+      available += availableWalRangeBytes(
+        finalRange.timeline,
+        finalRange.endLsn,
+        replayEndLsn,
+      )
+      return Math.min(restore.walBytesRequired, available)
+    }
+
+    const parentEnd = Math.min(replayEndLsn, ha.timeline.forkLsn)
+    const parentRequired = Math.max(0, parentEnd - finalRange.endLsn)
+    const parentAvailable = availableWalRangeBytes(
+      finalRange.timeline,
+      finalRange.endLsn,
+      parentEnd,
+    )
+    available += parentAvailable
+    if (parentAvailable < parentRequired || replayEndLsn <= ha.timeline.forkLsn) {
+      return Math.min(restore.walBytesRequired, available)
+    }
+    available += availableWalRangeBytes(
+      restoreReplayTimeline,
       ha.timeline.forkLsn,
-      parentArchivedThroughForRestore(),
-    )
-    const parentBytes = Math.max(0, parentEnd - selected.startLsn)
-    if (parentEnd < ha.timeline.forkLsn) return parentBytes
-    const targetEnd = Math.min(
       replayEndLsn,
-      archivedThroughForTimeline(restoreReplayTimeline),
     )
-    return Math.min(
-      restore.walBytesRequired,
-      parentBytes + Math.max(0, targetEnd - ha.timeline.forkLsn),
-    )
+    return Math.min(restore.walBytesRequired, available)
   }
 
   function refreshRestorePlan(
@@ -3314,7 +3411,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         : 0
     restore.walBytesRequired = Math.max(0, replayEndLsn - selected.startLsn)
     restore.walBytesAvailable = liveRestoreWalBytesAvailable(selected, replayEndLsn)
-    restore.lastReachedTime = lastReachedCommitTime(replayEndLsn)
+    refreshLastReachedCommit(replayEndLsn)
     restore.estimatedDurationSec =
       restore.backupBytesRequired / backupFetchBytesPerSec()
       + restore.walBytesRequired / walRecoveryBytesPerSec()
@@ -3324,12 +3421,17 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   function restoreStartupFailureReason(
     selected: (typeof dr.backups)[number],
   ): string {
-    if (
-      restoreReplayTimeline === ha.timeline.current
-      && selected.startTimeline === ha.timeline.parent
-      && selected.stopLsn > ha.timeline.forkLsn
-    ) {
-      return `Recovery startup failed: requested timeline ${restoreReplayTimeline} does not contain backup ${selected.label}'s minimum recovery point ${fmtLsn(selected.stopLsn)} on timeline ${selected.startTimeline}; that point is past the fork ${fmtLsn(ha.timeline.forkLsn)}`
+    const finalRange = selected.walRanges[selected.walRanges.length - 1]
+    if (!finalRange) return ''
+    const requestedTimeline = dr.restore.targetTimeline
+    const containsMinimumRecoveryPoint = requestedTimeline === finalRange.timeline
+      || (
+        requestedTimeline === ha.timeline.current
+        && finalRange.timeline === ha.timeline.parent
+        && finalRange.endLsn <= ha.timeline.forkLsn
+      )
+    if (!containsMinimumRecoveryPoint) {
+      return `Recovery startup failed: requested timeline ${requestedTimeline} does not contain backup ${selected.label}'s minimum recovery point ${fmtLsn(finalRange.endLsn)} on timeline ${finalRange.timeline}; that point is past the fork ${fmtLsn(ha.timeline.forkLsn)}`
     }
     return ''
   }
@@ -3337,7 +3439,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   function targetNotReachedReason(): string {
     const restore = dr.restore
     return restore.lastReachedTime > 0
-      ? `Recovery target not reached: recovery ended before configured recovery target was reached. The last transaction-end record actually reached was at ${restore.lastReachedTime.toFixed(1)}s on timeline ${restoreReplayTimeline}, before the selected recovery_target_time ${restore.targetTime.toFixed(1)}s`
+      ? `Recovery target not reached: recovery ended before configured recovery target was reached. The last transaction-end record actually reached was at ${restore.lastReachedTime.toFixed(1)}s on timeline ${restore.lastReachedTimeline}, before the selected recovery_target_time ${restore.targetTime.toFixed(1)}s`
       : `Recovery target not reached: recovery ended before configured recovery target was reached. No transaction-end timestamp is present in the bounded modeled evidence before the selected recovery_target_time ${restore.targetTime.toFixed(1)}s`
   }
 
@@ -3569,12 +3671,13 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
             failBaseBackup('Full backup failed: standby_a was promoted during the online backup, so pg_backup_stop cannot finish it')
           } else {
             backup.stopLsn = rep.standbys[0].appliedLsn
+            backup.stopTimeline = ha.timeline.current
             const requiredArchiveLsn = backupArchiveBoundary(backup.stopLsn)
             // WAL-G waits for the backup stop WAL to be archived. Model the
             // segment switch PostgreSQL requests at backup stop, then let the
             // ordinary wal-push queue decide when completion is durable.
             wal.insertLsn = Math.max(wal.insertLsn, requiredArchiveLsn)
-            if (archiveHasLsn(backup.startTimeline, requiredArchiveLsn)) {
+            if (backupWalRangesArchived()) {
               completeBaseBackup()
             } else backup.status = 'waiting_wal'
           }
@@ -3582,12 +3685,14 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       }
     } else if (backup.status === 'waiting_wal') {
       backup.progress = 1
-      const requiredArchiveLsn = backupArchiveBoundary(backup.stopLsn)
-      if (dr.archive.timeline !== backup.startTimeline) {
+      if (
+        backup.stopTimeline === backup.startTimeline
+        && dr.archive.timeline !== backup.startTimeline
+      ) {
         failBaseBackup(
           `Full backup failed: archive recovery moved from timeline ${backup.startTimeline} to timeline ${dr.archive.timeline} before the backup stop WAL reached timeline ${backup.startTimeline}'s archive`,
         )
-      } else if (archiveHasLsn(backup.startTimeline, requiredArchiveLsn)) {
+      } else if (backupWalRangesArchived()) {
         completeBaseBackup()
       }
     }
@@ -8379,6 +8484,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     dr.backup.progress = 0
     dr.backup.startedAt = 0
     dr.backup.startTimeline = 1
+    dr.backup.stopTimeline = 0
     dr.backup.startLsn = 0
     dr.backup.stopLsn = 0
     dr.backup.dataBytes = 0

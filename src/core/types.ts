@@ -778,15 +778,27 @@ export interface PhysicalReplicationSlotState {
 
 export type BaseBackupStatus = 'idle' | 'copying' | 'waiting_wal' | 'failed'
 
+export interface BaseBackupWalRange {
+  /** Timeline from the backup manifest's WAL-Ranges entry. */
+  timeline: number
+  /** First LSN that must be readable on this timeline. */
+  startLsn: number
+  /** Earliest LSN where replay may stop on this timeline. */
+  endLsn: number
+}
+
 export interface BaseBackup {
   id: number
   /** WAL-G base-backup name derived from the backup start WAL segment. */
   label: string
   startedAt: number
   completedAt: number
+  /** Timeline current at backup start; walRanges owns the full requirement. */
   startTimeline: number
   startLsn: number
   stopLsn: number
+  /** Chronological WAL requirements from the modeled backup manifest. */
+  walRanges: BaseBackupWalRange[]
   /** Logical bytes read from the data directory. */
   dataBytes: number
   /** Scaled compressed bytes stored in object storage. */
@@ -809,6 +821,7 @@ export interface BaseBackupOperation {
   progress: number
   startedAt: number
   startTimeline: number
+  stopTimeline: number
   startLsn: number
   stopLsn: number
   dataBytes: number
@@ -840,6 +853,7 @@ export interface PointInTimeRestore {
   targetRecordLsn: number
   targetLsn: number
   recoveryTargetTimeline: RecoveryTargetTimeline
+  /** Timeline current at backup start, used by recovery_target_timeline=current. */
   backupTimeline: number
   targetTimeline: number
   crossesTimelineFork: boolean
@@ -857,6 +871,8 @@ export interface PointInTimeRestore {
   walBytesReplayed: number
   /** Latest transaction-end timestamp reached in the available selected history. */
   lastReachedTime: number
+  /** Timeline of the transaction-end record that supplied lastReachedTime. */
+  lastReachedTimeline: number
   estimatedDurationSec: number
   elapsedSec: number
   failureReason: string

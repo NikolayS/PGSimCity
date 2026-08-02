@@ -382,6 +382,7 @@ describe('claims and conventions spine', () => {
     const timeline = CLAIM_VALUES.timelineRecovery
     expect(timeline.modeledForkDepth).toBe(1)
     expect(timeline.absent).toEqual([
+      'backup manifests with more than two WAL ranges',
       'numeric timeline targets',
       'multiple-fork trees',
       'timeline-history parsing',

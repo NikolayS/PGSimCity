@@ -116,8 +116,8 @@ export const CLAIM_VALUES = {
     plate: 'one-fork model · pre-fork backup stays usable · fork-segment copy carries parent tail',
     crossingDisclosure: 'recovery_target_timeline=latest means the latest timeline found in the archive. From a timeline-1 backup, an archived 00000002.history makes timeline 2 discoverable; if that file is absent, timeline 1 remains latest and its archived divergent tail can still contain the target. When recovery does follow timeline 2, WAL unique to timeline 1 after the fork is not part of that history.',
     defaultDisclosure: 'PostgreSQL 18.3 defaults recovery_target_timeline to latest. With current, PostgreSQL stays on the timeline current when the base backup was taken and replays that timeline’s archived WAL: if it encounters a transaction-end record whose timestamp crosses the target, recovery succeeds; otherwise it reports that the target was not reached after replaying as far as the archive goes.',
-    absent: ['numeric timeline targets', 'multiple-fork trees', 'timeline-history parsing', 'restore-side credentials and object GET failures', 'wider recovery_target_* interactions'],
-    coverageDisclosure: 'PGSimCity models one fork only: timeline 1 to timeline 2. It does not model numeric timeline targets, multiple-fork trees, timeline-history parsing, restore-side credentials or object GET failures, or the wider interactions among recovery_target_* settings.',
+    absent: ['backup manifests with more than two WAL ranges', 'numeric timeline targets', 'multiple-fork trees', 'timeline-history parsing', 'restore-side credentials and object GET failures', 'wider recovery_target_* interactions'],
+    coverageDisclosure: 'PGSimCity models one fork only: timeline 1 to timeline 2, including a standby backup manifest with one WAL range on each side of that fork. Backup manifests with more than two WAL ranges, numeric timeline targets, multiple-fork trees, timeline-history parsing, restore-side credentials or object GET failures, and the wider interactions among recovery_target_* settings are absent.',
   },
   vacuumReclaim: {
     plateLines: [
