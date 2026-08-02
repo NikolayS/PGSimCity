@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { COLOR, mixHex } from '../core/theme'
+import { CLAIM_VALUES } from '../core/claims'
 import { N_BACKEND_SLOTS, N_BUFFERS, N_VAC_WORKERS } from '../core/types'
 import type { SimState, VacPhase, WorldContext, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, damp, fmtDuration, fmtNum, fmtPct, lerp, makeRng, smoothstep } from '../core/util'
@@ -8,6 +9,8 @@ import {
   ANCHOR, CITY, N_TABLES, TABLES,
   rid, routePoint, routeTangent, vacBayPos,
 } from './layout'
+
+export const VACUUM_RECLAIM_PLATE_LINES = CLAIM_VALUES.vacuumReclaim.plateLines
 
 /* ============================================================================
  * THE MAINTENANCE YARD — the processes nobody thinks about until 3am.
@@ -1038,8 +1041,8 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   let dbCount = 0
 
   signs.plate('removed dead tuples', DECK_X, 12.6, LF[2] - 6.8, 'north', 1.25, COLOR.vacuum, 0.9)
-  signs.plate('space goes back to the table,', PILE_X, PAINT_Y + 0.02, PILE_Z + 15, 'up', 1.5, COLOR.inkDim, 0.42)
-  signs.plate('never to the filesystem', PILE_X, PAINT_Y + 0.02, PILE_Z + 19, 'up', 1.5, COLOR.inkDim, 0.42)
+  signs.plate(VACUUM_RECLAIM_PLATE_LINES[0], PILE_X, PAINT_Y + 0.02, PILE_Z + 15, 'up', 1.5, COLOR.inkDim, 0.42)
+  signs.plate(VACUUM_RECLAIM_PLATE_LINES[1], PILE_X, PAINT_Y + 0.02, PILE_Z + 19, 'up', 1.5, COLOR.inkDim, 0.42)
 
   /* =======================================================================
    * 6. LOGGING COLLECTOR — the tape.

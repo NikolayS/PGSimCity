@@ -41,9 +41,10 @@ audio, or game content.
 > ring-sizing rule. The animation must not be used as numeric version evidence
 > until that model is aligned.
 >
-> Three specialist review rounds checked PostgreSQL correctness against `postgresql.org/docs`
-> and the source rather than memory; every finding was independently checked by a reviewer tasked
-> with refuting it. A separate audit treated buildings, adjacencies, and animations as claims.
+> Four review rounds have checked the project: three specialist reviews compared PostgreSQL
+> correctness with `postgresql.org/docs` and the source rather than memory, and a separate audit
+> treated buildings, adjacencies, and animations as claims. Every finding was independently checked
+> by a reviewer tasked with refuting it.
 >
 > The deterministic suite fails CI on a red test. Its checks pin the model's scaled WAL
 > trigger approximation as `max_wal_size / (1 + checkpoint_completion_target)` at every
@@ -67,7 +68,7 @@ audio, or game content.
 | **Client sky** (north, above) | Connections arriving from the application tier |
 | **Postmaster** | The supervisor. Forks one backend per connection and never touches your data |
 | **Backend row** | 16 backend processes. Their lighting *is* their state — including `idle in transaction` |
-| **Buffer pool (`shared_buffers`)** | A representative sample of 1,024 frames, beside `wal_buffers`, the ProcArray, lock table, CLOG and buffer mapping table |
+| **Buffer pool (`shared_buffers`)** | Up to 1,024 representative frames (256 active at the default 2 GiB setting), beside `wal_buffers`, the ProcArray, lock table, CLOG and buffer mapping table |
 | **The excavation** | The data directory: where memory ends and storage begins |
 | **Storage** (below) | Heap files as fields of 8 KiB pages, B-trees as actual trees, TOAST, the FSM and visibility map, the OS page cache and the disks |
 | **WAL district** (east) | walwriter → `pg_wal` segments → archiver → walsender |

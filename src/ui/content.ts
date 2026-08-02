@@ -3,6 +3,7 @@ import {
   SHARED_BUFFERS_MIN_MIB,
 } from '../core/types'
 import type { ComponentDoc, Knobs } from '../core/types'
+import { CLAIM_VALUES } from '../core/claims'
 import { DOCS_MEMORY } from './docs-memory'
 import { DOCS_STORAGE } from './docs-storage'
 
@@ -135,7 +136,7 @@ export const KNOB_META: KnobMeta[] = [
     max: SHARED_BUFFERS_MAX_MIB,
     step: 128,
     fmt: fmtSharedBuffers,
-    hint: "Postgres's own page cache, sized here in real MiB/GiB. The plaza is a fixed 1,024-frame sample of that pool; each MiB implies 128 8 KiB buffers.",
+    hint: `Postgres's own page cache, sized here in real MiB/GiB. The plaza has capacity for ${CLAIM_VALUES.bufferSample.capacityFrames.toLocaleString('en-US')} representative frames; the default 2 GiB pool activates ${CLAIM_VALUES.bufferSample.defaultActiveFrames}. Each MiB implies 128 8 KiB buffers.`,
   },
   {
     key: 'bgwriterEnabled',
@@ -218,7 +219,7 @@ export const KNOB_META: KnobMeta[] = [
     max: 2048,
     step: 32,
     unit: 'MiB',
-    hint: 'When WAL grows past this, a checkpoint is forced whether it was due or not.',
+    hint: 'The WAL-volume partner to checkpoint_timeout: crossing the model’s moving budget requests a checkpoint before the timer does.',
   },
   {
     key: 'checkpointTimeout',

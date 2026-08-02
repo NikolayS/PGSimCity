@@ -102,6 +102,7 @@ import {
   walSegName,
   weightedPick,
 } from '../core/util'
+import { CLAIM_VALUES } from '../core/claims'
 import { SCENARIOS, SCENARIO_NARRATION_SECONDS } from './scenarios'
 import {
   collectRepresentativeVersions,
@@ -132,11 +133,12 @@ const PHYSICAL_STANDBY_KNOBS = [
 ] as const
 
 const PAGE = 8192
-const WAL_SEG = 16 * 1024 * 1024
+const WAL_SEG = CLAIM_VALUES.walSegment.bytes
 const INITIAL_WAL_SEGMENT_START = 0x1a000000
 const INITIAL_WAL_LSN = INITIAL_WAL_SEGMENT_START + Math.floor(WAL_SEG * 0.92)
 /** BAS_BULKREAD: a big seq scan gets a 256 KiB ring so it cannot evict the pool. */
-const RING = 32
+export const MODEL_BULK_READ_RING_FRAMES = CLAIM_VALUES.bulkReadRing.modelFrames
+const RING = MODEL_BULK_READ_RING_FRAMES
 const STEP_MAX = 1 / 30
 /** Keep UI disclosures tied to the first distortion documented in this file header. */
 export const MODEL_TIME_STRETCH = 100
@@ -551,8 +553,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   const standbyADataDirectory = { bytes: 0, appliedLsn: initialLsn }
   const standbyBDataDirectory = { bytes: 0, appliedLsn: initialLsn }
   const standbyA: PhysicalStandbyState = {
-    nodeId: 'standbyA',
-    applicationName: 'standby_a',
+    nodeId: CLAIM_VALUES.standbyNames.internal[0],
+    applicationName: CLAIM_VALUES.standbyNames.display[0],
     enabled: true,
     connected: true,
     mode: 'async',
@@ -574,8 +576,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     acknowledgedApplyLsn: initialLsn,
   }
   const standbyB: PhysicalStandbyState = {
-    nodeId: 'standbyB',
-    applicationName: 'standby_b',
+    nodeId: CLAIM_VALUES.standbyNames.internal[1],
+    applicationName: CLAIM_VALUES.standbyNames.display[1],
     enabled: true,
     connected: true,
     mode: 'async',
@@ -685,8 +687,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
           dataDirectory: primaryDataDirectory,
         },
         {
-          id: 'standbyA',
-          name: 'standby_a',
+          id: CLAIM_VALUES.standbyNames.internal[0],
+          name: CLAIM_VALUES.standbyNames.display[0],
           role: 'standby',
           online: true,
           leaderOpinion: 'primary',
@@ -695,8 +697,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
           dataDirectory: standbyADataDirectory,
         },
         {
-          id: 'standbyB',
-          name: 'standby_b',
+          id: CLAIM_VALUES.standbyNames.internal[1],
+          name: CLAIM_VALUES.standbyNames.display[1],
           role: 'standby',
           online: true,
           leaderOpinion: 'primary',

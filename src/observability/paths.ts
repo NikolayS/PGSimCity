@@ -19,6 +19,7 @@
 import { poolBytes, SHARED_BUFFERS_FULL_SAMPLE_MIB, SHARED_BUFFERS_MIN_MIB } from '../core/types'
 import type { Knobs, SimState } from '../core/types'
 import { configuredSynchronousStandby, worstConnectedStandbyLag } from '../core/replication'
+import { CLAIM_VALUES } from '../core/claims'
 import { fmtBytes } from '../core/util'
 import type { Collector } from './collector'
 import type { Subsystem } from './catalog'
@@ -1239,7 +1240,7 @@ const VERDICTS: Verdict[] = [
       'The city models one scripted ACCESS EXCLUSIVE holder and attaches every affected statement directly to it. It does not model lock modes, queue fairness or one waiter blocking later compatible requests. The evidence below establishes direct waiters and occupied slots only; PostgreSQL’s more complex queue-order cascade is not demonstrated here.',
     evidence: (s) => [
       { label: 'waiters', value: String(s.locks.length), tone: 'crit' },
-      { label: 'oldest wait', value: `${Math.max(0, ...s.locks.map((l) => l.ageSec)).toFixed(0)} model s`, tone: 'crit' },
+      { label: 'oldest wait', value: `${Math.max(0, ...s.locks.map((l) => l.ageSec)).toFixed(0)} ${CLAIM_VALUES.modelDuration.shortUnit}`, tone: 'crit' },
       { label: 'mode', value: 'AccessExclusiveLock', tone: 'crit' },
       { label: 'connections in use', value: `${s.stats.activeBackends} of ${s.maxConnections}` },
     ],
@@ -1264,7 +1265,7 @@ const VERDICTS: Verdict[] = [
       reading:
         s.locks.length === 0
           ? 'the model has no direct waiters — its scripted holder path has cleared'
-          : `${s.locks.length} modeled session${s.locks.length === 1 ? '' : 's'} still waiting directly on the holder, oldest ${Math.max(0, ...s.locks.map((l) => l.ageSec)).toFixed(0)} model s`,
+          : `${s.locks.length} modeled session${s.locks.length === 1 ? '' : 's'} still waiting directly on the holder, oldest ${Math.max(0, ...s.locks.map((l) => l.ageSec)).toFixed(0)} ${CLAIM_VALUES.modelDuration.shortUnit}`,
     }),
     city: 'lock.manager',
     reading: [

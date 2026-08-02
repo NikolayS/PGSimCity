@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { COLOR, mixHex } from '../core/theme'
+import { CLAIM_VALUES } from '../core/claims'
 import {
   allConnectedStandbysSentLsn,
   oldestReplicationSlotLsn,
@@ -41,6 +42,9 @@ const _axisY = new THREE.Vector3(0, 1, 0)
 
 const TAU = Math.PI * 2
 const MB = 1024 * 1024
+
+export const WAL_SEGMENT_PLATE_LABEL = `pg_wal · ${CLAIM_VALUES.walSegment.label} segments`
+export const WAL_SEGMENT_SIZE_PLATE_LABEL = CLAIM_VALUES.walSegment.label
 
 export function walsenderReadout(s: SimState): string {
   const r = s.replication
@@ -785,9 +789,9 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
   chargeBeam.raycast = () => {}
   chargeGroup.add(chargeBeam)
 
-  signs.plate('pg_wal · 16 MiB segments', VX, 17.2, -VAULT_Z - 2.2, 'north', 1.4, COLOR.wal, 1.0)
+  signs.plate(WAL_SEGMENT_PLATE_LABEL, VX, 17.2, -VAULT_Z - 2.2, 'north', 1.4, COLOR.wal, 1.0)
   signs.plate('inside the data directory · often mounted on its own volume', VX, 15.6, -VAULT_Z - 2.2, 'north', 0.66, COLOR.storage, 0.62)
-  signs.plate('16 MiB', VX, 2.0, -VAULT_Z - 2.95, 'north', 0.8, COLOR.archive, 0.7)
+  signs.plate(WAL_SEGMENT_SIZE_PLATE_LABEL, VX, 2.0, -VAULT_Z - 2.95, 'north', 0.8, COLOR.archive, 0.7)
   signs.plate('held by slot', VX - 4.2, 18.6, 0, 'west', 0.72, COLOR.warn, 0.62)
   const [SGN_RECYC] = signs.plate('recycled — renamed for reuse, not deleted', VX, 17.2, VAULT_Z + 2.2, 'south', 1.2, COLOR.inkDim, 0.7)
 

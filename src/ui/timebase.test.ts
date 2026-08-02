@@ -90,6 +90,17 @@ describe('user-facing timebase', () => {
     tour.dispose()
   })
 
+  it('renders the tour body with the shared inline-markdown rules', () => {
+    const ctx = context()
+    const tour = createTour(ctx)
+
+    ctx.bus.emit('tour:start', { chapter: 6 })
+
+    expect(document.querySelector<HTMLElement>('.tour-card__body')?.innerHTML)
+      .toContain('<code>synchronous_commit</code>')
+    tour.dispose()
+  })
+
   it('preserves the knob baseline across forward and backward clicks', () => {
     const ctx = context()
     ctx.sim.setKnob('tps', 321)

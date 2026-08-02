@@ -25,6 +25,7 @@ import type { Knobs } from '../core/types'
 import { NO_EA_CONTENT, TRADEMARK_NOTICE } from '../ui/legal'
 import { el, setText } from '../ui/uikit'
 import { fmtNum } from '../core/util'
+import { cityComponentHref } from '../core/city-route'
 
 import { BY_ID, CATALOG, CATALOG_SUBSYSTEMS, VERSIONS } from './catalog'
 import type { CatalogEntry } from './catalog'
@@ -407,7 +408,7 @@ function counterToggle(projection?: string): HTMLElement | null {
 
 function cityLink(id: string | undefined, label = 'See it in the city'): HTMLElement | null {
   if (!id) return null
-  return el('a', { class: 'citylink', href: `../#/c/${id}`, title: `Open ${id} in PGSimCity` }, el('span', { text: label }), el('code', { text: id }))
+  return el('a', { class: 'citylink', href: cityComponentHref(id, '../'), title: `Open ${id} in PGSimCity` }, el('span', { text: label }), el('code', { text: id }))
 }
 
 function liveGrid(projection: string): HTMLElement {

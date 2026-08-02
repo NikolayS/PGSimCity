@@ -1,11 +1,14 @@
 import * as THREE from 'three'
 import { COLOR, atmosphere, onThemeMode } from '../core/theme'
+import { CLAIM_VALUES } from '../core/claims'
 import { BUF_GRID, N_BACKEND_SLOTS, N_BUFFERS, poolBytes } from '../core/types'
 import type { SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, fmtBytes, fmtLsn, fmtNum, fmtPct, makeRng } from '../core/util'
 import { DECK_GATES } from './access'
 import type { DeckGate } from './access'
 import { ANCHOR, CITY, TABLES, bufferTilePos } from './layout'
+
+export const SHARED_BUFFER_SAMPLE_PLATE_LABEL = `SHARED_BUFFERS · REPRESENTATIVE SAMPLE · UP TO ${CLAIM_VALUES.bufferSample.capacityFrames.toLocaleString('en-US')} FRAMES`
 
 export function shmemDeckReadout(s: SimState): string {
   return `${fmtBytes(poolBytes(s.knobs))} pool · ${fmtNum(s.buffers.sampleFrames)} sampled frames · ${s.stats.activeBackends}/${s.maxConnections} attached`
@@ -2203,7 +2206,7 @@ function makeDeckTexture(rng: () => number): THREE.CanvasTexture {
     g.fillText(text, X(wx), Y(wz))
   }
 
-  label('SHARED_BUFFERS · REPRESENTATIVE SAMPLE · 1,024 FRAMES', 0, b0 + 3.4, 2.4, 'center', 'rgba(63,167,255,0.7)')
+  label(SHARED_BUFFER_SAMPLE_PLATE_LABEL, 0, b0 + 3.4, 2.4, 'center', 'rgba(63,167,255,0.7)')
   label('CLOCK SWEEP →', -HALF_GRID + 10, -b0 - 5.2, 1.9, 'center', 'rgba(255,204,85,0.65)')
   label('wal_buffers', ANCHOR.walBuffers[0], ANCHOR.walBuffers[2] + 13.6, 2.3, 'center', 'rgba(255,176,58,0.8)')
   label('circular · insert → write → flush', ANCHOR.walBuffers[0], ANCHOR.walBuffers[2] + 16.4, 1.5)
