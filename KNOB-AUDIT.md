@@ -58,7 +58,7 @@ evidence; they are not the current verdicts.
 Follow-up for a later storage-model audit (2026-08-02): the no-bgwriter
 scenario drives 5.0–54.0 representative writes/s and 15.3–87.8 reads/s against
 `DEVICE_PAGES_PER_SEC = 900`. Reads and writes together occupy about 7.8% of
-the modeled device at the measured high end. The shared finite-storage-pressure
+the modeled device in the audited run. The shared finite-storage-pressure
 lesson is therefore still lightly loaded at these knobs. This latency fix does
 not recalibrate that separate mechanism.
 

@@ -87,11 +87,20 @@ function measureArm(bgwriterEnabled: boolean, synchronousCommit: SyncCommit) {
   const commits = sim.state.stats.commits
   advanceBy(sim, WINDOW_SECONDS)
   const transactions = observations.reduce((sum, observation) => sum + observation.transactions, 0)
+  const evictionWalWaitTransactions = observations.reduce(
+    (sum, observation) => sum + (
+      observation.evictionWalFlushMs > 0 ? observation.transactions : 0
+    ),
+    0,
+  )
   return {
     bgwriter: bgwriterEnabled ? 'on' : 'off',
     synchronousCommit,
     observations: observations.length,
     transactions,
+    evictionWalWaitTransactionsPercent: Number(
+      ((evictionWalWaitTransactions / transactions) * 100).toFixed(3),
+    ),
     tps: Number(((sim.state.stats.commits - commits) / WINDOW_SECONDS).toFixed(3)),
     totalMs: roundDistribution(distribution(observations, (observation) => observation.totalMs)),
     dirtyWriteMs: roundDistribution(

@@ -3083,6 +3083,16 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
             return
           }
           writeOut(pending, 'checkpointer')
+          if (++sCkpt >= stride(1 / Math.max(dt, 1 / 120), 26)) {
+            sCkpt = 0
+            flow('ckpt.sweep', 1, 'page_write', 1.25)
+            flow(
+              rid.ioWrite(buf.rel[pending] < N_TABLES ? buf.rel[pending] : 0),
+              1,
+              'page_write',
+              1.1,
+            )
+          }
           releaseCheckpointFlushBuffer()
           ckpt.buffersWritten++
         }
