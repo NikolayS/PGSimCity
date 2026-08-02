@@ -99,6 +99,11 @@ export const CLAIM_VALUES = {
       source: 'activity.rows',
       branches: ['slow.1→commit.1'],
     },
+    walSyncWaitFloor: {
+      threshold: 1,
+      source: 'activity.rows',
+      branches: ['commit.1→v.sync_local', 'commit.1→v.commit_ok'],
+    },
     activeWorkFloor: {
       threshold: 3,
       source: 'activity.rows',

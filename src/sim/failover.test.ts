@@ -60,6 +60,28 @@ function runFailover(networkLagMs: number): {
 }
 
 describe('Patroni switchover and failover', () => {
+  it('never advances promoted flush LSN beyond inserted WAL', () => {
+    const sim = createSim(createBus())
+    sim.setKnob('tps', 2_000)
+    sim.setKnob('writeRatio', 1)
+    sim.setKnob('sharedBuffers', 128)
+    sim.setKnob('standbyBNetworkLag', 900)
+    advanceBy(sim, 35)
+
+    expect(sim.startFailover('standbyB')).toBe(true)
+    let maxFlushLead = 0
+    const deadline = sim.state.t + 90
+    while (sim.state.t < deadline) {
+      sim.update(1 / 30)
+      maxFlushLead = Math.max(
+        maxFlushLead,
+        sim.state.wal.flushLsn - sim.state.wal.insertLsn,
+      )
+    }
+
+    expect(maxFlushLead).toBe(0)
+  })
+
   it('parks commits on SyncRep when the configured synchronous standby disconnects', () => {
     const sim = createSim(createBus())
     sim.setKnob('tps', 600)

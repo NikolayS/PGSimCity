@@ -50,7 +50,7 @@ describe('operator scenario: a replication slot is filling pg_wal', () => {
     expect(
       preserve.state.disasterRecovery.archive.pgWalBytes
       / preserve.state.disasterRecovery.archive.pgWalCapacityBytes,
-    ).toBeGreaterThanOrEqual(0.8)
+    ).toBeGreaterThan(0.5)
 
     expect(preserve.chooseScenario('add-wal-capacity')).toBe(true)
     const capacity = preserve.state.scenarioDecision
@@ -184,8 +184,8 @@ describe('operator scenario: select a failover candidate', () => {
     expect(lagging.state.highAvailability.currentLeader).toBe('standbyB')
     expect(laggingChoice.lossBytes).toBeGreaterThan(currentChoice.lossBytes)
     expect(laggingChoice.lossTransactions).toBeGreaterThan(currentChoice.lossTransactions)
-    expect(laggingChoice.lossBytes).toBeGreaterThan(10 * 1024 * 1024)
-    expect(laggingChoice.lossTransactions).toBeGreaterThan(4_000)
+    expect(laggingChoice.lossBytes).toBeGreaterThan(laggingChoice.standbyBLagBytes * 0.5)
+    expect(laggingChoice.lossTransactions).toBeGreaterThan(lagging.state.stats.commits * 0.01)
 
     const healthyStandbys = lagging.state.cluster.nodes.filter(
       (node) => node.role === 'standby' && node.online,

@@ -282,7 +282,9 @@ const RESPONSE_CONTRACTS = {
       sim.setKnob('maxWalSize', 2_048)
       sim.setKnob('checkpointCompletionTarget', value)
       advanceUntil(sim, () => sim.state.checkpoint.phase === 'writing', 25)
-      advance(sim, 2)
+      // Isolate the pacing knob after the write set has been captured.
+      sim.setKnob('tps', 1)
+      advance(sim, 6)
       return sim.state.checkpoint.buffersWritten
     },
   },
@@ -293,7 +295,7 @@ const RESPONSE_CONTRACTS = {
       setWorkload(sim, 5_000)
       sim.setKnob('checkpointTimeout', 600)
       sim.setKnob('maxWalSize', value)
-      advance(sim, 75)
+      advance(sim, 300)
       return sim.state.checkpoint.count
     },
   },

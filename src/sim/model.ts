@@ -426,6 +426,8 @@ interface Extra {
   walPrepared: boolean
   evictionBuffer: number
   evictionFlushLsn: number
+  evictionVictimRel: number
+  evictionVictimBlk: number
   evictionRel: number
   evictionBlk: number
   evictionForWrite: boolean
@@ -478,6 +480,8 @@ function makeExtra(): Extra {
     walPrepared: false,
     evictionBuffer: -1,
     evictionFlushLsn: 0,
+    evictionVictimRel: 0,
+    evictionVictimBlk: 0,
     evictionRel: 0,
     evictionBlk: 0,
     evictionForWrite: false,
@@ -498,6 +502,8 @@ export interface SimOptions {
   scheduledBackups?: boolean
   /** Test/measurement hook; production leaves this unset and allocates nothing. */
   latencyObserver?: (observation: Readonly<ModelLatencyObservation>) => void
+  /** Test-only invariant hook called immediately before a representative page write. */
+  pageWriteObserver?: (observation: Readonly<PageWriteObservation>) => void
 }
 
 export interface ModelLatencyObservation {
@@ -508,10 +514,20 @@ export interface ModelLatencyObservation {
   transactions: number
 }
 
+export interface PageWriteObservation {
+  path: 'backend' | 'bgwriter' | 'checkpointer'
+  pageLsn: number
+  flushLsn: number
+  pageLsnOwners: number
+  tagMapped: boolean
+  afterWalWait: boolean
+}
+
 export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi {
   const maxStep = options.maxStep ?? STEP_MAX
   const scheduledBackups = options.scheduledBackups ?? true
   const latencyObserver = options.latencyObserver
+  const pageWriteObserver = options.pageWriteObserver
   if (!isFinite(maxStep) || maxStep <= 0 || maxStep > STEP_MAX * MAX_STEPS) {
     throw new Error(`invalid simulation maxStep: ${maxStep}`)
   }
@@ -1162,6 +1178,11 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     key = Math.imul(key ^ (key >>> 15), 0x846ca68b)
     return ((key ^ (key >>> 16)) >>> 0) % N_BUFFERS
   }
+
+  function deleteBufferMapping(b: number, rel = buf.rel[b], blk = buf.blk[b]): void {
+    const key = representativeBufKey(rel, blk)
+    if (bufMap.get(key) === b) bufMap.delete(key)
+  }
   const pinT = new Float32Array(N_BUFFERS)
   /**
    * Pages whose LSN is already past the checkpoint REDO point, i.e. that have
@@ -1190,7 +1211,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   const PINS = 4
   const pinRing = new Int32Array(N_BACKEND_SLOTS * PINS).fill(-1)
   const pinPos = new Int32Array(N_BACKEND_SLOTS)
-  /** slot + 1 for a backend victim; 255 for the bgwriter across XLogFlush(). */
+  /** slot + 1 for a backend victim; 254/255 for checkpointer/bgwriter WAL waits. */
   const evictionOwner = new Uint8Array(N_BUFFERS)
   /** Backend bitmask for sampled page changes awaiting their aggregate WAL insert. */
   const pageLsnOwners = new Uint16Array(N_BUFFERS)
@@ -1208,7 +1229,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     const n = pinsFor()
     const p = pinPos[slot] % n
     const old = pinRing[base + p]
-    if (old >= 0 && old !== b) buf.pinned[old] = 0
+    if (old >= 0 && old !== b && evictionOwner[old] === 0) buf.pinned[old] = 0
     pinRing[base + p] = b
     pinPos[slot] = (p + 1) % n
     buf.pinned[b] = 1
@@ -1219,7 +1240,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     const base = slot * PINS
     for (let i = 0; i < PINS; i++) {
       const b = pinRing[base + i]
-      if (b >= 0) buf.pinned[b] = 0
+      if (b >= 0 && evictionOwner[b] === 0) buf.pinned[b] = 0
       pinRing[base + i] = -1
     }
   }
@@ -1941,7 +1962,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
    * ====================================================================*/
 
   function invalidate(b: number): void {
-    if (buf.valid[b]) bufMap.delete(representativeBufKey(buf.rel[b], buf.blk[b]))
+    if (buf.valid[b]) deleteBufferMapping(b)
     buf.valid[b] = 0
     buf.dirty[b] = 0
     ckptNeeded[b] = 0
@@ -1955,11 +1976,28 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   }
 
   /** A dirty victim has to hit the disk before the frame can be reused. */
-  function writeOut(b: number, byBackend: boolean): boolean {
+  function writeOut(
+    b: number,
+    path: PageWriteObservation['path'],
+    afterWalWait = false,
+    expectedRel = buf.rel[b],
+    expectedBlk = buf.blk[b],
+  ): boolean {
     if (!buf.dirty[b]) return false
+    if (pageWriteObserver) {
+      const mappedBuffer = bufMap.get(representativeBufKey(expectedRel, expectedBlk))
+      pageWriteObserver({
+        path,
+        pageLsn: buf.pageLsn[b],
+        flushLsn: wal.flushLsn,
+        pageLsnOwners: pageLsnOwners[b],
+        tagMapped: mappedBuffer === b,
+        afterWalWait,
+      })
+    }
     buf.dirty[b] = 0
     ioWriteAcc++
-    if (byBackend) {
+    if (path === 'backend') {
       buf.dirtyEvictions++
       const rel = buf.rel[b] < N_TABLES ? buf.rel[b] : 0
       if (++sIoWrite >= stride(stats.ioWritePerSec, 30)) {
@@ -1997,7 +2035,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       } else {
         buf.clockHand++
       }
-      if (!buf.pinned[b]) {
+      if (!buf.pinned[b] && pageLsnOwners[b] === 0) {
         if (buf.usage[b] > 0) {
           buf.usage[b]--
           trycounter = size
@@ -2020,7 +2058,13 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     const base = slot * RING
     const b = ringBuf[base + x.ringPos]
     x.ringPos = (x.ringPos + 1) % RING
-    if (b >= 0 && b < buf.sampleFrames && !buf.pinned[b] && buf.usage[b] <= 1) return b
+    if (
+      b >= 0
+      && b < buf.sampleFrames
+      && !buf.pinned[b]
+      && pageLsnOwners[b] === 0
+      && buf.usage[b] <= 1
+    ) return b
     const v = clockVictim()
     if (v >= 0) ringBuf[base + ((x.ringPos + RING - 1) % RING)] = v
     return v
@@ -2077,6 +2121,16 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     if (forWrite) markDirty(v, slot)
   }
 
+  function pageWalDurable(b: number): boolean {
+    return pageLsnOwners[b] === 0 && buf.pageLsn[b] <= wal.flushLsn
+  }
+
+  function requestPageWalFlush(b: number): void {
+    if (pageLsnOwners[b] === 0 && buf.pageLsn[b] > wal.flushLsn) {
+      requestFlush(buf.pageLsn[b])
+    }
+  }
+
   function beginEvictionFlushWait(
     slot: number,
     victim: number,
@@ -2088,19 +2142,20 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     const x = extras[slot]
     x.evictionBuffer = victim
     x.evictionFlushLsn = buf.pageLsn[victim]
+    x.evictionVictimRel = buf.rel[victim]
+    x.evictionVictimBlk = buf.blk[victim]
     x.evictionRel = rel
     x.evictionBlk = blk
     x.evictionForWrite = forWrite
     x.evictionResumeState = b.state === 'exec_io' ? 'exec_io' : 'exec_cpu'
     x.evictionResumeT = b.stateT
     x.evictionResumeDur = b.stateDur
-    bufMap.delete(representativeBufKey(buf.rel[victim], buf.blk[victim]))
     pinBuffer(slot, victim)
     evictionOwner[victim] = slot + 1
     b.state = 'eviction_flush'
     b.stateT = 0
     b.stateDur = Math.max(0.09, flushDur) * 1.5
-    requestFlush(x.evictionFlushLsn)
+    requestPageWalFlush(victim)
   }
 
   function finishEvictionFlushWait(slot: number): void {
@@ -2112,14 +2167,58 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     b.state = x.evictionResumeState
     b.stateT = x.evictionResumeT
     b.stateDur = x.evictionResumeDur
-    if (writeOut(victim, true)) chargeBackendPageWrite(slot, duringRead)
+    if (writeOut(
+      victim,
+      'backend',
+      true,
+      x.evictionVictimRel,
+      x.evictionVictimBlk,
+    )) {
+      chargeBackendPageWrite(slot, duringRead)
+    }
+    deleteBufferMapping(victim, x.evictionVictimRel, x.evictionVictimBlk)
     buf.evictions++
-    installBufferMiss(slot, victim, x.evictionRel, x.evictionBlk, x.evictionForWrite, true)
-    b.buffersTouched++
-    b.buffersRead++
+    const replacementKey = representativeBufKey(x.evictionRel, x.evictionBlk)
+    const installed = bufMap.get(replacementKey)
+    if (installed !== undefined && installed !== victim && buf.valid[installed]) {
+      invalidate(victim)
+      pinBuffer(slot, installed)
+      if (buf.usage[installed] < 5) buf.usage[installed]++
+      buf.lastTouch[installed] = state.t
+      b.lastBuffer = installed
+      if (x.evictionForWrite) markDirty(installed, slot)
+      buf.hits++
+      winHits++
+      b.buffersTouched++
+      b.buffersHit++
+    } else {
+      installBufferMiss(slot, victim, x.evictionRel, x.evictionBlk, x.evictionForWrite, true)
+      b.buffersTouched++
+      b.buffersRead++
+    }
     x.evictionBuffer = -1
     x.evictionFlushLsn = 0
     evictionOwner[victim] = 0
+  }
+
+  function cancelEvictionFlushWait(slot: number): void {
+    const b = backends[slot]
+    const x = extras[slot]
+    const victim = x.evictionBuffer
+    if (victim < 0) return
+    b.state = x.evictionResumeState
+    b.stateT = x.evictionResumeT
+    b.stateDur = x.evictionResumeDur
+    buf.pinned[victim] = 0
+    if (evictionOwner[victim] === slot + 1) evictionOwner[victim] = 0
+    x.evictionBuffer = -1
+    x.evictionFlushLsn = 0
+    // The requested page is accounted as an uncached read; the dirty victim stays mapped.
+    buf.misses++
+    winMisses++
+    ioReadAcc++
+    b.buffersTouched++
+    b.buffersRead++
   }
 
   /**
@@ -2189,18 +2288,18 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       throw new Error(`buffer invariant: attempted to evict pinned frame ${v}`)
     }
     if (buf.valid[v]) {
-      if (buf.dirty[v] && buf.pageLsn[v] > wal.flushLsn) {
+      if (buf.dirty[v] && !pageWalDurable(v)) {
         /* FlushBuffer() enforces the write-ahead rule with XLogFlush(page LSN).
          * requestFlush joins the existing in-flight flush, so one fsync can
          * release committers and dirty-victim evictors together. */
         beginEvictionFlushWait(slot, v, rel, blk, forWrite)
         return null
       }
-      if (writeOut(v, true)) {
+      if (writeOut(v, 'backend')) {
         // An already-durable page pays only the device write itself.
         chargeBackendPageWrite(slot, b.state === 'exec_io')
       }
-      bufMap.delete(representativeBufKey(buf.rel[v], buf.blk[v]))
+      deleteBufferMapping(v)
       buf.evictions++
     }
     installBufferMiss(slot, v, rel, blk, forWrite)
@@ -2209,10 +2308,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
   function markDirty(b: number, slot: number): void {
     buf.dirty[b] = 1
-    /* Page changes are sampled before this trip drains its aggregate WAL body.
-     * The current insert position is the latest ordered record available to the
-     * representative page; finishStatement preserves the full byte volume. */
-    buf.pageLsn[b] = wal.insertLsn
+    /* The page LSN advances only when this trip's aggregate record has reached
+     * its end LSN. Until then the owner bit makes the content non-writable. */
     pageLsnOwners[b] |= 1 << slot
     const rel = buf.rel[b]
     if (rel < N_TABLES) {
@@ -2275,7 +2372,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     // way a page dirty at a checkpoint's redo point could escape being written.
     if (size < buf.sampleFrames) {
       for (let b = size; b < buf.sampleFrames; b++) {
-        writeOut(b, false)
+        writeOut(b, 'checkpointer')
         invalidate(b)
       }
     }
@@ -2354,7 +2451,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
    */
   function startFlush(): void {
     flushing = true
-    flushCovered = Math.max(flushTarget, wal.insertLsn)
+    flushTarget = Math.min(flushTarget, wal.insertLsn)
+    flushCovered = wal.insertLsn
     flushBytes = Math.max(0, flushCovered - wal.flushLsn)
     flushDur = (0.085 + Math.min(0.22, flushBytes / (6 * 1024 * 1024))) * ioPressure()
     flushT = 0
@@ -2366,14 +2464,15 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   }
 
   function requestFlush(target: number): void {
-    if (target > flushTarget) flushTarget = target
+    const insertedTarget = Math.min(target, wal.insertLsn)
+    if (insertedTarget > flushTarget) flushTarget = insertedTarget
     if (!flushing) {
       startFlush()
       return
     }
     /* Fsync is visually stretched, but insertion rates are not. Release the
      * requested write now; bytes above flushCovered ride the next fsync. */
-    wal.writeLsn = Math.max(wal.writeLsn, Math.min(target, wal.insertLsn))
+    wal.writeLsn = Math.max(wal.writeLsn, insertedTarget)
     wal.bufferBytes = Math.min(wal.bufferCapacity, wal.insertLsn - wal.writeLsn)
   }
 
@@ -2930,6 +3029,19 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   let ckptRecordTicket = 0
   /** The checkpointer has its own cursor: it sweeps the pool exactly once. */
   let ckptScan = 0
+  let checkpointFlushBuffer = -1
+  let checkpointFlushLsn = 0
+
+  function releaseCheckpointFlushBuffer(): void {
+    if (checkpointFlushBuffer >= 0) {
+      buf.pinned[checkpointFlushBuffer] = 0
+      if (evictionOwner[checkpointFlushBuffer] === 254) {
+        evictionOwner[checkpointFlushBuffer] = 0
+      }
+    }
+    checkpointFlushBuffer = -1
+    checkpointFlushLsn = 0
+  }
 
   function tickCheckpoint(dt: number): void {
     ckpt.elapsed += ckpt.phase === 'idle' ? 0 : dt
@@ -2957,6 +3069,34 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     }
 
     if (ckpt.phase === 'writing') {
+      if (checkpointFlushBuffer >= 0) {
+        const pending = checkpointFlushBuffer
+        if (!buf.valid[pending] || !buf.dirty[pending]) {
+          releaseCheckpointFlushBuffer()
+          ckpt.buffersWritten++
+        } else if (pageLsnOwners[pending] !== 0) {
+          return
+        } else {
+          checkpointFlushLsn = buf.pageLsn[pending]
+          if (wal.flushLsn < checkpointFlushLsn) {
+            requestFlush(checkpointFlushLsn)
+            return
+          }
+          writeOut(pending, 'checkpointer')
+          if (++sCkpt >= stride(1 / Math.max(dt, 1 / 120), 26)) {
+            sCkpt = 0
+            flow('ckpt.sweep', 1, 'page_write', 1.25)
+            flow(
+              rid.ioWrite(buf.rel[pending] < N_TABLES ? buf.rel[pending] : 0),
+              1,
+              'page_write',
+              1.1,
+            )
+          }
+          releaseCheckpointFlushBuffer()
+          ckpt.buffersWritten++
+        }
+      }
       // IsCheckpointOnSchedule(): both the WAL and time criteria are sampled
       // continuously. A workload change during the write phase therefore moves
       // the pace immediately instead of being frozen into one rate captured at
@@ -2991,7 +3131,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         while (ckptScan < buf.sampleFrames) {
           const b = ckptScan++
           if (ckptNeeded[b]) {
-            ckptNeeded[b] = 0
             found = b
             break
           }
@@ -3006,10 +3145,28 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         // cleaned still counts as processed and does not count as written —
         // that split is what makes buffers_checkpoint smaller than the dirty
         // count when the bgwriter is doing its job.
+        if (!buf.dirty[found]) {
+          ckptNeeded[found] = 0
+          ckpt.buffersWritten++
+          continue
+        }
+        if (!pageWalDurable(found)) {
+          if (evictionOwner[found] !== 0) {
+            ckptScan--
+            break
+          }
+          ckptNeeded[found] = 0
+          checkpointFlushBuffer = found
+          checkpointFlushLsn = buf.pageLsn[found]
+          buf.pinned[found] = 1
+          pinT[found] = state.t
+          evictionOwner[found] = 254
+          requestPageWalFlush(found)
+          break
+        }
+        ckptNeeded[found] = 0
         ckpt.buffersWritten++
-        if (!buf.dirty[found]) continue
-        buf.dirty[found] = 0
-        ioWriteAcc++
+        writeOut(found, 'checkpointer')
         if (++sCkpt >= flowStride) {
           sCkpt = 0
           flow('ckpt.sweep', 1, 'page_write', 1.25)
@@ -3097,12 +3254,16 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         evictionOwner[pending] = 0
         bgwriterFlushBuffer = -1
         bgwriterFlushLsn = 0
-      } else if (wal.flushLsn < bgwriterFlushLsn) {
+      } else if (pageLsnOwners[pending] !== 0) {
+        bgw.activity = damp(bgw.activity, 1, 6, dt)
+        return
+      } else if (!pageWalDurable(pending)) {
+        bgwriterFlushLsn = buf.pageLsn[pending]
         requestFlush(bgwriterFlushLsn)
         bgw.activity = damp(bgw.activity, 1, 6, dt)
         return
       } else {
-        writeOut(pending, false)
+        writeOut(pending, 'bgwriter')
         buf.pinned[pending] = 0
         evictionOwner[pending] = 0
         bgwriterFlushBuffer = -1
@@ -3184,16 +3345,16 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       scanned++
       // only frames that are about to be handed out: usage 0, unpinned
       if (buf.dirty[b] && buf.usage[b] === 0 && !buf.pinned[b]) {
-        if (buf.pageLsn[b] > wal.flushLsn) {
+        if (!pageWalDurable(b)) {
           bgwriterFlushBuffer = b
           bgwriterFlushLsn = buf.pageLsn[b]
           buf.pinned[b] = 1
           pinT[b] = state.t
           evictionOwner[b] = 255
-          requestFlush(bgwriterFlushLsn)
+          requestPageWalFlush(b)
           break
         }
-        writeOut(b, false)
+        writeOut(b, 'bgwriter')
         cleaned++
         if (++sBgw >= stride(cleaned / BGW_DELAY, 16)) {
           sBgw = 0
@@ -4214,6 +4375,30 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
    * PATRONI, PROMOTION, TIMELINES, AND REJOIN
    * ====================================================================*/
 
+  function clearInFlightPageWalState(): void {
+    releaseCheckpointFlushBuffer()
+    if (bgwriterFlushBuffer >= 0) buf.pinned[bgwriterFlushBuffer] = 0
+    bgwriterFlushBuffer = -1
+    bgwriterFlushLsn = 0
+    for (let i = 0; i < N_BACKEND_SLOTS; i++) {
+      const x = extras[i]
+      if (x.evictionBuffer >= 0) buf.pinned[x.evictionBuffer] = 0
+      x.evictionBuffer = -1
+      x.evictionFlushLsn = 0
+    }
+    evictionOwner.fill(0)
+    pageLsnOwners.fill(0)
+    buf.pageLsn.fill(0)
+    ckptNeeded.fill(0)
+    ckptScan = 0
+    checkpointFlushBuffer = -1
+    checkpointFlushLsn = 0
+    ckpt.phase = 'idle'
+    ckpt.progress = 0
+    ckpt.buffersToWrite = 0
+    ckpt.buffersWritten = asSampleFrames(0)
+  }
+
   function resetActiveWalAt(lsn: number): void {
     wal.insertLsn = lsn
     wal.writeLsn = lsn
@@ -4227,6 +4412,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     walWriterT = 0
     maintenanceWalPending = 0
     maintenanceFpiPending = 0
+    clearInFlightPageWalState()
 
     const seg0 = Math.floor(lsn / WAL_SEG)
     const base = seg0 - 3
@@ -4271,6 +4457,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   function stopCrashedPrimaryWork(): void {
     pendingTx = 0
     nextArrival = 0
+    clearInFlightPageWalState()
     for (let i = 0; i < N_BACKEND_SLOTS; i++) {
       const b = backends[i]
       const x = extras[i]
@@ -4282,6 +4469,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       x.walPending = 0
       x.walPendingFpi = 0
       x.walPrepared = false
+      x.evictionBuffer = -1
+      x.evictionFlushLsn = 0
       x.planFlat.length = 0
       unpinAll(i)
     }
@@ -6061,7 +6250,18 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
           break
 
         case 'eviction_flush':
-          if (wal.flushLsn >= x.evictionFlushLsn) finishEvictionFlushWait(slot)
+          if (x.evictionBuffer < 0 || !buf.valid[x.evictionBuffer]) {
+            cancelEvictionFlushWait(slot)
+          } else if (!buf.dirty[x.evictionBuffer]) {
+            finishEvictionFlushWait(slot)
+          } else if (pageLsnOwners[x.evictionBuffer] === 0) {
+            x.evictionFlushLsn = buf.pageLsn[x.evictionBuffer]
+            if (wal.flushLsn >= x.evictionFlushLsn) finishEvictionFlushWait(slot)
+            else requestFlush(x.evictionFlushLsn)
+          }
+          if (b.state === 'eviction_flush' && b.stateT > 8) {
+            cancelEvictionFlushWait(slot)
+          }
           break
 
         case 'commit_wait': {
@@ -6922,10 +7122,16 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     tickPostmaster(dt)
     tickLocks(dt)
     tickBackends(dt)
-    tickBgwriter(dt)
+    const activeLeader = ha.currentLeader === null
+      ? null
+      : state.cluster.nodes[clusterNodeIndex(ha.currentLeader)]
+    if (activeLeader?.online) tickBgwriter(dt)
     if (
-      ha.transition.kind !== 'switchover'
-      || ha.transition.status !== 'waiting'
+      activeLeader?.online
+      && (
+        ha.transition.kind !== 'switchover'
+        || ha.transition.status !== 'waiting'
+      )
     ) {
       tickCheckpoint(dt)
     }
@@ -7185,6 +7391,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     runtimeCkpt.numRequested = 0
     ckptNeeded.fill(0)
     ckptScan = 0
+    checkpointFlushBuffer = -1
+    checkpointFlushLsn = 0
     ckptWriteEnd = 0
     ckptSyncEnd = 0
     ckptRecordTicket = 0

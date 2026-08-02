@@ -309,6 +309,7 @@ export interface ActivityWaitCounts {
   lock: number
   io: number
   commit: number
+  walSync: number
   idleTx: number
   cpu: number
   idle: number
@@ -321,6 +322,7 @@ export function activityWaitCounts(s: SimState, c: Collector): ActivityWaitCount
     lock: 0,
     io: 0,
     commit: 0,
+    walSync: 0,
     idleTx: 0,
     cpu: 0,
     idle: 0,
@@ -328,6 +330,7 @@ export function activityWaitCounts(s: SimState, c: Collector): ActivityWaitCount
   for (const row of activityRows(s, c, { aux: false })) {
     counts.total++
     counts[row.bucket ?? 'cpu']++
+    if (row.wet === 'IO' && row.we === 'WalSync') counts.walSync++
   }
   return counts
 }
