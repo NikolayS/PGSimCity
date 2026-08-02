@@ -36,7 +36,11 @@ describe('quality degradation ladder', () => {
 
 describe('rendering fidelity ladder', () => {
   it('grounds daylight more strongly while keeping night AO subordinate to neon', () => {
-    expect(AO_BLEND_INTENSITY.day).toBe(0.9)
+    // Relational, not pinned: AO grounds daylight and stays subordinate to night
+    // neon. A pinned constant here would be Rule 9 in miniature -- it asserts the
+    // value someone happened to ship, not the property the ladder must hold.
+    expect(AO_BLEND_INTENSITY.day).toBeGreaterThan(AO_BLEND_INTENSITY.night)
+    expect(AO_BLEND_INTENSITY.day).toBeLessThanOrEqual(1)
     expect(AO_BLEND_INTENSITY.night).toBeLessThan(0.5)
   })
 

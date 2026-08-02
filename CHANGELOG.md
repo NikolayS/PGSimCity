@@ -11,6 +11,106 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+## [0.36.1] - 2026-08-02
+
+### Fixed
+
+- **The index-walk catalog recipe was wrong four ways.** `ORDER BY a.attnum` gave
+  table column order rather than index key order — for a btree, the single most
+  consequential fact. There was no `indnkeyatts` split, so `INCLUDE` payload
+  columns read as indexed; expression indexes vanished because their `indkey`
+  entries are `0`; and without an `indisvalid` filter an invalid index left by a
+  failed `CREATE INDEX CONCURRENTLY` read as an available access path — exactly
+  the case the step exists to teach. Nothing displayed was false only because the
+  seed schema happened to be single-column, valid and non-expression. Verified
+  against a real PostgreSQL 18.3 cluster.
+- **The 45-pair semantic colour claim was day-only, presented as global.** Night
+  ran the same aerial-perspective haze, but the night test applied no fog, so the
+  minimum pair fell to 0.03605 / 0.03424 / 0.03439 against the project's own
+  0.038 floor. Fixed in the artifact, not the assertion: fog density, the haze
+  ceiling and all five presets are byte-identical; two semantic hues moved by
+  ~0.007 OKLab each. The night test now applies fog at every tier.
+- **`START HERE` was untappable on a phone** — 7px with `min-height: 0`, because
+  `.machine-nav button` outranks the mobile `button` minimum on specificity. Now
+  86×44px. The browser audit's programmatic `.click()` had proved the handler was
+  bound, not that a finger could reach it.
+- Two vitest timeouts set to `0` (unbounded) now have real bounds, and the
+  vacuum-blockade scenario's lesson — terminate the blocking transaction and
+  vacuum reclaims — is covered again by directional assertions rather than the
+  magic thresholds that were removed.
+
+### Process
+
+- **v0.36.0 was tagged while its review panel was still running**, and the panel
+  then returned two blocking defects that were by then live. `CLAUDE.md` now
+  states that "an independent review panel has read it" means the panel has
+  *reported*, not been *dispatched*, and that when a deadline and the panel
+  conflict, the release ships less rather than sooner.
+
+### Known
+
+- The catalog recipe omits partial-index predicates, the access method, and
+  opclass/`DESC`/`COLLATE` modifiers; the neighbouring `\d` implementation keeps
+  them. The mobile touch guard asserts CSS source text rather than the rendered
+  box, so three sibling header controls remain below the 44px minimum. Both are
+  logged for the next release.
+
+## [0.36.0] - 2026-08-02
+
+### Added
+
+- **The Machine adopts your first query.** `SELECT 1` becomes a four-statement
+  walk through real `pg_class`, `pg_attribute` and `pg_index`, then
+  `EXPLAIN (ANALYZE, BUFFERS)` twice on the same table, with `Result`,
+  `Index Scan` and `Seq Scan` receipts retained side by side.
+- **First person has hands** that reach for the autovacuum lever, push the
+  control-centre door, and move differently underwater.
+- A graphics pass: contact darkening and aerial perspective, with all 45 semantic
+  colour pairs held above threshold and frame time unchanged.
+
+### Fixed
+
+- Reference coverage in `docs-storage.ts` is 44 of 44, with every PostgreSQL 18
+  section number verified. "Recovering Using a Continuous Archive Backup" is
+  §25.3.5, now enforced by a test.
+- The unexplained suite failure recorded in 0.33.0 is fixed. Five agents running
+  in parallel made it reproducible — three of ten loaded runs — and the fixes are
+  at the cause: duplicate browser audits consolidated, a vacuum assertion that
+  waited for a full cycle now asserts released xmin, and host-speed deadlines
+  removed from deterministic checks.
+
+### Held back
+
+- **A PgBouncer connection pooler**, built and reverted before release on four
+  blocking defects: the pooled run silently discarded ~3,050 transactions/second
+  into a counter absent from `SimStats` while the panel read "0 refused"; session
+  mode was transaction multiplexing with its wait attribution erased; the
+  headline throughput gain was `batchSize` collapsing under the admission gate
+  rather than the pooling mechanism; and "not a speed feature" was too categorical
+  against PgBouncer's own documented aim.
+
+## [0.35.0] - 2026-08-02
+
+### Added
+
+- **One timeline fork, enforced in the restore path.** A promotion increments the
+  timeline and writes `00000002.history`; parent and child archive frontiers are
+  tracked separately; `recovery_target_timeline = latest` follows the history file
+  across the fork while `current` stays on the backup's timeline; and the
+  divergent tail is quantified rather than hidden.
+- Recovery requires evidence: a time target is reached only when a
+  transaction-end record's timestamp crosses it. The archive is re-read live
+  rather than snapshotted at restore start. The fork segment is copied forward as
+  `XLogFileCopy` does. A backup spanning a promotion is stored as two WAL ranges.
+
+### Fixed
+
+- Six review rounds' worth of defects, including a fabricated archive-durability
+  claim that appeared four times by four different routes before an invariant
+  closed the class, and a correction that over-corrected into refusing every
+  cross-fork PITR.
+
+
 ## [0.34.0] — 2026-08-02
 
 ### Restore drills now distinguish evidence from claims

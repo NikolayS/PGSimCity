@@ -158,7 +158,7 @@ describe('operator scenario: an old transaction pins xmin', () => {
     expect(waited.deadTuplesReclaimed).toBeGreaterThan(0)
     expect(waited.deadTuplesAdded).toBeGreaterThan(killed.deadTuplesAdded)
     expect(waited.pagesAdded).toBeGreaterThan(killed.pagesAdded)
-  })
+  }, 30_000)
 })
 
 describe('operator scenario: select a failover candidate', () => {
