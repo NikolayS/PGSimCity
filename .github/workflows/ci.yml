@@ -1,7 +1,16 @@
 name: CI
 
 # Pull requests never reach the Pages deploy workflow, so validate them here.
+#
+# `push` matters as much as `pull_request`: this project's normal flow is the
+# owner merging agent branches straight into main, which no pull request ever
+# sees. With PR-only triggers the suite gated nothing on the path actually used —
+# typecheck and build ran, 783 tests did not. Verified by pushing a deliberately
+# failing assertion: `Tests (fast)` went red while typecheck and build stayed
+# green (run 30801057070).
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
