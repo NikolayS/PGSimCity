@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  checkGucContexts,
   compareSetting,
   expectedForMajor,
   loadOracleRegistry,
@@ -41,7 +42,84 @@ describe('PostgreSQL oracle claim registry', () => {
     expect(registry.claims.gucDefaults).toContainEqual(
       expect.objectContaining({ setting: 'autovacuum_vacuum_max_threshold' }),
     )
+    expect(registry.claims.gucContexts.map((claim) => claim.setting)).toEqual([
+      'shared_buffers',
+      'wal_buffers',
+      'max_connections',
+      'max_locks_per_transaction',
+      'max_prepared_transactions',
+      'max_wal_senders',
+      'max_replication_slots',
+      'checkpoint_timeout',
+      'checkpoint_completion_target',
+      'max_wal_size',
+      'bgwriter_lru_maxpages',
+      'bgwriter_delay',
+      'synchronous_commit',
+      'synchronous_standby_names',
+      'wal_level',
+      'full_page_writes',
+      'autovacuum',
+      'autovacuum_vacuum_scale_factor',
+      'autovacuum_max_workers',
+      'track_io_timing',
+      'logging_collector',
+      'shared_preload_libraries',
+    ])
     expect(registry.indexWalk.catalogSql).toContain('pg_catalog.pg_index')
+  })
+
+  it('qualifies the autovacuum worker context at its PostgreSQL 18 boundary', async () => {
+    const registry = await loadOracleRegistry()
+    const claim = registry.claims.gucContexts.find(
+      (candidate) => candidate.setting === 'autovacuum_max_workers',
+    )
+
+    expect(claim.cityClaim).toMatch(/PostgreSQL 17.*postmaster.*PostgreSQL 18.*sighup/is)
+    expect(expectedForMajor(claim, 13)).toMatchObject({ context: 'postmaster' })
+    expect(expectedForMajor(claim, 17)).toMatchObject({ context: 'postmaster' })
+    expect(expectedForMajor(claim, 18)).toMatchObject({ context: 'sighup' })
+  })
+
+  it('compares registered contexts with pg_settings in one query', async () => {
+    const query = async () => [
+      { name: 'stable_setting', context: 'sighup' },
+      { name: 'changed_setting', context: 'postmaster' },
+    ]
+    const registry = {
+      claims: {
+        gucContexts: [
+          {
+            setting: 'stable_setting',
+            cityClaim: 'reloadable',
+            expected: { context: 'sighup' },
+          },
+          {
+            setting: 'changed_setting',
+            cityClaim: 'version-qualified',
+            expected: [
+              { from: 13, to: 17, context: 'postmaster' },
+              { from: 18, context: 'sighup' },
+            ],
+          },
+        ],
+      },
+    }
+
+    await expect(checkGucContexts(query, registry, 17)).resolves.toEqual([
+      {
+        claim: 'GUC-context/stable_setting',
+        city: 'reloadable: sighup',
+        server: 'sighup',
+        verdict: 'MATCH',
+      },
+      {
+        claim: 'GUC-context/changed_setting',
+        city: 'version-qualified: postmaster',
+        server: 'postmaster',
+        verdict: 'MATCH',
+      },
+    ])
   })
 
   it('selects versioned expectations without special-casing a major in the tool', () => {

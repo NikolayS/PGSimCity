@@ -17,12 +17,83 @@ const expected = (
   display = `${value}${unit}`,
 ) => ({ value, unit, compare, display })
 
+export type PostgreSqlGucContext = 'postmaster' | 'sighup' | 'user' | 'superuser'
+
+interface GucContextExpectation {
+  context: PostgreSqlGucContext
+  from?: number
+  to?: number
+}
+
+interface GucContextClaim {
+  setting: string
+  cityClaim: string
+  expected: GucContextExpectation | readonly GucContextExpectation[]
+}
+
+const stableContext = (context: PostgreSqlGucContext): GucContextExpectation => ({ context })
+const stableContextClaim = 'Same context on PostgreSQL 13, 17, and 18'
+
+/*
+ * This is the complete pg_settings.context surface stated or operationally
+ * implied by the city. Version changes belong in data so the live oracle sees
+ * them on both sides of the boundary.
+ */
+export const POSTGRESQL_GUC_CONTEXTS = [
+  { setting: 'shared_buffers', cityClaim: stableContextClaim, expected: stableContext('postmaster') },
+  { setting: 'wal_buffers', cityClaim: stableContextClaim, expected: stableContext('postmaster') },
+  { setting: 'max_connections', cityClaim: stableContextClaim, expected: stableContext('postmaster') },
+  { setting: 'max_locks_per_transaction', cityClaim: stableContextClaim, expected: stableContext('postmaster') },
+  { setting: 'max_prepared_transactions', cityClaim: stableContextClaim, expected: stableContext('postmaster') },
+  { setting: 'max_wal_senders', cityClaim: stableContextClaim, expected: stableContext('postmaster') },
+  { setting: 'max_replication_slots', cityClaim: stableContextClaim, expected: stableContext('postmaster') },
+  { setting: 'checkpoint_timeout', cityClaim: stableContextClaim, expected: stableContext('sighup') },
+  { setting: 'checkpoint_completion_target', cityClaim: stableContextClaim, expected: stableContext('sighup') },
+  { setting: 'max_wal_size', cityClaim: stableContextClaim, expected: stableContext('sighup') },
+  { setting: 'bgwriter_lru_maxpages', cityClaim: stableContextClaim, expected: stableContext('sighup') },
+  { setting: 'bgwriter_delay', cityClaim: stableContextClaim, expected: stableContext('sighup') },
+  { setting: 'synchronous_commit', cityClaim: stableContextClaim, expected: stableContext('user') },
+  { setting: 'synchronous_standby_names', cityClaim: stableContextClaim, expected: stableContext('sighup') },
+  { setting: 'wal_level', cityClaim: stableContextClaim, expected: stableContext('postmaster') },
+  { setting: 'full_page_writes', cityClaim: stableContextClaim, expected: stableContext('sighup') },
+  { setting: 'autovacuum', cityClaim: stableContextClaim, expected: stableContext('sighup') },
+  { setting: 'autovacuum_vacuum_scale_factor', cityClaim: stableContextClaim, expected: stableContext('sighup') },
+  {
+    setting: 'autovacuum_max_workers',
+    cityClaim: 'PostgreSQL 17 and earlier: postmaster; PostgreSQL 18 and later: sighup',
+    expected: [
+      { from: 13, to: 17, context: 'postmaster' },
+      { from: 18, context: 'sighup' },
+    ],
+  },
+  { setting: 'track_io_timing', cityClaim: stableContextClaim, expected: stableContext('superuser') },
+  { setting: 'logging_collector', cityClaim: stableContextClaim, expected: stableContext('postmaster') },
+  { setting: 'shared_preload_libraries', cityClaim: stableContextClaim, expected: stableContext('postmaster') },
+] as const satisfies readonly GucContextClaim[]
+
+export function postgresGucContext(
+  setting: (typeof POSTGRESQL_GUC_CONTEXTS)[number]['setting'],
+  major = CLAIM_VALUES.postgresqlVersion.major,
+): PostgreSqlGucContext {
+  const claim = POSTGRESQL_GUC_CONTEXTS.find((candidate) => candidate.setting === setting)
+  if (!claim) throw new Error(`No registered pg_settings.context claim for ${setting}`)
+  const variants = (Array.isArray(claim.expected)
+    ? claim.expected
+    : [claim.expected]) as readonly GucContextExpectation[]
+  const match = variants.find((candidate) =>
+    (candidate.from === undefined || major >= candidate.from)
+    && (candidate.to === undefined || major <= candidate.to))
+  if (!match) throw new Error(`No pg_settings.context claim for ${setting} on PostgreSQL ${major}`)
+  return match.context
+}
+
 /*
  * Mechanically checkable PostgreSQL facts are data here, not branches in the
  * harness. Some entries describe stock defaults stated in prose; the explicit
  * city-model entries preserve intentional teaching-scale divergences.
  */
 export const POSTGRESQL_ORACLE_CLAIMS = {
+  gucContexts: POSTGRESQL_GUC_CONTEXTS,
   gucDefaults: [
     {
       id: 'postgres-default/recovery_target_timeline',

@@ -425,7 +425,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What you would see in production',
         body:
-          'In the server log this looks like a terse sequence: a message that a server process was terminated by signal 9, then that the server is terminating all other active server processes, then that all connections were closed because another server process exited abnormally, then the database system is in recovery mode. Applications see every connection drop at the same instant. Recovery time is bounded by how much WAL was written since the last checkpoint, which is exactly what `checkpoint_timeout` and `max_wal_size` are trading against.',
+          'The server log is a terse sequence: `client backend (PID …) was terminated by signal 9: Killed`; `terminating any other active server processes`; `all server processes terminated; reinitializing`; `database system was not properly shut down; automatic recovery in progress`; `redo starts at …`; `redo done at …`; and `database system is ready to accept connections`. Surviving clients, not the server log, receive `WARNING: terminating connection because of crash of another server process` and its rollback detail. A client that tries to reconnect during recovery may receive `FATAL: the database system is in recovery mode`; that is not an unconditional recovery-status line in the server log. Applications still see every connection drop at the same instant. Recovery time is bounded by how much WAL was written since the last checkpoint, which is exactly what `checkpoint_timeout` and `max_wal_size` are trading against.',
       },
       {
         heading: 'What the city models',
@@ -1508,7 +1508,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'How to run it honestly',
         body:
-          '`EXPLAIN` alone gives you only estimates; `EXPLAIN (ANALYZE)` actually runs the statement, so never run it on a `DELETE` outside a transaction you intend to roll back. Timing instrumentation itself costs something on systems with a slow clock — `EXPLAIN (ANALYZE, TIMING OFF)` tells you if that is distorting the result. Turn on `track_io_timing` to get real I/O times in the buffers output. And for the queries you cannot reproduce by hand, `auto_explain` with a duration threshold captures the plan that was actually used in production, which is frequently not the plan you get in psql.',
+          '`EXPLAIN` alone gives you only estimates; `EXPLAIN (ANALYZE)` actually runs the statement, so never run it on a `DELETE` outside a transaction you intend to roll back. Timing instrumentation itself costs something on systems with a slow clock — `EXPLAIN (ANALYZE, TIMING OFF)` tells you if that is distorting the result. Turn on `track_io_timing` to get real I/O times in the buffers output. For cluster-wide capture of queries you cannot reproduce by hand, add `auto_explain` to `shared_preload_libraries` and restart before setting its duration threshold. It then records the plan that was actually used in production, which is frequently not the plan you get in psql.',
       },
       {
         heading: 'What the city shows',

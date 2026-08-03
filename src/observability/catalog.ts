@@ -310,7 +310,7 @@ export const CATALOG: CatalogEntry[] = [
     docs: `${MANUAL}view-pg-settings.html`,
     coverage: 'partial',
     coverageNote:
-      'These are the model\'s own knobs, reported under the real GUC names. Changing one here changes the running model, exactly as a SET or a reload would.',
+      'These are the model\'s own knobs, reported under real GUC names, and city controls change the model immediately. On a real server, pg_settings.context is the operational rule: user and superuser settings can take effect with SET, sighup settings take effect after a reload, and postmaster settings require a restart and maintenance window.',
     projection: 'settings',
   },
   {
@@ -380,7 +380,7 @@ export const CATALOG: CatalogEntry[] = [
     docs: `${MANUAL}pgstatstatements.html`,
     coverage: 'absent',
     coverageNote:
-      'The city retains aggregate rolling p50/p99 model-time trips, not per-normalised-statement history, so this result stays absent. Transactions carried by one backend trip share one latency observation, so within-batch variance is not modeled, and 30 Hz integration quantizes observations to 33.33 model ms steps. PostgreSQL’s pg_stat_statements exposes mean_exec_time and stddev_exec_time but no percentiles. Production p50/p99 needs request tracing or a metrics histogram; the pg_stat_monitor extension can retain a response-time histogram inside PostgreSQL.',
+      'The city retains aggregate rolling p50/p99 model-time trips, not per-normalised-statement history, so this result stays absent. Transactions carried by one backend trip share one latency observation, so within-batch variance is not modeled, and 30 Hz integration quantizes observations to 33.33 model ms steps. PostgreSQL’s pg_stat_statements exposes mean_exec_time and stddev_exec_time but no percentiles. On a real cluster, add pg_stat_statements to shared_preload_libraries, restart, then run CREATE EXTENSION pg_stat_statements in each database where you will query it; creating the extension without the preload leaves the view unusable. Production p50/p99 needs request tracing or a metrics histogram; the pg_stat_monitor extension can retain a response-time histogram inside PostgreSQL.',
     version:
       'total_time became total_exec_time in 13 when planning time was split out. PostgreSQL 13 lacks toplevel, the JIT columns, stats_since and minmax_stats_since; it reports only blk_read_time and blk_write_time rather than the shared_/local_/temp_ block timing columns introduced in PostgreSQL 17. PostgreSQL 18 added wal_buffers_full, parallel_workers_to_launch and parallel_workers_launched.',
   },
