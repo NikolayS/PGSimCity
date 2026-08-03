@@ -1107,7 +1107,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What autovacuum does with them',
         body:
-          'Autovacuum workers read these counters to decide what to work on; the launcher only picks which database gets the next worker. A table qualifies for vacuum when its dead tuple estimate exceeds `autovacuum_vacuum_threshold` plus `autovacuum_vacuum_scale_factor` times its live tuple count — 50 plus 20% by default, which is far too lazy for a large hot table and is the most commonly overridden pair of settings in Postgres. Analyze has its own threshold, and since PG 13 inserts alone can trigger a vacuum through `autovacuum_vacuum_insert_threshold`, so that append-only tables still get their visibility map maintained.',
+          'Autovacuum workers read these counters to decide what to work on; the launcher only picks which database gets the next worker. The regular trigger starts with `autovacuum_vacuum_threshold` plus `autovacuum_vacuum_scale_factor` times the live tuple count — 50 plus 20% by default. PostgreSQL 18’s new `autovacuum_vacuum_max_threshold` caps that result at 100,000,000 tuples by default; PostgreSQL 17 and older have no cap. The city models the uncapped threshold-plus-scale formula only, which is materially different for very large tables even though its teaching tables never approach the cap. Analyze has its own threshold, and since PG 13 inserts alone can trigger a vacuum through `autovacuum_vacuum_insert_threshold`, so that append-only tables still get their visibility map maintained.',
       },
       {
         heading: 'Two things people conflate',

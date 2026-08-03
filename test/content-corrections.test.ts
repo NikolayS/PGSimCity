@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 import { createBus } from '../src/core/bus'
+import { CLAIM_VALUES } from '../src/core/claims'
 import { createCollector } from '../src/observability/collector'
 import { CATALOG } from '../src/observability/catalog'
 import { ALL_STEPS, ALL_VERDICTS } from '../src/observability/paths'
@@ -40,11 +41,29 @@ describe('PostgreSQL 18 content corrections', () => {
 
   it('records the major-version target and current bulk-read strategy durably', () => {
     const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8')
+    const checkpointer = DOCS_STORAGE.find((doc) => doc.id === 'checkpointer')!
+    const launcher = DOCS_STORAGE.find((doc) => doc.id === 'autovac.launcher')!
+    const stats = DOCS_MEMORY.find((doc) => doc.id === 'stats.shmem')!
+    const vacuumVerdict = ALL_VERDICTS.find((verdict) => verdict.id === 'v.av_tuning')!
+    const statements = CATALOG.find((entry) => entry.id === 'pg_stat_statements')!
+    const checkpointerCopy = checkpointer.sections.map((section) => section.body).join('\n')
+    const launcherCopy = launcher.sections.map((section) => section.body).join('\n')
+    const statsCopy = stats.sections.map((section) => section.body).join('\n')
 
     expect(readme).toContain('targets the PostgreSQL 18 major line')
     expect(readme).toContain('fixed 32-frame ring')
     expect(bodies).toContain('io_combine_limit')
     expect(`${bodies}\n${diagnosticCopy}`).not.toMatch(/small (?:256 kB|256 KiB) ring/i)
+    expect(CLAIM_VALUES.timelineRecovery.defaultDisclosure).toMatch(/since PostgreSQL 12/i)
+    expect(CLAIM_VALUES.timelineRecovery.defaultDisclosure).toMatch(/PostgreSQL 11 and older.*current/i)
+    expect(checkpointerCopy).toMatch(/PostgreSQL 14.*0\.9.*13 and older.*0\.5/is)
+    for (const copy of [launcherCopy, statsCopy, vacuumVerdict.mechanism]) {
+      expect(copy).toContain('autovacuum_vacuum_max_threshold')
+      expect(copy).toContain('100,000,000')
+    }
+    expect(launcherCopy).toMatch(/city.*does not (?:implement|model).*maximum|city.*uncapped/is)
+    expect(statements.version).toMatch(/PostgreSQL 18.*wal_buffers_full.*parallel_workers/is)
+    expect(statements.version).toMatch(/PostgreSQL 13.*toplevel.*JIT.*stats_since/is)
   })
 
   it('does not overclaim what cumulative statistics prove', () => {

@@ -448,6 +448,42 @@ body {
   letter-spacing: 0.16em;
   text-transform: uppercase;
 }
+.city-version-provenance {
+  width: min(540px, calc(100vw - 40px));
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+  color: var(--ink-dim);
+}
+.city-version-provenance > [data-disclosure] {
+  margin: 0;
+  font-family: var(--f-mono);
+  font-size: max(9px, var(--fs-micro));
+  font-weight: 650;
+  line-height: 1.45;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.city-version-provenance > .pg-correction {
+  margin: 0;
+  padding: 0;
+  border-top: 0;
+  font-size: max(9px, var(--fs-micro));
+}
+#hud-top > .city-version-provenance {
+  width: fit-content;
+  max-width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 3px 12px;
+  margin: 4px 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid var(--line-hair);
+  background: var(--bg-panel);
+  text-align: right;
+}
 .boot-bar {
   margin-top: 18px;
   width: 260px;

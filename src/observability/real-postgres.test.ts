@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
+import { CLAIM_VALUES } from '../core/claims'
 import type { RealPostgresSource } from './real-postgres'
 import {
   cityRelationForPlan,
@@ -85,6 +86,11 @@ describe.sequential('PGlite source', () => {
   })
 
   it('seeds the five city relations and returns real results and a real plan', async () => {
+    expect(source.serverVersion).toBe(CLAIM_VALUES.pgliteVersion.postgresqlVersion)
+    expect(source.versionText).toMatch(
+      new RegExp(`^${CLAIM_VALUES.pgliteVersion.reportedPrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+    )
+
     const catalog = await source.query(
       `SELECT tablename
        FROM pg_catalog.pg_tables

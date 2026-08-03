@@ -5,7 +5,8 @@ import './styles/ui.css'
 
 import { startAnalytics } from './core/analytics'
 import { createBus } from './core/bus'
-import { protectCorrectionLink } from './core/corrections'
+import { CLAIM_VALUES } from './core/claims'
+import { createCorrectionPath, displayedClaim, protectCorrectionLink } from './core/corrections'
 import { Registry } from './core/registry'
 import { installCityComponentRoutes } from './core/city-route'
 import {
@@ -74,6 +75,22 @@ const bootCorrectionLink = document.querySelector<HTMLAnchorElement>(
   '#boot a[data-correction-link="true"]',
 )
 if (bootCorrectionLink) protectCorrectionLink(bootCorrectionLink)
+const cityVersionProvenance = document.querySelector<HTMLElement>(
+  '#city-version-provenance',
+)
+const cityVersionClaim = cityVersionProvenance?.querySelector<HTMLElement>(
+  '[data-disclosure="city-postgresql-version"]',
+)
+if (cityVersionProvenance && cityVersionClaim) {
+  cityVersionClaim.textContent =
+    `This city's model and explanations describe ${CLAIM_VALUES.postgresqlVersion.referenceLabel}.`
+  createCorrectionPath(cityVersionProvenance, {
+    surface: 'City / PostgreSQL version provenance',
+    panel: 'Teaching target',
+    source: 'src/core/claims.ts#CLAIM_VALUES.postgresqlVersion; src/main.ts',
+    claim: () => displayedClaim(cityVersionClaim),
+  })
+}
 const analytics = startAnalytics('city')
 
 /* ============================================================================
@@ -447,6 +464,9 @@ async function boot(): Promise<void> {
   frame()
 
   finishBoot(bootSurface)
+  if (cityVersionProvenance) {
+    document.getElementById('hud-top')?.append(cityVersionProvenance)
+  }
 
   /* --- teardown (hot reload / navigation) ---------------------------------- */
 

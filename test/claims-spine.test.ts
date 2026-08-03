@@ -76,7 +76,7 @@ function lineOf(text: string, index: number): number {
 }
 
 describe('claims and conventions spine', () => {
-  it('owns exactly the twenty-two drift-prone contracts across both passes', () => {
+  it('owns exactly the twenty-four drift-prone contracts across both passes', () => {
     expect(Object.keys(CLAIMS)).toEqual([
       'appVersion',
       'walSegment',
@@ -96,6 +96,7 @@ describe('claims and conventions spine', () => {
       'eventConvention',
       'diagnoseBranchGates',
       'postgresqlVersion',
+      'pgliteVersion',
       'markdownRendering',
       'reviewStatus',
       'machineSynchronousCommitComparison',
@@ -944,5 +945,38 @@ describe('claims and conventions spine', () => {
       .toContain(version.sourceBranch)
     expect(read('observability/README.md'), `postgresqlVersion: Diagnose:manual path disagrees with ${owner}`)
       .toContain(`postgresql.org/docs/${version.major}`)
+
+    const city = read('index.html')
+    expect(city, `postgresqlVersion: city:visible teaching target disagrees with ${owner}`)
+      .toContain(`This city's model and explanations describe ${version.referenceLabel}.`)
+    expect(city, 'postgresqlVersion: city:visible teaching target lacks a disclosure marker')
+      .toContain('data-disclosure="city-postgresql-version"')
+
+    const machine = read('machine/index.html')
+    expect(machine, `postgresqlVersion: Machine:model teaching target disagrees with ${owner}`)
+      .toContain(`Model and explanations: ${version.referenceLabel}`)
+    expect(machine, 'postgresqlVersion: Machine:model teaching target lacks a disclosure marker')
+      .toContain('data-disclosure="machine-postgresql-version"')
+
+    const diagnose = read('src/observability/main.ts')
+    expect(diagnose, `postgresqlVersion: Diagnose:visible teaching target bypasses ${owner}`)
+      .toContain('CLAIM_VALUES.postgresqlVersion.referenceLabel')
+    expect(diagnose, 'postgresqlVersion: Diagnose:visible teaching target lacks a disclosure marker')
+      .toContain("disclosure: 'diagnose-postgresql-version'")
+
+    const pglite = CLAIM_VALUES.pgliteVersion
+    const lock = JSON.parse(read('package-lock.json')) as {
+      packages: Record<string, { version?: string }>
+    }
+    agrees(
+      'pgliteVersion',
+      'dependency:package-lock',
+      lock.packages['node_modules/@electric-sql/pglite']?.version,
+      pglite.packageVersion,
+    )
+    expect(machine, `pgliteVersion: Machine:separate engine provenance disagrees with ${CLAIMS.pgliteVersion.owner}`)
+      .toContain(`PGlite engine: ${pglite.reportedPrefix}`)
+    expect(machine, 'pgliteVersion: Machine:separate engine provenance does not name its evidence')
+      .toContain('checked separately with SELECT version()')
   })
 })

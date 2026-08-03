@@ -1612,7 +1612,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'How to tune it',
-        body: 'Read PostgreSQL checkpoint messages and correlate them with WAL generation, `num_requested`, explicit maintenance and backup activity. If WAL pressure is the verified cause, raise `max_wal_size` against measured peak WAL rate and available disk; if explicit requests are the cause, changing it will not help. Lengthening `checkpoint_timeout` can reduce full-page-image frequency but may lengthen crash recovery, so decide it against the actual RTO. Leave `checkpoint_completion_target` at 0.9 unless measurements establish a reason to finish writes earlier.',
+        body: 'Read PostgreSQL checkpoint messages and correlate them with WAL generation, `num_requested`, explicit maintenance and backup activity. If WAL pressure is the verified cause, raise `max_wal_size` against measured peak WAL rate and available disk; if explicit requests are the cause, changing it will not help. Lengthening `checkpoint_timeout` can reduce full-page-image frequency but may lengthen crash recovery, so decide it against the actual RTO. On PostgreSQL 14 and later, leave `checkpoint_completion_target` at its 0.9 default unless measurements establish a reason to finish writes earlier; PostgreSQL 13 and older default to 0.5.',
       },
       {
         heading: 'What the city measures',
@@ -1740,7 +1740,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'The threshold formula',
-        body: 'A table is vacuumed when its dead tuples exceed `autovacuum_vacuum_threshold + autovacuum_vacuum_scale_factor × reltuples` — by default 50 + 20% of the table. Analyze uses the same shape with a 10% factor. Since PostgreSQL 13 there is also an insert-driven trigger (`autovacuum_vacuum_insert_threshold`, 1000 plus 20%), which finally gave append-only tables a reason to get vacuumed at all, so their pages get frozen and marked all-visible before wraparound forces the issue.',
+        body: 'The regular dead-tuple trigger starts with `autovacuum_vacuum_threshold + autovacuum_vacuum_scale_factor × reltuples` — by default 50 + 20% of the table. PostgreSQL 18 caps that result with the new `autovacuum_vacuum_max_threshold`, whose default is 100,000,000 tuples; PostgreSQL 17 and older have no maximum. Analyze uses the threshold-plus-scale shape with a 10% factor. Since PostgreSQL 13 there is also an insert-driven trigger (`autovacuum_vacuum_insert_threshold`, 1000 plus 20%), which finally gave append-only tables a reason to get vacuumed at all, so their pages get frozen and marked all-visible before wraparound forces the issue.',
       },
       {
         heading: 'Why the defaults are too timid',
@@ -1756,7 +1756,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Where this model cheats',
-        body: 'The naptime here is 12 seconds, not 60, and this city has exactly one database — otherwise the yard would sit empty for the length of a visit. The threshold formula and phase order follow PostgreSQL. The city does not implement individual page cost points or dynamic rebalancing of the shared worker budget; it gives each worker an equal share of one quarter of modeled device throughput and realizes that ceiling as alternating work and `VacuumDelay` sleep slices.',
+        body: 'The naptime here is 12 seconds, not 60, and this city has exactly one database — otherwise the yard would sit empty for the length of a visit. The city uses the uncapped threshold-plus-scale formula and does not implement PostgreSQL 18’s `autovacuum_vacuum_max_threshold`; its tiny teaching tables never approach the default 100,000,000-tuple maximum. The phase order follows PostgreSQL. The city does not implement individual page cost points or dynamic rebalancing of the shared worker budget; it gives each worker an equal share of one quarter of modeled device throughput and realizes that ceiling as alternating work and `VacuumDelay` sleep slices.',
       },
     ],
     metrics: [

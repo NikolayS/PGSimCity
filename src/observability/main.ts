@@ -443,6 +443,13 @@ function renderHome(): HTMLElement {
     el('p', { class: 'eyebrow', text: 'POSTGRESQL OBSERVABILITY, FROM THE OTHER END' }),
     el('h1', { text: 'You do not have a question about pg_stat_activity. You have a database that is slow.' }),
     el('p', {
+      class: 'version-provenance',
+      data: { disclosure: 'diagnose-postgresql-version' },
+      text:
+        `Catalog shapes and explanations on this page describe ${CLAIM_VALUES.postgresqlVersion.referenceLabel}. `
+        + 'The version rail flags whole instruments missing from older majors; each instrument’s version note explains changed columns.',
+    }),
+    el('p', {
       class: 'lede',
       text:
         'There are about fifty statistics views in PostgreSQL and every one of them is an answer. This page keeps the questions attached. Pick a complaint, and the simulation behind this page — the same one that runs the city — is put into a state that actually produces it. Then you read real rows out of it, one view at a time, until you reach the column that proves what is wrong.',
@@ -688,7 +695,7 @@ function renderInstrument(e: CatalogEntry): HTMLElement {
     body.push(
       el(
         'aside',
-        { class: 'blindspot' },
+        { class: 'blindspot', data: { disclosure: `diagnose-${e.id}-version-scope` } },
         el('span', { class: 'note__k', text: `BLIND SPOT ON PG ${pgVersion}` }),
         el('p', { text: `${e.id} first appears in PostgreSQL ${e.since}. On the version you have selected it does not exist, and every question it would have answered has to be answered some other way — or not at all.` }),
         e.version ? md(e.version) : null,
@@ -740,7 +747,12 @@ function renderInstrument(e: CatalogEntry): HTMLElement {
     )
   }
   if (e.version && !missing) {
-    body.push(el('section', { class: 'block' }, el('h3', { text: 'What changed, and when' }), md(e.version)))
+    body.push(el(
+      'section',
+      { class: 'block', data: { disclosure: `diagnose-${e.id}-version-scope` } },
+      el('h3', { text: 'What changed, and when' }),
+      md(e.version),
+    ))
   }
 
   body.push(

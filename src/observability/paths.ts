@@ -1105,7 +1105,7 @@ const VERDICTS: Verdict[] = [
     because:
       'Nothing is pinning the horizon and dead rows are being removed, but they are being created faster than the current thresholds trigger a pass.',
     mechanism:
-      'A table is eligible for autovacuum once its dead tuples exceed autovacuum_vacuum_threshold + autovacuum_vacuum_scale_factor × n_live_tup. The default scale factor of 0.2 means a hundred-million-row table waits for twenty million dead rows before anything happens — a threshold calibrated for 2005 hardware and table sizes.',
+      'A table is eligible for regular autovacuum once its dead tuples exceed autovacuum_vacuum_threshold + autovacuum_vacuum_scale_factor × n_live_tup. The default scale factor of 0.2 means a hundred-million-row table waits for twenty million dead rows before anything happens. PostgreSQL 18’s new autovacuum_vacuum_max_threshold caps the computed trigger at 100,000,000 tuples by default; PostgreSQL 17 and older have no cap. This model uses the uncapped formula and its small teaching tables never reach that boundary.',
     evidence: (s) => [
       { label: 'scale factor', value: s.knobs.autovacuumScaleFactor.toFixed(2) },
       { label: 'worst table', value: `${[...s.tables].sort((a, b) => b.bloat - a.bloat)[0].def.name} · ${([...s.tables].sort((a, b) => b.bloat - a.bloat)[0].bloat * 100).toFixed(0)}% dead`, tone: 'warn' },

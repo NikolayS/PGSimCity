@@ -127,6 +127,15 @@ textarea {
   text-transform: uppercase;
 }
 
+.machine-provenance {
+  max-width: 72ch;
+  margin: 5px 0 0;
+  color: #bda57b;
+  font: 650 9px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .deck a,
 .terminal-header a,
 .machine-legal a {
@@ -1281,6 +1290,13 @@ button:focus-visible {
 
   .eyebrow {
     font-size: 7px;
+  }
+
+  .machine-provenance {
+    max-width: min(58vw, 43ch);
+    margin-top: 3px;
+    font-size: 9px;
+    line-height: 1.25;
   }
 
   .header-side {

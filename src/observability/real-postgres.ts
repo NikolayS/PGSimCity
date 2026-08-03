@@ -79,6 +79,7 @@ export interface RealQueryReport {
 
 export interface RealPostgresSource {
   readonly serverVersion: string
+  readonly versionText: string
   query(sql: string): Promise<RealQueryReport>
   close(): Promise<void>
 }
