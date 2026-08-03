@@ -1162,7 +1162,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
       if (!standby.connected) {
         return slot.exists
           ? `disconnected · sees ${opinion} as leader · slot holds ${fmtBytes(slot.retainedBytes)}`
-          : `disconnected · sees ${opinion} as leader · slot dropped; rebuild required`
+          : `disconnected · sees ${opinion} as leader · slot dropped; no retention guarantee`
       }
       return `applied ${fmtLsn(standby.appliedLsn)} · ${standby.lagSec.toFixed(1)} s behind · sees ${opinion} as leader`
     },

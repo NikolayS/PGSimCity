@@ -213,7 +213,7 @@ export const SCENARIOS: ScenarioDef[] = [
       [66, 'Bloat with no brakes', 'Every table taking writes is now growing without limit. Even the HOT path is blocked: page pruning respects the same horizon, so accounts starts bloating too. The one session that is doing nothing is the one throttling the entire database.'],
       [86, 'Where to look', 'pg_stat_activity, state = "idle in transaction", ordered by xact_start. Also check for abandoned replication slots and long-running queries on a hot standby with hot_standby_feedback on — same mechanism, same damage.'],
       [108, 'Release it', 'Turn off the long-running transaction knob. The horizon jumps forward, every dead row becomes removable at once, and the next vacuum pass actually collects something.'],
-      [126, 'Then prevent it', 'Set idle_in_transaction_session_timeout. Set statement_timeout. Neither is a nice-to-have: without them, one forgotten psql window can take down a production database over a weekend.'],
+      [126, 'Then prevent it', '`idle_in_transaction_session_timeout` ends a transaction left idle between statements. `statement_timeout` limits only the time while a statement is being processed; it is valuable against runaway statements, but it does not stop an idle transaction. Use each for the failure mode it actually covers.'],
     ],
   },
 
@@ -370,7 +370,7 @@ export const SCENARIOS: ScenarioDef[] = [
       [30, 'Backends pay the bill', 'Every time the sweep lands on a dirty victim, the backend that wanted that frame writes it out first. Watch the red page-write particles now leaving the plaza on the *backend* path rather than the teal bgwriter path.'],
       [48, 'Measure the claim', 'Open the Latency vital and compare modeled p50, p99 and TPS. With the bgwriter off in the final seeded run, dirty-victim-wait p99 rises from 5.6 to 8.9 model ms, while total p99 moves from 1133.3 to 1100.0 and total p99.9 from 1366.7 to 1333.3 model ms: this draw does not show an overall tail increase. Only 0.68% to 0.73% of transactions ride a trip with any eviction WAL wait, so the added cost sits outside the 99th percentile; incidence, not 33.33 model ms integration resolution, is the operative reason. The wait includes XLogFlush when the victim page LSN is ahead of durable WAL, followed by the page write.'],
       [64, 'Turn it back on', 'The teal sweep resumes and the backend writes fall away. It never cleans the whole pool — only a short window ahead of the clock hand, sized by the recent allocation rate — which is why the checkpointer still has plenty to do.'],
-      [80, 'What to tune', 'bgwriter_lru_maxpages and bgwriter_delay. In pg_stat_io, if the `writes` against `backend_type = \'client backend\'` are a large share of total writes, the bgwriter is being outrun. Raising maxpages is nearly free. On PostgreSQL 16 and older the counter to watch is `buffers_backend` in pg_stat_bgwriter.'],
+      [80, 'What to tune', 'bgwriter_lru_maxpages and bgwriter_delay. In pg_stat_io, if the `writes` against `backend_type = \'client backend\'` are a large share of total writes, the bgwriter is being outrun. Raising maxpages can move writes off the query path by letting the background writer do them first, but it can increase total writes when a cleaned page is dirtied again before the next checkpoint. On PostgreSQL 16 and older the counter to watch is `buffers_backend` in pg_stat_bgwriter.'],
     ],
   },
 
@@ -503,7 +503,7 @@ export const SCENARIOS: ScenarioDef[] = [
         {
           id: 'drop-replication-slot',
           label: 'Drop the required slot',
-          hint: 'Release retained WAL now, violate the stated continuity requirement, and rebuild standby_b from a new base backup.',
+          hint: 'Stop standby_b and detach primary_slot_name, then drop the inactive slot and restart without it. This removes the retention guarantee: streaming can continue while its WAL remains in pg_wal or the archive, but continuity is no longer guaranteed by the slot.',
         },
       ],
     },

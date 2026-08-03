@@ -308,6 +308,19 @@ export const POSTGRESQL_ORACLE_CLAIMS = {
     since: 18,
     timeoutSeconds: 30,
   },
+  operatorAdvice: {
+    statementTimeout: {
+      timeoutMs: 100,
+      idleMs: 500,
+    },
+    physicalSlotDrop: {
+      slot: 'oracle_standby_slot',
+      relation: 'oracle_slot_rows',
+      rows: 120_000,
+      payloadMd5Repeats: 18,
+      minimumRetainedBytes: 64 * 1024 * 1024,
+    },
+  },
   storageMvcc: {
     lockOnlyXmax: {
       extension: 'pageinspect',

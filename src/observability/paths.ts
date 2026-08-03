@@ -302,7 +302,7 @@ const KB = {
     min: 0,
     max: 600,
     step: 20,
-    help: 'Pages the background writer may clean per round. Raising it is nearly free.',
+    help: 'Pages the background writer may clean per round. Raising it can move writes off the query path, but can increase total writes when cleaned pages are dirtied again before checkpoint.',
   },
   autovacuum: {
     key: 'autovacuum',
@@ -1042,7 +1042,7 @@ const VERDICTS: Verdict[] = [
       { label: 'worst table', value: `${[...s.tables].sort((a, b) => b.bloat - a.bloat)[0].def.name} · ${([...s.tables].sort((a, b) => b.bloat - a.bloat)[0].bloat * 100).toFixed(0)}% dead`, tone: 'crit' },
     ],
     fix:
-      'Release the transaction and watch the horizon jump forward — every dead row becomes removable at once and the next pass actually collects. Then prevent it: set idle_in_transaction_session_timeout and statement_timeout. Neither is a nice-to-have. Without them one forgotten psql window can take down a production database over a weekend.',
+      'Release the transaction and watch the horizon jump forward — every dead row becomes removable at once and the next pass actually collects. Then prevent the same failure: idle_in_transaction_session_timeout ends a transaction left idle between statements. statement_timeout limits only the time while a statement is being processed; it is valuable against runaway statements, but it does not stop an idle transaction.',
     knobs: [KB.longRunningXact, KB.autovacuumScaleFactor],
     confirm: {
       projection: 'tables',

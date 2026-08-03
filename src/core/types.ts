@@ -1140,9 +1140,6 @@ export interface SlotPressureDecisionState extends ScenarioDecisionBase {
   slotRetainedAtDecision: number
   capacityAtDecision: number
   addedCapacityBytes: number
-  rebuildRequired: boolean
-  rebuildBytes: number
-  rebuildCopiedBytes: number
   rejectedWritesAtDecision: number
   rejectedWrites: number
 }

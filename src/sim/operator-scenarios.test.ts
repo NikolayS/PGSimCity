@@ -42,7 +42,7 @@ function readyDecision(
 }
 
 describe('operator scenario: a replication slot is filling pg_wal', () => {
-  it('plays capacity and slot removal, then rebuilds after the destructive choice', () => {
+  it('preserves the slot or drops only its retention guarantee', () => {
     const step = 1 / 3
     const preserve = createAggregateSim(step)
     preserve.runScenario('slot-pressure')
@@ -75,24 +75,17 @@ describe('operator scenario: a replication slot is filling pg_wal', () => {
     // Keep both choices at the same capacity so only the branch differs.
     discard.state.disasterRecovery.archive.pgWalCapacityBytes = 384 * 1024 * 1024
     readyDecision(discard, step)
+    const walBytesBeforeDrop = discard.state.disasterRecovery.archive.pgWalBytes
     expect(discard.chooseScenario('drop-replication-slot')).toBe(true)
     const dropped = discard.state.scenarioDecision
     expect(dropped?.kind).toBe('slot-pressure')
     if (dropped?.kind !== 'slot-pressure') return
     expect(dropped.correct).toBe(false)
-    expect(dropped.rebuildRequired).toBe(true)
     expect(discard.state.replication.physicalSlots[1].exists).toBe(false)
     expect(discard.state.replication.physicalSlots[1].retainedBytes).toBe(0)
-
-    expect(discard.recoverScenario()).toBe(true)
-    advanceUntil(discard, () => discard.state.scenarioDecision?.phase === 'recovered', 240, step)
-    const rebuilt = discard.state.scenarioDecision
-    expect(rebuilt?.kind).toBe('slot-pressure')
-    if (rebuilt?.kind !== 'slot-pressure') return
-    expect(rebuilt.rebuildBytes).toBeGreaterThan(8 * 1024 * 1024 * 1024)
-    expect(rebuilt.rebuildCopiedBytes).toBe(rebuilt.rebuildBytes)
-    expect(discard.state.replication.physicalSlots[1].exists).toBe(true)
+    expect(discard.state.disasterRecovery.archive.pgWalBytes).toBe(walBytesBeforeDrop)
     expect(discard.state.replication.standbys[1].connected).toBe(true)
+    expect(discard.recoverScenario()).toBe(false)
   })
 })
 

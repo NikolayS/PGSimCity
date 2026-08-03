@@ -230,7 +230,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'How to watch it',
-        body: 'Query `pg_replication_slots` and look at `active`, `wal_status` and `safe_wal_size` — `wal_status` moving from `reserved` to `extended` to `unreserved` to `lost` is the disk filling in slow motion. `unreserved` is the one to page on: the WAL that slot needs is now beyond `max_slot_wal_keep_size` and can be removed at the next checkpoint, so it is the last moment at which the slot can still be saved. By `lost` the segments are gone and whatever was consuming that slot has to be rebuilt. `pg_stat_archiver.last_failed_time` tells you whether archiving is the culprit. `SELECT pg_current_wal_lsn()` minus a slot LSN gives you exactly how many bytes one consumer is holding hostage.',
+        body: 'Query `pg_replication_slots` and look at `active`, `wal_status` and `safe_wal_size` — `wal_status` moving from `reserved` to `extended` to `unreserved` to `lost` is the disk filling in slow motion. `unreserved` is the one to page on: the WAL that slot needs is now beyond `max_slot_wal_keep_size` and can be removed at the next checkpoint, so it is the last moment at which the slot can still be saved. `lost` means the slot can no longer retain its required WAL; it does not prove that every recovery source has lost those segments. Dropping a slot removes its retention guarantee but does not delete WAL already in `pg_wal`. A physical standby continues while its required WAL is still there, or can recover missing local segments through `restore_command` when they exist in the archive. That standby needs a new base backup only when the necessary WAL is unavailable from every source. `pg_stat_archiver.last_failed_time` tells you whether archiving is the culprit. `SELECT pg_current_wal_lsn()` minus a slot LSN gives you exactly how many bytes one consumer is holding hostage.',
       },
     ],
     metrics: [
@@ -995,13 +995,13 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         label: 'standby_a slot',
         get: (s) => s.replication.physicalSlots[0].exists
           ? `${s.replication.physicalSlots[0].active ? 'active' : 'inactive'} · ${fmtBytes(s.replication.physicalSlots[0].retainedBytes)} retained`
-          : 'dropped · standby rebuild required',
+          : 'dropped · no retention guarantee',
       },
       {
         label: 'standby_b slot',
         get: (s) => s.replication.physicalSlots[1].exists
           ? `${s.replication.physicalSlots[1].active ? 'active' : 'inactive'} · ${fmtBytes(s.replication.physicalSlots[1].retainedBytes)} retained`
-          : 'dropped · standby rebuild required',
+          : 'dropped · no retention guarantee',
       },
       {
         label: 'Records in flight',
@@ -2420,7 +2420,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         label: 'Physical slot',
         get: (s) => s.replication.physicalSlots[1].exists
           ? `${s.replication.physicalSlots[1].active ? 'active' : 'inactive'} · ${fmtBytes(s.replication.physicalSlots[1].retainedBytes)} retained`
-          : 'dropped · standby rebuild required',
+          : 'dropped · no retention guarantee',
       },
       {
         label: 'Leader opinion',

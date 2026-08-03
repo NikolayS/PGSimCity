@@ -13,7 +13,7 @@ export function standbyReadout(s: SimState): string {
   if (!r.connected) {
     return slot.exists
       ? `disconnected · sees ${opinion} as leader · slot holds ${fmtBytes(slot.retainedBytes)}`
-      : `disconnected · sees ${opinion} as leader · slot dropped; rebuild required`
+      : `disconnected · sees ${opinion} as leader · slot dropped; no retention guarantee`
   }
   return `${fmtBytes(r.lagBytes)} behind · ${r.lagSec.toFixed(1)} s · sees ${opinion} as leader`
 }

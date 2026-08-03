@@ -60,8 +60,12 @@ describe('operator scenario dock', () => {
       '[data-scenario-choice="drop-replication-slot"]',
     )!.click()
     hud.update(0.2, 0.2)
-    expect(dock.textContent).toContain('base backup')
-    expect(dock.textContent).toContain('Rebuild standby_b')
+    expect(dock.textContent).toContain('retention guarantee')
+    expect(dock.textContent).toContain('streaming without slot')
+    expect(dock.textContent).toMatch(/base backup.*only if.*unavailable/is)
+    expect(
+      document.querySelector<HTMLButtonElement>('.hud-decision__recover')?.hidden,
+    ).toBe(true)
     expect(dock.textContent).not.toMatch(/points|score|badge/i)
 
     hud.dispose()

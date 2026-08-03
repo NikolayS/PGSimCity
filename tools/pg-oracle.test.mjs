@@ -41,6 +41,17 @@ describe('PostgreSQL oracle claim registry', () => {
       since: 18,
       timeoutSeconds: 30,
     })
+    expect(registry.claims.operatorAdvice).toMatchObject({
+      statementTimeout: {
+        timeoutMs: 100,
+        idleMs: 500,
+      },
+      physicalSlotDrop: {
+        slot: 'oracle_standby_slot',
+        rows: 120_000,
+        minimumRetainedBytes: 64 * 1024 * 1024,
+      },
+    })
     expect(registry.claims.storageMvcc).toMatchObject({
       hotSummarizingIndex: {
         since: 16,

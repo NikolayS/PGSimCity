@@ -177,11 +177,46 @@ describe('PostgreSQL 18 content corrections', () => {
   it('makes slot-pressure correctness depend on visible recovery evidence', () => {
     const scenario = SCENARIOS.find((entry) => entry.id === 'slot-pressure')!
     const preserve = scenario.decision!.choices.find((choice) => choice.id === 'add-wal-capacity')!
+    const drop = scenario.decision!.choices.find((choice) => choice.id === 'drop-replication-slot')!
+    const walVault = DOCS_STORAGE.find((doc) => doc.id === 'wal.vault')!
+    const slotCopy = walVault.sections.map((section) => section.body).join('\n')
 
     expect(scenario.blurb).toContain('required standby')
     expect(preserve.label).toBe('Add validated 512 MiB headroom')
     expect(preserve.hint).toContain('measured WAL rate')
     expect(preserve.hint).toContain('temporary headroom')
+    expect(drop.hint).toContain('retention guarantee')
+    expect(drop.hint).toMatch(/pg_wal.*archive/is)
+    expect(slotCopy).toMatch(/dropping.*does not delete.*WAL/is)
+    expect(slotCopy).toMatch(/base backup.*only.*unavailable.*every source/is)
+    expect(slotCopy).not.toContain('whatever was consuming that slot has to be rebuilt')
+  })
+
+  it('states the background-writer write-amplification trade', () => {
+    const scenario = SCENARIOS.find((entry) => entry.id === 'no-bgwriter')!
+    const tuning = scenario.beats.find((beat) => beat[0] === 80)![2]
+    const verdict = ALL_VERDICTS.find((entry) => entry.id === 'v.backend_writes')!
+    const maxPages = verdict.knobs.find((knob) => knob.key === 'bgwriterLruMaxpages')!
+
+    for (const copy of [tuning, maxPages.help]) {
+      expect(copy).toMatch(/move.*writes?.*(?:off|out of).*query.*path/is)
+      expect(copy).toMatch(/(?:increase|more|extra).*total.*writes?|total.*I\/O.*increase/is)
+      expect(copy).not.toMatch(/nearly free/i)
+    }
+  })
+
+  it('assigns idle and statement timeouts to different failure modes', () => {
+    const scenario = SCENARIOS.find((entry) => entry.id === 'xmin-horizon')!
+    const prevention = scenario.beats.find((beat) => beat[0] === 126)![2]
+    const verdict = ALL_VERDICTS.find((entry) => entry.id === 'v.xmin')!
+    const backend = DOCS_MEMORY.find((doc) => doc.id === 'backend.slot')!
+    const backendCopy = backend.sections.map((section) => section.body).join('\n')
+
+    for (const copy of [prevention, verdict.fix, backendCopy]) {
+      expect(copy).toMatch(/idle_in_transaction_session_timeout.*idle.*between statements/is)
+      expect(copy).toMatch(/statement_timeout.*while a statement is (?:being )?processed/is)
+      expect(copy).toMatch(/statement_timeout.*does not.*idle transaction/is)
+    }
   })
 
   it('lists the complete PostgreSQL 18 pg_stat_replication surface', () => {

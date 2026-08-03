@@ -1980,12 +1980,14 @@ export function createHud(ctx: UiContext): UiModule {
         'standby_b_slot',
         slot.exists
           ? `${slot.active ? 'active' : 'inactive'} · ${fmtBytes(slot.retainedBytes)} retained`
-          : 'dropped · no WAL retained',
+          : 'dropped · no retention guarantee',
       )
       setDecisionFact(
         2,
         'recovery intent',
-        'resume from this slot · rebuild not approved',
+        decision.choice === 'drop-replication-slot'
+          ? 'streaming without slot · guarantee lost'
+          : 'resume from this slot · rebuild not approved',
       )
       if (decision.choice === 'add-wal-capacity') {
         setText(
@@ -1997,17 +1999,7 @@ export function createHud(ctx: UiContext): UiModule {
       } else if (decision.choice === 'drop-replication-slot') {
         setText(
           decisionResult,
-          decision.phase === 'recovered'
-            ? `You dropped the slot, then copied a ${fmtBytes(decision.rebuildBytes)} base backup. standby_b can stream again.`
-            : `You dropped standby_b_slot despite the stated no-rebuild continuity requirement. Retained WAL is recyclable, but standby_b cannot resume from it; recovery now requires a ${fmtBytes(decision.rebuildBytes)} base backup.`,
-        )
-        decisionRecover.hidden = decision.phase !== 'outcome' && decision.phase !== 'recovering'
-        decisionRecover.disabled = decision.phase === 'recovering'
-        setText(
-          decisionRecover,
-          decision.phase === 'recovering'
-            ? `Rebuilding ${Math.min(100, (decision.rebuildCopiedBytes / Math.max(1, decision.rebuildBytes)) * 100).toFixed(0)}%`
-            : 'Rebuild standby_b',
+          'You stopped standby_b, removed primary_slot_name, dropped the now-inactive slot, and restarted without it despite the stated continuity requirement. Dropping the slot removes the retention guarantee; it does not delete WAL. standby_b remains streaming from WAL still in pg_wal, and restore_command could supply an archived segment. A new base backup is required only if the necessary WAL becomes unavailable from every source.',
         )
       }
       return

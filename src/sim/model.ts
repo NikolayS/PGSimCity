@@ -7808,9 +7808,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         slotRetainedAtDecision: 0,
         capacityAtDecision: dr.archive.pgWalCapacityBytes,
         addedCapacityBytes: 0,
-        rebuildRequired: false,
-        rebuildBytes: 0,
-        rebuildCopiedBytes: 0,
         rejectedWritesAtDecision: 0,
         rejectedWrites: 0,
       }
@@ -7846,51 +7843,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       }
     }
     return null
-  }
-
-  function finishStandbyBRebuild(decision: Extract<ScenarioDecisionState, { kind: 'slot-pressure' }>): void {
-    const lsn = wal.flushLsn
-    const standby = rep.standbys[1]
-    const slot = rep.physicalSlots[1]
-    setKnob('standbyBEnabled', true)
-    standby.enabled = true
-    standby.connected = true
-    standby.sentLsn = lsn
-    standby.receivedLsn = lsn
-    standby.writtenLsn = lsn
-    standby.flushedLsn = lsn
-    standby.appliedLsn = lsn
-    standby.acknowledgedWriteLsn = lsn
-    standby.acknowledgedFlushLsn = lsn
-    standby.acknowledgedApplyLsn = lsn
-    standby.lagBytes = 0
-    standby.lagSec = 0
-    standby.inFlight = 0
-    standby.walSender = 'streaming'
-    standby.walReceiver = 'streaming'
-    standby.startupProcess = 'streaming'
-    resetPhysicalRuntime(physicalRuntime[1], lsn)
-    slot.exists = true
-    slot.active = true
-    slot.restartLsn = lsn
-    slot.retainedBytes = 0
-    const node = state.cluster.nodes[2]
-    node.online = true
-    node.role = 'standby'
-    node.leaderOpinion = ha.currentLeader
-    node.wal.receivedLsn = lsn
-    node.wal.writtenLsn = lsn
-    node.wal.flushedLsn = lsn
-    node.wal.appliedLsn = lsn
-    node.dataDirectory.appliedLsn = lsn
-    decision.rebuildCopiedBytes = decision.rebuildBytes
-    decision.rebuildRequired = false
-    decision.phase = 'recovered'
-    toast(
-      `standby_b rebuilt from ${fmtBytes(decision.rebuildBytes)} of base-backup data; its physical slot starts at the current LSN`,
-      'good',
-      7500,
-    )
   }
 
   function tickScenarioDecision(dt: number): void {
@@ -7936,15 +7888,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
           <= Math.max(16 * MIB, decision.slotRetainedAtDecision * 0.1)
       ) {
         decision.phase = 'recovered'
-      }
-      if (decision.phase === 'recovering') {
-        decision.rebuildCopiedBytes = Math.min(
-          decision.rebuildBytes,
-          decision.rebuildCopiedBytes + DR_BACKUP_BYTES_PER_SEC * dt,
-        )
-        if (decision.rebuildCopiedBytes >= decision.rebuildBytes) {
-          finishStandbyBRebuild(decision)
-        }
       }
       return
     }
@@ -8152,17 +8095,14 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       if (choice === 'drop-replication-slot') {
         decision.choice = choice
         decision.correct = false
-        decision.rebuildRequired = true
-        decision.rebuildBytes = dr.dataDirectoryBytes
         const slot = rep.physicalSlots[1]
         slot.exists = false
         slot.active = false
         slot.restartLsn = wal.insertLsn
         slot.retainedBytes = 0
-        setKnob('standbyBEnabled', false)
         decision.phase = 'outcome'
         toast(
-          'standby_b_slot dropped; retained WAL is recyclable, and standby_b now needs a fresh base backup',
+          'standby_b restarted without primary_slot_name; it is streaming, but its WAL retention guarantee is gone',
           'warn',
           8000,
         )
@@ -8211,21 +8151,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   function recoverScenario(): boolean {
     const decision = state.scenarioDecision
     if (!decision) return false
-    if (
-      decision.kind === 'slot-pressure'
-      && decision.choice === 'drop-replication-slot'
-      && decision.rebuildRequired
-      && decision.phase === 'outcome'
-    ) {
-      decision.phase = 'recovering'
-      decision.rebuildCopiedBytes = 0
-      toast(
-        `Base backup started: ${fmtBytes(decision.rebuildBytes)} must be copied before standby_b can stream again`,
-        'info',
-        7000,
-      )
-      return true
-    }
     if (
       decision.kind === 'vacuum-blockade'
       && decision.choice === 'wait-for-transaction'

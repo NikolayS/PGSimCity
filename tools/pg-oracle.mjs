@@ -554,6 +554,201 @@ async function checkCheckpointTimerSkip(psql, query, registry, major) {
   )]
 }
 
+async function checkStatementTimeout(psql, registry, port) {
+  const claim = registry.claims.operatorAdvice.statementTimeout
+  const applicationName = 'oracle_statement_timeout'
+  const connection = [
+    'host=127.0.0.1',
+    `port=${port}`,
+    'dbname=postgres',
+    'user=postgres',
+    `application_name=${applicationName}`,
+  ].join(' ')
+  const execution = await psql(`
+    CREATE EXTENSION IF NOT EXISTS dblink;
+    SELECT public.dblink_connect('timeout_idle', ${sqlLiteral(connection)});
+    SELECT public.dblink_exec(
+      'timeout_idle',
+      ${sqlLiteral(`SET statement_timeout = '${claim.timeoutMs}ms'`)}
+    );
+    SELECT public.dblink_exec(
+      'timeout_idle',
+      'BEGIN ISOLATION LEVEL REPEATABLE READ'
+    );
+    CREATE TEMP TABLE oracle_timeout_snapshot AS
+    SELECT snapshot
+      FROM public.dblink(
+        'timeout_idle',
+        'SELECT pg_catalog.pg_current_snapshot()::text'
+      ) AS observed(snapshot text);
+    SELECT pg_catalog.pg_sleep(${claim.idleMs / 1_000});
+    SELECT pg_catalog.json_build_object(
+             'state', activity.state,
+             'idle_ms', pg_catalog.round(
+               extract(epoch FROM pg_catalog.clock_timestamp() - activity.state_change)
+                 * 1000
+             ),
+             'snapshot', snapshot.snapshot
+           )::text
+      FROM pg_catalog.pg_stat_activity AS activity
+      CROSS JOIN oracle_timeout_snapshot AS snapshot
+     WHERE activity.application_name = ${sqlLiteral(applicationName)};
+    SELECT public.dblink_disconnect('timeout_idle');`)
+  const json = execution.stdout
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .find((line) => line.startsWith('{'))
+  const observation = json ? JSON.parse(json) : null
+  const remainedIdle = observation?.state === 'idle in transaction'
+    && Number(observation?.idle_ms) >= claim.idleMs
+  return [result(
+    'timeout/statement-timeout-does-not-end-idle-transaction',
+    `${claim.timeoutMs} ms statement_timeout does not end a transaction idle between statements`,
+    observation
+      ? `${observation.state} after ${observation.idle_ms} ms idle; snapshot ${observation.snapshot}`
+      : 'idle transaction observation is absent',
+    remainedIdle,
+  )]
+}
+
+async function checkPhysicalSlotDrop(pgBin, psql, query, registry, port, scratch) {
+  const claim = registry.claims.operatorAdvice.physicalSlotDrop
+  const standbyDir = path.join(scratch, 'standby')
+  const standbySocket = path.join(scratch, 'standby-socket')
+  const standbyLog = path.join(scratch, 'standby.log')
+  const standbyPort = await freePort()
+  let standbyStarted = false
+
+  const stopStandby = async () => {
+    if (!standbyStarted) return
+    await run(path.join(pgBin, 'pg_ctl'), [
+      '-D', standbyDir, '-m', 'fast', '-w', 'stop',
+    ], { allowFailure: true })
+    standbyStarted = false
+  }
+  const startStandby = async (slot) => {
+    const slotOption = slot ? ` -c primary_slot_name=${slot}` : ''
+    await run(path.join(pgBin, 'pg_ctl'), [
+      '-D', standbyDir,
+      '-l', standbyLog,
+      '-o', `-h 127.0.0.1 -p ${standbyPort} -k ${standbySocket}${slotOption}`,
+      '-w', 'start',
+    ])
+    standbyStarted = true
+  }
+  const standbyQuery = async (sql) => {
+    const body = sql.trim().replace(/;+\s*$/u, '')
+    const execution = await run(path.join(pgBin, 'psql'), [
+      '-X', '-A', '-t', '-q', '-v', 'ON_ERROR_STOP=1',
+      '-h', '127.0.0.1', '-p', String(standbyPort),
+      '-U', 'postgres', '-d', 'postgres',
+      '-c', `SELECT COALESCE(json_agg(oracle_row), '[]'::json) FROM (${body}) AS oracle_row;`,
+    ])
+    return JSON.parse(execution.stdout.trim() || '[]')
+  }
+
+  try {
+    await psql(`
+      CREATE TABLE public.${claim.relation} (
+        id integer PRIMARY KEY,
+        payload text NOT NULL
+      )`)
+    await run(path.join(pgBin, 'pg_basebackup'), [
+      '-D', standbyDir,
+      '-R',
+      '-X', 'stream',
+      '--checkpoint=fast',
+      '-h', '127.0.0.1',
+      '-p', String(port),
+      '-U', 'postgres',
+    ])
+    await mkdir(standbySocket)
+    await psql(`SELECT * FROM pg_catalog.pg_create_physical_replication_slot(${sqlLiteral(claim.slot)})`)
+    await startStandby(claim.slot)
+    const active = await pollRow(
+      query,
+      `SELECT active FROM pg_catalog.pg_replication_slots WHERE slot_name = ${sqlLiteral(claim.slot)}`,
+      (row) => row?.active === true,
+      15_000,
+    )
+    if (active?.active !== true) throw new Error(`${claim.slot} did not become active`)
+    await stopStandby()
+    await pollRow(
+      query,
+      `SELECT active FROM pg_catalog.pg_replication_slots WHERE slot_name = ${sqlLiteral(claim.slot)}`,
+      (row) => row?.active === false,
+      10_000,
+    )
+
+    await psql(`
+      SET synchronous_commit = off;
+      INSERT INTO public.${claim.relation}
+      SELECT value, pg_catalog.repeat(pg_catalog.md5(value::text), ${claim.payloadMd5Repeats})
+        FROM pg_catalog.generate_series(1, ${claim.rows}) AS value;
+      CHECKPOINT`)
+    const [before] = await query(`
+      SELECT slot.slot_name,
+             pg_catalog.pg_wal_lsn_diff(
+               pg_catalog.pg_current_wal_lsn(),
+               slot.restart_lsn
+             )::bigint AS retained_bytes,
+             wal.wal_files,
+             wal.pg_wal_bytes
+        FROM pg_catalog.pg_replication_slots AS slot
+        CROSS JOIN LATERAL (
+          SELECT pg_catalog.count(*)::integer AS wal_files,
+                 pg_catalog.sum(size)::bigint AS pg_wal_bytes
+            FROM pg_catalog.pg_ls_waldir()
+        ) AS wal
+       WHERE slot.slot_name = ${sqlLiteral(claim.slot)}`)
+
+    await psql(`SELECT pg_catalog.pg_drop_replication_slot(${sqlLiteral(claim.slot)})`)
+    const [after] = await query(`
+      SELECT pg_catalog.count(*)::integer AS wal_files,
+             pg_catalog.sum(size)::bigint AS pg_wal_bytes
+        FROM pg_catalog.pg_ls_waldir()`)
+
+    await startStandby(null)
+    let standby = null
+    const replayDeadline = performance.now() + 30_000
+    while (performance.now() < replayDeadline) {
+      ;[standby] = await standbyQuery(`
+        SELECT pg_catalog.pg_is_in_recovery() AS still_standby,
+               (SELECT pg_catalog.count(*) FROM public.${claim.relation})::integer AS replayed_rows`)
+      if (standby?.still_standby === true && Number(standby?.replayed_rows) === claim.rows) break
+      await delay(250)
+    }
+    const [receiver] = await query(`
+      SELECT application_name, state, replay_lsn
+        FROM pg_catalog.pg_stat_replication
+       ORDER BY pid
+       LIMIT 1`)
+    const [slotAfter] = await query(`
+      SELECT pg_catalog.count(*)::integer AS slots
+        FROM pg_catalog.pg_replication_slots
+       WHERE slot_name = ${sqlLiteral(claim.slot)}`)
+
+    const retained = Number(before?.retained_bytes)
+    const walUnchanged = Number(before?.pg_wal_bytes) === Number(after?.pg_wal_bytes)
+      && Number(before?.wal_files) === Number(after?.wal_files)
+    const resumed = standby?.still_standby === true
+      && Number(standby?.replayed_rows) === claim.rows
+      && receiver?.state === 'streaming'
+      && Number(slotAfter?.slots) === 0
+    const transcript = before && after && standby && receiver
+      ? `before drop: wal_files ${before.wal_files}, pg_wal_bytes ${before.pg_wal_bytes}, retained_bytes ${before.retained_bytes}; after drop: wal_files ${after.wal_files}, pg_wal_bytes ${after.pg_wal_bytes}; restart without primary_slot_name: still_standby ${standby.still_standby}, replayed_rows ${standby.replayed_rows}, application_name ${receiver.application_name}, state ${receiver.state}, replay_lsn ${receiver.replay_lsn}; no base backup after drop`
+      : 'physical standby observation is incomplete'
+    return [result(
+      'replication/drop-physical-slot-keeps-available-wal',
+      'dropping an inactive physical slot removes its retention guarantee without deleting WAL or requiring an immediate base backup',
+      transcript,
+      retained >= claim.minimumRetainedBytes && walUnchanged && resumed,
+    )]
+  } finally {
+    await stopStandby()
+  }
+}
+
 async function checkAutovacuumThreshold(psql, query, registry) {
   const claim = registry.claims.autovacuumThreshold
   await psql("ALTER SYSTEM SET autovacuum_naptime = '1s'")
@@ -1090,7 +1285,7 @@ async function checkIndexWalk(psql, query, registry) {
   ]
 }
 
-async function runChecks(server, registry, major) {
+async function runChecks(server, registry, major, pgBin) {
   const checks = [
     ['version', () => checkVersion(server.query, registry, major)],
     ['GUC defaults', () => checkGucDefaults(server.query, registry, major)],
@@ -1098,6 +1293,15 @@ async function runChecks(server, registry, major) {
     ['catalog shapes', () => checkCatalog(server.psql, server.query, registry, major)],
     ['wait events', () => checkWaitEvents(server.query, registry, major)],
     ['checkpoint timer skip', () => checkCheckpointTimerSkip(server.psql, server.query, registry, major)],
+    ['statement timeout', () => checkStatementTimeout(server.psql, registry, server.port)],
+    ['physical slot drop', () => checkPhysicalSlotDrop(
+      pgBin,
+      server.psql,
+      server.query,
+      registry,
+      server.port,
+      server.scratch,
+    )],
     ['autovacuum threshold', () => checkAutovacuumThreshold(server.psql, server.query, registry)],
     ['storage and MVCC', () => checkStorageMvcc(server.psql, server.query, registry, major)],
     ['pg_stat_io values', () => checkPgStatIo(server.query, registry, major)],
@@ -1132,7 +1336,7 @@ async function main() {
   const registry = await loadOracleRegistry()
   const major = parseMajor(registry)
   const pgBin = `/usr/lib/postgresql/${major}/bin`
-  for (const binary of ['initdb', 'pg_ctl', 'psql', 'postgres']) {
+  for (const binary of ['initdb', 'pg_basebackup', 'pg_ctl', 'psql', 'postgres']) {
     try {
       await access(path.join(pgBin, binary))
     } catch {
@@ -1141,7 +1345,7 @@ async function main() {
   }
 
   const execution = await withThrowawayCluster(pgBin, async (server) => ({
-    results: await runChecks(server, registry, major),
+    results: await runChecks(server, registry, major, pgBin),
     port: server.port,
     scratch: server.scratch,
   }))
