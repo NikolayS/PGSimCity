@@ -5,14 +5,19 @@ import {
   checkGucContexts,
   checkVersion,
   compareSetting,
+  connectionLocalChecks,
   diagnosticSqlForMajor,
   expectedForMajor,
   hotUpdateChecks,
   indexWalkAttributeChecks,
+  linePointerLifecycleChecks,
   loadOracleRegistry,
   markdownTable,
   oracleSummary,
+  parsePgControlWalSegmentSize,
   verdictForComparison,
+  waitEventClaimsForMajor,
+  walSegmentObservationChecks,
 } from './pg-oracle.mjs'
 
 describe('PostgreSQL oracle claim registry', () => {
@@ -84,7 +89,7 @@ describe('PostgreSQL oracle claim registry', () => {
     ])
     expect(registry.unregisteredCityClaims).toEqual([])
     expect(registry.claims).toMatchObject({
-      walSegment: { bytes: 16 * 1024 * 1024 },
+      walSegment: { defaultBytes: 16 * 1024 * 1024, alternateMiB: 32 },
       latencyWaitMappings: {
         relation: { type: 'Lock', name: 'relation' },
         synchronousReplication: { type: 'IPC', name: 'SyncRep' },
@@ -103,10 +108,15 @@ describe('PostgreSQL oracle claim registry', () => {
 
     expect(registry.claims.gucDefaults.length).toBeGreaterThan(8)
     expect(registry.catalog.some((entry) => entry.id === 'pg_stat_io')).toBe(true)
-    expect(registry.claims.waitEvents.events).toContainEqual({
-      type: 'IO',
-      name: 'WalSync',
-    })
+    expect(waitEventClaimsForMajor(registry.claims.waitEvents, 13)).toContainEqual(
+      expect.objectContaining({ id: 'wal-sync', type: 'IO', name: 'WALSync' }),
+    )
+    expect(waitEventClaimsForMajor(registry.claims.waitEvents, 17)).toContainEqual(
+      expect.objectContaining({ id: 'wal-sync', type: 'IO', name: 'WalSync' }),
+    )
+    expect(waitEventClaimsForMajor(registry.claims.waitEvents, 18)).toContainEqual(
+      expect.objectContaining({ id: 'wal-write', type: 'LWLock', name: 'WALWrite' }),
+    )
     expect(registry.claims.pgStatIo.projectionRows).toContainEqual({
       backendType: 'checkpointer',
       object: 'relation',
@@ -307,6 +317,109 @@ describe('PostgreSQL oracle claim registry', () => {
     expect(expectedForMajor(claim, 13)).toMatchObject({ value: 1 })
     expect(expectedForMajor(claim, 17)).toMatchObject({ value: 2 })
     expect(expectedForMajor(claim, 19)).toMatchObject({ value: 2 })
+  })
+
+  it('compares SHOW, pg_control, WAL files, and a differently-initdb-d cluster', () => {
+    expect(parsePgControlWalSegmentSize(`
+      pg_control version number:            1800
+      Bytes per WAL segment:                16777216
+    `)).toBe(16 * 1024 * 1024)
+    expect(parsePgControlWalSegmentSize('pg_control output without the field')).toBeNull()
+
+    const city = { bytes: 16 * 1024 * 1024, label: '16 MiB' }
+    const claim = {
+      defaultBytes: city.bytes,
+      alternateMiB: 32,
+      configurableClaim: 'selected at initdb with --wal-segsize',
+      unqualifiedFixedSurfaces: ['world role', 'storage tldr'],
+    }
+    const observation = (bytes) => ({
+      show: bytes === city.bytes ? '16MB' : '32MB',
+      showBytes: bytes,
+      controlBytes: bytes,
+      fileName: '000000010000000000000001',
+      fileOffset: 8192,
+      allocatedFile: '000000010000000000000001',
+      fileSize: bytes,
+    })
+    const rows = walSegmentObservationChecks(
+      city,
+      claim,
+      observation(city.bytes),
+      observation(32 * 1024 * 1024),
+    )
+    const byClaim = new Map(rows.map((row) => [row.claim, row]))
+
+    expect(rows).toHaveLength(9)
+    expect(byClaim.get('WAL/default/SHOW-wal_segment_size')?.verdict).toBe('MATCH')
+    expect(byClaim.get('WAL/default/pg_control')?.verdict).toBe('MATCH')
+    expect(byClaim.get('WAL/initdb-alternate/SHOW-wal_segment_size')?.verdict).toBe('MATCH')
+    expect(byClaim.get('WAL/initdb-alternate/pg_control')?.verdict).toBe('MATCH')
+    expect(byClaim.get('WAL/initdb-configurability')?.verdict).toBe('MATCH')
+    expect(byClaim.get('WAL/unqualified-fixed-16MiB-surfaces')).toMatchObject({
+      verdict: 'DIVERGES',
+      city: expect.stringContaining('world role'),
+      server: expect.stringContaining('32MB'),
+    })
+  })
+
+  it('reports each connection-local behavior independently', () => {
+    const tradeoff = 'session state belongs to one server connection'
+    const claim = {
+      advisoryLockKey: 818_204,
+      preparedStatement: 'oracle_session_plan',
+      listenChannel: 'oracle_session_channel',
+    }
+    const matching = connectionLocalChecks(tradeoff, claim, {
+      a_pid: 101,
+      b_pid: 202,
+      a_work_mem: '64kB',
+      b_work_mem: '4MB',
+      b_got_lock: false,
+      a_prepared: 1,
+      b_prepared: 0,
+      prepared_result: 42,
+      a_listening: 1,
+      b_listening: 0,
+      notify_name: 'oracle_session_channel',
+      notify_extra: 'from-session-b',
+    })
+
+    expect(matching.map((row) => row.claim)).toEqual([
+      'connection-local/backend-identity',
+      'connection-local/session-GUC',
+      'connection-local/advisory-lock',
+      'connection-local/sql-PREPARE',
+      'connection-local/LISTEN-registration',
+      'connection-local/NOTIFY-delivery',
+    ])
+    expect(matching.every((row) => row.verdict === 'MATCH')).toBe(true)
+    expect(connectionLocalChecks(tradeoff, claim, null).every(
+      (row) => row.verdict === 'DIVERGES',
+    )).toBe(true)
+  })
+
+  it('requires normal, redirect, dead, and reusable line-pointer states plus FSM space', () => {
+    const vocabulary = {
+      linePointers: { definition: 'normal, redirect, dead, and reusable page slots' },
+    }
+    const checks = linePointerLifecycleChecks(vocabulary, {
+      hotFlags: [2, 1],
+      deadFlags: [3],
+      reusableFlags: [0],
+      freeSpaceBefore: 0,
+      freeSpaceAfter: 7000,
+    })
+
+    expect(checks).toHaveLength(2)
+    expect(checks.every((row) => row.verdict === 'MATCH')).toBe(true)
+    expect(linePointerLifecycleChecks(vocabulary, {
+      hotFlags: [1],
+      deadFlags: [],
+      reusableFlags: [],
+      freeSpaceBefore: 0,
+      freeSpaceAfter: 0,
+    }).every((row) => row.verdict === 'DIVERGES')).toBe(true)
   })
 
   it('gates summarizing-index HOT behavior at PostgreSQL 16', () => {
