@@ -331,9 +331,9 @@ export function backendConcurrencyMultiplier(serverConnections: number): number 
   return 1 + 2.5 * excess * excess
 }
 /**
- * Ceiling on the pages one vacuum pass may hand back. Real truncation needs an
- * ACCESS EXCLUSIVE lock and gives it up the moment anyone else wants the table,
- * so it proceeds in small bites — and usually reclaims nothing at all.
+ * Ceiling on the pages one vacuum pass may hand back. Real truncation makes a
+ * non-blocking ACCESS EXCLUSIVE attempt; if that fails, VACUUM skips truncation
+ * and returns without waiting, leaving the space in the table this time.
  */
 const TRUNCATE_MAX_PAGES = 8
 const MAX_VISIT_PAGES = 2400
@@ -4937,8 +4937,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
             // p/(1-p). For a bloated but populated table that is zero, which is
             // why the slab keeps its height while the bloat bar climbs. Only a
             // table that lost nearly all of its rows ever shrinks — and even
-            // then the truncation needs the exclusive lock it can only take a
-            // few pages at a time.
+            // then real truncation makes a non-blocking ACCESS EXCLUSIVE
+            // attempt and skips the shrink if another lock prevents it.
             const cap = t.pages * t.def.tuplesPerPage
             const used = t.liveTuples + t.deadTuples
             const free = cap > 0 ? clamp01((cap - used) / cap) : 0

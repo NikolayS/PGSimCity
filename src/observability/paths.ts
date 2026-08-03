@@ -1385,7 +1385,7 @@ const VERDICTS: Verdict[] = [
     title: 'Current estimates show low dead-tuple pressure; physical bloat is unmeasured.',
     because: 'The modeled dead-tuple fraction is low. On PostgreSQL, n_live_tup and n_dead_tup are estimates and do not measure reusable heap space, index bloat or TOAST growth.',
     mechanism:
-      'A relation can have a low current dead-tuple estimate and still contain reusable space from earlier churn; its indexes or TOAST relation can also be the growth. Conversely, dead tuples can occupy reusable space without requiring a physical shrink. The city can distinguish modeled live-row, heap-page and aggregate index growth, but it has no TOAST relation or chunk state.',
+      `A relation can have a low current dead-tuple estimate and still contain reusable space from earlier churn; its indexes or TOAST relation can also be the growth. Conversely, dead tuples can occupy reusable space without requiring a physical shrink. ${CLAIM_VALUES.vacuumReclaim.rule} The city can distinguish modeled live-row, heap-page and aggregate index growth, but it has no TOAST relation or chunk state.`,
     evidence: (s) => s.tables.slice(0, 3).map((t) => ({ label: t.def.name, value: `${(t.bloat * 100).toFixed(1)}% dead`, tone: 'ok' as const })),
     fix:
       'Graph pg_relation_size(), pg_indexes_size() and pg_total_relation_size() alongside row counts. If the physical question justifies a page scan, use pgstattuple or an equivalent inspection tool; do not declare “no bloat” from n_dead_tup alone.',

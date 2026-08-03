@@ -35,9 +35,9 @@ and what remains irreducibly spatial.
 > [Machine](machine/) can run PGlite, a real in-memory PostgreSQL compiled to
 > WebAssembly.
 >
-> PGSimCity targets the PostgreSQL 18 major line. Claims about defaults name
-> PostgreSQL 18.3, the reviewed reference release; mechanism claims follow the
-> [`REL_18_STABLE` source](https://github.com/postgres/postgres/tree/REL_18_STABLE).
+> PGSimCity targets the PostgreSQL 18 major line. PostgreSQL 18.4 is the
+> reviewed reference release against which its claims were verified; mechanism
+> claims follow the [`REL_18_STABLE` source](https://github.com/postgres/postgres/tree/REL_18_STABLE).
 > For example, PostgreSQL 18's bulk-read strategy starts at 256 KiB and grows
 > with `io_combine_limit × effective_io_concurrency`, subject to its caps
 > ([`GetAccessStrategy`](https://github.com/postgres/postgres/blob/REL_18_STABLE/src/backend/storage/buffer/freelist.c#L505-L611)).
@@ -73,7 +73,7 @@ and what remains irreducibly spatial.
 | **Client sky** (north, above) | Connections arriving from the application tier |
 | **Postmaster** | The supervisor. Forks one backend per connection and never touches your data |
 | **Backend row** | 16 backend processes. Their lighting *is* their state — including `idle in transaction` |
-| **Buffer pool (`shared_buffers`)** | Up to 1,024 representative frames (256 active at the 2 GiB model default; PostgreSQL 18.3 itself defaults to 128 MiB), beside `wal_buffers`, the ProcArray, lock table, CLOG and buffer mapping table |
+| **Buffer pool (`shared_buffers`)** | Up to 1,024 representative frames (256 active at the 2 GiB model default; PostgreSQL 18 defaults to 128 MiB), beside `wal_buffers`, the ProcArray, lock table, CLOG and buffer mapping table |
 | **The excavation** | The data directory: where memory ends and storage begins |
 | **Storage** (below) | Heap files as fields of 8 KiB pages, B-trees as actual trees, TOAST, the FSM and visibility map, the OS page cache and the disks |
 | **WAL district** (east) | Backends and walwriter write WAL into `pg_wal`; the archiver copies completed segments, while walsenders independently stream WAL as it is generated |

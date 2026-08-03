@@ -28,7 +28,7 @@ export const VACUUM_RECLAIM_PLATE_LINES = CLAIM_VALUES.vacuumReclaim.plateLines
  *   AUTOVACUUM     a launcher watching dead-tuple thresholds, and workers that
  *                  drive out to a table and reclaim what MVCC left behind.
  *   LANDFILL       what vacuum actually recovers: space reusable *inside* the
- *                  file, not disk handed back to the operating system.
+ *                  file; tail truncation's ACCESS EXCLUSIVE attempt never waits.
  *   LOGGER         the one process that makes an incident diagnosable after.
  *   STATS RELAY    a relay, not a collector — since PG15 the cumulative stats
  *                  live in shared memory, over in the plaza.

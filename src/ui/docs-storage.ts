@@ -977,7 +977,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'How a slot takes down a primary',
-        body: 'By default, inactive permanent slots do not expire: in PostgreSQL 18.3, `idle_replication_slot_timeout` defaults to zero (disabled). PostgreSQL 18 can invalidate an inactive slot when that timeout is configured, and `max_slot_wal_keep_size` can make a slot unusable once required WAL exceeds the limit. Without either guard, an abandoned consumer can pin `restart_lsn` while `pg_wal` grows toward a full volume. Monitor `active`, `restart_lsn`, `wal_status`, `safe_wal_size`, `invalidation_reason` and slot ownership; do not treat every inactive slot as abandoned.',
+        body: 'By default, inactive permanent slots do not expire: in PostgreSQL 18, `idle_replication_slot_timeout` defaults to zero (disabled). PostgreSQL 18 can invalidate an inactive slot when that timeout is configured, and `max_slot_wal_keep_size` can make a slot unusable once required WAL exceeds the limit. Without either guard, an abandoned consumer can pin `restart_lsn` while `pg_wal` grows toward a full volume. Monitor `active`, `restart_lsn`, `wal_status`, `safe_wal_size`, `invalidation_reason` and slot ownership; do not treat every inactive slot as abandoned.',
       },
       {
         heading: 'What you would see in production',
@@ -1165,7 +1165,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What bloat physically is',
-        body: 'Bloat is dead tuples and empty line pointers occupying pages that the table still owns. It hurts because a sequential scan reads dead space and the cache holds pages with fewer useful rows. A HOT update creates no new ordinary-index tuple-pointer entries; a non-HOT update creates new entries, but reuse and cleanup mean no single update guarantees that every index file grows. Over time, non-HOT churn can still bloat heap and indexes and enlarge the working set. Vacuum makes internal space reusable, while rewriting tools are needed when returning most of that allocation matters.',
+        body: `Bloat is dead tuples and empty line pointers occupying pages that the table still owns. It hurts because a sequential scan reads dead space and the cache holds pages with fewer useful rows. A HOT update creates no new ordinary-index tuple-pointer entries; a non-HOT update creates new entries, but reuse and cleanup mean no single update guarantees that every index file grows. Over time, non-HOT churn can still bloat heap and indexes and enlarge the working set. ${CLAIM_VALUES.vacuumReclaim.rule} Rewriting tools are needed when returning most of the table's allocation matters.`,
       },
       {
         heading: 'In the real thing',
@@ -1792,7 +1792,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     sections: [
       {
         heading: 'The phases, in order',
-        body: 'A vacuum moves through named phases, and `pg_stat_progress_vacuum` shows which one a worker is in. **Initializing**, then **scanning heap**: read pages (skipping all-visible ones via the visibility map), pruning and freezing along the way, and collect the TIDs of the dead line pointers left behind. **Vacuuming indexes**: for each index, remove every entry pointing at a collected TID — this is why vacuum cost scales with index count, not just table size. **Vacuuming heap**: return to the collected pages and turn those line pointers into free space, recording it in the FSM. Those two are a loop rather than a straight line: if the heap has not been fully scanned yet, the worker goes back to scanning (see "Memory and repeat passes" below). **Cleaning up indexes**: one final call per index to tidy up and refresh its statistics. **Truncating heap**: give back trailing empty pages if it can, and only those. **Performing final cleanup**: vacuum the free space map, update `pg_class`, and report to the cumulative statistics. ANALYZE is *not* one of these phases — autovacuum may run it against the same table straight afterwards, but it is a separate command with its own view, `pg_stat_progress_analyze`.',
+        body: `A vacuum moves through named phases, and \`pg_stat_progress_vacuum\` shows which one a worker is in. **Initializing**, then **scanning heap**: read pages (skipping all-visible ones via the visibility map), pruning and freezing along the way, and collect the TIDs of the dead line pointers left behind. **Vacuuming indexes**: for each index, remove every entry pointing at a collected TID — this is why vacuum cost scales with index count, not just table size. **Vacuuming heap**: return to the collected pages and turn those line pointers into free space, recording it in the FSM. Those two are a loop rather than a straight line: if the heap has not been fully scanned yet, the worker goes back to scanning (see "Memory and repeat passes" below). **Cleaning up indexes**: one final call per index to tidy up and refresh its statistics. **Truncating heap**: give back trailing empty pages if it can, and only those; this is the brief ${CLAIM_VALUES.vacuumReclaim.truncationLock.mode}, ${CLAIM_VALUES.vacuumReclaim.truncationLock.attempt} attempt, so no lock means no truncation and the space stays in the table. **Performing final cleanup**: vacuum the free space map, update \`pg_class\`, and report to the cumulative statistics. ANALYZE is *not* one of these phases — autovacuum may run it against the same table straight afterwards, but it is a separate command with its own view, \`pg_stat_progress_analyze\`.`,
       },
       {
         heading: 'Dead is not the same as removable',
@@ -1800,7 +1800,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Why the file usually does not shrink',
-        body: 'Vacuum reclaims space *inside* pages and hands it to the free space map for reuse. It only shortens the file if the very last pages are entirely empty, and even then it needs a brief `ACCESS EXCLUSIVE` lock, which it will abandon rather than block your workload for. On a table with live rows scattered near the end — which is nearly all of them — the file stays exactly as large as it was. That is correct behaviour, not a failure: the space is not lost, it is on the map, and the next inserts will use it.',
+        body: `${CLAIM_VALUES.vacuumReclaim.rule} On a table with live rows scattered near the end — which is nearly all of them — the file stays exactly as large as it was. That is correct behaviour, not a failure: the space remains on the map, and the next inserts will use it.`,
       },
       {
         heading: 'Freezing and wraparound',
@@ -1867,7 +1867,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     sections: [
       {
         heading: 'Reused, not returned',
-        body: 'When vacuum removes dead tuples it records the recovered space in the free space map, and future inserts and updates land there. From the operating system’s point of view nothing happened: the file is the same size, `df` does not move. This is usually the right answer — the space will be reused within minutes on a busy table, and returning it would just mean extending the file again — but it means "I vacuumed and the disk did not shrink" is expected behaviour, not a bug.',
+        body: `When vacuum removes dead tuples it records the recovered space in the free space map, and future inserts and updates land there. From the operating system’s point of view nothing happened: the file is the same size, \`df\` does not move. This is usually the right answer — the space will be reused within minutes on a busy table, and returning it would just mean extending the file again — but it means "I vacuumed and the disk did not shrink" is expected behaviour, not a bug. ${CLAIM_VALUES.vacuumReclaim.rule}`,
       },
       {
         heading: 'When you actually need the space back',
