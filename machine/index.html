@@ -209,7 +209,7 @@ EACH SUBMITTED STATEMENT EXECUTES ONCE; DISPLAYED ROWS COME FROM THAT EXECUTION.
           <div id="index-walk-intro">
             <p class="eyebrow" data-disclosure="index-walk-source">P SEQUENCE / M BOARD REPLAYS</p>
             <h2 id="index-walk-title">FROM SELECT 1 TO AN ACCESS PATH</h2>
-            <p>Four real PostgreSQL reports answer why two queries returning the same row take different routes.</p>
+            <p>Four real PostgreSQL reports show why a partial index is a path for some queries, not every query on its column.</p>
           </div>
           <div class="index-walk__header-actions">
             <span id="index-walk-status" aria-live="polite">READY · 0/4</span>
@@ -248,9 +248,9 @@ EACH SUBMITTED STATEMENT EXECUTES ONCE; DISPLAYED ROWS COME FROM THAT EXECUTION.
           <button type="button" data-index-walk-step="unindexed" disabled>
             <span class="index-walk__number">04</span>
             <span class="index-walk__copy">
-              <b>ASK FOR THE SAME ROW ANOTHER WAY</b>
+              <b>OMIT THE PARTIAL-INDEX PREDICATE</b>
               <code>WHERE owner = 'account-42'</code>
-              <small>Retain both plans instead of replacing the first receipt.</small>
+              <small>The owner index requires the query to imply balance &gt; 0.</small>
             </span>
             <output data-index-walk-result="unindexed">LOCKED</output>
           </button>

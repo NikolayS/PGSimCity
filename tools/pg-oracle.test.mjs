@@ -4,6 +4,7 @@ import {
   checkGucContexts,
   compareSetting,
   expectedForMajor,
+  indexWalkAttributeChecks,
   loadOracleRegistry,
   markdownTable,
 } from './pg-oracle.mjs'
@@ -146,7 +147,7 @@ describe('PostgreSQL oracle claim registry', () => {
     )).toBe(false)
   })
 
-  it('renders report cells as a pasteable Markdown table', () => {
+  it('renders pasteable reports and gates every index usability attribute', () => {
     const rendered = markdownTable([
       { claim: 'a|b', city: 'one\ntwo', server: 'three', verdict: 'DIVERGES' },
     ])
@@ -154,5 +155,77 @@ describe('PostgreSQL oracle claim registry', () => {
     expect(rendered).toContain('| Claim | City says | Server said | Verdict |')
     expect(rendered).toContain('a\\|b')
     expect(rendered).toContain('one<br>two')
+
+    const index = (
+      index_name,
+      index_definition,
+      {
+        access_method = 'btree',
+        uniqueness = 'non-unique',
+        validity = 'valid',
+        predicate = null,
+      } = {},
+    ) => ({
+      index_name,
+      access_method,
+      uniqueness,
+      validity,
+      predicate,
+      index_definition,
+    })
+    const serverRows = [
+      index('accounts_tenant_owner_idx', 'CREATE INDEX accounts_tenant_owner_idx ON oracle_fixture.accounts USING btree (tenant_id, owner)'),
+      index('accounts_owner_include_idx', 'CREATE INDEX accounts_owner_include_idx ON oracle_fixture.accounts USING btree (owner) INCLUDE (balance, email)'),
+      index('accounts_lower_owner_idx', 'CREATE INDEX accounts_lower_owner_idx ON oracle_fixture.accounts USING btree (lower(owner))'),
+      index(
+        'accounts_open_balance_idx',
+        'CREATE INDEX accounts_open_balance_idx ON oracle_fixture.accounts USING btree (balance) WHERE (deleted_at IS NULL)',
+        { predicate: '(deleted_at IS NULL)' },
+      ),
+      index('accounts_hash_idx', 'CREATE INDEX accounts_hash_idx ON oracle_fixture.accounts USING hash (owner)', { access_method: 'hash' }),
+      index('accounts_collate_idx', 'CREATE INDEX accounts_collate_idx ON oracle_fixture.accounts USING btree (owner COLLATE "C")'),
+      index('accounts_opclass_idx', 'CREATE INDEX accounts_opclass_idx ON oracle_fixture.accounts USING btree (owner text_pattern_ops)'),
+      index('accounts_desc_idx', 'CREATE INDEX accounts_desc_idx ON oracle_fixture.accounts USING btree (balance DESC NULLS LAST)'),
+      index('accounts_modifiers_idx', 'CREATE INDEX accounts_modifiers_idx ON oracle_fixture.accounts USING btree (owner COLLATE "C" text_pattern_ops DESC)'),
+      index('accounts_metadata_gin_idx', 'CREATE INDEX accounts_metadata_gin_idx ON oracle_fixture.accounts USING gin (metadata)', { access_method: 'gin' }),
+      index('accounts_created_brin_idx', 'CREATE INDEX accounts_created_brin_idx ON oracle_fixture.accounts USING brin (created_at)', { access_method: 'brin' }),
+      index('accounts_pkey', 'CREATE UNIQUE INDEX accounts_pkey ON oracle_fixture.accounts USING btree (id)', { uniqueness: 'unique' }),
+      index('accounts_invalid_owner_idx', 'CREATE UNIQUE INDEX accounts_invalid_owner_idx ON oracle_fixture.accounts USING btree (owner)', { uniqueness: 'unique', validity: 'INVALID' }),
+    ]
+    const catalogSql = 'SELECT pg_catalog.pg_get_indexdef(i.indexrelid) FROM pg_catalog.pg_index AS i'
+    const check = (rows = serverRows, sql = catalogSql) =>
+      indexWalkAttributeChecks(rows, serverRows, sql)
+    const byClaim = (rows = serverRows, sql = catalogSql) =>
+      new Map(check(rows, sql).map((entry) => [entry.claim, entry.verdict]))
+
+    expect(check().map((entry) => entry.claim)).toEqual([
+      'index-walk/composite-key-order',
+      'index-walk/include-columns',
+      'index-walk/expression-key',
+      'index-walk/partial-predicate',
+      'index-walk/non-btree-access-method',
+      'index-walk/collation',
+      'index-walk/operator-class',
+      'index-walk/key-ordering',
+      'index-walk/combined-modifiers',
+      'index-walk/uniqueness',
+      'index-walk/invalid-index',
+    ])
+    expect(check().every((entry) => entry.verdict === 'MATCH')).toBe(true)
+
+    const mutate = (name, field, value) => serverRows.map((row) =>
+      row.index_name === name ? { ...row, [field]: value } : row)
+    expect(byClaim(mutate('accounts_tenant_owner_idx', 'index_definition', '(owner, tenant_id)')).get('index-walk/composite-key-order')).toBe('DIVERGES')
+    expect(byClaim(mutate('accounts_owner_include_idx', 'index_definition', '(owner)')).get('index-walk/include-columns')).toBe('DIVERGES')
+    expect(byClaim(mutate('accounts_lower_owner_idx', 'index_definition', '(owner)')).get('index-walk/expression-key')).toBe('DIVERGES')
+    expect(byClaim(mutate('accounts_open_balance_idx', 'predicate', null)).get('index-walk/partial-predicate')).toBe('DIVERGES')
+    expect(byClaim(mutate('accounts_hash_idx', 'access_method', 'btree')).get('index-walk/non-btree-access-method')).toBe('DIVERGES')
+    expect(byClaim(serverRows, `${catalogSql}, k.position` ).get('index-walk/non-btree-access-method')).toBe('DIVERGES')
+    expect(byClaim(mutate('accounts_collate_idx', 'index_definition', '(owner)')).get('index-walk/collation')).toBe('DIVERGES')
+    expect(byClaim(mutate('accounts_opclass_idx', 'index_definition', '(owner)')).get('index-walk/operator-class')).toBe('DIVERGES')
+    expect(byClaim(mutate('accounts_desc_idx', 'index_definition', '(balance)')).get('index-walk/key-ordering')).toBe('DIVERGES')
+    expect(byClaim(mutate('accounts_modifiers_idx', 'index_definition', '(owner)')).get('index-walk/combined-modifiers')).toBe('DIVERGES')
+    expect(byClaim(mutate('accounts_pkey', 'uniqueness', 'non-unique')).get('index-walk/uniqueness')).toBe('DIVERGES')
+    expect(byClaim(serverRows.filter((row) => row.validity !== 'INVALID')).get('index-walk/invalid-index')).toBe('DIVERGES')
   })
 })

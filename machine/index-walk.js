@@ -30,10 +30,10 @@ export const INDEX_WALK_STEPS = Object.freeze([
   Object.freeze({
     id: 'unindexed',
     number: '04',
-    title: 'Ask for the same row another way',
+    title: 'Omit the partial-index predicate',
     displaySql: "WHERE owner = 'account-42'",
     sql: "SELECT id, balance FROM accounts WHERE owner = 'account-42';",
-    lesson: 'The same one-row result can require a different access plan.',
+    lesson: 'The owner index is partial: without balance > 0, it is not a path for this query.',
   }),
 ])
 
@@ -85,10 +85,17 @@ export function createIndexWalkEvidence(stepId, report) {
 
   if (stepId === 'catalog') {
     const primaryKey = rows.find((row) => row.index_name === 'accounts_pkey')
+    const partial = rows.find((row) => row.index_name === claim.partialIndex)
     const index = String(primaryKey?.index_name ?? '')
     const accessMethod = String(primaryKey?.access_method ?? '')
     const validity = String(primaryKey?.validity ?? '')
     const definition = String(primaryKey?.index_definition ?? '')
+    const partialIndex = String(partial?.index_name ?? '')
+    const partialAccessMethod = String(partial?.access_method ?? '')
+    const partialUniqueness = String(partial?.uniqueness ?? '')
+    const partialValidity = String(partial?.validity ?? '')
+    const partialPredicate = String(partial?.predicate ?? '')
+    const partialDefinition = String(partial?.index_definition ?? '')
     return Object.freeze({
       source: 'postgres',
       stepId,
@@ -97,11 +104,19 @@ export function createIndexWalkEvidence(stepId, report) {
       accessMethod: accessMethod || null,
       validity: validity || null,
       definition: definition || null,
+      partialIndex: partialIndex || null,
+      partialAccessMethod: partialAccessMethod || null,
+      partialUniqueness: partialUniqueness || null,
+      partialValidity: partialValidity || null,
+      partialPredicate: partialPredicate || null,
+      partialDefinition: partialDefinition || null,
       rows: rows.length,
       sharedHits,
       sharedReads,
       summary:
-        `${index || 'no primary-key row'} · ${validity || 'unknown validity'} ${accessMethod || 'unknown method'}`
+        `${partialIndex || 'no seeded partial-index row'}`
+        + ` · ${partialValidity || 'unknown validity'} ${partialUniqueness || 'unknown uniqueness'} ${partialAccessMethod || 'unknown method'}`
+        + ` · PARTIAL: ${partialPredicate || 'predicate unavailable'}`
         + ` · ${rows.length} catalog ${rows.length === 1 ? 'row' : 'rows'}`,
     })
   }
@@ -138,6 +153,12 @@ export function indexWalkFinding(evidence) {
     && catalog?.accessMethod === 'btree'
     && catalog?.validity === 'valid'
     && /\bUSING btree \(id\)$/u.test(catalog?.definition ?? '')
+    && catalog?.partialIndex === claim.partialIndex
+    && catalog?.partialAccessMethod === 'btree'
+    && catalog?.partialUniqueness === 'non-unique'
+    && catalog?.partialValidity === 'valid'
+    && /\bbalance\s*>\s*\(?0\b/u.test(catalog?.partialPredicate ?? '')
+    && /\bUSING btree \(owner\) WHERE /u.test(catalog?.partialDefinition ?? '')
     && indexed?.node === 'Index Scan'
     && indexed?.index === 'accounts_pkey'
     && indexed?.rows === 1

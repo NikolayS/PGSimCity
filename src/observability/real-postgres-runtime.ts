@@ -22,6 +22,8 @@ CREATE TABLE accounts (
 CREATE INDEX accounts_balance_updated_cover_idx
   ON accounts(balance, updated_at) INCLUDE (owner);
 CREATE INDEX accounts_lower_owner_idx ON accounts((lower(owner)));
+CREATE INDEX accounts_positive_owner_idx
+  ON accounts(owner) WHERE balance > 0;
 
 CREATE TABLE orders (
   id integer PRIMARY KEY,

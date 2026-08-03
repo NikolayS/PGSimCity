@@ -589,14 +589,15 @@ async function prepareIndexFixture(psql) {
       balance numeric NOT NULL,
       email text NOT NULL,
       deleted_at timestamptz,
+      created_at timestamptz NOT NULL,
       metadata jsonb NOT NULL
     );
     INSERT INTO oracle_fixture.accounts
-      (id, tenant_id, owner, balance, email, deleted_at, metadata)
+      (id, tenant_id, owner, balance, email, deleted_at, created_at, metadata)
     VALUES
-      (1, 10, 'duplicate', 100, 'one@example.test', NULL, '{"tier":"a"}'),
-      (2, 10, 'duplicate', 200, 'two@example.test', now(), '{"tier":"b"}'),
-      (3, 20, 'unique', 300, 'three@example.test', NULL, '{"tier":"a"}');
+      (1, 10, 'duplicate', 100, 'one@example.test', NULL, '2026-01-01', '{"tier":"a"}'),
+      (2, 10, 'duplicate', 200, 'two@example.test', now(), '2026-01-02', '{"tier":"b"}'),
+      (3, 20, 'unique', 300, 'three@example.test', NULL, '2026-01-03', '{"tier":"a"}');
     CREATE INDEX accounts_tenant_owner_idx
       ON oracle_fixture.accounts (tenant_id, owner);
     CREATE INDEX accounts_owner_include_idx
@@ -617,11 +618,106 @@ async function prepareIndexFixture(psql) {
       ON oracle_fixture.accounts (owner COLLATE "C" text_pattern_ops DESC);
     CREATE INDEX accounts_metadata_gin_idx
       ON oracle_fixture.accounts USING gin (metadata);
+    CREATE INDEX accounts_created_brin_idx
+      ON oracle_fixture.accounts USING brin (created_at);
   `)
   await psql(
     'CREATE UNIQUE INDEX CONCURRENTLY accounts_invalid_owner_idx ON oracle_fixture.accounts (owner);',
     { allowFailure: true },
   )
+}
+
+const INDEX_ROW_FIELDS = [
+  'access_method',
+  'uniqueness',
+  'validity',
+  'predicate',
+  'index_definition',
+]
+
+function sameIndexRow(cityRow, serverRow) {
+  return Boolean(
+    cityRow
+    && serverRow
+    && INDEX_ROW_FIELDS.every((field) => cityRow[field] === serverRow[field]),
+  )
+}
+
+function indexRowSummary(row) {
+  if (!row) return 'index row is absent'
+  return [
+    `${row.index_name}: ${row.validity} ${row.uniqueness} ${row.access_method}`,
+    row.predicate ? `predicate ${row.predicate}` : 'all rows',
+    row.index_definition,
+  ].join('; ')
+}
+
+export function indexWalkAttributeChecks(cityRows, serverRows, catalogSql) {
+  const cityByName = new Map(cityRows.map((row) => [row.index_name, row]))
+  const serverByName = new Map(serverRows.map((row) => [row.index_name, row]))
+  const attribute = (id, name, validate) => {
+    const cityRow = cityByName.get(name)
+    const serverRow = serverByName.get(name)
+    return result(
+      `index-walk/${id}`,
+      indexRowSummary(cityRow),
+      indexRowSummary(serverRow),
+      sameIndexRow(cityRow, serverRow)
+        && validate(cityRow)
+        && validate(serverRow),
+    )
+  }
+
+  const nonBtree = [
+    ['accounts_hash_idx', 'hash'],
+    ['accounts_metadata_gin_idx', 'gin'],
+    ['accounts_created_brin_idx', 'brin'],
+  ]
+  const cityNonBtree = nonBtree.map(([name]) => cityByName.get(name))
+  const serverNonBtree = nonBtree.map(([name]) => serverByName.get(name))
+  const inventsKeyPosition = /\bposition\b|WITH\s+ORDINALITY|pg_get_indexdef\s*\([^,()]+,\s*/iu
+    .test(catalogSql)
+  const nonBtreeMatches = nonBtree.every(([name, method]) => {
+    const cityRow = cityByName.get(name)
+    const serverRow = serverByName.get(name)
+    return sameIndexRow(cityRow, serverRow)
+      && cityRow?.access_method === method
+      && serverRow?.access_method === method
+      && String(cityRow?.index_definition).includes(`USING ${method}`)
+      && String(serverRow?.index_definition).includes(`USING ${method}`)
+  })
+
+  return [
+    attribute('composite-key-order', 'accounts_tenant_owner_idx', (row) =>
+      /USING btree \(tenant_id, owner\)/u.test(String(row?.index_definition))),
+    attribute('include-columns', 'accounts_owner_include_idx', (row) =>
+      /USING btree \(owner\) INCLUDE \(balance, email\)/u.test(String(row?.index_definition))),
+    attribute('expression-key', 'accounts_lower_owner_idx', (row) =>
+      /USING btree \(lower\(owner\)\)/u.test(String(row?.index_definition))),
+    attribute('partial-predicate', 'accounts_open_balance_idx', (row) =>
+      Boolean(row?.predicate)
+      && /deleted_at IS NULL/u.test(String(row.predicate))
+      && /\bWHERE\b/u.test(String(row.index_definition))),
+    result(
+      'index-walk/non-btree-access-method',
+      `${cityNonBtree.map(indexRowSummary).join(' | ')}; key position projected: ${inventsKeyPosition ? 'yes' : 'no'}`,
+      serverNonBtree.map(indexRowSummary).join(' | '),
+      nonBtreeMatches && !inventsKeyPosition,
+    ),
+    attribute('collation', 'accounts_collate_idx', (row) =>
+      /COLLATE "C"/u.test(String(row?.index_definition))),
+    attribute('operator-class', 'accounts_opclass_idx', (row) =>
+      /\btext_pattern_ops\b/u.test(String(row?.index_definition))),
+    attribute('key-ordering', 'accounts_desc_idx', (row) =>
+      /\bDESC NULLS LAST\b/u.test(String(row?.index_definition))),
+    attribute('combined-modifiers', 'accounts_modifiers_idx', (row) =>
+      /COLLATE "C" text_pattern_ops DESC/u.test(String(row?.index_definition))),
+    attribute('uniqueness', 'accounts_pkey', (row) =>
+      row?.uniqueness === 'unique'
+      && /^CREATE UNIQUE INDEX\b/u.test(String(row.index_definition))),
+    attribute('invalid-index', 'accounts_invalid_owner_idx', (row) =>
+      row?.validity === 'INVALID'),
+  ]
 }
 
 async function checkIndexWalk(psql, query, registry) {
@@ -631,7 +727,9 @@ async function checkIndexWalk(psql, query, registry) {
   const serverRows = await query(`
     SELECT c.relname AS index_name,
            am.amname AS access_method,
+           CASE WHEN i.indisunique THEN 'unique' ELSE 'non-unique' END AS uniqueness,
            CASE WHEN i.indisvalid THEN 'valid' ELSE 'INVALID' END AS validity,
+           pg_catalog.pg_get_expr(i.indpred, i.indrelid, true) AS predicate,
            pg_catalog.pg_get_indexdef(i.indexrelid) AS index_definition
       FROM pg_catalog.pg_index AS i
       JOIN pg_catalog.pg_class AS c ON c.oid = i.indexrelid
@@ -655,29 +753,14 @@ async function checkIndexWalk(psql, query, registry) {
   const columnTypes = new Map(pgIndexColumns.map((row) => [row.attname, row.data_type]))
   const missingColumns = citedColumns.filter((name) => !columnTypes.has(name))
 
-  const definitionMismatches = serverRows.filter((serverRow) => {
-    const cityRow = cityRows.find((candidate) => candidate.index_name === serverRow.index_name)
-    return !cityRow
-      || cityRow.access_method !== serverRow.access_method
-      || cityRow.validity !== serverRow.validity
-      || cityRow.index_definition !== serverRow.index_definition
-  })
-  const expectedClauses = ['WHERE ', 'USING hash', 'COLLATE "C"', 'text_pattern_ops', 'DESC NULLS LAST']
-  const missingClauses = expectedClauses.filter((clause) =>
-    !cityRows.some((row) => String(row.index_definition).includes(clause)))
-  const invalidServer = serverRows.filter((row) => row.validity === 'INVALID')
-  const invalidMismatches = invalidServer.filter((serverRow) => {
-    const cityRow = cityRows.find((candidate) => candidate.index_name === serverRow.index_name)
-    return !cityRow || cityRow.validity !== 'INVALID'
-  })
-  const invalidDefinition = invalidServer[0]
-  const cityDescribeLine = invalidDefinition
+  const cityInvalid = cityRows.find((row) => row.validity === 'INVALID')
+  const cityDescribeLine = cityInvalid
     ? formatDescribeIndex({
-      Name: invalidDefinition.index_name,
+      Name: cityInvalid.index_name,
       Primary: false,
-      Unique: true,
+      Unique: cityInvalid.uniqueness === 'unique',
       Valid: false,
-      Definition: invalidDefinition.index_definition,
+      Definition: cityInvalid.index_definition,
     }).trim()
     : ''
   const serverDescribeLine = described.stdout
@@ -694,22 +777,7 @@ async function checkIndexWalk(psql, query, registry) {
         : citedColumns.map((name) => `${name}:${columnTypes.get(name)}`).join(', '),
       missingColumns.length === 0,
     ),
-    result(
-      'index-walk/full-definitions',
-      'full definitions retain predicates, access methods, collations, operator classes, and ordering',
-      definitionMismatches.length > 0 || missingClauses.length > 0
-        ? `${definitionMismatches.length} definition mismatches; missing clauses ${missingClauses.join(', ') || 'none'}`
-        : `${serverRows.length} authoritative definitions match with every usability clause`,
-      definitionMismatches.length === 0 && missingClauses.length === 0,
-    ),
-    result(
-      'index-walk/invalid-index',
-      'retains rows with indisvalid = false and labels them INVALID',
-      invalidMismatches.length > 0
-        ? `invalid index missing or mislabeled: ${invalidMismatches.map((row) => row.index_name).join(', ')}`
-        : `${invalidServer.length} invalid index row retained and labeled INVALID`,
-      invalidServer.length > 0 && invalidMismatches.length === 0,
-    ),
+    ...indexWalkAttributeChecks(cityRows, serverRows, registry.indexWalk.catalogSql),
     result(
       'psql-describe/invalid-index',
       cityDescribeLine || 'invalid index is absent',

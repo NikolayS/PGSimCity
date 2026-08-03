@@ -60,22 +60,29 @@ describe('Machine first index walk', () => {
     expect(INDEX_WALK_STEPS[1].sql).toContain('pg_catalog.pg_index')
     expect(INDEX_WALK_STEPS[2].sql).toMatch(/WHERE id = 42/)
     expect(INDEX_WALK_STEPS[3].sql).toMatch(/WHERE owner = 'account-42'/)
+    expect(INDEX_WALK_STEPS[3].lesson).toMatch(/partial.*balance > 0/)
   })
 
-  it('reports every full index definition with its access method and validity', () => {
+  it('reports complete per-index usability facts without inventing key positions', () => {
     const sql = INDEX_WALK_STEPS[1].sql
 
     expect(sql).toBe(INDEX_WALK_CLAIM.catalogSql)
     expect(sql).toMatch(/am\.amname AS access_method/)
+    expect(sql).toMatch(/WHEN i\.indisunique THEN 'unique'/)
+    expect(sql).toMatch(/ELSE 'non-unique'/)
     expect(sql).toMatch(/WHEN i\.indisvalid THEN 'valid'/)
     expect(sql).toMatch(/ELSE 'INVALID'/)
+    expect(sql).toMatch(
+      /pg_catalog\.pg_get_expr\(i\.indpred, i\.indrelid, true\) AS predicate/,
+    )
     expect(sql).toMatch(/pg_catalog\.pg_get_indexdef\(i\.indexrelid\) AS index_definition/)
     expect(sql).not.toMatch(/pg_get_indexdef\([^)]*,/)
     expect(sql).not.toMatch(/AND i\.indisvalid/)
+    expect(sql).not.toMatch(/\bposition\b|WITH ORDINALITY/)
     expect(sql).toMatch(/ORDER BY c\.relname/)
   })
 
-  it('shows complete definitions for seeded PostgreSQL indexes', async () => {
+  it('makes the seeded partial owner index and its limited query scope visible', async () => {
     const source = await createPgliteSource(parseExplainJson)
     try {
       const catalog = await source.query(INDEX_WALK_STEPS[1].sql)
@@ -85,26 +92,49 @@ describe('Machine first index walk', () => {
         {
           index_name: 'accounts_balance_updated_cover_idx',
           access_method: 'btree',
+          uniqueness: 'non-unique',
           validity: 'valid',
+          predicate: null,
           index_definition: 'CREATE INDEX accounts_balance_updated_cover_idx ON public.accounts USING btree (balance, updated_at) INCLUDE (owner)',
         },
         {
           index_name: 'accounts_lower_owner_idx',
           access_method: 'btree',
+          uniqueness: 'non-unique',
           validity: 'valid',
+          predicate: null,
           index_definition: 'CREATE INDEX accounts_lower_owner_idx ON public.accounts USING btree (lower(owner))',
         },
         {
           index_name: 'accounts_pkey',
           access_method: 'btree',
+          uniqueness: 'unique',
           validity: 'valid',
+          predicate: null,
           index_definition: 'CREATE UNIQUE INDEX accounts_pkey ON public.accounts USING btree (id)',
         },
+        expect.objectContaining({
+          index_name: 'accounts_positive_owner_idx',
+          access_method: 'btree',
+          uniqueness: 'non-unique',
+          validity: 'valid',
+          predicate: expect.stringMatching(/balance > .*0/),
+          index_definition: expect.stringMatching(
+            /USING btree \(owner\) WHERE \(balance > .*0/,
+          ),
+        }),
       ])
 
       const unindexed = await source.query(INDEX_WALK_STEPS[3].sql)
       expect(unindexed.error).toBeNull()
       expect(unindexed.plan?.root.nodeType).toBe('Seq Scan')
+
+      const implied = await source.query(
+        "SELECT id, balance FROM accounts WHERE owner = 'account-42' AND balance > 0;",
+      )
+      expect(implied.error).toBeNull()
+      expect(implied.plan?.root.nodeType).toBe('Index Scan')
+      expect(implied.plan?.root.indexName).toBe('accounts_positive_owner_idx')
     } finally {
       await source.close()
     }
@@ -133,8 +163,17 @@ describe('Machine first index walk', () => {
       rows: [{
         index_name: 'accounts_pkey',
         access_method: 'btree',
+        uniqueness: 'unique',
         validity: 'valid',
+        predicate: null,
         index_definition: 'CREATE UNIQUE INDEX accounts_pkey ON public.accounts USING btree (id)',
+      }, {
+        index_name: 'accounts_positive_owner_idx',
+        access_method: 'btree',
+        uniqueness: 'non-unique',
+        validity: 'valid',
+        predicate: '(balance > (0)::numeric)',
+        index_definition: 'CREATE INDEX accounts_positive_owner_idx ON public.accounts USING btree (owner) WHERE (balance > (0)::numeric)',
       }],
       hits: 18,
     })
@@ -151,7 +190,7 @@ describe('Machine first index walk', () => {
     })
 
     expect(createIndexWalkEvidence('catalog', catalog).summary)
-      .toBe('accounts_pkey · valid btree · 1 catalog row')
+      .toBe('accounts_positive_owner_idx · valid non-unique btree · PARTIAL: (balance > (0)::numeric) · 2 catalog rows')
     expect(createIndexWalkEvidence('indexed', indexed).summary)
       .toBe('Index Scan · accounts_pkey · 1 row · hit 3 / read 0')
     expect(createIndexWalkEvidence('unindexed', unindexed).summary)
@@ -171,8 +210,17 @@ describe('Machine first index walk', () => {
         rows: [{
           index_name: 'accounts_pkey',
           access_method: 'btree',
+          uniqueness: 'unique',
           validity: 'valid',
+          predicate: null,
           index_definition: 'CREATE UNIQUE INDEX accounts_pkey ON public.accounts USING btree (id)',
+        }, {
+          index_name: 'accounts_positive_owner_idx',
+          access_method: 'btree',
+          uniqueness: 'non-unique',
+          validity: 'valid',
+          predicate: '(balance > (0)::numeric)',
+          index_definition: 'CREATE INDEX accounts_positive_owner_idx ON public.accounts USING btree (owner) WHERE (balance > (0)::numeric)',
         }],
       })),
       createIndexWalkEvidence('indexed', report({
@@ -191,6 +239,13 @@ describe('Machine first index walk', () => {
     expect(indexWalkFinding(evidence)).toEqual({
       supported: true,
       text: INDEX_WALK_CLAIM.finding,
+    })
+    const withoutPartialScope = evidence.map((entry) => entry?.stepId === 'catalog'
+      ? { ...entry, partialPredicate: null }
+      : entry)
+    expect(indexWalkFinding(withoutPartialScope)).toEqual({
+      supported: false,
+      text: INDEX_WALK_CLAIM.incomplete,
     })
     expect(indexWalkFinding(evidence.slice(0, 3))).toEqual({
       supported: false,

@@ -158,6 +158,9 @@ describe('machine room portrait layout', () => {
     expect(html).toMatch(/data-disclosure="index-walk-sequence"/)
     expect(html).toMatch(/data-disclosure="index-walk-model"/)
     expect(html).toMatch(/data-disclosure="index-walk-comparison"/)
+    expect(html).toMatch(/partial index is a path for some queries, not every query/)
+    expect(html).toMatch(/OMIT THE PARTIAL-INDEX PREDICATE/)
+    expect(html).toMatch(/requires the query to imply balance &gt; 0/)
     expect(script).toMatch(/matchingIndexWalkStep\(report\)/)
     expect(script).toMatch(/createIndexWalkEvidence\(step\.id, report\)/)
 
