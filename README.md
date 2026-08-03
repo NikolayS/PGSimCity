@@ -68,10 +68,10 @@ audio, or game content.
 | **Client sky** (north, above) | Connections arriving from the application tier |
 | **Postmaster** | The supervisor. Forks one backend per connection and never touches your data |
 | **Backend row** | 16 backend processes. Their lighting *is* their state — including `idle in transaction` |
-| **Buffer pool (`shared_buffers`)** | Up to 1,024 representative frames (256 active at the default 2 GiB setting), beside `wal_buffers`, the ProcArray, lock table, CLOG and buffer mapping table |
+| **Buffer pool (`shared_buffers`)** | Up to 1,024 representative frames (256 active at the 2 GiB model default; PostgreSQL 18.3 itself defaults to 128 MiB), beside `wal_buffers`, the ProcArray, lock table, CLOG and buffer mapping table |
 | **The excavation** | The data directory: where memory ends and storage begins |
 | **Storage** (below) | Heap files as fields of 8 KiB pages, B-trees as actual trees, TOAST, the FSM and visibility map, the OS page cache and the disks |
-| **WAL district** (east) | walwriter → `pg_wal` segments → archiver → walsender |
+| **WAL district** (east) | Backends and walwriter write WAL into `pg_wal`; the archiver copies completed segments, while walsenders independently stream WAL as it is generated |
 | **Maintenance yard** (west) | Checkpointer, background writer, autovacuum launcher and its workers |
 | **Standbys** (south) | Two independent walreceivers, startup processes replaying WAL, and the lag on each stream |
 | **Continuity quarter** (outer east and south) | WAL archive, base backups, point-in-time recovery, delayed replay, leader lease and rejoin machinery |
@@ -214,7 +214,7 @@ sources separately because PostgreSQL exposes the former and not the latter.
 
 ## Run it locally
 
-You need Node.js 20 or newer and a browser with WebGL2.
+You need Node.js `^20.19.0 || >=22.12.0` and a browser with WebGL2.
 
 ```bash
 npm install

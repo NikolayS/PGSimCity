@@ -269,5 +269,6 @@ wait. The value is the controlled experiment, not two noisy executions.
 
 - Touch controls verified only in Chrome's mobile emulation, never on a device.
 - The plate's containment audit constrains the Slonik silhouette.
-- Modest hardware falls to the `reduced` quality tier, which is not what the
-  screenshots show.
+- The renderer starts at the `high` quality tier and adaptively steps through
+  `medium`, `reduced`, and potentially `low` based on measured frame rate; the
+  screenshots show the starting tier.

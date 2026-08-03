@@ -51,7 +51,7 @@ event bus, registry, camera rig, renderer state, and flow controller.
 - three.js r185 for 3D and WebGL
 - Vite for development and the static production bundle
 - Vitest for deterministic unit and characterization tests
-- Node.js 20 or newer for local development
+- Node.js `^20.19.0 || >=22.12.0` for local development
 - WebGL2 in the browser
 
 three.js is the only bundled runtime dependency of the 3D application.
