@@ -118,6 +118,8 @@ describe('machine room portrait layout', () => {
     expect(html).toMatch(/class="comparison-lanes"/)
     expect(html.match(/class="comparison-board"/g)).toHaveLength(2)
     expect(html).toMatch(/aria-label="Choose comparison board"/)
+    expect(html).toMatch(/id="comparison"[^>]+role="dialog"[^>]+aria-modal="true"/)
+    expect(html).toMatch(/id="index-walk"[^>]+role="dialog"[^>]+aria-modal="true"/)
 
     const lanes = blockAfter(portrait, '.comparison-lanes')
     expect(lanes).toMatch(/grid-auto-flow:\s*column/)
@@ -131,16 +133,25 @@ describe('machine room portrait layout', () => {
     const boardsAt = html.indexOf('class="comparison-lanes"')
     expect(proofAt).toBeGreaterThan(0)
     expect(boardsAt).toBeGreaterThan(proofAt)
-    expect(html).toMatch(/<b class="source-medallion model-source">M<\/b>\s*MODELLED FINDING/)
+    expect(html).toMatch(/<b class="source-medallion model-source" role="img" aria-label="Modelled source">M<\/b>\s*MODELLED FINDING/)
     expect(html).toMatch(/class="comparison-source-key"[^>]+aria-label="Data source key"/)
     expect(html).toMatch(/id="comparison-pglite-disclosure"/)
     expect(html).toMatch(/id="comparison-replay-disclosure"/)
+    expect(html).toMatch(/id="comparison"[^>]+aria-describedby="comparison-pglite-disclosure comparison-replay-disclosure"/)
     expect(script).toMatch(
       /comparisonPgliteDisclosure\.textContent\s*=\s*SYNCHRONOUS_COMMIT_COMPARISON_CLAIM\.pgliteDisclosure/,
     )
     expect(script).toMatch(
       /comparisonReplayDisclosure\.textContent\s*=\s*SYNCHRONOUS_COMMIT_COMPARISON_CLAIM\.replayDisclosure/,
     )
+  })
+
+  it('spells out source medallions and associates qualifications with their claims', () => {
+    expect(html.match(/aria-label="PostgreSQL source"/g)?.length).toBeGreaterThanOrEqual(4)
+    expect(html.match(/aria-label="Modelled source"/g)?.length).toBeGreaterThanOrEqual(4)
+    expect(html).toMatch(/id="comparison-proof"[^>]+aria-describedby="comparison-pglite-disclosure"/)
+    expect(html).toMatch(/id="index-walk-finding"[^>]+aria-describedby="index-walk-sequence index-walk-model index-walk-comparison"/)
+    expect(html).toMatch(/id="terminal-transcript"[^>]+role="log"/)
   })
 
   it('describes one measured execution replayed through two modelled policies', () => {
@@ -158,6 +169,7 @@ describe('machine room portrait layout', () => {
     expect(html).toMatch(/data-disclosure="index-walk-sequence"/)
     expect(html).toMatch(/data-disclosure="index-walk-model"/)
     expect(html).toMatch(/data-disclosure="index-walk-comparison"/)
+    expect(html).toMatch(/id="index-walk"[^>]+aria-describedby="index-walk-sequence index-walk-model index-walk-comparison"/)
     expect(html).toMatch(/partial index is a path for some queries, not every query/)
     expect(html).toMatch(/OMIT THE PARTIAL-INDEX PREDICATE/)
     expect(html).toMatch(/requires the query to imply balance &gt; 0/)

@@ -77,8 +77,8 @@
               </details>
             </nav>
             <div class="source-key" aria-label="Data source key">
-              <span><b class="source-medallion postgres-source">P</b> POSTGRESQL REPORT</span>
-              <span><b class="source-medallion model-source">M</b> MODELLED RHYTHM</span>
+              <span><b class="source-medallion postgres-source" role="img" aria-label="PostgreSQL source">P</b> POSTGRESQL REPORT</span>
+              <span><b class="source-medallion model-source" role="img" aria-label="Modelled source">M</b> MODELLED RHYTHM</span>
             </div>
           </div>
         </header>
@@ -125,7 +125,7 @@
             </strong>
             <span id="terminal-state">OFFLINE</span>
           </header>
-          <div id="terminal-transcript" class="terminal-transcript" aria-live="polite">
+          <div id="terminal-transcript" class="terminal-transcript" role="log" aria-label="psql transcript" aria-live="polite" aria-relevant="additions text">
             <pre class="terminal-banner">psql workbench
 Type SQL directly. Up/Down recalls history.
 Available: \d  \dt  \d+ table  \timing
@@ -167,6 +167,7 @@ EACH SUBMITTED STATEMENT EXECUTES ONCE; DISPLAYED ROWS COME FROM THAT EXECUTION.
               width="720"
               height="900"
               tabindex="0"
+              aria-describedby="machine-stage-status"
               aria-label="A layered PostgreSQL architecture: client and processes above one shared memory segment, backend private memory outside it, then the kernel page cache and durable disk."
             ></canvas>
           </div>
@@ -194,6 +195,13 @@ EACH SUBMITTED STATEMENT EXECUTES ONCE; DISPLAYED ROWS COME FROM THAT EXECUTION.
           <span id="statement-state">NO STATEMENT</span>
           <span id="run-state">VIEW RUNNING</span>
         </div>
+        <p
+          id="machine-stage-status"
+          class="sr-only"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >Architecture board ready. No statement is running.</p>
       </section>
 
       <p class="fallback">This prototype needs a browser with Canvas 2D support.</p>
@@ -202,7 +210,10 @@ EACH SUBMITTED STATEMENT EXECUTES ONCE; DISPLAYED ROWS COME FROM THAT EXECUTION.
         id="index-walk"
         class="index-walk"
         data-correction-subject="machine-index-walk"
+        role="dialog"
+        aria-modal="true"
         aria-labelledby="index-walk-title"
+        aria-describedby="index-walk-sequence index-walk-model index-walk-comparison"
         hidden
       >
         <header class="index-walk__header">
@@ -257,8 +268,8 @@ EACH SUBMITTED STATEMENT EXECUTES ONCE; DISPLAYED ROWS COME FROM THAT EXECUTION.
         </div>
 
         <footer id="index-walk-footer" class="index-walk__footer">
-          <div id="index-walk-finding" class="index-walk__finding" hidden>
-            <span><b class="source-medallion postgres-source">P</b> MEASURED FINDING</span>
+          <div id="index-walk-finding" class="index-walk__finding" aria-describedby="index-walk-sequence index-walk-model index-walk-comparison" hidden>
+            <span><b class="source-medallion postgres-source" role="img" aria-label="PostgreSQL source">P</b> MEASURED FINDING</span>
             <strong id="index-walk-finding-text"></strong>
           </div>
           <div id="index-walk-disclosures" class="index-walk__disclosures">
@@ -274,7 +285,10 @@ EACH SUBMITTED STATEMENT EXECUTES ONCE; DISPLAYED ROWS COME FROM THAT EXECUTION.
         id="comparison"
         class="comparison"
         data-correction-subject="machine-comparison"
+        role="dialog"
+        aria-modal="true"
         aria-labelledby="comparison-title"
+        aria-describedby="comparison-pglite-disclosure comparison-replay-disclosure"
         hidden
       >
         <header class="comparison-header">
@@ -286,8 +300,8 @@ EACH SUBMITTED STATEMENT EXECUTES ONCE; DISPLAYED ROWS COME FROM THAT EXECUTION.
               data-disclosure="comparison-source-key"
               aria-label="Data source key"
             >
-              <span><b class="source-medallion postgres-source">P</b> POSTGRESQL EXECUTION</span>
-              <span><b class="source-medallion model-source">M</b> MODELLED REPLAY</span>
+              <span><b class="source-medallion postgres-source" role="img" aria-label="PostgreSQL source">P</b> POSTGRESQL EXECUTION</span>
+              <span><b class="source-medallion model-source" role="img" aria-label="Modelled source">M</b> MODELLED REPLAY</span>
             </div>
           </div>
           <div class="comparison-header__actions">
@@ -296,9 +310,9 @@ EACH SUBMITTED STATEMENT EXECUTES ONCE; DISPLAYED ROWS COME FROM THAT EXECUTION.
           </div>
         </header>
 
-        <section id="comparison-proof" class="comparison-proof" aria-label="Comparison finding">
+        <section id="comparison-proof" class="comparison-proof" aria-label="Comparison finding" aria-describedby="comparison-pglite-disclosure">
           <div class="comparison-proof__verdict">
-            <span data-disclosure="comparison-finding-source"><b class="source-medallion model-source">M</b> MODELLED FINDING</span>
+            <span data-disclosure="comparison-finding-source"><b class="source-medallion model-source" role="img" aria-label="Modelled source">M</b> MODELLED FINDING</span>
             <strong id="comparison-finding"></strong>
             <small
               id="comparison-pglite-disclosure"
@@ -347,7 +361,7 @@ EACH SUBMITTED STATEMENT EXECUTES ONCE; DISPLAYED ROWS COME FROM THAT EXECUTION.
                 data-disclosure="comparison-phase-a"
               >READY</span>
             </header>
-            <p data-disclosure="comparison-on-source"><b class="source-medallion postgres-source">P</b> SAME POSTGRESQL REPORT <b class="source-medallion model-source">M</b> WAITS FOR LOCAL WAL FLUSH</p>
+            <p data-disclosure="comparison-on-source"><b class="source-medallion postgres-source" role="img" aria-label="PostgreSQL source">P</b> SAME POSTGRESQL REPORT <b class="source-medallion model-source" role="img" aria-label="Modelled source">M</b> WAITS FOR LOCAL WAL FLUSH</p>
             <div class="comparison-board__viewport">
               <canvas
                 id="comparison-board-a"
@@ -370,7 +384,7 @@ EACH SUBMITTED STATEMENT EXECUTES ONCE; DISPLAYED ROWS COME FROM THAT EXECUTION.
                 data-disclosure="comparison-phase-b"
               >READY</span>
             </header>
-            <p data-disclosure="comparison-off-source"><b class="source-medallion postgres-source">P</b> SAME POSTGRESQL REPORT <b class="source-medallion model-source">M</b> <span data-comparison-note="b">EARLY ACK; CRASH CAN LOSE RECENT ACKS UNTIL WAL FLUSH</span></p>
+            <p data-disclosure="comparison-off-source"><b class="source-medallion postgres-source" role="img" aria-label="PostgreSQL source">P</b> SAME POSTGRESQL REPORT <b class="source-medallion model-source" role="img" aria-label="Modelled source">M</b> <span data-comparison-note="b">EARLY ACK; CRASH CAN LOSE RECENT ACKS UNTIL WAL FLUSH</span></p>
             <div class="comparison-board__viewport">
               <canvas
                 id="comparison-board-b"

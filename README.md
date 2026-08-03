@@ -18,6 +18,11 @@ approved by Electronic Arts Inc. SimCity is a trademark of Electronic Arts Inc.
 This project contains no SimCity code, assets, artwork, logos, characters,
 audio, or game content.
 
+The PostgreSQL lessons have keyboard and text-first routes, but the 3D scene and
+first-person walk do not have a nonvisual equivalent. See the
+[accessibility boundary and alternatives](ACCESSIBILITY.md) for what is covered
+and what remains irreducibly spatial.
+
 ![PGSimCity at golden hour: the reflective shared-buffers pool and backend avenue sit at the centre of the Slonik-shaped plate, surrounded by the WAL, maintenance, standby, recovery, and continuity districts under a scattering sky.](docs/screenshot.png)
 
 ---

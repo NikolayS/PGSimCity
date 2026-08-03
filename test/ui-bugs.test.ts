@@ -570,6 +570,67 @@ describe('city-first panel state', () => {
 
     inspector.dispose()
   })
+
+  it('connects the panel tabs to named panels and returns focus when a panel closes', () => {
+    const ctx = context()
+    const controls = createControls(ctx)
+    const inspector = createInspector(ctx)
+    const consoleTab = document.querySelector('.pgc-tab--left') as HTMLButtonElement
+    const consolePanel = document.querySelector('.pgc-rail') as HTMLElement
+    const inspectorTab = document.querySelector('.pgc-tab--right') as HTMLButtonElement
+    const inspectorPanel = document.querySelector('.pgc-insp') as HTMLElement
+
+    expect(consoleTab.getAttribute('aria-controls')).toBe(consolePanel.id)
+    expect(consolePanel.getAttribute('aria-labelledby')).toBe(consoleTab.id)
+    expect(inspectorTab.getAttribute('aria-controls')).toBe(inspectorPanel.id)
+    expect(inspectorPanel.getAttribute('aria-labelledby')).toContain(inspectorTab.id)
+
+    consoleTab.click()
+    ;(document.querySelector('.pgc-rail__collapse') as HTMLButtonElement).click()
+    expect(document.activeElement).toBe(consoleTab)
+
+    ctx.bus.emit('select', { id: 'shared.buffers' })
+    ;(document.querySelector('.pgc-insp__close') as HTMLButtonElement).click()
+    expect(document.activeElement).toBe(inspectorTab)
+
+    inspector.dispose()
+    controls.dispose()
+  })
+})
+
+describe('HUD teaching routes', () => {
+  beforeEach(() => {
+    const dom = installTestDom()
+    for (const id of ['hud-top', 'hud-bottom', 'toast-stack', 'compass', 'hud-right']) dom.mount(id)
+  })
+
+  it('opens the matching text inspector when a keyboard-operable vital is activated', () => {
+    const ctx = context()
+    const focuses = vi.fn()
+    const selections = vi.fn()
+    ctx.bus.on('focus', focuses)
+    ctx.bus.on('select', selections)
+    const inspector = createInspector(ctx)
+    const hud = createHud(ctx)
+
+    const tps = document.querySelector('.hud-vital') as HTMLButtonElement
+    expect(tps.getAttribute('aria-label')).toContain('inspector')
+    expect(tps.getAttribute('aria-label')).toContain(
+      tps.querySelector('.hud-vital__v')?.textContent,
+    )
+    const checkpoint = document.querySelector('.hud-ckpt') as HTMLButtonElement
+    expect(checkpoint.getAttribute('aria-label')).toContain(
+      checkpoint.querySelector('.hud-ckpt__state')?.textContent,
+    )
+    tps.click()
+
+    expect(focuses).toHaveBeenCalledWith({ id: 'backend.row' })
+    expect(selections).toHaveBeenCalledWith({ id: 'backend.row' })
+    expect(document.querySelector('.pgc-host--right')?.classList.contains('is-open')).toBe(true)
+
+    hud.dispose()
+    inspector.dispose()
+  })
 })
 
 describe('first-visit tour entry point', () => {
@@ -591,6 +652,22 @@ describe('first-visit tour entry point', () => {
     tour.dispose()
     tour = createTour(ctx)
     expect((document.querySelector('.tour-first') as HTMLElement).classList.contains('is-live')).toBe(false)
+    tour.dispose()
+  })
+
+  it('moves focus into the lesson controls and restores the tour opener', () => {
+    const ctx = context()
+    const opener = document.createElement('button')
+    opener.className = 'hud-tour'
+    document.body.append(opener)
+    const tour = createTour(ctx)
+
+    opener.focus()
+    ctx.bus.emit('tour:start', { source: 'button' })
+    expect(document.activeElement).toBe(document.querySelector('.tour-next'))
+
+    ctx.bus.emit('tour:stop', {})
+    expect(document.activeElement).toBe(opener)
     tour.dispose()
   })
 })

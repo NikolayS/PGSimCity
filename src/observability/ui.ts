@@ -110,16 +110,25 @@ export function dataTable(): LiveTable {
 
 /* ------------------------------ knob control ----------------------------- */
 
+let knobSequence = 0
+
 /** A GUC the reader can turn, labelled with its real name. */
 export function knobRow(sim: SimApi, spec: KnobSpec): { root: HTMLElement; sync(): void } {
+  const id = `diagnose-knob-${++knobSequence}`
   const value = el('span', { class: 'knob__v' })
-  const head = el('div', { class: 'knob__head' }, el('code', { class: 'knob__k', text: spec.guc }), value)
-  const help = el('p', { class: 'knob__help', text: spec.help })
+  const name = el('code', { class: 'knob__k', id: `${id}-name`, text: spec.guc })
+  const head = el('div', { class: 'knob__head' }, name, value)
+  const help = el('p', { class: 'knob__help', id: `${id}-help`, text: spec.help })
   let sync = () => {}
   let control: HTMLElement
 
   if (spec.kind === 'toggle') {
-    const btn = el('button', { class: 'knob__toggle', type: 'button' })
+    const btn = el('button', {
+      class: 'knob__toggle',
+      type: 'button',
+      'aria-label': `Toggle ${spec.guc}`,
+      'aria-describedby': help.id,
+    })
     btn.addEventListener('click', () => {
       const cur = sim.state.knobs[spec.key] as unknown as boolean
       sim.setKnob(spec.key as 'bgwriterEnabled', !cur)
@@ -130,10 +139,16 @@ export function knobRow(sim: SimApi, spec: KnobSpec): { root: HTMLElement; sync(
       const on = sim.state.knobs[spec.key] as unknown as boolean
       btn.classList.toggle('on', on)
       btn.textContent = on ? 'on' : 'off'
+      btn.setAttribute('aria-pressed', String(on))
       setText(value, on ? 'on' : 'off')
     }
   } else if (spec.kind === 'choice') {
-    const wrap = el('div', { class: 'knob__choices' })
+    const wrap = el('div', {
+      class: 'knob__choices',
+      role: 'group',
+      'aria-labelledby': name.id,
+      'aria-describedby': help.id,
+    })
     const buttons = (spec.choices ?? []).map((choice) => {
       const b = el('button', { class: 'knob__choice', type: 'button', text: choice })
       b.addEventListener('click', () => {
@@ -146,7 +161,11 @@ export function knobRow(sim: SimApi, spec: KnobSpec): { root: HTMLElement; sync(
     control = wrap
     sync = () => {
       const cur = String(sim.state.knobs[spec.key])
-      buttons.forEach((b) => b.classList.toggle('on', b.textContent === cur))
+      buttons.forEach((b) => {
+        const selected = b.textContent === cur
+        b.classList.toggle('on', selected)
+        b.setAttribute('aria-pressed', String(selected))
+      })
       setText(value, cur)
     }
   } else {
@@ -156,6 +175,8 @@ export function knobRow(sim: SimApi, spec: KnobSpec): { root: HTMLElement; sync(
       min: String(spec.min ?? 0),
       max: String(spec.max ?? 100),
       step: String(spec.step ?? 1),
+      'aria-labelledby': name.id,
+      'aria-describedby': help.id,
     })
     input.addEventListener('input', () => {
       sim.setKnob(spec.key as 'tps', Number(input.value))
@@ -166,7 +187,9 @@ export function knobRow(sim: SimApi, spec: KnobSpec): { root: HTMLElement; sync(
       const v = Number(sim.state.knobs[spec.key])
       if (document.activeElement !== input) input.value = String(v)
       input.style.setProperty('--fill', `${((v - (spec.min ?? 0)) / ((spec.max ?? 100) - (spec.min ?? 0))) * 100}%`)
-      setText(value, spec.fmt ? spec.fmt(v) : `${fmtNum(v, 2)}${spec.unit ? ` ${spec.unit}` : ''}`)
+      const formatted = spec.fmt ? spec.fmt(v) : `${fmtNum(v, 2)}${spec.unit ? ` ${spec.unit}` : ''}`
+      setText(value, formatted)
+      input.setAttribute('aria-valuetext', formatted)
     }
   }
 
@@ -268,17 +291,21 @@ function resolveVar(expr: string): string {
 export function vitalsStrip(sim: SimApi, coll: Collector): { root: HTMLElement; update(): void } {
   const cells = VITALS.map((v) => {
     const val = el('div', { class: 'vital__v' })
-    const canvas = el('canvas', { class: 'vital__spark' })
+    const canvas = el('canvas', { class: 'vital__spark', 'aria-hidden': 'true' })
     const root = el(
       'div',
-      { class: 'vital' },
+      { class: 'vital', role: 'group', 'aria-label': v.label },
       el('div', { class: 'vital__k', text: v.label }),
       val,
       canvas,
     )
     return { v, root, val, canvas, ink: resolveVar(v.color), last: '', lastTone: '' }
   })
-  const root = el('div', { class: 'vitals' }, ...cells.map((c) => c.root))
+  const root = el('div', {
+    class: 'vitals',
+    role: 'group',
+    'aria-label': 'Live model vitals',
+  }, ...cells.map((c) => c.root))
   return {
     root,
     update() {

@@ -26,7 +26,8 @@ import { DEFAULT_KNOBS } from '../core/types'
 import type { Knobs } from '../core/types'
 import { NO_EA_CONTENT, TRADEMARK_NOTICE } from '../ui/legal'
 import { el, setText } from '../ui/uikit'
-import { fmtNum } from '../core/util'
+import { fmtNum, reduceMotion } from '../core/util'
+import { simulationAnimationDelta } from '../core/timebase'
 import { cityComponentHref } from '../core/city-route'
 
 import { BY_ID, CATALOG, CATALOG_SUBSYSTEMS, VERSIONS } from './catalog'
@@ -54,6 +55,7 @@ const analytics = startAnalytics('observability')
 const bus = createBus()
 analytics.listen(bus)
 const sim = createSim(bus)
+if (reduceMotion()) sim.setKnob('paused', true)
 const coll = createCollector(sim)
 
 /**
@@ -129,21 +131,40 @@ if (!root) throw new Error('#app missing')
 
 const vitals = vitalsStrip(sim, coll)
 
-const pauseBtn = el('button', { class: 'chip', type: 'button', text: '❚❚', title: 'Pause the model' })
+const pauseBtn = el('button', { class: 'chip', type: 'button' })
+const syncPauseButton = () => {
+  const paused = sim.state.knobs.paused
+  pauseBtn.textContent = paused ? '▶' : '❚❚'
+  pauseBtn.title = paused ? 'Resume the model' : 'Pause the model'
+  pauseBtn.setAttribute('aria-label', pauseBtn.title)
+  pauseBtn.setAttribute('aria-pressed', String(paused))
+  pauseBtn.classList.toggle('on', paused)
+}
 pauseBtn.addEventListener('click', () => {
   sim.setKnob('paused', !sim.state.knobs.paused, 'user')
-  pauseBtn.textContent = sim.state.knobs.paused ? '▶' : '❚❚'
-  pauseBtn.classList.toggle('on', sim.state.knobs.paused)
+  syncPauseButton()
 })
+syncPauseButton()
 
 const speedBtns = [1, 2, 4].map((x) => {
-  const b = el('button', { class: `chip${x === 1 ? ' on' : ''}`, type: 'button', text: `${x}×` })
+  const b = el('button', {
+    class: `chip${x === 1 ? ' on' : ''}`,
+    type: 'button',
+    text: `${x}×`,
+    'aria-label': `${x} times model speed`,
+    'aria-pressed': String(x === 1),
+  })
   b.addEventListener('click', () => {
     sim.setKnob('timeScale', x, 'user')
-    speedBtns.forEach((o) => o.classList.toggle('on', o === b))
+    speedBtns.forEach((o) => {
+      const selected = o === b
+      o.classList.toggle('on', selected)
+      o.setAttribute('aria-pressed', String(selected))
+    })
   })
   return b
 })
+const clockControls = el('div', { class: 'clock', role: 'group', 'aria-label': 'Model animation controls' }, pauseBtn, ...speedBtns)
 
 const modeName = el('strong', { text: 'DIAGNOSE' })
 const brand = el(
@@ -196,14 +217,25 @@ const top = el(
   createCityExit(),
   surfaceNav,
   vitals.root,
-  el('div', { class: 'clock' }, pauseBtn, ...speedBtns),
+  clockControls,
 )
 
 const railBody = el('div', { class: 'rail__body' })
 const rail = el('aside', { class: 'rail' }, railBody)
-const pane = el('section', { class: 'pane' })
+const pane = el('section', { class: 'pane', id: 'diagnose-pane', tabindex: '-1' })
 const mainBody = el('main', { class: 'body' }, rail, pane)
-root.replaceChildren(top, mainBody)
+const skipLink = el('a', {
+  class: 'skip-link',
+  href: '#diagnose-pane',
+  text: 'Skip to the current lesson',
+  on: {
+    click: (event: Event) => {
+      event.preventDefault()
+      pane.focus()
+    },
+  },
+})
+root.replaceChildren(skipLink, top, mainBody)
 
 /* ---------------------------------------------------------------------------
  * Rail
@@ -213,12 +245,21 @@ function railHeading(text: string, ...extra: HTMLElement[]): HTMLElement {
   return el('div', { class: 'rail__head' }, el('h2', { text }), ...extra)
 }
 
-const versionRail = el('div', { class: 'versions' })
+const versionRail = el('div', { class: 'versions', role: 'group', 'aria-label': 'PostgreSQL version' })
 for (const v of VERSIONS) {
-  const b = el('button', { class: `vchip${v === pgVersion ? ' on' : ''}`, type: 'button', text: String(v) })
+  const b = el('button', {
+    class: `vchip${v === pgVersion ? ' on' : ''}`,
+    type: 'button',
+    text: String(v),
+    'aria-pressed': String(v === pgVersion),
+  })
   b.addEventListener('click', () => {
     pgVersion = v
-    versionRail.querySelectorAll('.vchip').forEach((n) => n.classList.toggle('on', n === b))
+    versionRail.querySelectorAll('.vchip').forEach((n) => {
+      const selected = n === b
+      n.classList.toggle('on', selected)
+      n.setAttribute('aria-pressed', String(selected))
+    })
     buildRail()
     render()
   })
@@ -288,6 +329,7 @@ function openDiagnose(): void {
   window.history.replaceState(null, '', window.location.pathname)
   buildRail()
   render()
+  focusPaneHeading()
   pane.scrollTo({ top: 0 })
 }
 
@@ -298,6 +340,7 @@ function openFlow(): void {
   window.history.replaceState(null, '', serializeFlowQuery(state))
   buildRail()
   render()
+  focusPaneHeading()
   pane.scrollTo({ top: 0 })
 }
 
@@ -312,6 +355,7 @@ function openSymptom(s: Symptom): void {
   })
   buildRail()
   render()
+  focusPaneHeading()
   pane.scrollTo({ top: 0 })
 }
 
@@ -323,6 +367,7 @@ function openInstrument(id: string): void {
   })
   buildRail()
   render()
+  focusPaneHeading()
 }
 
 function goto(nodeId: string): void {
@@ -331,7 +376,8 @@ function goto(nodeId: string): void {
   if (next && next.kind === 'step' && next.settle) settle(next.settle, 30)
   screen = { ...screen, nodeId, trail: [...screen.trail, screen.nodeId] }
   render()
-  pane.scrollTo({ top: 0, behavior: 'smooth' })
+  focusPaneHeading()
+  pane.scrollTo({ top: 0, behavior: reduceMotion() ? 'auto' : 'smooth' })
 }
 
 /** Advance the model until `ready`, or until the budget of model seconds runs out. */
@@ -351,6 +397,14 @@ function back(): void {
   const nodeId = trail.pop()!
   screen = { ...screen, nodeId, trail }
   render()
+  focusPaneHeading()
+}
+
+function focusPaneHeading(): void {
+  const heading = pane.querySelector<HTMLElement>('h1')
+  if (!heading) return
+  heading.tabIndex = -1
+  heading.focus({ preventScroll: true })
 }
 
 /* ---------------------------------------------------------------------------
@@ -380,12 +434,20 @@ const COUNTER_VIEWS = new Set(['database', 'bgwriter', 'checkpointer', 'wal', 'i
 
 function counterToggle(projection?: string): HTMLElement | null {
   if (projection && !COUNTER_VIEWS.has(projection)) return null
-  const wrap = el('div', { class: 'toggle' })
+  const wrap = el('div', { class: 'toggle', role: 'group', 'aria-label': 'Counter display mode' })
   const mk = (m: Mode, label: string, title: string) => {
-    const b = el('button', { class: `chip${counterMode === m ? ' on' : ''}`, type: 'button', text: label, title })
+    const b = el('button', {
+      class: `chip${counterMode === m ? ' on' : ''}`,
+      type: 'button',
+      text: label,
+      title,
+      'aria-pressed': String(counterMode === m),
+      data: { counterMode: m },
+    })
     b.addEventListener('click', () => {
       counterMode = m
       render()
+      pane.querySelector<HTMLElement>(`[data-counter-mode="${m}"]`)?.focus()
     })
     return b
   }
@@ -540,6 +602,8 @@ function renderStep(sc: Extract<Screen, { kind: 'console' }>, step: Step): HTMLE
       const t = m.test()
       any = any || t
       m.row.classList.toggle('true', t)
+      const flag = m.row.querySelector<HTMLElement>('.branch__flag')
+      flag?.setAttribute('aria-hidden', String(!t))
     }
     undecided.hidden = any
   }
@@ -548,15 +612,23 @@ function renderStep(sc: Extract<Screen, { kind: 'console' }>, step: Step): HTMLE
 
   const stepIndex = sc.trail.length + 1
 
+  const title = el('h1', { id: 'diagnose-card-title', text: step.title })
+  const summary = md(step.why, 'lede')
+  summary.id = 'diagnose-card-summary'
+
   return el(
     'article',
-    { class: 'card' },
+    {
+      class: 'card',
+      'aria-labelledby': title.id,
+      'aria-describedby': summary.id,
+    },
     el(
       'div',
       { class: 'card__head' },
       el('p', { class: 'eyebrow', text: `STEP ${stepIndex} · ${sc.symptom.complaint}` }),
-      el('h1', { text: step.title }),
-      md(step.why, 'lede'),
+      title,
+      summary,
     ),
     el('div', { class: 'chiprow' }, instrumentChip(step.instrument), counterToggle(step.projection)),
     sqlBlock(step.sql),
@@ -617,7 +689,12 @@ function renderVerdict(sc: Extract<Screen, { kind: 'console' }>, v: Verdict): HT
     if (!v.resolved) return null
     const flag = el('span', { class: 'rez__flag' })
     const read = el('span', { class: 'rez__read' })
-    const band = el('div', { class: 'rez' }, flag, read)
+    const band = el('div', {
+      class: 'rez',
+      role: 'status',
+      'aria-live': 'polite',
+      'aria-atomic': 'true',
+    }, flag, read)
     const paint = () => {
       const r = v.resolved!(sim.state, coll)
       const state = r.ok === null ? 'wait' : r.ok ? 'ok' : 'bad'
@@ -638,21 +715,29 @@ function renderVerdict(sc: Extract<Screen, { kind: 'console' }>, v: Verdict): HT
     next.append(b)
   }
 
+  const title = el('h1', { id: 'diagnose-card-title', text: v.title })
+  const summary = md(v.because, 'lede')
+  summary.id = 'diagnose-card-summary'
+  const mechanism = md(v.mechanism)
+  mechanism.id = 'diagnose-card-mechanism'
+
   return el(
     'article',
     {
       class: 'card verdict',
       data: v.disclosure ? { disclosure: v.disclosure } : {},
+      'aria-labelledby': title.id,
+      'aria-describedby': `${summary.id} ${mechanism.id}`,
     },
     el(
       'div',
       { class: 'card__head' },
       el('p', { class: 'eyebrow', text: `DIAGNOSIS · ${sc.symptom.complaint}` }),
-      el('h1', { text: v.title }),
-      md(v.because, 'lede'),
+      title,
+      summary,
     ),
     el('section', { class: 'block' }, el('h3', { text: 'The evidence, right now' }), evidence),
-    el('section', { class: 'block' }, el('h3', { text: 'Why that produces this symptom' }), md(v.mechanism)),
+    el('section', { class: 'block' }, el('h3', { text: 'Why that produces this symptom' }), mechanism),
     el('section', { class: 'block' }, el('h3', { text: 'What you do about it' }), md(v.fix), knobs),
     v.confirm
       ? el(
@@ -939,6 +1024,13 @@ function render(): void {
   mainBody.classList.toggle('is-flow', inFlow)
   diagnoseTab.classList.toggle('on', !inFlow)
   flowTab.classList.toggle('on', inFlow)
+  if (inFlow) {
+    flowTab.setAttribute('aria-current', 'page')
+    diagnoseTab.removeAttribute('aria-current')
+  } else {
+    diagnoseTab.setAttribute('aria-current', 'page')
+    flowTab.removeAttribute('aria-current')
+  }
   modeName.textContent = inFlow ? 'QUERY FLOW' : 'DIAGNOSE'
   document.title = inFlow ? 'Query flow · PGSimCity' : 'Diagnose · PGSimCity'
 
@@ -994,7 +1086,12 @@ let dataT = 0
 function frame(now: number): void {
   const dt = Math.min(0.1, (now - last) / 1000)
   last = now
-  sim.update(dt * sim.state.knobs.timeScale)
+  const modelDt = simulationAnimationDelta(
+    dt,
+    sim.state.knobs.paused,
+    sim.state.knobs.timeScale,
+  )
+  if (modelDt > 0) sim.update(modelDt)
   coll.sample()
   flowView?.update()
 

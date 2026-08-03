@@ -208,7 +208,13 @@ export function createInspector(ctx: UiContext): UiModule {
   /* --- header ------------------------------------------------------------ */
 
   const kindBadge = el('span', { class: 'pgc-kind' })
-  const title = el('h2', { class: 'pg-title pgc-insp__title', text: 'Nothing selected' })
+  const title = el('h2', {
+    class: 'pg-title pgc-insp__title',
+    id: 'pgc-inspector-title',
+    text: 'Nothing selected',
+    'aria-live': 'polite',
+    'aria-atomic': 'true',
+  })
   const subtitle = el('p', { class: 'pg-sub pgc-insp__sub', text: 'Click a building to open it up' })
   const readout = el('p', { class: 'pgc-readout' })
 
@@ -235,6 +241,7 @@ export function createInspector(ctx: UiContext): UiModule {
         click: () => {
           ctx.bus.emit('select', { id: null })
           setOpen(false)
+          tab.focus()
         },
       },
     },
@@ -280,12 +287,17 @@ export function createInspector(ctx: UiContext): UiModule {
   body.setAttribute('role', 'region')
   body.setAttribute('aria-label', 'Component notes')
 
-  const panel = el('section', { class: 'pg-panel pgc-panel pgc-insp' }, head, body)
-  panel.setAttribute('aria-label', 'Inspector')
+  const panel = el('section', {
+    class: 'pg-panel pgc-panel pgc-insp',
+    id: 'pgc-inspector-panel',
+    'aria-labelledby': 'pgc-inspector-tab pgc-inspector-title',
+  }, head, body)
 
   const tab = el('button', {
     class: 'pg-btn pg-btn--icon pgc-tab pgc-tab--right',
+    id: 'pgc-inspector-tab',
     type: 'button',
+    'aria-controls': 'pgc-inspector-panel',
     on: { click: () => setOpen(!isOpen()) },
   })
   tab.append(icon('layers', 15), el('span', { class: 'pgc-tab__label', text: 'Inspector' }))
