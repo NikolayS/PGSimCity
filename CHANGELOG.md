@@ -11,6 +11,94 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+## [0.37.2] - 2026-08-03
+
+Everything here was found by running PostgreSQL, not by reading about it. Six
+lenses drove real 13/17/18 clusters; two came back clean.
+
+### Fixed — advice an operator would act on
+
+- **"Dropping the slot means rebuilding the standby" is false.** Measured: an
+  inactive slot retaining 65 MiB was dropped, `pg_wal` did not shrink, and the
+  standby was restarted **without** `primary_slot_name` and kept streaming —
+  120,000 rows replayed, no base backup. Dropping a slot removes its retention
+  *guarantee*, not the WAL. The standby continues if the WAL is still in
+  `pg_wal`, recovers through `restore_command` if not, and needs a rebuild only
+  when the WAL is gone from every source.
+
+  This inverted the decision under pressure: an operator watching a disk fill,
+  believing a drop forces a rebuild, leaves the slot in place.
+
+- **Raising `bgwriter_lru_maxpages` is not "nearly free".** Backend writes nearly
+  vanish, which is the mechanism working — but total writes can rise, because a
+  page may be written repeatedly before the next checkpoint. It moves writes off
+  the query path at the cost of doing more of them.
+
+- **`statement_timeout` does not stop a forgotten idle transaction.** It is
+  measured only while a statement is *processing*. A session with
+  `statement_timeout = 100ms` was still connected after 500 ms idle. Both
+  timeouts are worth setting; they guard different things.
+
+### Fixed — MVCC and storage
+
+- **A committed `xmax` does not mean the tuple is dead.** `HEAP_XMAX_LOCK_ONLY`
+  records a row lock, and the tuple stays live after that locker commits; a
+  MultiXact must be read from its members and flags. `anatomy.ts` already said
+  "deleting or locking" — the prose contradicted the geometry, and the claims
+  spine did not catch it because field *meanings* were never registered. They are
+  now.
+
+- **HOT is not blocked by summarizing indexes.** Measured: 5,000 of 5,000 updates
+  went HOT with a BRIN-indexed column changing, against 0 of 5,000 for B-tree —
+  a rule introduced in PostgreSQL 16, not 18, verified across 13/17/18. The BRIN
+  summary still required maintenance, so "no index work happens at all" was wrong
+  twice.
+
+- `REINDEX TABLE` does not rewrite the heap; the ~2 KiB TOAST figure is a default
+  target changeable per table via `toast_tuple_target`; a wide value does not
+  always mean chunk reads *and* decompression; the xmin horizon is a
+  snapshot/removal horizon, not "the oldest xid anyone can still see"; and a
+  `READ ONLY` transaction can hold an XID via `pg_current_xact_id()`.
+
+### Fixed — the SQL we hand operators
+
+- **A lock-diagnosis query that stresses the lock manager.** `pg_blocking_pids()`
+  was called for every `pg_stat_activity` row; PostgreSQL documents that each
+  call briefly requires exclusive access to lock-manager shared state. Replaced
+  with the waiter-limited shape `lock.1` already used.
+- **`buffers_clean` non-zero is not a health invariant** — a healthy idle server
+  returns 0.
+- **PostgreSQL 15 did not make statistics survive restarts.** PostgreSQL 13
+  preserved them across a *clean* restart; 15 replaced the collector with
+  shared-memory accounting.
+- Queries using `num_done` and per-operation byte columns are PostgreSQL 18 SQL;
+  each now carries the PostgreSQL 17 form beside it.
+
+### Fixed — the front door
+
+- The README described `walwriter → segments → archiver → walsender` as a serial
+  pipeline. PostgreSQL branches these: the archiver copies completed segments
+  while walsenders stream independently. The project's own docs already said so.
+- 2 GiB `shared_buffers` was called "the default"; that is the **model** default,
+  against PostgreSQL's 128 MiB.
+- Regenerated the hero and the social preview — the deployed preview still showed
+  one standby and no continuity quarter.
+- The `reduced` tier is not a fixed destination; the renderer steps adaptively.
+- Node `^20.19.0 || >=22.12.0`, not "20 or newer" — Vite 7.3.6 requires it.
+- Contributors are told they need Chrome for the browser lane, and given the fast
+  lane without it.
+
+### Also
+
+- The index walk now exposes partial predicates, access method, `COLLATE`,
+  operator class and ordering — everything that decides whether an index serves a
+  given query — and `\d` marks an invalid index `INVALID` as psql does.
+- MVCC vocabulary is registered in the claims spine, so a label and its prose
+  cannot narrow apart again.
+- The oracle grew **58 → 100 checks**. GUC context, index attributes and
+  cross-version query executability are now classes it owns.
+
+
 ## [0.37.1] - 2026-08-03
 
 ### Fixed — configuration semantics, found against a running server
