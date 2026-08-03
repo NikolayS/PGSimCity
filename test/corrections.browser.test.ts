@@ -15,7 +15,13 @@ import {
   correctionCoverageFailures,
   measureCorrectionPages,
 } from './correction-browser.mjs'
-import { disclosureFailures } from './disclosure-browser.mjs'
+import {
+  disclosureFailures,
+  measureTierTouchTargetPages,
+  touchTargetFailures,
+} from './disclosure-browser.mjs'
+
+const QUALITY_LEVELS = ['ultra', 'high', 'medium', 'reduced', 'low'] as const
 
 const read = (path: string): string =>
   readFileSync(new URL(`../${path}`, import.meta.url), 'utf8')
@@ -199,6 +205,18 @@ describe('PostgreSQL correction reports', () => {
       path: '/',
       readySelector: '.an-overlay',
       measureDisclosures: true,
+      qualityLevels: QUALITY_LEVELS,
+      prepareDisclosures: `(() => {
+        for (const host of document.querySelectorAll('.pgc-host')) host.classList.add('is-open')
+        for (const panel of document.querySelectorAll('.pgc-panel')) {
+          panel.style.transition = 'none'
+          panel.style.visibility = 'visible'
+          panel.style.opacity = '1'
+          panel.style.transform = 'none'
+        }
+        document.querySelector('.control-center').hidden = false
+        document.querySelector('#hud-latency-panel').hidden = false
+      })()`,
       prepare: `(() => {
         const { sim, bus } = window.PGSIMCITY
         document.querySelector('.control-center').hidden = false
@@ -212,7 +230,10 @@ describe('PostgreSQL correction reports', () => {
           failureReason: '',
         })
         bus.emit('select', { id: 'recovery.ground' })
-        document.querySelector('.pgc-tab--left')?.click()
+        const consoleHost = document.querySelector('.pgc-host--left')
+        if (consoleHost && !consoleHost.classList.contains('is-open')) {
+          consoleHost.querySelector('.pgc-tab--left')?.click()
+        }
         const memory = Array.from(document.querySelectorAll('.pgc-group'))
           .find((node) => node.dataset.correctionSubject === 'city-console-memory')
         if (memory && !memory.classList.contains('is-open')) {
@@ -300,6 +321,17 @@ describe('PostgreSQL correction reports', () => {
     expect(disclosureFailures(disclosureReports)).toEqual([])
 
     const city = reports.find((report) => report.name === 'City')!
+    const tierReports = city.tierDisclosureReports
+    expect(tierReports.map((report) => report.level)).toEqual(QUALITY_LEVELS)
+    expect(tierReports.map((report) => report.quality.level)).toEqual(QUALITY_LEVELS)
+    for (const report of tierReports) {
+      expect(report.disclosure.viewport).toEqual({ width: 390, height: 844 })
+      expect(report.disclosure.disclosures.length).toBeGreaterThanOrEqual(
+        report.disclosure.authoredDisclosureCount,
+      )
+    }
+    expect(disclosureFailures(tierReports.map((report) => report.disclosure))).toEqual([])
+
     const inspectorBody = city.subjects
       .find((subject) => subject.label === 'city-inspector')!
       .links[0].body
@@ -357,5 +389,33 @@ describe('PostgreSQL correction reports', () => {
       }
     }
   // Browser-slot queue time is not claim behavior; the CDP helper bounds its own waits.
+  }, 0)
+
+  it('keeps City touch targets usable at every renderer tier', async () => {
+    const [tierReports] = await measureTierTouchTargetPages([{
+      name: 'City',
+      path: '/',
+      readySelector: '.an-overlay',
+      probeTouchTarget: true,
+      prepare: `new Promise((resolve) => {
+        document.querySelector('.tour-first__no')?.click()
+        requestAnimationFrame(() => requestAnimationFrame(resolve))
+      })`,
+    }], QUALITY_LEVELS)
+
+    expect(tierReports.map((report) => report.level)).toEqual(QUALITY_LEVELS)
+    expect(tierReports.map((report) => report.quality.level)).toEqual(QUALITY_LEVELS)
+    for (const report of tierReports) {
+      expect(report.touch.viewport).toEqual({ width: 390, height: 844 })
+      expect(report.touch.controls.length).toBeGreaterThan(0)
+    }
+    expect(touchTargetFailures(tierReports.map((report) => report.touch))).toEqual([])
+    expect(touchTargetFailures([{
+      name: 'Touch marker probe',
+      controls: [tierReports[0].touch.probe],
+    }])).toEqual([
+      'Touch marker probe · #temporary-touch-target-probe: 1.00 × 1.00px is below 44 × 44px',
+    ])
+  // Browser-slot queue time is not touch behavior; the CDP helper bounds its own waits.
   }, 0)
 })

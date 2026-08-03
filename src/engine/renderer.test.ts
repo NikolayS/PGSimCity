@@ -5,7 +5,7 @@ import { LIGHT_SHAFT_PRESETS } from './light-shafts'
 import type { QualitySettings } from '../core/types'
 
 describe('quality degradation ladder', () => {
-  it('spends cheaper reductions before disabling bloom', () => {
+  it('degrades decoration without removing semantic labels or route particles', () => {
     const presets = Object.values(QUALITY_PRESETS).reverse()
     const bloomOff = presets.findIndex((preset) => !preset.bloom)
 
@@ -22,6 +22,8 @@ describe('quality degradation ladder', () => {
     })
 
     expect(renderCost(firstBloomOff)).toEqual(renderCost(lastBloomOn))
+    expect(new Set(presets.map((preset) => preset.maxParticles))).toHaveLength(1)
+    expect(new Set(presets.map((preset) => preset.maxLabels))).toHaveLength(1)
     expect(presets.slice(0, bloomOff - 1)).toContainEqual(
       expect.objectContaining({
         bloom: true,
@@ -29,8 +31,8 @@ describe('quality degradation ladder', () => {
       }),
     )
     expect(lastBloomOn.pixelRatio).toBeLessThan(presets[0].pixelRatio)
-    expect(lastBloomOn.maxParticles).toBeLessThan(presets[0].maxParticles)
-    expect(lastBloomOn.maxLabels).toBeLessThan(presets[0].maxLabels)
+    expect(lastBloomOn.antialias).toBe(false)
+    expect(lastBloomOn.shadows).toBe(false)
   })
 })
 

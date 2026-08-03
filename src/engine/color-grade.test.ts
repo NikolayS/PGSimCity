@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  createTheme,
+  setBloomAvailable,
+  setThemeMode,
+} from '../core/theme'
+import {
   BOUNCE_PALETTE_KEYS,
   DAY_PALETTE,
   NIGHT_PALETTE,
@@ -11,6 +16,7 @@ import {
   HEIGHT_FOG_MAX,
   GOLDEN_HOUR_GRADE,
   gradeDaylightHex,
+  gradeDaylightHexWithEffects,
   gradeDaylightHexWithHeightFog,
   gradeDaylightHexWithScatter,
   foggedNightHex,
@@ -18,7 +24,7 @@ import {
   perceptualColorDistance,
 } from './color-grade'
 import { LIGHT_SHAFT_COLOR, LIGHT_SHAFT_PRESETS } from './light-shafts'
-import { FIDELITY_PRESETS } from './renderer'
+import { FIDELITY_PRESETS, QUALITY_PRESETS } from './renderer'
 
 const SEMANTIC = [
   'wal',
@@ -32,6 +38,8 @@ const SEMANTIC = [
   'lock',
   'shmem',
 ] as const
+
+const QUALITY_LEVELS = ['low', 'reduced', 'medium', 'high', 'ultra'] as const
 
 describe('golden-hour colour grade', () => {
   it('contains lift, gamma, gain, a midtone saturation curve and a restrained vignette', () => {
@@ -145,6 +153,50 @@ describe('local-clock colour separation', () => {
         }
       }
     })
+  }
+
+  for (const level of QUALITY_LEVELS) {
+    for (const mode of ['day', 'night'] as const) {
+      it(`keeps all 45 ${mode} semantic pairs distinct at ${level}`, () => {
+        const preset = QUALITY_PRESETS[level]
+        const fidelity = FIDELITY_PRESETS[level]
+        setThemeMode(mode, { persist: false })
+        setBloomAvailable(preset.bloom)
+        const theme = createTheme()
+        const materials = SEMANTIC.map((key) => theme.neon(NIGHT_PALETTE[key], 1))
+
+        try {
+          const colors = materials.map((material) => {
+            const hex = material.color.getHex()
+            return mode === 'day'
+              ? gradeDaylightHexWithEffects(
+                  hex,
+                  DAY_PALETTE.fog,
+                  HEIGHT_FOG_MAX * fidelity.aerialPerspective,
+                  LIGHT_SHAFT_COLOR,
+                  LIGHT_SHAFT_PRESETS[level].strength,
+                )
+              : foggedNightHex(
+                  hex,
+                  NIGHT_PALETTE.fog,
+                  HEIGHT_FOG_MAX * fidelity.aerialPerspective,
+                )
+          })
+          for (let i = 0; i < colors.length; i++) {
+            for (let j = i + 1; j < colors.length; j++) {
+              const distance = perceptualColorDistance(colors[i], colors[j])
+              expect(distance, `${SEMANTIC[i]} vs ${SEMANTIC[j]}`).toBeGreaterThanOrEqual(
+                mode === 'day' ? 0.045 : 0.038,
+              )
+            }
+          }
+        } finally {
+          theme.dispose()
+          setBloomAvailable(true)
+          setThemeMode('night', { persist: false })
+        }
+      })
+    }
   }
 
   it('keeps all ten semantic colours distinct across the complete sun path', () => {
