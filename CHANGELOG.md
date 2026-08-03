@@ -11,6 +11,66 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+## [0.37.1] - 2026-08-03
+
+### Fixed — configuration semantics, found against a running server
+
+- **"Changing one here changes the running model, exactly as a `SET` or a reload
+  would" was false for half its own projection.** `shared_buffers`, `wal_buffers`,
+  `max_connections` and `wal_level` are `postmaster` context and need a restart —
+  demonstrated with `pending_restart = t`. The city teaches people to change
+  settings, and the difference between "now", "on reload" and "needs a
+  maintenance window" is among the first things an operator must internalise. The
+  settings projection now reports `pg_settings.context` per row.
+
+- **`autovacuum_max_workers` changed context in PostgreSQL 18.** Measured:
+  `postmaster` on 13 and 17, **`sighup` on 18**, with a reload applying it. The
+  city reported `postmaster` — telling operators to schedule a restart they do
+  not need, in the exact version it targets. Now looked up rather than asserted,
+  and qualified by version.
+
+- **A quoted "server log" crash sequence mixed in client-only text.** After
+  `SIGKILL`ing a backend, `WARNING: terminating connection because of crash of
+  another server process` appeared only in the surviving client — absent from
+  `.log`, `.csv` and `.json`. An operator greps the server log; the real lines are
+  now quoted, and client-side ones are marked as such.
+
+- **Preload and restart steps were missing where they gate the feature.** A reader
+  following the city's `pg_stat_statements` advice got
+  `ERROR: pg_stat_statements must be loaded via "shared_preload_libraries"`.
+  `logging_collector` and `shared_preload_libraries` are `postmaster` context, and
+  installing `pg_prewarm` does not activate autoprewarm.
+
+### Fixed — the touch-target guard checked CSS text, not the rendered box
+
+The previous guard was a regex over stylesheet source: it proved a rule existed,
+not that it won — which is exactly how a control shipped at 7px, with
+`.machine-nav button` (0,1,1) beating `button { min-height: 28px }` (0,0,1).
+
+The audit now derives its control list from the rendered DOM, measures
+`getBoundingClientRect()` at 390x844 and hit-tests the centre with
+`elementFromPoint()`, proven by an injected 1x1px probe that fails naming the
+element. Several controls beyond the three known were undersized and are fixed.
+
+### Changed — the suite now gates the deploy
+
+`npm test` never ran in CI: typecheck and build only. This project's flow is
+agent branches merged straight into `main`, so a PR-only trigger would have gated
+nothing either — CI now runs on push to `main` as well.
+
+Two lanes: `Tests (fast)` excluding browser specs, and `Tests (Chrome)` with
+provisioned Chrome. Verified by pushing a deliberate failing assertion —
+`Tests (fast)` red while typecheck and build stayed green (run 30801057070) — and
+by the trigger fix running green on push (run 30801280366, 51s / 82s / 105s).
+
+### Added
+
+`npm run oracle`. The harness grew from 58 to **80 checks**: `pg_settings.context`
+is now a checked class across 13/17/18, so the next GUC whose context shifts
+between versions is caught rather than discovered. It stays local rather than in
+CI because hosted runners ship PostgreSQL 16 and the oracle needs 18 binaries.
+
+
 ## [0.37.0] - 2026-08-03
 
 ### Added
