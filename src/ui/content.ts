@@ -49,7 +49,7 @@ export function hasDoc(id: string | null | undefined): boolean {
  * it teaches. The control rail and the inspector both read this.
  * -------------------------------------------------------------------------*/
 
-export type KnobGroup = 'workload' | 'memory' | 'wal' | 'checkpoint' | 'vacuum' | 'replication' | 'recovery' | 'chaos' | 'sim'
+export type KnobGroup = 'workload' | 'pooler' | 'memory' | 'wal' | 'checkpoint' | 'vacuum' | 'replication' | 'recovery' | 'chaos' | 'sim'
 
 export interface KnobMeta {
   key: keyof Knobs
@@ -69,10 +69,13 @@ export interface KnobMeta {
   fmt?: (v: never) => string
   /** flag the settings that make people lose data or sleep */
   danger?: boolean
+  /** load-bearing qualification marker retained at narrow viewports */
+  disclosure?: string
 }
 
 export const KNOB_GROUPS: { id: KnobGroup; label: string; hint: string }[] = [
   { id: 'workload', label: 'Workload', hint: 'What the application is asking for' },
+  { id: 'pooler', label: 'Connection pooler', hint: 'Client admission and the PostgreSQL concurrency ceiling' },
   { id: 'memory', label: 'Memory', hint: 'How much of the database fits in RAM' },
   { id: 'wal', label: 'Write-ahead log', hint: 'Durability, and what it costs' },
   { id: 'checkpoint', label: 'Checkpoints', hint: 'Getting dirty pages onto disk' },
@@ -100,6 +103,71 @@ export const KNOB_META: KnobMeta[] = [
     step: 1,
     unit: 'tps',
     hint: 'How hard the application hammers the database. Everything downstream scales from here.',
+  },
+  {
+    key: 'clientConnections',
+    label: 'Client connections',
+    group: 'workload',
+    kind: 'logrange',
+    min: 1,
+    max: 2_000,
+    step: 1,
+    unit: 'clients',
+    hint: 'Concurrent application connections beside the aggregate transaction rate. Direct clients compete for max_connections; pooled clients stop at max_client_conn and share fewer PostgreSQL backends. Refused sockets are reported separately and do not silently reduce the tps knob.',
+    disclosure: 'pooler-client-count-scope',
+  },
+  {
+    key: 'poolMode',
+    label: 'pool_mode',
+    guc: 'PgBouncer pool_mode',
+    group: 'pooler',
+    kind: 'select',
+    options: [
+      { value: 'disabled', label: 'direct — no PgBouncer' },
+      { value: 'session', label: 'session — release on disconnect' },
+      { value: 'transaction', label: 'transaction — release on commit' },
+    ],
+    hint: `${CLAIM_VALUES.connectionPooler.transactionTradeoff} “direct” is PGSimCity's comparison state, not a PgBouncer pool_mode value. ${CLAIM_VALUES.connectionPooler.coverageDisclosure}`,
+    disclosure: 'pool-mode-cost',
+  },
+  {
+    key: 'defaultPoolSize',
+    label: 'default_pool_size',
+    guc: 'PgBouncer default_pool_size',
+    group: 'pooler',
+    kind: 'range',
+    min: 1,
+    max: 100,
+    step: 1,
+    unit: 'server connections',
+    hint: `Configured server connections for this one modeled user/database pool. This city starts at ${CLAIM_VALUES.connectionPooler.modelDefaultPoolSize}; PgBouncer itself defaults to ${CLAIM_VALUES.connectionPooler.pgBouncerDefaults.defaultPoolSize} per user/database pair. PgBouncer does not coordinate this value with PostgreSQL max_connections, so excess attempts fail.`,
+    disclosure: 'default-pool-size-scope',
+  },
+  {
+    key: 'maxClientConn',
+    label: 'max_client_conn',
+    guc: 'PgBouncer max_client_conn',
+    group: 'pooler',
+    kind: 'logrange',
+    min: 1,
+    max: 2_000,
+    step: 1,
+    unit: 'clients',
+    hint: `Process-wide client admission ceiling. It does not enlarge the PostgreSQL server pool; PgBouncer defaults to ${CLAIM_VALUES.connectionPooler.pgBouncerDefaults.maxClientConn}, and higher values also require enough file descriptors.`,
+    disclosure: 'max-client-conn-scope',
+  },
+  {
+    key: 'queryWaitTimeout',
+    label: 'query_wait_timeout',
+    guc: 'PgBouncer query_wait_timeout',
+    group: 'pooler',
+    kind: 'range',
+    min: 0,
+    max: 600,
+    step: 5,
+    unit: 's',
+    hint: `Disconnect a client whose query has waited this long for a server connection. PgBouncer defaults to ${CLAIM_VALUES.connectionPooler.pgBouncerDefaults.queryWaitTimeoutSeconds} seconds; zero queues indefinitely.`,
+    disclosure: 'query-wait-timeout-semantics',
   },
   {
     key: 'writeRatio',

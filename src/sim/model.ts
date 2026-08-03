@@ -311,6 +311,22 @@ const SCENARIO_LOCK_TIMEOUT: Readonly<Record<string, { atSec: number; sec: numbe
  * slowdown in the trip loop shows up one-for-one in achieved tps.
  */
 const NOMINAL_TRIPS = 35
+/** Teaching-scale concurrency knee; it is not a claim about a production core count. */
+export const MODEL_BACKEND_CONCURRENCY_TARGET = 8
+/** Fixed teaching lifetime used to make session-pool binding observable. */
+export const MODEL_SESSION_CONNECTION_LIFETIME = 15
+/** Fixed storage for aggregate arrival cohorts; compaction preserves every transaction. */
+const POOL_QUEUE_BUCKETS = 8192
+
+/**
+ * PostgreSQL work slows after the modeled concurrency knee regardless of who
+ * admitted the connections. A pooler only keeps the input below this curve.
+ */
+export function backendConcurrencyMultiplier(serverConnections: number): number {
+  const excess = Math.max(0, serverConnections - MODEL_BACKEND_CONCURRENCY_TARGET)
+    / MODEL_BACKEND_CONCURRENCY_TARGET
+  return 1 + 2.5 * excess * excess
+}
 /**
  * Ceiling on the pages one vacuum pass may hand back. Real truncation needs an
  * ACCESS EXCLUSIVE lock and gives it up the moment anyone else wants the table,
@@ -417,6 +433,7 @@ interface Extra {
   seqScan: boolean
   scanBlk: number
   visitT: number
+  poolSlotWaitT: number
   bufferReadWaitT: number
   dirtyWriteWaitT: number
   dirtyWriteDuringReadT: number
@@ -425,6 +442,8 @@ interface Extra {
   commitWaitT: number
   lockWaitT: number
   idleT: number
+  sessionAgeT: number
+  nextSessionPoolWaitT: number
   holdsLock: boolean
   ringPos: number
   planFlat: PlanNode[]
@@ -473,6 +492,7 @@ function makeExtra(): Extra {
     seqScan: false,
     scanBlk: 0,
     visitT: 0,
+    poolSlotWaitT: 0,
     bufferReadWaitT: 0,
     dirtyWriteWaitT: 0,
     dirtyWriteDuringReadT: 0,
@@ -481,6 +501,8 @@ function makeExtra(): Extra {
     commitWaitT: 0,
     lockWaitT: 0,
     idleT: 0,
+    sessionAgeT: 0,
+    nextSessionPoolWaitT: 0,
     holdsLock: false,
     ringPos: 0,
     planFlat: [],
@@ -709,6 +731,21 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     xminHorizon: 100000,
     oldestSnapshotAge: 0,
     maxConnections: N_BACKEND_SLOTS,
+    pooler: {
+      mode: DEFAULT_KNOBS.poolMode,
+      clientConnections: DEFAULT_KNOBS.clientConnections,
+      acceptedClients: DEFAULT_KNOBS.clientConnections,
+      refusedClients: 0,
+      boundClients: 0,
+      sessionPendingTransactions: Array(N_BACKEND_SLOTS).fill(0),
+      waitingClients: 0,
+      disconnectedClients: 0,
+      serverConnections: 0,
+      serverLimit: N_BACKEND_SLOTS,
+      serverCapacity: N_BACKEND_SLOTS,
+      serverConnectionErrors: 0,
+      serverOfferedTps: DEFAULT_KNOBS.tps,
+    },
     backends,
     buffers: primaryBuffers,
     wal: {
@@ -1052,20 +1089,23 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       cacheHitPct: 98,
       activeBackends: 0,
       runningBackends: 0,
+      poolerQueuedTransactions: 0,
+      poolerQueryWaitTimeouts: 0,
+      backendConcurrencyMultiplier: 1,
       latency: {
         observations: 0,
         transactions: 0,
         mean: {
           totalMs: 0,
-          waits: { bufferReadMs: 0, dirtyWriteMs: 0, tempFileMs: 0, commitMs: 0, lockMs: 0, runningMs: 0 },
+          waits: { poolSlotMs: 0, bufferReadMs: 0, dirtyWriteMs: 0, tempFileMs: 0, commitMs: 0, lockMs: 0, runningMs: 0 },
         },
         p50: {
           totalMs: 0,
-          waits: { bufferReadMs: 0, dirtyWriteMs: 0, tempFileMs: 0, commitMs: 0, lockMs: 0, runningMs: 0 },
+          waits: { poolSlotMs: 0, bufferReadMs: 0, dirtyWriteMs: 0, tempFileMs: 0, commitMs: 0, lockMs: 0, runningMs: 0 },
         },
         p99: {
           totalMs: 0,
-          waits: { bufferReadMs: 0, dirtyWriteMs: 0, tempFileMs: 0, commitMs: 0, lockMs: 0, runningMs: 0 },
+          waits: { poolSlotMs: 0, bufferReadMs: 0, dirtyWriteMs: 0, tempFileMs: 0, commitMs: 0, lockMs: 0, runningMs: 0 },
         },
       },
       history: { tps: [], hit: [], latencyP50: [], latencyP99: [], wal: [], dirty: [], lag: [] },
@@ -1114,18 +1154,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   const ha = state.highAvailability
   const dr = state.disasterRecovery
   const stats = state.stats
-  type RuntimeStats = typeof stats & {
-    queueDepth: number
-    queueSec: number
-    refused: number
-    arrivals: number
-    pagesFor90Pct: number
-  }
+  type RuntimeStats = typeof stats & { pagesFor90Pct: number }
   const runtimeStats = stats as RuntimeStats
-  runtimeStats.queueDepth = 0
-  runtimeStats.queueSec = 0
-  runtimeStats.refused = 0
-  runtimeStats.arrivals = 0
   runtimeStats.pagesFor90Pct = 0
 
   /* ---- derived tables ------------------------------------------------- */
@@ -1464,6 +1494,17 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
   let pendingTx = 0
   let nextArrival = 0
+  const poolArrivalAt = new Float64Array(POOL_QUEUE_BUCKETS)
+  const poolArrivalCount = new Float64Array(POOL_QUEUE_BUCKETS)
+  const compactArrivalAt = new Float64Array(POOL_QUEUE_BUCKETS)
+  const compactArrivalCount = new Float64Array(POOL_QUEUE_BUCKETS)
+  let poolArrivalHead = 0
+  let poolArrivalBuckets = 0
+  let queuedRandomTx = 0
+  const sessionPendingTx = new Float64Array(N_BACKEND_SLOTS)
+  let queuedSessionTx = 0
+  let sessionArrivalCursor = 0
+  let sessionWaitCohortAt = 0
   let backgroundSeqScans = 0
   let nextWideSeqScan = 1
   /** Transactions carried by one backend trip. See sizeBatch(). */
@@ -1474,8 +1515,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   let traceStepArmed = false
   let scenarioQueryKind: QueryKind | null = null
   let scenarioQueryTable = -1
-  /** Arrivals the queue could not hold — pg's "too many clients already". */
-  let refusedTx = 0
   let commitsAcc = 0
   /*
    * A rolling distribution of completed trips. One trip can stand for several
@@ -1486,6 +1525,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
    * and refresh allocate nothing in the production frame loop.
    */
   const latencyTotal = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
+  const latencyPoolSlot = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyBufferRead = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyDirtyWrite = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyTempFile = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
@@ -1494,6 +1534,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   const latencyRunning = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyWeight = new Float64Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyOrderTotal = new Uint16Array(MODEL_LATENCY_WINDOW_TRIPS)
+  const latencyOrderPoolSlot = new Uint16Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyOrderBufferRead = new Uint16Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyOrderDirtyWrite = new Uint16Array(MODEL_LATENCY_WINDOW_TRIPS)
   const latencyOrderTempFile = new Uint16Array(MODEL_LATENCY_WINDOW_TRIPS)
@@ -1502,6 +1543,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   const latencyOrderRunning = new Uint16Array(MODEL_LATENCY_WINDOW_TRIPS)
   let latencyHead = 0
   let latencyCount = 0
+  let latencyPoolSlotSeen = false
   /**
    * Bounded commit-position ledger used only to count acknowledged write
    * transactions beyond a failover candidate's durable LSN. Typed arrays keep
@@ -1858,6 +1900,253 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     return Math.max(1, Math.ceil(ratePerSec / targetPerSec))
   }
 
+  function clearArrivalQueue(): void {
+    poolArrivalHead = 0
+    poolArrivalBuckets = 0
+    queuedRandomTx = 0
+    sessionPendingTx.fill(0)
+    queuedSessionTx = 0
+    sessionArrivalCursor = 0
+  }
+
+  /** Preserve all queued work while coarsening only old arrival-time precision. */
+  function compactArrivalQueue(): void {
+    const compacted = Math.ceil(poolArrivalBuckets / 2)
+    for (let pair = 0; pair < compacted; pair++) {
+      const first = (poolArrivalHead + pair * 2) % POOL_QUEUE_BUCKETS
+      const secondOffset = pair * 2 + 1
+      const firstCount = poolArrivalCount[first]
+      if (secondOffset >= poolArrivalBuckets) {
+        compactArrivalAt[pair] = poolArrivalAt[first]
+        compactArrivalCount[pair] = firstCount
+        continue
+      }
+      const second = (poolArrivalHead + secondOffset) % POOL_QUEUE_BUCKETS
+      const secondCount = poolArrivalCount[second]
+      const count = firstCount + secondCount
+      compactArrivalAt[pair] = (
+        poolArrivalAt[first] * firstCount + poolArrivalAt[second] * secondCount
+      ) / Math.max(1, count)
+      compactArrivalCount[pair] = count
+    }
+    for (let i = 0; i < compacted; i++) {
+      poolArrivalAt[i] = compactArrivalAt[i]
+      poolArrivalCount[i] = compactArrivalCount[i]
+    }
+    poolArrivalHead = 0
+    poolArrivalBuckets = compacted
+  }
+
+  function enqueueArrivals(count: number, at: number): void {
+    if (count <= 0) return
+    if (poolArrivalBuckets >= POOL_QUEUE_BUCKETS) compactArrivalQueue()
+    const tail = (poolArrivalHead + poolArrivalBuckets) % POOL_QUEUE_BUCKETS
+    poolArrivalAt[tail] = at
+    poolArrivalCount[tail] = count
+    poolArrivalBuckets++
+    queuedRandomTx += count
+  }
+
+  function markQueuedArrivalsAt(at: number): void {
+    for (let i = 0; i < poolArrivalBuckets; i++) {
+      poolArrivalAt[(poolArrivalHead + i) % POOL_QUEUE_BUCKETS] = at
+    }
+  }
+
+  function moveArrivalQueueToSessions(): void {
+    const count = queuedRandomTx
+    poolArrivalHead = 0
+    poolArrivalBuckets = 0
+    queuedRandomTx = 0
+    sessionPendingTx.fill(0)
+    queuedSessionTx = count
+    sessionArrivalCursor = 0
+    const slots = sessionBindingLimit()
+    const each = Math.floor(count / slots)
+    let remainder = count - each * slots
+    for (let slot = 0; slot < slots; slot++) {
+      sessionPendingTx[slot] = each + (remainder-- > 0 ? 1 : 0)
+    }
+  }
+
+  function moveSessionQueueToArrivals(): void {
+    const count = queuedSessionTx
+    sessionPendingTx.fill(0)
+    queuedSessionTx = 0
+    sessionArrivalCursor = 0
+    enqueueArrivals(count, state.t)
+  }
+
+  function enqueueSessionArrivals(count: number): void {
+    const slots = sessionBindingLimit()
+    for (let i = 0; i < count; i++) {
+      const slot = sessionArrivalCursor++ % slots
+      sessionPendingTx[slot]++
+    }
+    queuedSessionTx += count
+  }
+
+  /** Returns the mean FIFO age of the batch; within-batch variance stays absent. */
+  function dequeueArrivals(count: number): number {
+    let remaining = Math.min(count, queuedRandomTx)
+    const taken = remaining
+    let weightedAge = 0
+    while (remaining > 0 && poolArrivalBuckets > 0) {
+      const available = poolArrivalCount[poolArrivalHead]
+      const consume = Math.min(remaining, available)
+      weightedAge += consume * Math.max(0, state.t - poolArrivalAt[poolArrivalHead])
+      remaining -= consume
+      queuedRandomTx -= consume
+      if (consume >= available) {
+        poolArrivalCount[poolArrivalHead] = 0
+        poolArrivalHead = (poolArrivalHead + 1) % POOL_QUEUE_BUCKETS
+        poolArrivalBuckets--
+      } else {
+        poolArrivalCount[poolArrivalHead] = available - consume
+      }
+    }
+    return taken > 0 ? weightedAge / taken : 0
+  }
+
+  function expireTransactionPoolWaiters(): void {
+    if (K.poolMode !== 'transaction' || K.queryWaitTimeout <= 0) return
+    const deadline = state.t - K.queryWaitTimeout
+    let expired = 0
+    while (
+      poolArrivalBuckets > 0
+      && poolArrivalAt[poolArrivalHead] <= deadline
+    ) {
+      expired += poolArrivalCount[poolArrivalHead]
+      poolArrivalCount[poolArrivalHead] = 0
+      poolArrivalHead = (poolArrivalHead + 1) % POOL_QUEUE_BUCKETS
+      poolArrivalBuckets--
+    }
+    if (expired <= 0) return
+    queuedRandomTx -= expired
+    pendingTx -= expired
+    stats.poolerQueryWaitTimeouts += expired
+    state.pooler.disconnectedClients += expired
+    if (state.t - refuseWarnT > 15) {
+      refuseWarnT = state.t
+      toast(
+        `PgBouncer query_wait_timeout disconnected ${Math.round(expired).toLocaleString()} waiting clients`,
+        'warn',
+        5000,
+      )
+    }
+  }
+
+  function expireSessionPoolWaiters(): void {
+    if (K.poolMode !== 'session' || K.queryWaitTimeout <= 0) return
+    const cycles = Math.floor((state.t - sessionWaitCohortAt) / K.queryWaitTimeout)
+    if (cycles <= 0) return
+    const accepted = acceptedClientConnections()
+    const bound = Math.min(accepted, sessionBindingLimit())
+    const expired = Math.max(0, accepted - bound) * cycles
+    sessionWaitCohortAt += cycles * K.queryWaitTimeout
+    if (expired <= 0) return
+    stats.poolerQueryWaitTimeouts += expired
+    state.pooler.disconnectedClients += expired
+  }
+
+  function acceptedClientConnections(): number {
+    const admissionLimit = K.poolMode === 'disabled'
+      ? state.maxConnections
+      : K.maxClientConn
+    return Math.min(K.clientConnections, admissionLimit)
+  }
+
+  function configuredServerConnectionLimit(): number {
+    return K.poolMode === 'disabled'
+      ? acceptedClientConnections()
+      : K.defaultPoolSize
+  }
+
+  function serverConnectionCapacity(): number {
+    return Math.max(1, Math.min(
+      state.maxConnections,
+      configuredServerConnectionLimit(),
+    ))
+  }
+
+  function sessionBindingLimit(): number {
+    return Math.max(1, Math.min(acceptedClientConnections(), serverConnectionCapacity()))
+  }
+
+  function activeServerConnectionLimit(): number {
+    return K.poolMode === 'session'
+      ? sessionBindingLimit()
+      : serverConnectionCapacity()
+  }
+
+  /** Session mode admits transactions only from clients holding a server binding. */
+  function serverOfferedTps(): number {
+    /* The tps knob is aggregate work offered by the admitted cohort. Refused
+     * sockets are reported connection failures; they do not silently delete a
+     * proportional share of that independently configured workload. */
+    if (K.poolMode !== 'session') return K.tps
+    const accepted = acceptedClientConnections()
+    if (accepted <= 0) return 0
+    const bound = Math.min(accepted, sessionBindingLimit())
+    return K.tps * bound / accepted
+  }
+
+  function syncPoolerState(): void {
+    const pooler = state.pooler
+    pooler.mode = K.poolMode
+    pooler.clientConnections = K.clientConnections
+    pooler.acceptedClients = acceptedClientConnections()
+    pooler.refusedClients = Math.max(0, K.clientConnections - pooler.acceptedClients)
+    pooler.serverConnections = stats.activeBackends
+    pooler.serverLimit = configuredServerConnectionLimit()
+    pooler.serverCapacity = serverConnectionCapacity()
+    pooler.serverConnectionErrors = K.poolMode === 'disabled'
+      ? 0
+      : Math.max(0, Math.min(pooler.acceptedClients, pooler.serverLimit) - pooler.serverCapacity)
+    pooler.boundClients = K.poolMode === 'session'
+      ? Math.min(pooler.acceptedClients, pooler.serverConnections, pooler.serverCapacity)
+      : 0
+    for (let slot = 0; slot < N_BACKEND_SLOTS; slot++) {
+      pooler.sessionPendingTransactions[slot] = K.poolMode === 'session'
+        ? sessionPendingTx[slot]
+        : 0
+    }
+    pooler.waitingClients = K.poolMode === 'session'
+      ? Math.max(0, pooler.acceptedClients - pooler.boundClients)
+      : K.poolMode === 'transaction'
+        ? Math.min(
+            pooler.acceptedClients,
+            Math.ceil(queuedRandomTx / Math.max(1, batchSize)),
+          )
+        : 0
+    pooler.serverOfferedTps = serverOfferedTps()
+    stats.poolerQueuedTransactions = K.poolMode === 'disabled'
+      ? 0
+      : (K.poolMode === 'session' ? queuedSessionTx + pooler.waitingClients : queuedRandomTx)
+    stats.backendConcurrencyMultiplier = state.scenario === 'connection-storm'
+      ? backendConcurrencyMultiplier(stats.activeBackends)
+      : 1
+  }
+
+  function rotateSessionBinding(slot: number): void {
+    if (
+      K.poolMode !== 'session'
+      || state.pooler.waitingClients <= 0
+      || extras[slot].sessionAgeT < MODEL_SESSION_CONNECTION_LIFETIME
+      || sessionPendingTx[slot] > 0
+    ) return
+    const x = extras[slot]
+    x.sessionAgeT %= MODEL_SESSION_CONNECTION_LIFETIME
+    const waited = Math.max(0, state.t - sessionWaitCohortAt)
+    x.nextSessionPoolWaitT = K.queryWaitTimeout > 0
+      ? Math.min(waited, K.queryWaitTimeout)
+      : waited
+    /* The newly bound client already had one query waiting for assignment. */
+    sessionPendingTx[slot]++
+    queuedSessionTx++
+    pendingTx++
+  }
+
   /**
    * How many transactions one backend trip stands for. Purely a function of the
    * OFFERED rate: a healthy fleet turns over NOMINAL_TRIPS trips per second, so
@@ -1868,11 +2157,12 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
    * that cancelled every bottleneck in the model — see the file header.
    */
   function sizeBatch(): void {
-    batchSize = Math.max(1, Math.round(K.tps / NOMINAL_TRIPS))
+    batchSize = Math.max(1, Math.round(serverOfferedTps() / NOMINAL_TRIPS))
   }
 
   function clearLatencyQuantile(quantile: LatencyQuantile): void {
     quantile.totalMs = 0
+    quantile.waits.poolSlotMs = 0
     quantile.waits.bufferReadMs = 0
     quantile.waits.dirtyWriteMs = 0
     quantile.waits.tempFileMs = 0
@@ -1903,6 +2193,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
   function readLatencyQuantile(fraction: number, totalWeight: number, out: LatencyQuantile): void {
     out.totalMs = readLatencyComponentQuantile(latencyTotal, latencyOrderTotal, fraction, totalWeight)
+    out.waits.poolSlotMs = latencyPoolSlotSeen
+      ? readLatencyComponentQuantile(latencyPoolSlot, latencyOrderPoolSlot, fraction, totalWeight)
+      : 0
     out.waits.bufferReadMs = readLatencyComponentQuantile(
       latencyBufferRead, latencyOrderBufferRead, fraction, totalWeight,
     )
@@ -1923,6 +2216,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
   function readLatencyMean(totalWeight: number, out: LatencyQuantile): void {
     let total = 0
+    let poolSlot = 0
     let bufferRead = 0
     let dirtyWrite = 0
     let tempFile = 0
@@ -1933,6 +2227,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       const at = latencyOrderTotal[i]
       const weight = latencyWeight[at]
       total += latencyTotal[at] * weight
+      if (latencyPoolSlotSeen) poolSlot += latencyPoolSlot[at] * weight
       bufferRead += latencyBufferRead[at] * weight
       dirtyWrite += latencyDirtyWrite[at] * weight
       tempFile += latencyTempFile[at] * weight
@@ -1942,6 +2237,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     }
     const scale = 1000 / totalWeight
     out.totalMs = total * scale
+    out.waits.poolSlotMs = poolSlot * scale
     out.waits.bufferReadMs = bufferRead * scale
     out.waits.dirtyWriteMs = dirtyWrite * scale
     out.waits.tempFileMs = tempFile * scale
@@ -1999,6 +2295,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     let orderedCount = latencyCount
     if (latencyCount === MODEL_LATENCY_WINDOW_TRIPS) {
       removeLatencySlot(latencyOrderTotal, at)
+      if (latencyPoolSlotSeen) removeLatencySlot(latencyOrderPoolSlot, at)
       removeLatencySlot(latencyOrderBufferRead, at)
       removeLatencySlot(latencyOrderDirtyWrite, at)
       removeLatencySlot(latencyOrderTempFile, at)
@@ -2008,14 +2305,16 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       orderedCount--
     }
     const total = Math.max(0, x.visitT)
+    let poolSlot = Math.max(0, x.poolSlotWaitT)
     let bufferRead = Math.max(0, x.bufferReadWaitT - x.dirtyWriteDuringReadT)
     let dirtyWrite = Math.max(0, x.dirtyWriteWaitT)
     let tempFile = Math.max(0, x.tempFileWaitT)
     let commit = Math.max(0, x.commitWaitT)
     let lock = Math.max(0, x.lockWaitT)
-    const waits = bufferRead + dirtyWrite + tempFile + commit + lock
+    const waits = poolSlot + bufferRead + dirtyWrite + tempFile + commit + lock
     if (waits > total && waits > 0) {
       const scale = total / waits
+      poolSlot *= scale
       bufferRead *= scale
       dirtyWrite *= scale
       tempFile *= scale
@@ -2024,16 +2323,29 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     }
 
     latencyTotal[at] = total
+    latencyPoolSlot[at] = poolSlot
     latencyBufferRead[at] = bufferRead
     latencyDirtyWrite[at] = dirtyWrite
     latencyTempFile[at] = tempFile
     latencyCommit[at] = commit
     latencyLock[at] = lock
-    latencyRunning[at] = Math.max(0, total - bufferRead - dirtyWrite - tempFile - commit - lock)
+    latencyRunning[at] = Math.max(
+      0,
+      total - poolSlot - bufferRead - dirtyWrite - tempFile - commit - lock,
+    )
     latencyWeight[at] = Math.max(1, x.latencyCount)
 
     /* Binary insertion makes every quantile refresh O(window), not O(window²). */
+    if (!latencyPoolSlotSeen && poolSlot > 0) {
+      latencyPoolSlotSeen = true
+      // Every older value is zero, so total-latency order is a valid fixed,
+      // allocation-free seed before the first positive pool-slot insertion.
+      for (let i = 0; i < orderedCount; i++) latencyOrderPoolSlot[i] = latencyOrderTotal[i]
+    }
     insertLatencySlot(latencyOrderTotal, latencyTotal, at, orderedCount)
+    if (latencyPoolSlotSeen) {
+      insertLatencySlot(latencyOrderPoolSlot, latencyPoolSlot, at, orderedCount)
+    }
     insertLatencySlot(latencyOrderBufferRead, latencyBufferRead, at, orderedCount)
     insertLatencySlot(latencyOrderDirtyWrite, latencyDirtyWrite, at, orderedCount)
     insertLatencySlot(latencyOrderTempFile, latencyTempFile, at, orderedCount)
@@ -2045,6 +2357,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       latencyObserver({
         totalMs: total * 1000,
         waits: {
+          poolSlotMs: poolSlot * 1000,
           bufferReadMs: bufferRead * 1000,
           dirtyWriteMs: dirtyWrite * 1000,
           tempFileMs: tempFile * 1000,
@@ -5244,6 +5557,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
   function stopCrashedPrimaryWork(): void {
     pendingTx = 0
+    clearArrivalQueue()
     nextArrival = 0
     clearInFlightPageWalState()
     for (let i = 0; i < N_BACKEND_SLOTS; i++) {
@@ -5366,6 +5680,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     resetTransition('switchover', 'primary', target)
     ha.acceptingWrites = false
     pendingTx = 0
+    clearArrivalQueue()
     toast(
       `Planned switchover: writes stopped; waiting for ${standbyForNode(target).applicationName} to flush every byte`,
       'info',
@@ -5817,6 +6132,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     ha.patroni.demotions++
     ha.acceptingWrites = false
     pendingTx = 0
+    clearArrivalQueue()
     toast(
       'Patroni lease TTL expired: the node demoted itself; only a committed leader-key compare-and-swap can promote a rival',
       'warn',
@@ -6365,9 +6681,24 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       && traceQueue[0].readyT < state.t
       ? traceQueue.shift()
       : undefined
-    const randomPending = Math.max(0, pendingTx - traceQueue.length)
+    const randomPending = K.poolMode === 'session'
+      ? sessionPendingTx[slot]
+      : Math.max(0, pendingTx - traceQueue.length)
     const take = requested ? 1 : Math.max(1, Math.min(randomPending, batchSize))
+    const transactionPoolWait = requested || K.poolMode === 'session'
+      ? 0
+      : dequeueArrivals(take)
+    const poolSlotWait = K.poolMode === 'transaction'
+      ? transactionPoolWait
+      : K.poolMode === 'session'
+        ? x.nextSessionPoolWaitT
+        : 0
     pendingTx -= take
+    if (!requested && K.poolMode === 'session') {
+      sessionPendingTx[slot] -= take
+      queuedSessionTx -= take
+    }
+    x.nextSessionPoolWaitT = 0
     x.txCount = take
     x.latencyCount = take
 
@@ -6440,7 +6771,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     x.walPrepared = false
     x.evictionBuffer = -1
     x.evictionFlushLsn = 0
-    x.visitT = 0
+    x.visitT = poolSlotWait
+    x.poolSlotWaitT = poolSlotWait
     x.bufferReadWaitT = 0
     x.dirtyWriteWaitT = 0
     x.dirtyWriteDuringReadT = 0
@@ -6613,7 +6945,14 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     // healthy ~40% miss point so the scale constant remains stable, while a
     // 32-frame thrash run pays the nonlinear latency a real device would.
     const cacheThrash = Math.max(0.65, (1 + 2 * missFrac) / 1.8)
-    const dur = (ioDur + base * (1 - ioShare)) * cacheThrash
+    /* Rejected and pool-waiting clients do no PostgreSQL work. Only the
+     * server processes actually connected here contribute pressure. */
+    const concurrencyMultiplier = state.scenario === 'connection-storm'
+      ? backendConcurrencyMultiplier(stats.activeBackends)
+      : 1
+    const dur = (ioDur + base * (1 - ioShare))
+      * cacheThrash
+      * concurrencyMultiplier
     x.execTotal = dur
     configureWorkMem(slot)
 
@@ -6922,7 +7261,15 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     // hundred transactions and then closes it, so the postmaster is forking
     // continuously — and the higher the transaction rate, the more processes
     // per second it has to create. This is the cost a pooler removes.
-    if (!x.holdsLock && stats.activeBackends > 3 && rng() < clamp(x.txCount / 300, 0.004, 0.6)) {
+    const serverOverCapacity = K.poolMode !== 'disabled'
+      && slot >= activeServerConnectionLimit()
+    /* Direct clients keep the city's existing connection churn in every
+     * workload. Pooling removes it by reusing its server connections. */
+    const directChurn = K.poolMode === 'disabled'
+      && stats.activeBackends > 3
+      && rng() < clamp(x.txCount / 300, 0.004, 0.6)
+    rotateSessionBinding(slot)
+    if (!x.holdsLock && (serverOverCapacity || directChurn)) {
       b.state = 'ending'
       b.stateDur = 0.18
     }
@@ -6931,6 +7278,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       flow(rid.result(slot), 1, 'result', 1.0)
       flow(rid.bufRet(slot), 1, 'result', 1.0)
     }
+    x.txCount = 0
   }
 
   function forkBackend(): boolean {
@@ -6939,7 +7287,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     for (let i = 0; i < N_BACKEND_SLOTS; i++) {
       if (!backends[i].active) { slot = i; break }
     }
-    if (slot < 0 || slot >= state.maxConnections) return false
+    if (slot < 0 || slot >= activeServerConnectionLimit()) return false
     const b = backends[slot]
     b.active = true
     b.state = 'starting'
@@ -6951,6 +7299,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     b.plan = null
     extras[slot] = extras[slot] || makeExtra()
     extras[slot].idleT = 0
+    extras[slot].sessionAgeT = 0
+    extras[slot].nextSessionPoolWaitT = 0
     state.forkPulse = Math.min(3, state.forkPulse + 1)
     forkCooldown = 0.14
     flow('conn.in', 1, 'fork', 1.4)
@@ -6974,6 +7324,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       const x = extras[slot]
       if (!b.active) continue
       activeN++
+      if (K.poolMode === 'session') x.sessionAgeT += dt
+      if (b.state === 'idle') rotateSessionBinding(slot)
       if (b.state === 'exec_io') x.bufferReadWaitT += dt
       else if (b.state === 'eviction_flush') {
         x.dirtyWriteWaitT += dt
@@ -7011,7 +7363,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
           const traceReady = traceQueue.length > 0
             && traceQueue[0].announced
             && traceQueue[0].readyT < state.t
-          const randomPending = pendingTx - traceQueue.length
+          const randomPending = K.poolMode === 'session'
+            ? sessionPendingTx[slot]
+            : pendingTx - traceQueue.length
           if (traceReady || randomPending > 0) startVisit(slot)
           else if (x.idleT > IDLE_REAP && activeN > 2) {
             b.state = 'ending'
@@ -7238,6 +7592,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         case 'free':
           break
       }
+      if (!b.active) activeN--
       if (b.active && isRunningState(b.state)) runningN++
       if (b.state === 'sort') {
         workMemNodes += b.workMemNodes
@@ -7252,6 +7607,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     }
     stats.activeBackends = activeN
     stats.runningBackends = runningN
+    syncPoolerState()
     state.workMem.activeNodes = workMemNodes
     state.workMem.activeSortNodes = workMemSortNodes
     state.workMem.activeHashNodes = workMemHashNodes
@@ -7292,9 +7648,13 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   function tickPostmaster(dt: number): void {
     forkCooldown -= dt
     state.forkPulse = damp(state.forkPulse, 0, 3.2, dt)
-    runtimeStats.queueDepth = pendingTx
-    runtimeStats.queueSec = pendingTx / Math.max(1, K.tps)
-    runtimeStats.refused = refusedTx
+    expireTransactionPoolWaiters()
+    expireSessionPoolWaiters()
+    stats.poolerQueuedTransactions = K.poolMode === 'disabled'
+      ? 0
+      : (K.poolMode === 'session'
+          ? queuedSessionTx + state.pooler.waitingClients
+          : queuedRandomTx)
     if (pendingTx <= 0) return
     let idle = 0
     let active = 0
@@ -7304,34 +7664,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       active++
       if (b.state === 'idle') idle++
     }
-    if (idle > 0) return
-    if (active < state.maxConnections) {
+    if (idle > 0 && K.poolMode !== 'session') return
+    if (active < activeServerConnectionLimit()) {
       forkBackend()
-      return
-    }
-    // At max_connections the request queue is the story. Queue time remains a
-    // separate client-side quantity; the latency distribution begins when a
-    // modeled backend starts the statement. The
-    // old cap was `maxConnections * batchSize * 2`, and batchSize was the
-    // controller's output — so the backlog grew the ceiling with it, the queue
-    // could never get deep, and the "too many clients" toast fired on a
-    // quantity that could not grow. Ten seconds of offered load is a real
-    // client-side queue; past that the clients are being refused.
-    const cap = Math.max(state.maxConnections * batchSize * 2, K.tps * 10)
-    if (pendingTx > cap) {
-      refusedTx += pendingTx - cap
-      pendingTx = cap
-      runtimeStats.queueDepth = pendingTx
-      runtimeStats.queueSec = pendingTx / Math.max(1, K.tps)
-      runtimeStats.refused = refusedTx
-      if (state.t - refuseWarnT > 15) {
-        refuseWarnT = state.t
-        toast(
-          `FATAL: sorry, too many clients already — ${Math.round(refusedTx).toLocaleString()} refused`,
-          'warn',
-          5000,
-        )
-      }
     }
   }
 
@@ -7742,6 +8077,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     if (def.id === 'work-mem-spill' && previousScenarioT < 52 && state.scenarioT >= 52) {
       setKnob('workMem', CLAIM_VALUES.workMem.spillExample.highMiB)
     }
+    if (def.id === 'connection-storm' && previousScenarioT < 44 && state.scenarioT >= 44) {
+      setKnob('clientConnections', 1_000)
+      setKnob('poolMode', 'transaction')
+    }
     // Stands in for a `lockTimeout` knob this scenario would set at a beat.
     const lt = SCENARIO_LOCK_TIMEOUT[def.id]
     if (lt && lockTimeout !== lt.sec && state.scenarioT >= lt.atSec) {
@@ -7895,6 +8234,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
   function setKnob<Key extends keyof Knobs>(key: Key, value: Knobs[Key], source?: 'user'): void {
     const previousCheckpointTimeout = K.checkpointTimeout
+    const previousPoolMode = K.poolMode
     K[key] = value
 
     switch (key) {
@@ -7906,10 +8246,72 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         break
       case 'tps':
         K.tps = Math.max(0, K.tps)
+        if (K.tps === 0 && K.poolMode === 'disabled') {
+          /* A zero direct-workload stage cancels application work that has not
+           * entered PostgreSQL. Retaining an unbounded hidden client queue here
+           * kept generating transaction-end records long after tests stopped
+           * the workload and fabricated later PITR targets. */
+          pendingTx = Math.min(pendingTx, traceQueue.length)
+          clearArrivalQueue()
+        }
         nextArrival = 0
         // The batch scale follows the offered rate, so it moves with the slider
         // rather than 250ms later.
         sizeBatch()
+        break
+      case 'clientConnections':
+        K.clientConnections = clamp(Math.round(K.clientConnections), 1, 2_000)
+        nextArrival = 0
+        if (K.poolMode === 'session') {
+          moveSessionQueueToArrivals()
+          moveArrivalQueueToSessions()
+        }
+        sizeBatch()
+        if (K.poolMode === 'session') sessionWaitCohortAt = state.t
+        syncPoolerState()
+        break
+      case 'poolMode':
+        sessionWaitCohortAt = state.t
+        if (previousPoolMode !== 'session' && K.poolMode === 'session') {
+          moveArrivalQueueToSessions()
+        } else if (previousPoolMode === 'session' && K.poolMode !== 'session') {
+          moveSessionQueueToArrivals()
+        }
+        if (previousPoolMode === 'disabled' && K.poolMode === 'transaction') {
+          // Work already waiting at the application enters PgBouncer now; its
+          // pool wait cannot predate the pooler's introduction.
+          markQueuedArrivalsAt(state.t)
+        }
+        for (let i = 0; i < N_BACKEND_SLOTS; i++) {
+          extras[i].sessionAgeT = 0
+          extras[i].nextSessionPoolWaitT = 0
+        }
+        sizeBatch()
+        syncPoolerState()
+        break
+      case 'defaultPoolSize':
+        K.defaultPoolSize = clamp(Math.round(K.defaultPoolSize), 1, 100)
+        if (K.poolMode === 'session') {
+          moveSessionQueueToArrivals()
+          moveArrivalQueueToSessions()
+        }
+        sizeBatch()
+        syncPoolerState()
+        break
+      case 'maxClientConn':
+        K.maxClientConn = clamp(Math.round(K.maxClientConn), 1, 2_000)
+        nextArrival = 0
+        if (K.poolMode === 'session') {
+          moveSessionQueueToArrivals()
+          moveArrivalQueueToSessions()
+        }
+        sizeBatch()
+        syncPoolerState()
+        break
+      case 'queryWaitTimeout':
+        K.queryWaitTimeout = clamp(Math.round(K.queryWaitTimeout), 0, 600)
+        sessionWaitCohortAt = state.t
+        syncPoolerState()
         break
       case 'bgwriterEnabled':
         bgw.enabled = K.bgwriterEnabled
@@ -8081,13 +8483,16 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     if (ha.acceptingWrites) {
       nextArrival -= dt
       let guard = 900
+      let arrivals = 0
       while (nextArrival <= 0 && guard-- > 0) {
-        const d = expDelay(K.tps, rng)
+        const d = expDelay(serverOfferedTps(), rng)
         if (!isFinite(d)) { nextArrival = 1e9; break }
         pendingTx++
-        runtimeStats.arrivals++
+        arrivals++
         nextArrival += d
       }
+      if (K.poolMode === 'session') enqueueSessionArrivals(arrivals)
+      else enqueueArrivals(arrivals, state.t)
     }
 
     tickPostmaster(dt)
@@ -8165,6 +8570,19 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     state.xminHorizon = 100000
     state.oldestSnapshotAge = 0
     state.maxConnections = N_BACKEND_SLOTS
+    state.pooler.mode = DEFAULT_KNOBS.poolMode
+    state.pooler.clientConnections = DEFAULT_KNOBS.clientConnections
+    state.pooler.acceptedClients = DEFAULT_KNOBS.clientConnections
+    state.pooler.refusedClients = 0
+    state.pooler.boundClients = 0
+    state.pooler.sessionPendingTransactions.fill(0)
+    state.pooler.waitingClients = 0
+    state.pooler.disconnectedClients = 0
+    state.pooler.serverConnections = 0
+    state.pooler.serverLimit = N_BACKEND_SLOTS
+    state.pooler.serverCapacity = N_BACKEND_SLOTS
+    state.pooler.serverConnectionErrors = 0
+    state.pooler.serverOfferedTps = DEFAULT_KNOBS.tps
     state.scenario = null
     state.scenarioT = 0
     state.scenarioDecision = null
@@ -8560,6 +8978,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     stats.cacheHitPct = 90
     stats.activeBackends = 0
     stats.runningBackends = 0
+    stats.poolerQueuedTransactions = 0
+    stats.poolerQueryWaitTimeouts = 0
+    stats.backendConcurrencyMultiplier = 1
     state.workMem.activeNodes = 0
     state.workMem.activeSortNodes = 0
     state.workMem.activeHashNodes = 0
@@ -8574,10 +8995,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     clearLatencyQuantile(stats.latency.mean)
     clearLatencyQuantile(stats.latency.p50)
     clearLatencyQuantile(stats.latency.p99)
-    runtimeStats.queueDepth = 0
-    runtimeStats.queueSec = 0
-    runtimeStats.refused = 0
-    runtimeStats.arrivals = 0
     runtimeStats.pagesFor90Pct = 0
     stats.history.tps.length = 0
     stats.history.hit.length = 0
@@ -8588,10 +9005,13 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     stats.history.lag.length = 0
 
     pendingTx = 0
+    clearArrivalQueue()
     nextArrival = 0
+    sessionWaitCohortAt = 0
     backgroundSeqScans = 0
     nextWideSeqScan = 1
     latencyTotal.fill(0)
+    latencyPoolSlot.fill(0)
     latencyBufferRead.fill(0)
     latencyDirtyWrite.fill(0)
     latencyTempFile.fill(0)
@@ -8601,6 +9021,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     latencyWeight.fill(0)
     latencyHead = 0
     latencyCount = 0
+    latencyPoolSlotSeen = false
     commitLsn.fill(0)
     commitCount.fill(0)
     commitHead = 0
@@ -8617,8 +9038,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     scenarioQueryKind = null
     scenarioQueryTable = -1
     resetTraceRecord()
-    refusedTx = 0
     sizeBatch()
+    syncPoolerState()
     commitsAcc = walAcc = fpiAcc = ioReadAcc = ioWriteAcc = 0
     maintenanceWalPending = maintenanceFpiPending = 0
     maintenanceWalQueued = maintenanceWalDrained = 0

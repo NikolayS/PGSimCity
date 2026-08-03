@@ -295,7 +295,11 @@ export interface KnobControl {
   dispose(): void
 }
 
-export function createKnobControl(ctx: UiContext, meta: KnobMeta): KnobControl {
+export function createKnobControl(
+  ctx: UiContext,
+  meta: KnobMeta,
+  markDisclosure = false,
+): KnobControl {
   const inputId = nextId(`pgc-${String(meta.key)}`)
   const labelIsGuc = !!meta.guc && meta.guc === meta.label
 
@@ -364,7 +368,9 @@ export function createKnobControl(ctx: UiContext, meta: KnobMeta): KnobControl {
 
   if (meta.hint) {
     const hintId = `${inputId}-hint`
-    root.append(el('p', { class: 'pg-field__hint pgc-knob__hint', id: hintId, text: meta.hint }))
+    const hint = el('p', { class: 'pg-field__hint pgc-knob__hint', id: hintId, text: meta.hint })
+    if (markDisclosure && meta.disclosure) hint.dataset.disclosure = meta.disclosure
+    root.append(hint)
     input.setAttribute('aria-describedby', hintId)
   }
 

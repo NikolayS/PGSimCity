@@ -194,9 +194,23 @@ describe('machine room portrait layout', () => {
         document.querySelector('#hud-latency-panel').hidden = false
         window.PGSIMCITY.bus.emit('select', { id: 'recovery.ground' })
       })()`,
+    }, {
+      name: 'City pooler',
+      path: '/',
+      readySelector: '.control-center__sources',
+      prepare: `(async () => {
+        for (let attempt = 0; attempt < 120 && !window.PGSIMCITY; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 100))
+        }
+        if (!window.PGSIMCITY) throw new Error('city API did not become ready')
+        document.querySelector('.control-center').hidden = false
+        document.querySelector('#hud-latency-panel').hidden = false
+        window.PGSIMCITY.bus.emit('select', { id: 'client.pooler' })
+      })()`,
     }])
 
     expect(reports.map((report) => report.viewport)).toEqual([
+      { width: 390, height: 844 },
       { width: 390, height: 844 },
       { width: 390, height: 844 },
     ])
@@ -206,6 +220,16 @@ describe('machine room portrait layout', () => {
         report.authoredDisclosureCount,
       )
     }
+    expect(reports[2].disclosures.map((disclosure) => disclosure.id)).toEqual(
+      expect.arrayContaining([
+        'connection-pooler-model-scope',
+        'pooler-client-count-scope',
+        'pool-mode-cost',
+        'default-pool-size-scope',
+        'max-client-conn-scope',
+        'query-wait-timeout-semantics',
+      ]),
+    )
     expect(reports[0].markerProbe.unmarkedIncluded).toBe(false)
     expect(disclosureFailures([{
       name: 'Marker probe',

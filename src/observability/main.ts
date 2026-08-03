@@ -626,7 +626,10 @@ function renderVerdict(sc: Extract<Screen, { kind: 'console' }>, v: Verdict): HT
 
   return el(
     'article',
-    { class: 'card verdict' },
+    {
+      class: 'card verdict',
+      data: v.disclosure ? { disclosure: v.disclosure } : {},
+    },
     el(
       'div',
       { class: 'card__head' },

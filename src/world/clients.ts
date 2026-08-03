@@ -10,11 +10,11 @@ import { OPACITY_TIER } from './storage'
  * CLIENTS — the application tier, the server boundary, and the postmaster.
  *
  * The story of every Postgres session starts here:
- *   a client arrives at the terminal → it crosses the boundary and is
- *   authenticated at the gate → the postmaster fork()s a backend → a conduit
- *   opens from the terminal to that backend, and from then on the postmaster is
- *   out of the loop entirely. It is the only process in the whole city that
- *   never touches your data.
+ *   a client arrives at the terminal → optionally waits at the pooler → a
+ *   server connection crosses the boundary and is authenticated at the gate →
+ *   the postmaster fork()s a backend → a conduit opens from the terminal to
+ *   that backend, and from then on the postmaster is out of the loop entirely.
+ *   It is the only process in the whole city that never touches your data.
  *
  * Two things this district has to say that the rest of the city cannot:
  *
@@ -48,6 +48,7 @@ type BoxSpec = [number, number, number, number, number, number]
 const N = N_BACKEND_SLOTS
 const RING_SLOTS = 4
 const RING_DUR = 0.62
+export const CONNECTION_POOLER_PLATE_LABEL = 'PgBouncer · pool_mode'
 
 /* --- conduit tessellation ------------------------------------------------- */
 /** Samples along one duct. 26 is smooth at the radius we draw. */
@@ -413,6 +414,44 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
   poolGroup.add(podLamp)
 
   group.add(poolGroup)
+
+  /* --- PgBouncer: a server-concurrency gate, not a PostgreSQL process. --- */
+  const PB = ANCHOR.pooler
+  const poolerGroup = new THREE.Group()
+  poolerGroup.name = 'client.pooler'
+  const poolerMass: BoxSpec[] = [
+    [PB[0] - 8, 5.5, PB[2], 2.2, 11, 2.2],
+    [PB[0] + 8, 5.5, PB[2], 2.2, 11, 2.2],
+    [PB[0], 11.2, PB[2], 18.2, 2.2, 2.2],
+    [PB[0], 14.2, PB[2], 28, 4.0, 0.8],
+  ]
+  const poolerStruct = new THREE.InstancedMesh(unitBox, matStruct, poolerMass.length)
+  fillBoxes(poolerStruct, poolerMass)
+  poolerGroup.add(poolerStruct)
+  for (const spec of poolerMass) pushBoxEdges(edgeVerts, spec)
+
+  const poolerGlowSpecs: BoxSpec[] = []
+  for (let i = 0; i < 8; i++) {
+    poolerGlowSpecs.push([PB[0] - 6.1 + i * 1.74, 10.9, PB[2] + 1.15, 0.8, 1.0, 0.16])
+  }
+  const poolerGlow = new THREE.InstancedMesh(unitBox, neonWhite, poolerGlowSpecs.length)
+  fillBoxes(poolerGlow, poolerGlowSpecs)
+  _c.setHex(COLOR.client).multiplyScalar(0.12)
+  for (let i = 0; i < poolerGlowSpecs.length; i++) poolerGlow.setColorAt(i, _c)
+  poolerGlow.instanceColor!.setUsage(THREE.DynamicDrawUsage)
+  poolerGroup.add(poolerGlow)
+
+  const poolerPlate = makePlate(CONNECTION_POOLER_PLATE_LABEL, 2.8, COLOR.client)
+  poolerPlate.position.set(PB[0], 14.2, PB[2] + 0.45)
+  const poolerPlateMaterial = poolerPlate.material as THREE.MeshBasicMaterial
+  poolerPlateMaterial.color.setHex(0xffffff)
+  poolerPlateMaterial.side = THREE.DoubleSide
+  poolerPlateMaterial.depthTest = false
+  poolerPlateMaterial.depthWrite = false
+  poolerPlateMaterial.needsUpdate = true
+  poolerPlate.renderOrder = 4
+  poolerGroup.add(poolerPlate)
+  group.add(poolerGroup)
 
   /* =======================================================================
    * 2. THE SERVER BOUNDARY — a fence, and one gate in it.
@@ -782,7 +821,7 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
   conduits.add(manifoldGroup)
 
   group.add(conduits)
-  group.userData.collisionBoxes = [...termMass, ...pierSpecs].map(
+  group.userData.collisionBoxes = [...termMass, ...poolerMass, ...pierSpecs].map(
     ([x, y, z, sx, sy, sz]) =>
       new THREE.Box3(
         new THREE.Vector3(x - sx / 2, y - sy / 2, z - sz / 2),
@@ -825,6 +864,22 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
   /* =======================================================================
    * Registration.
    * =====================================================================*/
+
+  ctx.register({
+    id: 'client.pooler',
+    name: 'PgBouncer pooler',
+    role: 'client admission and PostgreSQL concurrency limit',
+    kind: 'client',
+    district: 'clients',
+    object: poolerGroup,
+    tier: 0,
+    focus: { target: [PB[0], 7, PB[2]], distance: 64, dir: [0.6, 0.65, 1] },
+    labelAt: [PB[0], 15.5, PB[2]],
+    color: COLOR.client,
+    readout: (s) => s.pooler.mode === 'disabled'
+      ? `direct · ${s.pooler.acceptedClients} of ${s.pooler.clientConnections} clients admitted`
+      : `${s.pooler.acceptedClients} clients → ${s.pooler.serverConnections}/${s.pooler.serverCapacity} PostgreSQL backends`,
+  })
 
   ctx.register({
     id: 'client.pool',
@@ -1050,6 +1105,20 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
     for (let i = 0; i < termGlowSpecs.length; i++) termGlow.setColorAt(i, _c)
     termGlow.instanceColor!.needsUpdate = true
 
+    // The pooler remains legible when bypassed; active queue bars cross the
+    // bloom threshold in proportion to clients waiting for a server slot.
+    const pooled = sim.pooler.mode !== 'disabled'
+    const waiting = sim.pooler.acceptedClients > 0
+      ? clamp01(sim.pooler.waitingClients / sim.pooler.acceptedClients)
+      : 0
+    _c.setHex(COLOR.client).multiplyScalar(pooled ? 1.2 + waiting * 2.4 : 0.12)
+    if (waiting > 0.5) {
+      _c2.setHex(COLOR.warn).multiplyScalar(1.8 + waiting)
+      _c.lerp(_c2, waiting)
+    }
+    for (let i = 0; i < poolerGlowSpecs.length; i++) poolerGlow.setColorAt(i, _c)
+    poolerGlow.instanceColor!.needsUpdate = true
+
     // fork rings travelling down the shaft
     let ringDirty = false
     for (let r = 0; r < RING_SLOTS; r++) {
@@ -1122,6 +1191,8 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
     gatePlate.visible = level >= 2
     boundPlate.visible = level >= 2
     termPlate.visible = level >= 2
+    // Core identity, not decorative detail: keep the pool_mode plate on mobile.
+    poolerPlate.visible = true
     lamps.visible = level >= 1
   }
 
@@ -1130,6 +1201,8 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
     owned.length = 0
     podStruct.dispose()
     podLamp.dispose()
+    poolerStruct.dispose()
+    poolerGlow.dispose()
     termStruct.dispose()
     termGlow.dispose()
     pmStruct.dispose()

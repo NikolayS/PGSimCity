@@ -75,6 +75,8 @@ export interface TableDef {
  * -------------------------------------------------------------------------*/
 
 export type SyncCommit = 'off' | 'local' | 'remote_write' | 'on' | 'remote_apply'
+/** `disabled` is PGSimCity's direct-connection comparison, not a PgBouncer value. */
+export type PoolMode = 'disabled' | 'session' | 'transaction'
 export type WalLevel = 'minimal' | 'replica' | 'logical'
 export type SynchronousStandbyNames = 'none' | 'standbyA' | 'standbyB'
 export type HaPartition =
@@ -88,6 +90,16 @@ export type RecoveryTargetTimeline = 'latest' | 'current'
 export interface Knobs {
   /** Target transactions/sec offered by clients. */
   tps: number
+  /** Concurrent application connections offering that aggregate load. */
+  clientConnections: number
+  /** PgBouncer pool_mode, plus a direct-connection comparison state. */
+  poolMode: PoolMode
+  /** PgBouncer default_pool_size for this model's one user/database pool. */
+  defaultPoolSize: number
+  /** PgBouncer max_client_conn process-wide admission ceiling. */
+  maxClientConn: number
+  /** PgBouncer query_wait_timeout in seconds; zero waits indefinitely. */
+  queryWaitTimeout: number
   /** 0..1 — share of statements that write. */
   writeRatio: number
   /** 0..1 — within writes, share that are UPDATE/DELETE (vs INSERT). */
@@ -170,6 +182,11 @@ export function poolBytes(knobs: Pick<Knobs, 'sharedBuffers'>): number {
 
 export const DEFAULT_KNOBS: Knobs = {
   tps: 10,
+  clientConnections: N_BACKEND_SLOTS,
+  poolMode: 'disabled',
+  defaultPoolSize: 8,
+  maxClientConn: 100,
+  queryWaitTimeout: CLAIM_VALUES.connectionPooler.pgBouncerDefaults.queryWaitTimeoutSeconds,
   writeRatio: 0.2,
   updateRatio: 0.6,
   seqScanRatio: 0.15,
@@ -975,6 +992,7 @@ export interface LockEdge {
 
 /** Additive anatomy of one completed model-latency observation. */
 export interface LatencyWaits {
+  poolSlotMs: number
   bufferReadMs: number
   dirtyWriteMs: number
   tempFileMs: number
@@ -995,6 +1013,35 @@ export interface WorkMemState {
   /** Cumulative pg_stat_database-shaped counters since model reset. */
   tempFiles: number
   tempBytes: number
+}
+
+export interface PoolerState {
+  /** Direct comparison or the active PgBouncer pool_mode. */
+  mode: PoolMode
+  /** Application-side connections, including clients waiting at PgBouncer. */
+  clientConnections: number
+  /** Connections admitted by max_client_conn (or max_connections when direct). */
+  acceptedClients: number
+  /** Client connections rejected at the active admission boundary. */
+  refusedClients: number
+  /** Session-mode clients currently bound to a PostgreSQL server connection. */
+  boundClients: number
+  /** Per-backend pending work for the client session bound to that slot. */
+  sessionPendingTransactions: number[]
+  /** Clients with modeled work waiting for a pooled server connection. */
+  waitingClients: number
+  /** Cumulative client disconnects caused by query_wait_timeout. */
+  disconnectedClients: number
+  /** PostgreSQL client backends currently visible in pg_stat_activity. */
+  serverConnections: number
+  /** Direct demand or PgBouncer's configured default_pool_size. */
+  serverLimit: number
+  /** Server connections PostgreSQL can accept in this sixteen-slot model. */
+  serverCapacity: number
+  /** Configured pooled server connections PostgreSQL cannot accept. */
+  serverConnectionErrors: number
+  /** Aggregate tps reaching servers; session mode scales this to bound clients. */
+  serverOfferedTps: number
 }
 
 export interface LatencyQuantile {
@@ -1037,6 +1084,12 @@ export interface SimStats {
   activeBackends: number
   /** Backends whose pg_stat_activity state is active. */
   runningBackends: number
+  /** Transactions currently retained in the modeled PgBouncer queue. */
+  poolerQueuedTransactions: number
+  /** Waiting queries expired by query_wait_timeout since reset. */
+  poolerQueryWaitTimeouts: number
+  /** Synthetic statement-cost multiplier derived only from active backends. */
+  backendConcurrencyMultiplier: number
   /** Rolling weighted transaction quantiles in deliberately stretched model ms. */
   latency: LatencyStats
   /** rolling window for sparklines: newest last */
@@ -1123,6 +1176,7 @@ export interface SimState {
   xminHorizon: number
   oldestSnapshotAge: number
   maxConnections: number
+  pooler: PoolerState
   backends: BackendSim[]
   buffers: BufferPool
   wal: WalState
