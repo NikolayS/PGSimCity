@@ -309,8 +309,29 @@ async function withThrowawayCluster(pgBin, callback) {
   }
 }
 
-function result(claim, city, server, matches) {
-  return { claim, city, server, verdict: matches ? 'MATCH' : 'DIVERGES' }
+export function verdictForComparison(matches, registeredDivergence = false) {
+  if (!registeredDivergence) return matches ? 'MATCH' : 'DIVERGES'
+  return matches ? 'UNEXPECTED MATCH' : 'REGISTERED DIVERGENCE'
+}
+
+function result(claim, city, server, matches, registeredDivergence = false) {
+  return {
+    claim,
+    city,
+    server,
+    verdict: verdictForComparison(matches, registeredDivergence),
+  }
+}
+
+export function oracleSummary(rows) {
+  const unexpectedRows = rows.filter((row) =>
+    row.verdict === 'DIVERGES' || row.verdict === 'UNEXPECTED MATCH')
+  return {
+    matches: rows.filter((row) => row.verdict === 'MATCH').length,
+    registered: rows.filter((row) => row.verdict === 'REGISTERED DIVERGENCE').length,
+    unexpected: unexpectedRows.length,
+    unexpectedRows,
+  }
 }
 
 export async function checkDiagnosticSql(psql, registry, major) {
@@ -375,11 +396,12 @@ async function checkGucDefaults(query, registry, major) {
     const serverField = expected.serverField ?? 'setting'
     results.push(result(
       `GUC/${claim.id}`,
-      `${claim.cityClaim}: ${displayExpected(expected)}`,
+      `${claim.cityClaim}: ${displayExpected(expected)}${claim.registeredDivergence ? `; registered difference: ${claim.registeredDivergence}` : ''}`,
       server
         ? `${serverField === 'setting' ? 'SHOW' : serverField} ${server[serverField]}${serverField === 'setting' && server.unit ? ` ${server.unit}` : ''} (${server.source})`
         : 'setting is absent',
       compareSetting(expected, server),
+      Boolean(claim.registeredDivergence),
     ))
   }
   return results
@@ -1386,19 +1408,30 @@ async function main() {
     scratch: server.scratch,
   }))
   const elapsed = (performance.now() - startedAt) / 1000
-  const divergences = execution.results.filter((row) => row.verdict === 'DIVERGES')
-  const matches = execution.results.length - divergences.length
+  const summary = oracleSummary(execution.results)
+  const registeredRows = execution.results.filter(
+    (row) => row.verdict === 'REGISTERED DIVERGENCE',
+  )
 
   console.log(`# PGSimCity PostgreSQL ${major} oracle`)
   console.log('')
   console.log(`Throwaway cluster used probed port ${execution.port}; ${execution.scratch} was removed before this report.`)
-  console.log(`Checks: ${execution.results.length} total · ${matches} match · ${divergences.length} diverge.`)
+  console.log(`Checks: ${execution.results.length} total · ${summary.matches} match · ${summary.registered} registered divergences · ${summary.unexpected} unexpected.`)
   console.log('')
-  console.log(process.env.PG_ORACLE_ALL === '1' ? '## All observations' : '## Divergences')
+  console.log(process.env.PG_ORACLE_ALL === '1' ? '## All observations' : '## Unexpected results')
   console.log('')
-  console.log(markdownTable(process.env.PG_ORACLE_ALL === '1' ? execution.results : divergences))
+  console.log(markdownTable(
+    process.env.PG_ORACLE_ALL === '1' ? execution.results : summary.unexpectedRows,
+  ))
+  if (process.env.PG_ORACLE_ALL !== '1' && registeredRows.length > 0) {
+    console.log('')
+    console.log('## Registered model divergences')
+    console.log('')
+    console.log(markdownTable(registeredRows))
+  }
   console.log('')
   console.log(`Wall time: ${elapsed.toFixed(2)} s`)
+  if (summary.unexpected > 0) process.exitCode = 1
 }
 
 const isMain = process.argv[1]

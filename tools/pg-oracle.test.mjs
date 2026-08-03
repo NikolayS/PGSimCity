@@ -10,9 +10,44 @@ import {
   indexWalkAttributeChecks,
   loadOracleRegistry,
   markdownTable,
+  oracleSummary,
+  verdictForComparison,
 } from './pg-oracle.mjs'
 
 describe('PostgreSQL oracle claim registry', () => {
+  it('separates four registered model divergences from actionable results', async () => {
+    const registry = await loadOracleRegistry()
+    const registered = registry.claims.gucDefaults
+      .filter((claim) => claim.registeredDivergence)
+      .map((claim) => claim.id)
+
+    expect(registered).toEqual([
+      'city-model/checkpoint_timeout',
+      'city-model/max_wal_size',
+      'city-model/shared_buffers',
+      'city-model/autovacuum_vacuum_scale_factor',
+    ])
+    expect(verdictForComparison(true)).toBe('MATCH')
+    expect(verdictForComparison(false)).toBe('DIVERGES')
+    expect(verdictForComparison(false, true)).toBe('REGISTERED DIVERGENCE')
+    expect(verdictForComparison(true, true)).toBe('UNEXPECTED MATCH')
+
+    expect(oracleSummary([
+      { verdict: 'MATCH' },
+      { verdict: 'REGISTERED DIVERGENCE' },
+      { verdict: 'DIVERGES' },
+      { verdict: 'UNEXPECTED MATCH' },
+    ])).toEqual({
+      matches: 1,
+      registered: 1,
+      unexpected: 2,
+      unexpectedRows: [
+        { verdict: 'DIVERGES' },
+        { verdict: 'UNEXPECTED MATCH' },
+      ],
+    })
+  })
+
   it('discovers every check family through the registered oracle sources', async () => {
     const registry = await loadOracleRegistry()
 

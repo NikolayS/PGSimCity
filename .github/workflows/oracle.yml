@@ -1,0 +1,115 @@
+name: PostgreSQL oracle
+
+on:
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: postgresql-oracle
+  cancel-in-progress: false
+
+jobs:
+  oracle:
+    name: Audit PostgreSQL 18 claims
+    runs-on: ubuntu-latest
+    container:
+      image: postgres:18
+    timeout-minutes: 10
+    env:
+      # The image's PG_VERSION contains a package version; the harness expects a major.
+      PG_VERSION: '18'
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run PostgreSQL oracle
+        id: oracle
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          gosu postgres npm run oracle 2>&1 | tee /tmp/pgsimcity-oracle.md
+
+      - name: Reconcile divergence issue
+        if: always() && steps.oracle.outcome != 'skipped'
+        uses: actions/github-script@v7
+        env:
+          ORACLE_OUTCOME: ${{ steps.oracle.outcome }}
+          ORACLE_REPORT: /tmp/pgsimcity-oracle.md
+        with:
+          script: |
+            const fs = require('node:fs')
+            const marker = '<!-- pgsimcity-postgresql-oracle -->'
+            const title = 'PostgreSQL oracle divergence'
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              ...context.repo,
+              state: 'open',
+              per_page: 100,
+            })
+            const existing = issues.find((issue) =>
+              !issue.pull_request && issue.title === title && issue.body?.includes(marker))
+            const outcome = process.env.ORACLE_OUTCOME
+
+            if (outcome === 'failure') {
+              const reportPath = process.env.ORACLE_REPORT
+              const report = fs.existsSync(reportPath)
+                ? fs.readFileSync(reportPath, 'utf8').slice(0, 50_000)
+                : 'The oracle failed before it produced a report.'
+              const body = [
+                marker,
+                '',
+                'The nightly PostgreSQL 18 oracle found an unexpected result. Inspect the report, correct the claim or document an intentional model-scale difference with evidence, and rerun the workflow.',
+                '',
+                `- Workflow run: [${context.runId}](${runUrl})`,
+                `- Commit: ${context.sha}`,
+                '',
+                report,
+              ].join('\n')
+
+              if (existing) {
+                await github.rest.issues.update({
+                  ...context.repo,
+                  issue_number: existing.number,
+                  body,
+                })
+                core.notice(`Updated issue #${existing.number}`)
+              } else {
+                const created = await github.rest.issues.create({
+                  ...context.repo,
+                  title,
+                  body,
+                })
+                core.notice(`Opened issue #${created.data.number}`)
+              }
+            } else if (existing) {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: existing.number,
+                body: `The oracle returned to green in [workflow run ${context.runId}](${runUrl}).`,
+              })
+              await github.rest.issues.update({
+                ...context.repo,
+                issue_number: existing.number,
+                state: 'closed',
+              })
+              core.notice(`Closed recovered issue #${existing.number}`)
+            }
+
+      - name: Fail on unexpected oracle result
+        if: steps.oracle.outcome == 'failure'
+        run: exit 1
