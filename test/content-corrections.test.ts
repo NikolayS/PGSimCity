@@ -59,9 +59,26 @@ describe('PostgreSQL 18 content corrections', () => {
     expect(checkpointerCopy).toMatch(/PostgreSQL 14.*0\.9.*13 and older.*0\.5/is)
     for (const copy of [launcherCopy, statsCopy, vacuumVerdict.mechanism]) {
       expect(copy).toContain('autovacuum_vacuum_max_threshold')
-      expect(copy).toContain('100,000,000')
+      // Either numeral form; the fact is the cap, not its formatting.
+      expect(copy).toMatch(/100,000,000|100 million/)
+      // Version-dependent, so it must carry its version.
+      expect(copy).toMatch(/PostgreSQL 1[78]|17 and older/i)
     }
-    expect(launcherCopy).toMatch(/city.*does not (?:implement|model).*maximum|city.*uncapped/is)
+    /*
+     * The city IMPLEMENTS the cap (`AUTOVACUUM_VACUUM_MAX_THRESHOLD`,
+     * `src/sim/model.ts`), so prose must not still disclose it as unmodelled.
+     * That disclosure was true before the oracle round and is now false — a test
+     * asserting it would pin a stale claim about our own model.
+     */
+    for (const copy of [launcherCopy, statsCopy, vacuumVerdict.mechanism]) {
+      // Same-sentence window: `.*` would span two unrelated true statements.
+      // Note ANALYZE genuinely IS uncapped -- the max threshold caps vacuum only --
+      // so a bare /uncapped/ check would be a false positive on correct prose.
+      expect(copy).not.toMatch(/(?:does not (?:implement|model)|uncapped)[^.]{0,90}max(?:imum)?[ _]threshold/i)
+    }
+    // And the scale term is reltuples, not the live-tuple counter.
+    expect(`${launcherCopy}\n${statsCopy}`).toMatch(/reltuples/)
+    expect(`${launcherCopy}\n${statsCopy}`).not.toMatch(/scale_factor\s*[×x]\s*n_live_tup/i)
     expect(statements.version).toMatch(/PostgreSQL 18.*wal_buffers_full.*parallel_workers/is)
     expect(statements.version).toMatch(/PostgreSQL 13.*toplevel.*JIT.*stats_since/is)
   })
