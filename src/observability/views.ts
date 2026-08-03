@@ -17,6 +17,7 @@ import { PG_PAGE_BYTES, poolBytes, poolPages } from '../core/types'
 import type { BackendSim, PhysicalStandbyState, SimState, TableSim, VacPhase } from '../core/types'
 import { configuredSynchronousStandby } from '../core/replication'
 import { CLAIM_VALUES } from '../core/claims'
+import { POSTGRESQL_WAIT_EVENTS } from '../spine/postgresql-oracle'
 import { N_TABLES } from '../world/layout'
 import { fmtBytes, fmtLsn, fmtNum } from '../core/util'
 import type { Collector } from './collector'
@@ -161,15 +162,15 @@ function actOf(
     case 'idle_in_xact':
       return { state: 'idle in transaction', wet: 'Client', we: 'ClientRead', tone: 'warn', bucket: 'idleTx' }
     case 'exec_io':
-      return { state: 'active', wet: 'IO', we: 'DataFileRead', tone: 'accent', bucket: 'io' }
+      return { state: 'active', wet: POSTGRESQL_WAIT_EVENTS.dataFileRead.type, we: POSTGRESQL_WAIT_EVENTS.dataFileRead.name, tone: 'accent', bucket: 'io' }
     case 'eviction_flush':
-      return { state: 'active', wet: 'IO', we: 'WalSync', tone: 'accent', bucket: 'io' }
+      return { state: 'active', wet: POSTGRESQL_WAIT_EVENTS.walSync.type, we: POSTGRESQL_WAIT_EVENTS.walSync.name, tone: 'accent', bucket: 'io' }
     case 'commit_wait':
       return syncRep
-        ? { state: 'active', wet: 'IPC', we: 'SyncRep', tone: 'accent', bucket: 'commit' }
-        : { state: 'active', wet: 'IO', we: 'WalSync', tone: 'accent', bucket: 'commit' }
+        ? { state: 'active', wet: POSTGRESQL_WAIT_EVENTS.syncRep.type, we: POSTGRESQL_WAIT_EVENTS.syncRep.name, tone: 'accent', bucket: 'commit' }
+        : { state: 'active', wet: POSTGRESQL_WAIT_EVENTS.walSync.type, we: POSTGRESQL_WAIT_EVENTS.walSync.name, tone: 'accent', bucket: 'commit' }
     case 'blocked':
-      return { state: 'active', wet: 'Lock', we: 'relation', tone: 'crit', bucket: 'lock' }
+      return { state: 'active', wet: POSTGRESQL_WAIT_EVENTS.relation.type, we: POSTGRESQL_WAIT_EVENTS.relation.name, tone: 'crit', bucket: 'lock' }
     case 'sending':
       return { state: 'active', wet: 'Client', we: 'ClientWrite', tone: '', bucket: 'cpu' }
     default:
@@ -276,8 +277,8 @@ function activityRows(s: SimState, c: Collector, opts: { aux: boolean }): ActRow
       pid: PID.avWorker(w.slot),
       backendType: 'autovacuum worker',
       state: 'active',
-      wet: w.vacuumDelay ? 'Timeout' : '',
-      we: w.vacuumDelay ? 'VacuumDelay' : '',
+      wet: w.vacuumDelay ? POSTGRESQL_WAIT_EVENTS.vacuumDelay.type : '',
+      we: w.vacuumDelay ? POSTGRESQL_WAIT_EVENTS.vacuumDelay.name : '',
       xactAge: -1,
       xid: '',
       xmin: String(s.xminHorizon),
@@ -330,7 +331,10 @@ export function activityWaitCounts(s: SimState, c: Collector): ActivityWaitCount
   for (const row of activityRows(s, c, { aux: false })) {
     counts.total++
     counts[row.bucket ?? 'cpu']++
-    if (row.wet === 'IO' && row.we === 'WalSync') counts.walSync++
+    if (
+      row.wet === POSTGRESQL_WAIT_EVENTS.walSync.type
+      && row.we === POSTGRESQL_WAIT_EVENTS.walSync.name
+    ) counts.walSync++
   }
   return counts
 }

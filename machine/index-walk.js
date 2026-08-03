@@ -2,22 +2,6 @@ import { MACHINE_INDEX_WALK as claim } from '../src/spine/machine-index-walk.ts'
 
 export const INDEX_WALK_CLAIM = claim
 
-const CATALOG_SQL = `SELECT
-  c.relname AS index_name,
-  k.position::integer AS position,
-  CASE
-    WHEN k.position <= i.indnkeyatts THEN 'key'
-    ELSE 'include'
-  END AS column_role,
-  pg_catalog.pg_get_indexdef(i.indexrelid, k.position::integer, true) AS index_element
-FROM pg_catalog.pg_index AS i
-JOIN pg_catalog.pg_class AS c ON c.oid = i.indexrelid
-CROSS JOIN LATERAL
-  unnest(i.indkey) WITH ORDINALITY AS k(attnum, position)
-WHERE i.indrelid = 'accounts'::regclass
-  AND i.indisvalid
-ORDER BY c.relname, k.position;`
-
 export const INDEX_WALK_STEPS = Object.freeze([
   Object.freeze({
     id: 'constant',
@@ -32,7 +16,7 @@ export const INDEX_WALK_STEPS = Object.freeze([
     number: '02',
     title: 'Ask the catalogs',
     displaySql: 'pg_index + pg_get_indexdef',
-    sql: CATALOG_SQL,
+    sql: claim.catalogSql,
     lesson: 'The catalogs report which indexed path exists before a lookup runs.',
   }),
   Object.freeze({

@@ -345,6 +345,26 @@ export const CLAIMS = {
       'Machine:index walk P/M disclosures',
     ],
   },
+  postgresqlOracle: {
+    owner: 'src/core/claims.ts#CLAIMS.postgresqlOracle',
+    value: {
+      oracleSources: [
+        {
+          role: 'claims',
+          owner: 'src/spine/postgresql-oracle.ts#POSTGRESQL_ORACLE_CLAIMS',
+        },
+        {
+          role: 'catalog',
+          owner: 'src/observability/catalog.ts#CATALOG',
+        },
+        {
+          role: 'indexWalk',
+          owner: 'src/spine/machine-index-walk.ts#MACHINE_INDEX_WALK',
+        },
+      ],
+    },
+    surfaces: ['registry:mechanically checkable PostgreSQL facts', 'tool:throwaway PostgreSQL oracle'],
+  },
 } as const
 
 export type ClaimId = keyof typeof CLAIMS

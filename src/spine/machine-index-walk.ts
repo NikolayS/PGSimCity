@@ -1,4 +1,19 @@
 export const MACHINE_INDEX_WALK = Object.freeze({
+  catalogSql: `SELECT
+  c.relname AS index_name,
+  k.position::integer AS position,
+  CASE
+    WHEN k.position <= i.indnkeyatts THEN 'key'
+    ELSE 'include'
+  END AS column_role,
+  pg_catalog.pg_get_indexdef(i.indexrelid, k.position::integer, true) AS index_element
+FROM pg_catalog.pg_index AS i
+JOIN pg_catalog.pg_class AS c ON c.oid = i.indexrelid
+CROSS JOIN LATERAL
+  unnest(i.indkey) WITH ORDINALITY AS k(attnum, position)
+WHERE i.indrelid = 'accounts'::regclass
+  AND i.indisvalid
+ORDER BY c.relname, k.position;`,
   finding:
     'P measured on this seeded accounts table: both lookups returned one row. PostgreSQL used an Index Scan on accounts_pkey for id and a Seq Scan for owner; the catalog reported accounts_pkey on id.',
   incomplete:

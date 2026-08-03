@@ -65,6 +65,7 @@ describe('Machine first index walk', () => {
   it('reports valid index elements in index order with key roles and expressions intact', () => {
     const sql = INDEX_WALK_STEPS[1].sql
 
+    expect(sql).toBe(INDEX_WALK_CLAIM.catalogSql)
     expect(sql).toMatch(
       /CROSS JOIN LATERAL\s+unnest\(i\.indkey\)\s+WITH ORDINALITY AS k\(attnum, position\)/,
     )

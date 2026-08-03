@@ -70,7 +70,7 @@ function lineOf(text: string, index: number): number {
 }
 
 describe('claims and conventions spine', () => {
-  it('owns exactly the twenty-one drift-prone contracts across both passes', () => {
+  it('owns exactly the twenty-two drift-prone contracts across both passes', () => {
     expect(Object.keys(CLAIMS)).toEqual([
       'appVersion',
       'walSegment',
@@ -93,6 +93,7 @@ describe('claims and conventions spine', () => {
       'reviewStatus',
       'machineSynchronousCommitComparison',
       'machineIndexWalk',
+      'postgresqlOracle',
     ])
     for (const claim of Object.values(CLAIMS)) {
       expect(claim.owner).not.toBe('')
