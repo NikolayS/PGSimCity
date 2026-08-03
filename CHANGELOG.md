@@ -11,6 +11,63 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-08-03
+
+A lens created **real** conditions on a real PostgreSQL 18.3 — genuine lock waits,
+genuine slot retention, genuine checkpoint pressure — then walked Diagnose using
+only the evidence its own steps gather. It found the three failure modes that
+matter for a diagnostic tool, and this release fixes them.
+
+### Added — an entry point for the most common WAL-disk incident
+
+**"The disk is filling and `pg_wal` keeps growing" was not a symptom you could
+start from.** The root list had no disk-growth entry, no step used the `slots`
+projection that already existed, and slot advice appeared only *after* a
+replication verdict. An operator arriving with the actual symptom had nowhere to
+go.
+
+There is now a path, discriminating on `pg_replication_slots.wal_status`
+(`reserved` → `extended` → `unreserved` → `lost`) and `max_slot_wal_keep_size`,
+reaching the slot-drop consequence corrected in 0.37.2 — that dropping a slot
+removes its retention *guarantee*, not the WAL.
+
+### Fixed — a confident wrong verdict
+
+**Every lock wait reached the `ACCESS EXCLUSIVE` verdict solely because a waiter
+existed.** Ending the holder is sound advice for any blocking lock, so the action
+survived — but the asserted lock type, the DDL framing and the `lock_timeout`
+emphasis were wrong for an ordinary row-lock or `SHARE`-mode conflict, which is
+the far more common case. A reader with a `FOR UPDATE` conflict was told they had
+a DDL problem. The verdict now reports the mode actually observed, which
+`pg_locks.mode` was already supplying.
+
+### Fixed — evidence that narrows rather than concludes
+
+Two materially different conditions both reached `v.ckpt_storm`. The verdict was
+already honest that counters cannot establish cause; the branch now says so too —
+*"counters correlate; this narrows the path but does not establish cause"* —
+rather than letting a reader believe they had diagnosed something they had not.
+
+### Changed — the oracle audits itself, nightly
+
+`tools/pg-oracle.mjs` ran only when someone typed `npm run oracle`. The reasoning
+for keeping it out of CI was sound — hosted runners ship PostgreSQL 16, the
+oracle needs 18 — and is exactly the reasoning that left the test suite gating
+nothing for this project's entire history.
+
+Measured: a service container is fast (6.07 s pull, 2.60 s readiness) but cannot
+serve the standby audit, which needs real 18 binaries; a PGDG install costs
+34.29 s provisioning plus 40.67 s of oracle. It now runs as a **scheduled daily
+audit** rather than a push gate, because it legitimately reports four deliberate
+model divergences and a gate that cries wolf gets ignored.
+
+`ORACLE-AUDIT.md` records the boundary explicitly: which registered claims are
+mechanically checkable against a server, and which — model calibration,
+PgBouncer/WAL-G/PGlite behaviour, product thresholds, UI routing — are not.
+
+The harness is now at **131 checks**, from 58 when it was built.
+
+
 ## [0.37.2] - 2026-08-03
 
 Everything here was found by running PostgreSQL, not by reading about it. Six
