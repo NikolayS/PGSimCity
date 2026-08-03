@@ -117,7 +117,7 @@ const STEPS: TourStep[] = [
     id: 'buffers',
     title: 'Reading a page: the cache',
     body:
-      'Postgres reads the whole 8 KiB page containing a row into shared_buffers, represented by the sampled frames in the lit plaza, and every backend then reads that shared copy. Blue tiles match durable storage; the sweeping hand is the clock algorithm looking for a reusable frame. A shared-buffer miss makes PostgreSQL issue a read, but the operating-system page cache may satisfy it without physical device I/O. Large sequential scans above a quarter of shared_buffers use PostgreSQL 18’s bulk-read ring to limit cache pollution; with 18.3 defaults it starts at 256 KiB, grows to about 2.25 MiB for I/O concurrency, and remains capped. The city’s fixed sampled ring visualizes that isolation mechanism but not PostgreSQL 18’s dynamic size.',
+      'Postgres reads the whole 8 KiB page containing a row into shared_buffers, represented by the sampled frames in the lit plaza, and every backend then reads that shared copy. Blue tiles match durable storage; the sweeping hand is the clock algorithm looking for a reusable frame. A shared-buffer miss makes PostgreSQL issue a read, but the operating-system page cache may satisfy it without physical device I/O. Large sequential scans above a quarter of shared_buffers use PostgreSQL 18’s bulk-read ring to limit cache pollution; with PostgreSQL 18 defaults it starts at 256 KiB, grows to about 2.25 MiB for I/O concurrency, and remains capped. The city’s fixed sampled ring visualizes that isolation mechanism but not PostgreSQL 18’s dynamic size.',
     focus: 'shared.buffers',
     duration: 18,
     knobs: { seqScanRatio: 0.12 },

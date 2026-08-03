@@ -26,6 +26,7 @@ import {
 } from '../src/sim/model'
 import { SCENARIOS } from '../src/sim/scenarios'
 import { CHAPTERS } from '../src/ui/tour'
+import { DOCS_MEMORY } from '../src/ui/docs-memory'
 import { DOCS_STORAGE } from '../src/ui/docs-storage'
 import { KNOB_META, doc, mdToHtml } from '../src/ui/content'
 import { MODEL_LATENCY_VITAL_LABEL, emitLoose } from '../src/ui/hud'
@@ -147,7 +148,7 @@ describe('claims and conventions spine', () => {
     const modelValue = modelDefault!.expected as { value: string | number, unit: string }
     expect(postgresValue.unit).toBe('MB')
     expect(modelValue.unit).toBe('MB')
-    const readmeDefaultBoundary = `${CLAIM_VALUES.bufferSample.capacityFrames.toLocaleString('en-US')} representative frames (${CLAIM_VALUES.bufferSample.defaultActiveFrames} active at the ${Number(modelValue.value) / 1024} GiB model default; ${CLAIM_VALUES.postgresqlVersion.referenceLabel} itself defaults to ${postgresValue.value} MiB)`
+    const readmeDefaultBoundary = `${CLAIM_VALUES.bufferSample.capacityFrames.toLocaleString('en-US')} representative frames (${CLAIM_VALUES.bufferSample.defaultActiveFrames} active at the ${Number(modelValue.value) / 1024} GiB model default; ${CLAIM_VALUES.postgresqlVersion.majorLabel} defaults to ${postgresValue.value} MiB)`
     expect(read('README.md'), 'bufferSample: README:buffer-pool row disagrees with the oracle')
       .toContain(readmeDefaultBoundary)
     expect(storageDocCopy('standby.b'), 'bufferSample: prose:standby sample disclosure disagrees')
@@ -596,17 +597,44 @@ describe('claims and conventions spine', () => {
   })
 
   it('keeps vacuum truncation qualified on the model, plate, tour, and docs', () => {
+    expect(CLAIM_VALUES.vacuumReclaim).toMatchObject({
+      truncationLock: {
+        mode: 'ACCESS EXCLUSIVE',
+        attempt: 'non-blocking',
+        consequence: expect.stringMatching(/gives up.*space.*not returned/iu),
+      },
+    })
     agrees(
       'vacuumReclaim',
       'world:landfill plate',
       VACUUM_RECLAIM_PLATE_LINES,
       CLAIM_VALUES.vacuumReclaim.plateLines,
     )
+    expect(VACUUM_RECLAIM_PLATE_LINES.join(' '), 'vacuumReclaim: world:landfill plate omits the non-blocking truncation lock')
+      .toMatch(/ACCESS EXCLUSIVE.*non-blocking/iu)
     const vacuumChapter = CHAPTERS.find((chapter) => chapter.id === 'vacuum')
     expect(vacuumChapter?.body, 'vacuumReclaim: tour:vacuum chapter disagrees')
       .toContain(CLAIM_VALUES.vacuumReclaim.rule)
+    expect(vacuumChapter?.body, 'vacuumReclaim: tour:vacuum chapter omits the failed-lock consequence')
+      .toMatch(/non-blocking.*gives up.*space.*not returned/iu)
     expect(storageDocCopy('autovac.worker'), 'vacuumReclaim: prose:vacuum docs omit trailing-empty-page rule')
       .toContain('only shortens the file if the very last pages are entirely empty')
+    for (const id of ['storage.table', 'autovac.worker', 'landfill']) {
+      expect(storageDocCopy(id), `vacuumReclaim: prose:${id} omits the non-blocking truncation lock`)
+        .toMatch(/ACCESS EXCLUSIVE.*(?:non-blocking|does not wait|abandon).*space.*(?:stays|not returned)/isu)
+    }
+    const horizonDoc = DOCS_MEMORY.find((candidate) => candidate.id === 'xmin.horizon')
+    const horizonCopy = horizonDoc
+      ? [horizonDoc.tldr, ...horizonDoc.sections.map((section) => section.body)].join('\n')
+      : ''
+    expect(horizonCopy, 'vacuumReclaim: prose:xmin horizon omits the non-blocking truncation lock')
+      .toMatch(/ACCESS EXCLUSIVE.*(?:non-blocking|does not wait|abandon).*space.*(?:stays|not returned)/isu)
+    const bloatScenario = SCENARIOS.find((scenario) => scenario.id === 'bloat-and-vacuum')
+    expect(JSON.stringify(bloatScenario?.beats), 'vacuumReclaim: scenario:bloat omits the non-blocking truncation lock')
+      .toMatch(/ACCESS EXCLUSIVE.*non-blocking.*gives up.*space.*not returned/iu)
+    const noBloatVerdict = ALL_VERDICTS.find((verdict) => verdict.id === 'v.no_bloat')
+    expect(noBloatVerdict?.mechanism, 'vacuumReclaim: Diagnose:no-bloat verdict disagrees')
+      .toContain(CLAIM_VALUES.vacuumReclaim.rule)
     expect(read('src/sim/scenarios.ts'), 'vacuumReclaim: model:vacuum narration omits its tail-density simplification')
       .toContain('truncation uses a tail-density heuristic')
   })
@@ -933,7 +961,7 @@ describe('claims and conventions spine', () => {
     }
   })
 
-  it('pins target-version prose, manual links, and source links to PostgreSQL 18.3', () => {
+  it('pins target-version prose, manual links, and source links to the reviewed point release', () => {
     const owner = CLAIMS.postgresqlVersion.owner
     const version = CLAIM_VALUES.postgresqlVersion
     const files = [

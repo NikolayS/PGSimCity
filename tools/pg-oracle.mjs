@@ -489,16 +489,20 @@ function displayExpected(expected) {
   return expected.display ?? `${expected.value}${expected.unit ?? ''}`
 }
 
-async function checkVersion(query, registry, major) {
+export async function checkVersion(query, registry, major) {
   const [server] = await query(`
     SELECT current_setting('server_version') AS server_version,
            current_setting('server_version_num') AS server_version_num`)
-  const expected = registry.target.referenceLabel.replace(/^PostgreSQL\s+/u, '')
+  const serverVersionNum = Number(server.server_version_num)
+  const referenceVersionNum = registry.target.major * 10_000
+    + registry.target.referenceMinor
   const matches = major === registry.target.major
-    && String(server.server_version).startsWith(expected)
+    && Number.isInteger(serverVersionNum)
+    && serverVersionNum >= registry.target.major * 10_000
+    && serverVersionNum <= referenceVersionNum
   return [result(
     'postgresqlVersion/referenceLabel',
-    registry.target.referenceLabel,
+    `${registry.target.majorLabel ?? `PostgreSQL ${registry.target.major}`} major line; claims verified through ${registry.target.referenceLabel}`,
     `PostgreSQL ${server.server_version} (${server.server_version_num})`,
     matches,
   )]
@@ -1134,6 +1138,9 @@ async function checkVacuumReclaim(pgBin, psql, query, registry, port) {
 
   const lockDemonstrated = Number(tailLocked?.bytes) === Number(tailBefore?.bytes)
     && Number(tailTruncated?.bytes) < Number(tailLocked?.bytes)
+  const registeredLock = city.truncationLock?.mode === 'ACCESS EXCLUSIVE'
+    && city.truncationLock?.attempt === 'non-blocking'
+    && /gives up.*space.*not returned/iu.test(city.truncationLock?.consequence ?? '')
   return [
     result(
       'VACUUM/interior-space-stays-in-relation',
@@ -1156,11 +1163,11 @@ async function checkVacuumReclaim(pgBin, psql, query, registry, port) {
     ),
     result(
       'registry/vacuum-truncation-lock',
-      'the city says real truncation needs a lock; this facet must be in the vacuumReclaim registry owner',
+      'vacuumReclaim registers ACCESS EXCLUSIVE, the non-blocking attempt, and the no-lock/no-space-return consequence',
       lockDemonstrated
-        ? 'server demonstrated the lock requirement, but CLAIM_VALUES.vacuumReclaim does not register it'
+        ? 'server demonstrated that VACUUM skipped truncation while ACCESS SHARE prevented the non-blocking ACCESS EXCLUSIVE attempt'
         : 'server did not complete the controlled lock observation',
-      /lock/iu.test(JSON.stringify(city)),
+      lockDemonstrated && registeredLock,
     ),
   ]
 }

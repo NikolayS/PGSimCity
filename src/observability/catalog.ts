@@ -2,7 +2,7 @@
  * THE INSTRUMENT CATALOG
  *
  * Every name in this file targets the PostgreSQL 18 major line and was checked
- * against its manual; default-value claims use the reviewed 18.3 release. If a
+ * against its manual; default-value claims use the reviewed 18.4 release. If a
  * column, view, function or enum value appears here, it exists. Where a name
  * changed between releases the change is recorded in `version`, because a
  * reader on 15 who copies an 18 query and gets "column does not exist" has been

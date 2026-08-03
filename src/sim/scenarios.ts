@@ -16,6 +16,7 @@
  *   replica.standby, lock.manager, proc.array, clog.slru
  * ==========================================================================*/
 
+import { CLAIM_VALUES } from '../core/claims'
 import type { ScenarioDef } from '../core/types'
 
 /** A beat remains readable for this many seconds on the scenario clock. */
@@ -179,8 +180,8 @@ export const SCENARIOS: ScenarioDef[] = [
       [34, 'HOT is the quiet hero', 'A Heap-Only Tuple update keeps the new version on the same page and creates no new ordinary-index entries. In PostgreSQL 18, changed columns covered only by a summarizing index such as BRIN do not block HOT, although that summary may still need maintenance. Postgres can then prune dead heap versions during ordinary page access, with no vacuum at all. That is why accounts stays lean and sessions does not.'],
       [52, 'Bloat is not just size', 'The table is physically growing. Sequential scans now read more pages for the same live rows, and non-HOT churn can bloat indexes too. HOT updates create no new ordinary-index tuple-pointer entries, although PostgreSQL 18 may still maintain a BRIN summary. Either way, a larger working set competes for cache as well as disk.'],
       [70, 'Autovacuum comes back on', 'The scenario turns autovacuum on now. The launcher wakes and dispatches a worker down the violet road — and it is the worker, not the launcher, that reads the dead-row statistics and compares them with a threshold based on the separate pg_class.reltuples planner estimate. PostgreSQL 18 caps that threshold at 100 million.'],
-      [88, 'What the modeled worker does', 'The city runs heap scan, one aggregate pass per declared index, heap cleanup and a fixed truncate phase, charging representative page I/O. Its truncation uses a tail-density heuristic; it does not model ACCESS EXCLUSIVE acquisition or another session denying that lock. In this busy relation the heuristic normally leaves the file size unchanged.'],
-      [112, 'Space is reused, not returned', 'PostgreSQL normally records reclaimed space for reuse inside the table. The city represents this only as aggregate spare capacity that can delay relation extension; it has no per-page FSM entries or placement path. What you want in either case is for bloat to plateau instead of climbing.'],
+      [88, 'What the modeled worker does', `${CLAIM_VALUES.vacuumReclaim.rule} The city runs heap scan, one aggregate pass per declared index, heap cleanup and a fixed truncate phase, charging representative page I/O. Its truncation uses a tail-density heuristic; it does not model that lock attempt or another session denying it. In this busy relation the heuristic normally leaves the file size unchanged.`],
+      [112, 'Space is reused, not returned', `${CLAIM_VALUES.vacuumReclaim.rule} The city represents reclaimed space only as aggregate spare capacity that can delay relation extension; it has no per-page FSM entries or placement path. What you want in either case is for bloat to plateau instead of climbing.`],
       [126, 'Tune it up, not down', 'The defaults are conservative for 2005 hardware. Lower autovacuum_vacuum_scale_factor on big tables, raise autovacuum_max_workers and the cost limits. Vacuum that runs often is cheap; vacuum that runs rarely is an outage.'],
     ],
   },
@@ -338,7 +339,7 @@ export const SCENARIOS: ScenarioDef[] = [
       [16, 'Read the plan tree', 'Above the backend row, each running query shows its plan, lighting up from the leaves toward the root. That is the real order of execution: children produce rows, parents consume them. Nothing runs until something below it has emitted a tuple.'],
       [34, 'PostgreSQL can choose differently', 'A real PostgreSQL planner may prefer a sequential scan when a query touches most of a table, using cost settings and statistics. The city does not model that decision: the statement kind already selected the template before the displayed cost cards are drawn.'],
       [56, 'The bitmap template is fixed too', 'PostgreSQL can choose a bitmap scan between plain index access and a full sweep. Here, Bitmap Heap Scan appears only in the fixed DELETE template; no selectivity or cost crossover can make the city switch to it.'],
-      [74, 'The pool limits pollution', 'A sequential scan of a relation larger than a quarter of shared_buffers uses the bulk-read strategy. In PostgreSQL 18 it starts at 256 KiB, grows with io_combine_limit × effective_io_concurrency, and is capped; PostgreSQL 18.3 defaults yield about 2.25 MiB with 8 KiB blocks. The ring limits cache pollution but does not guarantee that no hot page is displaced.'],
+      [74, 'The pool limits pollution', 'A sequential scan of a relation larger than a quarter of shared_buffers uses the bulk-read strategy. In PostgreSQL 18 it starts at 256 KiB, grows with io_combine_limit × effective_io_concurrency, and is capped; PostgreSQL 18 defaults yield about 2.25 MiB with 8 KiB blocks. The ring limits cache pollution but does not guarantee that no hot page is displaced.'],
       [94, 'Try the other direction', 'Drag the seq scan ratio down and watch the workload mix produce fewer modeled reads while the index structures light up. Offered TPS is unchanged; achieved TPS remains a separate counter.'],
     ],
   },

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   checkDiagnosticSql,
   checkGucContexts,
+  checkVersion,
   compareSetting,
   diagnosticSqlForMajor,
   expectedForMajor,
@@ -46,6 +47,24 @@ describe('PostgreSQL oracle claim registry', () => {
         { verdict: 'UNEXPECTED MATCH' },
       ],
     })
+
+    const versionRegistry = {
+      target: {
+        major: 18,
+        referenceMinor: 4,
+        referenceLabel: 'PostgreSQL 18.4',
+      },
+    }
+    const queryFor = (serverVersion, serverVersionNum) => async () => [{
+      server_version: serverVersion,
+      server_version_num: serverVersionNum,
+    }]
+    await expect(checkVersion(queryFor('18.3', '180003'), versionRegistry, 18))
+      .resolves.toContainEqual(expect.objectContaining({ verdict: 'MATCH' }))
+    await expect(checkVersion(queryFor('18.4', '180004'), versionRegistry, 18))
+      .resolves.toContainEqual(expect.objectContaining({ verdict: 'MATCH' }))
+    await expect(checkVersion(queryFor('18.5', '180005'), versionRegistry, 18))
+      .resolves.toContainEqual(expect.objectContaining({ verdict: 'DIVERGES' }))
   })
 
   it('discovers every check family through the registered oracle sources', async () => {

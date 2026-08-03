@@ -131,13 +131,13 @@ export const POSTGRESQL_ORACLE_CLAIMS = {
     {
       id: 'postgres-default/join_collapse_limit',
       setting: 'join_collapse_limit',
-      cityClaim: 'PostgreSQL 18.3 default',
+      cityClaim: 'PostgreSQL 18 default',
       expected: expected(8, '', 'number'),
     },
     {
       id: 'postgres-default/geqo_threshold',
       setting: 'geqo_threshold',
-      cityClaim: 'PostgreSQL 18.3 default',
+      cityClaim: 'PostgreSQL 18 default',
       expected: expected(12, '', 'number'),
     },
     {
