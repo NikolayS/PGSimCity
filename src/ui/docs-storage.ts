@@ -1929,7 +1929,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     sections: [
       {
         heading: 'What it actually does',
-        body: 'Backends write log lines to stderr. With `logging_collector = on`, a dedicated process reads that pipe and writes rotated files under `log_directory`, which is what makes the server log survive restarts, rotate by size and age, and not interleave badly across processes. `log_destination` chooses the format: `stderr`, `csvlog`, or `jsonlog` (added in PostgreSQL 15), the latter two being the ones you want if anything machine-readable consumes the server log.',
+        body: 'Backends write log lines to stderr. With `logging_collector = on`, a dedicated process reads that pipe and writes rotated files under `log_directory`, which is what makes the server log survive restarts, rotate by size and age, and not interleave badly across processes. Enabling it is a maintenance change: `logging_collector` has postmaster context, so set it in configuration and restart the server; a reload alone leaves `pending_restart = t`. `log_destination` chooses the format: `stderr`, `csvlog`, or `jsonlog` (added in PostgreSQL 15), the latter two being the ones you want if anything machine-readable consumes the server log.',
       },
       {
         heading: 'log_line_prefix comes first',
@@ -1937,7 +1937,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'The four settings that matter',
-        body: '`log_min_duration_statement` logs any statement slower than a threshold; start at 1000 ms and walk it down, never set it to 0 on a busy system. `auto_explain` (a `shared_preload_libraries` module) logs the actual plan for those slow statements, which turns "this query was slow" into "this query chose a nested loop because the estimate was 1 row and reality was 400,000". `log_checkpoints` (on by default since PostgreSQL 15) prints the write/sync split of every checkpoint. `log_lock_waits` — off by default, turn it on — logs any session that waits longer than `deadlock_timeout` for a lock, with the blocker.',
+        body: '`log_min_duration_statement` logs any statement slower than a threshold; start at 1000 ms and walk it down, never set it to 0 on a busy system. For cluster-wide `auto_explain`, first add `auto_explain` to `shared_preload_libraries` and restart; only then will its duration threshold capture plans from every session. That turns "this query was slow" into "this query chose a nested loop because the estimate was 1 row and reality was 400,000". `log_checkpoints` (on by default since PostgreSQL 15) prints the write/sync split of every checkpoint. `log_lock_waits` — off by default, turn it on — logs any session that waits longer than `deadlock_timeout` for a lock, with the blocker.',
       },
       {
         heading: 'What you would see in production',
@@ -1992,7 +1992,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'The views worth knowing by heart',
-        body: '`pg_stat_activity` for "what is happening now", filtered on `state <> \'idle\'` and sorted by `xact_start`. `pg_stat_user_tables` for dead tuples, last autovacuum and the seq-scan-versus-index-scan ratio. `pg_stat_io` (PostgreSQL 16 and later) for who is doing the reads and writes, broken down by backend type. `pg_stat_replication` on the primary and `pg_stat_wal_receiver` on the standby. `pg_locks` joined to `pg_stat_activity` when things are blocked. And `pg_stat_statements`, which is an extension rather than core, for normalised per-query totals — install it on every cluster you own.',
+        body: '`pg_stat_activity` for "what is happening now", filtered on `state <> \'idle\'` and sorted by `xact_start`. `pg_stat_user_tables` for dead tuples, last autovacuum and the seq-scan-versus-index-scan ratio. `pg_stat_io` (PostgreSQL 16 and later) for who is doing the reads and writes, broken down by backend type. `pg_stat_replication` on the primary and `pg_stat_wal_receiver` on the standby. `pg_locks` joined to `pg_stat_activity` when things are blocked. And `pg_stat_statements` for normalised per-query totals — add it to `shared_preload_libraries`, restart, then run `CREATE EXTENSION pg_stat_statements` in every database where you will query it. Creating the extension without the preload produces an error instead of collecting statistics.',
       },
       {
         heading: 'Things that will catch you',
@@ -2305,7 +2305,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What to do about it',
-        body: 'Run representative read traffic on the standby before you need it — this is the strongest argument for using standbys for reporting even when you do not need the capacity. Use `pg_prewarm`, whose `autoprewarm` background worker periodically dumps the list of cached blocks and restores them on startup, which also fixes the unrelated problem of a cold cache after a restart. And when you plan a failover, plan for a warmup window rather than expecting instant parity.',
+        body: 'Run representative read traffic on the standby before you need it — this is the strongest argument for using standbys for reporting even when you do not need the capacity. To enable automatic cache restoration, add `pg_prewarm` to `shared_preload_libraries` on each standby and restart it. `CREATE EXTENSION pg_prewarm` makes the manual prewarm function available, but creating the extension alone does not start autoprewarm. Its background worker periodically dumps the list of cached blocks and restores them on startup, which also fixes the unrelated problem of a cold cache after a restart. And when you plan a failover, plan for a warmup window rather than expecting instant parity.',
       },
       {
         heading: 'While it is a standby',

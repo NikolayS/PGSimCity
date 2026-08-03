@@ -350,6 +350,29 @@ async function checkGucDefaults(query, registry, major) {
   return results
 }
 
+export async function checkGucContexts(query, registry, major) {
+  const claims = registry.claims.gucContexts
+  const names = [...new Set(claims.map((claim) => claim.setting))]
+  const rows = await query(`
+    SELECT name, context
+      FROM pg_catalog.pg_settings
+     WHERE name IN (${names.map(sqlLiteral).join(', ')})`)
+  const byName = new Map(rows.map((row) => [row.name, row]))
+  const results = []
+  for (const claim of claims) {
+    const expected = expectedForMajor(claim, major)
+    if (!expected) continue
+    const server = byName.get(claim.setting)
+    results.push(result(
+      `GUC-context/${claim.setting}`,
+      `${claim.cityClaim}: ${expected.context}`,
+      server?.context ?? 'setting is absent',
+      server?.context === expected.context,
+    ))
+  }
+  return results
+}
+
 async function relationColumns(query, relation) {
   return query(`
     SELECT a.attname
@@ -700,6 +723,7 @@ async function runChecks(server, registry, major) {
   const checks = [
     ['version', () => checkVersion(server.query, registry, major)],
     ['GUC defaults', () => checkGucDefaults(server.query, registry, major)],
+    ['GUC contexts', () => checkGucContexts(server.query, registry, major)],
     ['catalog shapes', () => checkCatalog(server.psql, server.query, registry, major)],
     ['wait events', () => checkWaitEvents(server.query, registry, major)],
     ['checkpoint timer skip', () => checkCheckpointTimerSkip(server.psql, server.query, registry, major)],

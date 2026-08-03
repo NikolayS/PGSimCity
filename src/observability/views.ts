@@ -17,7 +17,7 @@ import { PG_PAGE_BYTES, poolBytes, poolPages } from '../core/types'
 import type { BackendSim, PhysicalStandbyState, SimState, TableSim, VacPhase } from '../core/types'
 import { configuredSynchronousStandby } from '../core/replication'
 import { CLAIM_VALUES } from '../core/claims'
-import { POSTGRESQL_WAIT_EVENTS } from '../spine/postgresql-oracle'
+import { postgresGucContext, POSTGRESQL_WAIT_EVENTS } from '../spine/postgresql-oracle'
 import { N_TABLES } from '../world/layout'
 import { fmtBytes, fmtLsn, fmtNum } from '../core/util'
 import type { Collector } from './collector'
@@ -1067,24 +1067,24 @@ const settings: ProjectionFn = (s) => {
       { key: 'context', label: 'context' },
     ],
     rows: [
-      row('shared_buffers', String(poolPages(k)), '8kB', 'postmaster'),
-      row('wal_buffers', String(s.wal.bufferCapacity / PG_PAGE_BYTES), '8kB', 'postmaster'),
-      row('max_connections', String(s.maxConnections), '', 'postmaster'),
-      row('checkpoint_timeout', String(Math.round(k.checkpointTimeout)), 's', 'sighup'),
-      row('checkpoint_completion_target', k.checkpointCompletionTarget.toFixed(2), '', 'sighup'),
-      row('max_wal_size', String(Math.round(k.maxWalSize)), 'MB', 'sighup'),
-      row('bgwriter_lru_maxpages', k.bgwriterEnabled ? String(k.bgwriterLruMaxpages) : '0', '', 'sighup', k.bgwriterEnabled ? '' : 'warn'),
-      row('bgwriter_delay', '200', 'ms', 'sighup'),
-      row('synchronous_commit', k.synchronousCommit, '', 'user'),
-      row('wal_level', k.walLevel, '', 'postmaster'),
-      row('full_page_writes', k.fullPageWrites ? 'on' : 'off', '', 'sighup', k.fullPageWrites ? '' : 'crit'),
-      row('autovacuum', k.autovacuum ? 'on' : 'off', '', 'sighup', k.autovacuum ? '' : 'crit'),
-      row('autovacuum_vacuum_scale_factor', k.autovacuumScaleFactor.toFixed(2), '', 'sighup'),
-      row('autovacuum_max_workers', '3', '', 'postmaster'),
-      row('track_io_timing', 'off', '', 'superuser', 'warn'),
+      row('shared_buffers', String(poolPages(k)), '8kB', postgresGucContext('shared_buffers')),
+      row('wal_buffers', String(s.wal.bufferCapacity / PG_PAGE_BYTES), '8kB', postgresGucContext('wal_buffers')),
+      row('max_connections', String(s.maxConnections), '', postgresGucContext('max_connections')),
+      row('checkpoint_timeout', String(Math.round(k.checkpointTimeout)), 's', postgresGucContext('checkpoint_timeout')),
+      row('checkpoint_completion_target', k.checkpointCompletionTarget.toFixed(2), '', postgresGucContext('checkpoint_completion_target')),
+      row('max_wal_size', String(Math.round(k.maxWalSize)), 'MB', postgresGucContext('max_wal_size')),
+      row('bgwriter_lru_maxpages', k.bgwriterEnabled ? String(k.bgwriterLruMaxpages) : '0', '', postgresGucContext('bgwriter_lru_maxpages'), k.bgwriterEnabled ? '' : 'warn'),
+      row('bgwriter_delay', '200', 'ms', postgresGucContext('bgwriter_delay')),
+      row('synchronous_commit', k.synchronousCommit, '', postgresGucContext('synchronous_commit')),
+      row('wal_level', k.walLevel, '', postgresGucContext('wal_level')),
+      row('full_page_writes', k.fullPageWrites ? 'on' : 'off', '', postgresGucContext('full_page_writes'), k.fullPageWrites ? '' : 'crit'),
+      row('autovacuum', k.autovacuum ? 'on' : 'off', '', postgresGucContext('autovacuum'), k.autovacuum ? '' : 'crit'),
+      row('autovacuum_vacuum_scale_factor', k.autovacuumScaleFactor.toFixed(2), '', postgresGucContext('autovacuum_vacuum_scale_factor')),
+      row('autovacuum_max_workers', '3', '', postgresGucContext('autovacuum_max_workers')),
+      row('track_io_timing', 'off', '', postgresGucContext('track_io_timing'), 'warn'),
     ],
     caption:
-      'track_io_timing is off — which is the PostgreSQL default, and the reason blk_read_time, blk_write_time and every *_time column in pg_stat_io read zero on most servers you will ever touch. You can count I/Os without it. You cannot say whether they hurt.',
+      'City controls take effect immediately only in the model. On a real server, user and superuser settings can take effect with SET, sighup settings need a reload, and postmaster settings need a restart and maintenance window. PostgreSQL 18 changed autovacuum_max_workers to sighup; PostgreSQL 17 and earlier report postmaster. track_io_timing is off by default, so blk_read_time, blk_write_time and every *_time column in pg_stat_io usually read zero: you can count I/Os, but cannot say whether they hurt.',
   }
 }
 

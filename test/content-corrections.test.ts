@@ -83,6 +83,76 @@ describe('PostgreSQL 18 content corrections', () => {
     expect(statements.version).toMatch(/PostgreSQL 13.*toplevel.*JIT.*stats_since/is)
   })
 
+  it('makes every projected setting context operational and version-correct', () => {
+    const catalog = CATALOG.find((entry) => entry.id === 'pg_settings')!
+    const sim = createSim(createBus())
+    const projection = PROJECTIONS.settings(sim.state, createCollector(sim), 'total')
+    const contexts = Object.fromEntries(projection.rows.map((row) => {
+      const cell = row.cells.context
+      return [row.key, typeof cell === 'string' ? cell : cell.v]
+    }))
+
+    expect(catalog.coverageNote).not.toContain('exactly as a SET or a reload would')
+    expect(catalog.coverageNote).toMatch(/model.*immediately/i)
+    expect(catalog.coverageNote).toMatch(/context.*SET.*reload.*restart/is)
+    expect(contexts).toEqual({
+      shared_buffers: 'postmaster',
+      wal_buffers: 'postmaster',
+      max_connections: 'postmaster',
+      checkpoint_timeout: 'sighup',
+      checkpoint_completion_target: 'sighup',
+      max_wal_size: 'sighup',
+      bgwriter_lru_maxpages: 'sighup',
+      bgwriter_delay: 'sighup',
+      synchronous_commit: 'user',
+      wal_level: 'postmaster',
+      full_page_writes: 'sighup',
+      autovacuum: 'sighup',
+      autovacuum_vacuum_scale_factor: 'sighup',
+      autovacuum_max_workers: 'sighup',
+      track_io_timing: 'superuser',
+    })
+    expect(projection.caption).toMatch(/PostgreSQL 18.*autovacuum_max_workers.*sighup/is)
+    expect(projection.caption).toMatch(/PostgreSQL 17 and earlier.*postmaster/is)
+  })
+
+  it('separates crash-recovery server-log lines from client-only messages', () => {
+    const postmaster = DOCS_MEMORY.find((doc) => doc.id === 'postmaster')!
+    const production = postmaster.sections.find(
+      (section) => section.heading === 'What you would see in production',
+    )!.body
+
+    expect(production).toContain('client backend (PID …) was terminated by signal 9: Killed')
+    expect(production).toContain('all server processes terminated; reinitializing')
+    expect(production).toContain('automatic recovery in progress')
+    expect(production).toContain('redo starts at')
+    expect(production).toContain('redo done at')
+    expect(production).toContain('database system is ready to accept connections')
+    expect(production).toMatch(/surviving clients.*WARNING: terminating connection because of crash/is)
+    expect(production).toMatch(/reconnect.*during recovery.*FATAL: the database system is in recovery mode/is)
+  })
+
+  it('includes every preload and restart step before recommending gated features', () => {
+    const logger = DOCS_STORAGE.find((doc) => doc.id === 'logger')!
+    const stats = DOCS_STORAGE.find((doc) => doc.id === 'stats.collector')!
+    const standbyBuffers = DOCS_STORAGE.find((doc) => doc.id === 'replica.buffers')!
+    const planTree = DOCS_MEMORY.find((doc) => doc.id === 'planner.plantree')!
+    const statements = CATALOG.find((entry) => entry.id === 'pg_stat_statements')!
+    const loggerCopy = logger.sections.map((section) => section.body).join('\n')
+    const statsCopy = stats.sections.map((section) => section.body).join('\n')
+    const standbyCopy = standbyBuffers.sections.map((section) => section.body).join('\n')
+    const planCopy = planTree.sections.map((section) => section.body).join('\n')
+
+    expect(loggerCopy).toMatch(/logging_collector.*postmaster.*restart/is)
+    expect(loggerCopy).toContain('pending_restart = t')
+    expect(loggerCopy).toMatch(/auto_explain.*shared_preload_libraries.*restart/is)
+    expect(planCopy).toMatch(/auto_explain.*shared_preload_libraries.*restart/is)
+    expect(statsCopy).toMatch(/pg_stat_statements.*shared_preload_libraries.*restart.*CREATE EXTENSION pg_stat_statements/is)
+    expect(statements.coverageNote).toMatch(/shared_preload_libraries.*restart.*CREATE EXTENSION pg_stat_statements/is)
+    expect(standbyCopy).toMatch(/add `pg_prewarm` to `shared_preload_libraries` on each standby and restart/is)
+    expect(standbyCopy).toMatch(/CREATE EXTENSION pg_prewarm.*alone.*does not start autoprewarm/is)
+  })
+
   it('does not overclaim what cumulative statistics prove', () => {
     expect(diagnosticCopy).not.toContain('every miss is a real trip to storage')
     expect(diagnosticCopy).not.toContain('is on CPU — that is work')
