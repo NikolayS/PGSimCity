@@ -9,6 +9,7 @@ import { N_WAL_SEG_SLOTS } from '../core/types'
 import type { SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, damp, fmtBytes, fmtLsn, lerp, makeRng, smoothstep } from '../core/util'
 import { ANCHOR, TABLES, routePoint, routeTangent, walSegZ } from './layout'
+import { markTextPlane, markTextTexture } from './text-plane'
 
 /* ============================================================================
  * THE WAL DISTRICT — why there is a log at all.
@@ -135,6 +136,13 @@ const FACE_U: Record<Facing, [number, number, number]> = {
   south: [0, 1, 0],
   up: [0, 0, -1],
 }
+const FACE_N: Record<Facing, [number, number, number]> = {
+  west: [-1, 0, 0],
+  east: [1, 0, 0],
+  north: [0, 0, -1],
+  south: [0, 0, 1],
+  up: [0, 1, 0],
+}
 
 /* ============================================================================
  * SIGNAGE — one canvas atlas, one merged geometry, one draw call for every
@@ -156,6 +164,12 @@ class Signage {
   private readonly uv: number[] = []
   private readonly col: number[] = []
   private readonly idx: number[] = []
+  private readonly planes: {
+    text: string
+    center: [number, number, number]
+    normal: [number, number, number]
+    up: [number, number, number]
+  }[] = []
   private quads = 0
 
   geometry: THREE.BufferGeometry | null = null
@@ -214,6 +228,7 @@ class Signage {
     const qw = (height * w) / SIGN_ROW
     const r = FACE_R[facing]
     const u = FACE_U[facing]
+    const n = FACE_N[facing]
     const hw = qw / 2
     const hh = height / 2
     // The texture row is full-width; the quad only covers the inked span.
@@ -230,6 +245,13 @@ class Signage {
       [-hw, hh, u0, v1],
     ]
     _c.setHex(color).multiplyScalar(bright)
+    markTextTexture(this.texture, text)
+    this.planes.push({
+      text,
+      center: [x, y, z],
+      normal: [n[0], n[1], n[2]],
+      up: [u[0], u[1], u[2]],
+    })
     const base = this.quads * 4
     for (const [a, b, cu, cv] of corners) {
       this.pos.push(x + r[0] * a + u[0] * b, y + r[1] * a + u[1] * b, z + r[2] * a + u[2] * b)
@@ -260,6 +282,9 @@ class Signage {
     const mesh = new THREE.Mesh(g, mat)
     mesh.renderOrder = 5
     mesh.raycast = () => {}
+    for (const plane of this.planes) {
+      markTextPlane(mesh, plane.text, plane.center, plane.normal, plane.up)
+    }
     this.geometry = g
     this.mesh = mesh
     this.colorAttr = ca
@@ -1051,7 +1076,7 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
   const IX_BEACON = 5
   const IX_SLOTWARN = 6
 
-  signs.plate('walsender', WS[0], 4.9, WS[2] + 10.1, 'south', 1.1, COLOR.replication, 1.0)
+  signs.plate('walsender', WS[0], 8.2, WS[2] + 10.1, 'south', 1.1, COLOR.replication, 1.0)
   signs.plate('standby_a', WS[0] - 4, 7.8, WS[2] + 7.8, 'south', 0.43, COLOR.replication, 0.64)
   signs.plate('standby_b', WS[0], 7.8, WS[2] + 7.8, 'south', 0.43, COLOR.replication, 0.64)
   signs.plate('logical', WS[0] + 4, 7.8, WS[2] + 7.8, 'south', 0.43, COLOR.toast, 0.64)

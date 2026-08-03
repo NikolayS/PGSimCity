@@ -7,6 +7,7 @@ import { clamp, clamp01, fmtBytes, fmtLsn, fmtNum, fmtPct, makeRng } from '../co
 import { DECK_GATES } from './access'
 import type { DeckGate } from './access'
 import { ANCHOR, CITY, TABLES, bufferTilePos } from './layout'
+import { markTextPlane, markTextTexture } from './text-plane'
 
 export const SHARED_BUFFER_SAMPLE_PLATE_LABEL = `SHARED_BUFFERS · REPRESENTATIVE SAMPLE · UP TO ${CLAIM_VALUES.bufferSample.capacityFrames.toLocaleString('en-US')} FRAMES`
 
@@ -338,6 +339,8 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
   const deckPlan = new THREE.Mesh(gDeckPlan, mDeckTop)
   deckPlan.rotation.x = -Math.PI / 2
   deckPlan.position.set(0, DECK_TOP + 0.05, 0)
+  markTextTexture(deckTex, 'SHARED MEMORY SEGMENT floor plan')
+  markTextPlane(deckPlan, 'SHARED MEMORY SEGMENT floor plan')
   deck.add(deckPlan)
 
   // Continuous indigo rim strip at the deck edge — the plaza's outline at night.
@@ -726,6 +729,8 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
   const readout = makeCanvasPanel(1024, 256, 42, 10.5)
   keep(readout)
   readout.mesh.position.set(0, 15.5, -55)
+  markTextTexture(readout.texture, 'shared_buffers live readout')
+  markTextPlane(readout.mesh, 'shared_buffers live readout', [0, 0, 0], [0, 0, 1], [0, 1, 0], false)
   bufGroup.add(readout.mesh)
 
   /* ====================================================== 3. WAL BUFFERS */
@@ -857,7 +862,9 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
       const label = new THREE.Mesh(gLabel, mat)
       label.scale.set(7.6, 7.6 / Math.max(1, img.width / img.height), 1)
       label.position.set(EXTERNAL_X[i], MOUNT_Y + 0.8, -1.15)
+      label.rotation.y = Math.PI
       label.raycast = () => {}
+      markTextPlane(label, labels[i])
       procGroup.add(label)
     }
   }
@@ -1051,6 +1058,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
       field.scale.set(4.3, 4.3 / Math.max(1, fieldImg.width / fieldImg.height), 1)
       field.position.set(x, MOUNT_Y + 1.3, 2.05)
       field.raycast = () => {}
+      markTextPlane(field, fields[i])
       statsGroup.add(field)
 
       const homeTex = theme.textTexture(homes[i], { size: 44, color: '#8fa5c4', padding: 16 })
@@ -1060,6 +1068,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
       home.scale.set(4.3, 4.3 / Math.max(1, homeImg.width / homeImg.height), 1)
       home.position.set(x, MOUNT_Y + 0.55, 2.05)
       home.raycast = () => {}
+      markTextPlane(home, homes[i])
       statsGroup.add(home)
     }
   }
@@ -2043,7 +2052,7 @@ function makeCanvasPanel(w: number, h: number, worldW: number, worldH: number): 
     transparent: true,
     toneMapped: false,
     depthWrite: false,
-    side: THREE.DoubleSide,
+    side: THREE.FrontSide,
   })
   const mesh = new THREE.Mesh(geo, mat)
   mesh.renderOrder = 4

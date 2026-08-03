@@ -1299,6 +1299,7 @@ export function createTheme(): ThemeApi {
     drawText(cv, text, opts, mode)
 
     const tex = new THREE.CanvasTexture(cv)
+    tex.userData.pgText = [text]
     tex.colorSpace = THREE.SRGBColorSpace
     tex.anisotropy = 4
     tex.needsUpdate = true

@@ -5,6 +5,7 @@ import { configuredSynchronousStandby } from '../core/replication'
 import type { SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, damp, fmtBytes, fmtDuration, fmtLsn } from '../core/util'
 import { ANCHOR, CONTINUITY } from './layout'
+import { markTextPlane } from './text-plane'
 
 /* ============================================================================
  * THE CONTINUITY QUARTER — backups and point-in-time recovery.
@@ -168,7 +169,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
       opacity,
       depthWrite: false,
       toneMapped: false,
-      side: THREE.DoubleSide,
+      side: THREE.FrontSide,
     })
     mats.push(m)
     const mesh = new THREE.Mesh(unitPlane, m)
@@ -177,6 +178,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     mesh.rotation.y = yaw
     mesh.renderOrder = 3
     mesh.raycast = () => {}
+    markTextPlane(mesh, text)
     host.add(mesh)
     return mesh
   }
@@ -738,14 +740,14 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   box([RJ[0], 5, RJ[2] - 10, 30, 9, 0.7], 'dim')
   plate('pg_rewind', RJ[0] - 11, 10.6, RJ[2], 0, 1.8, COLOR.warn, 0.9, gRejoin)
   plate('pg_basebackup -R', RJ[0] + 11, 10.6, RJ[2], 0, 1.8, COLOR.storage, 0.9, gRejoin)
-  plate('REJOIN BAY', RJ[0], 8.0, RJ[2] - 10.5, 0, 2.0, COLOR.ink, 0.9, gRejoin)
+  plate('REJOIN BAY', RJ[0], 8.0, RJ[2] - 10.5, Math.PI, 2.0, COLOR.ink, 0.9, gRejoin)
   plate(
     'find the fork · discard the old tail · follow the new timeline',
-    RJ[0], 5.6, RJ[2] - 10.5, 0, 1.2, COLOR.inkDim, 0.72,
+    RJ[0], 5.6, RJ[2] - 10.5, Math.PI, 1.2, COLOR.inkDim, 0.72,
   )
   plate(
     'needs the old data directory + checksums or wal_log_hints + retained WAL',
-    RJ[0], 3.6, RJ[2] - 10.5, 0, 1.2, COLOR.inkDim, 0.72,
+    RJ[0], 3.6, RJ[2] - 10.5, Math.PI, 1.2, COLOR.inkDim, 0.72,
   )
   const rewindBar = lamp(COLOR.warn, 1.6, 1, 0.65, 4, RJ[0] - 11, 7.4, RJ[2], gRejoin)
   const rewindFailure = lamp(COLOR.crit, 1.8, 2.2, 2.2, 2.2, RJ[0] - 11, 4.6, RJ[2], gRejoin)

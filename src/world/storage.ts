@@ -4,6 +4,7 @@ import { N_VAC_WORKERS } from '../core/types'
 import type { FlowRequest, SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, fmtBytes, fmtNum, fmtPct, makeRng } from '../core/util'
 import { ANCHOR, CITY, N_TABLES, TABLES, indexPos, rid, routeCurve, tableX } from './layout'
+import { markTextPlane, markTextTexture } from './text-plane'
 
 export function diskArrayReadout(s: SimState): string {
   return `${fmtNum(s.stats.ioReadPerSec)} read pages/s · ${fmtNum(s.stats.ioWritePerSec)} sampled write frames/s · fsync ${
@@ -316,6 +317,8 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
   const gFloor = keep(new THREE.PlaneGeometry(floorW, floorD).rotateX(-Math.PI / 2))
   const floor = new THREE.Mesh(gFloor, mFloor)
   floor.position.set(floorCx, FLOOR_Y + 0.02, floorCz)
+  markTextTexture(floorTex, 'DATA DIRECTORY floor plan')
+  markTextPlane(floor, 'DATA DIRECTORY floor plan', [0, 0, 0], [0, 1, 0], [0, 0, -1])
   dirGroup.add(floor)
 
   // The printed plan is authored for night and must remain readable, so the
@@ -1003,6 +1006,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
       label.position.set(0, CITY.durability.y + 1.8, side * (d / 2 + 0.2))
       label.rotation.y = side < 0 ? Math.PI : 0
       label.raycast = () => {}
+      markTextPlane(label, 'MEMORY ENDS  /  DISK BEGINS')
       durabilityGroup.add(label)
     }
   }

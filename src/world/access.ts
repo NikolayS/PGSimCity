@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { COLOR } from '../core/theme'
 import type { SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
 import { CITY, ROUTES, routeCurve } from './layout'
+import { markTextPlane, markTextTexture } from './text-plane'
 
 /* ============================================================================
  * THE ACCESS DISTRICT — how a person on foot gets anywhere.
@@ -439,6 +440,11 @@ class SignAtlas {
   private readonly uv: number[] = []
   private readonly col: number[] = []
   private readonly idx: number[] = []
+  private readonly planes: {
+    text: string
+    center: [number, number, number]
+    normal: [number, number, number]
+  }[] = []
 
   constructor() {
     this.canvas.width = SIGN_W
@@ -506,6 +512,8 @@ class SignAtlas {
     const ox = x + n[0] * lift
     const oy = y + n[1] * lift
     const oz = z + n[2] * lift
+    markTextTexture(this.texture, text)
+    this.planes.push({ text, center: [ox, oy, oz], normal: [n[0], n[1], n[2]] })
     const corners: [number, number, number, number][] = [
       [-hw, -hh, u0, v0], [hw, -hh, u1, v0], [hw, hh, u1, v1], [-hw, hh, u0, v1],
     ]
@@ -548,6 +556,9 @@ class SignAtlas {
     mesh.name = 'access.signs'
     mesh.renderOrder = 5
     mesh.raycast = () => {}
+    for (const plane of this.planes) {
+      markTextPlane(mesh, plane.text, plane.center, plane.normal)
+    }
     return mesh
   }
 }
@@ -677,7 +688,16 @@ export const createAccess: AccessFactory = (ctx: WorldContext): AccessModule => 
    * the axis the board runs along; it faces the other one. Base at `y`, text at
    * 2.05 m — eye height for a 1.7 m walker at twenty paces.
    */
-  function signBoard(text: string, x: number, y: number, z: number, span: Axis, w: number, color: number): void {
+  function signBoard(
+    text: string,
+    x: number,
+    y: number,
+    z: number,
+    span: Axis,
+    w: number,
+    color: number,
+    readFrom?: Facing,
+  ): void {
     const th = 0.44
     // 2.4 m of headroom under the board: it is a gantry over a footway, not a
     // beam to walk into.
@@ -692,16 +712,24 @@ export const createAccess: AccessFactory = (ctx: WorldContext): AccessModule => 
     if (span === 'x') {
       bSteel.box(x, top, z, w, th + 0.18, 0.12)
       bRimP.box(x, top - th / 2 - 0.13, z, w, 0.05, 0.14)
-      signs.plate2(text, x, top, z, '+z', '-z', th * 0.7, color, 1.3, 0.075)
+      if (readFrom) signs.plate(text, x, top, z, readFrom, th * 0.7, color, 1.3, 0.075)
+      else signs.plate2(text, x, top, z, '+z', '-z', th * 0.7, color, 1.3, 0.075)
     } else {
       bSteel.box(x, top, z, 0.12, th + 0.18, w)
       bRimP.box(x, top - th / 2 - 0.13, z, 0.14, 0.05, w)
-      signs.plate2(text, x, top, z, '+x', '-x', th * 0.7, color, 1.3, 0.075)
+      if (readFrom) signs.plate(text, x, top, z, readFrom, th * 0.7, color, 1.3, 0.075)
+      else signs.plate2(text, x, top, z, '+x', '-x', th * 0.7, color, 1.3, 0.075)
     }
   }
 
   /** A 2.4 m fingerpost. Each arm points the way it names. */
-  function fingerpost(x: number, y: number, z: number, arms: [string, number, Facing][]): void {
+  function fingerpost(
+    x: number,
+    y: number,
+    z: number,
+    arms: [string, number, Facing][],
+    readFrom?: Facing,
+  ): void {
     const H = 2.4
     bSteel.box(x, y + H / 2, z, 0.14, H, 0.14)
     bSteel.box(x, y + 0.06, z, 0.5, 0.12, 0.5)
@@ -711,7 +739,8 @@ export const createAccess: AccessFactory = (ctx: WorldContext): AccessModule => 
       const n = FACE_N[facing]
       bSteel.box(x + n[0] * 0.6, y + h, z + n[2] * 0.6, n[0] ? 1.2 : 0.09, 0.26, n[2] ? 1.2 : 0.09)
       const f: [Facing, Facing] = n[0] !== 0 ? ['+z', '-z'] : ['+x', '-x']
-      signs.plate2(text, x + n[0] * 0.66, y + h, z + n[2] * 0.66, f[0], f[1], 0.2, color, 1.3, 0.055)
+      if (readFrom) signs.plate(text, x + n[0] * 0.66, y + h, z + n[2] * 0.66, readFrom, 0.2, color, 1.3, 0.055)
+      else signs.plate2(text, x + n[0] * 0.66, y + h, z + n[2] * 0.66, f[0], f[1], 0.2, color, 1.3, 0.055)
       h -= 0.44
     }
   }
@@ -978,12 +1007,12 @@ export const createAccess: AccessFactory = (ctx: WorldContext): AccessModule => 
     surfaces.flat(apronX0, apronX1, zLo, zHi, floorY, 0.2)
     bRimS.box((apronX0 + apronX1) / 2, floorY + 0.04, zLo + 0.1, 12, 0.08, 0.14)
     bRimS.box((apronX0 + apronX1) / 2, floorY + 0.04, zHi - 0.1, 12, 0.08, 0.14)
-    signBoard('DATA DIRECTORY — FLOOR LEVEL, y = -52 m', apronX0 + 6, floorY, zLo + 0.6, 'x', 8, COLOR.storage)
+    signBoard('DATA DIRECTORY — FLOOR LEVEL, y = -52 m', apronX0 + 6, floorY, zLo + 0.6, 'x', 8, COLOR.storage, '+z')
     signBoard('SHARED MEMORY IS 52 m ABOVE YOU', apronX0 + 6, floorY, zHi - 0.6, 'x', 8, COLOR.shmem)
     fingerpost(apronX0 - 1.5, floorY, (zLo + zHi) / 2, [
       ['UNDER THE PLAZA  90 m', COLOR.shmem, '-x'],
       ['THE SURFACE  ▴ 52 m', COLOR.storage, '+x'],
-    ])
+    ], '-z')
 
     /* -- the lit path across the excavation floor -------------------------
      * From the foot of the stair to the underside of the plaza: 90 m of open

@@ -6,6 +6,7 @@ import { traceStopBit } from '../core/model-helpers'
 import { traceStageState } from '../core/trace-presentation'
 import { ANCHOR } from './layout'
 import { CONTROL_TRACE_ROUTES } from './control-center-plan'
+import { markTextPlane } from './text-plane'
 
 const TRACE_CYAN = 0x8fe5e7
 const ROUTE_SAMPLES = 72
@@ -232,6 +233,7 @@ export function createControlCenterWorld(ctx: WorldContext): ControlCenterWorldM
   const doorPlate = new THREE.Mesh(plateGeometry, plateMaterial)
   doorPlate.name = 'control-center:door-sign'
   doorPlate.position.set(0, 8.0, 12.72)
+  markTextPlane(doorPlate, 'CONTROL CENTER  ·  E')
   room.add(doorPlate)
   group.add(room)
 

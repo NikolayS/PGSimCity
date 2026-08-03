@@ -21,6 +21,7 @@ import {
 } from './slonik'
 import type { PlanBounds } from './slonik'
 import type { DistrictId, SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
+import { markTextPlane } from './text-plane'
 
 export function worldGroundReadout(s: SimState): string {
   return `${fmtNum(s.stats.tps, 0)} tps · ${s.stats.cacheHitPct.toFixed(1)}% cache hit · ${s.stats.runningBackends} active`
@@ -983,6 +984,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     mesh.position.set(cx, cy, cz)
     mesh.renderOrder = 3
     mesh.raycast = () => {}
+    markTextPlane(mesh, text)
     group.add(mesh)
   }
 

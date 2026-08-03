@@ -5,6 +5,7 @@ import type { BackendState, SimState, WorldFactory, WorldModule } from '../core/
 import { clamp, clamp01, damp, fmtNum, lerp, makeRng } from '../core/util'
 import { ANCHOR, CONDUIT, conduitX, rid, routeCurve } from './layout'
 import { OPACITY_TIER } from './storage'
+import { markTextPlane } from './text-plane'
 
 /* ============================================================================
  * CLIENTS — the application tier, the server boundary, and the postmaster.
@@ -445,7 +446,7 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
   poolerPlate.position.set(PB[0], 14.2, PB[2] + 0.45)
   const poolerPlateMaterial = poolerPlate.material as THREE.MeshBasicMaterial
   poolerPlateMaterial.color.setHex(0xffffff)
-  poolerPlateMaterial.side = THREE.DoubleSide
+  poolerPlateMaterial.side = THREE.FrontSide
   poolerPlateMaterial.depthTest = false
   poolerPlateMaterial.depthWrite = false
   poolerPlateMaterial.needsUpdate = true
@@ -858,6 +859,7 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
     )
     const mesh = new THREE.Mesh(geo, mat)
     mesh.raycast = () => {}
+    markTextPlane(mesh, text)
     return mesh
   }
 

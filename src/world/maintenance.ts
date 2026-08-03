@@ -9,6 +9,7 @@ import {
   ANCHOR, CITY, N_TABLES, TABLES,
   rid, routePoint, routeTangent, vacBayPos,
 } from './layout'
+import { markTextPlane, markTextTexture } from './text-plane'
 
 export const VACUUM_RECLAIM_PLATE_LINES = CLAIM_VALUES.vacuumReclaim.plateLines
 
@@ -226,6 +227,13 @@ const FACE_U: Record<Facing, [number, number, number]> = {
   south: [0, 1, 0],
   up: [0, 0, -1],
 }
+const FACE_N: Record<Facing, [number, number, number]> = {
+  west: [-1, 0, 0],
+  east: [1, 0, 0],
+  north: [0, 0, -1],
+  south: [0, 0, 1],
+  up: [0, 1, 0],
+}
 
 /** A quad that billboards and whose text changes — the worker status panels. */
 interface LivePlate {
@@ -249,6 +257,13 @@ class Signage {
   private readonly uv: number[] = []
   private readonly col: number[] = []
   private readonly idx: number[] = []
+  private readonly planes: {
+    text: string
+    center: [number, number, number]
+    normal: [number, number, number]
+    up: [number, number, number]
+    fixed: boolean
+  }[] = []
   private quads = 0
 
   private geometry: THREE.BufferGeometry | null = null
@@ -310,6 +325,7 @@ class Signage {
     height: number,
     color: number,
     bright = 1,
+    fixed = true,
   ): number {
     const row = this.next++
     const w = this.draw(row, text)
@@ -317,9 +333,18 @@ class Signage {
     const hh = height / 2
     const r = FACE_R[facing]
     const u = FACE_U[facing]
+    const n = FACE_N[facing]
     this.uv0(row, w, this.uvTmp)
     const [u0, v0, u1, v1] = this.uvTmp
     _c.setHex(color).multiplyScalar(bright)
+    markTextTexture(this.texture, text)
+    this.planes.push({
+      text,
+      center: [x, y, z],
+      normal: [n[0], n[1], n[2]],
+      up: [u[0], u[1], u[2]],
+      fixed,
+    })
     const base = this.quads * 4
     const cs: [number, number, number, number][] = [
       [-hw, -hh, u0, v0],
@@ -337,7 +362,7 @@ class Signage {
   }
 
   live(text: string, height: number, color: number, bright = 1): LivePlate {
-    const quad = this.plate(text, 0, -9000, 0, 'up', height, color, bright)
+    const quad = this.plate(text, 0, -9000, 0, 'up', height, color, bright, false)
     return { quad, row: this.next - 1, hw: (height * this.lastW) / SIGN_ROW / 2, hh: height / 2, text }
   }
 
@@ -399,12 +424,15 @@ class Signage {
       alphaTest: 0.08,
       vertexColors: true,
       toneMapped: false,
-      side: THREE.DoubleSide,
+      side: THREE.FrontSide,
     })
     const mesh = new THREE.Mesh(g, mat)
     mesh.renderOrder = 5
     mesh.frustumCulled = false // live plates move; the atlas is one draw call
     mesh.raycast = () => {}
+    for (const plane of this.planes) {
+      markTextPlane(mesh, plane.text, plane.center, plane.normal, plane.up, plane.fixed)
+    }
     this.geometry = g
     this.mesh = mesh
     this.posAttr = pa
@@ -683,7 +711,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
 
   const SGN_CKPT = signs.plate('checkpointer', HALL_E + 0.5, 17.0, CZ + 3, 'east', 2.0, COLOR.checkpoint, 1.0)
   signs.plate('sample frames written', HALL_E + 0.5, 14.9, GAUGE_Z0 + GAUGE_LEN / 2, 'east', 0.85, COLOR.inkDim, 0.7)
-  signs.plate('full_page_writes', HALL_E + 0.5, 4.6, CZ + 0.5, 'east', 0.8, COLOR.wal, 0.55)
+  signs.plate('full_page_writes', HALL_E + 0.5, 8.2, CZ + 0.5, 'east', 0.8, COLOR.wal, 0.55)
   signs.plate('fsync', CX + 14.5, 8.6, CZ + 11.6, 'south', 1.0, COLOR.crit, 0.5)
   signs.plate('checkpoint_timeout', DIAL_X + 0.4, DIAL_Y + 8.6, DIAL_Z, 'east', 0.95, COLOR.checkpoint, 0.6)
   const SGN_MAXWAL = signs.plate('max_wal_size', DIAL_X + 0.4, DIAL_Y - 8.6, DIAL_Z, 'east', 0.95, COLOR.wal, 0.45)

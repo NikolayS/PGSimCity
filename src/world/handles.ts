@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { COLOR } from '../core/theme'
 import type { SimState, WorldContext, WorldModule } from '../core/types'
 import { ANCHOR } from './layout'
+import { markTextPlane } from './text-plane'
 
 export type WorldHandleKey = 'autovacuum'
 
@@ -109,6 +110,7 @@ export function createWorldHandles(ctx: WorldContext): WorldHandlesModule {
     mesh.scale.set(width, height, 1)
     mesh.renderOrder = 3
     mesh.raycast = () => {}
+    markTextPlane(mesh, text)
     parent.add(mesh)
     return mesh
   }

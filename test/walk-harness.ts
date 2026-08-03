@@ -21,6 +21,7 @@ import { createSim } from '../src/sim/model'
 import { createAccess, type AccessModule } from '../src/world/access'
 import { createBackends } from '../src/world/backends'
 import { createClients } from '../src/world/clients'
+import { createControlCenterWorld } from '../src/world/control-center'
 import { createContinuity } from '../src/world/continuity'
 import { createWorldHandles } from '../src/world/handles'
 import { createMaintenance } from '../src/world/maintenance'
@@ -78,6 +79,10 @@ export interface WalkCityHarness {
   componentBox(id: string): THREE.Box3
   run(route: TraversalRoute): TraversalResult
   dispose(): void
+}
+
+export interface WalkCityHarnessOptions {
+  includeControlCenter?: boolean
 }
 
 const QUALITY: QualitySettings = {
@@ -158,7 +163,7 @@ function addModule(scene: THREE.Scene, modules: WorldModule[], module: WorldModu
  * controller, without WebGL. Canvas calls are inert because collision only
  * needs the resulting scene graph and matrices.
  */
-export async function createWalkCityHarness(): Promise<WalkCityHarness> {
+export async function createWalkCityHarness(options: WalkCityHarnessOptions = {}): Promise<WalkCityHarness> {
   const dom = installTestDom({ canvas2d: true })
   const nativeDomParser = globalThis.DOMParser
   globalThis.DOMParser = TestDomParser as unknown as typeof DOMParser
@@ -194,6 +199,7 @@ export async function createWalkCityHarness(): Promise<WalkCityHarness> {
   addModule(scene, modules, createReplication(ctx))
   addModule(scene, modules, createPlanner(ctx))
   addModule(scene, modules, createContinuity(ctx))
+  if (options.includeControlCenter) addModule(scene, modules, createControlCenterWorld(ctx))
   scene.updateMatrixWorld(true)
 
   const collision = createCollisionWorld()
