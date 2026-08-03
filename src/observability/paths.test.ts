@@ -230,4 +230,35 @@ describe('diagnostic path contracts', () => {
     expect(sim.state.stats.cacheHitPct).toBeGreaterThanOrEqual(95)
     expect(displayed).toBeGreaterThanOrEqual(95)
   })
+
+  it('does not mistake a small client workload for exhausted PostgreSQL capacity', () => {
+    const sim = createSim(createBus())
+    const collector = createCollector(sim)
+    sim.setKnob('clientConnections', 4)
+    for (let index = 0; index < sim.state.backends.length; index++) {
+      const backend = sim.state.backends[index]
+      backend.active = index < 4
+      backend.state = index < 4 ? 'exec_cpu' : 'free'
+    }
+    sim.state.stats.activeBackends = 4
+    sim.state.pooler.serverCapacity = 4
+
+    const slow = ALL_STEPS.find((step) => step.id === 'slow.1')
+    const saturation = slow?.branches.find((branch) => branch.next === 'v.saturation')
+    const verdict = ALL_VERDICTS.find((candidate) => candidate.id === 'v.saturation')
+
+    expect(saturation?.test(sim.state, collector)).toBe(false)
+    expect(verdict?.evidence(sim.state, collector)).toContainEqual(
+      expect.objectContaining({ label: 'PostgreSQL backends', value: '4 of 16' }),
+    )
+    expect(verdict?.resolved?.(sim.state, collector).ok).toBe(true)
+
+    for (const backend of sim.state.backends) {
+      backend.active = false
+      backend.state = 'free'
+    }
+    sim.state.stats.activeBackends = 0
+    sim.state.pooler.serverCapacity = 1
+    expect(saturation?.test(sim.state, collector)).toBe(false)
+  })
 })

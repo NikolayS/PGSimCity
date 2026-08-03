@@ -86,7 +86,7 @@ export const CLAIM_VALUES = {
       'PgBouncer authentication, TLS, DNS, cancellation forwarding and admin console',
       'pgcat and Odyssey runtime behavior',
     ],
-    coverageDisclosure: 'PGSimCity models one PgBouncer-shaped user/database pool: client admission, persistent PostgreSQL server connections, transaction-mode queue age, query_wait_timeout disconnects, and session clients bound for a fixed fifteen-model-second connection lifetime. The connection-storm scenario’s uncalibrated pressure curve follows active PostgreSQL backends only. Production session-lifetime distributions, client identities, reconnect backoff and all session-level SQL state are absent; queue time is a modelled client-side estimate, not a PgBouncer timing sample.',
+    coverageDisclosure: 'PGSimCity models one PgBouncer-shaped user/database pool: client admission, persistent PostgreSQL server connections, transaction-mode queue age, query_wait_timeout disconnects, and session clients bound for a fixed fifteen-model-second connection lifetime. The tps control is aggregate work assigned to the admitted cohort, so changing refused socket count alone does not rescale it; session mode admits only the bound sessions’ share. The connection-storm scenario’s uncalibrated pressure curve follows active PostgreSQL backends only. Production session-lifetime distributions, client identities, reconnect backoff and all session-level SQL state are absent; queue time is a modelled client-side estimate, not a PgBouncer timing sample.',
   },
   workMem: {
     defaultMiB: 4,

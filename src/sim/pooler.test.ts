@@ -145,6 +145,72 @@ describe('connection pooler', () => {
       .toBe(backendConcurrencyMultiplier(sim.state.stats.activeBackends))
   })
 
+  it('keeps aggregate offered work independent of refused direct client sockets', () => {
+    function directReading(clientConnections: number) {
+      const sim = createAggregateSim()
+      sim.setKnob('clientConnections', clientConnections)
+      sim.setKnob('poolMode', 'disabled')
+      sim.setKnob('tps', 3_200)
+      sim.setKnob('writeRatio', 0.4)
+      sim.setKnob('updateRatio', 0.6)
+      sim.setKnob('seqScanRatio', 0)
+      sim.setKnob('sharedBuffers', 640)
+      sim.setKnob('synchronousCommit', 'off')
+      sim.setKnob('autovacuum', false)
+      advanceBy(sim, 20)
+      return {
+        serverOfferedTps: sim.state.pooler.serverOfferedTps,
+        achievedTps: sim.state.stats.tps,
+        backends: sim.state.stats.activeBackends,
+      }
+    }
+
+    const sixteen = directReading(16)
+    const hundred = directReading(100)
+    const thousand = directReading(1_000)
+
+    expect([sixteen.serverOfferedTps, hundred.serverOfferedTps, thousand.serverOfferedTps])
+      .toEqual([3_200, 3_200, 3_200])
+    expect([hundred.backends, thousand.backends]).toEqual([
+      sixteen.backends,
+      sixteen.backends,
+    ])
+    expect(hundred.achievedTps).toBeCloseTo(sixteen.achievedTps, 8)
+    expect(thousand.achievedTps).toBeCloseTo(sixteen.achievedTps, 8)
+  })
+
+  it('shows session binding trading throughput for compatibility under held clients', () => {
+    function pooledReading(mode: 'session' | 'transaction') {
+      const sim = createAggregateSim()
+      sim.setKnob('clientConnections', 1_000)
+      sim.setKnob('poolMode', mode)
+      sim.setKnob('defaultPoolSize', 8)
+      sim.setKnob('maxClientConn', 1_000)
+      sim.setKnob('tps', 3_200)
+      sim.setKnob('writeRatio', 0.4)
+      sim.setKnob('updateRatio', 0.6)
+      sim.setKnob('seqScanRatio', 0)
+      sim.setKnob('sharedBuffers', 640)
+      sim.setKnob('synchronousCommit', 'off')
+      sim.setKnob('autovacuum', false)
+      advanceBy(sim, 40)
+      return {
+        tps: sim.state.stats.tps,
+        waiting: sim.state.pooler.waitingClients,
+        poolSlotP99: sim.state.stats.latency.p99.waits.poolSlotMs,
+        bound: sim.state.pooler.boundClients,
+      }
+    }
+
+    const session = pooledReading('session')
+    const transaction = pooledReading('transaction')
+
+    expect(session.bound).toBe(8)
+    expect(session.waiting).toBe(992)
+    expect(session.poolSlotP99).toBeGreaterThan(0)
+    expect(transaction.tps).toBeGreaterThan(session.tps)
+  })
+
   it('does not make PgBouncer coordinate its server target with max_connections', () => {
     const sim = createAggregateSim()
     sim.setKnob('clientConnections', 100)

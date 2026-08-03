@@ -39,20 +39,20 @@ over t=76–95 s. These are model-time teaching values, not production forecasts
 
 | | Direct | Transaction pool |
 |---|---:|---:|
-| achieved throughput | 1,170.80 tps | 996.05 tps |
-| rolling p50 | 0.933 s | 27.367 s |
-| rolling p99 | 2.467 s | 50.467 s |
-| Pool-slot component p50 / p99 | 0 / 0 s | 26.933 / 49.733 s |
-| Active / unclassified component p50 / p99 | 0.629 / 1.167 s | 0.318 / 0.500 s |
-| PostgreSQL backends at sample | 14 | 8 |
+| achieved throughput | 1,049.33 tps | 933.68 tps |
+| rolling p50 | 1.133 s | 26.600 s |
+| rolling p99 | 2.633 s | 50.333 s |
+| Pool-slot component p50 / p99 | 0 / 0 s | 25.600 / 49.600 s |
+| Active / unclassified component p50 / p99 | 0.629 / 1.164 s | 0.330 / 0.497 s |
+| PostgreSQL backends at sample | 15 | 8 |
 | clients admitted / refused | 16 / 0 | 1,000 / 0 |
-| queued transactions / wait timeouts | 0 / 0 | 204,304 / 0 |
+| queued transactions / wait timeouts | 0 / 0 | 209,521 / 0 |
 
 Both sides receive the full 3,200 tps offered workload: the direct phase has
 sixteen admitted client connections, while the pooled phase admits 1,000 client
 sockets and targets eight PostgreSQL servers. Connection churn makes the direct
-backend count fluctuate; the sample caught fourteen, so its pressure multiplier
-was 2.406 versus 1.0 at the pooled knee. Pooling removes modeled connection churn
+backend count fluctuate; the sample caught fifteen, so its pressure multiplier
+was 2.914 versus 1.0 at the pooled knee. Pooling removes modeled connection churn
 and lowers backend pressure, but it does not change an assigned statement's plan
 or executor cost. In this run throughput is lower after pooling and the retained
 queue's measured FIFO age dominates latency; no work expires before the

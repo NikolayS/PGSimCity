@@ -395,7 +395,7 @@ const KB = {
     max: 2000,
     step: 1,
     unit: 'clients',
-    help: 'Application-side connections offering the aggregate load; this is workload, not a PostgreSQL setting.',
+    help: 'Application-side connections beside the aggregate tps control; refused sockets are reported separately and do not silently rescale that workload.',
   },
   poolMode: {
     key: 'poolMode',
@@ -548,7 +548,7 @@ const STEPS: Step[] = [
         label: 'Every connection slot is busy; new work is queueing outside PostgreSQL.',
         next: 'v.saturation',
         ...gated('connectionSpareSlots', (s, c) =>
-          activityWaitCounts(s, c).total >= s.pooler.serverCapacity - DIAGNOSTIC_GATES.connectionSpareSlots.threshold),
+          activityWaitCounts(s, c).total >= s.maxConnections - DIAGNOSTIC_GATES.connectionSpareSlots.threshold),
       },
       { label: 'Most of them are waiting on `Lock`.', next: 'lock.1', ...gated('lockWaitShare', (s, c) => share(activityWaitCounts(s, c).lock, activityWaitCounts(s, c).total) > DIAGNOSTIC_GATES.lockWaitShare.threshold) },
       { label: 'Most of them are waiting on `IO`.', next: 'io.1', ...gated('ioWaitShare', (s, c) => share(activityWaitCounts(s, c).io, activityWaitCounts(s, c).total) > DIAGNOSTIC_GATES.ioWaitShare.threshold) },
@@ -1420,7 +1420,7 @@ const VERDICTS: Verdict[] = [
       `The city models sixteen backend slots, a fixed fork cadence, queued demand and an uncalibrated pressure curve driven only by active PostgreSQL backends, with a teaching-scale knee at ${CLAIM_VALUES.connectionPooler.concurrencyTarget}. Pooling does not change an assigned statement's plan or executor cost; it reuses connections and can keep PostgreSQL below that pressure curve. ${CLAIM_VALUES.connectionPooler.coverageDisclosure}`,
     evidence: (s) => [
       { label: 'application clients', value: `${s.pooler.acceptedClients} admitted · ${s.pooler.refusedClients} refused`, tone: s.pooler.refusedClients > 0 ? 'crit' : 'warn' },
-      { label: 'PostgreSQL backends', value: `${s.stats.activeBackends} of ${s.pooler.serverCapacity}`, tone: 'crit' },
+      { label: 'PostgreSQL backends', value: `${s.stats.activeBackends} of ${s.maxConnections}`, tone: 'crit' },
       { label: 'pool mode / waiting', value: `${s.pooler.mode} · ${s.pooler.waitingClients} clients` },
       { label: 'pool wait timeouts', value: String(Math.round(s.stats.poolerQueryWaitTimeouts)), tone: s.stats.poolerQueryWaitTimeouts > 0 ? 'crit' : undefined },
       { label: 'achieved tps', value: s.stats.tps.toFixed(0) },
@@ -1439,8 +1439,8 @@ const VERDICTS: Verdict[] = [
  ORDER BY 4 DESC;`,
     },
     resolved: (s) => ({
-      ok: s.stats.activeBackends < s.pooler.serverCapacity - DIAGNOSTIC_GATES.connectionSpareSlots.threshold,
-      reading: `${s.pooler.acceptedClients} clients admitted by ${s.pooler.mode}; pg_stat_activity sees ${s.stats.activeBackends} of ${s.pooler.serverCapacity} PostgreSQL backends, achieving ${s.stats.tps.toFixed(0)} tps against ${Math.round(s.knobs.tps)} offered`,
+      ok: s.stats.activeBackends < s.maxConnections - DIAGNOSTIC_GATES.connectionSpareSlots.threshold,
+      reading: `${s.pooler.acceptedClients} clients admitted by ${s.pooler.mode}; pg_stat_activity sees ${s.stats.activeBackends} of ${s.maxConnections} PostgreSQL backends, achieving ${s.stats.tps.toFixed(0)} tps against ${Math.round(s.knobs.tps)} offered`,
     }),
     city: 'client.pooler',
     reading: [

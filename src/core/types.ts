@@ -1040,7 +1040,7 @@ export interface PoolerState {
   serverCapacity: number
   /** Configured pooled server connections PostgreSQL cannot accept. */
   serverConnectionErrors: number
-  /** Transactions/sec offered by admitted clients that can reach a server. */
+  /** Aggregate tps reaching servers; session mode scales this to bound clients. */
   serverOfferedTps: number
 }
 

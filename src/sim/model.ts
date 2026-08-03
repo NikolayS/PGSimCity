@@ -2079,20 +2079,16 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       : serverConnectionCapacity()
   }
 
-  /** Transactions offered by clients that passed the active connection gate. */
-  function admittedClientTps(): number {
-    if (K.clientConnections <= 0) return 0
-    return K.tps * acceptedClientConnections() / K.clientConnections
-  }
-
   /** Session mode admits transactions only from clients holding a server binding. */
   function serverOfferedTps(): number {
-    const admitted = admittedClientTps()
-    if (K.poolMode !== 'session') return admitted
+    /* The tps knob is aggregate work offered by the admitted cohort. Refused
+     * sockets are reported connection failures; they do not silently delete a
+     * proportional share of that independently configured workload. */
+    if (K.poolMode !== 'session') return K.tps
     const accepted = acceptedClientConnections()
     if (accepted <= 0) return 0
     const bound = Math.min(accepted, sessionBindingLimit())
-    return admitted * bound / accepted
+    return K.tps * bound / accepted
   }
 
   function syncPoolerState(): void {
@@ -7267,8 +7263,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     // per second it has to create. This is the cost a pooler removes.
     const serverOverCapacity = K.poolMode !== 'disabled'
       && slot >= activeServerConnectionLimit()
-    const directChurn = state.scenario === 'connection-storm'
-      && K.poolMode === 'disabled'
+    /* Direct clients keep the city's existing connection churn in every
+     * workload. Pooling removes it by reusing its server connections. */
+    const directChurn = K.poolMode === 'disabled'
       && stats.activeBackends > 3
       && rng() < clamp(x.txCount / 300, 0.004, 0.6)
     rotateSessionBinding(slot)
@@ -7595,6 +7592,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         case 'free':
           break
       }
+      if (!b.active) activeN--
       if (b.active && isRunningState(b.state)) runningN++
       if (b.state === 'sort') {
         workMemNodes += b.workMemNodes
@@ -8248,6 +8246,14 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         break
       case 'tps':
         K.tps = Math.max(0, K.tps)
+        if (K.tps === 0 && K.poolMode === 'disabled') {
+          /* A zero direct-workload stage cancels application work that has not
+           * entered PostgreSQL. Retaining an unbounded hidden client queue here
+           * kept generating transaction-end records long after tests stopped
+           * the workload and fabricated later PITR targets. */
+          pendingTx = Math.min(pendingTx, traceQueue.length)
+          clearArrivalQueue()
+        }
         nextArrival = 0
         // The batch scale follows the offered rate, so it moves with the slider
         // rather than 250ms later.

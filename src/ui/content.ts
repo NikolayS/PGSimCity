@@ -113,7 +113,7 @@ export const KNOB_META: KnobMeta[] = [
     max: 2_000,
     step: 1,
     unit: 'clients',
-    hint: 'Concurrent application connections offering the aggregate transaction rate. Direct clients compete for max_connections; pooled clients stop at max_client_conn and share fewer PostgreSQL backends.',
+    hint: 'Concurrent application connections beside the aggregate transaction rate. Direct clients compete for max_connections; pooled clients stop at max_client_conn and share fewer PostgreSQL backends. Refused sockets are reported separately and do not silently reduce the tps knob.',
     disclosure: 'pooler-client-count-scope',
   },
   {

@@ -760,7 +760,13 @@ export function createInspector(ctx: UiContext): UiModule {
     })
     if (id === 'backend.localmem') wrap.dataset.disclosure = 'work-mem-model-scope'
     if (id === 'client.pool' || id === 'client.pooler') {
-      wrap.dataset.disclosure = 'connection-pooler-model-scope'
+      wrap.append(
+        el('p', {
+          class: 'pgc-block pg-hint',
+          data: { disclosure: 'connection-pooler-model-scope' },
+          text: CLAIM_VALUES.connectionPooler.coverageDisclosure,
+        }),
+      )
     }
     if (id === 'timeline.yard' || id === 'recovery.ground' || id === 'recovery.clock') {
       wrap.dataset.disclosure = 'one-fork-timeline-recovery-scope'
@@ -846,7 +852,7 @@ export function createInspector(ctx: UiContext): UiModule {
       for (const key of keys) {
         const meta = knobMeta(key)
         if (!meta) continue
-        const control = createKnobControl(ctx, meta)
+        const control = createKnobControl(ctx, meta, true)
         knobs.push(control)
         block.append(control.root)
         added += 1
