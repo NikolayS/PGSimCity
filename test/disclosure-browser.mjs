@@ -415,3 +415,40 @@ export function touchTargetFailures(reports, floor = 44) {
   }
   return failures
 }
+
+/** Measure the live City disclosures after each real renderer-quality transition. */
+export async function measureTierDisclosurePage(evaluatePage, page, viewport, levels) {
+  const reports = []
+  for (const level of levels) {
+    if (page.prepareDisclosures) await evaluatePage(page.prepareDisclosures)
+    const quality = await evaluatePage(`new Promise((resolve) => {
+      window.PGSIMCITY.bus.emit('quality', { level: ${JSON.stringify(level)} })
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        resolve({ ...window.PGSIMCITY.gfx.quality })
+      }))
+    })`)
+    const tierPage = { ...page, name: `${page.name} · ${level}` }
+    const disclosure = await measureDisclosurePage(evaluatePage, tierPage, viewport)
+    reports.push({ level, quality, disclosure })
+  }
+  return reports
+}
+
+/** Measure touch targets at every tier from a fresh, unmodified page state. */
+export async function measureTierTouchTargetPages(pages, levels) {
+  return inspectRenderedPages(pages, async ({ evaluate, page, viewport }) => {
+    const reports = []
+    for (const level of levels) {
+      const quality = await evaluate(`new Promise((resolve) => {
+        window.PGSIMCITY.bus.emit('quality', { level: ${JSON.stringify(level)} })
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          resolve({ ...window.PGSIMCITY.gfx.quality })
+        }))
+      })`)
+      const tierPage = { ...page, name: `${page.name} · ${level}` }
+      const touch = await measureTouchTargetPage(evaluate, tierPage, viewport)
+      reports.push({ level, quality, touch })
+    }
+    return reports
+  })
+}

@@ -101,14 +101,20 @@ function wantsSmaa(level: QualityLevel): boolean {
   return level === 'high' || level === 'ultra'
 }
 
+/* Flow density and label identity are lessons, not effects. The active draw and
+ * collision counts still follow what is on screen; these ceilings only prevent
+ * a lower tier from silently dropping meaning during a busy scene. */
+const SEMANTIC_PARTICLE_BUDGET = 4200
+const SEMANTIC_LABEL_BUDGET = 44
+
 export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
   low: {
     level: 'low',
     pixelRatio: DPR_CAP.low,
     bloom: false,
     shadows: false,
-    maxParticles: 700,
-    maxLabels: 18,
+    maxParticles: SEMANTIC_PARTICLE_BUDGET,
+    maxLabels: SEMANTIC_LABEL_BUDGET,
     // No composer at 'low', so the default framebuffer is the only place AA
     // could happen — and 'low' exists precisely because we can't afford it.
     antialias: false,
@@ -118,8 +124,8 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     pixelRatio: DPR_CAP.reduced,
     bloom: true,
     shadows: false,
-    maxParticles: 700,
-    maxLabels: 18,
+    maxParticles: SEMANTIC_PARTICLE_BUDGET,
+    maxLabels: SEMANTIC_LABEL_BUDGET,
     antialias: false,
   },
   medium: {
@@ -127,8 +133,8 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     pixelRatio: DPR_CAP.medium,
     bloom: true,
     shadows: false,
-    maxParticles: 1500,
-    maxLabels: 26,
+    maxParticles: SEMANTIC_PARTICLE_BUDGET,
+    maxLabels: SEMANTIC_LABEL_BUDGET,
     antialias: false,
   },
   high: {
@@ -136,8 +142,8 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     pixelRatio: DPR_CAP.high,
     bloom: true,
     shadows: true,
-    maxParticles: 2600,
-    maxLabels: 34,
+    maxParticles: SEMANTIC_PARTICLE_BUDGET,
+    maxLabels: SEMANTIC_LABEL_BUDGET,
     antialias: true,
   },
   ultra: {
@@ -145,8 +151,8 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     pixelRatio: DPR_CAP.ultra,
     bloom: true,
     shadows: true,
-    maxParticles: 4200,
-    maxLabels: 44,
+    maxParticles: SEMANTIC_PARTICLE_BUDGET,
+    maxLabels: SEMANTIC_LABEL_BUDGET,
     antialias: true,
   },
 }

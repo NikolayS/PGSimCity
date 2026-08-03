@@ -244,13 +244,30 @@ export function gradeDaylightHexWithScatter(hex: number, scatterHex: number, str
 
 /** Palette readout through the strongest fused height-haze path. */
 export function gradeDaylightHexWithHeightFog(hex: number, fogHex: number, amount: number): number {
+  return gradeDaylightHexWithEffects(hex, fogHex, amount, 0, 0)
+}
+
+/** Palette readout through the tier's combined shaft and height-haze path. */
+export function gradeDaylightHexWithEffects(
+  hex: number,
+  fogHex: number,
+  fogAmount: number,
+  scatterHex: number,
+  scatterStrength: number,
+): number {
   const base = hexToLinear(hex)
   const fog = hexToLinear(fogHex)
-  const t = clamp01(amount)
+  const scatter = hexToLinear(scatterHex)
+  const lit: Rgb = [
+    base[0] + scatter[0] * scatterStrength,
+    base[1] + scatter[1] * scatterStrength,
+    base[2] + scatter[2] * scatterStrength,
+  ]
+  const t = clamp01(fogAmount)
   const hazed: Rgb = [
-    base[0] + (fog[0] - base[0]) * t,
-    base[1] + (fog[1] - base[1]) * t,
-    base[2] + (fog[2] - base[2]) * t,
+    lit[0] + (fog[0] - lit[0]) * t,
+    lit[1] + (fog[1] - lit[1]) * t,
+    lit[2] + (fog[2] - lit[2]) * t,
   ]
   return linearToHex(neutralToneMap(gradeLinear(hazed, 0)))
 }
