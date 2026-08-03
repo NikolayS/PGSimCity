@@ -22,7 +22,7 @@ import {
   simulationAnimationDelta,
   wallDelta,
 } from './core/timebase'
-import { clamp } from './core/util'
+import { clamp, reduceMotion } from './core/util'
 import type { ComponentDef, FlowRequest, QualitySettings, WorldContext, WorldModule } from './core/types'
 
 import { createRenderer } from './engine/renderer'
@@ -146,6 +146,7 @@ async function boot(): Promise<void> {
 
   await progress(BOOT_STEPS.simulation)
   const sim = createSim(bus)
+  if (reduceMotion()) sim.setKnob('paused', true)
 
   // --- the context every district is built against ---------------------------
   const ctx: WorldContext = {

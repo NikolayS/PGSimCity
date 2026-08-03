@@ -4,7 +4,7 @@ import type { Knobs, QueryKind, TracePlayback, TraceStop, TourChapter } from '..
 import { CLAIM_VALUES } from '../core/claims'
 import { createCorrectionPath, displayedClaim } from '../core/corrections'
 import { mdToHtml } from './content'
-import { clamp } from '../core/util'
+import { clamp, reduceMotion } from '../core/util'
 import { MODEL_TIME_STRETCH, sqlFor } from '../sim/model'
 import { SCENARIOS, SCENARIO_NARRATION_SECONDS } from '../sim/scenarios'
 import { MODE_IDS } from './mode-exits'
@@ -279,6 +279,7 @@ export function createTour(ctx: UiContext): UiModule {
   let atIdx = 0
   let lookIdx = 0
   let paintAcc = 0
+  let tourReturnFocus: HTMLElement | null = null
 
   /** Everything the tour touched, and what the knobs were before it started. */
   let baseline: Knobs | null = null
@@ -297,8 +298,16 @@ export function createTour(ctx: UiContext): UiModule {
   const numEl = el('span', { class: 'tour-card__n', text: '1' })
   const ofEl = el('span', { class: 'tour-card__of', text: `of ${STEPS.length}` })
   const eyebrow = el('span', { class: 'pg-eyebrow tour-card__eyebrow', text: 'Guided tour' })
-  const titleEl = el('h2', { class: 'tour-card__title', text: STEPS[0].title })
-  const bodyEl = el('p', { class: 'pg-body tour-card__body', html: mdToHtml(STEPS[0].body) })
+  const titleEl = el('h2', {
+    class: 'tour-card__title',
+    id: 'tour-card-title',
+    text: STEPS[0].title,
+  })
+  const bodyEl = el('p', {
+    class: 'pg-body tour-card__body',
+    id: 'tour-card-body',
+    html: mdToHtml(STEPS[0].body),
+  })
   const clockEl = el('span', { class: 'tour-card__clock', text: 'Your pace' })
 
   const deckBtn = (name: string, className: string, label: string, onClick: () => void): HTMLButtonElement =>
@@ -374,14 +383,19 @@ export function createTour(ctx: UiContext): UiModule {
       class: 'tour-card pg-panel',
       'data-correction-subject': 'city-guided-tour',
       role: 'region',
-      'aria-label': 'Guided tour',
-      'aria-live': 'polite',
+      'aria-labelledby': titleEl.id,
+      'aria-describedby': bodyEl.id,
     },
     el(
       'div',
       { class: 'tour-card__grid' },
       el('div', { class: 'tour-card__idx' }, numEl, ofEl),
-      el('div', { class: 'tour-card__text' }, eyebrow, titleEl, bodyEl),
+      el('div', {
+        class: 'tour-card__text',
+        role: 'status',
+        'aria-live': 'polite',
+        'aria-atomic': 'true',
+      }, eyebrow, titleEl, bodyEl),
       el(
         'div',
         { class: 'tour-card__deck' },
@@ -868,6 +882,7 @@ export function createTour(ctx: UiContext): UiModule {
     if (!partial) return
     for (const [key, value] of Object.entries(partial) as [KnobKey, Knobs[KnobKey]][]) {
       if (value === undefined) continue
+      if (key === 'paused' && value === false && reduceMotion()) continue
       touched.add(key)
       setKnob(key, value)
     }
@@ -979,6 +994,10 @@ export function createTour(ctx: UiContext): UiModule {
       goTo(target)
       return
     }
+    const active = document.activeElement
+    tourReturnFocus = active instanceof HTMLElement && !active.closest('.tour-first')
+      ? active
+      : document.querySelector<HTMLElement>('.hud-tour')
     running = true
     baseline = { ...sim.state.knobs }
     touched.clear()
@@ -995,6 +1014,7 @@ export function createTour(ctx: UiContext): UiModule {
     void card.offsetWidth
     card.classList.add('is-enter')
     enter(target)
+    nextBtn.focus({ preventScroll: true })
   }
 
   function stop(): void {
@@ -1004,6 +1024,11 @@ export function createTour(ctx: UiContext): UiModule {
     setClass(card, 'is-live', false)
     document.body.classList.remove('pg-tour')
     restoreKnobs()
+    const focusTarget = tourReturnFocus?.isConnected
+      ? tourReturnFocus
+      : document.querySelector<HTMLElement>('.hud-tour')
+    tourReturnFocus = null
+    focusTarget?.focus({ preventScroll: true })
     bus.emit('toast', { text: 'Tour ended — every setting restored', kind: 'info', ms: 2400 })
   }
 

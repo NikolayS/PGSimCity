@@ -388,6 +388,18 @@ button:focus-visible {
   outline: none;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 #postgres-toggle {
   justify-self: start;
   color: #d7eeee;
@@ -1228,7 +1240,15 @@ button:focus-visible {
   }
 
   .source-key {
-    display: none;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   .index-walk {
@@ -1810,5 +1830,23 @@ button:focus-visible {
 
   .terminal:focus-within {
     height: min(42dvh, 164px);
+  }
+}
+
+button:focus-visible,
+a:focus-visible,
+summary:focus-visible,
+textarea:focus-visible,
+canvas:focus-visible {
+  outline: 2px solid #f0ad4e;
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
   }
 }

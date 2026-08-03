@@ -211,6 +211,7 @@ export async function inspectRenderedPages(pages, inspect) {
 
     await send('Runtime.enable')
     await send('Page.enable')
+    await send('Accessibility.enable')
     await send('Network.enable')
     await send('Network.setBlockedURLs', { urls: ['*plausible.io*'] })
     await send('Emulation.setDeviceMetricsOverride', {
@@ -227,13 +228,45 @@ export async function inspectRenderedPages(pages, inspect) {
     const origin = `http://127.0.0.1:${address.port}`
     const reports = []
     for (const page of pages) {
+      await send('Emulation.setEmulatedMedia', {
+        features: [{
+          name: 'prefers-reduced-motion',
+          value: page.reducedMotion ? 'reduce' : 'no-preference',
+        }],
+      })
       await send('Page.navigate', { url: `${origin}${page.path}` })
       await waitForPage(send, page.readySelector)
       if (page.prepare) await evaluate(send, page.prepare)
       const viewport = await evaluate(send, '({ width: innerWidth, height: innerHeight })')
       reports.push(await inspect({
+        accessibilityTree: () => send('Accessibility.getFullAXTree'),
         evaluate: (expression, options) => evaluate(send, expression, options),
+        keyPress: async (key, { code = key, shift = false } = {}) => {
+          const modifiers = shift ? 8 : 0
+          const virtualKeyCode = {
+            Enter: 13,
+            Escape: 27,
+            ' ': 32,
+            Tab: 9,
+          }[key]
+          const params = {
+            key,
+            code,
+            modifiers,
+            ...(key === 'Enter'
+              ? { text: '\r', unmodifiedText: '\r' }
+              : key === ' '
+                ? { text: ' ', unmodifiedText: ' ' }
+                : {}),
+            ...(virtualKeyCode
+              ? { nativeVirtualKeyCode: virtualKeyCode, windowsVirtualKeyCode: virtualKeyCode }
+              : {}),
+          }
+          await send('Input.dispatchKeyEvent', { type: 'keyDown', ...params })
+          await send('Input.dispatchKeyEvent', { type: 'keyUp', ...params })
+        },
         page,
+        send,
         viewport,
       }))
     }
@@ -319,6 +352,9 @@ const TOUCH_TARGET_EXPRESSION = `(async () => {
   }
   const isRenderedControl = (element) => {
     if (!hasClickHandler(element)) return false
+    // Skip links are intentionally parked outside the viewport until keyboard
+    // focus reveals them; they are not a rendered touch target in that state.
+    if (element.matches('.skip-link:not(:focus)')) return false
     if (element.closest('[hidden], [inert], [aria-hidden="true"]')) return false
     const style = getComputedStyle(element)
     const rect = element.getBoundingClientRect()

@@ -404,6 +404,10 @@ export function createHud(ctx: UiContext): UiModule {
     state: State
   }
 
+  const vitalAction = (def: VitalDef): string => def.key === 'latency'
+    ? 'Open the text wait breakdown'
+    : 'Focus the city component and open its text inspector'
+
   const vitals: VitalUi[] = VITALS.map((def) => {
     const value = el('div', { class: 'pg-metric__v hud-vital__v', text: '—' })
     const canvas = el('canvas', { class: 'pg-spark hud-vital__spark', width: 88, height: 24 })
@@ -415,14 +419,17 @@ export function createHud(ctx: UiContext): UiModule {
         'data-vital': def.key,
         type: 'button',
         title: def.key === 'latency' ? def.hint : `${def.hint}\nClick to fly to it.`,
-        'aria-label': def.key === 'latency' ? 'Latency p50 and p99 — show wait breakdown' : `${def.label} — show in the city`,
+        'aria-label': `${def.label}: —. ${vitalAction(def)}`,
         ...(def.key === 'latency'
           ? { 'aria-expanded': 'false', 'aria-controls': 'hud-latency-panel' }
           : {}),
         on: {
           click: () => {
             if (def.key === 'latency') setLatencyOpen(!latencyOpen)
-            else bus.emit('focus', { id: def.focus })
+            else {
+              bus.emit('focus', { id: def.focus })
+              bus.emit('select', { id: def.focus })
+            }
           },
         },
       },
@@ -458,8 +465,13 @@ export function createHud(ctx: UiContext): UiModule {
       class: 'hud-ckpt',
       type: 'button',
       title: 'Time until the next checkpoint, against checkpoint_timeout. Click to fly to the checkpointer.',
-      'aria-label': 'Checkpoint countdown — show the checkpointer',
-      on: { click: () => bus.emit('focus', { id: 'checkpointer' }) },
+      'aria-label': 'Checkpoint countdown. Focus the checkpointer and open its text inspector',
+      on: {
+        click: () => {
+          bus.emit('focus', { id: 'checkpointer' })
+          bus.emit('select', { id: 'checkpointer' })
+        },
+      },
     },
     el('span', { class: 'hud-ckpt__ring' }, ringSvg, ringNum),
     el(
@@ -783,9 +795,13 @@ export function createHud(ctx: UiContext): UiModule {
   const latencyVital = vitals.find((vital) => vital.def.key === 'latency')
 
   function setLatencyOpen(open: boolean): void {
+    const focusWasInside = latencyPanel.contains(document.activeElement)
     latencyOpen = open
     latencyPanel.hidden = !open
-    if (open) latencyPanel.scrollTop = 0
+    if (open) {
+      latencyPanel.scrollTop = 0
+      latencyClose.focus()
+    } else if (focusWasInside) latencyVital?.root.focus()
     latencyVital?.root.setAttribute('aria-expanded', String(open))
   }
 
@@ -1787,6 +1803,7 @@ export function createHud(ctx: UiContext): UiModule {
     for (const v of vitals) {
       const { text, state } = vitalValue(v.def.key, s)
       setText(v.value, text)
+      v.root.setAttribute('aria-label', `${v.def.label}: ${text}. ${vitalAction(v.def)}`)
       if (state !== v.state) {
         v.state = state
         v.value.className = 'pg-metric__v hud-vital__v' + (state ? ` is-${state}` : '')
@@ -1826,6 +1843,10 @@ export function createHud(ctx: UiContext): UiModule {
       lastRingClass = cls
       ckptBtn.className = cls
     }
+    ckptBtn.setAttribute(
+      'aria-label',
+      `Checkpoint ${ckptState.textContent}. Focus the checkpointer and open its text inspector`,
+    )
     ringBar.setAttribute('stroke-dashoffset', (RING_C * (1 - p)).toFixed(2))
   }
 

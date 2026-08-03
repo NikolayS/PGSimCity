@@ -568,7 +568,9 @@ export function createControls(ctx: UiContext): UiModule {
 
   const tab = el('button', {
     class: 'pg-btn pg-btn--icon pgc-tab pgc-tab--left',
+    id: 'pgc-console-tab',
     type: 'button',
+    'aria-controls': 'pgc-console-panel',
     on: { click: () => setOpen(!isOpen()) },
   })
   tab.append(icon('gear', 15), el('span', { class: 'pgc-tab__label', text: 'Console' }))
@@ -606,7 +608,12 @@ export function createControls(ctx: UiContext): UiModule {
         type: 'button',
         title: 'Collapse the console',
         'aria-label': 'Collapse the console',
-        on: { click: () => setOpen(false) },
+        on: {
+          click: () => {
+            setOpen(false)
+            tab.focus()
+          },
+        },
       },
       icon('chevron', 14),
     ),
@@ -700,12 +707,13 @@ export function createControls(ctx: UiContext): UiModule {
     'section',
     {
       class: 'pg-panel pgc-panel pgc-rail',
+      id: 'pgc-console-panel',
+      'aria-labelledby': 'pgc-console-tab',
     },
     head,
     body,
     foot,
   )
-  panel.setAttribute('aria-label', 'Console')
   host.append(tab, panel)
   mount.append(host)
 

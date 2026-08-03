@@ -53,6 +53,7 @@ import {
   displayedClaim,
 } from '../src/core/corrections.ts'
 import { CLAIM_VALUES } from '../src/core/claims.ts'
+import { reduceMotion } from '../src/core/util.ts'
 
 const canvas = document.querySelector('#machine')
 const architecturePane = document.querySelector('.architecture-pane')
@@ -70,6 +71,7 @@ const machineFaster = document.querySelector('#machine-faster')
 const statementMode = document.querySelector('#statement-mode')
 const statementNext = document.querySelector('#statement-next')
 const statementState = document.querySelector('#statement-state')
+const machineStageStatus = document.querySelector('#machine-stage-status')
 const postgresToggle = document.querySelector('#postgres-toggle')
 const postgresStatus = document.querySelector('#postgres-status')
 const postgresMeasurement = document.querySelector('#postgres-measurement')
@@ -138,6 +140,7 @@ if (
   || !statementMode
   || !statementNext
   || !statementState
+  || !machineStageStatus
   || !postgresToggle
   || !postgresStatus
   || !postgresMeasurement
@@ -548,7 +551,7 @@ const params = new URLSearchParams(window.location.search)
 const suppliedTimeParam = params.get('t')
 const suppliedTime = suppliedTimeParam === null ? Number.NaN : Number(suppliedTimeParam)
 let manualTime = Number.isFinite(suppliedTime) ? wrap(suppliedTime, MASTER_PERIOD) : 0
-let paused = Number.isFinite(suppliedTime) || params.get('paused') === '1'
+let paused = reduceMotion() || Number.isFinite(suppliedTime) || params.get('paused') === '1'
 let viewingRate = nearestViewingRate(params.get('rate'))
 let labelsVisible = params.get('labels') !== '0'
 let lastFrame = performance.now()
@@ -656,6 +659,15 @@ function startStatementReplay(report) {
   statement.error = report.error?.message ?? null
   statement.status = report.error ? 'error' : 'replaying'
   if (statement.status === 'error') statement.stageIndex = 2
+  if (statement.status === 'replaying' && reduceMotion()) {
+    statement.elapsedMs = statement.replay.durationMs
+    statement.stageIndex = activeStatementStageIndex(
+      statement.replay,
+      statement.replay.durationMs,
+    )
+    statement.stageElapsedMs = statement.replay.stages[statement.stageIndex].durationMs
+    statement.status = 'complete'
+  }
   completionFollowPending = statement.status === 'error'
   updatePostgresUi()
   updateStatementControls()
@@ -829,19 +841,22 @@ function updateComparisonUi() {
 }
 
 function openComparison() {
+  rememberModalReturnFocus()
   if (indexWalkState.visible) {
     indexWalkState.visible = false
     updateIndexWalkUi()
   }
   comparisonState.visible = true
   updateComparisonUi()
+  syncModalIsolation()
   comparisonRun.focus()
 }
 
 function closeComparison() {
   comparisonState.visible = false
   updateComparisonUi()
-  comparisonOpen.focus()
+  syncModalIsolation()
+  restoreModalFocus(comparisonOpen)
 }
 
 function nextIndexWalkStep() {
@@ -910,19 +925,21 @@ function updateIndexWalkUi() {
       const stepBottom = visibleStep.offsetTop - firstTop + visibleStep.offsetHeight
       indexWalkStepsRoot.scrollTo({
         top: Math.max(0, stepBottom - indexWalkStepsRoot.clientHeight),
-        behavior: 'smooth',
+        behavior: reduceMotion() ? 'auto' : 'smooth',
       })
     })
   }
 }
 
 function openIndexWalk() {
+  rememberModalReturnFocus()
   if (comparisonState.visible) {
     comparisonState.visible = false
     updateComparisonUi()
   }
   indexWalkState.visible = true
   updateIndexWalkUi()
+  syncModalIsolation()
   const next = nextIndexWalkStep()
   ;(indexWalkStepButtons[next] ?? indexWalkClose).focus()
 }
@@ -930,7 +947,8 @@ function openIndexWalk() {
 function closeIndexWalk() {
   indexWalkState.visible = false
   updateIndexWalkUi()
-  indexWalkOpen.focus()
+  syncModalIsolation()
+  restoreModalFocus(indexWalkOpen)
 }
 
 function resetIndexWalk() {
@@ -1024,6 +1042,9 @@ async function runSynchronousCommitComparison() {
     comparisonState.status = 'running'
     setCurrentReport(report)
     updateComparisonUi()
+    if (reduceMotion()) {
+      updateComparison((model.observationAtMs + 1) / 1000)
+    }
     return true
   } catch (error) {
     comparisonState.status = 'error'
@@ -1040,6 +1061,12 @@ function continueComparison() {
   comparisonState.holdReleased = true
   comparisonState.status = 'running'
   updateComparisonUi()
+  if (reduceMotion() && comparisonState.model) {
+    const endMs = Math.max(
+      ...comparisonState.model.lanes.map((lane) => lane.replay.durationMs),
+    )
+    updateComparison(Math.max(0, endMs - comparisonState.elapsedMs + 1) / 1000)
+  }
 }
 
 function selectComparisonLane(laneIndex) {
@@ -1047,7 +1074,7 @@ function selectComparisonLane(laneIndex) {
   if (!(board instanceof HTMLElement)) return
   comparisonLanes.scrollTo({
     left: board.offsetLeft - comparisonLanes.offsetLeft,
-    behavior: 'smooth',
+    behavior: reduceMotion() ? 'auto' : 'smooth',
   })
   comparisonTabA.setAttribute('aria-pressed', String(laneIndex === 0))
   comparisonTabB.setAttribute('aria-pressed', String(laneIndex === 1))
@@ -1117,10 +1144,27 @@ function updateStatementControls() {
     statementState.textContent = 'NO STATEMENT'
   }
   const receipt = statement.replay?.receipt
+  const receiptRows = receipt
+    ? `${receipt.rows} row${receipt.rows === 1 ? '' : 's'}`
+    : null
+  const stage = statement.replay?.stages[statement.stageIndex]
+  let accessibleStatus = 'Architecture board ready. No statement is running.'
+  if (statement.status === 'measuring') {
+    accessibleStatus = `PostgreSQL is measuring: ${statement.shortSql}`
+  } else if (statement.status === 'replaying' && statement.replay && stage) {
+    accessibleStatus = `Modelled architecture replay, stage ${statement.stageIndex + 1} of ${statement.replay.stages.length}: ${stage.label}. PostgreSQL measurements are reported separately in the receipt.`
+  } else if (statement.status === 'complete' && receipt) {
+    accessibleStatus = `PostgreSQL measured receipt: ${receipt.sharedHits} shared buffer hits, ${receipt.sharedReads} shared reads, ${receipt.planningTimeMs} milliseconds planning, ${receipt.executionTimeMs} milliseconds execution, ${receiptRows}. Modelled architecture replay complete.`
+  } else if (statement.status === 'error') {
+    accessibleStatus = `Statement error: ${statement.error ?? 'PostgreSQL report unavailable'}`
+  }
+  if (machineStageStatus.textContent !== accessibleStatus) {
+    machineStageStatus.textContent = accessibleStatus
+  }
   canvas.setAttribute(
     'aria-label',
     receipt
-      ? `PostgreSQL statement replay and architecture. Measured: ${receipt.sharedHits} shared buffer hits, ${receipt.sharedReads} shared reads, ${receipt.planningTimeMs} milliseconds planning, ${receipt.executionTimeMs} milliseconds execution, ${receipt.rows} rows.`
+      ? `PostgreSQL statement replay and architecture. Measured: ${receipt.sharedHits} shared buffer hits, ${receipt.sharedReads} shared reads, ${receipt.planningTimeMs} milliseconds planning, ${receipt.executionTimeMs} milliseconds execution, ${receiptRows}.`
       : 'A layered PostgreSQL architecture with modelled ambient processes and a foreground trace for the submitted statement.',
   )
 }
@@ -2799,6 +2843,8 @@ function updateReadout() {
   clock.textContent = `${manualTime.toFixed(1).padStart(4, '0')} / 36s MODEL`
   runState.textContent = paused ? 'VIEW PAUSED' : 'VIEW RUNNING'
   machineToggle.textContent = paused ? 'RUN' : 'PAUSE'
+  machineToggle.setAttribute('aria-label', paused ? 'Run the modelled architecture view' : 'Pause the modelled architecture view')
+  machineToggle.setAttribute('aria-pressed', String(paused))
   updateStatementControls()
 }
 
@@ -3301,6 +3347,71 @@ function recallHistory(direction) {
   resizeTerminalInput()
 }
 
+const workbench = document.querySelector('.workbench')
+let modalReturnFocus = null
+
+function activeModal() {
+  if (comparisonState.visible) return comparisonRoot
+  if (indexWalkState.visible) return indexWalkRoot
+  return null
+}
+
+function rememberModalReturnFocus() {
+  if (activeModal()) return
+  if (document.activeElement instanceof HTMLElement) {
+    modalReturnFocus = document.activeElement
+  }
+}
+
+function syncModalIsolation() {
+  const modal = activeModal()
+  for (const child of workbench.children) child.inert = Boolean(modal && child !== modal)
+}
+
+function restoreModalFocus(fallback) {
+  if (activeModal()) return
+  const target = modalReturnFocus?.isConnected && modalReturnFocus !== document.body
+    ? modalReturnFocus
+    : fallback
+  modalReturnFocus = null
+  target?.focus()
+}
+
+function modalFocusables(root) {
+  return [...root.querySelectorAll(
+    'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )].filter((element) => !element.closest('[hidden], [inert]'))
+}
+
+function containModalTab(event) {
+  const modal = activeModal()
+  if (!modal || event.key !== 'Tab') return false
+  const focusables = modalFocusables(modal)
+  if (!focusables.length) {
+    event.preventDefault()
+    modal.focus()
+    return true
+  }
+  const first = focusables[0]
+  const last = focusables[focusables.length - 1]
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus()
+    return true
+  }
+  if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+    return true
+  }
+  if (!modal.contains(document.activeElement)) {
+    event.preventDefault()
+    ;(event.shiftKey ? last : first).focus()
+    return true
+  }
+  return false
+}
+
 window.addEventListener('resize', resize)
 if (typeof ResizeObserver === 'function') {
   new ResizeObserver(resize).observe(architectureScroll)
@@ -3366,8 +3477,14 @@ terminalInput.addEventListener('keydown', (event) => {
   }
 })
 window.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && comparisonState.visible) closeComparison()
-  else if (event.key === 'Escape' && indexWalkState.visible) closeIndexWalk()
+  if (containModalTab(event)) return
+  if (event.key === 'Escape' && comparisonState.visible) {
+    event.preventDefault()
+    closeComparison()
+  } else if (event.key === 'Escape' && indexWalkState.visible) {
+    event.preventDefault()
+    closeIndexWalk()
+  }
 })
 window.addEventListener('beforeunload', () => {
   if (postgres.source) void postgres.source.close()
