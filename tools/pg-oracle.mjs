@@ -11,6 +11,8 @@ import { fileURLToPath } from 'node:url'
 
 import ts from 'typescript'
 
+import { formatDescribeIndex } from '../machine/psql.js'
+
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url))
 const CLAIMS_OWNER = 'src/core/claims.ts#CLAIMS'
 const VALUES_OWNER = 'src/core/claims.ts#CLAIM_VALUES'
@@ -268,10 +270,12 @@ async function withThrowawayCluster(pgBin, callback) {
       throw new Error(`PostgreSQL did not start after five free-port probes:\n${log.trim()}`)
     }
 
-    const psql = async (sql, { allowFailure = false } = {}) => run(
+    const psql = async (sql, { allowFailure = false, tuplesOnly = true } = {}) => run(
       path.join(pgBin, 'psql'),
       [
-        '-X', '-A', '-t', '-q',
+        '-X',
+        ...(tuplesOnly ? ['-A', '-t'] : []),
+        '-q',
         '-v', 'ON_ERROR_STOP=1',
         '-h', '127.0.0.1',
         '-p', String(port),
@@ -452,6 +456,105 @@ async function checkPgStatIo(query, registry, major) {
   })
 }
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function pollRow(query, sql, ready, timeoutMs) {
+  const deadline = performance.now() + timeoutMs
+  let row = null
+  while (performance.now() < deadline) {
+    ;[row] = await query(sql)
+    if (ready(row)) return row
+    await delay(250)
+  }
+  return row
+}
+
+async function checkCheckpointTimerSkip(psql, query, registry, major) {
+  const claim = registry.claims.checkpointTimerSkip
+  if (major < claim.since) return []
+
+  await psql(`ALTER SYSTEM SET checkpoint_timeout = '${claim.timeoutSeconds}s'`)
+  await psql('SELECT pg_catalog.pg_reload_conf()')
+  await psql('CHECKPOINT')
+  await psql(`SELECT pg_catalog.pg_stat_reset_shared('checkpointer')`)
+  const row = await pollRow(
+    query,
+    'SELECT num_timed, num_requested, num_done, buffers_written FROM pg_catalog.pg_stat_checkpointer',
+    (candidate) => Number(candidate?.num_timed) > 0,
+    (claim.timeoutSeconds + 8) * 1_000,
+  )
+  const skipped = Number(row?.num_timed) > 0
+    && Number(row?.num_requested) === 0
+    && Number(row?.num_done) === 0
+  return [result(
+    'pg_stat_checkpointer/timer-expiry-skip',
+    'num_timed counts idle timer expiries; num_done remains zero when the checkpoint is skipped',
+    row
+      ? `num_timed ${row.num_timed}, num_requested ${row.num_requested}, num_done ${row.num_done}, buffers_written ${row.buffers_written}`
+      : 'no pg_stat_checkpointer row',
+    skipped,
+  )]
+}
+
+async function checkAutovacuumThreshold(psql, query, registry) {
+  const claim = registry.claims.autovacuumThreshold
+  await psql("ALTER SYSTEM SET autovacuum_naptime = '1s'")
+  await psql('SELECT pg_catalog.pg_reload_conf()')
+  await psql(`
+    CREATE TABLE public.${claim.relation} (
+      id integer PRIMARY KEY,
+      payload integer NOT NULL
+    ) WITH (
+      autovacuum_enabled = false,
+      autovacuum_vacuum_threshold = ${claim.baseThreshold},
+      autovacuum_vacuum_scale_factor = ${claim.scaleFactor},
+      autovacuum_vacuum_insert_threshold = 1000,
+      autovacuum_vacuum_insert_scale_factor = ${claim.scaleFactor}
+    )`)
+  await psql(`
+    INSERT INTO public.${claim.relation}
+    SELECT value, 0 FROM pg_catalog.generate_series(1, ${claim.reltuples}) AS value`)
+  await psql(`VACUUM (ANALYZE) public.${claim.relation}`)
+  await psql(`
+    INSERT INTO public.${claim.relation}
+    SELECT value, 0
+      FROM pg_catalog.generate_series(${claim.reltuples + 1}, ${claim.liveTuples}) AS value`)
+  await psql(`
+    UPDATE public.${claim.relation}
+       SET payload = payload + 1
+     WHERE id <= ${claim.deadTuples}`)
+
+  const [before] = await query(`
+    SELECT c.reltuples::bigint AS reltuples,
+           s.n_live_tup,
+           s.n_dead_tup,
+           s.autovacuum_count
+      FROM pg_catalog.pg_class AS c
+      JOIN pg_catalog.pg_stat_all_tables AS s ON s.relid = c.oid
+     WHERE c.oid = 'public.${claim.relation}'::regclass`)
+  const reltuplesThreshold = claim.baseThreshold + claim.scaleFactor * Number(before.reltuples)
+  const liveThreshold = claim.baseThreshold + claim.scaleFactor * Number(before.n_live_tup)
+  const sourceDistinguishes = Number(before.n_dead_tup) > reltuplesThreshold
+    && Number(before.n_dead_tup) < liveThreshold
+
+  await psql(`ALTER TABLE public.${claim.relation} SET (autovacuum_enabled = true)`)
+  const after = await pollRow(
+    query,
+    `SELECT autovacuum_count FROM pg_catalog.pg_stat_all_tables WHERE relid = 'public.${claim.relation}'::regclass`,
+    (candidate) => Number(candidate?.autovacuum_count) > Number(before.autovacuum_count),
+    12_000,
+  )
+  const launched = Number(after?.autovacuum_count) > Number(before.autovacuum_count)
+  return [result(
+    'autovacuum/reltuples-threshold-source',
+    `dead ${claim.deadTuples} crosses the reltuples threshold but not the n_live_tup threshold; autovacuum launches`,
+    `reltuples ${before.reltuples}, n_live_tup ${before.n_live_tup}, n_dead_tup ${before.n_dead_tup}; thresholds ${reltuplesThreshold}/${liveThreshold}; autovacuum ${launched ? 'launched' : 'did not launch'}`,
+    sourceDistinguishes && launched,
+  )]
+}
+
 async function prepareIndexFixture(psql) {
   await psql(`
     CREATE SCHEMA oracle_fixture;
@@ -479,6 +582,16 @@ async function prepareIndexFixture(psql) {
       ON oracle_fixture.accounts ((lower(owner)));
     CREATE INDEX accounts_open_balance_idx
       ON oracle_fixture.accounts (balance) WHERE deleted_at IS NULL;
+    CREATE INDEX accounts_hash_idx
+      ON oracle_fixture.accounts USING hash (owner);
+    CREATE INDEX accounts_collate_idx
+      ON oracle_fixture.accounts (owner COLLATE "C");
+    CREATE INDEX accounts_opclass_idx
+      ON oracle_fixture.accounts (owner text_pattern_ops);
+    CREATE INDEX accounts_desc_idx
+      ON oracle_fixture.accounts (balance DESC NULLS LAST);
+    CREATE INDEX accounts_modifiers_idx
+      ON oracle_fixture.accounts (owner COLLATE "C" text_pattern_ops DESC);
     CREATE INDEX accounts_metadata_gin_idx
       ON oracle_fixture.accounts USING gin (metadata);
   `)
@@ -490,25 +603,21 @@ async function prepareIndexFixture(psql) {
 
 async function checkIndexWalk(psql, query, registry) {
   await prepareIndexFixture(psql)
+  const described = await psql('\\d oracle_fixture.accounts', { tuplesOnly: false })
   const cityRows = await query(registry.indexWalk.catalogSql)
   const serverRows = await query(`
     SELECT c.relname AS index_name,
            am.amname AS access_method,
-           i.indisvalid,
-           pg_catalog.pg_get_expr(i.indpred, i.indrelid) AS predicate,
-           k.position::integer AS position,
-           CASE WHEN k.position <= i.indnkeyatts THEN 'key' ELSE 'include' END AS column_role,
-           pg_catalog.pg_get_indexdef(i.indexrelid, k.position::integer, true) AS index_element
+           CASE WHEN i.indisvalid THEN 'valid' ELSE 'INVALID' END AS validity,
+           pg_catalog.pg_get_indexdef(i.indexrelid) AS index_definition
       FROM pg_catalog.pg_index AS i
       JOIN pg_catalog.pg_class AS c ON c.oid = i.indexrelid
       JOIN pg_catalog.pg_class AS t ON t.oid = i.indrelid
       JOIN pg_catalog.pg_namespace AS n ON n.oid = t.relnamespace
       JOIN pg_catalog.pg_am AS am ON am.oid = c.relam
-      CROSS JOIN LATERAL
-        unnest(i.indkey) WITH ORDINALITY AS k(attnum, position)
      WHERE n.nspname = 'oracle_fixture'
        AND t.relname = 'accounts'
-     ORDER BY c.relname, k.position`)
+     ORDER BY c.relname`)
 
   const citedColumns = [...new Set(
     [...registry.indexWalk.catalogSql.matchAll(/\bi\.([a-z_][a-z0-9_]*)/giu)]
@@ -523,22 +632,35 @@ async function checkIndexWalk(psql, query, registry) {
   const columnTypes = new Map(pgIndexColumns.map((row) => [row.attname, row.data_type]))
   const missingColumns = citedColumns.filter((name) => !columnTypes.has(name))
 
-  const validServerRows = serverRows.filter((row) => row.indisvalid)
-  const elementMismatches = validServerRows.filter((serverRow) => {
-    const cityRow = cityRows.find((candidate) =>
-      candidate.index_name === serverRow.index_name
-      && candidate.position === serverRow.position)
+  const definitionMismatches = serverRows.filter((serverRow) => {
+    const cityRow = cityRows.find((candidate) => candidate.index_name === serverRow.index_name)
     return !cityRow
-      || cityRow.column_role !== serverRow.column_role
-      || cityRow.index_element !== serverRow.index_element
+      || cityRow.access_method !== serverRow.access_method
+      || cityRow.validity !== serverRow.validity
+      || cityRow.index_definition !== serverRow.index_definition
   })
-  const nonBtree = serverRows.filter((row) => row.access_method !== 'btree')
-  const cityProjectsMethod = cityRows.some((row) => Object.hasOwn(row, 'access_method'))
-  const invalid = serverRows.filter((row) => !row.indisvalid)
-  const cityInvalidNames = new Set(cityRows.map((row) => row.index_name))
-  const omittedInvalid = [...new Set(
-    invalid.filter((row) => !cityInvalidNames.has(row.index_name)).map((row) => row.index_name),
-  )]
+  const expectedClauses = ['WHERE ', 'USING hash', 'COLLATE "C"', 'text_pattern_ops', 'DESC NULLS LAST']
+  const missingClauses = expectedClauses.filter((clause) =>
+    !cityRows.some((row) => String(row.index_definition).includes(clause)))
+  const invalidServer = serverRows.filter((row) => row.validity === 'INVALID')
+  const invalidMismatches = invalidServer.filter((serverRow) => {
+    const cityRow = cityRows.find((candidate) => candidate.index_name === serverRow.index_name)
+    return !cityRow || cityRow.validity !== 'INVALID'
+  })
+  const invalidDefinition = invalidServer[0]
+  const cityDescribeLine = invalidDefinition
+    ? formatDescribeIndex({
+      Name: invalidDefinition.index_name,
+      Primary: false,
+      Unique: true,
+      Valid: false,
+      Definition: invalidDefinition.index_definition,
+    }).trim()
+    : ''
+  const serverDescribeLine = described.stdout
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .find((line) => line.includes('accounts_invalid_owner_idx')) ?? ''
 
   return [
     result(
@@ -550,28 +672,26 @@ async function checkIndexWalk(psql, query, registry) {
       missingColumns.length === 0,
     ),
     result(
-      'index-walk/valid-elements',
-      'valid composite, INCLUDE, expression, partial, and non-btree elements retain catalog order and roles',
-      elementMismatches.length > 0
-        ? `${elementMismatches.length} element mismatches`
-        : `${validServerRows.length} authoritative element rows match`,
-      elementMismatches.length === 0,
-    ),
-    result(
-      'index-walk/non-btree-access-method',
-      cityProjectsMethod ? 'projects each index access method' : 'does not project an access method',
-      nonBtree.length > 0
-        ? [...new Set(nonBtree.map((row) => `${row.index_name} uses ${row.access_method}`))].join(', ')
-        : 'fixture has no non-btree index',
-      nonBtree.length === 0 || cityProjectsMethod,
+      'index-walk/full-definitions',
+      'full definitions retain predicates, access methods, collations, operator classes, and ordering',
+      definitionMismatches.length > 0 || missingClauses.length > 0
+        ? `${definitionMismatches.length} definition mismatches; missing clauses ${missingClauses.join(', ') || 'none'}`
+        : `${serverRows.length} authoritative definitions match with every usability clause`,
+      definitionMismatches.length === 0 && missingClauses.length === 0,
     ),
     result(
       'index-walk/invalid-index',
-      'filters rows with indisvalid = false',
-      omittedInvalid.length > 0
-        ? `existing invalid index omitted: ${omittedInvalid.join(', ')}`
-        : 'no invalid index was omitted',
-      omittedInvalid.length === 0,
+      'retains rows with indisvalid = false and labels them INVALID',
+      invalidMismatches.length > 0
+        ? `invalid index missing or mislabeled: ${invalidMismatches.map((row) => row.index_name).join(', ')}`
+        : `${invalidServer.length} invalid index row retained and labeled INVALID`,
+      invalidServer.length > 0 && invalidMismatches.length === 0,
+    ),
+    result(
+      'psql-describe/invalid-index',
+      cityDescribeLine || 'invalid index is absent',
+      serverDescribeLine || 'psql did not display the invalid index',
+      cityDescribeLine.length > 0 && cityDescribeLine === serverDescribeLine,
     ),
   ]
 }
@@ -582,6 +702,8 @@ async function runChecks(server, registry, major) {
     ['GUC defaults', () => checkGucDefaults(server.query, registry, major)],
     ['catalog shapes', () => checkCatalog(server.psql, server.query, registry, major)],
     ['wait events', () => checkWaitEvents(server.query, registry, major)],
+    ['checkpoint timer skip', () => checkCheckpointTimerSkip(server.psql, server.query, registry, major)],
+    ['autovacuum threshold', () => checkAutovacuumThreshold(server.psql, server.query, registry)],
     ['pg_stat_io values', () => checkPgStatIo(server.query, registry, major)],
     ['index walk', () => checkIndexWalk(server.psql, server.query, registry)],
   ]

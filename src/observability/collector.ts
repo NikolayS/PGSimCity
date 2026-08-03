@@ -118,8 +118,6 @@ export function createCollector(sim: SimApi): Collector {
 
   /* Event-driven accumulators — these are counted as they happen because the
    * model does not keep them itself. */
-  let ckptTimed = 0
-  let ckptRequested = 0
   let ckptWriteMs = 0
   let ckptBuffers = 0
   let lastCkptCount = s.checkpoint.count
@@ -153,8 +151,9 @@ export function createCollector(sim: SimApi): Collector {
       dirtyEvictions: st.buffers.dirtyEvictions,
       evictions: st.buffers.evictions,
       insertLsn: st.wal.insertLsn,
-      ckptTimed: 0,
-      ckptRequested: 0,
+      ckptTimed: st.checkpoint.numTimed,
+      ckptRequested: st.checkpoint.numRequested,
+      ckptDone: st.checkpoint.numDone,
       ckptWriteMs: 0,
       ckptBuffers: 0,
       walRecords: 0,
@@ -174,8 +173,6 @@ export function createCollector(sim: SimApi): Collector {
     if (s.checkpoint.count !== lastCkptCount) {
       const n = Math.max(0, s.checkpoint.count - lastCkptCount)
       lastCkptCount = s.checkpoint.count
-      if (s.checkpoint.reason === 'wal' || s.checkpoint.reason === 'manual') ckptRequested += n
-      else ckptTimed += n
       ckptWriteMs += s.checkpoint.lastDuration * 1000
       ckptBuffers += s.checkpoint.buffersWritten
     }
@@ -225,9 +222,9 @@ export function createCollector(sim: SimApi): Collector {
     total.tupDeleted = s.stats.tupDeleted - base.tupDeleted
     total.tempFiles = s.workMem.tempFiles - base.tempFiles
     total.tempBytes = s.workMem.tempBytes - base.tempBytes
-    total.ckptTimed = ckptTimed
-    total.ckptRequested = ckptRequested
-    total.ckptDone = ckptTimed + ckptRequested
+    total.ckptTimed = s.checkpoint.numTimed - base.ckptTimed
+    total.ckptRequested = s.checkpoint.numRequested - base.ckptRequested
+    total.ckptDone = s.checkpoint.numDone - base.ckptDone
     total.ckptWriteMs = ckptWriteMs
     total.ckptBuffers = ckptBuffers
     total.bgwClean = s.bgwriter.cleanedTotal - base.bgwClean
@@ -255,7 +252,7 @@ export function createCollector(sim: SimApi): Collector {
     base = snapshotRaw(s)
     resetAt = s.t
     resetStamp = stamp()
-    ckptTimed = ckptRequested = ckptWriteMs = ckptBuffers = 0
+    ckptWriteMs = ckptBuffers = 0
     walRecords = 0
     walFpi = 0
     lastInsertLsn = s.wal.insertLsn

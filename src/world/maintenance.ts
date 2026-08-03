@@ -774,9 +774,9 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
    * 3. AUTOVACUUM LAUNCHER — the control tower.
    *
    *    Every naptime it wakes, compares each table's dead tuples against
-   *    threshold + scale_factor * live, and forks a worker for the worst
-   *    offender. The scanner makes exactly one revolution per naptime, so the
-   *    sweep you can see IS the countdown.
+   *    min(max_threshold, threshold + scale_factor * reltuples), and forks a
+   *    worker for the worst offender. The scanner makes exactly one revolution
+   *    per naptime, so the sweep you can see IS the countdown.
    * =====================================================================*/
 
   const gLaunch = new THREE.Group()

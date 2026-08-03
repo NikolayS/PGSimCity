@@ -162,6 +162,9 @@ const IDLE_REAP = 22
 const MIB = 1024 * 1024
 const WORK_MEM_HASH_MULTIPLIER = CLAIM_VALUES.workMem.hashMemMultiplier
 const WORK_MEM_SPILL_PENALTY = CLAIM_VALUES.workMem.spillSlowdown - 1
+const AUTOVACUUM_VACUUM_THRESHOLD = 50
+const AUTOVACUUM_VACUUM_MAX_THRESHOLD = 100_000_000
+const AUTOVACUUM_VACUUM_INSERT_THRESHOLD = 1_000
 /** A visible full backup of the ~8 GiB city takes tens of simulated seconds. */
 export const DR_BACKUP_BYTES_PER_SEC = 384 * MIB
 /** Object-store download is faster than the backup's checksum/compress path. */
@@ -635,9 +638,14 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     pages: def.pages,
     indexPages: def.indexes.reduce((n, index) => n + index.pages, 0),
     liveTuples: def.pages * def.tuplesPerPage,
+    reltuples: def.pages * def.tuplesPerPage,
     deadTuples: 0,
     bloat: 0,
-    vacuumThreshold: 50,
+    vacuumThreshold: Math.min(
+      AUTOVACUUM_VACUUM_MAX_THRESHOLD,
+      AUTOVACUUM_VACUUM_THRESHOLD
+        + DEFAULT_KNOBS.autovacuumScaleFactor * def.pages * def.tuplesPerPage,
+    ),
     lastVacuum: 0,
     seqScans: 0,
     idxScans: 0,
@@ -771,6 +779,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       elapsed: 0,
       lastDuration: 0,
       reason: 'time',
+      numTimed: 0,
+      numRequested: 0,
+      numDone: 0,
       count: 0,
       redoLsn: initialLsn,
       completedRedoLsn: initialLsn,
@@ -1141,13 +1152,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   const buf = state.buffers
   const wal = state.wal
   const ckpt = state.checkpoint
-  type RuntimeCheckpoint = typeof ckpt & {
-    numTimed: number
-    numRequested: number
-  }
-  const runtimeCkpt = ckpt as RuntimeCheckpoint
-  runtimeCkpt.numTimed = 0
-  runtimeCkpt.numRequested = 0
   const bgw = state.bgwriter
   const av = state.autovac
   const rep = state.replication
@@ -4079,8 +4083,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     ckpt.buffersWritten = asSampleFrames(0)
     ckpt.nextInSec = K.checkpointTimeout
     ckptRecordTicket = 0
-    if (reason === 'time') runtimeCkpt.numTimed++
-    else runtimeCkpt.numRequested++
+    if (reason !== 'time') ckpt.numRequested++
     // RedoRecPtr: where replay would restart if we crashed once this checkpoint
     // has completed. `completedRedoLsn` — what pg_control still says, and what
     // WAL retention is measured from — does not move until then.
@@ -4112,6 +4115,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   let ckptSyncDur = 1.5
   let ckptSyncEnd = 0
   let ckptRecordTicket = 0
+  let lastCheckpointEndLsn = wal.insertLsn
   /** The checkpointer has its own cursor: it sweeps the pool exactly once. */
   let ckptScan = 0
   let checkpointFlushBuffer = -1
@@ -4142,7 +4146,13 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     if (ckpt.phase === 'idle') {
       const walSinceRedo = wal.insertLsn - ckpt.redoLsn
       if (walSinceRedo > walTriggerBytes(K)) startCheckpoint('wal')
-      else if (ckpt.nextInSec <= 0) startCheckpoint('time')
+      else if (ckpt.nextInSec <= 0) {
+        ckpt.numTimed++
+        ckpt.nextInSec = K.checkpointTimeout
+        // A timeout is recorded even when there has been no WAL activity
+        // since the last checkpoint; in that case PostgreSQL skips the run.
+        if (wal.insertLsn > lastCheckpointEndLsn) startCheckpoint('time')
+      }
       return
     }
 
@@ -4298,7 +4308,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       // completion instead of at start: right phase, wrong magnitude.
       ckpt.completedRedoLsn = ckpt.redoLsn
       ckpt.lastDuration = ckpt.elapsed
+      ckpt.numDone++
       ckpt.count++
+      lastCheckpointEndLsn = wal.insertLsn
       ckpt.phase = 'idle'
       ckpt.progress = 0
       bus.emit('checkpoint:end', { duration: ckpt.lastDuration })
@@ -4481,12 +4493,16 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     for (let i = 0; i < N_TABLES; i++) {
       const t = tables[i]
       t.heat = damp(t.heat, 0, 1.1, dt)
-      t.vacuumThreshold = 50 + K.autovacuumScaleFactor * t.liveTuples
+      t.vacuumThreshold = Math.min(
+        AUTOVACUUM_VACUUM_MAX_THRESHOLD,
+        AUTOVACUUM_VACUUM_THRESHOLD + K.autovacuumScaleFactor * t.reltuples,
+      )
       // autovacuum.c relation_needs_vacanalyze: insert-triggered vacuum scales
       // only with the unfrozen share. That makes append-only relations get a
       // cheap VM/freeze pass even though they never manufacture dead tuples.
       const unfrozen = t.pages > 0 ? clamp01((t.pages - frozenPages[i]) / t.pages) : 1
-      vacuumInsThreshold[i] = 1000 + K.autovacuumScaleFactor * t.liveTuples * unfrozen
+      vacuumInsThreshold[i] = AUTOVACUUM_VACUUM_INSERT_THRESHOLD
+        + K.autovacuumScaleFactor * t.reltuples * unfrozen
       const rt = runtimeTable(i)
       rt.insSinceVacuum = insSinceVacuum[i]
       rt.frozenPages = frozenPages[i]
@@ -4942,7 +4958,12 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
           break
         }
         case 'analyze': {
-          if (done) vacNext(w, 'return', 1.8)
+          if (done) {
+            // The folded-in ANALYZE refreshes pg_class.reltuples. Between
+            // maintenance passes it stays stale while liveTuples keeps moving.
+            t.reltuples = Math.max(0, t.liveTuples)
+            vacNext(w, 'return', 1.8)
+          }
           break
         }
         case 'return': {
@@ -8778,12 +8799,14 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     ckpt.elapsed = 0
     ckpt.lastDuration = 0
     ckpt.reason = 'time'
+    ckpt.numTimed = 0
+    ckpt.numRequested = 0
+    ckpt.numDone = 0
     ckpt.count = 0
     ckpt.redoLsn = lsn0
     ckpt.completedRedoLsn = lsn0
     // Both pointers, or the first tick reports a 26-billion-byte pg_wal.
-    runtimeCkpt.numTimed = 0
-    runtimeCkpt.numRequested = 0
+    lastCheckpointEndLsn = lsn0
     ckptNeeded.fill(0)
     ckptScan = 0
     checkpointFlushBuffer = -1
@@ -8839,12 +8862,19 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       const d = TABLES[i]
       t.pages = d.pages
       t.liveTuples = d.pages * d.tuplesPerPage
+      t.reltuples = t.liveTuples
       // The city is a database that has been up for a while, not one that was
       // loaded a second ago, so the tables already carry dead versions. sessions
       // starts just under its threshold: autovacuum has a bay to open in the
       // first half minute at any transaction rate, which is the only way the
       // yard introduces itself before a visitor has stopped looking at it.
-      const seed = d.id === 'events' ? 0 : Math.round((50 + K.autovacuumScaleFactor * t.liveTuples) * (d.id === 'sessions' ? 0.995 : 0.45))
+      const threshold = Math.min(
+        AUTOVACUUM_VACUUM_MAX_THRESHOLD,
+        AUTOVACUUM_VACUUM_THRESHOLD + K.autovacuumScaleFactor * t.reltuples,
+      )
+      const seed = d.id === 'events'
+        ? 0
+        : Math.round(threshold * (d.id === 'sessions' ? 0.995 : 0.45))
       t.deadTuples = seed
       deadRemovable[i] = seed
       insSinceVacuum[i] = 0
@@ -8861,7 +8891,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       rt.frozenPages = t.pages
       rt.vacuumInsThreshold = 1000
       t.bloat = 0
-      t.vacuumThreshold = 50 + K.autovacuumScaleFactor * t.liveTuples
+      t.vacuumThreshold = threshold
       t.lastVacuum = 0
       t.seqScans = 0
       t.idxScans = 0

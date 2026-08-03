@@ -441,6 +441,13 @@ export interface CheckpointState {
   elapsed: number
   lastDuration: number
   reason: 'time' | 'wal' | 'manual'
+  /** pg_stat_checkpointer.num_timed: timer expiries, including skipped ones. */
+  numTimed: number
+  /** pg_stat_checkpointer.num_requested: checkpoint requests received. */
+  numRequested: number
+  /** pg_stat_checkpointer.num_done: checkpoints that actually completed. */
+  numDone: number
+  /** Legacy model-facing alias for completed checkpoints. */
   count: number
   /** LSN at REDO point of the running/last checkpoint */
   redoLsn: number
@@ -546,10 +553,12 @@ export interface TableSim {
   /** Live total across this table's index relation files, including bloat. */
   indexPages: number
   liveTuples: number
+  /** pg_class.reltuples planner estimate, refreshed by modeled VACUUM/ANALYZE. */
+  reltuples: number
   deadTuples: number
   /** deadTuples / (live+dead) */
   bloat: number
-  /** autovacuum_vacuum_threshold + scale_factor * live */
+  /** min(autovacuum_vacuum_max_threshold, base + scale_factor * reltuples) */
   vacuumThreshold: number
   lastVacuum: number
   seqScans: number

@@ -17,6 +17,30 @@ describe('PostgreSQL oracle claim registry', () => {
       type: 'IO',
       name: 'WalSync',
     })
+    expect(registry.claims.pgStatIo.projectionRows).toContainEqual({
+      backendType: 'checkpointer',
+      object: 'relation',
+      context: 'normal',
+      operations: ['writes', 'writebacks', 'fsyncs'],
+    })
+    expect(registry.claims.pgStatIo.projectionRows).toContainEqual({
+      backendType: 'background writer',
+      object: 'relation',
+      context: 'normal',
+      operations: ['writes', 'writebacks', 'fsyncs'],
+    })
+    expect(registry.claims.autovacuumThreshold).toMatchObject({
+      reltuples: 1_000,
+      liveTuples: 1_700,
+      deadTuples: 300,
+    })
+    expect(registry.claims.checkpointTimerSkip).toMatchObject({
+      since: 18,
+      timeoutSeconds: 30,
+    })
+    expect(registry.claims.gucDefaults).toContainEqual(
+      expect.objectContaining({ setting: 'autovacuum_vacuum_max_threshold' }),
+    )
     expect(registry.indexWalk.catalogSql).toContain('pg_catalog.pg_index')
   })
 

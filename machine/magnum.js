@@ -5,6 +5,7 @@ import {
   nextStatementStageIndex,
 } from './architecture.js'
 import {
+  formatDescribeIndex,
   formatError,
   formatReport,
   formatResult,
@@ -3116,6 +3117,7 @@ async function describeRelation(argument, extended) {
       ic.relname AS "Name",
       i.indisprimary AS "Primary",
       i.indisunique AS "Unique",
+      i.indisvalid AS "Valid",
       pg_catalog.pg_get_indexdef(i.indexrelid) AS "Definition"
     FROM pg_catalog.pg_index AS i
     JOIN pg_catalog.pg_class AS ic ON ic.oid = i.indexrelid
@@ -3150,9 +3152,7 @@ async function describeRelation(argument, extended) {
   if (indexRows.length > 0) {
     lines.push('Indexes:')
     for (const row of indexRows) {
-      const using = String(row.Definition).split(' USING ')[1] ?? row.Definition
-      const kind = row.Primary ? ' PRIMARY KEY,' : row.Unique ? ' UNIQUE,' : ''
-      lines.push(`    "${row.Name}"${kind} ${using}`)
+      lines.push(formatDescribeIndex(row))
     }
   }
   const constraintRows = constraints.results.at(-1)?.rows ?? []

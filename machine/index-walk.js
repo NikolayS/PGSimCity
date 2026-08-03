@@ -86,20 +86,22 @@ export function createIndexWalkEvidence(stepId, report) {
   if (stepId === 'catalog') {
     const primaryKey = rows.find((row) => row.index_name === 'accounts_pkey')
     const index = String(primaryKey?.index_name ?? '')
-    const column = String(primaryKey?.index_element ?? '')
-    const role = String(primaryKey?.column_role ?? '')
-    const position = Number(primaryKey?.position) || 0
+    const accessMethod = String(primaryKey?.access_method ?? '')
+    const validity = String(primaryKey?.validity ?? '')
+    const definition = String(primaryKey?.index_definition ?? '')
     return Object.freeze({
       source: 'postgres',
       stepId,
       node: null,
       index: index || null,
-      column: column || null,
+      accessMethod: accessMethod || null,
+      validity: validity || null,
+      definition: definition || null,
       rows: rows.length,
       sharedHits,
       sharedReads,
       summary:
-        `${index || 'no valid primary-key row'} · ${role || 'unknown role'} ${position || '?'}: ${column || 'unknown'}`
+        `${index || 'no primary-key row'} · ${validity || 'unknown validity'} ${accessMethod || 'unknown method'}`
         + ` · ${rows.length} catalog ${rows.length === 1 ? 'row' : 'rows'}`,
     })
   }
@@ -133,7 +135,9 @@ export function indexWalkFinding(evidence) {
   const supported = Boolean(
     constant?.node === 'Result'
     && catalog?.index === 'accounts_pkey'
-    && catalog?.column === 'id'
+    && catalog?.accessMethod === 'btree'
+    && catalog?.validity === 'valid'
+    && /\bUSING btree \(id\)$/u.test(catalog?.definition ?? '')
     && indexed?.node === 'Index Scan'
     && indexed?.index === 'accounts_pkey'
     && indexed?.rows === 1

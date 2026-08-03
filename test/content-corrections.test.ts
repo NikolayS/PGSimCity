@@ -95,6 +95,29 @@ describe('PostgreSQL 18 content corrections', () => {
     expect(tableCatalog.what).not.toMatch(/bloat becomes visible/i)
   })
 
+  it('uses reltuples and the PostgreSQL 18 cap everywhere autovacuum is explained', () => {
+    const tuning = ALL_VERDICTS.find((verdict) => verdict.id === 'v.av_tuning')!
+    const scenario = SCENARIOS.find((entry) => entry.id === 'bloat-and-vacuum')!
+    const scenarioCopy = scenario.beats.map((beat) => beat[2]).join('\n')
+    const copy = `${bodies}\n${tuning.mechanism}\n${scenarioCopy}`
+
+    expect(copy).toContain('pg_class.reltuples')
+    expect(copy).toContain('autovacuum_vacuum_max_threshold')
+    expect(copy).toContain('100 million')
+    expect(copy).not.toMatch(/scale_factor × (?:n_live_tup|its live row count)/i)
+  })
+
+  it('distinguishes checkpoint timer expiries from completed checkpoints', () => {
+    const checkpoint = DOCS_STORAGE.find((doc) => doc.id === 'checkpointer')!
+    const stall = ALL_STEPS.find((step) => step.id === 'stall.1')!
+    const copy = `${checkpoint.sections.map((section) => section.body).join('\n')}\n${stall.look}`
+
+    expect(copy).toContain('timer expiry')
+    expect(copy).toContain('num_done')
+    expect(copy).toContain('skip')
+    expect(copy).not.toContain('num_timed` counts timer checkpoints')
+  })
+
   it('never converts the pg_stat_wal FPI count into a byte share', () => {
     const wal = ALL_STEPS.find((step) => step.id === 'stall.2')!
     const storm = ALL_VERDICTS.find((verdict) => verdict.id === 'v.ckpt_storm')!

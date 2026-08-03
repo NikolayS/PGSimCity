@@ -82,6 +82,12 @@ export const POSTGRESQL_ORACLE_CLAIMS = {
       expected: expected(50, '', 'number'),
     },
     {
+      id: 'postgres-default/autovacuum_vacuum_max_threshold',
+      setting: 'autovacuum_vacuum_max_threshold',
+      cityClaim: 'PostgreSQL default since PostgreSQL 18',
+      expected: [{ from: 18, ...expected(100_000_000, '', 'number') }],
+    },
+    {
       id: 'postgres-default/autovacuum_analyze_scale_factor',
       setting: 'autovacuum_analyze_scale_factor',
       cityClaim: 'PostgreSQL default',
@@ -210,6 +216,18 @@ export const POSTGRESQL_ORACLE_CLAIMS = {
     since: 17,
     events: Object.values(POSTGRESQL_WAIT_EVENTS),
   },
+  autovacuumThreshold: {
+    relation: 'oracle_autovacuum_threshold',
+    reltuples: 1_000,
+    liveTuples: 1_700,
+    deadTuples: 300,
+    baseThreshold: 50,
+    scaleFactor: 0.2,
+  },
+  checkpointTimerSkip: {
+    since: 18,
+    timeoutSeconds: 30,
+  },
   pgStatIo: {
     relation: 'pg_catalog.pg_stat_io',
     since: 16,
@@ -227,13 +245,13 @@ export const POSTGRESQL_ORACLE_CLAIMS = {
         backendType: 'checkpointer',
         object: 'relation',
         context: 'normal',
-        operations: ['reads', 'hits', 'evictions'],
+        operations: ['writes', 'writebacks', 'fsyncs'],
       },
       {
         backendType: 'background writer',
         object: 'relation',
         context: 'normal',
-        operations: ['reads', 'hits', 'evictions'],
+        operations: ['writes', 'writebacks', 'fsyncs'],
       },
     ],
   },

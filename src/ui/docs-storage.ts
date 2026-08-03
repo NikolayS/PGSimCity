@@ -1604,7 +1604,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Time-triggered or WAL-triggered',
-        body: "A checkpoint starts when `checkpoint_timeout` elapses, when WAL volume approaches the moving `max_wal_size` threshold, or when something requests one — including explicit `CHECKPOINT`, base-backup activity and shutdown. PGSimCity uses 60 seconds instead of PostgreSQL's 5-minute default so the cycle is visible; only the checkpoint clock is compressed. `pg_stat_checkpointer.num_timed` counts timer checkpoints; `num_requested` aggregates requested checkpoints and does **not** identify their cause. If requests are frequent, correlate their rate with WAL volume, PostgreSQL checkpoint messages and maintenance or backup activity before changing `max_wal_size`. In this city the model records its own reason separately, so a scenario can know that WAL pressure caused a request even though the real counter alone cannot.",
+        body: "When `checkpoint_timeout` elapses PostgreSQL records a timer expiry, but it can skip the checkpoint if nothing changed. WAL volume approaching the moving `max_wal_size` threshold or an explicit request — including `CHECKPOINT`, base-backup activity and shutdown — can also start one. PGSimCity uses 60 seconds instead of PostgreSQL's 5-minute default so the cycle is visible; only the checkpoint clock is compressed. In PostgreSQL 18, `pg_stat_checkpointer.num_timed` counts timer expiries and `num_done` counts completed checkpoints; `num_requested` aggregates requests and does **not** identify their cause. If requests are frequent, correlate their rate with WAL volume, PostgreSQL checkpoint messages and maintenance or backup activity before changing `max_wal_size`. In this city the model records its own reason separately, so a scenario can know that WAL pressure caused a request even though the real counter alone cannot.",
       },
       {
         heading: 'Where the latency spike comes from',
@@ -1740,7 +1740,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'The threshold formula',
-        body: 'A table is vacuumed when its dead tuples exceed `autovacuum_vacuum_threshold + autovacuum_vacuum_scale_factor × reltuples` — by default 50 + 20% of the table. Analyze uses the same shape with a 10% factor. Since PostgreSQL 13 there is also an insert-driven trigger (`autovacuum_vacuum_insert_threshold`, 1000 plus 20%), which finally gave append-only tables a reason to get vacuumed at all, so their pages get frozen and marked all-visible before wraparound forces the issue.',
+        body: 'A table is vacuumed when its dead-tuple estimate exceeds `min(autovacuum_vacuum_max_threshold, autovacuum_vacuum_threshold + autovacuum_vacuum_scale_factor × pg_class.reltuples)`. PostgreSQL 18 defaults make that the smaller of 100 million and 50 + 20% of `reltuples`. This is the planner estimate refreshed by `VACUUM` or `ANALYZE`, not the live-tuple estimate in `pg_stat_user_tables`. Analyze uses the uncapped base-plus-scale shape with a 10% factor. Since PostgreSQL 13 there is also an insert-driven trigger (`autovacuum_vacuum_insert_threshold`, 1000 plus 20% of `reltuples` times the unfrozen-page share), which finally gave append-only tables a reason to get vacuumed at all, so their pages get frozen and marked all-visible before wraparound forces the issue.',
       },
       {
         heading: 'Why the defaults are too timid',
@@ -1752,11 +1752,11 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What you would see in production',
-        body: 'The symptom is never "autovacuum is slow". It is a table growing while its row count is flat, or `pg_stat_user_tables.last_autovacuum` hours old on your busiest table, or three workers permanently occupied by three giant tables while everything else queues behind them. Watch `n_dead_tup` against the computed threshold, and `pg_stat_progress_vacuum` to see what the running workers are actually doing.',
+        body: 'The symptom is never "autovacuum is slow". It is a table growing while its row count is flat, or `pg_stat_user_tables.last_autovacuum` hours old on your busiest table, or three workers permanently occupied by three giant tables while everything else queues behind them. Watch `n_dead_tup` against a threshold computed from `pg_class.reltuples` — not `n_live_tup` — and use `pg_stat_progress_vacuum` to see what running workers are actually doing.',
       },
       {
         heading: 'Where this model cheats',
-        body: 'The naptime here is 12 seconds, not 60, and this city has exactly one database — otherwise the yard would sit empty for the length of a visit. The threshold formula and phase order follow PostgreSQL. The city does not implement individual page cost points or dynamic rebalancing of the shared worker budget; it gives each worker an equal share of one quarter of modeled device throughput and realizes that ceiling as alternating work and `VacuumDelay` sleep slices.',
+        body: 'The naptime here is 12 seconds, not 60, and this city has exactly one database — otherwise the yard would sit empty for the length of a visit. The city keeps `reltuples` separate from its live-tuple counter, refreshes it when the folded-in `ANALYZE` phase completes, and applies PostgreSQL 18’s 100-million maximum threshold; it does not model sampling error or a separate manual ANALYZE. The phase order follows PostgreSQL. The city does not implement individual page cost points or dynamic rebalancing of the shared worker budget; it gives each worker an equal share of one quarter of modeled device throughput and realizes that ceiling as alternating work and `VacuumDelay` sleep slices.',
       },
     ],
     metrics: [
@@ -1996,7 +1996,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Things that will catch you',
-        body: 'Statistics are approximate by design: `n_live_tup` is an estimate, not a count, and `reltuples` in `pg_class` is only as fresh as the last analyze. Within one transaction, repeated reads of a stats view return the same snapshot by default (`stats_fetch_consistency`), which is helpful for consistent queries and confusing when you are polling in a loop. And `pg_stat_reset()` does more damage than people expect: it wipes the dead-tuple counts autovacuum uses to decide what to vacuum, so the next round of maintenance is scheduled on amnesia.',
+        body: 'Statistics are approximate by design: `n_live_tup` is an estimate, not a count, and `reltuples` in `pg_class` is only as fresh as the last `VACUUM` or `ANALYZE`. Autovacuum compares its cumulative dead-tuple estimate with a scale threshold derived from that separate `reltuples` value, so the two sources can diverge sharply on a fast-changing table. Within one transaction, repeated reads of a stats view return the same snapshot by default (`stats_fetch_consistency`), which is helpful for consistent queries and confusing when you are polling in a loop. And `pg_stat_reset()` does more damage than people expect: it wipes the dead-tuple counts autovacuum uses to decide what to vacuum, so the next round of maintenance is scheduled on amnesia.',
       },
     ],
     metrics: [

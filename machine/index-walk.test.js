@@ -62,22 +62,20 @@ describe('Machine first index walk', () => {
     expect(INDEX_WALK_STEPS[3].sql).toMatch(/WHERE owner = 'account-42'/)
   })
 
-  it('reports valid index elements in index order with key roles and expressions intact', () => {
+  it('reports every full index definition with its access method and validity', () => {
     const sql = INDEX_WALK_STEPS[1].sql
 
     expect(sql).toBe(INDEX_WALK_CLAIM.catalogSql)
-    expect(sql).toMatch(
-      /CROSS JOIN LATERAL\s+unnest\(i\.indkey\)\s+WITH ORDINALITY AS k\(attnum, position\)/,
-    )
-    expect(sql).toMatch(/k\.position <= i\.indnkeyatts THEN 'key'/)
-    expect(sql).toMatch(/ELSE 'include'/)
-    expect(sql).toMatch(/pg_catalog\.pg_get_indexdef\(i\.indexrelid, k\.position::integer, true\)/)
-    expect(sql).toMatch(/AND i\.indisvalid/)
-    expect(sql).toMatch(/ORDER BY c\.relname, k\.position/)
-    expect(sql).not.toMatch(/ORDER BY c\.relname, a\.attnum/)
+    expect(sql).toMatch(/am\.amname AS access_method/)
+    expect(sql).toMatch(/WHEN i\.indisvalid THEN 'valid'/)
+    expect(sql).toMatch(/ELSE 'INVALID'/)
+    expect(sql).toMatch(/pg_catalog\.pg_get_indexdef\(i\.indexrelid\) AS index_definition/)
+    expect(sql).not.toMatch(/pg_get_indexdef\([^)]*,/)
+    expect(sql).not.toMatch(/AND i\.indisvalid/)
+    expect(sql).toMatch(/ORDER BY c\.relname/)
   })
 
-  it('shows composite order, INCLUDE payloads, and expressions in seeded PostgreSQL', async () => {
+  it('shows complete definitions for seeded PostgreSQL indexes', async () => {
     const source = await createPgliteSource(parseExplainJson)
     try {
       const catalog = await source.query(INDEX_WALK_STEPS[1].sql)
@@ -86,33 +84,21 @@ describe('Machine first index walk', () => {
       expect(catalog.results.at(-1)?.rows).toEqual([
         {
           index_name: 'accounts_balance_updated_cover_idx',
-          position: 1,
-          column_role: 'key',
-          index_element: 'balance',
-        },
-        {
-          index_name: 'accounts_balance_updated_cover_idx',
-          position: 2,
-          column_role: 'key',
-          index_element: 'updated_at',
-        },
-        {
-          index_name: 'accounts_balance_updated_cover_idx',
-          position: 3,
-          column_role: 'include',
-          index_element: 'owner',
+          access_method: 'btree',
+          validity: 'valid',
+          index_definition: 'CREATE INDEX accounts_balance_updated_cover_idx ON public.accounts USING btree (balance, updated_at) INCLUDE (owner)',
         },
         {
           index_name: 'accounts_lower_owner_idx',
-          position: 1,
-          column_role: 'key',
-          index_element: 'lower(owner)',
+          access_method: 'btree',
+          validity: 'valid',
+          index_definition: 'CREATE INDEX accounts_lower_owner_idx ON public.accounts USING btree (lower(owner))',
         },
         {
           index_name: 'accounts_pkey',
-          position: 1,
-          column_role: 'key',
-          index_element: 'id',
+          access_method: 'btree',
+          validity: 'valid',
+          index_definition: 'CREATE UNIQUE INDEX accounts_pkey ON public.accounts USING btree (id)',
         },
       ])
 
@@ -146,9 +132,9 @@ describe('Machine first index walk', () => {
       nodeType: 'Nested Loop',
       rows: [{
         index_name: 'accounts_pkey',
-        position: 1,
-        column_role: 'key',
-        index_element: 'id',
+        access_method: 'btree',
+        validity: 'valid',
+        index_definition: 'CREATE UNIQUE INDEX accounts_pkey ON public.accounts USING btree (id)',
       }],
       hits: 18,
     })
@@ -165,7 +151,7 @@ describe('Machine first index walk', () => {
     })
 
     expect(createIndexWalkEvidence('catalog', catalog).summary)
-      .toBe('accounts_pkey · key 1: id · 1 catalog row')
+      .toBe('accounts_pkey · valid btree · 1 catalog row')
     expect(createIndexWalkEvidence('indexed', indexed).summary)
       .toBe('Index Scan · accounts_pkey · 1 row · hit 3 / read 0')
     expect(createIndexWalkEvidence('unindexed', unindexed).summary)
@@ -184,9 +170,9 @@ describe('Machine first index walk', () => {
         nodeType: 'Nested Loop',
         rows: [{
           index_name: 'accounts_pkey',
-          position: 1,
-          column_role: 'key',
-          index_element: 'id',
+          access_method: 'btree',
+          validity: 'valid',
+          index_definition: 'CREATE UNIQUE INDEX accounts_pkey ON public.accounts USING btree (id)',
         }],
       })),
       createIndexWalkEvidence('indexed', report({

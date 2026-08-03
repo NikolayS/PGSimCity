@@ -230,12 +230,13 @@ function ckptResolved(c: Collector): Resolution {
       reading: `num_requested has not moved, but there is only ${secs} s of counter history — too little to call it either way`,
     }
   const timed = Math.round(c.total.ckptTimed)
+  const done = Math.round(c.total.ckptDone)
   return {
     ok: true,
     reading:
       timed > 0
-        ? `num_requested has not moved in ${secs} s and ${timed} checkpoint${timed === 1 ? '' : 's'} fired on the timer — the schedule is yours again`
-        : `num_requested has not moved in ${secs} s — no requested checkpoint has completed in this observation window`,
+        ? `num_requested has not moved in ${secs} s; the timer expired ${timed} time${timed === 1 ? '' : 's'} and num_done records ${done} completion${done === 1 ? '' : 's'} — timer expiries can be skipped`
+        : `num_requested has not moved in ${secs} s; num_done records ${done} completion${done === 1 ? '' : 's'}, including any run already in flight when the counters were reset`,
   }
 }
 
@@ -562,21 +563,21 @@ const STEPS: Step[] = [
   {
     id: 'stall.1',
     kind: 'step',
-    title: 'Is the checkpointer running on the timer, or on requests?',
-    why: 'Periodic stalls may correlate with checkpoints. These counters separate timer checkpoints from requested ones, but a second source is needed to identify why a request occurred.',
+    title: 'Is the checkpointer timer expiring, or are requests arriving?',
+    why: 'Periodic stalls may correlate with checkpoints. These counters separate timer expiries from requests, while num_done counts actual completions; a second source is needed to identify why a request occurred.',
     instrument: 'pg_stat_checkpointer',
     projection: 'checkpointer',
     city: 'checkpointer',
-    sql: `SELECT num_timed, num_requested, buffers_written,
+    sql: `SELECT num_timed, num_requested, num_done, buffers_written,
        write_time, sync_time
   FROM pg_stat_checkpointer;`,
     look:
-      '`num_timed` counts checkpoints initiated by `checkpoint_timeout`. `num_requested` counts requested checkpoints from multiple causes, including WAL pressure, explicit CHECKPOINT, base-backup activity and shutdown. A high requested rate tells you to correlate checkpoint messages, WAL volume, maintenance and backups; it does not prove max_wal_size is too small.',
+      '`num_timed` counts `checkpoint_timeout` expiries, including expiries where PostgreSQL skips the checkpoint because nothing changed. `num_done` counts completed checkpoints. `num_requested` counts requests from multiple causes, including WAL pressure, explicit CHECKPOINT, base-backup activity and shutdown. A high requested rate tells you to correlate checkpoint messages, WAL volume, maintenance and backups; it does not prove max_wal_size is too small.',
     note:
-      'pg_stat_checkpointer is new in PostgreSQL 17. On 16 and older these two counters live in pg_stat_bgwriter and are called `checkpoints_timed` and `checkpoints_req` — same numbers, older home. Most tuning guides still name the old columns.',
+      'pg_stat_checkpointer is new in PostgreSQL 17; num_done arrived in 18. On 16 and older the timer and request counters live in pg_stat_bgwriter as `checkpoints_timed` and `checkpoints_req`. Those older versions do not expose the separate completion count.',
     branches: [
       { label: '`num_requested` is a serious share; investigate the request sources.', next: 'stall.2', ...gated('requestedCheckpointShare', (_s, c) => c.total.ckptDone > 0 && checkpointRequestedShare(c) > DIAGNOSTIC_GATES.requestedCheckpointShare.threshold) },
-      { label: 'Almost every checkpoint is timed.', next: 'v.ckpt_ok', ...gated('requestedCheckpointShare', (_s, c) => c.total.ckptDone > 0 && checkpointRequestedShare(c) <= DIAGNOSTIC_GATES.requestedCheckpointShare.threshold) },
+      { label: 'Requests are a small share of timer expiries plus requests.', next: 'v.ckpt_ok', ...gated('requestedCheckpointShare', (_s, c) => c.total.ckptDone > 0 && checkpointRequestedShare(c) <= DIAGNOSTIC_GATES.requestedCheckpointShare.threshold) },
     ],
   },
   {
@@ -917,12 +918,12 @@ SELECT w.*, b.state AS blocker_state,
     instrument: 'pg_stat_checkpointer',
     projection: 'checkpointer',
     city: 'checkpointer',
-    sql: `SELECT num_timed, num_requested, buffers_written, write_time
+    sql: `SELECT num_timed, num_requested, num_done, buffers_written, write_time
   FROM pg_stat_checkpointer;
 
 SELECT buffers_clean, buffers_alloc FROM pg_stat_bgwriter;`,
     look:
-      'A low num_requested rate means few checkpoints were requested during this window; it does not reveal why any request occurred. Correlate requests with WAL volume, checkpoint messages, backups and explicit maintenance. buffers_clean should be non-zero but modest — the background writer is meant to clean a short way ahead of the clock hand, not to empty the pool.',
+      'A low num_requested rate means few checkpoints were requested during this window; it does not reveal why any request occurred. num_timed is timer expiries, while num_done is completed checkpoints. Correlate requests with WAL volume, checkpoint messages, backups and explicit maintenance. buffers_clean should be non-zero but modest — the background writer is meant to clean a short way ahead of the clock hand, not to empty the pool.',
     note:
       'PostgreSQL 17 split pg_stat_checkpointer out of pg_stat_bgwriter. If you are on 16 or older, read checkpoints_timed and checkpoints_req from pg_stat_bgwriter instead.',
     branches: [{ label: 'Next: is the standby keeping up?', source: 'checkpointer.counters', next: 'normal.4', test: () => true }],
@@ -961,6 +962,7 @@ const VERDICTS: Verdict[] = [
     evidence: (_s, c) => [
       { label: 'num_timed', value: String(Math.round(c.total.ckptTimed)) },
       { label: 'num_requested', value: String(Math.round(c.total.ckptRequested)), tone: 'crit' },
+      { label: 'num_done', value: String(Math.round(c.total.ckptDone)) },
       { label: 'requested share', value: `${(checkpointRequestedShare(c) * 100).toFixed(0)}%`, tone: 'crit' },
       { label: 'wal_fpi rate', value: `${c.rate.walFpi.toFixed(1)}/s`, tone: 'warn' },
       { label: 'wal_bytes rate', value: `${fmtBytes(c.rate.walBytes)}/s`, tone: 'warn' },
@@ -971,7 +973,7 @@ const VERDICTS: Verdict[] = [
     confirm: {
       projection: 'checkpointer',
       instrument: 'pg_stat_checkpointer',
-      sql: `SELECT num_timed, num_requested FROM pg_stat_checkpointer;`,
+      sql: `SELECT num_timed, num_requested, num_done FROM pg_stat_checkpointer;`,
     },
     resolved: (_s, c) => ckptResolved(c),
     city: 'checkpointer',
@@ -999,7 +1001,7 @@ const VERDICTS: Verdict[] = [
     confirm: {
       projection: 'checkpointer',
       instrument: 'pg_stat_checkpointer',
-      sql: `SELECT num_timed, num_requested FROM pg_stat_checkpointer;`,
+      sql: `SELECT num_timed, num_requested, num_done FROM pg_stat_checkpointer;`,
     },
     resolved: (_s, c) => ckptResolved(c),
     city: 'wal.vault',
@@ -1010,12 +1012,13 @@ const VERDICTS: Verdict[] = [
     kind: 'verdict',
     title: 'Few checkpoints were requested in this window.',
     because:
-      'The observed checkpoints are mostly timer-driven. That is evidence against a high rate of requested checkpoints, not proof that max_wal_size is ideal or that checkpoint I/O cannot contribute to a stall.',
+      'Few request events were observed relative to timer expiries. A timer expiry can be skipped, so num_done—not num_timed—says how many checkpoints completed. This is not proof that max_wal_size is ideal or that checkpoint I/O cannot contribute to a stall.',
     mechanism:
-      'A timed checkpoint normally has checkpoint_completion_target of the configured interval for pacing. A checkpoint that this model starts under WAL pressure may have only the model’s estimated time to refill its WAL budget; other kinds of requested checkpoint do not imply that deadline.',
+      'When a timer expiry starts a checkpoint, checkpoint_completion_target paces it across the configured interval; an idle expiry can be skipped. A checkpoint that this model starts under WAL pressure may have only the model’s estimated time to refill its WAL budget; other kinds of requested checkpoint do not imply that deadline.',
     evidence: (_s, c) => [
       { label: 'num_timed', value: String(Math.round(c.total.ckptTimed)), tone: 'ok' },
       { label: 'num_requested', value: String(Math.round(c.total.ckptRequested)), tone: 'ok' },
+      { label: 'num_done', value: String(Math.round(c.total.ckptDone)), tone: 'ok' },
       { label: 'buffers_written', value: String(Math.round(c.total.ckptBuffers)) },
     ],
     fix:
@@ -1105,7 +1108,7 @@ const VERDICTS: Verdict[] = [
     because:
       'Nothing is pinning the horizon and dead rows are being removed, but they are being created faster than the current thresholds trigger a pass.',
     mechanism:
-      'A table is eligible for autovacuum once its dead tuples exceed autovacuum_vacuum_threshold + autovacuum_vacuum_scale_factor × n_live_tup. The default scale factor of 0.2 means a hundred-million-row table waits for twenty million dead rows before anything happens — a threshold calibrated for 2005 hardware and table sizes.',
+      'A table is eligible for autovacuum once its dead-tuple estimate exceeds min(autovacuum_vacuum_max_threshold, autovacuum_vacuum_threshold + autovacuum_vacuum_scale_factor × pg_class.reltuples). reltuples is the planner estimate refreshed by VACUUM or ANALYZE, not pg_stat_all_tables.n_live_tup. PostgreSQL 18 defaults the maximum threshold to 100 million, so that cap—not an ever-growing scale term—governs very large tables.',
     evidence: (s) => [
       { label: 'scale factor', value: s.knobs.autovacuumScaleFactor.toFixed(2) },
       { label: 'worst table', value: `${[...s.tables].sort((a, b) => b.bloat - a.bloat)[0].def.name} · ${([...s.tables].sort((a, b) => b.bloat - a.bloat)[0].bloat * 100).toFixed(0)}% dead`, tone: 'warn' },
@@ -1117,7 +1120,10 @@ const VERDICTS: Verdict[] = [
     confirm: {
       projection: 'tables',
       instrument: 'pg_stat_all_tables',
-      sql: `SELECT relname, n_dead_tup, n_live_tup FROM pg_stat_all_tables ORDER BY n_dead_tup DESC;`,
+      sql: `SELECT s.relname, c.reltuples, s.n_live_tup, s.n_dead_tup
+  FROM pg_stat_all_tables AS s
+  JOIN pg_class AS c ON c.oid = s.relid
+ ORDER BY s.n_dead_tup DESC;`,
     },
     resolved: (s) => {
       const worst = [...s.tables].sort((a, b) => b.bloat - a.bloat)[0]

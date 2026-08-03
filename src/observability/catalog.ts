@@ -121,7 +121,7 @@ export const CATALOG: CatalogEntry[] = [
     docs: `${M}#MONITORING-PG-STAT-ALL-TABLES-VIEW`,
     coverage: 'partial',
     coverageNote:
-      'The model tracks five tables with seq_scan, idx_scan, n_tup_ins/upd/del, n_tup_hot_upd, n_live_tup, n_dead_tup and last_autovacuum. Its tuple counts are exact model state; PostgreSQL labels n_live_tup and n_dead_tup as estimates. The model never ANALYZEs, so the analyze columns stay blank.',
+      'The model tracks five tables with seq_scan, idx_scan, n_tup_ins/upd/del, n_tup_hot_upd, n_live_tup, n_dead_tup and last_autovacuum. Its live/dead counters are exact model state; PostgreSQL labels n_live_tup and n_dead_tup as estimates. The folded-in autovacuum ANALYZE phase refreshes the model’s separate reltuples value, but analyze timestamps and counters are not tracked, so those view columns stay blank.',
     version:
       'last_seq_scan, last_idx_scan and n_tup_newpage_upd arrived in 16. The four total_*_time columns arrived in 18.',
     projection: 'tables',
@@ -157,7 +157,7 @@ export const CATALOG: CatalogEntry[] = [
     docs: `${M}#MONITORING-PG-STAT-CHECKPOINTER-VIEW`,
     coverage: 'partial',
     coverageNote:
-      'num_timed, num_requested and write_time come from the model checkpointer. buffers_written is blank because checkpoint writes are sample-scale. The model has no standby restartpoints and does not separate sync_time from write_time.',
+      'num_timed counts model timer expiries, num_requested counts requests, and num_done counts completed checkpoints; an idle timer expiry can be skipped. write_time comes from the model checkpointer. buffers_written is blank because checkpoint writes are sample-scale. The model has no standby restartpoints and does not separate sync_time from write_time.',
     version:
       'New in 17, split out of pg_stat_bgwriter. On 16 and older use checkpoints_timed and checkpoints_req in pg_stat_bgwriter — the same two numbers under different names. num_done and slru_written arrived in 18.',
     projection: 'checkpointer',

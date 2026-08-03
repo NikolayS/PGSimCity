@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  formatDescribeIndex,
   formatError,
   formatResult,
   parseMetaCommand,
@@ -56,6 +57,16 @@ describe('Magnum psql output', () => {
       'LINE 1: SELEC 1',
       '        ^',
     ].join('\n'))
+  })
+
+  it('marks an invalid index the way psql describe does', () => {
+    expect(formatDescribeIndex({
+      Name: 'accounts_invalid_owner_idx',
+      Primary: false,
+      Unique: true,
+      Valid: false,
+      Definition: 'CREATE UNIQUE INDEX accounts_invalid_owner_idx ON public.accounts USING btree (owner)',
+    })).toBe('    "accounts_invalid_owner_idx" UNIQUE, btree (owner) INVALID')
   })
 
   it('recognizes only the implemented psql meta-commands', () => {

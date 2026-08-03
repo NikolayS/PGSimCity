@@ -152,6 +152,13 @@ export function formatReport(report, options = {}) {
   return blocks.join('\n\n')
 }
 
+export function formatDescribeIndex(row) {
+  const using = String(row.Definition).split(' USING ')[1] ?? row.Definition
+  const kind = row.Primary ? ' PRIMARY KEY,' : row.Unique ? ' UNIQUE,' : ''
+  const validity = row.Valid ? '' : ' INVALID'
+  return `    "${row.Name}"${kind} ${using}${validity}`
+}
+
 export function parseMetaCommand(input) {
   const match = /^\\([^\s]+)(?:\s+([\s\S]*))?$/u.exec(input.trim())
   if (!match) return null

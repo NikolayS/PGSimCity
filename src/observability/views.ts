@@ -577,19 +577,21 @@ const bgwriter: ProjectionFn = (s, c, mode) => ({
 })
 
 export function checkpointRequestedShare(c: Collector): number {
-  const done = c.total.ckptTimed + c.total.ckptRequested
-  return done > 0 ? c.total.ckptRequested / done : 0
+  const causes = c.total.ckptTimed + c.total.ckptRequested
+  return causes > 0 ? c.total.ckptRequested / causes : 0
 }
 
 const checkpointer: ProjectionFn = (s, c, mode) => {
   const t = c.total
-  const done = t.ckptTimed + t.ckptRequested
+  const causes = t.ckptTimed + t.ckptRequested
+  const done = t.ckptDone
   const requested = checkpointRequestedShare(c)
-  const tone: Tone = done === 0 ? 'dim' : requested > 0.5 ? 'crit' : requested > DIAGNOSTIC_GATES.requestedCheckpointShare.threshold ? 'warn' : 'ok'
+  const tone: Tone = causes === 0 ? 'dim' : requested > 0.5 ? 'crit' : requested > DIAGNOSTIC_GATES.requestedCheckpointShare.threshold ? 'warn' : 'ok'
   return {
     cols: [
       { key: 'num_timed', label: 'num_timed', num: true },
       { key: 'num_requested', label: 'num_requested', num: true },
+      { key: 'num_done', label: 'num_done', num: true },
       { key: 'forced', label: 'requested %', num: true },
       { key: 'buffers_written', label: 'buffers_written', num: true },
       { key: 'write_time', label: 'write_time (ms)', num: true },
@@ -602,7 +604,8 @@ const checkpointer: ProjectionFn = (s, c, mode) => {
         cells: {
           num_timed: ctr(t.ckptTimed, c.rate.ckptTimed, mode),
           num_requested: { v: mode === 'rate' ? `${c.rate.ckptRequested.toFixed(2)}/s` : fmtNum(t.ckptRequested), tone },
-          forced: ratio(t.ckptRequested, done, (x) => (x > 0.5 ? 'crit' : x > DIAGNOSTIC_GATES.requestedCheckpointShare.threshold ? 'warn' : 'ok')),
+          num_done: ctr(t.ckptDone, c.rate.ckptDone, mode),
+          forced: ratio(t.ckptRequested, causes, (x) => (x > 0.5 ? 'crit' : x > DIAGNOSTIC_GATES.requestedCheckpointShare.threshold ? 'warn' : 'ok')),
           buffers_written: NULLC,
           write_time: n(t.ckptWriteMs),
           phase: {
@@ -614,8 +617,8 @@ const checkpointer: ProjectionFn = (s, c, mode) => {
     ],
     caption:
       done === 0
-        ? `No checkpoint has completed since the counters were reset ${fmtNum(c.total.elapsed)} s ago, so requested % has nothing to divide and reads "—". The model phase on the right can still be moving.`
-        : 'requested % is num_requested / (num_timed + num_requested), computed by hand. PostgreSQL num_requested combines multiple request sources; this ratio does not prove max_wal_size pressure. Correlate checkpoint messages, WAL volume, maintenance and backups. buffers_written is blank because model writes are sample-scale; the last column is model-only.',
+        ? `num_done says no checkpoint has completed since the counters were reset ${fmtNum(c.total.elapsed)} s ago. num_timed can still rise when a timer expiry is skipped; requested % compares requests with timer expiries, not completions. The model phase on the right can still be moving.`
+        : 'num_done counts completed checkpoints. requested % is num_requested / (num_timed + num_requested), where num_timed counts timer expiries that may be skipped. PostgreSQL num_requested combines multiple request sources; this ratio does not prove max_wal_size pressure. Correlate checkpoint messages, WAL volume, maintenance and backups. buffers_written is blank because model writes are sample-scale; the last column is model-only.',
   }
 }
 

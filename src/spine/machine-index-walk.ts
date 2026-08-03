@@ -1,21 +1,16 @@
 export const MACHINE_INDEX_WALK = Object.freeze({
   catalogSql: `SELECT
   c.relname AS index_name,
-  k.position::integer AS position,
-  CASE
-    WHEN k.position <= i.indnkeyatts THEN 'key'
-    ELSE 'include'
-  END AS column_role,
-  pg_catalog.pg_get_indexdef(i.indexrelid, k.position::integer, true) AS index_element
+  am.amname AS access_method,
+  CASE WHEN i.indisvalid THEN 'valid' ELSE 'INVALID' END AS validity,
+  pg_catalog.pg_get_indexdef(i.indexrelid) AS index_definition
 FROM pg_catalog.pg_index AS i
 JOIN pg_catalog.pg_class AS c ON c.oid = i.indexrelid
-CROSS JOIN LATERAL
-  unnest(i.indkey) WITH ORDINALITY AS k(attnum, position)
+JOIN pg_catalog.pg_am AS am ON am.oid = c.relam
 WHERE i.indrelid = 'accounts'::regclass
-  AND i.indisvalid
-ORDER BY c.relname, k.position;`,
+ORDER BY c.relname;`,
   finding:
-    'P measured on this seeded accounts table: both lookups returned one row. PostgreSQL used an Index Scan on accounts_pkey for id and a Seq Scan for owner; the catalog reported accounts_pkey on id.',
+    'P measured on this seeded accounts table: both lookups returned one row. PostgreSQL used an Index Scan on accounts_pkey for id and a Seq Scan for owner; the catalog reported the full valid btree definition of accounts_pkey.',
   incomplete:
     'The measured sequence is incomplete or PostgreSQL chose a different plan. Read the receipts instead of assuming the expected finding.',
   sequenceDisclosure:
