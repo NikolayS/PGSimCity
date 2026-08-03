@@ -52,6 +52,7 @@ import {
   createCorrectionPath,
   displayedClaim,
 } from '../src/core/corrections.ts'
+import { CLAIM_VALUES } from '../src/core/claims.ts'
 
 const canvas = document.querySelector('#machine')
 const architecturePane = document.querySelector('.architecture-pane')
@@ -75,6 +76,7 @@ const postgresMeasurement = document.querySelector('#postgres-measurement')
 const measurementRack = document.querySelector('.measurement-rack')
 const terminalBanner = document.querySelector('.terminal-banner')
 const machineDeck = document.querySelector('.deck')
+const machineVersionProvenance = document.querySelector('#machine-version-provenance')
 const terminalState = document.querySelector('#terminal-state')
 const terminalTranscript = document.querySelector('#terminal-transcript')
 const terminalForm = document.querySelector('#terminal-form')
@@ -142,6 +144,7 @@ if (
   || !measurementRack
   || !terminalBanner
   || !machineDeck
+  || !machineVersionProvenance
   || !terminalState
   || !terminalTranscript
   || !terminalForm
@@ -470,7 +473,7 @@ function safeWorkbenchClaim() {
     : 'P measured receipt: not available.'
 
   return [
-    displayedClaim(machineDeck, terminalBanner, postgresMeasurement),
+    displayedClaim(machineDeck, machineVersionProvenance, terminalBanner, postgresMeasurement),
     `Board labels: ${MACHINE_BOARD_LABELS.join(' · ')}`,
     stageNarration,
     measured,
@@ -2897,6 +2900,14 @@ function resizeTerminalInput() {
 }
 
 function updatePostgresUi() {
+  const actualVersion = postgres.source?.versionText.match(
+    /^PostgreSQL\s+\S+(?:\s+\(PGlite\s+[^)]+\))?/u,
+  )?.[0]
+  machineVersionProvenance.textContent =
+    `Model and explanations: ${CLAIM_VALUES.postgresqlVersion.referenceLabel}`
+    + ` · PGlite engine: ${actualVersion ?? CLAIM_VALUES.pgliteVersion.reportedPrefix},`
+    + ' checked separately with SELECT version().'
+
   postgresToggle.dataset.state =
     postgres.status === 'failed'
       ? 'error'

@@ -1107,7 +1107,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What autovacuum does with them',
         body:
-          'Autovacuum workers read the cumulative dead-tuple counter, but the scale term comes from `pg_class.reltuples` — the planner estimate refreshed by `VACUUM` or `ANALYZE`, not `pg_stat_user_tables.n_live_tup`. The PostgreSQL 18 vacuum threshold is the smaller of `autovacuum_vacuum_max_threshold` and `autovacuum_vacuum_threshold + autovacuum_vacuum_scale_factor × reltuples`: 100 million versus 50 plus 20% by default. Analyze has its own threshold, and since PG 13 inserts alone can trigger a vacuum through `autovacuum_vacuum_insert_threshold`, so that append-only tables still get their visibility map maintained.',
+          'Autovacuum workers read the cumulative dead-tuple counter, but the scale term comes from `pg_class.reltuples` — the planner estimate refreshed by `VACUUM` or `ANALYZE`, not `pg_stat_user_tables.n_live_tup`. The PostgreSQL 18 vacuum threshold is the smaller of `autovacuum_vacuum_max_threshold` and `autovacuum_vacuum_threshold + autovacuum_vacuum_scale_factor × reltuples`: 100 million versus 50 plus 20% by default; PostgreSQL 17 and older have no cap. Analyze has its own threshold, and since PG 13 inserts alone can trigger a vacuum through `autovacuum_vacuum_insert_threshold`, so that append-only tables still get their visibility map maintained.',
       },
       {
         heading: 'Two things people conflate',

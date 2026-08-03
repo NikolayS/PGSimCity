@@ -2,6 +2,7 @@ import { PGlite } from '@electric-sql/pglite'
 import initdbWasmUrl from '../../node_modules/@electric-sql/pglite/dist/initdb.wasm?url'
 import fsBundleUrl from '../../node_modules/@electric-sql/pglite/dist/pglite.data?url'
 import pgliteWasmUrl from '../../node_modules/@electric-sql/pglite/dist/pglite.wasm?url'
+import { PGLITE_VERSION } from '../spine/pglite-version'
 
 import type {
   RealPlan,
@@ -281,11 +282,13 @@ export async function createPgliteSource(
     typeof window === 'undefined' ? undefined : await loadBrowserArtifacts()
   const db = await PGlite.create('memory://', browserArtifacts)
   await db.exec(SEED_SQL)
-  const versionResult = await db.query<{ server_version: string }>('SHOW server_version')
-  const serverVersion = versionResult.rows[0]?.server_version ?? 'unknown'
+  const versionResult = await db.query<{ version: string }>(PGLITE_VERSION.versionQuery)
+  const versionText = versionResult.rows[0]?.version ?? 'unknown'
+  const serverVersion = /^PostgreSQL\s+(\S+)/u.exec(versionText)?.[1] ?? 'unknown'
 
   return {
     serverVersion,
+    versionText,
     async query(sql: string): Promise<RealQueryReport> {
       try {
         const analyzed = await executeAnalyzed(db, sql, parsePlan)

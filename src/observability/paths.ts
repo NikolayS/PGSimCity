@@ -1108,7 +1108,7 @@ const VERDICTS: Verdict[] = [
     because:
       'Nothing is pinning the horizon and dead rows are being removed, but they are being created faster than the current thresholds trigger a pass.',
     mechanism:
-      'A table is eligible for autovacuum once its dead-tuple estimate exceeds min(autovacuum_vacuum_max_threshold, autovacuum_vacuum_threshold + autovacuum_vacuum_scale_factor × pg_class.reltuples). reltuples is the planner estimate refreshed by VACUUM or ANALYZE, not pg_stat_all_tables.n_live_tup. PostgreSQL 18 defaults the maximum threshold to 100 million, so that cap—not an ever-growing scale term—governs very large tables.',
+      'A table is eligible for autovacuum once its dead-tuple estimate exceeds min(autovacuum_vacuum_max_threshold, autovacuum_vacuum_threshold + autovacuum_vacuum_scale_factor × pg_class.reltuples). reltuples is the planner estimate refreshed by VACUUM or ANALYZE, not pg_stat_all_tables.n_live_tup. PostgreSQL 18 defaults the maximum threshold to 100 million, so that cap—not an ever-growing scale term—governs very large tables; PostgreSQL 17 and older have no cap.',
     evidence: (s) => [
       { label: 'scale factor', value: s.knobs.autovacuumScaleFactor.toFixed(2) },
       { label: 'worst table', value: `${[...s.tables].sort((a, b) => b.bloat - a.bloat)[0].def.name} · ${([...s.tables].sort((a, b) => b.bloat - a.bloat)[0].bloat * 100).toFixed(0)}% dead`, tone: 'warn' },

@@ -132,8 +132,11 @@ export const POSTGRESQL_ORACLE_CLAIMS = {
     {
       id: 'postgres-default/checkpoint_completion_target',
       setting: 'checkpoint_completion_target',
-      cityClaim: 'PostgreSQL default',
-      expected: expected(DEFAULT_KNOBS.checkpointCompletionTarget, '', 'number'),
+      cityClaim: 'PostgreSQL default; 0.9 since PostgreSQL 14',
+      expected: [
+        { from: 13, to: 13, ...expected(0.5, '', 'number') },
+        { from: 14, ...expected(DEFAULT_KNOBS.checkpointCompletionTarget, '', 'number') },
+      ],
     },
     {
       id: 'postgres-default/max_wal_size',
@@ -179,6 +182,12 @@ export const POSTGRESQL_ORACLE_CLAIMS = {
       setting: 'autovacuum_max_workers',
       cityClaim: 'PostgreSQL default',
       expected: expected(3, '', 'number'),
+    },
+    {
+      id: 'postgres-default/autovacuum_vacuum_max_threshold',
+      setting: 'autovacuum_vacuum_max_threshold',
+      cityClaim: 'PostgreSQL 18 default',
+      expected: { from: 18, ...expected(100_000_000, '', 'number') },
     },
     {
       id: 'postgres-default/track_io_timing',

@@ -6,6 +6,7 @@
 
 import { MACHINE_SYNCHRONOUS_COMMIT_COMPARISON } from '../spine/machine-comparison'
 import { MACHINE_INDEX_WALK } from '../spine/machine-index-walk'
+import { PGLITE_VERSION } from '../spine/pglite-version'
 import { BUILD_LABEL } from './build'
 
 const KIB = 1024
@@ -139,7 +140,7 @@ export const CLAIM_VALUES = {
     historyFile: '00000002.history',
     plate: 'one-fork model · pre-fork backup stays usable · fork-segment copy carries parent tail',
     crossingDisclosure: 'recovery_target_timeline=latest means the latest timeline found in the archive. From a timeline-1 backup, an archived 00000002.history makes timeline 2 discoverable; if that file is absent, timeline 1 remains latest and its archived divergent tail can still contain the target. When recovery does follow timeline 2, WAL unique to timeline 1 after the fork is not part of that history.',
-    defaultDisclosure: 'PostgreSQL 18.3 defaults recovery_target_timeline to latest. With current, PostgreSQL stays on the timeline current when the base backup was taken and replays that timeline’s archived WAL: if it encounters a transaction-end record whose timestamp crosses the target, recovery succeeds; otherwise it reports that the target was not reached after replaying as far as the archive goes.',
+    defaultDisclosure: 'PostgreSQL 18.3 defaults recovery_target_timeline to latest; latest has been the default since PostgreSQL 12. PostgreSQL 11 and older defaulted to current. With current, PostgreSQL stays on the timeline current when the base backup was taken and replays that timeline’s archived WAL: if it encounters a transaction-end record whose timestamp crosses the target, recovery succeeds; otherwise it reports that the target was not reached after replaying as far as the archive goes.',
     absent: ['backup manifests with more than two WAL ranges', 'numeric timeline targets', 'multiple-fork trees', 'timeline-history parsing', 'restore-side credentials and object GET failures', 'wider recovery_target_* interactions'],
     coverageDisclosure: 'PGSimCity models one fork only: timeline 1 to timeline 2, including a standby backup manifest with one WAL range on each side of that fork. Backup manifests with more than two WAL ranges, numeric timeline targets, multiple-fork trees, timeline-history parsing, restore-side credentials or object GET failures, and the wider interactions among recovery_target_* settings are absent.',
   },
@@ -244,6 +245,7 @@ export const CLAIM_VALUES = {
     },
   },
   postgresqlVersion: POSTGRESQL_VERSION,
+  pgliteVersion: PGLITE_VERSION,
   markdownRendering: {
     owner: 'mdToHtml',
   },
@@ -343,7 +345,12 @@ export const CLAIMS = {
   postgresqlVersion: {
     owner: 'src/core/claims.ts#CLAIM_VALUES.postgresqlVersion',
     value: CLAIM_VALUES.postgresqlVersion,
-    surfaces: ['README:target declaration', 'Diagnose:catalog and prose', 'tour:version-specific claims', 'docs:manual and source links'],
+    surfaces: ['README:target declaration', 'city:visible teaching target', 'Machine:model teaching target', 'Diagnose:visible teaching target and catalog prose', 'tour:version-specific claims', 'docs:manual and source links'],
+  },
+  pgliteVersion: {
+    owner: 'src/spine/pglite-version.ts#PGLITE_VERSION',
+    value: CLAIM_VALUES.pgliteVersion,
+    surfaces: ['dependency:package-lock', 'PGlite:SELECT version()', 'Machine:separate engine provenance'],
   },
   markdownRendering: {
     owner: 'src/ui/content.ts#mdToHtml',

@@ -298,6 +298,16 @@ body {
   font-family: var(--f-mono);
 }
 .lede { margin: 0; font-size: var(--fs-lg); line-height: 1.6; color: var(--ink-dim); max-width: 82ch; }
+.version-provenance {
+  max-width: 88ch;
+  margin: -4px 0 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--c-backend);
+  color: var(--ink-dim);
+  font-family: var(--f-mono);
+  font-size: max(9px, var(--fs-xs));
+  line-height: 1.55;
+}
 
 .block { display: grid; gap: 10px; }
 .block h3 {

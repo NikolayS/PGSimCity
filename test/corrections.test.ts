@@ -182,6 +182,7 @@ describe('PostgreSQL correction reports', () => {
       ['src/ui/tour.ts', 2, 'tour chapters and scenario beats'],
       ['src/ui/control-center.ts', 1, 'control center'],
       ['src/ui/help.ts', 1, 'help and reading guide'],
+      ['src/main.ts', 1, 'city PostgreSQL version provenance'],
       ['src/observability/main.ts', 1, 'all Diagnose and Query flow cards'],
       ['machine/magnum.js', 4, 'Machine workbench, board, index walk, and comparison'],
     ] as const
@@ -226,6 +227,7 @@ describe('PostgreSQL correction reports', () => {
       name: 'Diagnose',
       path: '/observability/',
       readySelector: '[data-correction-path]',
+      measureDisclosures: true,
     }, {
       name: 'Query flow',
       path: '/observability/?view=flow&statement=aggregate&setting=shared_buffers&a=4096&b=64',
@@ -273,8 +275,9 @@ describe('PostgreSQL correction reports', () => {
     const disclosureReports = reports.flatMap(
       (report) => report.disclosureReport ? [report.disclosureReport] : [],
     )
-    expect(disclosureReports.map((report) => report.name)).toEqual(['City', 'Machine'])
+    expect(disclosureReports.map((report) => report.name)).toEqual(['City', 'Diagnose', 'Machine'])
     expect(disclosureReports.map((report) => report.viewport)).toEqual([
+      { width: 390, height: 844 },
       { width: 390, height: 844 },
       { width: 390, height: 844 },
     ])

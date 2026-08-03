@@ -1612,7 +1612,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'How to tune it',
-        body: 'Read PostgreSQL checkpoint messages and correlate them with WAL generation, `num_requested`, explicit maintenance and backup activity. If WAL pressure is the verified cause, raise `max_wal_size` against measured peak WAL rate and available disk; if explicit requests are the cause, changing it will not help. Lengthening `checkpoint_timeout` can reduce full-page-image frequency but may lengthen crash recovery, so decide it against the actual RTO. Leave `checkpoint_completion_target` at 0.9 unless measurements establish a reason to finish writes earlier.',
+        body: 'Read PostgreSQL checkpoint messages and correlate them with WAL generation, `num_requested`, explicit maintenance and backup activity. If WAL pressure is the verified cause, raise `max_wal_size` against measured peak WAL rate and available disk; if explicit requests are the cause, changing it will not help. Lengthening `checkpoint_timeout` can reduce full-page-image frequency but may lengthen crash recovery, so decide it against the actual RTO. On PostgreSQL 14 and later, leave `checkpoint_completion_target` at its 0.9 default unless measurements establish a reason to finish writes earlier; PostgreSQL 13 and older default to 0.5.',
       },
       {
         heading: 'What the city measures',
@@ -1740,7 +1740,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'The threshold formula',
-        body: 'A table is vacuumed when its dead-tuple estimate exceeds `min(autovacuum_vacuum_max_threshold, autovacuum_vacuum_threshold + autovacuum_vacuum_scale_factor × pg_class.reltuples)`. PostgreSQL 18 defaults make that the smaller of 100 million and 50 + 20% of `reltuples`. This is the planner estimate refreshed by `VACUUM` or `ANALYZE`, not the live-tuple estimate in `pg_stat_user_tables`. Analyze uses the uncapped base-plus-scale shape with a 10% factor. Since PostgreSQL 13 there is also an insert-driven trigger (`autovacuum_vacuum_insert_threshold`, 1000 plus 20% of `reltuples` times the unfrozen-page share), which finally gave append-only tables a reason to get vacuumed at all, so their pages get frozen and marked all-visible before wraparound forces the issue.',
+        body: 'A table is vacuumed when its dead-tuple estimate exceeds `min(autovacuum_vacuum_max_threshold, autovacuum_vacuum_threshold + autovacuum_vacuum_scale_factor × pg_class.reltuples)`. PostgreSQL 18 defaults make that the smaller of 100 million and 50 + 20% of `reltuples`; PostgreSQL 17 and older have no maximum. This is the planner estimate refreshed by `VACUUM` or `ANALYZE`, not the live-tuple estimate in `pg_stat_user_tables`. Analyze uses the uncapped base-plus-scale shape with a 10% factor. Since PostgreSQL 13 there is also an insert-driven trigger (`autovacuum_vacuum_insert_threshold`, 1000 plus 20% of `reltuples` times the unfrozen-page share), which finally gave append-only tables a reason to get vacuumed at all, so their pages get frozen and marked all-visible before wraparound forces the issue.',
       },
       {
         heading: 'Why the defaults are too timid',
