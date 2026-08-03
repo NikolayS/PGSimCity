@@ -11,6 +11,74 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-08-03
+
+### Added
+
+- **An oracle: the city's claims, checked against a real PostgreSQL.**
+  `tools/pg-oracle.mjs` spins a throwaway cluster on a probed port, derives its
+  checks from the claims registry rather than a hand-written list, and prints a
+  divergence table. 58 checks in 34 s; runs against 13, 17 and 18, and will take
+  19 without code changes. Registering a claim now automatically subjects it to a
+  real server.
+
+  Cross-version runs double as a finder: anything that diverges on 17 or 13 but
+  not 18 is by definition version-dependent, which is how four unqualified claims
+  were found and qualified.
+
+- **Version provenance.** The city, the Machine and Diagnose each now say which
+  PostgreSQL they describe. The Machine separately reports the engine it actually
+  queried — `PostgreSQL 18.3 (PGlite 0.5.4)`, `server_version_num = 180003`,
+  obtained from `SELECT version()` rather than assumed. It matches the teaching
+  target, but it is a different fact and is stated as one.
+
+- **A PgBouncer connection pooler**, rebuilt after the first attempt was reverted
+  on four blocking defects. It now shows the honest result: at equal admitted
+  load the pooler *costs* throughput (1,170 direct vs 996 pooled), and session
+  mode binds eight clients to eight backends while 992 await assignment. The
+  trade the feature exists to teach is no longer inverted.
+
+### Fixed — found by running PostgreSQL, not by reading about it
+
+- **Autovacuum uses `pg_class.reltuples`, not `pg_stat_user_tables.n_live_tup`.**
+  A live server launched autovacuum when the `reltuples` threshold was crossed
+  and the `n_live_tup` threshold was not. The city said `n_live_tup` in three
+  places and implemented it. `reltuples` is a planner estimate refreshed by
+  `VACUUM`/`ANALYZE`, so the two diverge exactly when a table changes fast —
+  which is when autovacuum matters. Six rounds of documentation review passed
+  this, because the manual's phrasing admits both readings.
+
+- **PostgreSQL 18's `autovacuum_vacuum_max_threshold`** (default 100,000,000) caps
+  the scale term and was neither modelled nor mentioned. Now both.
+
+- **`num_timed` counts timer expiries, not checkpoints.** On an idle server:
+  `num_timed 1, num_done 0`, no checkpoint messages. If nothing changed, the timer
+  fires and the checkpoint is *skipped*. The city set
+  `ckptDone = ckptTimed + ckptRequested` and let Diagnose say a timer checkpoint
+  "fired". PostgreSQL 18 exposes `num_done` for exactly this reason.
+
+- **`pg_stat_io` operations were wrong for the writers** — the city projected
+  `reads, hits, evictions` for `checkpointer` and `background writer`; the server
+  reports `writes, writebacks, fsyncs`. Those processes write.
+
+- **`\d` rendered an invalid index as usable**, where real psql prints `INVALID`;
+  and the index walk had over-corrected into hiding invalid indexes entirely.
+  Neither is right: a failed `CREATE INDEX CONCURRENTLY` leaves an index that
+  consumes space, is maintained on write, and the planner will not use.
+
+- **The index walk stripped what determines usability** — predicates, access
+  method, `COLLATE`, operator class and ordering. `text_pattern_ops` is what makes
+  `LIKE 'x%'` indexable; a partial index serves only queries matching its
+  predicate; a hash index has no key order at all.
+
+### Verified clean against a real server
+
+WAL, recovery, replication and backup — checked with real streaming replication,
+a real promotion and a real `00000002.history`. Locks, concurrency and isolation —
+checked with six concurrent sessions producing real lock waits, real deadlock
+reports and a real `40001` serialization failure. Both lenses returned no defects.
+
+
 ## [0.36.2] - 2026-08-02
 
 ### Fixed
