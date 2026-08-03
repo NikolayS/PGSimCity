@@ -6,6 +6,7 @@
 
 import { MACHINE_SYNCHRONOUS_COMMIT_COMPARISON } from '../spine/machine-comparison'
 import { MACHINE_INDEX_WALK } from '../spine/machine-index-walk'
+import { MVCC_VOCABULARY } from '../spine/mvcc-vocabulary'
 import { PGLITE_VERSION } from '../spine/pglite-version'
 import { BUILD_LABEL } from './build'
 
@@ -151,6 +152,7 @@ export const CLAIM_VALUES = {
     ],
     rule: 'Vacuum reuses space inside the table and can return only trailing empty pages to the filesystem.',
   },
+  mvccVocabulary: MVCC_VOCABULARY,
   cityComponentRoute: {
     hashPrefix: '#/c/',
   },
@@ -321,6 +323,11 @@ export const CLAIMS = {
     owner: 'src/core/claims.ts#CLAIM_VALUES.vacuumReclaim',
     value: CLAIM_VALUES.vacuumReclaim,
     surfaces: ['model:vacuum truncate phase', 'world:landfill plate', 'tour:vacuum chapter', 'prose:vacuum docs'],
+  },
+  mvccVocabulary: {
+    owner: 'src/spine/mvcc-vocabulary.ts#MVCC_VOCABULARY',
+    value: CLAIM_VALUES.mvccVocabulary,
+    surfaces: ['world/anatomy:labels and tooltips', 'docs/Diagnose/scenarios:explanatory prose'],
   },
   cityComponentRoute: {
     owner: 'src/core/claims.ts#CLAIM_VALUES.cityComponentRoute',

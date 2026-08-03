@@ -76,7 +76,7 @@ function lineOf(text: string, index: number): number {
 }
 
 describe('claims and conventions spine', () => {
-  it('owns exactly the twenty-four drift-prone contracts across both passes', () => {
+  it('owns exactly the twenty-five drift-prone contracts across both passes', () => {
     expect(Object.keys(CLAIMS)).toEqual([
       'appVersion',
       'walSegment',
@@ -91,6 +91,7 @@ describe('claims and conventions spine', () => {
       'restoreDrill',
       'timelineRecovery',
       'vacuumReclaim',
+      'mvccVocabulary',
       'cityComponentRoute',
       'componentNaming',
       'eventConvention',
