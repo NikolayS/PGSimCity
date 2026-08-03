@@ -18,7 +18,8 @@ approved by Electronic Arts Inc. SimCity is a trademark of Electronic Arts Inc.
 This project contains no SimCity code, assets, artwork, logos, characters,
 audio, or game content.
 
-The PostgreSQL lessons have keyboard and text-first routes, but the 3D scene and
+The PostgreSQL lessons have keyboard and text-first routes, including a city
+architecture description generated from the layout, but the 3D scene and
 first-person walk do not have a nonvisual equivalent. See the
 [accessibility boundary and alternatives](ACCESSIBILITY.md) for what is covered
 and what remains irreducibly spatial.

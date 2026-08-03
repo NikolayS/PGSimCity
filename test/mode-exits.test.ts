@@ -9,6 +9,7 @@ import { createCityExit, installCityEscape } from '../src/observability/shell'
 import { SCENARIOS } from '../src/sim/scenarios'
 import { createAnatomy } from '../src/ui/anatomy'
 import { createContextMenu } from '../src/ui/context-menu'
+import { createCityWords } from '../src/ui/city-words'
 import { createControls } from '../src/ui/controls'
 import { createHelp } from '../src/ui/help'
 import { createHud } from '../src/ui/hud'
@@ -68,6 +69,7 @@ describe('enterable mode exits', () => {
       createHelp(ctx),
       createTour(ctx),
       createSearch(ctx),
+      createCityWords(ctx),
       createAnatomy(ctx),
       createContextMenu({
         dom: canvas as unknown as HTMLElement,
@@ -207,6 +209,7 @@ describe('enterable mode exits', () => {
     const ctx = context()
     const help = createHelp(ctx)
     const search = createSearch(ctx)
+    const cityWords = createCityWords(ctx)
     const tour = createTour(ctx)
     const anatomy = createAnatomy(ctx)
     const loose = ctx.bus as unknown as {
@@ -225,6 +228,12 @@ describe('enterable mode exits', () => {
     document.querySelector<HTMLButtonElement>('[data-mode-exit="command-palette"]')!.click()
     expect(palette.hidden).toBe(true)
 
+    ctx.bus.emit('ui:city-words', { open: true })
+    const cityWordsRoot = document.querySelector<HTMLElement>('.city-words')!
+    expect(cityWordsRoot.hidden).toBe(false)
+    document.querySelector<HTMLButtonElement>('[data-mode-exit="city-in-words"]')!.click()
+    expect(cityWordsRoot.hidden).toBe(true)
+
     ctx.bus.emit('tour:start', {})
     expect(document.body.classList.contains('pg-tour')).toBe(true)
     document.querySelector<HTMLButtonElement>('[data-mode-exit="guided-tour"]')!.click()
@@ -239,6 +248,7 @@ describe('enterable mode exits', () => {
     expect(anatomyRoot.hidden).toBe(true)
 
     anatomy.dispose()
+    cityWords.dispose()
     tour.dispose()
     search.dispose()
     help.dispose()

@@ -63,6 +63,7 @@ import { createControls } from './ui/controls'
 import { createInspector } from './ui/panel'
 import { createTour } from './ui/tour'
 import { createSearch } from './ui/search'
+import { createCityWords } from './ui/city-words'
 import { createTouchpad } from './ui/touchpad'
 import { createZoomContext } from './ui/zoom-context'
 import { createControlCenter } from './ui/control-center'
@@ -294,6 +295,7 @@ async function boot(): Promise<void> {
     createInspector(uiCtx),
     createTour(uiCtx),
     createSearch(uiCtx),
+    createCityWords(uiCtx),
     /* Right-click. The camera gave up that button when rotation moved to
      * shift-drag, which is what made a contextual menu possible at all. */
     createContextMenu({ dom: renderer.domElement, picker, registry, bus, rig }),

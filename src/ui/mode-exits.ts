@@ -15,6 +15,7 @@ export const MODE_IDS = {
   scenario: 'scenario',
   help: 'help',
   palette: 'command-palette',
+  cityWords: 'city-in-words',
   contextMenu: 'context-menu',
   closeZoom: 'close-zoom',
 } as const

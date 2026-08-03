@@ -240,6 +240,27 @@ export function createHelp(ctx: UiContext): UiModule {
     text: 'How to read the city',
     'data-help-section': 'reading',
   })
+  const cityWordsRoute = el(
+    'div',
+    { class: 'help-city-words-route' },
+    el('p', {
+      text: 'Need the layout itself in text? The architecture guide names every district, its footprint and contents, then explains why each adjacency matters.',
+    }),
+    el(
+      'button',
+      {
+        class: 'pg-btn help-city-words',
+        type: 'button',
+        on: {
+          click: () => {
+            setOpen(false)
+            ctx.bus.emit('ui:city-words', { open: true })
+          },
+        },
+      },
+      'Open City in words',
+    ),
+  )
   const legalSection = el(
     'section',
     { class: 'help-legal', 'data-help-section': 'legal' },
@@ -275,6 +296,7 @@ export function createHelp(ctx: UiContext): UiModule {
           el('span', { html: r.p }),
         ),
       ),
+      cityWordsRoute,
     ),
     el('p', {
       class: 'help-disclaimer',
