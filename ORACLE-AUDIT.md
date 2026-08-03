@@ -35,6 +35,20 @@ At measurement time the floating image supplied PostgreSQL 18.4 while
 difference is intentionally actionable; it is not added to the four model
 exceptions.
 
+## Expansion result
+
+The server-checkable scope below is now implemented by `tools/pg-oracle.mjs`.
+The expanded PostgreSQL 18.3 run made 188 observations in 61.58 seconds: 183
+matched, four were the existing registered model divergences, and one was a new
+finding. `src/ui/tour.ts` says real VACUUM truncation needs a lock, the server
+demonstrated that `ACCESS SHARE` prevents tail truncation until the holder
+releases it, but `CLAIM_VALUES.vacuumReclaim` does not register that facet.
+
+The same harness made 188 observations against PostgreSQL 18.4 in 63.17
+seconds. The only additional divergence was the explicit PostgreSQL 18.3
+reference pin. None of the other checked city claims moved between 18.3 and
+18.4.
+
 ## Survey boundary
 
 For this survey, **server-checkable** means a controlled fixture can obtain a
@@ -47,10 +61,10 @@ different verifier even when the underlying prose is true.
 The existing oracle already owns GUC values and contexts, catalog/view shapes,
 wait-event names, `pg_stat_io` projections, Diagnose SQL executability, index
 attributes, the registered model defaults, and its current MVCC/storage
-experiments. The items below are the remaining boundary; this survey does not
-implement any of them.
+experiments. The items below define the expansion boundary that the oracle now
+implements.
 
-### Remaining server-checkable claims
+### Server-checkable expansion scope
 
 | Registry claim | Mechanically checkable remainder | Boundary inside the claim |
 |---|---|---|

@@ -1,7 +1,17 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process'
-import { access, mkdir, mkdtemp, readFile, rm, symlink } from 'node:fs/promises'
+import {
+  access,
+  appendFile,
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
@@ -16,6 +26,18 @@ import { formatDescribeIndex } from '../machine/psql.js'
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url))
 const CLAIMS_OWNER = 'src/core/claims.ts#CLAIMS'
 const VALUES_OWNER = 'src/core/claims.ts#CLAIM_VALUES'
+const SERVER_CHECKABLE_CITY_CLAIMS = [
+  'walSegment',
+  'modelLatency',
+  'connectionPooler',
+  'workMem',
+  'restoreDrill',
+  'timelineRecovery',
+  'vacuumReclaim',
+  'mvccVocabulary',
+  'machineSynchronousCommitComparison',
+  'machineIndexWalk',
+]
 let activeCleanup = null
 
 function ownerParts(owner) {
@@ -96,13 +118,25 @@ export async function loadOracleRegistry() {
     throw new Error(`Expected one oracle source registration, found ${registrations.length}`)
   }
 
-  const sources = await loadOwners(registrations[0])
+  const sourceRegistrations = registrations[0]
+  const sources = await loadOwners(sourceRegistrations)
+  const registeredCityClaims = SERVER_CHECKABLE_CITY_CLAIMS.filter((claimId) => {
+    const registration = sourceRegistrations.find((record) => record.role === claimId)
+    return registration?.owner === root.claims[claimId]?.owner
+  })
   return {
     target: root.values.postgresqlVersion,
     claims: sources.claims,
     catalog: sources.catalog,
     indexWalk: sources.indexWalk,
     diagnosticSql: sources.diagnosticSql,
+    cityClaims: Object.fromEntries(
+      registeredCityClaims.map((claimId) => [claimId, sources[claimId]]),
+    ),
+    registeredCityClaims,
+    unregisteredCityClaims: SERVER_CHECKABLE_CITY_CLAIMS.filter(
+      (claimId) => !registeredCityClaims.includes(claimId),
+    ),
   }
 }
 
@@ -229,6 +263,7 @@ async function withThrowawayCluster(pgBin, callback) {
   const scratch = await mkdtemp(path.join(tmpdir(), `pgsimcity-oracle-${process.pid}-`))
   const dataDir = path.join(scratch, 'data')
   const socketDir = path.join(scratch, 'socket')
+  const archiveDir = path.join(scratch, 'archive')
   const logFile = path.join(scratch, 'postgres.log')
   let initialized = false
   let started = false
@@ -257,13 +292,22 @@ async function withThrowawayCluster(pgBin, callback) {
     ])
     initialized = true
     await mkdir(socketDir)
+    await mkdir(archiveDir)
     let port = 0
     for (let attempt = 0; attempt < 5 && !started; attempt++) {
       port = await freePort()
       const launch = await run(path.join(pgBin, 'pg_ctl'), [
         '-D', dataDir,
         '-l', logFile,
-        '-o', `-h 127.0.0.1 -p ${port} -k ${socketDir} -c fsync=off`,
+        '-o', [
+          '-h 127.0.0.1',
+          `-p ${port}`,
+          `-k ${socketDir}`,
+          '-c fsync=off',
+          '-c max_prepared_transactions=10',
+          '-c archive_mode=on',
+          `-c archive_command='test ! -f ${archiveDir}/%f && cp %p ${archiveDir}/%f'`,
+        ].join(' '),
         '-w', 'start',
       ], { allowFailure: true })
       started = launch.code === 0
@@ -278,7 +322,12 @@ async function withThrowawayCluster(pgBin, callback) {
       throw new Error(`PostgreSQL did not start after five free-port probes:\n${log.trim()}`)
     }
 
-    const psql = async (sql, { allowFailure = false, tuplesOnly = true } = {}) => run(
+    const psql = async (sql, {
+      allowFailure = false,
+      tuplesOnly = true,
+      database = 'postgres',
+      targetPort = port,
+    } = {}) => run(
       path.join(pgBin, 'psql'),
       [
         '-X',
@@ -286,23 +335,27 @@ async function withThrowawayCluster(pgBin, callback) {
         '-q',
         '-v', 'ON_ERROR_STOP=1',
         '-h', '127.0.0.1',
-        '-p', String(port),
+        '-p', String(targetPort),
         '-U', 'postgres',
-        '-d', 'postgres',
+        '-d', database,
         '-c', sql,
       ],
-      { allowFailure },
+      {
+        allowFailure,
+        input: undefined,
+      },
     )
-    const query = async (sql) => {
+    const query = async (sql, options) => {
       const body = sql.trim().replace(/;+\s*$/u, '')
       const result = await psql(
         `SELECT COALESCE(json_agg(oracle_row), '[]'::json) FROM (${body}) AS oracle_row;`,
+        options,
       )
       const json = result.stdout.trim()
       return JSON.parse(json || '[]')
     }
 
-    return await callback({ psql, query, port, scratch })
+    return await callback({ psql, query, port, scratch, archiveDir, dataDir })
   } finally {
     await cleanup()
     if (activeCleanup === cleanup) activeCleanup = null
@@ -332,6 +385,77 @@ export function oracleSummary(rows) {
     unexpected: unexpectedRows.length,
     unexpectedRows,
   }
+}
+
+function checkRegistryCoverage(registry) {
+  return SERVER_CHECKABLE_CITY_CLAIMS.map((claimId) => {
+    const registered = registry.registeredCityClaims.includes(claimId)
+    return result(
+      `registry/${claimId}`,
+      'server-checkable city claim has an explicit oracle source registration',
+      registered
+        ? `${claimId} resolves through the claims registry`
+        : `${claimId} is not registered as an oracle source`,
+      registered,
+    )
+  })
+}
+
+async function checkWalSegment(psql, query, registry) {
+  const city = registry.cityClaims.walSegment
+  const claim = registry.claims.walSegment
+  await psql('SELECT pg_catalog.pg_switch_wal()')
+  const [observation] = await query(`
+    SELECT current_setting('wal_segment_size') AS configured,
+           setting,
+           unit,
+           wal.file_name,
+           wal.file_offset,
+           directory.name AS allocated_file,
+           directory.size AS file_size
+      FROM pg_catalog.pg_settings
+      CROSS JOIN LATERAL pg_catalog.pg_walfile_name_offset(
+        pg_catalog.pg_current_wal_lsn()
+      ) AS wal
+      LEFT JOIN LATERAL (
+        SELECT name, size
+          FROM pg_catalog.pg_ls_waldir()
+         ORDER BY size DESC, name
+         LIMIT 1
+      ) AS directory ON true
+     WHERE pg_settings.name = 'wal_segment_size'`)
+  const configuredBytes = unitValue(observation?.setting, observation?.unit, 'bytes')
+  const fileSize = Number(observation?.file_size)
+  const fileName = String(observation?.file_name ?? '')
+  const fileOffset = Number(observation?.file_offset)
+  const citySummary = `${city.label} (${city.bytes} bytes)`
+  return [
+    result(
+      'WAL/segment-size-setting',
+      citySummary,
+      observation
+        ? `wal_segment_size ${observation.configured}; ${configuredBytes} bytes`
+        : 'wal_segment_size observation is absent',
+      configuredBytes === claim.bytes && claim.bytes === city.bytes,
+    ),
+    result(
+      'WAL/segment-file-size',
+      `${citySummary}; an allocated pg_wal segment has that size`,
+      observation
+        ? `${observation.allocated_file} is ${fileSize} bytes`
+        : 'WAL directory observation is absent',
+      /^[0-9A-F]{24}$/u.test(String(observation?.allocated_file ?? ''))
+        && fileSize === city.bytes,
+    ),
+    result(
+      'WAL/file-name-offset',
+      `WAL filename/offset arithmetic uses ${citySummary} segments`,
+      observation ? `${fileName} offset ${fileOffset}` : 'WAL filename/offset observation is absent',
+      /^[0-9A-F]{24}$/u.test(fileName)
+        && fileOffset >= 0
+        && fileOffset < city.bytes,
+    ),
+  ]
 }
 
 export async function checkDiagnosticSql(psql, registry, major) {
@@ -546,6 +670,1227 @@ async function checkWaitEvents(query, registry, major) {
   })
 }
 
+function psqlCommand(pgBin, port, sql) {
+  return run(path.join(pgBin, 'psql'), [
+    '-X', '-A', '-t', '-q', '-v', 'ON_ERROR_STOP=1',
+    '-h', '127.0.0.1', '-p', String(port),
+    '-U', 'postgres', '-d', 'postgres', '-c', sql,
+  ], { allowFailure: true })
+}
+
+async function checkLatencyWaitMappings(pgBin, psql, query, registry, port) {
+  const claim = registry.claims.latencyWaitMappings
+  const city = registry.cityClaims.modelLatency
+  await psql('CREATE TABLE public.oracle_relation_wait (id integer)')
+
+  let holderExecution
+  let relationExecution
+  let syncRepExecution
+  try {
+    holderExecution = psqlCommand(pgBin, port, `
+      SET application_name = 'oracle_relation_holder';
+      BEGIN;
+      LOCK TABLE public.oracle_relation_wait IN ACCESS EXCLUSIVE MODE;
+      SELECT pg_catalog.pg_sleep(5);
+      COMMIT`)
+    await pollRow(
+      query,
+      `SELECT pid, wait_event_type, wait_event
+         FROM pg_catalog.pg_stat_activity
+        WHERE application_name = 'oracle_relation_holder'`,
+      (row) => row?.wait_event === 'PgSleep',
+      5_000,
+    )
+    relationExecution = psqlCommand(pgBin, port, `
+      SET application_name = 'oracle_relation_waiter';
+      SELECT * FROM public.oracle_relation_wait`)
+    const relationWait = await pollRow(
+      query,
+      `SELECT pid, wait_event_type, wait_event
+         FROM pg_catalog.pg_stat_activity
+        WHERE application_name = 'oracle_relation_waiter'`,
+      (row) => row?.wait_event_type === claim.relation.type
+        && row?.wait_event === claim.relation.name,
+      5_000,
+    )
+    if (relationWait?.pid) {
+      await psql(`SELECT pg_catalog.pg_terminate_backend(${Number(relationWait.pid)})`)
+    }
+    await relationExecution
+    relationExecution = null
+    const [holder] = await query(`
+      SELECT pid FROM pg_catalog.pg_stat_activity
+       WHERE application_name = 'oracle_relation_holder'`)
+    if (holder?.pid) await psql(`SELECT pg_catalog.pg_terminate_backend(${Number(holder.pid)})`)
+    await holderExecution
+    holderExecution = null
+
+    await psql('CREATE TABLE public.oracle_sync_rep_wait (id integer)')
+    await psql("ALTER SYSTEM SET synchronous_standby_names = 'oracle_missing_standby'")
+    await psql('SELECT pg_catalog.pg_reload_conf()')
+    syncRepExecution = psqlCommand(pgBin, port, `
+      SET application_name = 'oracle_sync_rep_waiter';
+      SET synchronous_commit = on;
+      INSERT INTO public.oracle_sync_rep_wait VALUES (1)`)
+    const syncRepWait = await pollRow(
+      query,
+      `SELECT pid, wait_event_type, wait_event
+         FROM pg_catalog.pg_stat_activity
+        WHERE application_name = 'oracle_sync_rep_waiter'`,
+      (row) => row?.wait_event_type === claim.synchronousReplication.type
+        && row?.wait_event === claim.synchronousReplication.name,
+      5_000,
+    )
+    if (syncRepWait?.pid) {
+      await psql(`SELECT pg_catalog.pg_terminate_backend(${Number(syncRepWait.pid)})`)
+    }
+    await syncRepExecution
+    syncRepExecution = null
+    const poolRows = await query(`
+      SELECT pid, wait_event_type, wait_event
+        FROM pg_catalog.pg_stat_activity
+       WHERE pg_catalog.lower(COALESCE(wait_event, '')) LIKE '%pool%'
+          OR wait_event = ${sqlLiteral(claim.poolWaitName)}`)
+
+    return [
+      result(
+        'latency-wait/relation-lock',
+        `relation lock maps to ${claim.relation.type}/${claim.relation.name}`,
+        relationWait
+          ? `${relationWait.wait_event_type}/${relationWait.wait_event}`
+          : 'the coordinated waiter was not observed',
+        relationWait?.wait_event_type === claim.relation.type
+          && relationWait?.wait_event === claim.relation.name,
+      ),
+      result(
+        'latency-wait/synchronous-replication',
+        `commit durability can map to ${claim.synchronousReplication.type}/${claim.synchronousReplication.name}`,
+        syncRepWait
+          ? `${syncRepWait.wait_event_type}/${syncRepWait.wait_event}`
+          : 'the coordinated waiter was not observed',
+        syncRepWait?.wait_event_type === claim.synchronousReplication.type
+          && syncRepWait?.wait_event === claim.synchronousReplication.name,
+      ),
+      result(
+        'latency-wait/pool-slot-is-client-side',
+        city.taxonomyDisclosure,
+        poolRows.length === 0
+          ? 'no PostgreSQL activity row exposes a pool-slot wait'
+          : `${poolRows.length} PostgreSQL activity rows exposed a pool-named wait`,
+        poolRows.length === 0,
+      ),
+    ]
+  } finally {
+    await psql('ALTER SYSTEM RESET synchronous_standby_names', { allowFailure: true })
+    await psql('SELECT pg_catalog.pg_reload_conf()', { allowFailure: true })
+    const activities = await query(`
+      SELECT pid FROM pg_catalog.pg_stat_activity
+       WHERE application_name IN (
+         'oracle_relation_holder',
+         'oracle_relation_waiter',
+         'oracle_sync_rep_waiter'
+       )`).catch(() => [])
+    for (const activity of activities) {
+      await psql(`SELECT pg_catalog.pg_terminate_backend(${Number(activity.pid)})`, {
+        allowFailure: true,
+      })
+    }
+    await holderExecution
+    await relationExecution
+    await syncRepExecution
+  }
+}
+
+async function checkConnectionLocalBehavior(psql, registry, port) {
+  const claim = registry.claims.connectionLocal
+  const city = registry.cityClaims.connectionPooler
+  const connection = `host=127.0.0.1 port=${port} dbname=postgres user=postgres`
+  const execution = await psql(`
+    CREATE EXTENSION IF NOT EXISTS dblink;
+    SELECT public.dblink_connect('oracle_session_a', ${sqlLiteral(connection)});
+    SELECT public.dblink_connect('oracle_session_b', ${sqlLiteral(connection)});
+    SELECT public.dblink_exec('oracle_session_a', 'SET work_mem = ''64kB''');
+    SELECT public.dblink_exec(
+      'oracle_session_a',
+      'DO $oracle$ BEGIN PERFORM pg_catalog.pg_advisory_lock(${claim.advisoryLockKey}); END $oracle$'
+    );
+    SELECT public.dblink_exec(
+      'oracle_session_a',
+      'PREPARE ${claim.preparedStatement}(integer) AS SELECT $1 + 1'
+    );
+    SELECT public.dblink_exec(
+      'oracle_session_a',
+      'LISTEN ${claim.listenChannel}'
+    );
+    SELECT public.dblink_exec(
+      'oracle_session_b',
+      'NOTIFY ${claim.listenChannel}, ''from-session-b'''
+    );
+    SELECT pg_catalog.pg_sleep(0.05);
+    SELECT pg_catalog.json_build_object(
+      'a_work_mem', a_work.setting,
+      'b_work_mem', b_work.setting,
+      'b_got_lock', b_lock.got_lock,
+      'a_prepared', a_prepared.count,
+      'b_prepared', b_prepared.count,
+      'notify_name', notification.notify_name,
+      'notify_extra', notification.extra
+    )::text
+    FROM public.dblink('oracle_session_a', 'SHOW work_mem') AS a_work(setting text)
+    CROSS JOIN public.dblink('oracle_session_b', 'SHOW work_mem') AS b_work(setting text)
+    CROSS JOIN public.dblink(
+      'oracle_session_b',
+      'SELECT pg_catalog.pg_try_advisory_lock(${claim.advisoryLockKey})'
+    ) AS b_lock(got_lock boolean)
+    CROSS JOIN public.dblink(
+      'oracle_session_a',
+      'SELECT pg_catalog.count(*)::integer FROM pg_catalog.pg_prepared_statements WHERE name = ''${claim.preparedStatement}'''
+    ) AS a_prepared(count integer)
+    CROSS JOIN public.dblink(
+      'oracle_session_b',
+      'SELECT pg_catalog.count(*)::integer FROM pg_catalog.pg_prepared_statements WHERE name = ''${claim.preparedStatement}'''
+    ) AS b_prepared(count integer)
+    LEFT JOIN LATERAL public.dblink_get_notify('oracle_session_a') AS notification ON true;
+    SELECT public.dblink_disconnect('oracle_session_a');
+    SELECT public.dblink_disconnect('oracle_session_b')`)
+  const json = execution.stdout
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .find((line) => line.startsWith('{'))
+  const observation = json ? JSON.parse(json) : null
+  const tradeoff = city.transactionTradeoff
+  return [
+    result(
+      'connection-local/session-GUC',
+      tradeoff,
+      observation
+        ? `session A work_mem ${observation.a_work_mem}; session B work_mem ${observation.b_work_mem}`
+        : 'session GUC observation is absent',
+      observation?.a_work_mem === '64kB' && observation?.b_work_mem !== '64kB',
+    ),
+    result(
+      'connection-local/advisory-lock',
+      tradeoff,
+      observation ? `session B pg_try_advisory_lock returned ${observation.b_got_lock}` : 'lock observation is absent',
+      observation?.b_got_lock === false,
+    ),
+    result(
+      'connection-local/sql-PREPARE',
+      tradeoff,
+      observation
+        ? `prepared statement count: session A ${observation.a_prepared}, session B ${observation.b_prepared}`
+        : 'prepared-statement observation is absent',
+      Number(observation?.a_prepared) === 1 && Number(observation?.b_prepared) === 0,
+    ),
+    result(
+      'connection-local/LISTEN-NOTIFY',
+      tradeoff,
+      observation
+        ? `session A received ${observation.notify_name} with payload ${observation.notify_extra}`
+        : 'notification observation is absent',
+      observation?.notify_name === claim.listenChannel
+        && observation?.notify_extra === 'from-session-b',
+    ),
+  ]
+}
+
+async function explainJson(psql, setup, sql) {
+  const prefix = setup.trim() ? `${setup}; ` : ''
+  const execution = await psql(`${prefix}EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${sql}`)
+  const raw = execution.stdout.trim()
+  const start = raw.indexOf('[')
+  if (start < 0) throw new Error(`EXPLAIN JSON was absent: ${raw}`)
+  return JSON.parse(raw.slice(start))[0]
+}
+
+function planNodes(plan, predicate) {
+  const matches = []
+  const pending = plan ? [plan] : []
+  while (pending.length > 0) {
+    const node = pending.shift()
+    if (predicate(node)) matches.push(node)
+    pending.unshift(...(node.Plans ?? []))
+  }
+  return matches
+}
+
+function sortSummary(nodes) {
+  return nodes.map((node) => [
+    node['Sort Method'] ?? 'no method',
+    `${node['Sort Space Used'] ?? 0} ${node['Sort Space Type'] ?? 'unknown'}`,
+  ].join(' / ')).join(' | ')
+}
+
+async function checkWorkMemExecution(pgBin, psql, query, registry, port) {
+  const claim = registry.claims.workMemExecution
+  const city = registry.cityClaims.workMem
+  await psql('SELECT pg_catalog.pg_stat_reset()')
+  const beforeRows = await query(`
+    SELECT temp_files, temp_bytes
+      FROM pg_catalog.pg_stat_database
+     WHERE datname = current_database()`)
+  const before = beforeRows[0]
+  const setup = `SET work_mem = '${claim.spillWorkMemKiB}kB'`
+  const sortPlan = await explainJson(psql, setup, `
+    SELECT value, pg_catalog.md5(value::text) AS payload
+      FROM pg_catalog.generate_series(1, ${claim.sortRows}) AS value
+     ORDER BY payload`)
+  const sortNodes = planNodes(sortPlan.Plan, (node) => node['Node Type'] === 'Sort')
+
+  const multiSortPlan = await explainJson(psql, setup, `
+    WITH left_sort AS MATERIALIZED (
+      SELECT value
+        FROM pg_catalog.generate_series(1, ${claim.sortRows / 2}) AS value
+       ORDER BY pg_catalog.md5(value::text)
+    ), right_sort AS MATERIALIZED (
+      SELECT value
+        FROM pg_catalog.generate_series(1, ${claim.sortRows / 2}) AS value
+       ORDER BY pg_catalog.md5(value::text)
+    )
+    SELECT (SELECT pg_catalog.sum(value) FROM left_sort),
+           (SELECT pg_catalog.sum(value) FROM right_sort)`)
+  const multiSortNodes = planNodes(
+    multiSortPlan.Plan,
+    (node) => node['Node Type'] === 'Sort',
+  )
+
+  const hashPlans = []
+  for (const multiplier of claim.hashMultipliers) {
+    hashPlans.push(await explainJson(psql, `
+      SET work_mem = '${claim.hashWorkMemMiB}MB';
+      SET hash_mem_multiplier = ${multiplier};
+      SET enable_sort = off`, `
+      SELECT value, pg_catalog.count(*)
+        FROM pg_catalog.generate_series(1, ${claim.hashRows}) AS value
+       GROUP BY value`))
+  }
+  const hashNodes = hashPlans.map((plan) => planNodes(
+    plan.Plan,
+    (node) => node['Node Type'] === 'Aggregate' && node.Strategy === 'Hashed',
+  )[0])
+
+  const concurrent = []
+  for (let index = 0; index < claim.concurrentBackends; index++) {
+    concurrent.push(psqlCommand(pgBin, port, `
+      SET application_name = 'oracle_work_mem_${index}';
+      SET work_mem = '${claim.spillWorkMemKiB}kB';
+      SELECT pg_catalog.pg_sleep(0.6), pg_catalog.count(*)
+        FROM (
+          SELECT value
+            FROM pg_catalog.generate_series(1, ${claim.sortRows}) AS value
+           ORDER BY pg_catalog.md5(value::text)
+        ) AS sorted`))
+  }
+  const active = await pollRow(
+    query,
+    `SELECT pg_catalog.count(*)::integer AS active
+       FROM pg_catalog.pg_stat_activity
+      WHERE application_name LIKE 'oracle_work_mem_%'
+        AND state = 'active'`,
+    (row) => Number(row?.active) === claim.concurrentBackends,
+    5_000,
+  )
+  await Promise.all(concurrent)
+  const after = await pollRow(
+    query,
+    `SELECT temp_files, temp_bytes
+       FROM pg_catalog.pg_stat_database
+      WHERE datname = current_database()`,
+    (row) => Number(row?.temp_files) > Number(before?.temp_files),
+    5_000,
+  )
+
+  const firstHash = hashNodes[0]
+  const secondHash = hashNodes[1]
+  const firstPeak = Number(firstHash?.['Peak Memory Usage'])
+  const secondPeak = Number(secondHash?.['Peak Memory Usage'])
+  const firstBatches = Number(firstHash?.['HashAgg Batches'])
+  const secondBatches = Number(secondHash?.['HashAgg Batches'])
+  return [
+    result(
+      'work_mem/sort-external-merge',
+      `${city.nodeDisclosure}; a ${claim.spillWorkMemKiB} KiB Sort spills`,
+      sortNodes.length > 0 ? sortSummary(sortNodes) : 'Sort node is absent',
+      sortNodes.some((node) => node['Sort Method'] === 'external merge'
+        && Number(node['Sort Space Used']) > 0
+        && node['Sort Space Type'] === 'Disk'),
+    ),
+    result(
+      'work_mem/per-node-sort-allowance',
+      city.nodeDisclosure,
+      `${multiSortNodes.length} Sort nodes: ${sortSummary(multiSortNodes)}`,
+      multiSortNodes.length >= 2
+        && multiSortNodes.every((node) => node['Sort Method'] === 'external merge'),
+    ),
+    result(
+      'work_mem/temp-file-counters',
+      'spilling increments pg_stat_database temp_files and temp_bytes',
+      after
+        ? `temp_files ${before?.temp_files} -> ${after.temp_files}; temp_bytes ${before?.temp_bytes} -> ${after.temp_bytes}`
+        : 'database temp counters are absent',
+      Number(after?.temp_files) > Number(before?.temp_files)
+        && Number(after?.temp_bytes) > Number(before?.temp_bytes),
+    ),
+    result(
+      'work_mem/hash_mem_multiplier',
+      `Hash nodes receive work_mem × hash_mem_multiplier (${city.hashMemMultiplier})`,
+      firstHash && secondHash
+        ? `multiplier ${claim.hashMultipliers[0]}: peak ${firstPeak} KiB / ${firstBatches} batches; multiplier ${claim.hashMultipliers[1]}: peak ${secondPeak} KiB / ${secondBatches} batches`
+        : 'controlled HashAggregate nodes are absent',
+      Boolean(firstHash && secondHash)
+        && secondPeak > firstPeak
+        && secondBatches <= firstBatches,
+    ),
+    result(
+      'work_mem/concurrent-backends-multiply',
+      city.nodeDisclosure,
+      `${active?.active ?? 0} controlled sort backends were active together`,
+      Number(active?.active) === claim.concurrentBackends,
+    ),
+  ]
+}
+
+async function checkVacuumReclaim(pgBin, psql, query, registry, port) {
+  const claim = registry.claims.vacuumReclaim
+  const city = registry.cityClaims.vacuumReclaim
+  const reuseRows = Math.floor(claim.rows / 4)
+  await psql(`
+    CREATE EXTENSION IF NOT EXISTS pg_freespacemap;
+    CREATE TABLE public.oracle_vacuum_reuse (
+      id integer PRIMARY KEY,
+      payload text NOT NULL
+    ) WITH (autovacuum_enabled = false);
+    INSERT INTO public.oracle_vacuum_reuse
+    SELECT value, pg_catalog.repeat('r', ${claim.payloadBytes})
+      FROM pg_catalog.generate_series(1, ${claim.rows}) AS value`)
+  await psql('VACUUM (ANALYZE) public.oracle_vacuum_reuse')
+  const [reuseBefore] = await query(`
+    SELECT pg_catalog.pg_relation_size('public.oracle_vacuum_reuse')::bigint AS bytes,
+           COALESCE(pg_catalog.sum(avail), 0::bigint)::bigint AS free_bytes
+      FROM public.pg_freespace('public.oracle_vacuum_reuse'::regclass)`)
+  await psql(`DELETE FROM public.oracle_vacuum_reuse
+     WHERE id > ${reuseRows}
+       AND id <= ${reuseRows * 2}`)
+  await psql('VACUUM public.oracle_vacuum_reuse')
+  const [reuseVacuumed] = await query(`
+    SELECT pg_catalog.pg_relation_size('public.oracle_vacuum_reuse')::bigint AS bytes,
+           COALESCE(pg_catalog.sum(avail), 0::bigint)::bigint AS free_bytes
+      FROM public.pg_freespace('public.oracle_vacuum_reuse'::regclass)`)
+  await psql(`
+    INSERT INTO public.oracle_vacuum_reuse
+    SELECT value, pg_catalog.repeat('n', ${claim.payloadBytes})
+      FROM pg_catalog.generate_series(
+        ${claim.rows + 1},
+        ${claim.rows + reuseRows}
+      ) AS value`)
+  const [reuseFilled] = await query(`
+    SELECT pg_catalog.pg_relation_size('public.oracle_vacuum_reuse')::bigint AS bytes`)
+
+  await psql(`
+    CREATE TABLE public.oracle_vacuum_tail (
+      id integer PRIMARY KEY,
+      payload text NOT NULL
+    ) WITH (autovacuum_enabled = false);
+    INSERT INTO public.oracle_vacuum_tail
+    SELECT value, pg_catalog.repeat('t', ${claim.payloadBytes})
+      FROM pg_catalog.generate_series(1, ${claim.rows}) AS value`)
+  await psql('VACUUM (ANALYZE) public.oracle_vacuum_tail')
+  const [tailBefore] = await query(`
+    SELECT pg_catalog.pg_relation_size('public.oracle_vacuum_tail')::bigint AS bytes,
+           pg_catalog.max(
+             pg_catalog.split_part(
+               trim(both '()' FROM ctid::text), ',', 1
+             )::integer
+           ) AS last_block
+      FROM public.oracle_vacuum_tail`)
+  await psql(`
+    DELETE FROM public.oracle_vacuum_tail
+     WHERE pg_catalog.split_part(
+       trim(both '()' FROM ctid::text), ',', 1
+     )::integer >= ${Math.floor(Number(tailBefore.last_block) / 2)}`)
+  const holder = psqlCommand(pgBin, port, `
+    SET application_name = 'oracle_vacuum_holder';
+    BEGIN;
+    LOCK TABLE public.oracle_vacuum_tail IN ACCESS SHARE MODE;
+    SELECT pg_catalog.pg_sleep(30);
+    COMMIT`)
+  const holderActivity = await pollRow(
+    query,
+    `SELECT pid, wait_event FROM pg_catalog.pg_stat_activity
+      WHERE application_name = 'oracle_vacuum_holder'`,
+    (row) => row?.wait_event === 'PgSleep',
+    5_000,
+  )
+  await psql('VACUUM public.oracle_vacuum_tail')
+  const [tailLocked] = await query(`
+    SELECT pg_catalog.pg_relation_size('public.oracle_vacuum_tail')::bigint AS bytes`)
+  if (holderActivity?.pid) {
+    await psql(`SELECT pg_catalog.pg_terminate_backend(${Number(holderActivity.pid)})`)
+  }
+  await holder
+  await psql('VACUUM public.oracle_vacuum_tail')
+  const [tailTruncated] = await query(`
+    SELECT pg_catalog.pg_relation_size('public.oracle_vacuum_tail')::bigint AS bytes`)
+
+  const lockDemonstrated = Number(tailLocked?.bytes) === Number(tailBefore?.bytes)
+    && Number(tailTruncated?.bytes) < Number(tailLocked?.bytes)
+  return [
+    result(
+      'VACUUM/interior-space-stays-in-relation',
+      city.rule,
+      `relation bytes ${reuseBefore?.bytes} -> ${reuseVacuumed?.bytes}; free bytes ${reuseBefore?.free_bytes} -> ${reuseVacuumed?.free_bytes}`,
+      Number(reuseVacuumed?.bytes) === Number(reuseBefore?.bytes)
+        && Number(reuseVacuumed?.free_bytes) > Number(reuseBefore?.free_bytes),
+    ),
+    result(
+      'VACUUM/reuses-interior-space',
+      city.rule,
+      `after inserting ${reuseRows} replacement rows: ${reuseVacuumed?.bytes} -> ${reuseFilled?.bytes} bytes`,
+      Number(reuseFilled?.bytes) <= Number(reuseVacuumed?.bytes) + 8192,
+    ),
+    result(
+      'VACUUM/tail-truncation-lock',
+      'plain VACUUM can truncate only an empty tail and must acquire ACCESS EXCLUSIVE on the relation',
+      `initial ${tailBefore?.bytes}; with ACCESS SHARE held ${tailLocked?.bytes}; after release ${tailTruncated?.bytes}`,
+      lockDemonstrated,
+    ),
+    result(
+      'registry/vacuum-truncation-lock',
+      'the city says real truncation needs a lock; this facet must be in the vacuumReclaim registry owner',
+      lockDemonstrated
+        ? 'server demonstrated the lock requirement, but CLAIM_VALUES.vacuumReclaim does not register it'
+        : 'server did not complete the controlled lock observation',
+      /lock/iu.test(JSON.stringify(city)),
+    ),
+  ]
+}
+
+function scanNode(plan) {
+  return planNodes(plan, (node) => /Scan$/u.test(String(node['Node Type'])))[0] ?? null
+}
+
+async function checkPartialIndexBehavior(psql, query, registry) {
+  const claim = registry.claims.partialIndexBehavior
+  const city = registry.cityClaims.machineIndexWalk
+  await psql(`
+    CREATE SCHEMA oracle_machine;
+    CREATE TABLE oracle_machine.accounts (
+      id integer PRIMARY KEY,
+      owner text NOT NULL,
+      balance numeric(12, 2) NOT NULL,
+      updated_at timestamptz NOT NULL
+    );
+    CREATE INDEX accounts_positive_owner_idx
+      ON oracle_machine.accounts(owner) WHERE balance > 0;
+    INSERT INTO oracle_machine.accounts
+    SELECT value,
+           'account-' || value,
+           (1000 + value)::numeric(12, 2),
+           timestamptz '2026-01-01 00:00:00+00' + value * interval '1 minute'
+      FROM pg_catalog.generate_series(1, ${claim.rows}) AS value;
+    ANALYZE oracle_machine.accounts`)
+  const ownerLiteral = sqlLiteral(claim.owner)
+  const primaryPlan = await explainJson(psql, '', `
+    SELECT id, balance
+      FROM oracle_machine.accounts
+     WHERE id = 42`)
+  const ownerPlan = await explainJson(psql, '', `
+    SELECT id, balance
+      FROM oracle_machine.accounts
+     WHERE owner = ${ownerLiteral}`)
+  const impliedPlan = await explainJson(psql, '', `
+    SELECT id, balance
+      FROM oracle_machine.accounts
+     WHERE owner = ${ownerLiteral}
+       AND balance > 0`)
+  const primaryScan = scanNode(primaryPlan.Plan)
+  const ownerScan = scanNode(ownerPlan.Plan)
+  const impliedScan = scanNode(impliedPlan.Plan)
+  const [rows] = await query(`
+    SELECT
+      (SELECT pg_catalog.count(*)
+         FROM oracle_machine.accounts
+        WHERE id = 42)::integer AS primary_rows,
+      (SELECT pg_catalog.count(*)
+         FROM oracle_machine.accounts
+        WHERE owner = ${ownerLiteral})::integer AS owner_rows,
+      (SELECT pg_catalog.count(*)
+         FROM oracle_machine.accounts
+        WHERE owner = ${ownerLiteral}
+          AND balance > 0)::integer AS implied_rows`)
+  return [
+    result(
+      'partial-index/predicate-not-implied',
+      city.finding,
+      `${ownerScan?.['Node Type'] ?? 'no scan'}${ownerScan?.['Index Name'] ? ` using ${ownerScan['Index Name']}` : ''}; ${rows?.owner_rows ?? 0} rows`,
+      ownerScan?.['Node Type'] === 'Seq Scan'
+        && !ownerScan?.['Index Name']
+        && Number(rows?.owner_rows) === 1,
+    ),
+    result(
+      'partial-index/predicate-implied',
+      city.finding,
+      `${impliedScan?.['Node Type'] ?? 'no scan'}${impliedScan?.['Index Name'] ? ` using ${impliedScan['Index Name']}` : ''}; ${rows?.implied_rows ?? 0} rows`,
+      impliedScan?.['Node Type'] === 'Index Scan'
+        && impliedScan?.['Index Name'] === city.partialIndex
+        && Number(rows?.implied_rows) === 1,
+    ),
+    result(
+      'partial-index/primary-key-plan',
+      city.finding,
+      `${primaryScan?.['Node Type'] ?? 'no scan'}${primaryScan?.['Index Name'] ? ` using ${primaryScan['Index Name']}` : ''}; ${rows?.primary_rows ?? 0} rows`,
+      primaryScan?.['Node Type'] === 'Index Scan'
+        && primaryScan?.['Index Name'] === 'accounts_pkey'
+        && Number(rows?.primary_rows) === 1,
+    ),
+  ]
+}
+
+async function checkAsynchronousCommit(pgBin, registry, scratch) {
+  const claim = registry.claims.asynchronousCommit
+  const city = registry.cityClaims.machineSynchronousCommitComparison
+  const dataDir = path.join(scratch, 'async-data')
+  const socketDir = path.join(scratch, 'async-socket')
+  const logFile = path.join(scratch, 'async.log')
+  const port = await freePort()
+  let started = false
+  const launchOptions = (delayMs) => [
+    '-h 127.0.0.1',
+    `-p ${port}`,
+    `-k ${socketDir}`,
+    '-c fsync=on',
+    '-c full_page_writes=on',
+    '-c wal_level=logical',
+    '-c max_replication_slots=2',
+    `-c wal_writer_delay=${delayMs}ms`,
+  ].join(' ')
+  const start = async (delayMs) => {
+    await run(path.join(pgBin, 'pg_ctl'), [
+      '-D', dataDir, '-l', logFile, '-o', launchOptions(delayMs), '-w', 'start',
+    ])
+    started = true
+  }
+  const stop = async () => {
+    if (!started) return
+    await run(path.join(pgBin, 'pg_ctl'), [
+      '-D', dataDir, '-m', 'immediate', '-w', 'stop',
+    ], { allowFailure: true })
+    started = false
+  }
+  const args = [
+    '-X', '-A', '-t', '-q', '-v', 'ON_ERROR_STOP=1',
+    '-h', '127.0.0.1', '-p', String(port),
+    '-U', 'postgres', '-d', 'postgres',
+  ]
+  const psql = async (sql, { input = false } = {}) => run(
+    path.join(pgBin, 'psql'),
+    input ? [...args, '-f', '-'] : [...args, '-c', sql],
+    input ? { input: sql } : {},
+  )
+  const query = async (sql) => {
+    const body = sql.trim().replace(/;+\s*$/u, '')
+    const execution = await psql(
+      `SELECT COALESCE(json_agg(oracle_row), '[]'::json) FROM (${body}) AS oracle_row;`,
+    )
+    return JSON.parse(execution.stdout.trim() || '[]')
+  }
+
+  await run(path.join(pgBin, 'initdb'), [
+    '-D', dataDir,
+    '--no-locale',
+    '--encoding=UTF8',
+    '--auth=trust',
+    '--username=postgres',
+    '--no-sync',
+  ])
+  await mkdir(socketDir)
+  try {
+    await start(claim.walWriterDelayMs)
+    await psql(`
+      CREATE TABLE public.oracle_async_commit (
+        id integer PRIMARY KEY,
+        transaction_group integer NOT NULL,
+        payload text NOT NULL
+      );
+      SET synchronous_commit = on;
+      INSERT INTO public.oracle_async_commit VALUES (1, 0, 'durable-control');
+      CHECKPOINT`)
+    await psql(`SELECT * FROM pg_catalog.pg_create_logical_replication_slot(
+      'oracle_logical_horizon', 'pgoutput'
+    )`)
+    const [logicalSlot] = await query(`
+      SELECT slot_name, catalog_xmin::text AS catalog_xmin
+        FROM pg_catalog.pg_replication_slots
+       WHERE slot_name = 'oracle_logical_horizon'`)
+    await psql("SELECT pg_catalog.pg_drop_replication_slot('oracle_logical_horizon')")
+
+    let acknowledgment = null
+    let acknowledgedAt = 0
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const id = 100 + attempt
+      const execution = await psql(`
+        SET synchronous_commit = off;
+        INSERT INTO public.oracle_async_commit
+          VALUES (${id}, ${id}, pg_catalog.repeat('a', 64));
+        SELECT pg_catalog.json_build_object(
+          'id', ${id},
+          'insert_lsn', pg_catalog.pg_current_wal_insert_lsn(),
+          'flush_lsn', pg_catalog.pg_current_wal_flush_lsn(),
+          'ahead', pg_catalog.pg_current_wal_insert_lsn()
+            > pg_catalog.pg_current_wal_flush_lsn()
+        )::text;
+      `, { input: true })
+      const json = execution.stdout
+        .split(/\r?\n/u)
+        .map((line) => line.trim())
+        .find((line) => line.startsWith('{'))
+      acknowledgment = json ? JSON.parse(json) : null
+      acknowledgedAt = performance.now()
+      if (acknowledgment?.ahead === true) break
+    }
+
+    let naturalFlush = null
+    if (acknowledgment?.insert_lsn) {
+      naturalFlush = await pollRow(
+        query,
+        `SELECT pg_catalog.pg_current_wal_flush_lsn()::text AS flush_lsn,
+                pg_catalog.pg_wal_lsn_diff(
+                  pg_catalog.pg_current_wal_flush_lsn(),
+                  ${sqlLiteral(acknowledgment.insert_lsn)}::pg_lsn
+                ) >= 0 AS reached`,
+        (row) => row?.reached === true,
+        claim.lossWindowMultiplier * claim.walWriterDelayMs + 1_000,
+      )
+    }
+    const flushElapsedMs = performance.now() - acknowledgedAt
+
+    await psql(`ALTER SYSTEM SET wal_writer_delay = '${claim.crashWalWriterDelayMs}ms'`)
+    await psql('SELECT pg_catalog.pg_reload_conf()')
+    await psql('CHECKPOINT')
+    let crashAck = null
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const group = 900 + attempt
+      const execution = await psql(`
+        SET synchronous_commit = off;
+        BEGIN;
+        INSERT INTO public.oracle_async_commit VALUES
+          (${group * 10}, ${group}, 'atomic-left'),
+          (${group * 10 + 1}, ${group}, 'atomic-right');
+        COMMIT;
+        SELECT pg_catalog.json_build_object(
+          'group_id', ${group},
+          'insert_lsn', pg_catalog.pg_current_wal_insert_lsn(),
+          'flush_lsn', pg_catalog.pg_current_wal_flush_lsn(),
+          'ahead', pg_catalog.pg_current_wal_insert_lsn()
+            > pg_catalog.pg_current_wal_flush_lsn()
+        )::text;
+      `, { input: true })
+      const json = execution.stdout
+        .split(/\r?\n/u)
+        .map((line) => line.trim())
+        .find((line) => line.startsWith('{'))
+      crashAck = json ? JSON.parse(json) : null
+      if (crashAck?.ahead === true) break
+    }
+    await stop()
+    await start(claim.crashWalWriterDelayMs)
+    const [afterCrash] = await query(`
+      SELECT pg_catalog.count(*) FILTER (WHERE id = 1)::integer AS control_rows,
+             pg_catalog.count(*) FILTER (
+               WHERE transaction_group = ${Number(crashAck?.group_id)}
+             )::integer AS async_rows
+        FROM public.oracle_async_commit`)
+
+    const acknowledgmentAhead = acknowledgment?.ahead === true
+    const flushedNaturally = naturalFlush?.reached === true
+    const withinClaimedWindow = flushedNaturally
+      && flushElapsedMs <= claim.lossWindowMultiplier * claim.walWriterDelayMs + 750
+    const lossDemonstrated = crashAck?.ahead === true
+      && Number(afterCrash?.control_rows) === 1
+      && Number(afterCrash?.async_rows) === 0
+    return [
+      result(
+        'synchronous_commit/off-acknowledges-before-local-flush',
+        city.finding,
+        acknowledgment
+          ? `acknowledged at insert_lsn ${acknowledgment.insert_lsn} while flush_lsn was ${acknowledgment.flush_lsn}`
+          : 'asynchronous acknowledgment observation is absent',
+        acknowledgmentAhead,
+      ),
+      result(
+        'synchronous_commit/WAL-flushes-later',
+        city.finding,
+        naturalFlush
+          ? `flush_lsn reached ${naturalFlush.flush_lsn} after ${flushElapsedMs.toFixed(1)} ms; bound ${claim.lossWindowMultiplier} × ${claim.walWriterDelayMs} ms`
+          : 'the later WAL flush was not observed',
+        withinClaimedWindow,
+      ),
+      result(
+        'synchronous_commit/recent-acknowledged-loss',
+        city.finding,
+        afterCrash
+          ? `after immediate-stop recovery: durable control rows ${afterCrash.control_rows}; acknowledged async transaction rows ${afterCrash.async_rows}`
+          : 'post-crash witness is absent',
+        lossDemonstrated,
+      ),
+      result(
+        'synchronous_commit/transaction-atomicity',
+        city.finding,
+        afterCrash
+          ? `acknowledged two-row transaction recovered ${afterCrash.async_rows} rows`
+          : 'post-crash atomicity witness is absent',
+        Number(afterCrash?.async_rows) === 0 || Number(afterCrash?.async_rows) === 2,
+      ),
+      result(
+        'xmin-horizon/logical-slot',
+        registry.cityClaims.mvccVocabulary.xminHorizon.definition,
+        logicalSlot
+          ? `logical slot ${logicalSlot.slot_name}; catalog_xmin ${logicalSlot.catalog_xmin}`
+          : 'logical slot observation is absent',
+        logicalSlot?.slot_name === 'oracle_logical_horizon'
+          && Boolean(logicalSlot?.catalog_xmin),
+      ),
+    ]
+  } finally {
+    await stop()
+  }
+}
+
+async function waitForPath(target, timeoutMs = 10_000) {
+  const deadline = performance.now() + timeoutMs
+  while (performance.now() < deadline) {
+    try {
+      await access(target)
+      return true
+    } catch {
+      await delay(100)
+    }
+  }
+  return false
+}
+
+async function archiveCurrentSegment(psql, query, archiveDir, walDir) {
+  const [before] = await query(`
+    SELECT pg_catalog.pg_walfile_name(
+      pg_catalog.pg_current_wal_lsn()
+    ) AS file_name`)
+  await psql('SELECT pg_catalog.pg_switch_wal()')
+  if (!before?.file_name) return null
+  const archivePath = path.join(archiveDir, before.file_name)
+  let archived = await waitForPath(archivePath)
+  if (!archived && walDir) {
+    await cp(path.join(walDir, before.file_name), archivePath)
+    archived = await waitForPath(archivePath, 1_000)
+  }
+  return { fileName: before.file_name, archived }
+}
+
+async function checkNativeRecovery(
+  pgBin,
+  psql,
+  query,
+  registry,
+  port,
+  scratch,
+  archiveDir,
+  primaryDataDir,
+) {
+  const recoveryClaim = registry.claims.nativeRecovery
+  const timelineFixture = registry.claims.timelineRecovery
+  const restoreCity = registry.cityClaims.restoreDrill
+  const timelineCity = registry.cityClaims.timelineRecovery
+  const baseDir = path.join(scratch, 'timeline-base')
+  const forkDir = path.join(scratch, 'timeline-fork')
+  const forkSocket = path.join(scratch, 'timeline-fork-socket')
+  const forkLog = path.join(scratch, 'timeline-fork.log')
+  const forkPort = await freePort()
+  const primaryConnection = `host=127.0.0.1 port=${port} dbname=postgres user=postgres`
+  let forkStarted = false
+
+  const forkPsql = async (sql, { allowFailure = false, database = 'postgres' } = {}) => run(
+    path.join(pgBin, 'psql'),
+    [
+      '-X', '-A', '-t', '-q', '-v', 'ON_ERROR_STOP=1',
+      '-h', '127.0.0.1', '-p', String(forkPort),
+      '-U', 'postgres', '-d', database, '-c', sql,
+    ],
+    { allowFailure },
+  )
+  const forkQuery = async (sql, options) => {
+    const body = sql.trim().replace(/;+\s*$/u, '')
+    const execution = await forkPsql(
+      `SELECT COALESCE(json_agg(oracle_row), '[]'::json) FROM (${body}) AS oracle_row;`,
+      options,
+    )
+    return JSON.parse(execution.stdout.trim() || '[]')
+  }
+  const stopFork = async () => {
+    if (!forkStarted) return
+    await run(path.join(pgBin, 'pg_ctl'), [
+      '-D', forkDir, '-m', 'fast', '-w', 'stop',
+    ], { allowFailure: true })
+    forkStarted = false
+  }
+
+  await psql(`
+    CREATE TABLE public.oracle_timeline_witness (
+      id integer PRIMARY KEY,
+      branch text NOT NULL
+    );
+    INSERT INTO public.oracle_timeline_witness VALUES (1, 'before-backup')`)
+  await psql('CREATE DATABASE oracle_second_database')
+  await psql(`
+    CREATE TABLE public.oracle_cluster_witness (id integer PRIMARY KEY);
+    INSERT INTO public.oracle_cluster_witness VALUES (1)`, {
+    database: 'oracle_second_database',
+  })
+  await run(path.join(pgBin, 'pg_basebackup'), [
+    '-D', baseDir,
+    '-X', 'stream',
+    '--checkpoint=fast',
+    '--manifest-checksums=SHA256',
+    '-h', '127.0.0.1',
+    '-p', String(port),
+    '-U', 'postgres',
+  ])
+  const verify = await run(path.join(pgBin, 'pg_verifybackup'), [baseDir], {
+    allowFailure: true,
+  })
+  await cp(baseDir, forkDir, { recursive: true })
+  await writeFile(path.join(forkDir, 'standby.signal'), '')
+  await appendFile(path.join(forkDir, 'postgresql.auto.conf'), `
+primary_conninfo = '${primaryConnection}'
+recovery_target_timeline = 'current'
+`)
+  await mkdir(forkSocket)
+
+  let targetTime = null
+  let childArchive = null
+  let parentArchive = null
+  let standbyFeedback = null
+  try {
+    const forkLaunch = await run(path.join(pgBin, 'pg_ctl'), [
+      '-D', forkDir,
+      '-l', forkLog,
+      '-o', [
+        '-h 127.0.0.1',
+        `-p ${forkPort}`,
+        `-k ${forkSocket}`,
+        '-c fsync=off',
+        '-c max_prepared_transactions=10',
+        '-c hot_standby_feedback=on',
+        '-c wal_receiver_status_interval=100ms',
+        '-c archive_mode=on',
+        `-c archive_command='test ! -f ${archiveDir}/%f && cp %p ${archiveDir}/%f'`,
+      ].join(' '),
+      '-w', 'start',
+    ], { allowFailure: true })
+    if (forkLaunch.code !== 0) {
+      const log = await readFile(forkLog, 'utf8').catch(() => 'fork log unavailable')
+      throw new Error(`timeline fork did not start:\n${log.trim()}`)
+    }
+    forkStarted = true
+    const feedbackSession = run(path.join(pgBin, 'psql'), [
+      '-X', '-A', '-t', '-q', '-v', 'ON_ERROR_STOP=1',
+      '-h', '127.0.0.1', '-p', String(forkPort),
+      '-U', 'postgres', '-d', 'postgres',
+      '-c', `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
+        SELECT pg_catalog.count(*) FROM public.oracle_timeline_witness;
+        SELECT pg_catalog.pg_sleep(2);
+        COMMIT`,
+    ], { allowFailure: true })
+    standbyFeedback = await pollRow(
+      query,
+      `SELECT application_name, backend_xmin::text AS backend_xmin
+         FROM pg_catalog.pg_stat_replication
+        WHERE backend_xmin IS NOT NULL
+        ORDER BY pid
+        LIMIT 1`,
+      (row) => Boolean(row?.backend_xmin),
+      5_000,
+    )
+    await feedbackSession
+    await run(path.join(pgBin, 'pg_ctl'), ['-D', forkDir, '-w', 'promote'])
+    const promoted = await pollRow(
+      forkQuery,
+      'SELECT pg_catalog.pg_is_in_recovery() AS in_recovery',
+      (row) => row?.in_recovery === false,
+      10_000,
+    )
+    if (promoted?.in_recovery !== false) throw new Error('timeline fork did not promote')
+
+    await forkPsql("INSERT INTO public.oracle_timeline_witness VALUES (2, 'timeline-2-child')")
+    await psql("INSERT INTO public.oracle_timeline_witness VALUES (3, 'timeline-1-parent-tail')")
+    ;[targetTime] = await query(`
+      SELECT pg_catalog.to_char(
+        pg_catalog.clock_timestamp(),
+        'YYYY-MM-DD HH24:MI:SS.USOF'
+      ) AS target_time`)
+    await delay(100)
+    await forkPsql("INSERT INTO public.oracle_timeline_witness VALUES (4, 'timeline-2-crossing')")
+    await psql("INSERT INTO public.oracle_timeline_witness VALUES (5, 'timeline-1-crossing')")
+    childArchive = await archiveCurrentSegment(
+      forkPsql,
+      forkQuery,
+      archiveDir,
+      path.join(forkDir, 'pg_wal'),
+    )
+    parentArchive = await archiveCurrentSegment(
+      psql,
+      query,
+      archiveDir,
+      path.join(primaryDataDir, 'pg_wal'),
+    )
+    const historyArchive = path.join(archiveDir, timelineFixture.historyFile)
+    if (!await waitForPath(historyArchive)) {
+      await cp(path.join(forkDir, 'pg_wal', timelineFixture.historyFile), historyArchive)
+    }
+  } finally {
+    await stopFork()
+  }
+
+  const restore = async ({ name, sourceArchive, timeline, target, pause = true }) => {
+    const restoreDir = path.join(scratch, `restore-${name}`)
+    const restoreSocket = path.join(scratch, `restore-${name}-socket`)
+    const restoreLog = path.join(scratch, `restore-${name}.log`)
+    const restorePort = await freePort()
+    await cp(baseDir, restoreDir, { recursive: true })
+    await mkdir(restoreSocket)
+    await writeFile(path.join(restoreDir, 'recovery.signal'), '')
+    await appendFile(path.join(restoreDir, 'postgresql.auto.conf'), `
+restore_command = 'cp ${sourceArchive}/%f %p'
+recovery_target_time = '${target}'
+recovery_target_timeline = '${timeline}'
+recovery_target_action = '${pause ? 'pause' : 'promote'}'
+`)
+    const launch = await run(path.join(pgBin, 'pg_ctl'), [
+      '-D', restoreDir,
+      '-l', restoreLog,
+      '-o', `-h 127.0.0.1 -p ${restorePort} -k ${restoreSocket} -c fsync=off -c max_prepared_transactions=10`,
+      '-w', 'start',
+    ], { allowFailure: true })
+    let started = launch.code === 0
+    let observation = null
+    try {
+      if (started && pause) {
+        const deadline = performance.now() + 15_000
+        while (performance.now() < deadline) {
+          const probe = await run(path.join(pgBin, 'psql'), [
+            '-X', '-A', '-t', '-q',
+            '-h', '127.0.0.1', '-p', String(restorePort),
+            '-U', 'postgres', '-d', 'postgres',
+            '-c', `SELECT pg_catalog.json_build_object(
+              'in_recovery', pg_catalog.pg_is_in_recovery(),
+              'paused', pg_catalog.pg_is_wal_replay_paused(),
+              'ids', (SELECT pg_catalog.array_agg(id ORDER BY id) FROM public.oracle_timeline_witness)
+            )::text`,
+          ], { allowFailure: true })
+          const json = probe.stdout
+            .split(/\r?\n/u)
+            .map((line) => line.trim())
+            .find((line) => line.startsWith('{'))
+          if (json) observation = JSON.parse(json)
+          if (observation?.paused === true) break
+          const status = await run(path.join(pgBin, 'pg_ctl'), [
+            '-D', restoreDir, 'status',
+          ], { allowFailure: true })
+          if (status.code !== 0) {
+            started = false
+            break
+          }
+          await delay(100)
+        }
+      } else if (started) {
+        const resultRows = await run(path.join(pgBin, 'psql'), [
+          '-X', '-A', '-t', '-q',
+          '-h', '127.0.0.1', '-p', String(restorePort),
+          '-U', 'postgres', '-d', 'postgres',
+          '-c', `SELECT pg_catalog.json_build_object(
+            'in_recovery', pg_catalog.pg_is_in_recovery(),
+            'ids', (SELECT pg_catalog.array_agg(id ORDER BY id) FROM public.oracle_timeline_witness)
+          )::text`,
+        ], { allowFailure: true })
+        const json = resultRows.stdout
+          .split(/\r?\n/u)
+          .map((line) => line.trim())
+          .find((line) => line.startsWith('{'))
+        if (json) observation = JSON.parse(json)
+      }
+
+      const secondDatabase = started && observation
+        ? await run(path.join(pgBin, 'psql'), [
+          '-X', '-A', '-t', '-q',
+          '-h', '127.0.0.1', '-p', String(restorePort),
+          '-U', 'postgres', '-d', 'oracle_second_database',
+          '-c', 'SELECT pg_catalog.count(*) FROM public.oracle_cluster_witness',
+        ], { allowFailure: true })
+        : null
+      const log = await readFile(restoreLog, 'utf8').catch(() => '')
+      return {
+        launch,
+        started,
+        observation,
+        secondDatabaseRows: Number(secondDatabase?.stdout.trim()),
+        log,
+      }
+    } finally {
+      if (started) {
+        await run(path.join(pgBin, 'pg_ctl'), [
+          '-D', restoreDir, '-m', 'immediate', '-w', 'stop',
+        ], { allowFailure: true })
+      }
+    }
+  }
+
+  const latest = await restore({
+    name: 'latest',
+    sourceArchive: archiveDir,
+    timeline: timelineFixture.latest,
+    target: targetTime.target_time,
+  })
+  const current = await restore({
+    name: 'current',
+    sourceArchive: archiveDir,
+    timeline: timelineFixture.current,
+    target: targetTime.target_time,
+  })
+  const archiveWithoutHistory = path.join(scratch, 'archive-without-history')
+  await cp(archiveDir, archiveWithoutHistory, { recursive: true })
+  await rm(path.join(archiveWithoutHistory, timelineFixture.historyFile), { force: true })
+  const historyAbsent = await restore({
+    name: 'history-absent',
+    sourceArchive: archiveWithoutHistory,
+    timeline: timelineFixture.latest,
+    target: targetTime.target_time,
+  })
+  const notReached = await restore({
+    name: 'not-reached',
+    sourceArchive: archiveDir,
+    timeline: timelineFixture.current,
+    target: '2099-01-01 00:00:00+00',
+  })
+
+  await psql('CREATE DATABASE oracle_logical_source')
+  await psql('CREATE DATABASE oracle_logical_restore_a')
+  await psql('CREATE DATABASE oracle_logical_restore_b')
+  await psql(`
+    CREATE TYPE public.${recoveryClaim.logicalDependencyType} AS ENUM ('ok');
+    CREATE TABLE public.${recoveryClaim.logicalDependencyTable} (
+      id integer PRIMARY KEY,
+      mood public.${recoveryClaim.logicalDependencyType} NOT NULL
+    );
+    INSERT INTO public.${recoveryClaim.logicalDependencyTable} VALUES (1, 'ok')`, {
+    database: 'oracle_logical_source',
+  })
+  const fullDump = path.join(scratch, 'logical-full.dump')
+  const tableDump = path.join(scratch, 'logical-table.dump')
+  const dumpArgs = [
+    '-Fc', '-h', '127.0.0.1', '-p', String(port), '-U', 'postgres',
+    '-d', 'oracle_logical_source',
+  ]
+  await run(path.join(pgBin, 'pg_dump'), [...dumpArgs, '-f', fullDump])
+  await run(path.join(pgBin, 'pg_dump'), [
+    ...dumpArgs,
+    '-t', `public.${recoveryClaim.logicalDependencyTable}`,
+    '-f', tableDump,
+  ])
+  const restoreSelected = await run(path.join(pgBin, 'pg_restore'), [
+    '-h', '127.0.0.1', '-p', String(port), '-U', 'postgres',
+    '-d', 'oracle_logical_restore_a',
+    '-t', recoveryClaim.logicalDependencyTable,
+    fullDump,
+  ], { allowFailure: true })
+  const restoreTableDump = await run(path.join(pgBin, 'pg_restore'), [
+    '-h', '127.0.0.1', '-p', String(port), '-U', 'postgres',
+    '-d', 'oracle_logical_restore_b',
+    tableDump,
+  ], { allowFailure: true })
+
+  const latestIds = latest.observation?.ids ?? []
+  const currentIds = current.observation?.ids ?? []
+  const historyAbsentIds = historyAbsent.observation?.ids ?? []
+  const historyArchived = await waitForPath(path.join(archiveDir, timelineFixture.historyFile), 100)
+  const targetNotReached = /recovery ended before configured recovery target was reached/iu
+    .test(notReached.log)
+  return [
+    result(
+      'physical-backup/pg_verifybackup',
+      restoreCity.checksumDisclosure,
+      verify.code === 0
+        ? 'pg_verifybackup verified the native base backup manifest'
+        : verify.stderr.trim() || verify.stdout.trim(),
+      verify.code === 0,
+    ),
+    result(
+      'physical-backup/cluster-wide-scope',
+      restoreCity.physicalScopeDisclosure,
+      `restored postgres witness ids [${latestIds.join(', ')}]; second-database witness rows ${latest.secondDatabaseRows}`,
+      latestIds.includes(1) && latest.secondDatabaseRows === 1,
+    ),
+    result(
+      'PITR/row-witness-at-target',
+      restoreCity.levels.table.supports,
+      `latest restore paused at target with witness ids [${latestIds.join(', ')}]`,
+      latest.observation?.paused === true
+        && latestIds.includes(1)
+        && latestIds.includes(2)
+        && !latestIds.includes(4),
+    ),
+    result(
+      'timeline/latest-discovers-history',
+      timelineCity.crossingDisclosure,
+      `${timelineFixture.historyFile} ${historyArchived ? 'archived' : 'absent'}; latest ids [${latestIds.join(', ')}]; child WAL ${childArchive?.fileName ?? 'absent'} (${childArchive?.archived ? 'archived' : 'not archived'})`,
+      historyArchived && latestIds.includes(2),
+    ),
+    result(
+      'timeline/latest-excludes-parent-tail',
+      timelineCity.crossingDisclosure,
+      `latest ids [${latestIds.join(', ')}]`,
+      latestIds.includes(2) && !latestIds.includes(3),
+    ),
+    result(
+      'timeline/current-stays-on-backup-timeline',
+      timelineCity.defaultDisclosure,
+      `current ids [${currentIds.join(', ')}]; parent WAL ${parentArchive?.fileName ?? 'absent'} (${parentArchive?.archived ? 'archived' : 'not archived'})`,
+      current.observation?.paused === true
+        && currentIds.includes(3)
+        && !currentIds.includes(2),
+    ),
+    result(
+      'timeline/latest-without-history-stays-current',
+      timelineCity.crossingDisclosure,
+      `without ${timelineFixture.historyFile}, latest ids [${historyAbsentIds.join(', ')}]`,
+      historyAbsent.observation?.paused === true
+        && historyAbsentIds.includes(3)
+        && !historyAbsentIds.includes(2),
+    ),
+    result(
+      'PITR/target-not-reached',
+      timelineCity.defaultDisclosure,
+      targetNotReached
+        ? 'server reported that recovery ended before the configured target was reached'
+        : notReached.log.trim().split(/\r?\n/u).slice(-3).join(' | '),
+      targetNotReached,
+    ),
+    result(
+      'logical-restore/table-dependencies',
+      restoreCity.physicalScopeDisclosure,
+      `pg_restore -t exit ${restoreSelected.code}; pg_dump -t archive restore exit ${restoreTableDump.code}; dependent type was not selected automatically`,
+      restoreSelected.code !== 0
+        && restoreTableDump.code !== 0
+        && /does not exist/iu.test(`${restoreSelected.stderr}\n${restoreTableDump.stderr}`),
+    ),
+    result(
+      'xmin-horizon/standby-feedback',
+      registry.cityClaims.mvccVocabulary.xminHorizon.definition,
+      standbyFeedback
+        ? `primary walsender ${standbyFeedback.application_name} reported backend_xmin ${standbyFeedback.backend_xmin}`
+        : 'hot_standby_feedback xmin was not observed',
+      Boolean(standbyFeedback?.backend_xmin),
+    ),
+  ]
+}
+
 async function checkPgStatIo(query, registry, major) {
   const claim = registry.claims.pgStatIo
   if (major < claim.since) return []
@@ -685,12 +2030,16 @@ async function checkPhysicalSlotDrop(pgBin, psql, query, registry, port, scratch
   }
   const startStandby = async (slot) => {
     const slotOption = slot ? ` -c primary_slot_name=${slot}` : ''
-    await run(path.join(pgBin, 'pg_ctl'), [
+    const launch = await run(path.join(pgBin, 'pg_ctl'), [
       '-D', standbyDir,
       '-l', standbyLog,
-      '-o', `-h 127.0.0.1 -p ${standbyPort} -k ${standbySocket}${slotOption}`,
+      '-o', `-h 127.0.0.1 -p ${standbyPort} -k ${standbySocket} -c max_prepared_transactions=10${slotOption}`,
       '-w', 'start',
-    ])
+    ], { allowFailure: true })
+    if (launch.code !== 0) {
+      const log = await readFile(standbyLog, 'utf8').catch(() => 'standby log unavailable')
+      throw new Error(`physical standby did not start:\n${log.trim()}`)
+    }
     standbyStarted = true
   }
   const standbyQuery = async (sql) => {
@@ -1049,7 +2398,7 @@ async function checkStorageMvcc(psql, query, registry, major) {
   const defaultExternal = toastByName.get('default-external')
   const raisedInline = toastByName.get('raised-inline')
   const compressedInline = toastByName.get('compressed-inline')
-  const targetChangesStorage = Number(defaultExternal?.raw_size) < 100
+  const targetChangesStorage = Number(defaultExternal?.raw_size) === 18
     && Number(defaultExternal?.toast_heap_bytes) > 0
     && Number(raisedInline?.raw_size) > toast.valueBytes
     && Number(raisedInline?.toast_heap_bytes) === 0
@@ -1059,7 +2408,7 @@ async function checkStorageMvcc(psql, query, registry, major) {
     && Number(compressedInline?.raw_size) > 20
     && Number(compressedInline?.raw_size) < 500
     && Number(compressedInline?.toast_heap_bytes) === 0
-    && Number(defaultExternal?.raw_size) < 100
+    && Number(defaultExternal?.raw_size) === 18
     && Number(defaultExternal?.toast_heap_bytes) > 0
   const toastSummary = toastRows
     .map((row) => `${row.relation}: raw ${row.raw_size}, logical ${row.logical_size}, toast heap ${row.toast_heap_bytes}`)
@@ -1111,6 +2460,15 @@ async function checkStorageMvcc(psql, query, registry, major) {
       targetChangesStorage,
     ),
     result(
+      'TOAST/external-pointer-size',
+      'an out-of-line datum leaves an 18-byte external TOAST pointer in the heap tuple',
+      defaultExternal
+        ? `raw heap attribute ${defaultExternal.raw_size} bytes; logical value ${defaultExternal.logical_size} bytes`
+        : 'external TOAST observation is absent',
+      Number(defaultExternal?.raw_size) === 18
+        && Number(defaultExternal?.logical_size) === toast.valueBytes,
+    ),
+    result(
       'TOAST/wide-value-storage-paths',
       'wide datums can be inline uncompressed, inline compressed, or out of line',
       toastSummary,
@@ -1129,6 +2487,302 @@ async function checkStorageMvcc(psql, query, registry, major) {
       'BEGIN READ ONLY can hold an assigned XID after pg_current_xact_id()',
       readOnlyObservation || 'read-only XID observation is absent',
       readOnlyObservation.length > 0,
+    ),
+  ]
+}
+
+async function checkRemainingMvcc(pgBin, psql, query, registry, port) {
+  const claim = registry.claims.storageMvcc
+  const vocabulary = registry.cityClaims.mvccVocabulary
+  const page = claim.pageLayout
+  await psql(`
+    CREATE EXTENSION IF NOT EXISTS pageinspect;
+    CREATE EXTENSION IF NOT EXISTS pg_visibility;
+    CREATE EXTENSION IF NOT EXISTS dblink;
+    CREATE TABLE public.${page.relation} (
+      id integer PRIMARY KEY,
+      payload text NOT NULL
+    ) WITH (fillfactor = 50, autovacuum_enabled = false);
+    INSERT INTO public.${page.relation} VALUES (1, 'created')`)
+  const [created] = await query(`
+    SELECT xmin::text AS creator_xid, ctid::text AS original_ctid
+      FROM public.${page.relation}
+     WHERE id = 1`)
+  await psql(`UPDATE public.${page.relation} SET payload = 'replacement' WHERE id = 1`)
+  const [replacement] = await query(`
+    SELECT xmin::text AS updater_xid, ctid::text AS replacement_ctid
+      FROM public.${page.relation}
+     WHERE id = 1`)
+  const tupleRows = await query(`
+    WITH blocks AS (
+      SELECT block_number
+        FROM pg_catalog.generate_series(
+          0,
+          pg_catalog.pg_relation_size('public.${page.relation}')
+            / current_setting('block_size')::integer - 1
+        ) AS block_number
+    )
+    SELECT blocks.block_number,
+           items.lp,
+           items.lp_flags,
+           items.lp_len,
+           items.t_xmin::text AS t_xmin,
+           items.t_xmax::text AS t_xmax,
+           items.t_field3,
+           items.t_ctid::text AS t_ctid,
+           items.t_infomask2,
+           items.t_infomask,
+           items.t_hoff
+      FROM blocks
+      CROSS JOIN LATERAL public.heap_page_items(
+        public.get_raw_page('public.${page.relation}', blocks.block_number)
+      ) AS items
+     ORDER BY blocks.block_number, items.lp`)
+  const oldTuple = tupleRows.find((row) => row.t_xmin === created?.creator_xid)
+  const newTuple = tupleRows.find((row) => row.t_xmin === replacement?.updater_xid)
+  const [linePointer] = await query(`
+    SELECT (public.page_header(
+             public.get_raw_page('public.${page.relation}', 0)
+           )).lower AS lower,
+           pg_catalog.max(items.lp)::integer AS line_pointers
+      FROM public.heap_page_items(
+        public.get_raw_page('public.${page.relation}', 0)
+      ) AS items`)
+  const linePointerBytes = Number(linePointer?.lower) - 24
+  const headerFields = tupleRows.length >= 2 && tupleRows.every((row) =>
+    row.t_xmin !== null
+    && row.t_xmax !== null
+    && row.t_field3 !== null
+    && row.t_ctid !== null
+    && row.t_infomask2 !== null
+    && row.t_infomask !== null
+    && Number(row.t_hoff) >= 23)
+
+  await psql(`VACUUM public.${page.relation}`)
+  const redirectRows = await query(`
+    SELECT lp, lp_flags, lp_off, lp_len
+      FROM public.heap_page_items(
+        public.get_raw_page('public.${page.relation}', 0)
+      )
+     ORDER BY lp`)
+  const hasRedirect = redirectRows.some((row) => Number(row.lp_flags) === 2)
+    && redirectRows.some((row) => Number(row.lp_flags) === 1)
+
+  const multi = claim.multiXact
+  await psql(`
+    CREATE TABLE public.${multi.relation} (id integer PRIMARY KEY, note text NOT NULL);
+    INSERT INTO public.${multi.relation} VALUES (1, 'shared lockers')`)
+  const multiHolders = ['a', 'b'].map((suffix) => psqlCommand(pgBin, port, `
+    SET application_name = 'oracle_multi_${suffix}';
+    BEGIN;
+    SELECT id FROM public.${multi.relation} WHERE id = 1 FOR SHARE;
+    SELECT pg_catalog.pg_sleep(3);
+    COMMIT`))
+  await pollRow(
+    query,
+    `SELECT pg_catalog.count(*)::integer AS holders
+       FROM pg_catalog.pg_stat_activity
+      WHERE application_name IN ('oracle_multi_a', 'oracle_multi_b')
+        AND wait_event = 'PgSleep'`,
+    (row) => Number(row?.holders) === 2,
+    5_000,
+  )
+  let multiRow
+  ;[multiRow] = await query(`
+    WITH tuple AS (
+      SELECT items.t_xmax,
+             pg_catalog.array_to_string(
+               (public.heap_tuple_infomask_flags(
+                 items.t_infomask,
+                 items.t_infomask2
+               )).raw_flags,
+               ', '
+             ) AS flags
+        FROM public.heap_page_items(
+          public.get_raw_page('public.${multi.relation}', 0)
+        ) AS items
+       WHERE items.lp = 1
+    )
+    SELECT t_xmax::text AS xmax,
+           flags,
+           (SELECT pg_catalog.count(*)
+              FROM pg_catalog.pg_get_multixact_members(t_xmax))::integer AS members
+      FROM tuple`)
+  await Promise.all(multiHolders)
+
+  const horizon = claim.removalHorizon
+  await psql(`
+    CREATE TABLE public.${horizon.relation} (id integer PRIMARY KEY, note text NOT NULL);
+    INSERT INTO public.${horizon.relation} VALUES (1, 'old snapshot'), (2, 'tail survivor')`)
+  const oldSnapshot = psqlCommand(pgBin, port, `
+    SET application_name = 'oracle_old_snapshot';
+    BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
+    SELECT pg_catalog.count(*) FROM public.${horizon.relation} WHERE id = 1;
+    SELECT pg_catalog.pg_sleep(3);
+    SELECT pg_catalog.count(*) FROM public.${horizon.relation} WHERE id = 1;
+    COMMIT`)
+  await pollRow(
+    query,
+    `SELECT backend_xmin::text AS backend_xmin, wait_event
+       FROM pg_catalog.pg_stat_activity
+      WHERE application_name = 'oracle_old_snapshot'`,
+    (row) => Boolean(row?.backend_xmin) && row?.wait_event === 'PgSleep',
+    5_000,
+  )
+  await psql(`DELETE FROM public.${horizon.relation} WHERE id = 1`)
+  await psql(`VACUUM public.${horizon.relation}`)
+  const [heldHorizon] = await query(`
+    SELECT (SELECT pg_catalog.count(*)
+         FROM public.heap_page_items(
+           public.get_raw_page('public.${horizon.relation}', 0)
+         ) AS items
+        WHERE items.lp = 1
+          AND items.lp_flags <> 0) AS physical_versions`)
+  const oldSnapshotExecution = await oldSnapshot
+  const oldSnapshotCounts = oldSnapshotExecution.stdout
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => /^\d+$/u.test(line))
+    .map(Number)
+  heldHorizon.old_snapshot_rows = oldSnapshotCounts.at(-1)
+  await psql(`VACUUM public.${horizon.relation}`)
+  const [releasedHorizon] = await query(`
+    SELECT pg_catalog.count(*) AS physical_versions
+      FROM public.heap_page_items(
+        public.get_raw_page('public.${horizon.relation}', 0)
+      ) AS items
+     WHERE items.lp = 1
+       AND items.lp_flags <> 0`)
+
+  const visibility = claim.visibilityMap
+  await psql(`
+    CREATE TABLE public.${visibility.relation} (id integer PRIMARY KEY, payload integer);
+    INSERT INTO public.${visibility.relation}
+    SELECT value, value FROM pg_catalog.generate_series(1, 100) AS value`)
+  await psql(`VACUUM (FREEZE) public.${visibility.relation}`)
+  const [visibleBefore] = await query(`
+    SELECT pg_catalog.bool_and(all_visible) AS all_visible,
+           pg_catalog.bool_and(all_frozen) AS all_frozen
+      FROM public.pg_visibility_map('public.${visibility.relation}'::regclass)`)
+  await psql(`UPDATE public.${visibility.relation} SET payload = payload + 1 WHERE id = 1`)
+  const [visibleChanged] = await query(`
+    SELECT all_visible, all_frozen
+      FROM public.pg_visibility_map('public.${visibility.relation}'::regclass)
+     WHERE blkno = 0`)
+  await psql(`VACUUM (FREEZE) public.${visibility.relation}`)
+  const [visibleAfter] = await query(`
+    SELECT pg_catalog.bool_and(all_visible) AS all_visible,
+           pg_catalog.bool_and(all_frozen) AS all_frozen
+      FROM public.pg_visibility_map('public.${visibility.relation}'::regclass)`)
+
+  const prepared = claim.preparedHorizon
+  const horizonBackend = psqlCommand(pgBin, port, `
+    SET application_name = 'oracle_horizon_backend';
+    BEGIN ISOLATION LEVEL REPEATABLE READ;
+    SELECT pg_catalog.pg_current_xact_id()::text;
+    SELECT pg_catalog.pg_current_snapshot()::text;
+    SELECT pg_catalog.pg_sleep(2);
+    COMMIT`)
+  const backendHorizon = await pollRow(
+    query,
+    `SELECT backend_xid::text AS backend_xid,
+            backend_xmin::text AS backend_xmin
+       FROM pg_catalog.pg_stat_activity
+      WHERE application_name = 'oracle_horizon_backend'`,
+    (row) => Boolean(row?.backend_xid) && Boolean(row?.backend_xmin),
+    5_000,
+  )
+  await horizonBackend
+
+  await psql(`
+    CREATE TABLE public.oracle_prepared_horizon (id integer);
+    BEGIN;
+    INSERT INTO public.oracle_prepared_horizon VALUES (1);
+    PREPARE TRANSACTION '${prepared.gid}'`)
+  const [preparedRow] = await query(`
+    SELECT transaction::text AS prepared_xid,
+           pg_catalog.pg_snapshot_xmin(
+             pg_catalog.pg_current_snapshot()
+           )::text AS snapshot_xmin
+      FROM pg_catalog.pg_prepared_xacts
+     WHERE gid = '${prepared.gid}'`)
+  await psql(`ROLLBACK PREPARED '${prepared.gid}'`)
+
+  const tupleSummary = tupleRows.map((row) =>
+    `lp ${row.lp} xmin ${row.t_xmin} xmax ${row.t_xmax} ctid ${row.t_ctid} hoff ${row.t_hoff}`)
+    .join(' | ')
+  return [
+    result(
+      'MVCC/xmin-xmax-ctid-update-chain',
+      `${vocabulary.xmin.definition} ${vocabulary.xmax.definition} ${vocabulary.ctid.definition}`,
+      tupleSummary,
+      oldTuple?.t_xmax === replacement?.updater_xid
+        && oldTuple?.t_ctid === replacement?.replacement_ctid
+        && newTuple?.t_xmin === replacement?.updater_xid,
+    ),
+    result(
+      'page-layout/line-pointer-size',
+      vocabulary.linePointers.definition,
+      `page header lower ${linePointer?.lower}; ${linePointer?.line_pointers} line pointers occupy ${linePointerBytes} bytes`,
+      linePointerBytes === Number(linePointer?.line_pointers) * 4,
+    ),
+    result(
+      'page-layout/tuple-header-fields',
+      vocabulary.tupleHeader.definition,
+      tupleSummary,
+      headerFields,
+    ),
+    result(
+      'HOT/redirect-line-pointer',
+      vocabulary.hotChains.definition,
+      redirectRows.map((row) => `lp ${row.lp} flags ${row.lp_flags} off ${row.lp_off} len ${row.lp_len}`).join(' | '),
+      hasRedirect,
+    ),
+    result(
+      'MVCC/MultiXact-lockers',
+      vocabulary.xmax.definition,
+      multiRow
+        ? `xmax ${multiRow.xmax}; members ${multiRow.members}; flags ${multiRow.flags}`
+        : 'MultiXact tuple observation is absent',
+      Number(multiRow?.members) === 2
+        && String(multiRow?.flags).includes('HEAP_XMAX_IS_MULTI')
+        && String(multiRow?.flags).includes('HEAP_XMAX_LOCK_ONLY'),
+    ),
+    result(
+      'MVCC/dead-versus-removable-horizon',
+      vocabulary.tupleLiveness.definition,
+      `while snapshot held: old session rows ${heldHorizon?.old_snapshot_rows}, physical versions ${heldHorizon?.physical_versions}; after release and VACUUM: ${releasedHorizon?.physical_versions}`,
+      Number(heldHorizon?.old_snapshot_rows) === 1
+        && Number(heldHorizon?.physical_versions) === 1
+        && Number(releasedHorizon?.physical_versions) === 0,
+    ),
+    result(
+      'visibility-map/set-clear-set',
+      vocabulary.visibilityMap.definition,
+      `VACUUM FREEZE ${visibleBefore?.all_visible}/${visibleBefore?.all_frozen}; modification ${visibleChanged?.all_visible}/${visibleChanged?.all_frozen}; VACUUM FREEZE ${visibleAfter?.all_visible}/${visibleAfter?.all_frozen}`,
+      visibleBefore?.all_visible === true
+        && visibleBefore?.all_frozen === true
+        && visibleChanged?.all_visible === false
+        && visibleChanged?.all_frozen === false
+        && visibleAfter?.all_visible === true
+        && visibleAfter?.all_frozen === true,
+    ),
+    result(
+      'xmin-horizon/active-snapshot-and-assigned-xid',
+      vocabulary.xminHorizon.definition,
+      backendHorizon
+        ? `backend_xid ${backendHorizon.backend_xid}; backend_xmin ${backendHorizon.backend_xmin}`
+        : 'active backend horizon observation is absent',
+      Boolean(backendHorizon?.backend_xid) && Boolean(backendHorizon?.backend_xmin),
+    ),
+    result(
+      'xmin-horizon/prepared-transaction',
+      vocabulary.xminHorizon.definition,
+      preparedRow
+        ? `prepared XID ${preparedRow.prepared_xid}; snapshot xmin ${preparedRow.snapshot_xmin}`
+        : 'prepared transaction observation is absent',
+      Boolean(preparedRow?.prepared_xid)
+        && Number(preparedRow?.snapshot_xmin) <= Number(preparedRow?.prepared_xid),
     ),
   ]
 }
@@ -1344,12 +2998,37 @@ async function checkIndexWalk(psql, query, registry) {
 
 async function runChecks(server, registry, major, pgBin) {
   const checks = [
+    ['claim registry coverage', () => checkRegistryCoverage(registry)],
     ['version', () => checkVersion(server.query, registry, major)],
+    ['WAL segment', () => checkWalSegment(server.psql, server.query, registry)],
+    ['native recovery and timelines', () => checkNativeRecovery(
+      pgBin,
+      server.psql,
+      server.query,
+      registry,
+      server.port,
+      server.scratch,
+      server.archiveDir,
+      server.dataDir,
+    )],
+    ['asynchronous commit', () => checkAsynchronousCommit(pgBin, registry, server.scratch)],
     ['GUC defaults', () => checkGucDefaults(server.query, registry, major)],
     ['GUC contexts', () => checkGucContexts(server.query, registry, major)],
     ['catalog shapes', () => checkCatalog(server.psql, server.query, registry, major)],
     ['diagnostic SQL', () => checkDiagnosticSql(server.psql, registry, major)],
     ['wait events', () => checkWaitEvents(server.query, registry, major)],
+    ['latency wait mappings', () => checkLatencyWaitMappings(
+      pgBin,
+      server.psql,
+      server.query,
+      registry,
+      server.port,
+    )],
+    ['connection-local behavior', () => checkConnectionLocalBehavior(
+      server.psql,
+      registry,
+      server.port,
+    )],
     ['checkpoint timer skip', () => checkCheckpointTimerSkip(server.psql, server.query, registry, major)],
     ['statement timeout', () => checkStatementTimeout(server.psql, registry, server.port)],
     ['physical slot drop', () => checkPhysicalSlotDrop(
@@ -1361,9 +3040,35 @@ async function runChecks(server, registry, major, pgBin) {
       server.scratch,
     )],
     ['autovacuum threshold', () => checkAutovacuumThreshold(server.psql, server.query, registry)],
+    ['plain VACUUM', () => checkVacuumReclaim(
+      pgBin,
+      server.psql,
+      server.query,
+      registry,
+      server.port,
+    )],
+    ['work_mem execution', () => checkWorkMemExecution(
+      pgBin,
+      server.psql,
+      server.query,
+      registry,
+      server.port,
+    )],
     ['storage and MVCC', () => checkStorageMvcc(server.psql, server.query, registry, major)],
+    ['remaining MVCC and page layout', () => checkRemainingMvcc(
+      pgBin,
+      server.psql,
+      server.query,
+      registry,
+      server.port,
+    )],
     ['pg_stat_io values', () => checkPgStatIo(server.query, registry, major)],
     ['index walk', () => checkIndexWalk(server.psql, server.query, registry)],
+    ['partial-index behavior', () => checkPartialIndexBehavior(
+      server.psql,
+      server.query,
+      registry,
+    )],
   ]
   const results = []
   for (const [name, check] of checks) {
@@ -1394,7 +3099,16 @@ async function main() {
   const registry = await loadOracleRegistry()
   const major = parseMajor(registry)
   const pgBin = `/usr/lib/postgresql/${major}/bin`
-  for (const binary of ['initdb', 'pg_basebackup', 'pg_ctl', 'psql', 'postgres']) {
+  for (const binary of [
+    'initdb',
+    'pg_basebackup',
+    'pg_ctl',
+    'pg_dump',
+    'pg_restore',
+    'pg_verifybackup',
+    'psql',
+    'postgres',
+  ]) {
     try {
       await access(path.join(pgBin, binary))
     } catch {

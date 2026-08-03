@@ -412,6 +412,46 @@ export const CLAIMS = {
           role: 'diagnosticSql',
           owner: 'src/observability/paths.ts#DIAGNOSTIC_SQL',
         },
+        {
+          role: 'walSegment',
+          owner: 'src/core/claims.ts#CLAIM_VALUES.walSegment',
+        },
+        {
+          role: 'modelLatency',
+          owner: 'src/core/claims.ts#CLAIM_VALUES.modelLatency',
+        },
+        {
+          role: 'connectionPooler',
+          owner: 'src/core/claims.ts#CLAIM_VALUES.connectionPooler',
+        },
+        {
+          role: 'workMem',
+          owner: 'src/core/claims.ts#CLAIM_VALUES.workMem',
+        },
+        {
+          role: 'restoreDrill',
+          owner: 'src/core/claims.ts#CLAIM_VALUES.restoreDrill',
+        },
+        {
+          role: 'timelineRecovery',
+          owner: 'src/core/claims.ts#CLAIM_VALUES.timelineRecovery',
+        },
+        {
+          role: 'vacuumReclaim',
+          owner: 'src/core/claims.ts#CLAIM_VALUES.vacuumReclaim',
+        },
+        {
+          role: 'mvccVocabulary',
+          owner: 'src/spine/mvcc-vocabulary.ts#MVCC_VOCABULARY',
+        },
+        {
+          role: 'machineSynchronousCommitComparison',
+          owner: 'src/spine/machine-comparison.ts#MACHINE_SYNCHRONOUS_COMMIT_COMPARISON',
+        },
+        {
+          role: 'machineIndexWalk',
+          owner: 'src/spine/machine-index-walk.ts#MACHINE_INDEX_WALK',
+        },
       ],
     },
     surfaces: ['registry:mechanically checkable PostgreSQL facts', 'tool:throwaway PostgreSQL oracle'],

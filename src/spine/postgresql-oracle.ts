@@ -347,6 +347,64 @@ export const POSTGRESQL_ORACLE_CLAIMS = {
     readOnlyXid: {
       function: 'pg_current_xact_id()',
     },
+    pageLayout: {
+      relation: 'oracle_page_layout',
+    },
+    multiXact: {
+      relation: 'oracle_multixact',
+    },
+    removalHorizon: {
+      relation: 'oracle_removal_horizon',
+    },
+    visibilityMap: {
+      relation: 'oracle_visibility_map',
+    },
+    preparedHorizon: {
+      gid: 'oracle_prepared_horizon',
+    },
+  },
+  walSegment: {
+    bytes: CLAIM_VALUES.walSegment.bytes,
+  },
+  latencyWaitMappings: {
+    relation: POSTGRESQL_WAIT_EVENTS.relation,
+    synchronousReplication: POSTGRESQL_WAIT_EVENTS.syncRep,
+    poolWaitName: 'PoolSlot',
+  },
+  connectionLocal: {
+    advisoryLockKey: 818_204,
+    preparedStatement: 'oracle_session_plan',
+    listenChannel: 'oracle_session_channel',
+  },
+  workMemExecution: {
+    spillWorkMemKiB: 64,
+    hashWorkMemMiB: 1,
+    hashMultipliers: [1, CLAIM_VALUES.workMem.hashMemMultiplier],
+    sortRows: 40_000,
+    hashRows: 80_000,
+    concurrentBackends: 2,
+  },
+  nativeRecovery: {
+    logicalDependencyType: 'oracle_mood',
+    logicalDependencyTable: 'oracle_dependency_table',
+  },
+  timelineRecovery: {
+    historyFile: CLAIM_VALUES.timelineRecovery.historyFile,
+    latest: CLAIM_VALUES.timelineRecovery.defaultTarget,
+    current: 'current',
+  },
+  vacuumReclaim: {
+    rows: 24_000,
+    payloadBytes: 768,
+  },
+  asynchronousCommit: {
+    walWriterDelayMs: 200,
+    crashWalWriterDelayMs: 10_000,
+    lossWindowMultiplier: 3,
+  },
+  partialIndexBehavior: {
+    rows: 2_000,
+    owner: 'account-42',
   },
   pgStatIo: {
     relation: 'pg_catalog.pg_stat_io',

@@ -51,6 +51,37 @@ describe('PostgreSQL oracle claim registry', () => {
   it('discovers every check family through the registered oracle sources', async () => {
     const registry = await loadOracleRegistry()
 
+    expect(registry.registeredCityClaims).toEqual([
+      'walSegment',
+      'modelLatency',
+      'connectionPooler',
+      'workMem',
+      'restoreDrill',
+      'timelineRecovery',
+      'vacuumReclaim',
+      'mvccVocabulary',
+      'machineSynchronousCommitComparison',
+      'machineIndexWalk',
+    ])
+    expect(registry.unregisteredCityClaims).toEqual([])
+    expect(registry.claims).toMatchObject({
+      walSegment: { bytes: 16 * 1024 * 1024 },
+      latencyWaitMappings: {
+        relation: { type: 'Lock', name: 'relation' },
+        synchronousReplication: { type: 'IPC', name: 'SyncRep' },
+      },
+      connectionLocal: { advisoryLockKey: 818_204 },
+      workMemExecution: {
+        spillWorkMemKiB: 64,
+        hashWorkMemMiB: 1,
+      },
+      nativeRecovery: { logicalDependencyType: 'oracle_mood' },
+      timelineRecovery: { historyFile: '00000002.history' },
+      vacuumReclaim: { rows: 24_000 },
+      asynchronousCommit: { lossWindowMultiplier: 3 },
+      partialIndexBehavior: { rows: 2_000 },
+    })
+
     expect(registry.claims.gucDefaults.length).toBeGreaterThan(8)
     expect(registry.catalog.some((entry) => entry.id === 'pg_stat_io')).toBe(true)
     expect(registry.claims.waitEvents.events).toContainEqual({
