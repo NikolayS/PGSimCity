@@ -11,6 +11,67 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+## [0.38.1] - 2026-08-03
+
+### Added — the city works without a mouse, and without sight where it can
+
+The teaching content is text — panels, docs, Diagnose steps and verdicts, the
+Machine's transcript and receipts — and none of it had been checked for
+keyboard-only or screen-reader use.
+
+A complete lesson is now reachable by keyboard alone: `Tab, Enter, Tab, Enter,
+Tab, Tab, Tab, Tab, Enter` from the skip link to a Diagnose verdict, no pointer.
+
+The `P`/`M` distinction — the project's integrity line — survives translation to
+a medium with no colour or glyphs. A Machine receipt announces as *"PostgreSQL
+measured receipt: … 1 row. **Modelled architecture replay complete.**"*, and a
+replay stage as *"Modelled architecture replay, stage 1 of N … PostgreSQL
+measurements are reported separately in the receipt."*
+
+`ACCESSIBILITY.md` records the structural limits honestly rather than covering
+them with labels. A first-person walk through a 3D city will not work without
+sight; what matters is that the lessons are reachable another way, and where a
+mechanism is taught only through geometry that is named as a gap.
+
+### Fixed — the lower fidelity tiers still teach
+
+Every visual rule this project enforces had only ever been verified at `high` or
+`ultra`. A reader on older hardware gets `reduced` or `low`.
+
+Measured at every tier, day and night: the worst semantic colour pair holds at
+0.0666 day / 0.0442 night, disclosures hold 9px, touch targets hold 44x44px.
+
+`low` needed work to make that true. It drops bloom and the night post-chain, and
+bloom is what carries semantic glow at night — so a brighter semantic palette and
+compensating lights restore the meaning, at roughly 0.6 MiB and up to 3,500
+additional semantic packets. Plates, labels, routes, disclosures and semantic
+hues all survive. Key Design Rule 4 says meaning must survive degradation while
+decoration need not; that is now measured rather than assumed, and the colour,
+disclosure and touch tests sweep the tier axis.
+
+City chunk: **+6 bytes**. `TIER-AUDIT.md` records what each tier removes.
+
+### Fixed — vacuum can succeed and still not return space
+
+`VACUUM` truncation needs a brief `ACCESS EXCLUSIVE`, and the attempt is
+non-blocking: with an `ACCESS SHARE` held, truncation did not happen until the
+lock was released. The city taught reclamation without the lock facet, so an
+operator watching disk not fall after a clean vacuum had no explanation.
+
+### Changed — PostgreSQL 18.4
+
+The oracle ran its full suite against 18.4: 188 checks, and **only the version
+label differed**. No checked behaviour moved between 18.3 and 18.4. That is the
+evidence for a safe bump, so the reference is now 18.4 — while the city continues
+to target the **18 major line**, since a point release is not where behaviour
+changes.
+
+### Oracle
+
+**188 checks, 61.8 s, 0 unexpected divergences.** The four that remain each carry
+their justification inline, so a reader can tell deliberate from accidental.
+
+
 ## [0.38.0] - 2026-08-03
 
 A lens created **real** conditions on a real PostgreSQL 18.3 — genuine lock waits,
