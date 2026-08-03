@@ -61,7 +61,7 @@ export interface TableDef {
   tuplesPerPage: number
   /** How hot this table is in the workload (relative weight, sums are normalised). */
   weight: number
-  /** Fraction of updates that can be HOT (no index churn). */
+  /** Fraction of updates that can be HOT (no modeled ordinary-index entry churn). */
   hotFriendly: number
   /** Accent colour (hex int) used by storage + flows. */
   color: number

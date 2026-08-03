@@ -7082,7 +7082,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         else if (k === 1) blk = idxBlk(ti, 1)
         else if (k === 2) blk = idxBlk(ti, 2, write && !x.hot)
         else { blk = pickBlk(ti, 'hot', undefined, write); forWrite = write }
-        // a non-HOT update also has to write every index entry
+        // A non-HOT update writes every modeled index entry; BRIN summaries are absent.
         if (write && !x.hot && k === 2) forWrite = true
       }
       const hit = touchPage(slot, ti, blk, forWrite, ring)

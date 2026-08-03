@@ -185,7 +185,7 @@ const STEPS: TourStep[] = [
     id: 'horizon',
     title: 'When vacuum cannot: the horizon',
     body:
-      'Now the expensive mistake. Somebody typed BEGIN, took a snapshot of the database, and went to lunch. Vacuum may not remove any row version that snapshot could still need, so the horizon — the oldest transaction anyone can still see — stops moving, and every table taking writes grows with no brake on it. The workers still run. They collect nothing. After a short look we let that transaction go: watch the horizon jump forward and the entire backlog become collectable at once.',
+      'Now the expensive mistake. Somebody typed BEGIN, took a snapshot of the database, and went to lunch. Vacuum may not remove any row version that snapshot could still need, so the snapshot and removal horizon — the oldest transaction whose status or visibility might still matter — stops moving, and every table taking writes grows with no brake on it. Older committed and frozen tuples can still be visible; this line governs cleanup, not the oldest creator anyone may read. The workers still run. They collect nothing. After a short look we let that transaction go: watch the horizon jump forward and the entire backlog become collectable at once.',
     focus: 'xmin.horizon',
     duration: 22,
     knobs: { longRunningXact: true },

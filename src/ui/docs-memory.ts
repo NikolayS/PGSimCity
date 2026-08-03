@@ -832,7 +832,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'How a row version is judged',
         body:
-          'Each row version carries `xmin` (the transaction that created it) and `xmax` (the transaction that deleted or superseded it, if any). A version is visible if its creator committed and is visible to your snapshot, and its deleter either does not exist, aborted, or is not visible to your snapshot. That test needs commit status, which comes from the commit log, cached and then cached again in the row itself as a hint bit. Your own open transaction is the one case the snapshot does not decide: you do see rows your earlier statements inserted and you no longer see rows they deleted, although nothing has committed — that is settled by the command counters `cmin` and `cmax`, checked before any commit status is consulted. Ordinary MVCC reads do not block ordinary row-version changes merely to preserve visibility; explicit table locks, row-locking reads, unique checks and foreign-key interactions still can block.',
+          'Each row version carries `xmin` (the transaction that created it) and `xmax`, which can record a transaction ID or MultiXact that deleted, updated, or locked it. A version is visible if its creator committed and is visible to your snapshot, and it has no effective deleter visible to that snapshot. A lock-only `xmax` does not delete the version: `HEAP_XMAX_LOCK_ONLY` means it records only a row lock, so the tuple remains live even after the locker commits. If `xmax` is a MultiXact, its members and the tuple flags determine whether it includes an updater instead of the raw number acting as a deleting XID. That visibility test needs commit status, which comes from the commit log, cached and then cached again in the row itself as a hint bit. Your own open transaction is the one case the snapshot does not decide: you do see rows your earlier statements inserted and you no longer see rows they deleted, although nothing has committed — that is settled by the command counters `cmin` and `cmax`, checked before any commit status is consulted. Ordinary MVCC reads do not block ordinary row-version changes merely to preserve visibility; explicit table locks, row-locking reads, unique checks and foreign-key interactions still can block.',
       },
       {
         heading: 'Why taking one has to be cheap',
@@ -847,7 +847,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What you would see in production',
         body:
-          '`pg_stat_activity.backend_xid` is set only once a transaction has written something — read-only transactions do not consume transaction ids. `backend_xmin` is the xmin horizon of that one backend — how far back it is pinning cleanup for every table in its database. `SELECT pg_current_snapshot()` returns the raw `xmin:xmax:in-progress` triple if you want to see one directly.',
+          '`pg_stat_activity.backend_xid` appears once a top-level transaction ID has been assigned. Ordinary read-only transactions avoid assigning an XID, but read-only is not a guarantee: calling `pg_current_xact_id()` explicitly assigns one without writing user data. A non-null `backend_xid` is therefore evidence of an assigned XID, not proof that the transaction has written user data. `backend_xmin` is the xmin horizon of that one backend — how far back it is pinning cleanup for every table in its database. `SELECT pg_current_snapshot()` returns the raw `xmin:xmax:in-progress` triple if you want to see one directly.',
       },
       {
         heading: 'What the city models',
@@ -857,9 +857,9 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     ],
     metrics: [
       {
-        label: 'In transaction',
+        label: 'Assigned XIDs',
         get: (s) => fmtNum(countBackends(s, (b) => b.active && b.state !== 'idle' && nz(b.xid) > 0)),
-        hint: 'backends assigned an xid — i.e. inside a transaction that has written',
+        hint: 'modeled active backends with an assigned xid; the city assigns xids only to writes',
       },
       { label: 'Next xid', get: (s) => fmtNum(nz(s.xid)) },
       { label: 'xmin horizon', get: (s) => fmtNum(nz(s.xminHorizon)) },
@@ -886,13 +886,13 @@ export const DOCS_MEMORY: ComponentDoc[] = [
   {
     id: 'xmin.horizon',
     title: 'The xmin Horizon',
-    subtitle: 'the oldest thing anybody might still need to see',
+    subtitle: 'a snapshot and removal horizon, not the oldest visible creator',
     tldr: 'Vacuum may only remove row versions dead to everyone — one old transaction pins that line for every table in its database.',
     sections: [
       {
         heading: 'What the horizon is',
         body:
-          'Vacuum derives cleanup cutoffs from several candidates, including active snapshot xmins, assigned transaction XIDs, prepared transactions, replication-slot xmins and standby feedback. A dead row version can be removed only once its deleting transaction committed and no relevant cutoff says somebody could still need it. This is not a per-table rule: one old candidate can retain versions across a database, while catalog cutoffs can have cluster-wide reach.',
+          'Vacuum derives cleanup cutoffs from several candidates, including active snapshot xmins, assigned transaction XIDs, prepared transactions, replication-slot xmins and standby feedback. It is a snapshot and removal horizon: the oldest transaction whose status or visibility might still matter, not the oldest creator XID a snapshot can see. Committed and frozen tuples created by much older XIDs remain visible. A dead row version can be removed only once its deleting transaction committed and no relevant cutoff says somebody could still need it. This is not a per-table rule: one old candidate can retain versions across a database, while catalog cutoffs can have cluster-wide reach.',
       },
       {
         heading: 'The most destructive mistake in Postgres',

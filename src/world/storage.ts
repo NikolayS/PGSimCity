@@ -1489,7 +1489,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
         tileFlash[base + k] = 0.9
         tileVm[base + k] = 0 // a modified page is no longer all-visible
       }
-      // HOT updates land on the heap page and touch no index at all.
+      // The model represents ordinary indexes; HOT adds no entry to them.
       guard = 0
       while (hotBudget[ti] >= 1 && guard++ < 4) {
         hotBudget[ti] -= 1
@@ -1768,7 +1768,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
         spawnProbe(ti, 0)
       }
       guard = 0
-      // Non-HOT updates must maintain every index. HOT updates never get here.
+      // Non-HOT updates maintain every modeled index. BRIN summary maintenance is absent.
       while (idxWriteBudget[ti] >= 1 && guard++ < 2) {
         idxWriteBudget[ti] -= 1
         spawnProbe(ti, 1)

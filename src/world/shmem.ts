@@ -1190,7 +1190,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
   ctx.register({
     id: 'xmin.horizon',
     name: 'xmin horizon',
-    role: 'oldest xid anyone can still see',
+    role: 'snapshot and removal horizon',
     kind: 'concept',
     district: 'shmem',
     object: bladeGroup,

@@ -373,6 +373,39 @@ export async function checkGucContexts(query, registry, major) {
   return results
 }
 
+export function hotUpdateChecks(rows, major, since, expectedUpdates) {
+  const byName = new Map(rows.map((row) => [row.relname, row]))
+  const check = (relation, expectedHot, reason) => {
+    const row = byName.get(relation)
+    const updates = Number(row?.n_tup_upd)
+    const hot = Number(row?.n_tup_hot_upd)
+    const newPage = row?.n_tup_newpage_upd === null || row?.n_tup_newpage_upd === undefined
+      ? null
+      : Number(row.n_tup_newpage_upd)
+    return result(
+      `HOT/${relation}`,
+      `${expectedUpdates} updates; ${expectedHot} HOT (${reason})`,
+      row
+        ? `n_tup_upd ${updates}, n_tup_hot_upd ${hot}, n_tup_newpage_upd ${newPage ?? 'not available'}`
+        : 'statistics row is absent',
+      updates === expectedUpdates
+        && hot === expectedHot
+        && (newPage === null || newPage === 0),
+    )
+  }
+
+  return [
+    check(
+      'hot_brin',
+      major >= since ? expectedUpdates : 0,
+      major >= since
+        ? `summarizing indexes allow HOT since PostgreSQL ${since}`
+        : `summarizing indexes block HOT before PostgreSQL ${since}`,
+    ),
+    check('hot_btree', 0, 'an ordinary B-tree covers the changed column'),
+  ]
+}
+
 async function relationColumns(query, relation) {
   return query(`
     SELECT a.attname
@@ -576,6 +609,276 @@ async function checkAutovacuumThreshold(psql, query, registry) {
     `reltuples ${before.reltuples}, n_live_tup ${before.n_live_tup}, n_dead_tup ${before.n_dead_tup}; thresholds ${reltuplesThreshold}/${liveThreshold}; autovacuum ${launched ? 'launched' : 'did not launch'}`,
     sourceDistinguishes && launched,
   )]
+}
+
+async function checkStorageMvcc(psql, query, registry, major) {
+  const claim = registry.claims.storageMvcc
+  const lock = claim.lockOnlyXmax
+  await psql(`CREATE EXTENSION IF NOT EXISTS ${lock.extension}`)
+  await psql(`
+    CREATE TABLE public.${lock.relation} (
+      id integer PRIMARY KEY,
+      note text NOT NULL
+    );
+    INSERT INTO public.${lock.relation} VALUES (1, 'still live')`)
+  await psql(`
+    BEGIN;
+    SELECT * FROM public.${lock.relation} WHERE id = 1 FOR UPDATE;
+    COMMIT`)
+  const statusExpression = major >= 14
+    ? 'pg_catalog.pg_xact_status(h.t_xmax::text::xid8)'
+    : 'pg_catalog.txid_status(h.t_xmax::text::bigint)'
+  const [lockRow] = await query(`
+    SELECT h.lp,
+           h.t_xmin::text AS t_xmin,
+           h.t_xmax::text AS t_xmax,
+           ${statusExpression} AS xmax_status,
+           h.t_ctid::text AS t_ctid,
+           pg_catalog.array_to_string(
+             (public.heap_tuple_infomask_flags(h.t_infomask, h.t_infomask2)).raw_flags,
+             ', '
+           ) AS flags,
+           (SELECT note FROM public.${lock.relation} WHERE id = 1) AS live_note
+      FROM public.heap_page_items(public.get_raw_page('public.${lock.relation}', 0)) AS h
+     WHERE h.lp = 1`)
+  const lockFlags = String(lockRow?.flags ?? '')
+  const lockOnly = lockRow?.xmax_status === 'committed'
+    && lockRow?.live_note === 'still live'
+    && lockFlags.includes('HEAP_XMAX_LOCK_ONLY')
+
+  const hot = claim.hotSummarizingIndex
+  await psql(`
+    CREATE TABLE public.${hot.brinRelation} (
+      id integer PRIMARY KEY,
+      payload integer NOT NULL,
+      filler text NOT NULL
+    ) WITH (fillfactor = 50, autovacuum_enabled = false);
+    CREATE TABLE public.${hot.btreeRelation} (
+      id integer PRIMARY KEY,
+      payload integer NOT NULL,
+      filler text NOT NULL
+    ) WITH (fillfactor = 50, autovacuum_enabled = false);
+    INSERT INTO public.${hot.brinRelation}
+    SELECT value, value, repeat('x', 32)
+      FROM pg_catalog.generate_series(1, ${hot.rows}) AS value;
+    INSERT INTO public.${hot.btreeRelation}
+    SELECT value, value, repeat('x', 32)
+      FROM pg_catalog.generate_series(1, ${hot.rows}) AS value;
+    CREATE INDEX ${hot.brinRelation}_payload_idx
+      ON public.${hot.brinRelation} USING brin (payload) WITH (pages_per_range = 32);
+    CREATE INDEX ${hot.btreeRelation}_payload_idx
+      ON public.${hot.btreeRelation} (payload)`)
+  await psql(`UPDATE public.${hot.brinRelation} SET payload = payload + 100000`)
+  await psql(`UPDATE public.${hot.btreeRelation} SET payload = payload + 100000`)
+
+  const newPageProjection = major >= 16 ? 's.n_tup_newpage_upd' : 'NULL::bigint'
+  let hotRows = []
+  for (let attempt = 0; attempt < 20; attempt++) {
+    hotRows = await query(`
+      SELECT c.relname,
+             s.n_tup_upd,
+             s.n_tup_hot_upd,
+             ${newPageProjection} AS n_tup_newpage_upd
+        FROM pg_catalog.pg_stat_user_tables AS s
+        JOIN pg_catalog.pg_class AS c ON c.oid = s.relid
+       WHERE c.relname IN ('${hot.brinRelation}', '${hot.btreeRelation}')
+       ORDER BY c.relname`)
+    if (hotRows.length === 2
+      && hotRows.every((row) => Number(row.n_tup_upd) === hot.rows)) break
+    await delay(100)
+  }
+
+  const brinSummaryRows = await query(`
+    WITH pages AS (
+      SELECT block_number,
+             public.get_raw_page(
+               'public.${hot.brinRelation}_payload_idx',
+               block_number::integer
+             ) AS page
+        FROM pg_catalog.generate_series(
+          0,
+          pg_catalog.pg_relation_size('public.${hot.brinRelation}_payload_idx')
+            / current_setting('block_size')::integer - 1
+        ) AS block_number
+    ), regular_pages AS (
+      SELECT block_number, page
+        FROM pages
+       WHERE public.brin_page_type(page) = 'regular'
+    )
+    SELECT items.itemoffset,
+           items.blknum,
+           items.value
+      FROM regular_pages
+      CROSS JOIN LATERAL public.brin_page_items(
+        regular_pages.page,
+        'public.${hot.brinRelation}_payload_idx'::regclass
+      ) AS items
+     WHERE items.attnum = 1
+     ORDER BY items.blknum`)
+  const summary = brinSummaryRows
+    .map((row) => `${row.itemoffset}:${row.blknum}:${row.value}`)
+    .join(' | ')
+  const summaryMaintained = brinSummaryRows.some((row) => String(row.value).includes('105000'))
+
+  const reindex = claim.reindexHeap
+  await psql(`
+    CREATE TABLE public.${reindex.relation} (id integer, payload text NOT NULL);
+    INSERT INTO public.${reindex.relation} VALUES (1, 'one'), (2, 'two');
+    CREATE INDEX ${reindex.relation}_payload_idx ON public.${reindex.relation} (payload)`)
+  const [reindexBefore] = await query(`
+    SELECT pg_catalog.pg_relation_filenode('public.${reindex.relation}'::regclass)::text AS heap,
+           pg_catalog.pg_relation_filenode('public.${reindex.relation}_payload_idx'::regclass)::text AS index`)
+  await psql(`REINDEX TABLE public.${reindex.relation}`)
+  const [reindexAfter] = await query(`
+    SELECT pg_catalog.pg_relation_filenode('public.${reindex.relation}'::regclass)::text AS heap,
+           pg_catalog.pg_relation_filenode('public.${reindex.relation}_payload_idx'::regclass)::text AS index`)
+  const heapPreserved = reindexBefore?.heap === reindexAfter?.heap
+    && reindexBefore?.index !== reindexAfter?.index
+
+  const toast = claim.toastTupleTarget
+  await psql(`
+    CREATE TABLE public.oracle_toast_value (payload text NOT NULL);
+    INSERT INTO public.oracle_toast_value
+    SELECT pg_catalog.left(pg_catalog.string_agg(pg_catalog.md5(value::text), ''), ${toast.valueBytes})
+      FROM pg_catalog.generate_series(1, 100) AS value;
+    CREATE TABLE public.oracle_toast_default (payload text NOT NULL);
+    ALTER TABLE public.oracle_toast_default ALTER COLUMN payload SET STORAGE EXTERNAL;
+    CREATE TABLE public.oracle_toast_raised (payload text NOT NULL)
+      WITH (toast_tuple_target = ${toast.raisedTarget});
+    ALTER TABLE public.oracle_toast_raised ALTER COLUMN payload SET STORAGE EXTERNAL;
+    CREATE TABLE public.oracle_toast_compressed (payload text NOT NULL);
+    INSERT INTO public.oracle_toast_default SELECT payload FROM public.oracle_toast_value;
+    INSERT INTO public.oracle_toast_raised SELECT payload FROM public.oracle_toast_value;
+    INSERT INTO public.oracle_toast_compressed VALUES (repeat('compress me ', 300))`)
+  const toastRows = await query(`
+    SELECT relation,
+           raw_size,
+           logical_size,
+           toast_heap_bytes
+      FROM (
+        SELECT 'default-external' AS relation,
+               pg_catalog.octet_length(items.t_attrs[1]) AS raw_size,
+               (SELECT pg_catalog.octet_length(payload) FROM public.oracle_toast_default) AS logical_size,
+               pg_catalog.pg_relation_size(c.reltoastrelid) AS toast_heap_bytes
+          FROM public.heap_page_item_attrs(
+                 public.get_raw_page('public.oracle_toast_default', 0),
+                 'public.oracle_toast_default'::regclass,
+                 false
+               ) AS items
+          CROSS JOIN pg_catalog.pg_class AS c
+         WHERE c.oid = 'public.oracle_toast_default'::regclass
+        UNION ALL
+        SELECT 'raised-inline',
+               pg_catalog.octet_length(items.t_attrs[1]),
+               (SELECT pg_catalog.octet_length(payload) FROM public.oracle_toast_raised),
+               pg_catalog.pg_relation_size(c.reltoastrelid)
+          FROM public.heap_page_item_attrs(
+                 public.get_raw_page('public.oracle_toast_raised', 0),
+                 'public.oracle_toast_raised'::regclass,
+                 false
+               ) AS items
+          CROSS JOIN pg_catalog.pg_class AS c
+         WHERE c.oid = 'public.oracle_toast_raised'::regclass
+        UNION ALL
+        SELECT 'compressed-inline',
+               pg_catalog.octet_length(items.t_attrs[1]),
+               (SELECT pg_catalog.octet_length(payload) FROM public.oracle_toast_compressed),
+               pg_catalog.pg_relation_size(c.reltoastrelid)
+          FROM public.heap_page_item_attrs(
+                 public.get_raw_page('public.oracle_toast_compressed', 0),
+                 'public.oracle_toast_compressed'::regclass,
+                 false
+               ) AS items
+          CROSS JOIN pg_catalog.pg_class AS c
+         WHERE c.oid = 'public.oracle_toast_compressed'::regclass
+      ) AS observations
+     ORDER BY relation`)
+  const toastByName = new Map(toastRows.map((row) => [row.relation, row]))
+  const defaultExternal = toastByName.get('default-external')
+  const raisedInline = toastByName.get('raised-inline')
+  const compressedInline = toastByName.get('compressed-inline')
+  const targetChangesStorage = Number(defaultExternal?.raw_size) < 100
+    && Number(defaultExternal?.toast_heap_bytes) > 0
+    && Number(raisedInline?.raw_size) > toast.valueBytes
+    && Number(raisedInline?.toast_heap_bytes) === 0
+    && Number(defaultExternal?.logical_size) === toast.valueBytes
+    && Number(raisedInline?.logical_size) === toast.valueBytes
+  const threeReadPaths = Number(raisedInline?.raw_size) > toast.valueBytes
+    && Number(compressedInline?.raw_size) > 20
+    && Number(compressedInline?.raw_size) < 500
+    && Number(compressedInline?.toast_heap_bytes) === 0
+    && Number(defaultExternal?.raw_size) < 100
+    && Number(defaultExternal?.toast_heap_bytes) > 0
+  const toastSummary = toastRows
+    .map((row) => `${row.relation}: raw ${row.raw_size}, logical ${row.logical_size}, toast heap ${row.toast_heap_bytes}`)
+    .join(' | ')
+
+  const [snapshot] = await query(`
+    SELECT pg_catalog.split_part(pg_catalog.pg_current_snapshot()::text, ':', 1)::bigint AS snapshot_xmin,
+           xmin::text::bigint AS tuple_xmin,
+           note
+      FROM public.${lock.relation}
+     WHERE id = 1`)
+  const oldCreatorVisible = snapshot?.note === 'still live'
+    && Number(snapshot?.tuple_xmin) < Number(snapshot?.snapshot_xmin)
+
+  const readOnly = await psql(`
+    BEGIN READ ONLY;
+    SELECT current_setting('transaction_read_only'), ${claim.readOnlyXid.function}::text`)
+  const readOnlyObservation = readOnly.stdout
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .find((line) => /^on\|\d+$/u.test(line)) ?? ''
+
+  return [
+    result(
+      'MVCC/committed-lock-only-xmax',
+      'committed HEAP_XMAX_LOCK_ONLY leaves the tuple live',
+      lockRow
+        ? `lp ${lockRow.lp}, t_xmin ${lockRow.t_xmin}, t_xmax ${lockRow.t_xmax}, xmax_status ${lockRow.xmax_status}, t_ctid ${lockRow.t_ctid}, flags ${lockFlags}, row ${lockRow.live_note}`
+        : 'heap tuple is absent',
+      lockOnly,
+    ),
+    ...hotUpdateChecks(hotRows, major, hot.since, hot.rows),
+    result(
+      'HOT/BRIN-summary-maintenance',
+      'the BRIN summary includes the updated upper bound 105000',
+      summary || 'no BRIN summary rows',
+      summaryMaintained,
+    ),
+    result(
+      'storage/REINDEX-TABLE-heap-filnode',
+      'REINDEX TABLE changes the index filenode but preserves the heap filenode',
+      `heap ${reindexBefore?.heap} -> ${reindexAfter?.heap}; index ${reindexBefore?.index} -> ${reindexAfter?.index}`,
+      heapPreserved,
+    ),
+    result(
+      'TOAST/toast_tuple_target',
+      `${toast.valueBytes}-byte value external at the default target and inline at ${toast.raisedTarget}`,
+      toastSummary,
+      targetChangesStorage,
+    ),
+    result(
+      'TOAST/wide-value-storage-paths',
+      'wide datums can be inline uncompressed, inline compressed, or out of line',
+      toastSummary,
+      threeReadPaths,
+    ),
+    result(
+      'MVCC/snapshot-xmin-is-not-oldest-visible-creator',
+      'a snapshot sees a committed tuple whose creator XID is older than snapshot xmin',
+      snapshot
+        ? `snapshot xmin ${snapshot.snapshot_xmin}, visible tuple xmin ${snapshot.tuple_xmin}, note ${snapshot.note}`
+        : 'visible tuple is absent',
+      oldCreatorVisible,
+    ),
+    result(
+      'MVCC/read-only-assigned-xid',
+      'BEGIN READ ONLY can hold an assigned XID after pg_current_xact_id()',
+      readOnlyObservation || 'read-only XID observation is absent',
+      readOnlyObservation.length > 0,
+    ),
+  ]
 }
 
 async function prepareIndexFixture(psql) {
@@ -796,6 +1099,7 @@ async function runChecks(server, registry, major) {
     ['wait events', () => checkWaitEvents(server.query, registry, major)],
     ['checkpoint timer skip', () => checkCheckpointTimerSkip(server.psql, server.query, registry, major)],
     ['autovacuum threshold', () => checkAutovacuumThreshold(server.psql, server.query, registry)],
+    ['storage and MVCC', () => checkStorageMvcc(server.psql, server.query, registry, major)],
     ['pg_stat_io values', () => checkPgStatIo(server.query, registry, major)],
     ['index walk', () => checkIndexWalk(server.psql, server.query, registry)],
   ]

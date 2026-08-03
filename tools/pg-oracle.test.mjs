@@ -4,6 +4,7 @@ import {
   checkGucContexts,
   compareSetting,
   expectedForMajor,
+  hotUpdateChecks,
   indexWalkAttributeChecks,
   loadOracleRegistry,
   markdownTable,
@@ -39,6 +40,20 @@ describe('PostgreSQL oracle claim registry', () => {
     expect(registry.claims.checkpointTimerSkip).toMatchObject({
       since: 18,
       timeoutSeconds: 30,
+    })
+    expect(registry.claims.storageMvcc).toMatchObject({
+      hotSummarizingIndex: {
+        since: 16,
+        rows: 5_000,
+      },
+      lockOnlyXmax: {
+        extension: 'pageinspect',
+      },
+      toastTupleTarget: {
+        defaultTarget: 2_000,
+        raisedTarget: 4_000,
+        valueBytes: 3_000,
+      },
     })
     expect(registry.claims.gucDefaults).toContainEqual(
       expect.objectContaining({ setting: 'autovacuum_vacuum_max_threshold' }),
@@ -134,6 +149,24 @@ describe('PostgreSQL oracle claim registry', () => {
     expect(expectedForMajor(claim, 13)).toMatchObject({ value: 1 })
     expect(expectedForMajor(claim, 17)).toMatchObject({ value: 2 })
     expect(expectedForMajor(claim, 19)).toMatchObject({ value: 2 })
+  })
+
+  it('gates summarizing-index HOT behavior at PostgreSQL 16', () => {
+    const rows = [
+      { relname: 'hot_brin', n_tup_upd: 5_000, n_tup_hot_upd: 5_000, n_tup_newpage_upd: 0 },
+      { relname: 'hot_btree', n_tup_upd: 5_000, n_tup_hot_upd: 0, n_tup_newpage_upd: 0 },
+    ]
+
+    expect(hotUpdateChecks(rows, 18, 16, 5_000).every((entry) => entry.verdict === 'MATCH')).toBe(true)
+    expect(hotUpdateChecks(rows, 17, 16, 5_000).every((entry) => entry.verdict === 'MATCH')).toBe(true)
+    expect(hotUpdateChecks([
+      { ...rows[0], n_tup_hot_upd: 0 },
+      rows[1],
+    ], 13, 16, 5_000).every((entry) => entry.verdict === 'MATCH')).toBe(true)
+    expect(hotUpdateChecks([
+      { ...rows[0], n_tup_hot_upd: 0 },
+      rows[1],
+    ], 18, 16, 5_000).some((entry) => entry.verdict === 'DIVERGES')).toBe(true)
   })
 
   it('normalises PostgreSQL native units before comparing defaults', () => {

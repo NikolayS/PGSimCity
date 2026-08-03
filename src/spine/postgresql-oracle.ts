@@ -308,6 +308,29 @@ export const POSTGRESQL_ORACLE_CLAIMS = {
     since: 18,
     timeoutSeconds: 30,
   },
+  storageMvcc: {
+    lockOnlyXmax: {
+      extension: 'pageinspect',
+      relation: 'oracle_lock_only',
+    },
+    hotSummarizingIndex: {
+      since: 16,
+      rows: 5_000,
+      brinRelation: 'hot_brin',
+      btreeRelation: 'hot_btree',
+    },
+    reindexHeap: {
+      relation: 'oracle_reindex',
+    },
+    toastTupleTarget: {
+      defaultTarget: 2_000,
+      raisedTarget: 4_000,
+      valueBytes: 3_000,
+    },
+    readOnlyXid: {
+      function: 'pg_current_xact_id()',
+    },
+  },
   pgStatIo: {
     relation: 'pg_catalog.pg_stat_io',
     since: 16,
