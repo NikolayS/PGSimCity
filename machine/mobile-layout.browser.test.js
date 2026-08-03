@@ -171,10 +171,7 @@ describe('machine room portrait layout', () => {
     expect(startHere).toMatch(/font-size:\s*11px/)
   })
 
-  it('keeps every marked honesty disclosure visible and legible at 390px', {
-    tags: ['browser'],
-    timeout: 90_000,
-  }, async () => {
+  it('keeps every marked honesty disclosure visible and legible at 390px', async () => {
     const reports = await measureDisclosurePages([{
       name: 'Machine',
       path: '/machine/',
@@ -241,7 +238,7 @@ describe('machine room portrait layout', () => {
       'Marker probe · TEMPORARY DISCLOSURE PROBE: 1px is below the 9px floor',
     ])
     expect(disclosureFailures(reports)).toEqual([])
-  })
+  }, 90_000)
 
   it('keeps the deferred-flush risk state readable outside the mobile canvas', () => {
     expect(html).toMatch(

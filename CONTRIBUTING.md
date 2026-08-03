@@ -25,6 +25,10 @@ The oracle starts and removes its own throwaway cluster. It requires the target
 major's server binaries at `/usr/lib/postgresql/18/bin`; it never substitutes a
 different PostgreSQL major or silently runs without a server.
 
+Tests that launch real Chrome use the `*.browser.test.*` filename convention.
+CI provisions Chrome for that separately gating lane; all other tests remain in
+the faster always-gating lane.
+
 Before opening a pull request:
 
 ```bash

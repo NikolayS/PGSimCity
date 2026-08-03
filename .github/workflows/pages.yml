@@ -34,7 +34,7 @@ jobs:
         run: npm ci
 
       - name: Run non-browser tests
-        run: npm test -- --tagsFilter='!browser'
+        run: npm test -- --exclude '**/*.browser.test.*'
 
   browser_test:
     name: Tests (Chrome)
@@ -62,7 +62,7 @@ jobs:
       - name: Run browser tests
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
-        run: npm test -- test/corrections.test.ts machine/mobile-layout.test.js --tagsFilter=browser --maxWorkers=2
+        run: npm test -- browser.test --maxWorkers=2
 
   build:
     runs-on: ubuntu-latest
