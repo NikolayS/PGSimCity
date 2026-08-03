@@ -200,6 +200,11 @@ export const CLAIM_VALUES = {
       source: 'checkpointer.counters',
       branches: ['stall.1→stall.2', 'stall.1→v.ckpt_ok'],
     },
+    slotRetainedBytes: {
+      threshold: 16 * MIB,
+      source: 'slots.rows',
+      branches: ['disk.1→v.slot_retention', 'disk.1→v.no_slot_retention'],
+    },
     deadTupleRatio: {
       threshold: 0.02,
       source: 'tables.rows',

@@ -13,6 +13,7 @@ import { activityWaitCounts, PROJECTIONS, PROJECTION_SOURCES } from './views'
 const INTENDED_VERDICT = {
   slow: 'v.saturation',
   stall: 'v.ckpt_storm',
+  disk: 'v.slot_retention',
   bloat: 'v.xmin',
   reads: 'v.backend_writes',
   blocked: 'v.lock_holder',
@@ -110,6 +111,73 @@ function reachableVerdicts(
 }
 
 describe('diagnostic path contracts', () => {
+  it('reports the observed row-lock wait mode without turning it into DDL', () => {
+    const sim = createSim(createBus())
+    const collector = createCollector(sim)
+    sim.state.locks.push({
+      holder: 0,
+      waiter: 1,
+      table: 0,
+      mode: 'ShareLock',
+      ageSec: 7,
+    })
+    const verdict = ALL_VERDICTS.find((candidate) => candidate.id === 'v.lock_holder')!
+    const copy = [verdict.title, verdict.because, verdict.mechanism, verdict.fix].join('\n')
+
+    expect(verdict.evidence(sim.state, collector)).toContainEqual(
+      expect.objectContaining({ label: 'waited mode', value: 'ShareLock' }),
+    )
+    expect(copy).not.toMatch(/holds an ACCESS EXCLUSIVE lock|this is DDL/i)
+    expect(verdict.fix).toMatch(/end the holder.*transaction/is)
+    expect(verdict.fix).toMatch(/AccessExclusiveLock.*DDL.*lock_timeout/is)
+    const control = verdict.knobs.find((knob) => knob.key === 'lockContention')!
+    expect(control.guc).toBe('an open blocking transaction')
+    expect(control.help).toMatch(/row-conflict waits.*transactions.*deadlocks/is)
+    expect(control.help).toMatch(/AccessExclusiveLock.*DDL.*lock_timeout/is)
+  })
+
+  it('routes a filling disk through replication-slot retention evidence', () => {
+    const symptom = SYMPTOMS.find((candidate) => candidate.id === 'disk')
+    expect(symptom).toBeDefined()
+    const step = symptom ? NODES.get(symptom.entry) : undefined
+    expect(step?.kind).toBe('step')
+    if (!step || step.kind !== 'step') return
+
+    expect(step.projection).toBe('slots')
+    expect(step.sql).toMatch(/wal_status[\s\S]*safe_wal_size[\s\S]*max_slot_wal_keep_size/i)
+    expect(step.sqlCompatibility).toMatchObject({ from: 18 })
+    expect(step.sqlCompatibility?.alternatives).toContainEqual(
+      expect.objectContaining({ from: 17, to: 17 }),
+    )
+
+    const sim = createSim(createBus())
+    const collector = createCollector(sim)
+    const slot = sim.state.replication.physicalSlots[1]
+    slot.active = false
+    slot.retainedBytes = 128 * 1024 * 1024
+    slot.restartLsn = sim.state.wal.insertLsn - slot.retainedBytes
+    const retention = step.branches.find((branch) => branch.next === 'v.slot_retention')
+    expect(retention?.test(sim.state, collector)).toBe(true)
+    slot.active = true
+    expect(retention?.test(sim.state, collector)).toBe(true)
+
+    const verdict = ALL_VERDICTS.find((candidate) => candidate.id === 'v.slot_retention')!
+    const copy = [verdict.because, verdict.mechanism, verdict.fix].join('\n')
+    expect(copy).toMatch(/reserved.*extended.*unreserved.*lost/is)
+    expect(verdict.fix).toMatch(/dropping.*does not delete.*WAL/is)
+    expect(verdict.fix).toMatch(/base backup.*only.*unavailable.*every source/is)
+  })
+
+  it('states that checkpoint-counter correlation narrows rather than concludes', () => {
+    const step = ALL_STEPS.find((candidate) => candidate.id === 'stall.2')!
+    const branch = step.branches.find((candidate) => candidate.next === 'v.ckpt_storm')!
+    const verdict = ALL_VERDICTS.find((candidate) => candidate.id === 'v.ckpt_storm')!
+
+    expect(branch.label).toMatch(/narrows/i)
+    expect(branch.label).toMatch(/does not (?:establish|conclude)/i)
+    expect(verdict.because).toMatch(/counters alone neither establish/i)
+  })
+
   it('reports cost-based autovacuum sleeps as Timeout/VacuumDelay', () => {
     const sim = createSim(createBus())
     const collector = createCollector(sim)

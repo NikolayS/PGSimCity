@@ -5070,7 +5070,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         holder: lockHolder,
         waiter: slot,
         table: ti,
-        mode: 'AccessExclusiveLock',
+        mode: 'RowExclusiveLock',
         ageSec: 0,
       })
     }

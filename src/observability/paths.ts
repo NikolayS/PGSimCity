@@ -218,6 +218,27 @@ function worstSenderStandby(s: SimState) {
   )[0]
 }
 
+interface RetainingSlot {
+  name: string
+  active: boolean
+  retainedBytes: number
+}
+
+function worstRetainingSlot(s: SimState): RetainingSlot | null {
+  let worst: RetainingSlot | null = null
+  for (const slot of s.replication.physicalSlots) {
+    if (!slot.exists) continue
+    if (!worst || slot.retainedBytes > worst.retainedBytes) worst = slot
+  }
+  if (s.replication.logicalEnabled) {
+    const retainedBytes = Math.max(0, s.wal.insertLsn - s.replication.logicalSlotLsn)
+    if (!worst || retainedBytes > worst.retainedBytes) {
+      worst = { name: 'pgsimcity_sub', active: true, retainedBytes }
+    }
+  }
+  return worst
+}
+
 /** How long the counters must have been running before an absence means anything. */
 const QUIET_SECONDS = 25
 
@@ -348,9 +369,9 @@ const KB = {
   },
   lockContention: {
     key: 'lockContention',
-    guc: 'an uncommitted LOCK TABLE',
+    guc: 'an open blocking transaction',
     kind: 'toggle',
-    help: 'Not a setting either. lock_timeout is what stops the queue forming behind it.',
+    help: 'Not a setting. Reduce row-conflict waits with short transactions; consistent access order prevents deadlocks. For an AccessExclusiveLock waiter running DDL, lock_timeout can bound lock acquisition.',
   },
   synchronousCommit: {
     key: 'synchronousCommit',
@@ -488,6 +509,15 @@ export const SYMPTOMS: Symptom[] = [
     scenario: 'checkpoint-storm',
     entry: 'stall.1',
     accent: 'checkpoint',
+  },
+  {
+    id: 'disk',
+    complaint: 'The disk is filling and pg_wal keeps growing.',
+    sub: 'WAL segments accumulate even after checkpoints complete.',
+    scenario: 'slot-pressure',
+    warmSeconds: 90,
+    entry: 'disk.1',
+    accent: 'wal',
   },
   {
     id: 'bloat',
@@ -640,6 +670,27 @@ SELECT w.*, b.state AS blocker_state,
   LEFT JOIN pg_stat_activity b ON b.pid = w.blocker_pid
  ORDER BY w.waitstart;`
 
+const SLOT_RETENTION_SQL = `SELECT s.slot_name, s.slot_type, s.active, s.restart_lsn,
+       pg_wal_lsn_diff(pg_current_wal_lsn(), s.restart_lsn) AS retained_bytes,
+       s.wal_status, s.safe_wal_size,
+       current_setting('max_slot_wal_keep_size') AS max_slot_wal_keep_size
+  FROM pg_replication_slots AS s
+ ORDER BY retained_bytes DESC NULLS LAST;`
+
+const SLOT_RETENTION_SQL_PG17 = `SELECT s.slot_name, s.slot_type, s.active, s.restart_lsn,
+       pg_wal_lsn_diff(pg_current_wal_lsn(), s.restart_lsn) AS retained_bytes,
+       s.wal_status, s.safe_wal_size,
+       current_setting('max_slot_wal_keep_size') AS max_slot_wal_keep_size
+  FROM pg_replication_slots AS s
+ ORDER BY retained_bytes DESC NULLS LAST;`
+
+const SLOT_RETENTION_SQL_COMPATIBILITY = {
+  from: 18,
+  alternatives: [{ from: 17, to: 17, sql: SLOT_RETENTION_SQL_PG17 }],
+  note:
+    'The selected pg_replication_slots columns and max_slot_wal_keep_size setting have the same form on PostgreSQL 18 and PostgreSQL 17; both executable forms are registered explicitly.',
+} as const satisfies SqlCompatibility
+
 const STEPS: Step[] = [
   /* ==================== everything is slow ============================== */
   {
@@ -709,8 +760,41 @@ const STEPS: Step[] = [
     note:
       'A full-page image can omit the unused page hole, and wal_compression can compress it, so even BLCKSZ is not its recorded size. BLCKSZ is build-time configurable. PostgreSQL 18 reports WAL I/O in pg_stat_io with object = \'wal\'.',
     branches: [
-      { label: 'In this model, wal_fpi and wal_bytes rise together after requested checkpoints.', source: 'wal.counters', next: 'v.ckpt_storm', test: (_s, c) => c.total.walBytes > 0 && c.total.walFpi > 0 },
+      { label: 'The counters correlate in this model. This narrows the path, but does not establish the checkpoint request cause.', source: 'wal.counters', next: 'v.ckpt_storm', test: (_s, c) => c.total.walBytes > 0 && c.total.walFpi > 0 },
       { label: 'WAL bytes rise without a modeled FPI burst.', source: 'wal.counters', next: 'v.wal_volume', test: (_s, c) => c.total.walBytes > 0 && c.total.walFpi <= 0 },
+    ],
+  },
+
+  /* ==================== disk / WAL retention ========================== */
+  {
+    id: 'disk.1',
+    kind: 'step',
+    title: 'Is a replication slot retaining the growing WAL?',
+    why: 'A slot keeps WAL available from restart_lsn for its consumer. Compare each slot with the current insert position before treating checkpoints, archiving or the filesystem as the cause of pg_wal growth.',
+    instrument: 'pg_replication_slots',
+    projection: 'slots',
+    city: 'wal.vault',
+    sql: SLOT_RETENTION_SQL,
+    sqlCompatibility: SLOT_RETENTION_SQL_COMPATIBILITY,
+    look:
+      '`reserved` means the required WAL is still within max_wal_size; `extended` means retention has gone beyond max_wal_size. With a finite max_slot_wal_keep_size, `unreserved` means required WAL is no longer protected and may be removed at the next checkpoint; `lost` means required WAL has already been removed and the slot is unusable. A max_slot_wal_keep_size of -1 is unlimited, so safe_wal_size is null and an abandoned slot can retain WAL until the volume fills.',
+    branches: [
+      {
+        label: 'A slot still has `reserved` or `extended` WAL above the model alert boundary.',
+        next: 'v.slot_retention',
+        ...gated('slotRetainedBytes', (s) => {
+          const slot = worstRetainingSlot(s)
+          return slot !== null && slot.retainedBytes > DIAGNOSTIC_GATES.slotRetainedBytes.threshold
+        }),
+      },
+      {
+        label: 'No slot is retaining WAL above the model alert boundary; `unreserved` or `lost` also cannot explain continued retention.',
+        next: 'v.no_slot_retention',
+        ...gated('slotRetainedBytes', (s) => {
+          const slot = worstRetainingSlot(s)
+          return slot === null || slot.retainedBytes <= DIAGNOSTIC_GATES.slotRetainedBytes.threshold
+        }),
+      },
     ],
   },
 
@@ -1103,6 +1187,71 @@ const VERDICTS: Verdict[] = [
     reading: [DOC('wal-configuration.html', 'WAL Configuration')],
   },
   {
+    id: 'v.slot_retention',
+    kind: 'verdict',
+    title: 'A replication slot is retaining WAL on the primary.',
+    because:
+      'The slot’s restart_lsn is behind the current WAL position, and the retained-byte gap is large enough to explain continued pg_wal growth in this model. An active consumer can retain WAL while lagging just as an inactive one can retain it while disconnected.',
+    mechanism:
+      '`reserved` means the slot still needs WAL inside max_wal_size; `extended` means slot retention has extended pg_wal beyond that budget. A finite max_slot_wal_keep_size can move the slot to `unreserved`, where required WAL may be removed at the next checkpoint, and then `lost`, where the slot is unusable. The default -1 leaves retention unlimited.',
+    evidence: (s) => {
+      const slot = worstRetainingSlot(s)
+      if (!slot) return [{ label: 'retaining slot', value: 'none', tone: 'ok' }]
+      return [
+        { label: 'slot_name', value: slot.name, tone: 'crit' },
+        { label: 'active', value: slot.active ? 't' : 'f', tone: slot.active ? 'warn' : 'crit' },
+        { label: 'WAL retained', value: fmtBytes(slot.retainedBytes), tone: 'crit' },
+        { label: 'wal_status', value: 'reserved', tone: 'warn' },
+        { label: 'max_slot_wal_keep_size', value: '-1 (unlimited in this model)', tone: 'warn' },
+        { label: 'modeled pg_wal', value: fmtBytes(s.disasterRecovery.archive.pgWalBytes) },
+      ]
+    },
+    fix:
+      'Identify the slot owner and recovery intent first. If the consumer is required, restore consumption or add measured temporary headroom and verify its catch-up rate. If the slot is abandoned, stop and detach that consumer before dropping the slot. Dropping a slot removes its retention guarantee but does not delete WAL already in pg_wal. A physical standby can continue while its required WAL remains in pg_wal or is available through the archive; it needs a new base backup only when the necessary WAL is unavailable from every source.',
+    knobs: [],
+    confirm: {
+      projection: 'slots',
+      instrument: 'pg_replication_slots',
+      sql: SLOT_RETENTION_SQL,
+      sqlCompatibility: SLOT_RETENTION_SQL_COMPATIBILITY,
+    },
+    resolved: (s) => {
+      const slot = worstRetainingSlot(s)
+      return {
+        ok: slot === null || slot.retainedBytes <= DIAGNOSTIC_GATES.slotRetainedBytes.threshold,
+        reading: slot === null
+          ? 'no replication slot retains WAL in the model'
+          : `${slot.name} is ${slot.active ? 'active' : 'inactive'} and retains ${fmtBytes(slot.retainedBytes)}`,
+      }
+    },
+    city: 'wal.vault',
+    reading: [
+      DOC('view-pg-replication-slots.html', 'pg_replication_slots'),
+      DOC('runtime-config-replication.html', 'Replication settings'),
+    ],
+  },
+  {
+    id: 'v.no_slot_retention',
+    kind: 'verdict',
+    title: 'No replication slot explains the continued pg_wal growth.',
+    because:
+      'No physical or logical slot is retaining more than the model alert boundary. A slot already marked unreserved or lost has stopped protecting some or all required WAL and cannot explain continued retention after checkpoint cleanup.',
+    mechanism:
+      'pg_wal can also grow because the current checkpoint redo point is old, archiving has not completed, wal_keep_size reserves segments, a base backup needs WAL, or removal is otherwise delayed. Slot evidence narrows that list; it does not measure filesystem consumers outside pg_wal.',
+    evidence: (s) => {
+      const slot = worstRetainingSlot(s)
+      return [
+        { label: 'largest slot hold', value: fmtBytes(slot?.retainedBytes ?? 0), tone: 'ok' },
+        { label: 'model alert boundary', value: fmtBytes(DIAGNOSTIC_GATES.slotRetainedBytes.threshold) },
+      ]
+    },
+    fix:
+      'Inspect checkpoint completion, pg_stat_archiver, backup activity, wal_keep_size and the filesystem view of pg_wal. Do not drop a slot that the evidence does not show retaining the growth.',
+    knobs: [],
+    city: 'wal.vault',
+    reading: [DOC('wal-configuration.html', 'WAL Configuration')],
+  },
+  {
     id: 'v.ckpt_ok',
     kind: 'verdict',
     title: 'Few checkpoints were requested in this window.',
@@ -1347,19 +1496,19 @@ const VERDICTS: Verdict[] = [
   {
     id: 'v.lock_holder',
     kind: 'verdict',
-    title: 'One session holds an ACCESS EXCLUSIVE lock and never committed.',
+    title: 'One transaction is holding a conflicting lock open.',
     because:
-      'Every blocked backend points at the same pid, and that pid is not running a query — it is in `idle in transaction`. The statement that took the lock finished in a millisecond. The lock outlives it, because a lock is held until the transaction ends.',
+      'The blocked rows point to the same blocker. The requested lock mode is evidence about each waiter; it is not evidence that the blocker holds ACCESS EXCLUSIVE. The blocker’s transaction must end before its transaction-scoped locks are released.',
     mechanism:
-      'The city models one scripted ACCESS EXCLUSIVE holder and attaches every affected statement directly to it. It does not model lock modes, queue fairness or one waiter blocking later compatible requests. The evidence below establishes direct waiters and occupied slots only; PostgreSQL’s more complex queue-order cascade is not demonstrated here.',
+      'A row-level conflict commonly appears as an ungranted ShareLock on the other transaction ID; relation-level requests report modes such as RowExclusiveLock, ShareLock or AccessExclusiveLock. The mode belongs to the waiter row. Inspect the blocker’s complete pg_locks rows before naming what it holds. The city models one direct holder and does not model queue fairness or waiter-to-waiter cascades.',
     evidence: (s) => [
       { label: 'waiters', value: String(s.locks.length), tone: 'crit' },
       { label: 'oldest wait', value: `${Math.max(0, ...s.locks.map((l) => l.ageSec)).toFixed(0)} ${CLAIM_VALUES.modelDuration.shortUnit}`, tone: 'crit' },
-      { label: 'mode', value: 'AccessExclusiveLock', tone: 'crit' },
+      { label: 'waited mode', value: [...new Set(s.locks.map((lock) => lock.mode))].join(', ') || '—', tone: 'crit' },
       { label: 'connections in use', value: `${s.stats.activeBackends} of ${s.maxConnections}` },
     ],
     fix:
-      'End the holder’s transaction, not the waiters’ queries. Ask the client to commit or roll back; if the session is abandoned, verify the PID, owner and abort consequences before pg_terminate_backend(). pg_cancel_backend() only cancels a current query and cannot clear an idle-in-transaction session. Use SET lock_timeout for DDL so lock acquisition fails promptly.',
+      'End the holder’s transaction, not the waiters’ queries. Ask the client to commit or roll back; if the session is abandoned, verify the PID, owner and abort consequences before pg_terminate_backend(). pg_cancel_backend() only cancels a current query and cannot clear an idle-in-transaction session. Only when waited_mode is AccessExclusiveLock and the waiter is DDL should SET lock_timeout be the specific prevention advice.',
     knobs: [KB.lockContention],
     confirm: {
       projection: 'locks',

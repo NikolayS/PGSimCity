@@ -795,7 +795,7 @@ export interface PhysicalStandbyState {
 export interface PhysicalReplicationSlotState {
   name: 'standby_a_slot' | 'standby_b_slot'
   standbyId: 'standbyA' | 'standbyB'
-  /** False after DROP_REPLICATION_SLOT; the standby then needs a new base backup. */
+  /** False after DROP_REPLICATION_SLOT; continuity then depends on pg_wal or archive availability. */
   exists: boolean
   active: boolean
   restartLsn: number
@@ -995,6 +995,7 @@ export interface LockEdge {
   holder: number
   waiter: number
   table: number
+  /** Lock mode requested by the waiter, matching the ungranted pg_locks row. */
   mode: string
   ageSec: number
 }

@@ -1016,7 +1016,7 @@ const locks: ProjectionFn = (s) => {
         pid: String(PID.backend(l.waiter)),
         locktype: 'relation',
         relation: s.tables[l.table]?.def.name ?? '—',
-        mode: l.mode === 'AccessExclusiveLock' ? 'RowExclusiveLock' : l.mode,
+        mode: l.mode,
         granted: { v: 'f', tone: 'crit' },
         wait_age: { v: age(l.ageSec), tone: l.ageSec > 5 ? 'crit' : 'warn' },
         blocked_by: { v: `{${PID.backend(l.holder)}}`, tone: 'crit' },
@@ -1109,9 +1109,11 @@ const slots: ProjectionFn = (s) => {
         confirmed_flush_lsn: NULLC,
         retained: {
           v: fmtBytes(behind),
-          tone: behind > 256 * 1024 * 1024 ? 'crit' : behind > 16 * 1024 * 1024 ? 'warn' : 'dim',
+          tone: behind > 256 * 1024 * 1024 ? 'crit' : behind > DIAGNOSTIC_GATES.slotRetainedBytes.threshold ? 'warn' : 'dim',
         },
         wal_status: { v: 'reserved', tone: slot.active ? 'ok' : 'warn' },
+        safe_wal_size: NULLC,
+        max_slot_wal_keep_size: '-1',
       },
     })
   }
@@ -1125,8 +1127,10 @@ const slots: ProjectionFn = (s) => {
         active: { v: 't', tone: 'ok' },
         restart_lsn: { v: fmtLsn(s.replication.logicalSlotLsn), tone: 'warn' },
         confirmed_flush_lsn: { v: fmtLsn(s.replication.logicalSlotLsn), tone: 'accent' },
-        retained: { v: fmtBytes(Math.max(0, behind)), tone: behind > 4e6 ? 'warn' : 'dim' },
+        retained: { v: fmtBytes(Math.max(0, behind)), tone: behind > DIAGNOSTIC_GATES.slotRetainedBytes.threshold ? 'warn' : 'dim' },
         wal_status: { v: 'reserved', tone: 'ok' },
+        safe_wal_size: NULLC,
+        max_slot_wal_keep_size: '-1',
       },
     })
   }
@@ -1139,6 +1143,8 @@ const slots: ProjectionFn = (s) => {
       { key: 'confirmed_flush_lsn', label: 'confirmed_flush_lsn' },
       { key: 'retained', label: 'WAL retained', num: true },
       { key: 'wal_status', label: 'wal_status' },
+      { key: 'safe_wal_size', label: 'safe_wal_size', num: true },
+      { key: 'max_slot_wal_keep_size', label: 'max_slot_wal_keep_size' },
     ],
     rows,
     caption:
