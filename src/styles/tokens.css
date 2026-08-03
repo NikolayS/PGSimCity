@@ -50,6 +50,15 @@
   text-decoration-color: currentColor;
 }
 
+@media (max-width: 900px) and (pointer: coarse) {
+  .pg-correction__link {
+    display: inline-flex;
+    min-width: var(--tap);
+    min-height: var(--tap);
+    align-items: center;
+  }
+}
+
 :root {
   /* --- surfaces --- */
   --bg-void: #04060c;

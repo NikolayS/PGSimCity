@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest'
 import {
   disclosureFailures,
   measureDisclosurePages,
+  measureTouchTargetPages,
+  touchTargetFailures,
 } from '../test/disclosure-browser.mjs'
 
 import {
@@ -164,12 +166,42 @@ describe('machine room portrait layout', () => {
     expect(walk).toMatch(/max-height:\s*48dvh/)
   })
 
-  it('keeps START HERE readable and thumb-sized on a phone', () => {
-    const startHere = blockAfter(portrait, '#index-walk-open')
+  it('keeps every rendered touch control thumb-sized and hit-testable at 390px', async () => {
+    const reports = await measureTouchTargetPages([{
+      name: 'Machine',
+      path: '/machine/',
+      readySelector: '#comparison-open',
+      probeTouchTarget: true,
+    }, {
+      name: 'City',
+      path: '/',
+      readySelector: '.control-center__sources',
+      prepare: `(async () => {
+        for (let attempt = 0; attempt < 120 && !window.PGSIMCITY; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 100))
+        }
+        if (!window.PGSIMCITY) throw new Error('city API did not become ready')
+      })()`,
+    }, {
+      name: 'Diagnose',
+      path: '/observability/',
+      readySelector: '.top',
+    }])
 
-    expect(startHere).toMatch(/min-(?:block-size|height):\s*44px/)
-    expect(startHere).toMatch(/font-size:\s*11px/)
-  })
+    expect(reports.map((report) => report.viewport)).toEqual([
+      { width: 390, height: 844 },
+      { width: 390, height: 844 },
+      { width: 390, height: 844 },
+    ])
+    for (const report of reports) expect(report.controls.length).toBeGreaterThan(0)
+    expect(touchTargetFailures([{
+      name: 'Probe',
+      controls: [reports[0].probe],
+    }])).toEqual([
+      'Probe · #temporary-touch-target-probe: 1.00 × 1.00px is below 44 × 44px',
+    ])
+    expect(touchTargetFailures(reports)).toEqual([])
+  }, 90_000)
 
   it('keeps every marked honesty disclosure visible and legible at 390px', async () => {
     const reports = await measureDisclosurePages([{

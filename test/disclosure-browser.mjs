@@ -127,11 +127,12 @@ const MEASURE_EXPRESSION = `(() => {
   })
 })()`
 
-async function evaluate(send, expression) {
+async function evaluate(send, expression, options = {}) {
   const result = await send('Runtime.evaluate', {
     expression,
     awaitPromise: true,
     returnByValue: true,
+    ...options,
   })
   if (result.exceptionDetails) {
     throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text)
@@ -231,7 +232,7 @@ export async function inspectRenderedPages(pages, inspect) {
       if (page.prepare) await evaluate(send, page.prepare)
       const viewport = await evaluate(send, '({ width: innerWidth, height: innerHeight })')
       reports.push(await inspect({
-        evaluate: (expression) => evaluate(send, expression),
+        evaluate: (expression, options) => evaluate(send, expression, options),
         page,
         viewport,
       }))
@@ -294,6 +295,121 @@ export function disclosureFailures(reports, floor = 9) {
       if (disclosure.hiddenBy) failures.push(`${report.name} · ${label}: hidden (${disclosure.hiddenBy})`)
       if (disclosure.fontSize < floor) {
         failures.push(`${report.name} · ${label}: ${disclosure.fontSize}px is below the ${floor}px floor`)
+      }
+    }
+  }
+  return failures
+}
+
+const TOUCH_TARGET_EXPRESSION = `(async () => {
+  const describe = (element) => {
+    if (element.id) return '#' + element.id
+    const ariaLabel = element.getAttribute('aria-label')
+    if (ariaLabel) return ariaLabel
+    const text = element.textContent.replace(/\\s+/g, ' ').trim()
+    if (text) return text.slice(0, 80)
+    const name = element.getAttribute('name')
+    return name ? element.tagName.toLowerCase() + '[name="' + name + '"]' : element.tagName.toLowerCase()
+  }
+  const hasClickHandler = (element) => {
+    if (element.tagName !== 'A') return true
+    if (typeof element.onclick === 'function') return true
+    if (typeof getEventListeners !== 'function') return false
+    return (getEventListeners(element).click || []).length > 0
+  }
+  const isRenderedControl = (element) => {
+    if (!hasClickHandler(element)) return false
+    if (element.closest('[hidden], [inert], [aria-hidden="true"]')) return false
+    const style = getComputedStyle(element)
+    const rect = element.getBoundingClientRect()
+    const parent = element.parentElement
+    const parentStyle = parent && getComputedStyle(parent)
+    const parentRect = parent && parent.getBoundingClientRect()
+    const hiddenByOwnCss = parentStyle
+      && parentStyle.display !== 'none'
+      && parentStyle.visibility === 'visible'
+      && Number(parentStyle.opacity) > 0
+      && parentRect.width > 0
+      && parentRect.height > 0
+      && (style.display === 'none'
+        || style.visibility !== 'visible'
+        || Number(style.opacity) === 0
+        || style.pointerEvents === 'none')
+    return hiddenByOwnCss || (style.display !== 'none'
+      && style.visibility === 'visible'
+      && Number(style.opacity) > 0
+      && style.pointerEvents !== 'none'
+      && rect.width > 0
+      && rect.height > 0)
+  }
+  const controls = Array.from(document.querySelectorAll(
+    'button, a, [role="button"], input:not([type="hidden"]), select',
+  )).filter(isRenderedControl)
+  const measured = []
+  for (const element of controls) {
+    element.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' })
+    const rect = element.getBoundingClientRect()
+    const centerX = rect.left + rect.width / 2
+    const centerY = rect.top + rect.height / 2
+    const hit = document.elementFromPoint(centerX, centerY)
+    measured.push({
+      label: describe(element),
+      width: rect.width,
+      height: rect.height,
+      hitTestable: hit === element || element.contains(hit),
+      hit: hit ? describe(hit) : null,
+    })
+  }
+  return measured
+})()`
+
+/** Measure every rendered semantic touch control on a page already owned by an audit. */
+export async function measureTouchTargetPage(evaluatePage, page, viewport) {
+  const controls = await evaluatePage(TOUCH_TARGET_EXPRESSION, {
+    includeCommandLineAPI: true,
+  })
+  let probe
+  if (page.probeTouchTarget) {
+    await evaluatePage(`(() => {
+      const button = document.createElement('button')
+      button.id = 'temporary-touch-target-probe'
+      button.textContent = 'TEMPORARY TOUCH TARGET PROBE'
+      button.style.cssText = 'position:fixed;z-index:2147483647;left:100px;top:100px;box-sizing:border-box;width:1px;height:1px;min-width:0;min-height:0;padding:0;border:0'
+      document.body.append(button)
+    })()`)
+    const probed = await evaluatePage(TOUCH_TARGET_EXPRESSION, {
+      includeCommandLineAPI: true,
+    })
+    await evaluatePage(`document.querySelector('#temporary-touch-target-probe').remove()`)
+    probe = probed.find((control) => control.label === '#temporary-touch-target-probe')
+  }
+  return {
+    name: page.name,
+    viewport,
+    controls,
+    probe,
+  }
+}
+
+/** Measure rendered semantic controls after a real 390x844 touch layout. */
+export async function measureTouchTargetPages(pages) {
+  return inspectRenderedPages(pages, ({ evaluate, page, viewport }) => (
+    measureTouchTargetPage(evaluate, page, viewport)
+  ))
+}
+
+export function touchTargetFailures(reports, floor = 44) {
+  const failures = []
+  for (const report of reports) {
+    for (const control of report.controls) {
+      if (control.width < floor || control.height < floor) {
+        failures.push(
+          `${report.name} · ${control.label}: ${control.width.toFixed(2)} × ${control.height.toFixed(2)}px is below ${floor} × ${floor}px`,
+        )
+      }
+      if (!control.hitTestable) {
+        const hit = control.hit ? `hit ${control.hit}` : 'hit nothing'
+        failures.push(`${report.name} · ${control.label}: centre ${hit}`)
       }
     }
   }

@@ -1225,6 +1225,9 @@ export function createHud(ctx: UiContext): UiModule {
   function applyPhoneLayout(): void {
     const target = phone.matches ? dockSlot : rightCluster
     if (toolCluster.parentElement !== target) target.append(toolCluster)
+    for (const vital of vitals) {
+      vital.root.hidden = phone.matches && vital.def.key !== 'latency'
+    }
     // Leaving the rail expanded across a rotation would re-cover the city.
     if (!phone.matches && scenariosOpen) setScenariosOpen(false)
   }

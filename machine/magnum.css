@@ -1309,6 +1309,7 @@ button:focus-visible {
   }
 
   #index-walk-open {
+    min-width: 44px;
     min-height: 44px;
     padding-inline: 8px;
     font-size: 11px;
@@ -1352,6 +1353,19 @@ button:focus-visible {
   .clock-control output {
     min-height: 28px;
     padding: 6px 8px;
+  }
+
+  .control-rack button,
+  .architecture-readout button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .pg-correction__link {
+    display: inline-flex;
+    min-width: 44px;
+    min-height: 44px;
+    align-items: center;
   }
 
   .viewing-rate {

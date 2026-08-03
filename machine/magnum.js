@@ -223,6 +223,13 @@ const MOBILE_BOARD_QUERY =
   + '(max-width: 900px) and (max-height: 500px) and (hover: none) and (pointer: coarse)'
 const mobileBoardMedia = window.matchMedia(MOBILE_BOARD_QUERY)
 
+function syncMobileResetVisibility() {
+  machineReset.hidden = mobileBoardMedia.matches
+}
+
+mobileBoardMedia.addEventListener('change', syncMobileResetVisibility)
+syncMobileResetVisibility()
+
 const periods = Object.freeze({
   walwriter: 3,
   backends: 6,

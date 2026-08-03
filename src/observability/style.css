@@ -269,6 +269,7 @@ body {
 /* ------------------------------------------------------------ pane */
 
 .pane {
+  min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 16px 22px 60px;
@@ -856,6 +857,14 @@ body {
   .card h1 { font-size: 20px; }
   .intro h1 { font-size: 21px; }
   .sqlblock__code { font-size: var(--fs-xs); }
+}
+
+@media (max-width: 900px) and (pointer: coarse) {
+  button,
+  .top .surface-tab {
+    min-width: var(--tap);
+    min-height: var(--tap);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
