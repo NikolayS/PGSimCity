@@ -28,6 +28,7 @@
     "dev": "vite",
     "bake:light": "node tools/bake-indirect.mjs",
     "build": "vite build",
+    "oracle": "node tools/pg-oracle.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:layout": "node tools/verify-hud-layout.mjs",

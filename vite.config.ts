@@ -111,6 +111,10 @@ export default defineConfig({
    * 12 failures in a working tree that was clean. dist/ is built output. */
   test: {
     exclude: ['**/node_modules/**', '**/dist/**', '.claude/**'],
+    tags: [{
+      name: 'browser',
+      description: 'Requires the explicitly provisioned headless Chrome CI lane.',
+    }],
     /*
      * Vitest's default is 5 s. These are deterministic model tests — no
      * `Date.now`, no `Math.random`, no `setTimeout` anywhere in `src/sim` — so a

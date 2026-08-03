@@ -193,7 +193,11 @@ describe('PostgreSQL correction reports', () => {
     }
   })
 
-  it('covers every claim-bearing panel rendered by each browser surface', async () => {
+  it('covers every claim-bearing panel rendered by each browser surface', {
+    tags: ['browser'],
+    // Browser-slot queue time is not claim behavior; the CDP helper bounds its own waits.
+    timeout: 0,
+  }, async () => {
     const reports = await measureCorrectionPages([{
       name: 'City',
       path: '/',
@@ -356,6 +360,5 @@ describe('PostgreSQL correction reports', () => {
         }
       }
     }
-  // Browser-slot queue time is not claim behavior; the CDP helper bounds its own waits.
-  }, 0)
+  })
 })
