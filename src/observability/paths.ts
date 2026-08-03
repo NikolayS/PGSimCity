@@ -55,7 +55,27 @@ export interface Branch {
   next: string
 }
 
-export interface Step {
+export interface SqlVariant {
+  from: number
+  to?: number
+  sql: string
+}
+
+export interface SqlCompatibility {
+  /** first PostgreSQL major that accepts the displayed target query */
+  from: number
+  /** executable forms for earlier supported majors */
+  alternatives: readonly SqlVariant[]
+  /** visible explanation of the version boundary */
+  note: string
+}
+
+export interface DiagnosticSqlBlock {
+  sql: string
+  sqlCompatibility?: SqlCompatibility
+}
+
+export interface Step extends DiagnosticSqlBlock {
   id: string
   kind: 'step'
   /** the question this step asks */
@@ -131,7 +151,7 @@ export interface Verdict {
   fix: string
   knobs: KnobSpec[]
   /** what to re-read to confirm the fix worked */
-  confirm?: { projection: string; instrument: string; sql: string }
+  confirm?: { projection: string; instrument: string } & DiagnosticSqlBlock
   /**
    * Re-run the finding against live state, so the reader who turns the dial gets
    * an answer instead of a table they have to re-interpret unaided. This is the
@@ -525,6 +545,101 @@ export const SYMPTOMS: Symptom[] = [
  * The tree
  * -------------------------------------------------------------------------*/
 
+const CHECKPOINTER_SQL = `SELECT num_timed, num_requested, num_done, buffers_written,
+       write_time, sync_time
+  FROM pg_stat_checkpointer;`
+
+const CHECKPOINTER_SQL_PG17 = `SELECT num_timed, num_requested, buffers_written,
+       write_time, sync_time
+  FROM pg_stat_checkpointer;`
+
+const CHECKPOINTER_CONFIRM_SQL =
+  `SELECT num_timed, num_requested, num_done FROM pg_stat_checkpointer;`
+
+const CHECKPOINTER_CONFIRM_SQL_PG17 =
+  `SELECT num_timed, num_requested FROM pg_stat_checkpointer;`
+
+const CHECKPOINTER_SQL_COMPATIBILITY = {
+  from: 18,
+  alternatives: [{ from: 17, to: 17, sql: CHECKPOINTER_SQL_PG17 }],
+  note:
+    'The displayed query is PostgreSQL 18 SQL because `num_done` arrived in 18. On PostgreSQL 17, omit `num_done`; `num_timed` and `num_requested` remain available in `pg_stat_checkpointer`.',
+} as const satisfies SqlCompatibility
+
+const CHECKPOINTER_CONFIRM_SQL_COMPATIBILITY = {
+  ...CHECKPOINTER_SQL_COMPATIBILITY,
+  alternatives: [{ from: 17, to: 17, sql: CHECKPOINTER_CONFIRM_SQL_PG17 }],
+} as const satisfies SqlCompatibility
+
+const IO_SQL = `SELECT backend_type, object, context,
+       reads, read_bytes, hits,
+       writes, write_bytes, writebacks, evictions
+  FROM pg_stat_io
+ WHERE object = 'relation'
+   AND context = 'normal';`
+
+const IO_SQL_PG17 = `SELECT backend_type, object, context,
+       reads, reads * op_bytes AS read_bytes, hits,
+       writes, writes * op_bytes AS write_bytes, writebacks, evictions
+  FROM pg_stat_io
+ WHERE object = 'relation'
+   AND context = 'normal';`
+
+const IO_SQL_COMPATIBILITY = {
+  from: 18,
+  alternatives: [{ from: 17, to: 17, sql: IO_SQL_PG17 }],
+  note:
+    'The displayed query is PostgreSQL 18 SQL, where per-operation byte columns replaced `op_bytes`. On PostgreSQL 17, calculate `reads * op_bytes AS read_bytes` and `writes * op_bytes AS write_bytes`.',
+} as const satisfies SqlCompatibility
+
+const BASELINE_WRITE_SQL = `SELECT num_timed, num_requested, num_done, buffers_written, write_time
+  FROM pg_stat_checkpointer;
+
+SELECT buffers_clean, maxwritten_clean, buffers_alloc
+  FROM pg_stat_bgwriter;
+
+SELECT backend_type, sum(writes) AS writes
+  FROM pg_stat_io
+ WHERE backend_type IN ('client backend', 'checkpointer')
+   AND object = 'relation'
+ GROUP BY backend_type
+ ORDER BY backend_type;`
+
+const BASELINE_WRITE_SQL_PG17 = `SELECT num_timed, num_requested, buffers_written, write_time
+  FROM pg_stat_checkpointer;
+
+SELECT buffers_clean, maxwritten_clean, buffers_alloc
+  FROM pg_stat_bgwriter;
+
+SELECT backend_type, sum(writes) AS writes
+  FROM pg_stat_io
+ WHERE backend_type IN ('client backend', 'checkpointer')
+   AND object = 'relation'
+ GROUP BY backend_type
+ ORDER BY backend_type;`
+
+const BASELINE_WRITE_SQL_COMPATIBILITY = {
+  ...CHECKPOINTER_SQL_COMPATIBILITY,
+  alternatives: [{ from: 17, to: 17, sql: BASELINE_WRITE_SQL_PG17 }],
+} as const satisfies SqlCompatibility
+
+const LOCK_WAITERS_SQL = `WITH waiters AS (
+  SELECT a.pid AS waiter_pid, a.state AS waiter_state,
+         a.query AS waiter_query, l.locktype,
+         l.relation::regclass AS waited_relation,
+         l.mode AS waited_mode, l.waitstart,
+         unnest(pg_blocking_pids(a.pid)) AS blocker_pid
+    FROM pg_locks l
+    JOIN pg_stat_activity a USING (pid)
+   WHERE NOT l.granted
+)
+SELECT w.*, b.state AS blocker_state,
+       b.xact_start AS blocker_xact_start,
+       b.query AS blocker_query
+  FROM waiters w
+  LEFT JOIN pg_stat_activity b ON b.pid = w.blocker_pid
+ ORDER BY w.waitstart;`
+
 const STEPS: Step[] = [
   /* ==================== everything is slow ============================== */
   {
@@ -568,13 +683,12 @@ const STEPS: Step[] = [
     instrument: 'pg_stat_checkpointer',
     projection: 'checkpointer',
     city: 'checkpointer',
-    sql: `SELECT num_timed, num_requested, num_done, buffers_written,
-       write_time, sync_time
-  FROM pg_stat_checkpointer;`,
+    sql: CHECKPOINTER_SQL,
+    sqlCompatibility: CHECKPOINTER_SQL_COMPATIBILITY,
     look:
       '`num_timed` counts `checkpoint_timeout` expiries, including expiries where PostgreSQL skips the checkpoint because nothing changed. `num_done` counts completed checkpoints. `num_requested` counts requests from multiple causes, including WAL pressure, explicit CHECKPOINT, base-backup activity and shutdown. A high requested rate tells you to correlate checkpoint messages, WAL volume, maintenance and backups; it does not prove max_wal_size is too small.',
     note:
-      'pg_stat_checkpointer is new in PostgreSQL 17; num_done arrived in 18. On 16 and older the timer and request counters live in pg_stat_bgwriter as `checkpoints_timed` and `checkpoints_req`. Those older versions do not expose the separate completion count.',
+      'pg_stat_checkpointer is new in PostgreSQL 17. On 16 and older the timer and request counters live in pg_stat_bgwriter as `checkpoints_timed` and `checkpoints_req`; those older versions do not expose a separate completion count.',
     branches: [
       { label: '`num_requested` is a serious share; investigate the request sources.', next: 'stall.2', ...gated('requestedCheckpointShare', (_s, c) => c.total.ckptDone > 0 && checkpointRequestedShare(c) > DIAGNOSTIC_GATES.requestedCheckpointShare.threshold) },
       { label: 'Requests are a small share of timer expiries plus requests.', next: 'v.ckpt_ok', ...gated('requestedCheckpointShare', (_s, c) => c.total.ckptDone > 0 && checkpointRequestedShare(c) <= DIAGNOSTIC_GATES.requestedCheckpointShare.threshold) },
@@ -721,12 +835,8 @@ SELECT pid, application_name, state, backend_xmin,
     instrument: 'pg_stat_io',
     projection: 'io',
     city: 'shared.buffers',
-    sql: `SELECT backend_type, object, context,
-       reads, read_bytes, hits,
-       writes, write_bytes, writebacks, evictions
-  FROM pg_stat_io
- WHERE object = 'relation'
-   AND context = 'normal';`,
+    sql: IO_SQL,
+    sqlCompatibility: IO_SQL_COMPATIBILITY,
     look:
       'Client-backend writes prove that client backends wrote relation buffers; they do not identify one causal chain or one remedy. Compare rates and bytes by backend type and context, then correlate workload, checkpointer/background-writer activity and individual backends before changing memory.',
     note:
@@ -773,26 +883,11 @@ SELECT * FROM pg_buffercache_usage_counts();`,
     instrument: 'pg_blocking_pids',
     projection: 'locks',
     city: 'lock.manager',
-    sql: `WITH waiters AS (
-  SELECT a.pid AS waiter_pid, a.state AS waiter_state,
-         a.query AS waiter_query, l.locktype,
-         l.relation::regclass AS waited_relation,
-         l.mode AS waited_mode, l.waitstart,
-         unnest(pg_blocking_pids(a.pid)) AS blocker_pid
-    FROM pg_locks l
-    JOIN pg_stat_activity a USING (pid)
-   WHERE NOT l.granted
-)
-SELECT w.*, b.state AS blocker_state,
-       b.xact_start AS blocker_xact_start,
-       b.query AS blocker_query
-  FROM waiters w
-  LEFT JOIN pg_stat_activity b ON b.pid = w.blocker_pid
- ORDER BY w.waitstart;`,
+    sql: LOCK_WAITERS_SQL,
     look:
       'Each row shows a waiter and the lock it requested, then the blocker PID and activity independently. It does not claim which of the blocker’s locks conflicts with that request. A recurring blocker PID is a lead; inspect its transaction state and full lock set before acting.',
     note:
-      'pg_blocking_pids() encodes wait-queue and conflict rules that are difficult to reproduce with a pg_locks self-join. A zero blocker PID can represent a prepared transaction, whose pg_locks.pid is null; inspect pg_prepared_xacts in that case.',
+      'Each `pg_blocking_pids()` call briefly needs exclusive access to lock-manager shared state, so this query invokes it only for lock waiters, never for every activity row. The function encodes wait-queue and conflict rules that are difficult to reproduce with a pg_locks self-join. A zero blocker PID can represent a prepared transaction, whose pg_locks.pid is null; inspect pg_prepared_xacts in that case.',
     branches: [
       { label: 'One pid is blocking everyone else.', source: 'locks.rows', next: 'v.lock_holder', test: (s) => s.locks.length > 0 },
       { label: 'Nothing is blocked.', source: 'locks.rows', next: 'v.no_locks', test: (s) => s.locks.length === 0 },
@@ -890,7 +985,7 @@ SELECT w.*, b.state AS blocker_state,
     look:
       'These are totals since `stats_reset`, not rates. The raw number is almost never what you want — take two samples a minute apart and subtract. Switch the toggle above the table to per-second and watch every figure change meaning. A healthy OLTP hit ratio is 99%-ish; anything with a serious seq-scan component will read lower and that is not automatically wrong.',
     note:
-      'Since PostgreSQL 15 these counters live in shared memory rather than being shipped to a collector process over UDP, which is why they no longer get lost under load and why a restart no longer resets them.',
+      'Since PostgreSQL 15 these counters are accumulated in shared memory instead of being shipped to a separate collector process over UDP. That architectural change did not introduce restart persistence: PostgreSQL 13 also preserved cumulative statistics across a clean shutdown and restart. An immediate shutdown or crash still discards them, so read `stats_reset` before interpreting a sample.',
     branches: [{ label: 'Next: who is connected, and what are they doing?', source: 'database.counters', next: 'normal.2', test: () => true }],
   },
   {
@@ -918,14 +1013,12 @@ SELECT w.*, b.state AS blocker_state,
     instrument: 'pg_stat_checkpointer',
     projection: 'checkpointer',
     city: 'checkpointer',
-    sql: `SELECT num_timed, num_requested, num_done, buffers_written, write_time
-  FROM pg_stat_checkpointer;
-
-SELECT buffers_clean, buffers_alloc FROM pg_stat_bgwriter;`,
+    sql: BASELINE_WRITE_SQL,
+    sqlCompatibility: BASELINE_WRITE_SQL_COMPATIBILITY,
     look:
-      'A low num_requested rate means few checkpoints were requested during this window; it does not reveal why any request occurred. num_timed is timer expiries, while num_done is completed checkpoints. Correlate requests with WAL volume, checkpoint messages, backups and explicit maintenance. buffers_clean should be non-zero but modest — the background writer is meant to clean a short way ahead of the clock hand, not to empty the pool.',
+      'Treat every cumulative value here as a rate between two samples. `buffers_clean` can remain zero on a healthy idle server because nothing needed cleaning. A rising `maxwritten_clean` rate means the background writer repeatedly hit `bgwriter_lru_maxpages`; compare its cleaning rate with the client-backend and checkpointer write counts and with `buffers_written` before tuning. A low `num_requested` rate means few checkpoints were requested during the window, not why they occurred.',
     note:
-      'PostgreSQL 17 split pg_stat_checkpointer out of pg_stat_bgwriter. If you are on 16 or older, read checkpoints_timed and checkpoints_req from pg_stat_bgwriter instead.',
+      'PostgreSQL 17 split pg_stat_checkpointer out of pg_stat_bgwriter. On 16 and older, read checkpoints_timed and checkpoints_req from pg_stat_bgwriter instead.',
     branches: [{ label: 'Next: is the standby keeping up?', source: 'checkpointer.counters', next: 'normal.4', test: () => true }],
   },
   {
@@ -973,7 +1066,8 @@ const VERDICTS: Verdict[] = [
     confirm: {
       projection: 'checkpointer',
       instrument: 'pg_stat_checkpointer',
-      sql: `SELECT num_timed, num_requested, num_done FROM pg_stat_checkpointer;`,
+      sql: CHECKPOINTER_CONFIRM_SQL,
+      sqlCompatibility: CHECKPOINTER_CONFIRM_SQL_COMPATIBILITY,
     },
     resolved: (_s, c) => ckptResolved(c),
     city: 'checkpointer',
@@ -1001,7 +1095,8 @@ const VERDICTS: Verdict[] = [
     confirm: {
       projection: 'checkpointer',
       instrument: 'pg_stat_checkpointer',
-      sql: `SELECT num_timed, num_requested, num_done FROM pg_stat_checkpointer;`,
+      sql: CHECKPOINTER_CONFIRM_SQL,
+      sqlCompatibility: CHECKPOINTER_CONFIRM_SQL_COMPATIBILITY,
     },
     resolved: (_s, c) => ckptResolved(c),
     city: 'wal.vault',
@@ -1269,15 +1364,7 @@ const VERDICTS: Verdict[] = [
     confirm: {
       projection: 'locks',
       instrument: 'pg_locks',
-      sql: `SELECT a.pid, a.state, l.locktype,
-       l.relation::regclass AS relation, l.mode, l.granted,
-       now() - l.waitstart AS wait_age,
-       pg_blocking_pids(a.pid) AS blocked_by
-  FROM pg_locks l
-  JOIN pg_stat_activity a USING (pid)
- WHERE NOT l.granted
-    OR l.pid IN (SELECT unnest(pg_blocking_pids(w.pid))
-                   FROM pg_stat_activity w);`,
+      sql: LOCK_WAITERS_SQL,
     },
     resolved: (s) => ({
       ok: s.locks.length === 0,
@@ -1296,7 +1383,7 @@ const VERDICTS: Verdict[] = [
     id: 'v.no_locks',
     kind: 'verdict',
     title: 'Nothing is blocked. This is not a lock problem.',
-    because: 'pg_blocking_pids() returns an empty array for every session — no backend is waiting on a heavyweight lock.',
+    because: 'pg_locks has no ungranted rows, so the waiter-limited query has no backend on which it needs to call pg_blocking_pids(). No backend is waiting on a heavyweight lock.',
     mechanism:
       'Lock waits are one of the few Postgres problems with a clean, unambiguous signal: wait_event_type = \'Lock\'. If nobody is showing it, no amount of lock tuning will help, and the queue you think you are seeing is a queue somewhere else.',
     evidence: (s) => [
@@ -1596,3 +1683,29 @@ for (const v of VERDICTS) NODES.set(v.id, v)
 
 export const ALL_STEPS = STEPS
 export const ALL_VERDICTS = VERDICTS
+
+export interface DiagnosticSqlEntry {
+  id: string
+  variants: readonly SqlVariant[]
+}
+
+function sqlVariants(block: DiagnosticSqlBlock): readonly SqlVariant[] {
+  if (!block.sqlCompatibility) return [{ from: 17, sql: block.sql }]
+  return [
+    ...block.sqlCompatibility.alternatives,
+    { from: block.sqlCompatibility.from, sql: block.sql },
+  ]
+}
+
+export const DIAGNOSTIC_SQL: readonly DiagnosticSqlEntry[] = [
+  ...STEPS.map((step) => ({
+    id: `step/${step.id}`,
+    variants: sqlVariants(step),
+  })),
+  ...VERDICTS.flatMap((verdict) => verdict.confirm
+    ? [{
+        id: `confirm/${verdict.id}`,
+        variants: sqlVariants(verdict.confirm),
+      }]
+    : []),
+]

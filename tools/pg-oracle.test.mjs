@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  checkDiagnosticSql,
   checkGucContexts,
   compareSetting,
+  diagnosticSqlForMajor,
   expectedForMajor,
   hotUpdateChecks,
   indexWalkAttributeChecks,
@@ -94,6 +96,66 @@ describe('PostgreSQL oracle claim registry', () => {
       'shared_preload_libraries',
     ])
     expect(registry.indexWalk.catalogSql).toContain('pg_catalog.pg_index')
+    expect(registry.diagnosticSql.length).toBeGreaterThan(20)
+    for (const major of [17, 18]) {
+      expect(
+        registry.diagnosticSql.filter((entry) => !diagnosticSqlForMajor(entry, major)),
+        `every Diagnose SQL block needs a PostgreSQL ${major} form`,
+      ).toEqual([])
+    }
+  })
+
+  it('executes the registered Diagnose SQL form for the selected major', async () => {
+    const calls = []
+    const psql = async (sql) => {
+      calls.push(sql)
+      return { code: 0, stdout: '', stderr: '' }
+    }
+    const registry = {
+      diagnosticSql: [
+        {
+          id: 'step/versioned',
+          variants: [
+            { from: 17, to: 17, sql: 'SELECT reads * op_bytes AS read_bytes FROM pg_stat_io;' },
+            { from: 18, sql: 'SELECT read_bytes FROM pg_stat_io;' },
+          ],
+        },
+      ],
+    }
+
+    await expect(checkDiagnosticSql(psql, registry, 17)).resolves.toEqual([
+      {
+        claim: 'diagnostic-sql/step/versioned',
+        city: 'executes on PostgreSQL 17',
+        server: 'executed successfully',
+        verdict: 'MATCH',
+      },
+    ])
+    expect(calls).toEqual(['SELECT reads * op_bytes AS read_bytes FROM pg_stat_io;'])
+
+    calls.length = 0
+    await checkDiagnosticSql(psql, registry, 18)
+    expect(calls).toEqual(['SELECT read_bytes FROM pg_stat_io;'])
+  })
+
+  it('reports a Diagnose SQL execution error as an oracle divergence', async () => {
+    const psql = async () => ({
+      code: 1,
+      stdout: '',
+      stderr: 'ERROR: column "num_done" does not exist',
+    })
+    const registry = {
+      diagnosticSql: [{ id: 'confirm/checkpoint', variants: [{ from: 17, sql: 'SELECT num_done;' }] }],
+    }
+
+    await expect(checkDiagnosticSql(psql, registry, 17)).resolves.toEqual([
+      {
+        claim: 'diagnostic-sql/confirm/checkpoint',
+        city: 'executes on PostgreSQL 17',
+        server: 'ERROR: column "num_done" does not exist',
+        verdict: 'DIVERGES',
+      },
+    ])
   })
 
   it('qualifies the autovacuum worker context at its PostgreSQL 18 boundary', async () => {

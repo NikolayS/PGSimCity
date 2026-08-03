@@ -284,6 +284,65 @@ describe('PostgreSQL 18 content corrections', () => {
     expect(catalog.what).not.toMatch(/names the process/i)
   })
 
+  it('limits pg_blocking_pids calls to lock waiters', () => {
+    const locks = ALL_STEPS.find((step) => step.id === 'lock.1')!
+    const verdict = ALL_VERDICTS.find((entry) => entry.id === 'v.lock_holder')!
+    const noLocks = ALL_VERDICTS.find((entry) => entry.id === 'v.no_locks')!
+
+    expect(verdict.confirm?.sql).toBe(locks.sql)
+    expect(locks.sql.match(/pg_blocking_pids\(/g)).toHaveLength(1)
+    expect(locks.sql).toContain('WITH waiters AS')
+    expect(locks.sql).toContain('WHERE NOT l.granted')
+    expect(locks.note).toMatch(/exclusive access.*lock-manager.*only.*waiter/is)
+    expect(noLocks.because).toContain('ungranted')
+    expect(noLocks.because).not.toContain('every session')
+  })
+
+  it('treats background-writer cleaning as a sampled rate, not a liveness check', () => {
+    const baseline = ALL_STEPS.find((step) => step.id === 'normal.3')!
+
+    expect(baseline.sql).toContain('maxwritten_clean')
+    expect(baseline.sql).toMatch(/client backend[\s\S]*checkpointer/)
+    expect(baseline.look).toMatch(/buffers_clean.*rate/is)
+    expect(baseline.look).toMatch(/zero.*nothing needed cleaning/is)
+    expect(baseline.look).not.toMatch(/buffers_clean should be non-zero/i)
+  })
+
+  it('separates PostgreSQL 15 shared-memory statistics from restart persistence', () => {
+    const baseline = ALL_STEPS.find((step) => step.id === 'normal.1')!
+
+    expect(baseline.note).toMatch(/PostgreSQL 15.*shared memory/is)
+    expect(baseline.note).toMatch(/PostgreSQL 13.*clean.*restart/is)
+    expect(baseline.note).toMatch(/immediate shutdown|crash/i)
+    expect(baseline.note).not.toMatch(/15[\s\S]*why a restart no longer resets/i)
+  })
+
+  it('keeps PostgreSQL 18 SQL and registers executable PostgreSQL 17 forms', () => {
+    const stall = ALL_STEPS.find((step) => step.id === 'stall.1')!
+    const io = ALL_STEPS.find((step) => step.id === 'io.1')!
+    const baseline = ALL_STEPS.find((step) => step.id === 'normal.3')!
+    const checkpointConfirms = ALL_VERDICTS
+      .filter((verdict) => ['v.ckpt_storm', 'v.wal_volume'].includes(verdict.id))
+      .map((verdict) => verdict.confirm!)
+
+    for (const query of [stall, baseline, ...checkpointConfirms]) {
+      expect(query.sql).toContain('num_done')
+      expect(query.sqlCompatibility).toMatchObject({ from: 18 })
+      expect(query.sqlCompatibility?.alternatives).toContainEqual(
+        expect.objectContaining({ from: 17, to: 17 }),
+      )
+      expect(query.sqlCompatibility?.alternatives[0].sql).not.toContain('num_done')
+      expect(query.sqlCompatibility?.note).toMatch(/PostgreSQL 18.*PostgreSQL 17/is)
+    }
+
+    expect(io.sql).toContain('read_bytes')
+    expect(io.sql).toContain('write_bytes')
+    expect(io.sqlCompatibility).toMatchObject({ from: 18 })
+    expect(io.sqlCompatibility?.alternatives[0].sql).toContain('reads * op_bytes AS read_bytes')
+    expect(io.sqlCompatibility?.alternatives[0].sql).toContain('writes * op_bytes AS write_bytes')
+    expect(io.sqlCompatibility?.note).toMatch(/PostgreSQL 18.*PostgreSQL 17/is)
+  })
+
   it('shows waited locks separately from blocker activity', () => {
     const locks = ALL_STEPS.find((step) => step.id === 'lock.1')!
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process'
-import { access, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, rm, symlink } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
@@ -64,6 +64,7 @@ async function loadOwners(records) {
       throw new Error(`Could not load registered TypeScript claims:\n${summary}`)
     }
 
+    await symlink(path.join(REPO_ROOT, 'node_modules'), path.join(buildDir, 'node_modules'), 'dir')
     const require = createRequire(path.join(buildDir, 'oracle-loader.cjs'))
     const modules = new Map()
     const loaded = {}
@@ -101,12 +102,19 @@ export async function loadOracleRegistry() {
     claims: sources.claims,
     catalog: sources.catalog,
     indexWalk: sources.indexWalk,
+    diagnosticSql: sources.diagnosticSql,
   }
 }
 
 export function expectedForMajor(claim, major) {
   const variants = Array.isArray(claim.expected) ? claim.expected : [claim.expected]
   return variants.find((variant) =>
+    (variant.from === undefined || major >= variant.from)
+    && (variant.to === undefined || major <= variant.to)) ?? null
+}
+
+export function diagnosticSqlForMajor(entry, major) {
+  return entry.variants.find((variant) =>
     (variant.from === undefined || major >= variant.from)
     && (variant.to === undefined || major <= variant.to)) ?? null
 }
@@ -303,6 +311,33 @@ async function withThrowawayCluster(pgBin, callback) {
 
 function result(claim, city, server, matches) {
   return { claim, city, server, verdict: matches ? 'MATCH' : 'DIVERGES' }
+}
+
+export async function checkDiagnosticSql(psql, registry, major) {
+  const results = []
+  for (const entry of registry.diagnosticSql) {
+    const variant = diagnosticSqlForMajor(entry, major)
+    if (!variant) {
+      results.push(result(
+        `diagnostic-sql/${entry.id}`,
+        `executes on PostgreSQL ${major}`,
+        'no SQL variant registered for this major',
+        false,
+      ))
+      continue
+    }
+    const execution = await psql(variant.sql, { allowFailure: true })
+    const detail = execution.code === 0
+      ? 'executed successfully'
+      : execution.stderr.trim() || execution.stdout.trim() || `psql exited ${execution.code}`
+    results.push(result(
+      `diagnostic-sql/${entry.id}`,
+      `executes on PostgreSQL ${major}`,
+      detail,
+      execution.code === 0,
+    ))
+  }
+  return results
 }
 
 function displayExpected(expected) {
@@ -1291,6 +1326,7 @@ async function runChecks(server, registry, major, pgBin) {
     ['GUC defaults', () => checkGucDefaults(server.query, registry, major)],
     ['GUC contexts', () => checkGucContexts(server.query, registry, major)],
     ['catalog shapes', () => checkCatalog(server.psql, server.query, registry, major)],
+    ['diagnostic SQL', () => checkDiagnosticSql(server.psql, registry, major)],
     ['wait events', () => checkWaitEvents(server.query, registry, major)],
     ['checkpoint timer skip', () => checkCheckpointTimerSkip(server.psql, server.query, registry, major)],
     ['statement timeout', () => checkStatementTimeout(server.psql, registry, server.port)],

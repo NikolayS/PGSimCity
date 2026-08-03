@@ -403,6 +403,10 @@ export const CLAIMS = {
           role: 'indexWalk',
           owner: 'src/spine/machine-index-walk.ts#MACHINE_INDEX_WALK',
         },
+        {
+          role: 'diagnosticSql',
+          owner: 'src/observability/paths.ts#DIAGNOSTIC_SQL',
+        },
       ],
     },
     surfaces: ['registry:mechanically checkable PostgreSQL facts', 'tool:throwaway PostgreSQL oracle'],

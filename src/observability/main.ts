@@ -413,6 +413,13 @@ function cityLink(id: string | undefined, label = 'See it in the city'): HTMLEle
   return el('a', { class: 'citylink', href: cityComponentHref(id, '../'), title: `Open ${id} in PGSimCity` }, el('span', { text: label }), el('code', { text: id }))
 }
 
+function versionNote(...notes: (string | undefined)[]): HTMLElement | null {
+  const copy = notes.filter((note): note is string => Boolean(note)).join(' ')
+  return copy
+    ? el('aside', { class: 'note' }, el('span', { class: 'note__k', text: 'VERSIONS' }), md(copy))
+    : null
+}
+
 function liveGrid(projection: string): HTMLElement {
   const fn = PROJECTIONS[projection]
   const t = dataTable()
@@ -560,7 +567,7 @@ function renderStep(sc: Extract<Screen, { kind: 'console' }>, step: Step): HTMLE
       el('h3', { text: 'What you are looking for' }),
       md(step.look),
     ),
-    step.note ? el('aside', { class: 'note' }, el('span', { class: 'note__k', text: 'VERSIONS' }), md(step.note)) : null,
+    versionNote(step.sqlCompatibility?.note, step.note),
     el(
       'section',
       { class: 'block' },
@@ -660,6 +667,7 @@ function renderVerdict(sc: Extract<Screen, { kind: 'console' }>, v: Verdict): HT
           }),
           el('div', { class: 'chiprow' }, instrumentChip(v.confirm.instrument), counterToggle(v.confirm.projection)),
           sqlBlock(v.confirm.sql),
+          versionNote(v.confirm.sqlCompatibility?.note),
           liveGrid(v.confirm.projection),
         )
       : null,
