@@ -8,6 +8,7 @@ import {
 } from '../src/core/claims'
 import { MACHINE_SYNCHRONOUS_COMMIT_COMPARISON } from '../src/spine/machine-comparison'
 import { MACHINE_INDEX_WALK } from '../src/spine/machine-index-walk'
+import { POSTGRESQL_ORACLE_CLAIMS } from '../src/spine/postgresql-oracle'
 import type { ClaimId } from '../src/core/claims'
 import { DESTINATIONS } from '../src/core/destinations'
 import { formatModelMilliseconds } from '../src/core/trace-presentation'
@@ -132,8 +133,23 @@ describe('claims and conventions spine', () => {
     const hint = KNOB_META.find((knob) => knob.key === 'sharedBuffers')?.hint ?? ''
     expect(hint, 'bufferSample: controls:shared_buffers hint omits the default active sample')
       .toContain(String(CLAIM_VALUES.bufferSample.defaultActiveFrames))
-    expect(read('README.md'), 'bufferSample: README:buffer-pool row disagrees')
-      .toContain(`${CLAIM_VALUES.bufferSample.capacityFrames.toLocaleString('en-US')} representative frames (${CLAIM_VALUES.bufferSample.defaultActiveFrames} active at the default 2 GiB setting)`)
+    const postgresDefault = POSTGRESQL_ORACLE_CLAIMS.gucDefaults.find(
+      (claim) => claim.id === 'postgres-default/shared_buffers',
+    )
+    const modelDefault = POSTGRESQL_ORACLE_CLAIMS.gucDefaults.find(
+      (claim) => claim.id === 'city-model/shared_buffers',
+    )
+    expect(postgresDefault, 'bufferSample: oracle lacks the PostgreSQL default').toBeDefined()
+    expect(modelDefault, 'bufferSample: oracle lacks the city model default').toBeDefined()
+    expect(Array.isArray(postgresDefault!.expected)).toBe(false)
+    expect(Array.isArray(modelDefault!.expected)).toBe(false)
+    const postgresValue = postgresDefault!.expected as { value: string | number, unit: string }
+    const modelValue = modelDefault!.expected as { value: string | number, unit: string }
+    expect(postgresValue.unit).toBe('MB')
+    expect(modelValue.unit).toBe('MB')
+    const readmeDefaultBoundary = `${CLAIM_VALUES.bufferSample.capacityFrames.toLocaleString('en-US')} representative frames (${CLAIM_VALUES.bufferSample.defaultActiveFrames} active at the ${Number(modelValue.value) / 1024} GiB model default; ${CLAIM_VALUES.postgresqlVersion.referenceLabel} itself defaults to ${postgresValue.value} MiB)`
+    expect(read('README.md'), 'bufferSample: README:buffer-pool row disagrees with the oracle')
+      .toContain(readmeDefaultBoundary)
     expect(storageDocCopy('standby.b'), 'bufferSample: prose:standby sample disclosure disagrees')
       .toContain(`${CLAIM_VALUES.bufferSample.capacityFrames.toLocaleString('en-US')}-frame sample capacity; at the default 2 GiB setting ${CLAIM_VALUES.bufferSample.defaultActiveFrames} frames are active`)
   })

@@ -11,12 +11,12 @@ Thanks for helping make PostgreSQL internals understandable and accurate.
 
 ## Development
 
-Node.js 20 or newer is required.
+Node.js `^20.19.0 || >=22.12.0` is required.
 
 ```bash
 npm install
 npm run dev        # http://localhost:5173/
-npm test           # one fast, deterministic run
+npm test           # full suite, including Chrome tests
 npm run test:watch # rerun affected tests while editing
 npm run oracle     # compare registered claims with PostgreSQL 18
 ```
@@ -25,9 +25,18 @@ The oracle starts and removes its own throwaway cluster. It requires the target
 major's server binaries at `/usr/lib/postgresql/18/bin`; it never substitutes a
 different PostgreSQL major or silently runs without a server.
 
+The full `npm test` suite requires `google-chrome` on `PATH`. Set `CHROME_BIN`
+to select another Chrome or Chromium executable. Contributors without Chrome
+can run the deterministic fast lane while editing:
+
+```bash
+npm test -- --exclude '**/*.browser.test.*'
+```
+
 Tests that launch real Chrome use the `*.browser.test.*` filename convention.
 CI provisions Chrome for that separately gating lane; all other tests remain in
-the faster always-gating lane.
+the faster always-gating lane. Run the unfiltered suite before opening a pull
+request.
 
 Before opening a pull request:
 

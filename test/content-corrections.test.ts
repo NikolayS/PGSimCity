@@ -52,6 +52,8 @@ describe('PostgreSQL 18 content corrections', () => {
 
     expect(readme).toContain('targets the PostgreSQL 18 major line')
     expect(readme).toContain('fixed 32-frame ring')
+    expect(readme).toMatch(/WAL district[^\n]+archiver copies completed[^\n]+walsenders independently stream WAL as it is generated/i)
+    expect(readme).not.toContain('walwriter → `pg_wal` segments → archiver → walsender')
     expect(bodies).toContain('io_combine_limit')
     expect(`${bodies}\n${diagnosticCopy}`).not.toMatch(/small (?:256 kB|256 KiB) ring/i)
     expect(CLAIM_VALUES.timelineRecovery.defaultDisclosure).toMatch(/since PostgreSQL 12/i)
