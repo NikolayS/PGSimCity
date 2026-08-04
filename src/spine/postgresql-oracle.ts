@@ -298,7 +298,96 @@ export const POSTGRESQL_ORACLE_CLAIMS = {
   waitEvents: {
     relation: 'pg_catalog.pg_wait_events',
     since: 17,
-    events: Object.values(POSTGRESQL_WAIT_EVENTS),
+    events: [
+      {
+        id: 'wal-sync',
+        cityClaim: 'the local WAL fsync wait is IO/WALSync through PostgreSQL 16 and IO/WalSync from PostgreSQL 17',
+        expected: [
+          { from: 13, to: 16, type: 'IO', name: 'WALSync' },
+          { from: 17, ...POSTGRESQL_WAIT_EVENTS.walSync },
+        ],
+      },
+      {
+        id: 'sync-rep',
+        cityClaim: 'a commit waiting for synchronous replication reports IPC/SyncRep',
+        expected: POSTGRESQL_WAIT_EVENTS.syncRep,
+      },
+      {
+        id: 'relation-lock',
+        cityClaim: 'a heavyweight relation-lock wait reports Lock/relation',
+        expected: POSTGRESQL_WAIT_EVENTS.relation,
+      },
+      {
+        id: 'vacuum-delay',
+        cityClaim: 'a cost-throttled vacuum worker reports Timeout/VacuumDelay',
+        expected: POSTGRESQL_WAIT_EVENTS.vacuumDelay,
+      },
+      {
+        id: 'data-file-read',
+        cityClaim: 'a data-file read wait reports IO/DataFileRead',
+        expected: POSTGRESQL_WAIT_EVENTS.dataFileRead,
+      },
+      {
+        id: 'data-file-write',
+        cityClaim: 'a data-file write wait reports IO/DataFileWrite',
+        expected: POSTGRESQL_WAIT_EVENTS.dataFileWrite,
+      },
+      {
+        id: 'client-read',
+        cityClaim: 'a backend waiting for client input reports Client/ClientRead',
+        expected: { type: 'Client', name: 'ClientRead' },
+      },
+      {
+        id: 'client-write',
+        cityClaim: 'a backend waiting to send to its client reports Client/ClientWrite',
+        expected: { type: 'Client', name: 'ClientWrite' },
+      },
+      {
+        id: 'wal-writer-main',
+        cityClaim: 'the idle WAL writer reports Activity/WalWriterMain',
+        expected: { type: 'Activity', name: 'WalWriterMain' },
+      },
+      {
+        id: 'transactionid-lock',
+        cityClaim: 'a row conflict can wait on Lock/transactionid',
+        expected: { type: 'Lock', name: 'transactionid' },
+      },
+      {
+        id: 'buffer-mapping',
+        cityClaim: 'buffer mapping contention reports LWLock/BufferMapping',
+        expected: { type: 'LWLock', name: 'BufferMapping' },
+      },
+      {
+        id: 'wal-write',
+        cityClaim: 'WAL-buffer write contention can report LWLock/WALWrite',
+        expected: { type: 'LWLock', name: 'WALWrite' },
+      },
+      {
+        id: 'wal-buffer-mapping',
+        cityClaim: 'WAL-buffer mapping contention can report LWLock/WALBufMapping',
+        expected: { type: 'LWLock', name: 'WALBufMapping' },
+      },
+      {
+        id: 'xact-buffer',
+        cityClaim: 'pg_xact page I/O can report LWLock/XactBuffer',
+        expected: { type: 'LWLock', name: 'XactBuffer' },
+      },
+      {
+        id: 'xact-slru',
+        cityClaim: 'pg_xact cache access can report LWLock/XactSLRU',
+        expected: { type: 'LWLock', name: 'XactSLRU' },
+      },
+      {
+        id: 'subtrans-buffer',
+        cityClaim: 'pg_subtrans page I/O can report LWLock/SubtransBuffer',
+        expected: { type: 'LWLock', name: 'SubtransBuffer' },
+      },
+      {
+        id: 'subtrans-slru',
+        cityClaim: 'pg_subtrans cache access can report LWLock/SubtransSLRU',
+        expected: { type: 'LWLock', name: 'SubtransSLRU' },
+      },
+    ],
   },
   autovacuumThreshold: {
     relation: 'oracle_autovacuum_threshold',
@@ -349,6 +438,17 @@ export const POSTGRESQL_ORACLE_CLAIMS = {
     },
     pageLayout: {
       relation: 'oracle_page_layout',
+      headerRelation: 'oracle_tuple_header_layout',
+      pageHeaderBytes: 24,
+      linePointerBytes: 4,
+      fixedTupleHeaderBytes: 23,
+      nullableColumns: 17,
+    },
+    linePointerLifecycle: {
+      relation: 'oracle_line_pointer_lifecycle',
+    },
+    deletingXmax: {
+      relation: 'oracle_deleting_xmax',
     },
     multiXact: {
       relation: 'oracle_multixact',
@@ -364,7 +464,14 @@ export const POSTGRESQL_ORACLE_CLAIMS = {
     },
   },
   walSegment: {
-    bytes: CLAIM_VALUES.walSegment.bytes,
+    defaultBytes: CLAIM_VALUES.walSegment.bytes,
+    alternateMiB: 32,
+    configurableClaim: 'WAL segment size is selected at initdb time with --wal-segsize',
+    unqualifiedFixedSurfaces: [
+      'src/world/wal.ts WAL-vault role',
+      'src/world/continuity.ts archive-silo plate',
+      'src/ui/docs-storage.ts WAL-vault summary',
+    ],
   },
   latencyWaitMappings: {
     relation: POSTGRESQL_WAIT_EVENTS.relation,

@@ -401,13 +401,113 @@ function checkRegistryCoverage(registry) {
   })
 }
 
-async function checkWalSegment(psql, query, registry) {
-  const city = registry.cityClaims.walSegment
-  const claim = registry.claims.walSegment
+export function parsePgControlWalSegmentSize(output) {
+  const match = String(output).match(/^\s*Bytes per WAL segment:\s+(\d+)\s*$/mu)
+  return match ? Number(match[1]) : null
+}
+
+function walPhysicalSummary(observation) {
+  if (!observation) return 'WAL observation is absent'
+  return `${observation.allocatedFile} is ${observation.fileSize} bytes; current ${observation.fileName} offset ${observation.fileOffset}`
+}
+
+function validWalPhysicalObservation(observation, expectedBytes) {
+  return /^[0-9A-F]{24}$/u.test(String(observation?.allocatedFile ?? ''))
+    && /^[0-9A-F]{24}$/u.test(String(observation?.fileName ?? ''))
+    && Number(observation?.fileSize) === expectedBytes
+    && Number(observation?.fileOffset) >= 0
+    && Number(observation?.fileOffset) < expectedBytes
+}
+
+export function walSegmentObservationChecks(city, claim, defaultObservation, alternateObservation) {
+  const alternateBytes = claim.alternateMiB * 1024 * 1024
+  const citySummary = `${city.label} (${city.bytes} bytes)`
+  const fixedSurfaces = claim.unqualifiedFixedSurfaces.join(', ')
+  return [
+    result(
+      'WAL/default/SHOW-wal_segment_size',
+      `the modeled cluster uses ${citySummary}`,
+      defaultObservation
+        ? `SHOW wal_segment_size returned ${defaultObservation.show}; ${defaultObservation.showBytes} bytes`
+        : 'SHOW wal_segment_size observation is absent',
+      defaultObservation?.showBytes === city.bytes
+        && city.bytes === claim.defaultBytes,
+    ),
+    result(
+      'WAL/default/pg_control',
+      `pg_control agrees with the modeled cluster's ${citySummary} setting`,
+      defaultObservation
+        ? `pg_controldata reported ${defaultObservation.controlBytes} bytes; SHOW reported ${defaultObservation.showBytes}`
+        : 'pg_control observation is absent',
+      defaultObservation?.controlBytes === city.bytes
+        && defaultObservation?.controlBytes === defaultObservation?.showBytes,
+    ),
+    result(
+      'WAL/default/segment-file-size',
+      `an allocated WAL segment in the modeled configuration is ${citySummary}`,
+      walPhysicalSummary(defaultObservation),
+      /^[0-9A-F]{24}$/u.test(String(defaultObservation?.allocatedFile ?? ''))
+        && Number(defaultObservation?.fileSize) === city.bytes,
+    ),
+    result(
+      'WAL/default/file-name-offset',
+      `WAL filename and offset arithmetic use ${citySummary} segments`,
+      walPhysicalSummary(defaultObservation),
+      /^[0-9A-F]{24}$/u.test(String(defaultObservation?.fileName ?? ''))
+        && Number(defaultObservation?.fileOffset) >= 0
+        && Number(defaultObservation?.fileOffset) < city.bytes,
+    ),
+    result(
+      'WAL/initdb-alternate/SHOW-wal_segment_size',
+      `initdb --wal-segsize=${claim.alternateMiB} produces a ${claim.alternateMiB} MiB cluster`,
+      alternateObservation
+        ? `SHOW wal_segment_size returned ${alternateObservation.show}; ${alternateObservation.showBytes} bytes`
+        : 'alternate SHOW wal_segment_size observation is absent',
+      alternateObservation?.showBytes === alternateBytes,
+    ),
+    result(
+      'WAL/initdb-alternate/pg_control',
+      `pg_control records the initdb-selected ${claim.alternateMiB} MiB size`,
+      alternateObservation
+        ? `pg_controldata reported ${alternateObservation.controlBytes} bytes; SHOW reported ${alternateObservation.showBytes}`
+        : 'alternate pg_control observation is absent',
+      alternateObservation?.controlBytes === alternateBytes
+        && alternateObservation?.controlBytes === alternateObservation?.showBytes,
+    ),
+    result(
+      'WAL/initdb-alternate/physical-WAL',
+      `WAL files and offsets follow the initdb-selected ${claim.alternateMiB} MiB size`,
+      walPhysicalSummary(alternateObservation),
+      validWalPhysicalObservation(alternateObservation, alternateBytes),
+    ),
+    result(
+      'WAL/initdb-configurability',
+      claim.configurableClaim,
+      defaultObservation && alternateObservation
+        ? `the default cluster reported ${defaultObservation.show}; the --wal-segsize=${claim.alternateMiB} cluster reported ${alternateObservation.show}`
+        : 'the two initdb configurations were not both observed',
+      defaultObservation?.showBytes === city.bytes
+        && alternateObservation?.showBytes === alternateBytes
+        && alternateObservation?.showBytes !== defaultObservation?.showBytes,
+    ),
+    result(
+      'WAL/unqualified-fixed-16MiB-surfaces',
+      fixedSurfaces
+        ? `${fixedSurfaces} state fixed ${city.label} segments without the initdb scope`
+        : 'no unqualified fixed-size WAL surface is registered',
+      alternateObservation
+        ? `a real --wal-segsize=${claim.alternateMiB} cluster reports ${alternateObservation.show}`
+        : 'alternate cluster observation is absent',
+      fixedSurfaces.length === 0 || alternateObservation?.showBytes === city.bytes,
+    ),
+  ]
+}
+
+async function observeWalSegment(pgBin, dataDir, psql, query) {
   await psql('SELECT pg_catalog.pg_switch_wal()')
+  const shown = await psql('SHOW wal_segment_size')
   const [observation] = await query(`
-    SELECT current_setting('wal_segment_size') AS configured,
-           setting,
+    SELECT setting,
            unit,
            wal.file_name,
            wal.file_offset,
@@ -420,42 +520,98 @@ async function checkWalSegment(psql, query, registry) {
       LEFT JOIN LATERAL (
         SELECT name, size
           FROM pg_catalog.pg_ls_waldir()
+         WHERE name ~ '^[0-9A-F]{24}$'
          ORDER BY size DESC, name
          LIMIT 1
       ) AS directory ON true
      WHERE pg_settings.name = 'wal_segment_size'`)
-  const configuredBytes = unitValue(observation?.setting, observation?.unit, 'bytes')
-  const fileSize = Number(observation?.file_size)
-  const fileName = String(observation?.file_name ?? '')
-  const fileOffset = Number(observation?.file_offset)
-  const citySummary = `${city.label} (${city.bytes} bytes)`
-  return [
-    result(
-      'WAL/segment-size-setting',
-      citySummary,
-      observation
-        ? `wal_segment_size ${observation.configured}; ${configuredBytes} bytes`
-        : 'wal_segment_size observation is absent',
-      configuredBytes === claim.bytes && claim.bytes === city.bytes,
-    ),
-    result(
-      'WAL/segment-file-size',
-      `${citySummary}; an allocated pg_wal segment has that size`,
-      observation
-        ? `${observation.allocated_file} is ${fileSize} bytes`
-        : 'WAL directory observation is absent',
-      /^[0-9A-F]{24}$/u.test(String(observation?.allocated_file ?? ''))
-        && fileSize === city.bytes,
-    ),
-    result(
-      'WAL/file-name-offset',
-      `WAL filename/offset arithmetic uses ${citySummary} segments`,
-      observation ? `${fileName} offset ${fileOffset}` : 'WAL filename/offset observation is absent',
-      /^[0-9A-F]{24}$/u.test(fileName)
-        && fileOffset >= 0
-        && fileOffset < city.bytes,
-    ),
-  ]
+  const control = await run(path.join(pgBin, 'pg_controldata'), [dataDir])
+  return {
+    show: shown.stdout.trim(),
+    showBytes: unitValue(observation?.setting, observation?.unit, 'bytes'),
+    controlBytes: parsePgControlWalSegmentSize(control.stdout),
+    fileName: String(observation?.file_name ?? ''),
+    fileOffset: Number(observation?.file_offset),
+    allocatedFile: String(observation?.allocated_file ?? ''),
+    fileSize: Number(observation?.file_size),
+  }
+}
+
+async function withAlternateWalSegmentCluster(pgBin, segmentMiB, callback) {
+  const scratch = await mkdtemp(path.join(tmpdir(), `pgsimcity-oracle-walseg-${process.pid}-`))
+  const dataDir = path.join(scratch, 'data')
+  const socketDir = path.join(scratch, 'socket')
+  const logFile = path.join(scratch, 'postgres.log')
+  let initialized = false
+  let started = false
+  const parentCleanup = activeCleanup
+  const cleanup = async () => {
+    if (started) {
+      await run(path.join(pgBin, 'pg_ctl'), [
+        '-D', dataDir, '-m', 'immediate', '-w', 'stop',
+      ], { allowFailure: true })
+      started = false
+    }
+    await rm(scratch, { recursive: true, force: true })
+  }
+  activeCleanup = async () => {
+    await cleanup()
+    await parentCleanup?.()
+  }
+  try {
+    await run(path.join(pgBin, 'initdb'), [
+      '-D', dataDir,
+      '--no-locale',
+      '--encoding=UTF8',
+      '--auth=trust',
+      '--username=postgres',
+      '--no-sync',
+      `--wal-segsize=${segmentMiB}`,
+    ])
+    initialized = true
+    await mkdir(socketDir)
+    const port = await freePort()
+    const launch = await run(path.join(pgBin, 'pg_ctl'), [
+      '-D', dataDir,
+      '-l', logFile,
+      '-o', `-h 127.0.0.1 -p ${port} -k ${socketDir} -c fsync=off`,
+      '-w', 'start',
+    ], { allowFailure: true })
+    if (launch.code !== 0) {
+      const log = await readFile(logFile, 'utf8').catch(() => 'server log unavailable')
+      throw new Error(`alternate WAL-segment cluster did not start: ${log.trim()}`)
+    }
+    started = true
+    const psql = async (sql) => run(path.join(pgBin, 'psql'), [
+      '-X', '-A', '-t', '-q', '-v', 'ON_ERROR_STOP=1',
+      '-h', '127.0.0.1', '-p', String(port),
+      '-U', 'postgres', '-d', 'postgres', '-c', sql,
+    ])
+    const query = async (sql) => {
+      const body = sql.trim().replace(/;+\s*$/u, '')
+      const execution = await psql(
+        `SELECT COALESCE(json_agg(oracle_row), '[]'::json) FROM (${body}) AS oracle_row;`,
+      )
+      return JSON.parse(execution.stdout.trim() || '[]')
+    }
+    return await callback({ dataDir, psql, query })
+  } finally {
+    if (initialized) await cleanup()
+    else await rm(scratch, { recursive: true, force: true })
+    if (activeCleanup !== parentCleanup) activeCleanup = parentCleanup
+  }
+}
+
+async function checkWalSegment(pgBin, psql, query, registry, dataDir) {
+  const city = registry.cityClaims.walSegment
+  const claim = registry.claims.walSegment
+  const defaultObservation = await observeWalSegment(pgBin, dataDir, psql, query)
+  const alternateObservation = await withAlternateWalSegmentCluster(
+    pgBin,
+    claim.alternateMiB,
+    (alternate) => observeWalSegment(pgBin, alternate.dataDir, alternate.psql, alternate.query),
+  )
+  return walSegmentObservationChecks(city, claim, defaultObservation, alternateObservation)
 }
 
 export async function checkDiagnosticSql(psql, registry, major) {
@@ -650,6 +806,13 @@ async function checkCatalog(psql, query, registry, major) {
   return results
 }
 
+export function waitEventClaimsForMajor(claim, major) {
+  return claim.events.flatMap((entry) => {
+    const expected = expectedForMajor(entry, major)
+    return expected ? [{ id: entry.id, cityClaim: entry.cityClaim, ...expected }] : []
+  })
+}
+
 async function checkWaitEvents(query, registry, major) {
   const claim = registry.claims.waitEvents
   const [presence] = await query(`
@@ -668,9 +831,14 @@ async function checkWaitEvents(query, registry, major) {
 
   const rows = await query('SELECT type, name FROM pg_catalog.pg_wait_events')
   const actual = new Set(rows.map((row) => `${row.type}/${row.name}`))
-  return claim.events.map((event) => {
+  return waitEventClaimsForMajor(claim, major).map((event) => {
     const name = `${event.type}/${event.name}`
-    return result(`wait-event/${name}`, name, actual.has(name) ? name : 'absent', actual.has(name))
+    return result(
+      `wait-event/${event.id}`,
+      `${event.cityClaim}: ${name}`,
+      actual.has(name) ? `${name} is present in pg_wait_events` : `${name} is absent from pg_wait_events`,
+      actual.has(name),
+    )
   })
 }
 
@@ -678,11 +846,11 @@ function psqlCommand(pgBin, port, sql) {
   return run(path.join(pgBin, 'psql'), [
     '-X', '-A', '-t', '-q', '-v', 'ON_ERROR_STOP=1',
     '-h', '127.0.0.1', '-p', String(port),
-    '-U', 'postgres', '-d', 'postgres', '-c', sql,
-  ], { allowFailure: true })
+    '-U', 'postgres', '-d', 'postgres',
+  ], { allowFailure: true, input: `${sql}\n` })
 }
 
-async function checkLatencyWaitMappings(pgBin, psql, query, registry, port) {
+async function checkLatencyWaitMappings(pgBin, psql, query, registry, port, major) {
   const claim = registry.claims.latencyWaitMappings
   const city = registry.cityClaims.modelLatency
   await psql('CREATE TABLE public.oracle_relation_wait (id integer)')
@@ -755,6 +923,13 @@ async function checkLatencyWaitMappings(pgBin, psql, query, registry, port) {
         FROM pg_catalog.pg_stat_activity
        WHERE pg_catalog.lower(COALESCE(wait_event, '')) LIKE '%pool%'
           OR wait_event = ${sqlLiteral(claim.poolWaitName)}`)
+    const poolCatalogRows = major >= registry.claims.waitEvents.since
+      ? await query(`
+          SELECT type, name
+            FROM pg_catalog.pg_wait_events
+           WHERE pg_catalog.lower(name) LIKE '%pool%'
+              OR name = ${sqlLiteral(claim.poolWaitName)}`)
+      : []
 
     return [
       result(
@@ -778,10 +953,10 @@ async function checkLatencyWaitMappings(pgBin, psql, query, registry, port) {
       result(
         'latency-wait/pool-slot-is-client-side',
         city.taxonomyDisclosure,
-        poolRows.length === 0
-          ? 'no PostgreSQL activity row exposes a pool-slot wait'
-          : `${poolRows.length} PostgreSQL activity rows exposed a pool-named wait`,
-        poolRows.length === 0,
+        poolRows.length === 0 && poolCatalogRows.length === 0
+          ? `no PostgreSQL activity row exposes a pool-slot wait${major >= registry.claims.waitEvents.since ? ', and pg_wait_events registers no pool-named event' : ''}`
+          : `${poolRows.length} activity rows and ${poolCatalogRows.length} pg_wait_events rows exposed a pool-named wait`,
+        poolRows.length === 0 && poolCatalogRows.length === 0,
       ),
     ]
   } finally {
@@ -805,70 +980,23 @@ async function checkLatencyWaitMappings(pgBin, psql, query, registry, port) {
   }
 }
 
-async function checkConnectionLocalBehavior(psql, registry, port) {
-  const claim = registry.claims.connectionLocal
-  const city = registry.cityClaims.connectionPooler
-  const connection = `host=127.0.0.1 port=${port} dbname=postgres user=postgres`
-  const execution = await psql(`
-    CREATE EXTENSION IF NOT EXISTS dblink;
-    SELECT public.dblink_connect('oracle_session_a', ${sqlLiteral(connection)});
-    SELECT public.dblink_connect('oracle_session_b', ${sqlLiteral(connection)});
-    SELECT public.dblink_exec('oracle_session_a', 'SET work_mem = ''64kB''');
-    SELECT public.dblink_exec(
-      'oracle_session_a',
-      'DO $oracle$ BEGIN PERFORM pg_catalog.pg_advisory_lock(${claim.advisoryLockKey}); END $oracle$'
-    );
-    SELECT public.dblink_exec(
-      'oracle_session_a',
-      'PREPARE ${claim.preparedStatement}(integer) AS SELECT $1 + 1'
-    );
-    SELECT public.dblink_exec(
-      'oracle_session_a',
-      'LISTEN ${claim.listenChannel}'
-    );
-    SELECT public.dblink_exec(
-      'oracle_session_b',
-      'NOTIFY ${claim.listenChannel}, ''from-session-b'''
-    );
-    SELECT pg_catalog.pg_sleep(0.05);
-    SELECT pg_catalog.json_build_object(
-      'a_work_mem', a_work.setting,
-      'b_work_mem', b_work.setting,
-      'b_got_lock', b_lock.got_lock,
-      'a_prepared', a_prepared.count,
-      'b_prepared', b_prepared.count,
-      'notify_name', notification.notify_name,
-      'notify_extra', notification.extra
-    )::text
-    FROM public.dblink('oracle_session_a', 'SHOW work_mem') AS a_work(setting text)
-    CROSS JOIN public.dblink('oracle_session_b', 'SHOW work_mem') AS b_work(setting text)
-    CROSS JOIN public.dblink(
-      'oracle_session_b',
-      'SELECT pg_catalog.pg_try_advisory_lock(${claim.advisoryLockKey})'
-    ) AS b_lock(got_lock boolean)
-    CROSS JOIN public.dblink(
-      'oracle_session_a',
-      'SELECT pg_catalog.count(*)::integer FROM pg_catalog.pg_prepared_statements WHERE name = ''${claim.preparedStatement}'''
-    ) AS a_prepared(count integer)
-    CROSS JOIN public.dblink(
-      'oracle_session_b',
-      'SELECT pg_catalog.count(*)::integer FROM pg_catalog.pg_prepared_statements WHERE name = ''${claim.preparedStatement}'''
-    ) AS b_prepared(count integer)
-    LEFT JOIN LATERAL public.dblink_get_notify('oracle_session_a') AS notification ON true;
-    SELECT public.dblink_disconnect('oracle_session_a');
-    SELECT public.dblink_disconnect('oracle_session_b')`)
-  const json = execution.stdout
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .find((line) => line.startsWith('{'))
-  const observation = json ? JSON.parse(json) : null
-  const tradeoff = city.transactionTradeoff
+export function connectionLocalChecks(tradeoff, claim, observation) {
   return [
+    result(
+      'connection-local/backend-identity',
+      `${tradeoff}; session state is keyed to a server backend`,
+      observation
+        ? `session A backend ${observation.a_pid}; session B backend ${observation.b_pid}`
+        : 'backend-identity observation is absent',
+      Number.isInteger(Number(observation?.a_pid))
+        && Number.isInteger(Number(observation?.b_pid))
+        && Number(observation?.a_pid) !== Number(observation?.b_pid),
+    ),
     result(
       'connection-local/session-GUC',
       tradeoff,
       observation
-        ? `session A work_mem ${observation.a_work_mem}; session B work_mem ${observation.b_work_mem}`
+        ? `after A committed: session A work_mem ${observation.a_work_mem}; session B work_mem ${observation.b_work_mem}`
         : 'session GUC observation is absent',
       observation?.a_work_mem === '64kB' && observation?.b_work_mem !== '64kB',
     ),
@@ -882,20 +1010,127 @@ async function checkConnectionLocalBehavior(psql, registry, port) {
       'connection-local/sql-PREPARE',
       tradeoff,
       observation
-        ? `prepared statement count: session A ${observation.a_prepared}, session B ${observation.b_prepared}`
+        ? `prepared count A ${observation.a_prepared}, B ${observation.b_prepared}; EXECUTE on A returned ${observation.prepared_result}`
         : 'prepared-statement observation is absent',
-      Number(observation?.a_prepared) === 1 && Number(observation?.b_prepared) === 0,
+      Number(observation?.a_prepared) === 1
+        && Number(observation?.b_prepared) === 0
+        && Number(observation?.prepared_result) === 42,
     ),
     result(
-      'connection-local/LISTEN-NOTIFY',
+      'connection-local/LISTEN-registration',
       tradeoff,
       observation
-        ? `session A received ${observation.notify_name} with payload ${observation.notify_extra}`
+        ? `listening-channel count: session A ${observation.a_listening}, session B ${observation.b_listening}`
+        : 'LISTEN-registration observation is absent',
+      Number(observation?.a_listening) === 1 && Number(observation?.b_listening) === 0,
+    ),
+    result(
+      'connection-local/NOTIFY-delivery',
+      tradeoff,
+      observation
+        ? `session B sent NOTIFY; listening session A received ${observation.notify_name} with payload ${observation.notify_extra}`
         : 'notification observation is absent',
       observation?.notify_name === claim.listenChannel
         && observation?.notify_extra === 'from-session-b',
     ),
   ]
+}
+
+async function checkConnectionLocalBehavior(psql, registry, port) {
+  const claim = registry.claims.connectionLocal
+  const city = registry.cityClaims.connectionPooler
+  const connection = `host=127.0.0.1 port=${port} dbname=postgres user=postgres`
+  const fixtureSql = `
+    CREATE EXTENSION IF NOT EXISTS dblink;
+    SELECT public.dblink_connect('oracle_session_a', ${sqlLiteral(connection)});
+    SELECT public.dblink_connect('oracle_session_b', ${sqlLiteral(connection)});
+    SELECT public.dblink_exec('oracle_session_a', 'BEGIN');
+    SELECT public.dblink_exec('oracle_session_a', 'SET work_mem = ''64kB''');
+    SELECT public.dblink_exec('oracle_session_a', 'COMMIT');
+    SELECT public.dblink_exec('oracle_session_a', 'BEGIN');
+    SELECT public.dblink_exec(
+      'oracle_session_a',
+      'DO $oracle$ BEGIN PERFORM pg_catalog.pg_advisory_lock(${claim.advisoryLockKey}); END $oracle$'
+    );
+    SELECT public.dblink_exec('oracle_session_a', 'COMMIT');
+    SELECT public.dblink_exec(
+      'oracle_session_a',
+      'PREPARE ${claim.preparedStatement}(integer) AS SELECT $1 + 1'
+    );
+    SELECT public.dblink_exec('oracle_session_a', 'LISTEN ${claim.listenChannel}');
+    SELECT public.dblink_exec(
+      'oracle_session_b',
+      'NOTIFY ${claim.listenChannel}, ''from-session-b'''
+    );
+    SELECT pg_catalog.pg_sleep(0.05);
+    CREATE TEMP TABLE oracle_connection_observation AS
+    WITH notification AS MATERIALIZED (
+      SELECT notify_name, extra
+        FROM public.dblink_get_notify('oracle_session_a')
+    )
+    SELECT pg_catalog.json_build_object(
+      'a_pid', (SELECT pid FROM public.dblink(
+        'oracle_session_a',
+        'SELECT pg_catalog.pg_backend_pid()'
+      ) AS observed(pid integer)),
+      'b_pid', (SELECT pid FROM public.dblink(
+        'oracle_session_b',
+        'SELECT pg_catalog.pg_backend_pid()'
+      ) AS observed(pid integer)),
+      'a_work_mem', (SELECT setting FROM public.dblink(
+        'oracle_session_a', 'SHOW work_mem'
+      ) AS observed(setting text)),
+      'b_work_mem', (SELECT setting FROM public.dblink(
+        'oracle_session_b', 'SHOW work_mem'
+      ) AS observed(setting text)),
+      'b_got_lock', (SELECT got_lock FROM public.dblink(
+        'oracle_session_b',
+        'SELECT pg_catalog.pg_try_advisory_lock(${claim.advisoryLockKey})'
+      ) AS observed(got_lock boolean)),
+      'a_prepared', (SELECT count FROM public.dblink(
+        'oracle_session_a',
+        'SELECT pg_catalog.count(*)::integer FROM pg_catalog.pg_prepared_statements WHERE name = ''${claim.preparedStatement}'''
+      ) AS observed(count integer)),
+      'b_prepared', (SELECT count FROM public.dblink(
+        'oracle_session_b',
+        'SELECT pg_catalog.count(*)::integer FROM pg_catalog.pg_prepared_statements WHERE name = ''${claim.preparedStatement}'''
+      ) AS observed(count integer)),
+      'prepared_result', (SELECT result FROM public.dblink(
+        'oracle_session_a',
+        'EXECUTE ${claim.preparedStatement}(41)'
+      ) AS observed(result integer)),
+      'a_listening', (SELECT count FROM public.dblink(
+        'oracle_session_a',
+        'SELECT pg_catalog.count(*)::integer FROM pg_catalog.pg_listening_channels() AS channels(channel) WHERE channel = ''${claim.listenChannel}'''
+      ) AS observed(count integer)),
+      'b_listening', (SELECT count FROM public.dblink(
+        'oracle_session_b',
+        'SELECT pg_catalog.count(*)::integer FROM pg_catalog.pg_listening_channels() AS channels(channel) WHERE channel = ''${claim.listenChannel}'''
+      ) AS observed(count integer)),
+      'notify_name', (SELECT notify_name FROM notification LIMIT 1),
+      'notify_extra', (SELECT extra FROM notification LIMIT 1)
+    )::text AS payload;
+    SELECT public.dblink_exec(
+      'oracle_session_a',
+      'DO $oracle$ BEGIN PERFORM pg_catalog.pg_advisory_unlock_all(); END $oracle$'
+    );
+    SELECT public.dblink_disconnect('oracle_session_a');
+    SELECT public.dblink_disconnect('oracle_session_b');
+    SELECT 'ORACLE_CONNECTION_JSON:' || payload
+      FROM oracle_connection_observation`
+  const execution = await psql(fixtureSql)
+  const marker = 'ORACLE_CONNECTION_JSON:'
+  const markerOffset = execution.stdout.indexOf(marker)
+  if (markerOffset < 0) {
+    const transcript = JSON.stringify(execution.stdout || execution.stderr || 'no psql output')
+    throw new Error(`connection-local fixture produced no observation: ${transcript}`)
+  }
+  const json = execution.stdout
+    .slice(markerOffset + marker.length)
+    .split(/\r?\n/u, 1)[0]
+    .trim()
+  const observation = JSON.parse(json)
+  return connectionLocalChecks(city.transactionTradeoff, claim, observation)
 }
 
 async function explainJson(psql, setup, sql) {
@@ -2420,6 +2655,25 @@ async function checkStorageMvcc(psql, query, registry, major) {
   const toastSummary = toastRows
     .map((row) => `${row.relation}: raw ${row.raw_size}, logical ${row.logical_size}, toast heap ${row.toast_heap_bytes}`)
     .join(' | ')
+  await psql('SELECT pg_catalog.pg_stat_reset()')
+  await psql('SELECT pg_catalog.md5(payload) FROM public.oracle_toast_default')
+  const toastReadPath = await pollRow(
+    query,
+    `SELECT stats.heap_blks_read,
+            stats.heap_blks_hit,
+            stats.idx_blks_read,
+            stats.idx_blks_hit
+       FROM pg_catalog.pg_statio_all_tables AS stats
+       JOIN pg_catalog.pg_class AS owner ON owner.reltoastrelid = stats.relid
+      WHERE owner.oid = 'public.oracle_toast_default'::regclass`,
+    (row) => Number(row?.heap_blks_read) + Number(row?.heap_blks_hit) > 0
+      && Number(row?.idx_blks_read) + Number(row?.idx_blks_hit) > 0,
+    3_000,
+  )
+  const toastHeapAccesses = Number(toastReadPath?.heap_blks_read)
+    + Number(toastReadPath?.heap_blks_hit)
+  const toastIndexAccesses = Number(toastReadPath?.idx_blks_read)
+    + Number(toastReadPath?.idx_blks_hit)
 
   const [snapshot] = await query(`
     SELECT pg_catalog.split_part(pg_catalog.pg_current_snapshot()::text, ':', 1)::bigint AS snapshot_xmin,
@@ -2482,6 +2736,16 @@ async function checkStorageMvcc(psql, query, registry, major) {
       threeReadPaths,
     ),
     result(
+      'TOAST/external-read-path',
+      'reading an out-of-line datum follows the TOAST index and chunk heap before returning the logical value',
+      toastReadPath
+        ? `TOAST heap read/hit ${toastReadPath.heap_blks_read}/${toastReadPath.heap_blks_hit}; index read/hit ${toastReadPath.idx_blks_read}/${toastReadPath.idx_blks_hit}; logical value ${defaultExternal?.logical_size} bytes`
+        : 'TOAST heap/index access observation is absent',
+      toastHeapAccesses > 0
+        && toastIndexAccesses > 0
+        && Number(defaultExternal?.logical_size) === toast.valueBytes,
+    ),
+    result(
       'MVCC/snapshot-xmin-is-not-oldest-visible-creator',
       'a snapshot sees a committed tuple whose creator XID is older than snapshot xmin',
       snapshot
@@ -2498,6 +2762,37 @@ async function checkStorageMvcc(psql, query, registry, major) {
   ]
 }
 
+export function linePointerLifecycleChecks(vocabulary, observation) {
+  const hotFlags = observation?.hotFlags ?? []
+  const deadFlags = observation?.deadFlags ?? []
+  const reusableFlags = observation?.reusableFlags ?? []
+  const freeSpaceBefore = Number(observation?.freeSpaceBefore)
+  const freeSpaceAfter = Number(observation?.freeSpaceAfter)
+  return [
+    result(
+      'page-layout/line-pointer-states',
+      vocabulary.linePointers.definition,
+      observation
+        ? `HOT-pruned flags [${hotFlags.join(', ')}]; index-cleanup-off flags [${deadFlags.join(', ')}]; cleaned flags [${reusableFlags.join(', ')}]`
+        : 'line-pointer lifecycle observation is absent',
+      hotFlags.includes(1)
+        && hotFlags.includes(2)
+        && deadFlags.includes(3)
+        && reusableFlags.includes(0),
+    ),
+    result(
+      'page-layout/free-space-map-reuse',
+      'VACUUM cleanup makes reclaimed page capacity visible through the free space map',
+      observation
+        ? `pg_freespace before cleanup ${freeSpaceBefore} bytes; after cleanup ${freeSpaceAfter} bytes`
+        : 'free-space-map observation is absent',
+      Number.isFinite(freeSpaceBefore)
+        && Number.isFinite(freeSpaceAfter)
+        && freeSpaceAfter > freeSpaceBefore,
+    ),
+  ]
+}
+
 async function checkRemainingMvcc(pgBin, psql, query, registry, port) {
   const claim = registry.claims.storageMvcc
   const vocabulary = registry.cityClaims.mvccVocabulary
@@ -2505,6 +2800,7 @@ async function checkRemainingMvcc(pgBin, psql, query, registry, port) {
   await psql(`
     CREATE EXTENSION IF NOT EXISTS pageinspect;
     CREATE EXTENSION IF NOT EXISTS pg_visibility;
+    CREATE EXTENSION IF NOT EXISTS pg_freespacemap;
     CREATE EXTENSION IF NOT EXISTS dblink;
     CREATE TABLE public.${page.relation} (
       id integer PRIMARY KEY,
@@ -2542,7 +2838,7 @@ async function checkRemainingMvcc(pgBin, psql, query, registry, port) {
            items.t_hoff
       FROM blocks
       CROSS JOIN LATERAL public.heap_page_items(
-        public.get_raw_page('public.${page.relation}', blocks.block_number)
+        public.get_raw_page('public.${page.relation}', blocks.block_number::integer)
       ) AS items
      ORDER BY blocks.block_number, items.lp`)
   const oldTuple = tupleRows.find((row) => row.t_xmin === created?.creator_xid)
@@ -2555,7 +2851,8 @@ async function checkRemainingMvcc(pgBin, psql, query, registry, port) {
       FROM public.heap_page_items(
         public.get_raw_page('public.${page.relation}', 0)
       ) AS items`)
-  const linePointerBytes = Number(linePointer?.lower) - 24
+  const alignedFixedHeaderBytes = Math.ceil(page.fixedTupleHeaderBytes / 8) * 8
+  const linePointerBytes = Number(linePointer?.lower) - page.pageHeaderBytes
   const headerFields = tupleRows.length >= 2 && tupleRows.every((row) =>
     row.t_xmin !== null
     && row.t_xmax !== null
@@ -2563,7 +2860,39 @@ async function checkRemainingMvcc(pgBin, psql, query, registry, port) {
     && row.t_ctid !== null
     && row.t_infomask2 !== null
     && row.t_infomask !== null
-    && Number(row.t_hoff) >= 23)
+    && Number(row.t_hoff) >= page.fixedTupleHeaderBytes)
+
+  const nullableColumns = Array.from(
+    { length: page.nullableColumns - 1 },
+    (_, index) => `nullable_${index + 1} integer`,
+  )
+  const nonNullValues = Array.from(
+    { length: page.nullableColumns - 1 },
+    (_, index) => String(index + 1),
+  )
+  await psql(`
+    CREATE TABLE public.${page.headerRelation} (
+      id integer NOT NULL,
+      ${nullableColumns.join(',\n      ')}
+    ) WITH (autovacuum_enabled = false);
+    INSERT INTO public.${page.headerRelation} VALUES (1, ${nonNullValues.join(', ')});
+    INSERT INTO public.${page.headerRelation} (id) VALUES (2)`)
+  const headerRows = await query(`
+    SELECT lp, t_hoff, t_bits, t_infomask, t_infomask2
+      FROM public.heap_page_items(
+        public.get_raw_page('public.${page.headerRelation}', 0)
+      )
+     ORDER BY lp`)
+  const withoutNulls = headerRows[0]
+  const withNulls = headerRows[1]
+  const bitmapBytes = Math.ceil(page.nullableColumns / 8)
+  const alignedBitmapHeaderBytes = Math.ceil(
+    (page.fixedTupleHeaderBytes + bitmapBytes) / 8,
+  ) * 8
+  const exactHeaderLayout = Number(withoutNulls?.t_hoff) === alignedFixedHeaderBytes
+    && withoutNulls?.t_bits === null
+    && Number(withNulls?.t_hoff) === alignedBitmapHeaderBytes
+    && withNulls?.t_bits !== null
 
   await psql(`VACUUM public.${page.relation}`)
   const redirectRows = await query(`
@@ -2574,6 +2903,75 @@ async function checkRemainingMvcc(pgBin, psql, query, registry, port) {
      ORDER BY lp`)
   const hasRedirect = redirectRows.some((row) => Number(row.lp_flags) === 2)
     && redirectRows.some((row) => Number(row.lp_flags) === 1)
+
+  const lineLifecycle = claim.linePointerLifecycle
+  await psql(`
+    CREATE TABLE public.${lineLifecycle.relation} (
+      id integer PRIMARY KEY,
+      payload text NOT NULL
+    ) WITH (autovacuum_enabled = false);
+    INSERT INTO public.${lineLifecycle.relation} VALUES (1, 'remove'), (2, 'survivor')`)
+  const [freeSpaceBefore] = await query(`
+    SELECT public.pg_freespace('public.${lineLifecycle.relation}'::regclass, 0) AS bytes`)
+  await psql(`DELETE FROM public.${lineLifecycle.relation} WHERE id = 1`)
+  await psql(`VACUUM (INDEX_CLEANUP OFF, TRUNCATE OFF) public.${lineLifecycle.relation}`)
+  const deadPointerRows = await query(`
+    SELECT lp, lp_flags, lp_off, lp_len
+      FROM public.heap_page_items(
+        public.get_raw_page('public.${lineLifecycle.relation}', 0)
+      )
+     ORDER BY lp`)
+  await psql(`VACUUM (INDEX_CLEANUP ON, TRUNCATE OFF) public.${lineLifecycle.relation}`)
+  const reusablePointerRows = await query(`
+    SELECT lp, lp_flags, lp_off, lp_len
+      FROM public.heap_page_items(
+        public.get_raw_page('public.${lineLifecycle.relation}', 0)
+      )
+     ORDER BY lp`)
+  const [freeSpaceAfter] = await query(`
+    SELECT public.pg_freespace('public.${lineLifecycle.relation}'::regclass, 0) AS bytes`)
+  const linePointerObservation = {
+    hotFlags: redirectRows.map((row) => Number(row.lp_flags)),
+    deadFlags: deadPointerRows.map((row) => Number(row.lp_flags)),
+    reusableFlags: reusablePointerRows.map((row) => Number(row.lp_flags)),
+    freeSpaceBefore: Number(freeSpaceBefore?.bytes),
+    freeSpaceAfter: Number(freeSpaceAfter?.bytes),
+  }
+
+  const deleting = claim.deletingXmax
+  await psql(`
+    CREATE TABLE public.${deleting.relation} (id integer PRIMARY KEY, note text NOT NULL);
+    INSERT INTO public.${deleting.relation} VALUES (1, 'delete me')`)
+  const deletionMarker = 'ORACLE_DELETING_XMAX_JSON:'
+  const deletionExecution = await psql(`
+    WITH deleted AS (
+      DELETE FROM public.${deleting.relation}
+       WHERE id = 1
+       RETURNING xmin::text AS creator_xid,
+                 xmax::text AS deleting_xid,
+                 ctid::text AS deleted_ctid
+    )
+    SELECT '${deletionMarker}' || pg_catalog.row_to_json(deleted)::text
+      FROM deleted`)
+  const deletionLine = deletionExecution.stdout
+    .split(/\r?\n/u)
+    .map((candidate) => candidate.trim())
+    .find((candidate) => candidate.startsWith(deletionMarker))
+  const deleted = deletionLine
+    ? JSON.parse(deletionLine.slice(deletionMarker.length))
+    : null
+  const [deletedPage] = await query(`
+    SELECT t_xmin::text AS creator_xid,
+           t_xmax::text AS deleting_xid,
+           t_ctid::text AS deleted_ctid,
+           pg_catalog.array_to_string(
+             (public.heap_tuple_infomask_flags(t_infomask, t_infomask2)).raw_flags,
+             ', '
+           ) AS flags
+      FROM public.heap_page_items(
+        public.get_raw_page('public.${deleting.relation}', 0)
+      )
+     WHERE lp_flags = 1`)
 
   const multi = claim.multiXact
   await psql(`
@@ -2623,11 +3021,14 @@ async function checkRemainingMvcc(pgBin, psql, query, registry, port) {
     INSERT INTO public.${horizon.relation} VALUES (1, 'old snapshot'), (2, 'tail survivor')`)
   const oldSnapshot = psqlCommand(pgBin, port, `
     SET application_name = 'oracle_old_snapshot';
+    CREATE TEMP TABLE oracle_old_snapshot_result (rows integer);
     BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
     SELECT pg_catalog.count(*) FROM public.${horizon.relation} WHERE id = 1;
     SELECT pg_catalog.pg_sleep(3);
+    INSERT INTO oracle_old_snapshot_result
     SELECT pg_catalog.count(*) FROM public.${horizon.relation} WHERE id = 1;
-    COMMIT`)
+    COMMIT;
+    SELECT rows FROM oracle_old_snapshot_result`)
   await pollRow(
     query,
     `SELECT backend_xmin::text AS backend_xmin, wait_event
@@ -2731,19 +3132,33 @@ async function checkRemainingMvcc(pgBin, psql, query, registry, port) {
       'page-layout/line-pointer-size',
       vocabulary.linePointers.definition,
       `page header lower ${linePointer?.lower}; ${linePointer?.line_pointers} line pointers occupy ${linePointerBytes} bytes`,
-      linePointerBytes === Number(linePointer?.line_pointers) * 4,
+      linePointerBytes === Number(linePointer?.line_pointers) * page.linePointerBytes,
     ),
     result(
       'page-layout/tuple-header-fields',
       vocabulary.tupleHeader.definition,
-      tupleSummary,
-      headerFields,
+      `${tupleSummary}; no-null t_hoff ${withoutNulls?.t_hoff} bits ${withoutNulls?.t_bits}; with-null t_hoff ${withNulls?.t_hoff} bits ${withNulls?.t_bits}`,
+      headerFields && exactHeaderLayout,
     ),
     result(
       'HOT/redirect-line-pointer',
       vocabulary.hotChains.definition,
       redirectRows.map((row) => `lp ${row.lp} flags ${row.lp_flags} off ${row.lp_off} len ${row.lp_len}`).join(' | '),
       hasRedirect,
+    ),
+    ...linePointerLifecycleChecks(vocabulary, linePointerObservation),
+    result(
+      'MVCC/deleting-xmax',
+      vocabulary.xmax.definition,
+      deleted && deletedPage
+        ? `DELETE returned creator ${deleted.creator_xid}, deleting xmax ${deleted.deleting_xid}, ctid ${deleted.deleted_ctid}; page shows ${deletedPage.creator_xid}/${deletedPage.deleting_xid}/${deletedPage.deleted_ctid}; flags ${deletedPage.flags}`
+        : 'deleted tuple observation is absent',
+      Boolean(deleted?.creator_xid)
+        && Boolean(deleted?.deleting_xid)
+        && deleted?.creator_xid !== deleted?.deleting_xid
+        && deletedPage?.creator_xid === deleted?.creator_xid
+        && deletedPage?.deleting_xid === deleted?.deleting_xid
+        && deletedPage?.deleted_ctid === deleted?.deleted_ctid,
     ),
     result(
       'MVCC/MultiXact-lockers',
@@ -3007,7 +3422,13 @@ async function runChecks(server, registry, major, pgBin) {
   const checks = [
     ['claim registry coverage', () => checkRegistryCoverage(registry)],
     ['version', () => checkVersion(server.query, registry, major)],
-    ['WAL segment', () => checkWalSegment(server.psql, server.query, registry)],
+    ['WAL segment', () => checkWalSegment(
+      pgBin,
+      server.psql,
+      server.query,
+      registry,
+      server.dataDir,
+    )],
     ['native recovery and timelines', () => checkNativeRecovery(
       pgBin,
       server.psql,
@@ -3030,6 +3451,7 @@ async function runChecks(server, registry, major, pgBin) {
       server.query,
       registry,
       server.port,
+      major,
     )],
     ['connection-local behavior', () => checkConnectionLocalBehavior(
       server.psql,
@@ -3077,8 +3499,19 @@ async function runChecks(server, registry, major, pgBin) {
       registry,
     )],
   ]
+  const requested = (process.env.PG_ORACLE_ONLY ?? '')
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean)
+  const selectedChecks = requested.length === 0
+    ? checks
+    : checks.filter(([name]) => requested.includes(name))
+  if (requested.length > 0 && selectedChecks.length !== requested.length) {
+    const known = checks.map(([name]) => name).join(', ')
+    throw new Error(`PG_ORACLE_ONLY named an unknown check; available checks: ${known}`)
+  }
   const results = []
-  for (const [name, check] of checks) {
+  for (const [name, check] of selectedChecks) {
     try {
       results.push(...await check())
     } catch (error) {
@@ -3098,7 +3531,7 @@ function parseMajor(registry) {
 
 async function main() {
   if (process.argv.includes('--help')) {
-    console.log('Usage: PG_VERSION=18 node tools/pg-oracle.mjs\nSet PG_ORACLE_ALL=1 to print matches as well as divergences.')
+    console.log('Usage: PG_VERSION=18 node tools/pg-oracle.mjs\nSet PG_ORACLE_ALL=1 to print matches; PG_ORACLE_ONLY accepts comma-separated check-family names.')
     return
   }
 
@@ -3110,6 +3543,7 @@ async function main() {
     'initdb',
     'pg_basebackup',
     'pg_ctl',
+    'pg_controldata',
     'pg_dump',
     'pg_restore',
     'pg_verifybackup',

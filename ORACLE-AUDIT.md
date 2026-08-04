@@ -38,22 +38,38 @@ exceptions.
 ## Expansion result
 
 The server-checkable scope below is now implemented by `tools/pg-oracle.mjs`.
-The expanded PostgreSQL 18.3 run made 188 observations in 61.58 seconds: 183
+The completed PostgreSQL 18.3 run made 211 observations in 62.35 seconds: 206
 matched, four were the existing registered model divergences, and one was a new
-finding. `src/ui/tour.ts` says real VACUUM truncation needs a lock, the server
-demonstrated that `ACCESS SHARE` prevents tail truncation until the holder
-releases it, but `CLAIM_VALUES.vacuumReclaim` does not register that facet.
+finding. The count grew by 23 while wall time stayed below the earlier expanded
+run's 63-second measurement.
 
-The same harness made 188 observations against PostgreSQL 18.4 in 63.17
-seconds. The only additional divergence was the explicit PostgreSQL 18.3
-reference pin. None of the other checked city claims moved between 18.3 and
-18.4.
+The finding is `WAL/unqualified-fixed-16MiB-surfaces`. `SHOW
+wal_segment_size`, `pg_controldata`, `pg_ls_waldir()`, and
+`pg_walfile_name_offset()` all agree on both the default 16 MiB cluster and a
+second cluster created with `initdb --wal-segsize=32`. The long WAL-vault body
+correctly says the size is fixed at `initdb` time, but the WAL-vault role, the
+archive-silo plate, and the WAL-vault summary still state fixed 16 MiB segments
+without that scope. The oracle reports the 32 MiB contradiction; this audit does
+not change those surfaces.
+
+The version-sensitive remainder was also exercised on the installed
+PostgreSQL 13/17/18 rail. The six focused WAL, wait/latency, connection-local,
+and storage/MVCC families made 42 observations on PostgreSQL 13.23 in 16.73
+seconds and 58 on PostgreSQL 17.9 in 13.09 seconds. Every server observation
+matched except the same fixed-16-MiB finding. PostgreSQL 13 verifies that
+`pg_wait_events` is absent and stages the activity waits directly; PostgreSQL
+17 and 18 enumerate the registered names from `pg_wait_events`. The spine
+selects the older `WALSync` spelling through PostgreSQL 16 and the
+catalog-confirmed `WalSync` spelling from PostgreSQL 17. The nightly target
+remains the PostgreSQL 18 teaching line and completes in about one minute, well
+below a few minutes.
 
 ## Survey boundary
 
 For this survey, **server-checkable** means a controlled fixture can obtain a
-repeatable verdict from stock PostgreSQL 18, its shipped client utilities, and
-bundled contrib extensions. It does not include reading PostgreSQL source or
+repeatable verdict from stock PostgreSQL 18, with PostgreSQL 13 and 17 used at
+version boundaries, using shipped client utilities and bundled contrib
+extensions. It does not include reading PostgreSQL source or
 documentation, running PgBouncer/WAL-G/pgBackRest/PGlite, benchmarking elapsed
 time, or checking PGSimCity's TypeScript and browser behavior. Those need a
 different verifier even when the underlying prose is true.
@@ -68,7 +84,7 @@ implements.
 
 | Registry claim | Mechanically checkable remainder | Boundary inside the claim |
 |---|---|---|
-| `walSegment` | Compare `wal_segment_size`, WAL file naming/offsets, and an actual segment's size with 16 MiB. | The painted label and model constant remain repository checks. |
+| `walSegment` | Compare `SHOW wal_segment_size`, `pg_control`, WAL file naming/offsets, and actual segment sizes in default and differently-initdb-d clusters. | The model's configured size remains a repository fact; unqualified fixed-size surfaces are reported when the alternate cluster contradicts them. |
 | `modelLatency` | Stage coordinated relation-lock and synchronous-replication waits and verify the claimed `pg_stat_activity` type/name mapping; verify that pool wait is absent from PostgreSQL activity. | Model quantiles, the 512-trip window, phase attribution, batching, 30 Hz resolution, and the meaning of an `active`/null-wait sample are model or interpretive claims. |
 | `connectionPooler` | With two server sessions, exercise the connection-local behavior beneath the warning: session GUCs, advisory locks, SQL `PREPARE`, and `LISTEN` stay with a backend, while `NOTIFY` can be sent. | PgBouncer defaults, pooling modes, admission, timeout, prepared-statement tracking, multiplexing, and all model scales require PgBouncer or PGSimCity, not a PostgreSQL server alone. |
 | `workMem` | Use controlled plans with multiple Sort/Hash nodes to observe per-node memory, hash multiplication, temp spill, and concurrent-backend multiplication. | The existing default checks already cover `work_mem` and `hash_mem_multiplier`; the example MiB budgets, tenfold slowdown, fixed nodes, and absent planner features are model choices. |
