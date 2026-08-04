@@ -3,7 +3,7 @@ import { COLOR } from '../core/theme'
 import { N_BACKEND_SLOTS } from '../core/types'
 import type { BackendState, SimState, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, damp, fmtNum, lerp, makeRng } from '../core/util'
-import { ANCHOR, CONDUIT, conduitX, rid, routeCurve } from './layout'
+import { ANCHOR, CONDUIT, DISTRICT_BOUNDS, conduitX, rid, routeCurve } from './layout'
 import { OPACITY_TIER } from './storage'
 import { markTextPlane } from './text-plane'
 
@@ -285,6 +285,15 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
 
   const TX = ANCHOR.clientTerminal[0]
   const TZ = ANCHOR.clientTerminal[2] // -300
+  // The Slonik containment audit can only protect visible paving that reads
+  // its extent from the district geography it audits.
+  const clientBounds = DISTRICT_BOUNDS.clients
+  const forecourt = {
+    x0: clientBounds.x[0],
+    x1: clientBounds.x[1],
+    z0: clientBounds.z[0] + 4,
+    z1: ANCHOR.connGate[2],
+  }
 
   /* =======================================================================
    * 1. THE CLIENT TERMINAL — the application tier, on the ground, outside.
@@ -333,7 +342,10 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
 
   // The forecourt. Plain tarmac laid over the city's survey grid: the ground
   // treatment changing is what tells you which side of the boundary you are on.
-  const apronGeo = own(new THREE.PlaneGeometry(300, 104))
+  const apronGeo = own(new THREE.PlaneGeometry(
+    forecourt.x1 - forecourt.x0,
+    forecourt.z1 - forecourt.z0,
+  ))
   const apronMat = theme.mat('clients.forecourt', {
     color: 0x0a1119,
     roughness: 0.98,
@@ -349,7 +361,11 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
   const apron = new THREE.Mesh(apronGeo, apronMat)
   apron.name = 'client.forecourt'
   apron.rotation.x = -Math.PI / 2
-  apron.position.set(0, 0.06, -304)
+  apron.position.set(
+    (forecourt.x0 + forecourt.x1) / 2,
+    0.06,
+    (forecourt.z0 + forecourt.z1) / 2,
+  )
   apron.renderOrder = -4
   apron.raycast = () => {}
   terminal.add(apron)
@@ -360,7 +376,7 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
     const z = -352 + r * 11
     bayVerts.push(-104, 0.09, z, 104, 0.09, z)
   }
-  bayVerts.push(-150, 0.09, -356, 150, 0.09, -356)
+  bayVerts.push(forecourt.x0, 0.09, forecourt.z0, forecourt.x1, 0.09, forecourt.z0)
   const bayGeo = own(new THREE.BufferGeometry())
   bayGeo.setAttribute('position', new THREE.Float32BufferAttribute(bayVerts, 3))
   const bayLines = new THREE.LineSegments(bayGeo, theme.line(COLOR.inkDim, 0.1))
