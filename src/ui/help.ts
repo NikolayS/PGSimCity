@@ -311,7 +311,7 @@ export function createHelp(ctx: UiContext): UiModule {
         'Mistakes have been found and fixed throughout. ' +
         "Touch controls have been verified only in Chrome's mobile emulation. " +
         '<a href="https://github.com/NikolayS/PGSimCity#how-much-to-trust-this" target="_blank" rel="noopener">See exactly what was checked.</a>' +
-        '<br><br>Found one? Use “This does not match PostgreSQL” at the foot of the panel so its exact claim and source arrive with the report, or send a ' +
+        '<br><br>Found one? Use “Report a problem with this claim on GitHub ↗” at the foot of the panel so its exact claim and source arrive with the report, or send a ' +
         '<a href="https://github.com/NikolayS/PGSimCity/pulls" target="_blank" rel="noopener">pull request</a>.',
     }),
     el('p', {

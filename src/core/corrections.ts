@@ -7,6 +7,9 @@ export const CORRECTION_PLAUSIBLE_CLASS =
 export const CORRECTION_URL_MAX_LENGTH = 8_000
 export const CORRECTION_CLAIM_TRUNCATION_MARKER =
   '[Claim truncated: the correction link reached its safe URL limit. Quote any omitted text in the issue after opening it.]'
+export const CORRECTION_LINK_TEXT = 'Report a problem with this claim on GitHub'
+export const CORRECTION_LINK_ACCESSIBLE_NAME =
+  `${CORRECTION_LINK_TEXT} (opens in a new tab; submit the issue there to file the report)`
 
 const ISSUE_URL = 'https://github.com/NikolayS/PGSimCity/issues/new'
 const NO_STATE =
@@ -66,6 +69,12 @@ export function buildCorrectionBody(report: CorrectionReport): string {
     : NO_STATE
 
   return [
+    '## Before submitting',
+    '',
+    'Use this issue to report a problem with the PostgreSQL claim copied below. Replace the prompts under “What PostgreSQL actually does” and “Documentation or source” with the correction and supporting evidence.',
+    '',
+    'If you opened this link out of curiosity or do not have a correction to report, close this tab without submitting the issue.',
+    '',
     '## Where',
     '',
     `- Surface: ${oneLine(report.surface)}`,
@@ -86,11 +95,11 @@ export function buildCorrectionBody(report: CorrectionReport): string {
     '',
     '## What PostgreSQL actually does',
     '',
-    '<!-- Please replace this comment with what PostgreSQL does instead. -->',
+    '<!-- Required: explain what PostgreSQL does instead and how the displayed claim is wrong. -->',
     '',
     '## Documentation or source',
     '',
-    '<!-- Please link the PostgreSQL documentation section or source that supports the correction. -->',
+    '<!-- Required: link the PostgreSQL documentation section or source that supports the correction. -->',
     '',
     '## Anything else',
     '',
@@ -222,7 +231,10 @@ export function createCorrectionPath(
   anchor.className = 'pg-correction__link'
   anchor.target = '_blank'
   anchor.rel = 'noreferrer noopener'
-  anchor.textContent = 'This does not match PostgreSQL'
+  anchor.textContent = `${CORRECTION_LINK_TEXT} ↗`
+  anchor.setAttribute('aria-label', CORRECTION_LINK_ACCESSIBLE_NAME)
+  anchor.title =
+    'Opens a pre-filled GitHub issue in a new tab. Nothing is filed until you submit it.'
 
   const refresh = (): void => {
     anchor.href = correctionIssueUrl(reportFrom(options))
