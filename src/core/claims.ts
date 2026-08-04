@@ -8,6 +8,7 @@ import { MACHINE_SYNCHRONOUS_COMMIT_COMPARISON } from '../spine/machine-comparis
 import { MACHINE_INDEX_WALK } from '../spine/machine-index-walk'
 import { MVCC_VOCABULARY } from '../spine/mvcc-vocabulary'
 import { PGLITE_VERSION } from '../spine/pglite-version'
+import { CITY_ARCHITECTURE_CLAIMS } from '../spine/city-architecture'
 import { BUILD_LABEL } from './build'
 
 const KIB = 1024
@@ -163,6 +164,7 @@ export const CLAIM_VALUES = {
   cityComponentRoute: {
     hashPrefix: '#/c/',
   },
+  cityArchitecture: CITY_ARCHITECTURE_CLAIMS,
   componentNaming: {
     panelTitleOwner: 'registry.name',
   },
@@ -345,6 +347,11 @@ export const CLAIMS = {
     owner: 'src/core/claims.ts#CLAIM_VALUES.cityComponentRoute',
     value: CLAIM_VALUES.cityComponentRoute,
     surfaces: ['Diagnose:city links', 'tour:component targets', 'scenario:focus targets', 'city:component registry'],
+  },
+  cityArchitecture: {
+    owner: 'src/spine/city-architecture.ts#CITY_ARCHITECTURE_CLAIMS',
+    value: CLAIM_VALUES.cityArchitecture,
+    surfaces: ['layout:district bounds, anchors and routes', 'city:City in words', 'ACCESSIBILITY:text-first route'],
   },
   componentNaming: {
     owner: 'src/core/registry.ts#ComponentDef.name',

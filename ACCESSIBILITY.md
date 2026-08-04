@@ -9,6 +9,11 @@ is not. This document records the boundary honestly; it is not a claim that the
 - In the city, use `/` or `Ctrl/Cmd+K` to search the component inventory. A
   result opens the component's text inspector. The HUD vitals also open the
   matching inspector or a textual latency breakdown when activated.
+- Choose **City in words** from that command palette to read the city as an
+  architecture diagram: every district's layout-owned footprint, position,
+  contents and relative scale, followed by the PostgreSQL reason for each
+  adjacency and route. The same guide is available from `?` → **Reading** →
+  **Open City in words**. Its district links open the matching city destination.
 - Press `T` for the guided tour. Its fourteen chapter titles and explanations
   are live text, and its Previous, Play/Pause, Next, chapter, and Exit controls
   are ordinary buttons.
@@ -30,20 +35,25 @@ city model stays paused.
 
 ## Structural limits
 
-- The WebGL city has no semantic scene graph, nonvisual object map, or
-  screen-reader description of every animated event. The command palette and
-  inspector expose the component inventory and lesson prose, but they do not
-  communicate the city's exact spatial layout.
+- The WebGL city has no semantic scene graph or screen-reader description of
+  every animated event. **City in words** now supplies the static architecture
+  carried by the layout — district footprints, cardinal and vertical placement,
+  containment, relative scale and reasoned adjacency — from the same bounds,
+  anchors and routes that place the geometry. It is a textual site map, not a
+  live nonvisual object map: moving packets, process state and nearby objects
+  remain available through their existing inspectors and readouts rather than
+  being announced as a continuous scene.
 - First-person walking, swimming, pointer-lock looking, nearby levers, and the
   experience of scale are visual and spatial interactions. There is no honest
   keyboard-only or screen-reader substitute for navigating that geometry.
   Relevant PostgreSQL settings and mechanisms are available in the console,
   inspector, tour, Diagnose, or Machine, but the embodied city lesson is not.
-- Some metaphors are geometry-specific: the Slonik-shaped plate, district
-  adjacency, the relative height of shared memory and storage, and simultaneous
-  particle routes. Text routes teach the underlying mechanisms, but not those
-  visual metaphors. Treating an `aria-label` as a replacement would overstate
-  what a nonvisual reader receives.
+- Some metaphors are still geometry-specific: the exact Slonik-shaped plate,
+  simultaneous particle routes, and the felt relative height and distance of
+  structures. **City in words** states the corresponding topology and derived
+  coordinates, but it does not reproduce how that geometry looks or feels.
+  Treating an `aria-label` as a replacement would overstate what a nonvisual
+  reader receives.
 - The Machine announces each modelled replay stage and the final measured
   receipt. Its exact board coordinates and simultaneous A/B path geometry
   remain visual; the comparison finding, aligned timeline, source labels, and

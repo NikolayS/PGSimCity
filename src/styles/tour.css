@@ -650,6 +650,9 @@ body.pg-tour #hud-bottom:focus-within {
 .pal-row[data-kind='chapter'] .pal-row__badge {
   color: var(--c-storage);
 }
+.pal-row[data-kind='guide'] .pal-row__badge {
+  color: var(--c-client);
+}
 
 .pal-row__main {
   display: grid;

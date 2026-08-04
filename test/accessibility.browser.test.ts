@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { inspectRenderedPages } from './disclosure-browser.mjs'
+import {
+  disclosureFailures,
+  inspectRenderedPages,
+  measureDisclosurePage,
+  measureTouchTargetPage,
+  touchTargetFailures,
+} from './disclosure-browser.mjs'
 
 interface AxNode {
   ignored?: boolean
@@ -14,6 +20,69 @@ const names = (tree: { nodes: AxNode[] }) => tree.nodes
   .map((node) => String(node.name?.value ?? ''))
 
 describe('keyboard and screen-reader lesson routes', () => {
+  it('opens the layout-derived city architecture by keyboard and exposes the full modal', async () => {
+    const [report] = await inspectRenderedPages([{
+      name: 'City in words',
+      path: '/',
+      readySelector: '.city-words',
+    }], async ({ accessibilityTree, evaluate, keyPress, page, viewport }) => {
+      await keyPress('/', { code: 'Slash' })
+      await evaluate(`(() => {
+        const input = document.querySelector('#pal-input')
+        input.value = 'city in words'
+        input.dispatchEvent(new Event('input'))
+      })()`)
+      await keyPress('Enter', { code: 'Enter' })
+      await evaluate(`new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+
+      const state = await evaluate(`(() => ({
+        open: !document.querySelector('.city-words').hidden,
+        active: document.activeElement.getAttribute('aria-label') || document.activeElement.textContent.trim(),
+        districts: document.querySelectorAll('[data-city-district]').length,
+        relationships: document.querySelectorAll('[data-city-relationship]').length,
+        text: document.querySelector('.city-words__body').textContent,
+        stageInert: document.querySelector('#stage').inert,
+        hudInert: document.querySelector('#hud').inert,
+      }))()`)
+      const disclosure = await measureDisclosurePage(evaluate, page, viewport)
+      const touch = await measureTouchTargetPage(evaluate, page, viewport)
+      const axNames = names(await accessibilityTree())
+
+      await evaluate(`document.querySelector('.city-words .pg-correction__link').focus()`)
+      await keyPress('Tab', { code: 'Tab' })
+      const wrapped = await evaluate(`document.activeElement.getAttribute('aria-label')`)
+      await keyPress('Escape', { code: 'Escape' })
+      const closed = await evaluate(`({
+        hidden: document.querySelector('.city-words').hidden,
+        stageInert: document.querySelector('#stage').inert,
+        hudInert: document.querySelector('#hud').inert,
+      })`)
+
+      return { state, disclosure, touch, axNames, wrapped, closed }
+    })
+
+    expect(report.state).toMatchObject({
+      open: true,
+      active: 'Close City in words',
+      districts: 9,
+      relationships: 11,
+      stageInert: true,
+      hudInert: true,
+    })
+    expect(report.state.text).toMatch(/WAL is written before the data pages it protects/i)
+    expect(report.state.text).toMatch(/does not replace the first-person walk/i)
+    expect(report.axNames).toContain('The city in words')
+    expect(report.axNames).toContain('Close City in words')
+    expect(report.wrapped).toBe('Close City in words')
+    const cityWordsDisclosures = report.disclosure.disclosures.filter(
+      (item: { id: string }) => item.id === 'city-words-limit',
+    )
+    expect(cityWordsDisclosures).toHaveLength(1)
+    expect(disclosureFailures([{ ...report.disclosure, disclosures: cityWordsDisclosures }])).toEqual([])
+    expect(touchTargetFailures([report.touch])).toEqual([])
+    expect(report.closed).toEqual({ hidden: true, stageInert: false, hudInert: false })
+  }, 90_000)
+
   it('contains both Machine dialogs, restores their openers, and exposes source meaning', async () => {
     const [report] = await inspectRenderedPages([{
       name: 'Machine',

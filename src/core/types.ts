@@ -1294,7 +1294,7 @@ export interface BusEvents {
   'tour:chapter': { index: number; total: number; title: string }
   'trace:open': { source?: 'button' | 'keyboard' }
   'trace:run': { statement: QueryKind; table: string; playback: TracePlayback }
-  'panel:open': { panel: 'console' | 'inspector' | 'help'; item?: string }
+  'panel:open': { panel: 'console' | 'inspector' | 'help' | 'city-words'; item?: string }
   /** open one of the physical anatomy instruments, optionally for a component */
   'anatomy:open': { view: 'page' | 'directory'; id?: string }
   'camera:mode': { mode: CameraMode }
@@ -1313,6 +1313,7 @@ export interface BusEvents {
   'ui:help': { open?: boolean; section?: 'controls' | 'legend' | 'reading' | 'legal' }
   'ui:labels-toggle': Record<string, never>
   'ui:palette': { open?: boolean }
+  'ui:city-words': { open?: boolean; district?: DistrictId }
   'ui:theme-toggle': Record<string, never>
 }
 

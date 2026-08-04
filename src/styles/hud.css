@@ -1206,6 +1206,20 @@ body.pg-labels-off #labels-root {
   margin-bottom: 0;
 }
 
+.help-city-words-route {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-hair);
+}
+.help-city-words-route p {
+  margin: 0;
+}
+.help-city-words {
+  min-height: var(--tap);
+  margin-top: 8px;
+  color: var(--c-backend);
+}
+
 .help-disclaimer {
   margin: 16px 0 0;
   padding-top: 12px;

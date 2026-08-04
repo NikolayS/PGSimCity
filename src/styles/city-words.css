@@ -1,0 +1,198 @@
+/* The city plan as a text document. Geometry stays visible only as context; the
+   modal itself is an ordinary, scrollable architecture description. */
+
+.city-words {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: grid;
+  place-items: center;
+  padding: calc(18px + var(--safe-t)) calc(18px + var(--safe-r)) calc(18px + var(--safe-b)) calc(18px + var(--safe-l));
+  pointer-events: auto;
+  background: var(--bg-overlay);
+}
+
+.city-words[hidden] {
+  display: none;
+}
+
+.city-words__dialog {
+  width: min(1040px, 100%);
+  max-height: min(92vh, 900px);
+  background: var(--bg-panel-solid);
+}
+
+.city-words__head {
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.city-words__heading {
+  display: grid;
+  gap: 3px;
+}
+
+.city-words__close,
+.city-words__visit {
+  min-height: var(--tap);
+}
+
+.city-words__close {
+  flex: 0 0 auto;
+}
+
+.city-words__body {
+  font-size: var(--fs-md);
+  line-height: 1.62;
+  color: var(--ink-dim);
+}
+
+.city-words__intro,
+.city-words__limit {
+  max-width: 84ch;
+}
+
+.city-words__intro p,
+.city-words__limit p {
+  margin: 8px 0 0;
+}
+
+.city-words__orientation {
+  color: var(--ink-faint);
+}
+
+.city-words__section-title {
+  margin: 24px 0 10px;
+  color: var(--ink);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+
+.city-words__intro .city-words__section-title {
+  margin-top: 0;
+}
+
+.city-words__districts,
+.city-words__relationships {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--line-hair);
+}
+
+.city-words__district,
+.city-words__relationship {
+  min-width: 0;
+  padding: 16px;
+  background: var(--bg-panel-solid);
+}
+
+.city-words__district-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.city-words__district-title,
+.city-words__relationship-title,
+.city-words__minor {
+  margin: 0;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.city-words__district-title,
+.city-words__relationship-title {
+  font-size: var(--fs-md);
+}
+
+.city-words__minor {
+  margin-top: 12px;
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.city-words__id,
+.city-words__footprint {
+  color: var(--c-backend);
+  font-size: var(--fs-micro);
+}
+
+.city-words__represents,
+.city-words__placement,
+.city-words__scale,
+.city-words__relationship p {
+  margin: 8px 0 0;
+}
+
+.city-words__footprint {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 8px 0 0;
+}
+
+.city-words__contains {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.city-words__contains li + li {
+  margin-top: 2px;
+}
+
+.city-words__scale strong,
+.city-words__relationship strong {
+  color: var(--ink);
+}
+
+.city-words__visit {
+  margin-top: 12px;
+  color: var(--c-backend);
+  border-top: 1px solid var(--line-hair);
+}
+
+.city-words__limit {
+  margin-bottom: 8px;
+  padding: 12px 14px;
+  border-left: 2px solid var(--c-warn);
+  background: var(--bg-sunken);
+  font-size: max(11px, var(--fs-xs));
+}
+
+.city-words__limit .city-words__section-title {
+  margin-top: 0;
+}
+
+@media (max-width: 720px) {
+  .city-words {
+    padding: var(--safe-t) var(--safe-r) var(--safe-b) var(--safe-l);
+  }
+
+  .city-words__dialog {
+    width: 100%;
+    max-height: 100svh;
+  }
+
+  .city-words__head,
+  .city-words__body {
+    padding-inline: 12px;
+  }
+
+  .city-words__districts,
+  .city-words__relationships {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .city-words__district,
+  .city-words__relationship {
+    padding: 14px 12px;
+  }
+
+  .city-words__visit {
+    width: 100%;
+    justify-content: center;
+  }
+}

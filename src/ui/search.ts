@@ -22,6 +22,7 @@ import type { UiContext, UiModule } from './uikit'
  *   scenarios   the guided experiments in sim/scenarios.ts
  *   chapters    the guided tour, jumped to directly
  *   anatomy     the physical page and directory instruments
+ *   guides      text-first maps of the city
  *
  * Opened with / or Ctrl+K (also from the HUD's toolbar over the loose
  * 'ui:palette' channel), closed with Escape, a backdrop click, or activating
@@ -29,7 +30,7 @@ import type { UiContext, UiModule } from './uikit'
  * does not also dismiss the inspector or the tour behind us.
  * ==========================================================================*/
 
-type ItemKind = 'component' | 'setting' | 'scenario' | 'chapter' | 'anatomy'
+type ItemKind = 'component' | 'setting' | 'scenario' | 'chapter' | 'anatomy' | 'guide'
 
 interface Item {
   kind: ItemKind
@@ -43,6 +44,7 @@ interface Item {
 }
 
 const GROUPS: { kind: ItemKind; label: string }[] = [
+  { kind: 'guide', label: 'Guides' },
   { kind: 'component', label: 'Components' },
   { kind: 'setting', label: 'Settings' },
   { kind: 'scenario', label: 'Scenarios' },
@@ -50,7 +52,14 @@ const GROUPS: { kind: ItemKind; label: string }[] = [
   { kind: 'anatomy', label: 'Anatomy' },
 ]
 
-const LIMITS: Record<ItemKind, number> = { component: 8, setting: 6, scenario: 5, chapter: 5, anatomy: 2 }
+const LIMITS: Record<ItemKind, number> = {
+  component: 8,
+  setting: 6,
+  scenario: 5,
+  chapter: 5,
+  anatomy: 2,
+  guide: 2,
+}
 
 const ANATOMY = [
   {
@@ -65,12 +74,21 @@ const ANATOMY = [
   },
 ] as const
 
+const GUIDES = [
+  {
+    id: 'city-in-words',
+    title: 'City in words',
+    sub: 'Read the city as a PostgreSQL architecture diagram: districts, containment, scale and meaningful adjacency',
+  },
+] as const
+
 /**
  * Curated starting points for an empty query — the eight places worth going
  * first. Components that no world module registered are skipped, so the list
  * is always honest about what exists.
  */
 const CURATED: { kind: ItemKind; id: string }[] = [
+  { kind: 'guide', id: 'city-in-words' },
   { kind: 'chapter', id: 'connect' },
   { kind: 'component', id: 'shared.buffers' },
   { kind: 'component', id: 'wal.vault' },
@@ -177,6 +195,10 @@ export function createSearch(ctx: UiContext): UiModule {
     bus.emit('anatomy:open', { view })
   }
 
+  function openGuide(): void {
+    bus.emit('ui:city-words', { open: true })
+  }
+
   /**
    * Settings live in the console, not here. Ask for the rail, then walk the
    * DOM the way a user would: open the drawer, open the group, scroll the dial
@@ -276,6 +298,17 @@ export function createSearch(ctx: UiContext): UiModule {
     }
   }
 
+  function guideItem(def: (typeof GUIDES)[number]): Item {
+    return {
+      kind: 'guide',
+      key: def.id,
+      badge: 'read',
+      title: def.title,
+      sub: def.sub,
+      run: openGuide,
+    }
+  }
+
   /* =======================================================================
    * COLLECTION
    * =====================================================================*/
@@ -293,9 +326,15 @@ export function createSearch(ctx: UiContext): UiModule {
       } else if (pick.kind === 'scenario') {
         const def = SCENARIOS.find((s) => s.id === pick.id)
         if (def) out.push(scenarioItem(def))
-      } else {
+      } else if (pick.kind === 'chapter') {
         const i = CHAPTERS.findIndex((c) => c.id === pick.id)
         if (i >= 0) out.push(chapterItem(CHAPTERS[i], i))
+      } else if (pick.kind === 'anatomy') {
+        const def = ANATOMY.find((item) => item.view === pick.id)
+        if (def) out.push(anatomyItem(def))
+      } else if (pick.kind === 'guide') {
+        const def = GUIDES.find((guide) => guide.id === pick.id)
+        if (def) out.push(guideItem(def))
       }
     }
     return out
@@ -365,6 +404,18 @@ export function createSearch(ctx: UiContext): UiModule {
       out.push(anatomyItem(def))
     }
 
+    for (const def of rank(
+      GUIDES,
+      (item) => [
+        [item.title, 1],
+        [item.id, 0.95],
+        [item.sub, 0.55],
+      ],
+      LIMITS.guide,
+    )) {
+      out.push(guideItem(def))
+    }
+
     return out
   }
 
@@ -376,7 +427,7 @@ export function createSearch(ctx: UiContext): UiModule {
     class: 'pal-input pg-mono',
     type: 'text',
     id: 'pal-input',
-    placeholder: 'Search the city — buildings, settings, scenarios, anatomy',
+    placeholder: 'Search the city — buildings, settings, scenarios, guides',
     autocomplete: 'off',
     autocapitalize: 'off',
     role: 'combobox',
@@ -491,7 +542,7 @@ export function createSearch(ctx: UiContext): UiModule {
           el('p', { class: 'pal-empty__t', text: `Nothing matches “${query.trim()}”` }),
           el('p', {
             class: 'pal-empty__s',
-            text: 'Try a building (buffers), a parameter (max_wal_size), a scenario (bloat), or anatomy (page).',
+            text: 'Try a building (buffers), a parameter (max_wal_size), a scenario (bloat), or a guide (city in words).',
           }),
         ),
       )
@@ -563,7 +614,9 @@ export function createSearch(ctx: UiContext): UiModule {
       input.value = ''
       render()
       // focus after the frame that unhides it, or the browser ignores it
-      requestAnimationFrame(() => input.focus())
+      requestAnimationFrame(() => {
+        if (open) input.focus()
+      })
     } else {
       list.replaceChildren()
       flat = []
