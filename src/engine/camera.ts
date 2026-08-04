@@ -34,6 +34,11 @@ export interface CameraRig extends CameraApi {
   readonly speed: number
 }
 
+export interface CameraRigOptions {
+  /** Test override; production follows the live media-query preference. */
+  reducedMotion?: boolean
+}
+
 /* --------------------------------------------------------------------------
  * Tuning. Every number here is a feel decision.
  * ------------------------------------------------------------------------*/
@@ -58,6 +63,10 @@ const VEL_TRACK = 26
 
 /** Keyboard translation acceleration (1/s). */
 const KEY_ACCEL = 9
+/** Keyboard turn/tilt speed, radians per second. */
+const KEY_LOOK_RATE = 1.45
+/** Keyboard orbit zoom exponent per second. */
+const KEY_ZOOM_RATE = 2.2
 /** Fly look sensitivity, radians per pixel. */
 const LOOK_SENS = 0.0022
 const PITCH_LIMIT = 1.5359 // 88°
@@ -177,9 +186,11 @@ const MOVE_CODES = new Set([
   'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'KeyC',
   'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
   'Space', 'PageUp', 'PageDown',
+  'Equal', 'Minus', 'NumpadAdd', 'NumpadSubtract',
 ])
 
 const FLY_ONLY_CODES = new Set(['Space', 'KeyE', 'KeyC', 'KeyQ'])
+const ORBIT_ONLY_CODES = new Set(['Equal', 'Minus', 'NumpadAdd', 'NumpadSubtract'])
 
 function isTypingTarget(t: EventTarget | null): boolean {
   const el = t as HTMLElement | null
@@ -219,6 +230,7 @@ export function createCameraRig(
   camera: THREE.PerspectiveCamera,
   domElement: HTMLElement,
   bus: Bus,
+  options: CameraRigOptions = {},
 ): CameraRig {
   /* ---- state -------------------------------------------------------------*/
 
@@ -269,6 +281,7 @@ export function createCameraRig(
   let dragOrbit = false
   let dragPan = false
   let dragLook = false
+  let keyboardOrbit = false
   let panGestureAnnounced = false
   let rotateGestureAnnounced = false
   let locked = false
@@ -326,6 +339,7 @@ export function createCameraRig(
   }
 
   const scriptedNow = () => mode === 'focus' || mode === 'tour'
+  const motionReduced = () => options.reducedMotion ?? reduceMotion()
 
   /**
    * Rebuild the orbit state from wherever the camera currently is, putting the
@@ -491,13 +505,17 @@ export function createCameraRig(
 
   function beginRotateAt(e: { clientX: number; clientY: number }): void {
     readEventNdc(e)
+    beginRotateAtNdc(inputNdcX, inputNdcY)
+  }
+
+  function beginRotateAtNdc(ndcX: number, ndcY: number): void {
     pivotT.copy(pivot)
     distT = dist
     zoomAnchored = false
     panAnchorValid = false
     velPivot.set(0, 0, 0)
     kbVel.set(0, 0, 0)
-    rotateAnchorValid = pickGroundOrCentre(inputNdcX, inputNdcY, rotateAnchor)
+    rotateAnchorValid = pickGroundOrCentre(ndcX, ndcY, rotateAnchor)
     if (!rotateAnchorValid) {
       rotateAnchor.copy(pivot)
       rotateAnchorValid = true
@@ -677,6 +695,7 @@ export function createCameraRig(
   }
 
   function endPointer(e: PointerEvent): void {
+    const wasMultiPointer = ptrIds.length >= 2
     const i = ptrIds.indexOf(e.pointerId)
     if (i >= 0) ptrIds.splice(i, 1)
     ptrX.delete(e.pointerId)
@@ -689,6 +708,18 @@ export function createCameraRig(
       }
     }
     if (ptrIds.length < 2) pinchActive = false
+    if (wasMultiPointer && ptrIds.length === 1 && mode === 'orbit') {
+      const remaining = ptrIds[0]
+      const x = ptrX.get(remaining)
+      const y = ptrY.get(remaining)
+      dragOrbit = false
+      dragLook = false
+      if (x !== undefined && y !== undefined) {
+        dragPan = true
+        beginPanAt({ clientX: x, clientY: y })
+      }
+      return
+    }
     if (ptrIds.length === 0) {
       dragOrbit = false
       dragPan = false
@@ -738,10 +769,21 @@ export function createCameraRig(
     // Space / E / C / Q only mean "move" in fly mode — in orbit they belong to
     // whatever the HUD binds them to.
     if (FLY_ONLY_CODES.has(e.code) && mode !== 'fly' && !(mode === 'tour' && userMode === 'fly')) return
+    if (
+      ORBIT_ONLY_CODES.has(e.code)
+      && mode !== 'orbit'
+      && !(scriptedNow() && userMode === 'orbit')
+    ) return
     interrupt()
     keys.add(e.code)
     // otherwise the page scrolls under us
-    if (e.code === 'Space' || e.code.startsWith('Arrow') || e.code === 'PageUp' || e.code === 'PageDown') {
+    if (
+      e.code === 'Space'
+      || e.code.startsWith('Arrow')
+      || e.code === 'PageUp'
+      || e.code === 'PageDown'
+      || ORBIT_ONLY_CODES.has(e.code)
+    ) {
       e.preventDefault()
     }
   }
@@ -759,6 +801,7 @@ export function createCameraRig(
     dragOrbit = false
     dragPan = false
     dragLook = false
+    keyboardOrbit = false
     pinchActive = false
     panAnchorValid = false
     rotateAnchorValid = false
@@ -785,6 +828,7 @@ export function createCameraRig(
   const offCameraPresetRequest = bus.on('ui:camera-preset', ({ preset }) => {
     if (preset === 'plan') plan()
   })
+  const offTourStop = bus.on('tour:stop', () => release())
 
   const prevTouchAction = domElement.style.touchAction
   domElement.style.touchAction = 'none'
@@ -793,10 +837,33 @@ export function createCameraRig(
 
   /** Signed keyboard axes, shared by both modes. */
   function axisForward(): number {
-    return (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0)
+    return (
+      keys.has('KeyW') || (!shiftDown && keys.has('ArrowUp')) ? 1 : 0
+    ) - (
+      keys.has('KeyS') || (!shiftDown && keys.has('ArrowDown')) ? 1 : 0
+    )
   }
   function axisStrafe(): number {
-    return (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0)
+    return (
+      keys.has('KeyD') || (!shiftDown && keys.has('ArrowRight')) ? 1 : 0
+    ) - (
+      keys.has('KeyA') || (!shiftDown && keys.has('ArrowLeft')) ? 1 : 0
+    )
+  }
+  function axisTurn(): number {
+    if (!shiftDown) return 0
+    return (keys.has('ArrowLeft') ? 1 : 0) - (keys.has('ArrowRight') ? 1 : 0)
+  }
+  function axisTilt(): number {
+    if (!shiftDown) return 0
+    return (keys.has('ArrowUp') ? 1 : 0) - (keys.has('ArrowDown') ? 1 : 0)
+  }
+  function axisZoom(): number {
+    return (
+      keys.has('Equal') || keys.has('NumpadAdd') ? 1 : 0
+    ) - (
+      keys.has('Minus') || keys.has('NumpadSubtract') ? 1 : 0
+    )
   }
   /**
    * PageUp/PageDown change altitude in both modes; Space/E/C/Q are fly-only so
@@ -874,13 +941,26 @@ export function createCameraRig(
       pitchStep = -ky
       velTheta = damp(velTheta, -kx / sdt, VEL_TRACK, sdt)
       velPhi = damp(velPhi, -ky / sdt, VEL_TRACK, sdt)
-    } else {
+    } else if (!motionReduced()) {
       yawStep = velTheta * dt
       pitchStep = velPhi * dt
       velTheta = damp(velTheta, 0, SPIN_DECAY, dt)
       velPhi = damp(velPhi, 0, SPIN_DECAY, dt)
       if (velTheta < 1e-4 && velTheta > -1e-4) velTheta = 0
       if (velPhi < 1e-4 && velPhi > -1e-4) velPhi = 0
+    } else {
+      velTheta = 0
+      velPhi = 0
+    }
+    const keyTurn = axisTurn()
+    const keyTilt = axisTilt()
+    if (!dragOrbit && (keyTurn !== 0 || keyTilt !== 0)) {
+      if (!keyboardOrbit) beginRotateAtNdc(0, 0)
+      keyboardOrbit = true
+      yawStep += keyTurn * KEY_LOOK_RATE * dt
+      pitchStep += keyTilt * KEY_LOOK_RATE * dt
+    } else {
+      keyboardOrbit = false
     }
     inRotX = 0
     inRotY = 0
@@ -912,7 +992,7 @@ export function createCameraRig(
       velPivot.x = damp(velPivot.x, _v2.x, VEL_TRACK, sdt)
       velPivot.y = damp(velPivot.y, _v2.y, VEL_TRACK, sdt)
       velPivot.z = damp(velPivot.z, _v2.z, VEL_TRACK, sdt)
-    } else if (velPivot.lengthSq() > DEAD_VEL) {
+    } else if (!motionReduced() && velPivot.lengthSq() > DEAD_VEL) {
       _v1.copy(velPivot).multiplyScalar(dt)
       translateOrbit(_v1)
       if (
@@ -970,6 +1050,12 @@ export function createCameraRig(
       kbVel.set(0, 0, 0) // no residual drift once the key is up
     }
 
+    const zoomAxis = axisZoom()
+    if (zoomAxis !== 0) {
+      pendingZoom *= Math.exp(-zoomAxis * KEY_ZOOM_RATE * dt)
+      zoomNdcX = 0
+      zoomNdcY = 0
+    }
     applyZoom()
 
     /* smoothed quantities chase their targets */
@@ -1001,6 +1087,8 @@ export function createCameraRig(
   function tickFly(dt: number): void {
     yaw -= inLookX * LOOK_SENS
     pitch -= inLookY * LOOK_SENS
+    yaw += axisTurn() * KEY_LOOK_RATE * dt
+    pitch += axisTilt() * KEY_LOOK_RATE * dt
     inLookX = 0
     inLookY = 0
     pitch = clamp(pitch, -PITCH_LIMIT, PITCH_LIMIT)
@@ -1102,6 +1190,7 @@ export function createCameraRig(
     rotateAnchorValid = false
     panAnchorValid = false
     zoomAnchored = false
+    keyboardOrbit = false
 
     tweenTarget.set(spec.target[0], spec.target[1], spec.target[2])
     const d = clamp(spec.distance, MIN_DIST, MAX_DIST)
@@ -1137,7 +1226,7 @@ export function createCameraRig(
     // A visitor who asked for reduced motion gets a cut, not a flight: a
     // scripted camera move across the whole city is exactly the kind of motion
     // the preference exists to stop.
-    if (opts?.instant || reduceMotion()) {
+    if (opts?.instant || motionReduced()) {
       camera.position.copy(tweenP1)
       camera.quaternion.copy(tweenQ1)
       camera.updateMatrixWorld()
@@ -1231,6 +1320,7 @@ export function createCameraRig(
     velPivot.set(0, 0, 0)
     kbVel.set(0, 0, 0)
     flyVel.set(0, 0, 0)
+    if (back === 'orbit') applyOrbitTransform()
     setMode_(back)
   }
 
@@ -1363,6 +1453,7 @@ export function createCameraRig(
     rotateAnchorValid = false
     panAnchorValid = false
     zoomAnchored = false
+    keyboardOrbit = false
   }
 
   function resize(w: number, h: number): void {
@@ -1386,6 +1477,7 @@ export function createCameraRig(
     window.removeEventListener('blur', onBlur)
     document.removeEventListener('pointerlockchange', onLockChange)
     offCameraPresetRequest()
+    offTourStop()
     domElement.style.touchAction = prevTouchAction
     if (document.pointerLockElement === domElement) document.exitPointerLock()
     keys.clear()

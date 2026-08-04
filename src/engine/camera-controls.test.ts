@@ -81,6 +81,20 @@ function wheel(dom: HTMLElement, deltaY: number, at: [number, number] = [400, 30
   dom.dispatchEvent(event)
 }
 
+function key(type: 'keydown' | 'keyup', code: string, shiftKey = false): Event {
+  const event = new Event(type, { cancelable: true })
+  Object.defineProperties(event, {
+    code: { value: code },
+    key: { value: code.startsWith('Arrow') ? code : code.replace('Key', '') },
+    shiftKey: { value: shiftKey },
+    altKey: { value: false },
+    ctrlKey: { value: false },
+    metaKey: { value: false },
+    repeat: { value: false },
+  })
+  return event
+}
+
 function groundPointAt(camera: THREE.PerspectiveCamera, clientX: number, clientY: number): THREE.Vector3 {
   const origin = camera.position.clone()
   const direction = new THREE.Vector3(clientX / 400 - 1, 1 - clientY / 300, 0.5)
@@ -149,6 +163,31 @@ describe('map camera mouse controls', () => {
 
     expect(fixture.camera.quaternion.angleTo(rotationBefore)).toBeGreaterThan(0.01)
     expectAtScreenPoint(fixture.camera, anchor, 280, 260)
+  })
+
+  it('turns from a keyboard-only orbit sequence without losing the viewport-centre anchor', () => {
+    const anchor = groundPointAt(fixture.camera, 400, 300)
+    const rotationBefore = fixture.camera.quaternion.clone()
+
+    window.dispatchEvent(key('keydown', 'ArrowLeft', true))
+    fixture.rig.update(0.1)
+    window.dispatchEvent(key('keyup', 'ArrowLeft'))
+
+    expect(fixture.camera.quaternion.angleTo(rotationBefore)).toBeGreaterThan(0.01)
+    expectAtScreenPoint(fixture.camera, anchor, 400, 300)
+  })
+
+  it('looks around in fly mode from the same keyboard-only turn and tilt chords', () => {
+    fixture.rig.setMode('fly')
+    const rotationBefore = fixture.camera.quaternion.clone()
+
+    window.dispatchEvent(key('keydown', 'ArrowLeft', true))
+    window.dispatchEvent(key('keydown', 'ArrowUp', true))
+    fixture.rig.update(0.1)
+    window.dispatchEvent(key('keyup', 'ArrowLeft'))
+    window.dispatchEvent(key('keyup', 'ArrowUp'))
+
+    expect(fixture.camera.quaternion.angleTo(rotationBefore)).toBeGreaterThan(0.01)
   })
 
   it.each([
@@ -267,6 +306,73 @@ describe('map camera mouse controls', () => {
     fixture.rig.update(1 / 60)
 
     expect(fixture.camera.quaternion.angleTo(rotationBefore)).toBeGreaterThan(0.01)
+  })
+
+  it('returns the remaining finger to one-finger pan after a two-finger gesture', () => {
+    fixture.dom.dispatchEvent(
+      pointer('pointerdown', { pointerId: 1, pointerType: 'touch', clientX: 300, clientY: 300 }),
+    )
+    fixture.dom.dispatchEvent(
+      pointer('pointerdown', { pointerId: 2, pointerType: 'touch', clientX: 400, clientY: 300 }),
+    )
+    fixture.dom.dispatchEvent(
+      pointer('pointermove', { pointerId: 2, pointerType: 'touch', clientX: 390, clientY: 325 }),
+    )
+    fixture.rig.update(1 / 60)
+    fixture.dom.dispatchEvent(
+      pointer('pointerup', { pointerId: 2, pointerType: 'touch', clientX: 390, clientY: 325 }),
+    )
+    const pivotBefore = fixture.rig.pivot.clone()
+    const rotationBefore = fixture.camera.quaternion.clone()
+
+    fixture.dom.dispatchEvent(
+      pointer('pointermove', { pointerId: 1, pointerType: 'touch', clientX: 340, clientY: 315 }),
+    )
+    fixture.rig.update(1 / 60)
+
+    expect(fixture.rig.pivot.distanceTo(pivotBefore)).toBeGreaterThan(0.1)
+    expect(fixture.camera.quaternion.angleTo(rotationBefore)).toBeLessThan(1e-8)
+  })
+
+  it('does not coast after a reduced-motion rotate drag is released', () => {
+    fixture.rig.dispose()
+    fixture.rig = createCameraRig(fixture.camera, fixture.dom, fixture.bus, { reducedMotion: true })
+    drag(fixture.dom, { button: 0, shiftKey: true })
+    fixture.rig.update(1 / 60)
+    fixture.dom.dispatchEvent(pointer('pointerup', { button: 0, clientX: 340, clientY: 305 }))
+    const rotationAtRelease = fixture.camera.quaternion.clone()
+
+    for (let frame = 0; frame < 30; frame++) fixture.rig.update(1 / 60)
+
+    expect(fixture.camera.quaternion.angleTo(rotationAtRelease)).toBeLessThan(1e-10)
+  })
+
+  it('does not coast after a reduced-motion pan drag is released', () => {
+    fixture.rig.dispose()
+    fixture.rig = createCameraRig(fixture.camera, fixture.dom, fixture.bus, { reducedMotion: true })
+    drag(fixture.dom, { button: 0 })
+    fixture.rig.update(1 / 60)
+    fixture.dom.dispatchEvent(pointer('pointerup', { button: 0, clientX: 340, clientY: 305 }))
+    const pivotAtRelease = fixture.rig.pivot.clone()
+
+    for (let frame = 0; frame < 30; frame++) fixture.rig.update(1 / 60)
+
+    expect(fixture.rig.pivot.distanceTo(pivotAtRelease)).toBeLessThan(1e-10)
+  })
+
+  it('stops an active focus move when the guided tour exits', () => {
+    fixture.rig.focusOn({ target: [200, 12, 80], distance: 60 })
+    fixture.rig.update(0.1)
+    expect(fixture.rig.scripted).toBe(true)
+
+    fixture.bus.emit('tour:stop', {})
+    const positionAtExit = fixture.camera.position.clone()
+    const rotationAtExit = fixture.camera.quaternion.clone()
+    fixture.rig.update(0.5)
+
+    expect(fixture.rig.scripted).toBe(false)
+    expect(fixture.camera.position.distanceTo(positionAtExit)).toBeLessThan(1e-10)
+    expect(fixture.camera.quaternion.angleTo(rotationAtExit)).toBeLessThan(1e-10)
   })
 
   it('right-drag does not move the camera', () => {

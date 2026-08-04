@@ -140,7 +140,11 @@ Press **`?`** in the city for the city control map and colour legend.
 | 2 fingers | Pinch to zoom · twist to orbit · drag both up/down to tilt |
 | First-person touch | Left thumb moves · right thumb looks · buttons jump and crouch (rise and dive while swimming) |
 | Click | Select a building · in fly or walk mode, capture the mouse for looking |
+| Double-click | Focus a component — semantic focus instead of a map-style zoom step |
 | `W` `A` `S` `D` or the arrow keys | Move |
+| `Shift` + left/right arrow | Turn left/right in orbit, fly, or walk mode |
+| `Shift` + up/down arrow | Tilt or look up/down in orbit, fly, or walk mode |
+| `+` / `-` | Zoom in/out in orbit mode |
 | `Space` or `E` · `C` or `Q` | Rise · descend in fly mode; in walk mode, `Space` jumps, `E` operates nearby levers, doors, or consoles, and `C` crouches |
 | `PageUp` / `PageDown` | Change altitude in orbit or fly mode |
 | `Shift` · `Alt` | Boost · precision in orbit or fly mode; `Shift` runs in walk mode |

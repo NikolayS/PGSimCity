@@ -108,7 +108,7 @@ function keyEvent(token: string, overrides: Partial<{
   shiftKey: boolean
 }> = {}): Event {
   const compact = token.replace(/\s+/g, '')
-  const named = compact.split('+').at(-1) ?? compact
+  const named = compact === '+' ? compact : compact.split('+').at(-1) ?? compact
   const aliases: Record<string, { key: string; code: string }> = {
     Esc: { key: 'Escape', code: 'Escape' },
     Home: { key: 'Home', code: 'Home' },
@@ -120,6 +120,8 @@ function keyEvent(token: string, overrides: Partial<{
     '?': { key: '?', code: 'Slash' },
     ',': { key: ',', code: 'Comma' },
     '.': { key: '.', code: 'Period' },
+    '+': { key: '+', code: 'Equal' },
+    '-': { key: '-', code: 'Minus' },
   }
   const resolved = aliases[named] ?? (
     /^[A-Za-z]$/.test(named)
@@ -331,7 +333,11 @@ describe('documented map-camera instructions', () => {
       'touch-look',
       'touch-vertical',
       'click',
+      'double-click',
       'move',
+      'turn',
+      'tilt',
+      'zoom-keys',
       'rise',
       'operate',
       'descend',
@@ -340,6 +346,7 @@ describe('documented map-camera instructions', () => {
       'altitude',
       'pointer-lock-exit',
     ])
+    expect(instruction(CAMERA_KEYS, 'double-click').what).toContain('semantic focus')
   })
 
   it('drives the printed pan gesture', () => {
@@ -369,6 +376,35 @@ describe('documented map-camera instructions', () => {
       expect(current.cameraRig!.pivot.distanceTo(before)).toBeGreaterThan(0.01)
     },
   )
+
+  it.each([
+    ['turn', 0],
+    ['turn', 1],
+    ['tilt', 0],
+    ['tilt', 1],
+  ] as const)('changes orbit heading with documented keyboard-only %s control %s', (id, index) => {
+    const current = fixture(true)
+    const binding = instruction(CAMERA_KEYS, id).keys[index]
+    const before = current.camera!.quaternion.clone()
+    press(binding)
+    current.cameraRig!.update(0.1)
+    release(binding)
+    expect(current.camera!.quaternion.angleTo(before)).toBeGreaterThan(0.01)
+  })
+
+  it.each([
+    [0, -1],
+    [1, 1],
+  ] as const)('zooms the orbit camera with documented keyboard-only zoom control %s', (index, direction) => {
+    const current = fixture(true)
+    const binding = instruction(CAMERA_KEYS, 'zoom-keys').keys[index]
+    const before = current.camera!.position.distanceTo(current.cameraRig!.pivot)
+    press(binding)
+    current.cameraRig!.update(0.1)
+    release(binding)
+    const after = current.camera!.position.distanceTo(current.cameraRig!.pivot)
+    expect(Math.sign(after - before)).toBe(direction)
+  })
 
   it.each([
     ['PgUp', 1],

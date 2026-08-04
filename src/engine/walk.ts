@@ -267,6 +267,8 @@ const PITCH_LEVEL_BY = 0.45
 /** Drop-in flight time per metre travelled, on top of a fixed minimum. */
 const DESCENT_PER_M = 0.0022
 const DESCENT_MIN = 0.3
+/** Keyboard look speed, radians per second. */
+const KEY_LOOK_RATE = 1.45
 
 /** Fallback landing pads for enter(), nearest-first, when nothing is underfoot. */
 const LANDING_PADS: readonly [number, number, number][] = [
@@ -409,6 +411,7 @@ export function createWalkController(opts: WalkOptions): WalkController {
   let touchLookY = 0
   let locked = false
   let dragLook = false
+  let shiftDown = false
   let touchStrafe = 0
   let touchForward = 0
   let touchJump = false
@@ -590,6 +593,7 @@ export function createWalkController(opts: WalkOptions): WalkController {
   function onKeyDown(e: KeyboardEvent): void {
     if (!enabled || isTypingTarget(e.target)) return
     if (e.ctrlKey || e.metaKey || e.altKey) return
+    shiftDown = e.shiftKey || e.code === 'ShiftLeft' || e.code === 'ShiftRight'
     if (!MOVE_CODES.has(e.code)) return
     keys.add(e.code)
     if (e.code === 'Space') {
@@ -600,11 +604,13 @@ export function createWalkController(opts: WalkOptions): WalkController {
   }
 
   function onKeyUp(e: KeyboardEvent): void {
+    shiftDown = e.shiftKey
     keys.delete(e.code)
   }
 
   function onBlur(): void {
     keys.clear()
+    shiftDown = false
     dragLook = false
     lookX = 0
     lookY = 0
@@ -667,8 +673,8 @@ export function createWalkController(opts: WalkOptions): WalkController {
 
   function axisForward(): number {
     return clamp(
-      (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) -
-        (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0) +
+      (keys.has('KeyW') || (!shiftDown && keys.has('ArrowUp')) ? 1 : 0) -
+        (keys.has('KeyS') || (!shiftDown && keys.has('ArrowDown')) ? 1 : 0) +
         touchForward,
       -1,
       1,
@@ -676,8 +682,8 @@ export function createWalkController(opts: WalkOptions): WalkController {
   }
   function axisStrafe(): number {
     return clamp(
-      (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) -
-        (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0) +
+      (keys.has('KeyD') || (!shiftDown && keys.has('ArrowRight')) ? 1 : 0) -
+        (keys.has('KeyA') || (!shiftDown && keys.has('ArrowLeft')) ? 1 : 0) +
         touchStrafe,
       -1,
       1,
@@ -690,10 +696,12 @@ export function createWalkController(opts: WalkOptions): WalkController {
       keys.has('KeyA') ||
       keys.has('KeyS') ||
       keys.has('KeyD') ||
-      keys.has('ArrowUp') ||
-      keys.has('ArrowDown') ||
-      keys.has('ArrowLeft') ||
-      keys.has('ArrowRight')
+      (!shiftDown && (
+        keys.has('ArrowUp') ||
+        keys.has('ArrowDown') ||
+        keys.has('ArrowLeft') ||
+        keys.has('ArrowRight')
+      ))
     )
   }
 
@@ -1282,6 +1290,10 @@ export function createWalkController(opts: WalkOptions): WalkController {
     const lookScale = swimming ? SWIM_LOOK_SCALE : 1
     yaw -= (lookX * T.lookSensitivity + touchLookX) * lookScale
     pitch -= (lookY * T.lookSensitivity + touchLookY) * lookScale
+    if (shiftDown) {
+      yaw += ((keys.has('ArrowLeft') ? 1 : 0) - (keys.has('ArrowRight') ? 1 : 0)) * KEY_LOOK_RATE * d
+      pitch += ((keys.has('ArrowUp') ? 1 : 0) - (keys.has('ArrowDown') ? 1 : 0)) * KEY_LOOK_RATE * d
+    }
     lookX = 0
     lookY = 0
     touchLookX = 0
@@ -1362,6 +1374,7 @@ export function createWalkController(opts: WalkOptions): WalkController {
     dom.removeEventListener('pointerup', onPointerUp)
     dom.removeEventListener('pointercancel', onPointerUp)
     keys.clear()
+    shiftDown = false
     resetTouchInput()
     if (fade && fade.parentNode) fade.parentNode.removeChild(fade)
     fade = null

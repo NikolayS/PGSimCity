@@ -7,6 +7,7 @@ import { createSim } from '../sim/model'
 import type { AudioApi } from './audio'
 import { createCollisionWorld } from './collision'
 import { createWalkController } from './walk'
+import { installTestDom } from '../../test/dom'
 
 function fakeAudio(): AudioApi {
   return {
@@ -32,6 +33,60 @@ function floor(): THREE.Mesh {
 }
 
 describe('first-person embodiment', () => {
+  it('changes heading and pitch with keyboard-only look controls', () => {
+    installTestDom()
+    const bus = createBus()
+    const collision = createCollisionWorld()
+    const ground = floor()
+    collision.addWalkable(ground, 'ground')
+    const camera = new THREE.PerspectiveCamera()
+    camera.position.set(300, 4, 8)
+    const walk = createWalkController({
+      camera,
+      dom: new EventTarget() as HTMLElement,
+      collision,
+      audio: fakeAudio(),
+      sim: createSim(bus).state as SimState,
+      bus,
+    })
+    void walk.enter(new THREE.Vector3(300, 3.2, 8))
+    for (let i = 0; i < 24; i++) walk.update(0.1)
+    const before = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 }
+    walk.capturePose(before)
+    const down = new Event('keydown', { cancelable: true })
+    Object.defineProperties(down, {
+      code: { value: 'ArrowLeft' },
+      key: { value: 'ArrowLeft' },
+      shiftKey: { value: true },
+      altKey: { value: false },
+      ctrlKey: { value: false },
+      metaKey: { value: false },
+    })
+    window.dispatchEvent(down)
+    const tilt = new Event('keydown', { cancelable: true })
+    Object.defineProperties(tilt, {
+      code: { value: 'ArrowUp' },
+      key: { value: 'ArrowUp' },
+      shiftKey: { value: true },
+      altKey: { value: false },
+      ctrlKey: { value: false },
+      metaKey: { value: false },
+    })
+    window.dispatchEvent(tilt)
+    walk.update(0.1)
+    const after = { ...before }
+    walk.capturePose(after)
+
+    expect(Math.abs(after.yaw - before.yaw)).toBeGreaterThan(0.01)
+    expect(Math.abs(after.pitch - before.pitch)).toBeGreaterThan(0.01)
+    expect(after.x).toBeCloseTo(before.x, 8)
+    expect(after.z).toBeCloseTo(before.z, 8)
+
+    walk.dispose()
+    collision.dispose()
+    ground.geometry.dispose()
+  })
+
   it('grounds one directional body shadow at the walker feet and removes it on dispose', () => {
     const bus = createBus()
     const collision = createCollisionWorld()
