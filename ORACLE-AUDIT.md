@@ -37,32 +37,42 @@ exceptions.
 
 ## Expansion result
 
-The server-checkable scope below is now implemented by `tools/pg-oracle.mjs`.
-The completed PostgreSQL 18.3 run made 211 observations in 62.35 seconds: 206
-matched, four were the existing registered model divergences, and one was a new
-finding. The count grew by 23 while wall time stayed below the earlier expanded
-run's 63-second measurement.
+The sentence that this whole scope was implemented was not true when this gap
+audit began. The unchanged PostgreSQL 18 run made 211 observations: 207
+matched, four were registered model divergences, and none were unexpected. A
+check-name and SQL-path review gave these pre-fix verdicts:
 
-The finding is `WAL/unqualified-fixed-16MiB-surfaces`. `SHOW
-wal_segment_size`, `pg_controldata`, `pg_ls_waldir()`, and
-`pg_walfile_name_offset()` all agree on both the default 16 MiB cluster and a
-second cluster created with `initdb --wal-segsize=32`. The long WAL-vault body
-correctly says the size is fixed at `initdb` time, but the WAL-vault role, the
-archive-silo plate, and the WAL-vault summary still state fixed 16 MiB segments
-without that scope. The oracle reports the 32 MiB contradiction; this audit does
-not change those surfaces.
+| Registry claim | Pre-fix verdict | Concrete oracle evidence | Missing part |
+|---|---|---|---|
+| `walSegment` | PARTIAL | `WAL/default/SHOW-wal_segment_size`, `WAL/default/pg_control`, `WAL/default/segment-file-size`, `WAL/default/file-name-offset`, and the five `WAL/initdb-*`/qualification checks | `file-name-offset` accepted any 24-hex filename and in-range offset, and the measured segment file was not required to be the one containing the observed LSN. |
+| `modelLatency` | IMPLEMENTED | `latency-wait/relation-lock`, `latency-wait/synchronous-replication`, `latency-wait/pool-slot-is-client-side` | — |
+| `connectionPooler` | IMPLEMENTED | `connection-local/backend-identity`, `session-GUC`, `advisory-lock`, `sql-PREPARE`, `LISTEN-registration`, and `NOTIFY-delivery` | — |
+| `workMem` | PARTIAL | `work_mem/sort-external-merge`, `per-node-sort-allowance`, `temp-file-counters`, `hash_mem_multiplier`, `concurrent-backends-multiply` | No plan contained multiple Hash nodes. The concurrency result counted active backends but did not require the concurrent phase itself to multiply temp files and bytes. |
+| `restoreDrill` | IMPLEMENTED | `physical-backup/pg_verifybackup`, `physical-backup/cluster-wide-scope`, `PITR/row-witness-at-target`, `logical-restore/table-dependencies` | — |
+| `timelineRecovery` | IMPLEMENTED | `timeline/latest-discovers-history`, `latest-excludes-parent-tail`, `current-stays-on-backup-timeline`, `latest-without-history-stays-current`, plus the two `PITR/*target*` checks | — |
+| `vacuumReclaim` | IMPLEMENTED | `VACUUM/interior-space-stays-in-relation`, `reuses-interior-space`, `tail-truncation-lock`, `registry/vacuum-truncation-lock` | — |
+| `mvccVocabulary` | PARTIAL | The `MVCC/*`, `page-layout/*`, `HOT/*`, `visibility-map/set-clear-set`, `xmin-horizon/*`, and `TOAST/*` families staged the named fields and states | Visibility bits were not connected to index-only heap fetches; inline TOAST reads were not observed; assigned-XID and prepared-transaction checks did not demonstrate retention and release; standby feedback only required a non-null field; logical-slot `catalog_xmin` had no cutoff comparison. |
+| `machineSynchronousCommitComparison` | IMPLEMENTED | `synchronous_commit/off-acknowledges-before-local-flush`, `WAL-flushes-later`, `recent-acknowledged-loss`, `transaction-atomicity` | — |
+| `machineIndexWalk` | PARTIAL | `partial-index/predicate-not-implied`, `predicate-implied`, `primary-key-plan` | The fixture used look-alike hard-coded SQL and accepted any single returned row instead of executing the owned Machine statements and comparing the seeded row values. |
 
-The version-sensitive remainder was also exercised on the installed
-PostgreSQL 13/17/18 rail. The six focused WAL, wait/latency, connection-local,
-and storage/MVCC families made 42 observations on PostgreSQL 13.23 in 16.73
-seconds and 58 on PostgreSQL 17.9 in 13.09 seconds. Every server observation
-matched except the same fixed-16-MiB finding. PostgreSQL 13 verifies that
-`pg_wait_events` is absent and stages the activity waits directly; PostgreSQL
-17 and 18 enumerate the registered names from `pg_wait_events`. The spine
-selects the older `WALSync` spelling through PostgreSQL 16 and the
-catalog-confirmed `WalSync` spelling from PostgreSQL 17. The nightly target
-remains the PostgreSQL 18 teaching line and completes in about one minute, well
-below a few minutes.
+The missing observations are now implemented. WAL filename and offset values are
+calculated independently from the observed LSN, timeline and segment size, and
+the measured file must be that exact current segment. The work-memory family now
+includes `work_mem/per-node-hash-allowance`, and
+`work_mem/concurrent-backends-multiply` requires per-backend temp-file growth.
+The MVCC family adds `visibility-map/index-only-scan-effect`,
+`TOAST/inline-read-path`, and `xmin-horizon/assigned-xid-removal`; the existing
+prepared, logical-slot, and standby-feedback checks now test actual cutoff or
+tuple-retention behavior. The Machine family executes statements owned by
+`MACHINE_INDEX_WALK` and compares the exact seeded `{id: 42, balance: 1042}`
+row.
+
+The completed PostgreSQL 18.3 run made 215 observations in 79.26 seconds: 211
+matched, four were the existing registered model divergences, and none were
+unexpected. The changed WAL, work-memory, storage/MVCC, page-layout, and Machine
+families also made 44 matching observations on PostgreSQL 13.23 in 21.06 seconds
+and 44 on PostgreSQL 17.9 in 19.18 seconds. The table below is therefore the
+implemented expansion boundary, not merely the intended one.
 
 ## Survey boundary
 

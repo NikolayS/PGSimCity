@@ -9,15 +9,23 @@ import {
   diagnosticSqlForMajor,
   expectedForMajor,
   hotUpdateChecks,
+  horizonConstraintChecks,
   indexWalkAttributeChecks,
   linePointerLifecycleChecks,
   loadOracleRegistry,
+  logicalSlotHorizonCheck,
   markdownTable,
   oracleSummary,
   parsePgControlWalSegmentSize,
+  partialIndexBehaviorChecks,
+  toastReadPathChecks,
+  standbyFeedbackHorizonCheck,
   verdictForComparison,
+  visibilityMapChecks,
   waitEventClaimsForMajor,
+  walFileNameOffsetForLsn,
   walSegmentObservationChecks,
+  workMemMultiplicationChecks,
 } from './pg-oracle.mjs'
 
 describe('PostgreSQL oracle claim registry', () => {
@@ -337,9 +345,15 @@ describe('PostgreSQL oracle claim registry', () => {
       show: bytes === city.bytes ? '16MB' : '32MB',
       showBytes: bytes,
       controlBytes: bytes,
-      fileName: '000000010000000000000001',
-      fileOffset: 8192,
-      allocatedFile: '000000010000000000000001',
+      lsn: '0/1802000',
+      timelineId: 1,
+      fileName: bytes === city.bytes
+        ? '000000010000000000000001'
+        : '000000010000000000000000',
+      fileOffset: bytes === city.bytes ? 0x802000 : 0x1802000,
+      allocatedFile: bytes === city.bytes
+        ? '000000010000000000000001'
+        : '000000010000000000000000',
       fileSize: bytes,
     })
     const rows = walSegmentObservationChecks(
@@ -360,6 +374,45 @@ describe('PostgreSQL oracle claim registry', () => {
       verdict: 'DIVERGES',
       city: expect.stringContaining('world role'),
       server: expect.stringContaining('32MB'),
+    })
+    expect(walFileNameOffsetForLsn('0/1802000', 1, city.bytes)).toEqual({
+      fileName: '000000010000000000000001',
+      fileOffset: 0x802000,
+    })
+    expect(walFileNameOffsetForLsn('0/2000000', 1, city.bytes)).toEqual({
+      fileName: '000000010000000000000002',
+      fileOffset: 0,
+    })
+  })
+
+  it('rejects a plausible WAL filename that disagrees with the LSN arithmetic', () => {
+    const city = { bytes: 16 * 1024 * 1024, label: '16 MiB' }
+    const claim = {
+      defaultBytes: city.bytes,
+      alternateMiB: 32,
+      configurableClaim: 'selected at initdb with --wal-segsize',
+      unqualifiedFixedSurfaces: [],
+    }
+    const observation = (bytes, fileName, fileOffset) => ({
+      show: bytes === city.bytes ? '16MB' : '32MB',
+      showBytes: bytes,
+      controlBytes: bytes,
+      lsn: '0/1802000',
+      timelineId: 1,
+      fileName,
+      fileOffset,
+      allocatedFile: fileName,
+      fileSize: bytes,
+    })
+    const rows = walSegmentObservationChecks(
+      city,
+      claim,
+      observation(city.bytes, '000000010000000000000002', 0x802000),
+      observation(32 * 1024 * 1024, '000000010000000000000000', 0x1802000),
+    )
+
+    expect(rows.find((row) => row.claim === 'WAL/default/file-name-offset')).toMatchObject({
+      verdict: 'DIVERGES',
     })
   })
 
@@ -397,6 +450,175 @@ describe('PostgreSQL oracle claim registry', () => {
     expect(connectionLocalChecks(tradeoff, claim, null).every(
       (row) => row.verdict === 'DIVERGES',
     )).toBe(true)
+  })
+
+  it('requires separate HashAggregate observations and per-backend spill multiplication', () => {
+    const city = { nodeDisclosure: 'eligible nodes and concurrent backends multiply work_mem' }
+    const claim = { concurrentBackends: 2 }
+    const hashNode = (peak) => ({
+      'Node Type': 'Aggregate',
+      Strategy: 'Hashed',
+      'Peak Memory Usage': peak,
+      'HashAgg Batches': 3,
+    })
+    const incomplete = workMemMultiplicationChecks(city, claim, {
+      multiHashNodes: [hashNode(1024)],
+      activeBackends: 2,
+      tempFilesBefore: 10,
+      tempFilesAfter: 11,
+      tempBytesBefore: 1000,
+      tempBytesAfter: 2000,
+    })
+
+    expect(incomplete.map((row) => [row.claim, row.verdict])).toEqual([
+      ['work_mem/per-node-hash-allowance', 'DIVERGES'],
+      ['work_mem/concurrent-backends-multiply', 'DIVERGES'],
+    ])
+
+    const complete = workMemMultiplicationChecks(city, claim, {
+      multiHashNodes: [hashNode(1024), hashNode(1536)],
+      activeBackends: 2,
+      tempFilesBefore: 10,
+      tempFilesAfter: 12,
+      tempBytesBefore: 1000,
+      tempBytesAfter: 3000,
+    })
+    expect(complete.every((row) => row.verdict === 'MATCH')).toBe(true)
+  })
+
+  it('checks the exact seeded Machine lookup rows as well as their plan nodes', () => {
+    const city = {
+      finding: 'seeded partial-index behavior',
+      partialIndex: 'accounts_positive_owner_idx',
+      expectedLookupRow: { id: 42, balance: 1042 },
+    }
+    const observation = {
+      primaryScan: { 'Node Type': 'Index Scan', 'Index Name': 'accounts_pkey' },
+      ownerScan: { 'Node Type': 'Seq Scan' },
+      impliedScan: {
+        'Node Type': 'Index Scan',
+        'Index Name': 'accounts_positive_owner_idx',
+      },
+      primaryRows: [{ id: 42, balance: 1042 }],
+      ownerRows: [{ id: 42, balance: 7 }],
+      impliedRows: [{ id: 42, balance: 1042 }],
+    }
+
+    const wrongRow = partialIndexBehaviorChecks(city, observation)
+    expect(wrongRow.find((row) => row.claim === 'partial-index/predicate-not-implied'))
+      .toMatchObject({ verdict: 'DIVERGES' })
+
+    const exact = partialIndexBehaviorChecks(city, {
+      ...observation,
+      ownerRows: [{ id: 42, balance: 1042 }],
+    })
+    expect(exact.every((row) => row.verdict === 'MATCH')).toBe(true)
+  })
+
+  it('requires visibility-map changes to alter index-only heap fetches', () => {
+    const vocabulary = { visibilityMap: { definition: 'all-visible controls heap fetches' } }
+    const observation = {
+      visibleBefore: { all_visible: true, all_frozen: true },
+      visibleChanged: { all_visible: false, all_frozen: false },
+      visibleAfter: { all_visible: true, all_frozen: true },
+      beforeScan: { 'Node Type': 'Index Only Scan', 'Heap Fetches': 0 },
+      changedScan: { 'Node Type': 'Index Only Scan', 'Heap Fetches': 100 },
+      afterScan: { 'Node Type': 'Index Only Scan', 'Heap Fetches': 0 },
+    }
+
+    expect(visibilityMapChecks(vocabulary, observation).every(
+      (row) => row.verdict === 'MATCH',
+    )).toBe(true)
+    expect(visibilityMapChecks(vocabulary, {
+      ...observation,
+      changedScan: { 'Node Type': 'Index Only Scan', 'Heap Fetches': 0 },
+    }).find((row) => row.claim === 'visibility-map/index-only-scan-effect'))
+      .toMatchObject({ verdict: 'DIVERGES' })
+  })
+
+  it('distinguishes inline reads from the external TOAST index-and-heap path', () => {
+    const checks = toastReadPathChecks({
+      expectedLogicalBytes: 3_000,
+      expectedCompressedLogicalBytes: 3_600,
+      externalLogicalBytes: 3_000,
+      externalHeapAccesses: 2,
+      externalIndexAccesses: 1,
+      inlineLogicalBytes: [3_000, 3_600],
+      inlineHeapAccesses: 0,
+      inlineIndexAccesses: 0,
+    })
+    expect(checks.every((row) => row.verdict === 'MATCH')).toBe(true)
+    expect(toastReadPathChecks({
+      expectedLogicalBytes: 3_000,
+      expectedCompressedLogicalBytes: 3_600,
+      externalLogicalBytes: 3_000,
+      externalHeapAccesses: 2,
+      externalIndexAccesses: 1,
+      inlineLogicalBytes: [3_000, 3_600],
+      inlineHeapAccesses: 1,
+      inlineIndexAccesses: 0,
+    }).find((row) => row.claim === 'TOAST/inline-read-path'))
+      .toMatchObject({ verdict: 'DIVERGES' })
+  })
+
+  it('requires assigned and prepared XID cutoffs to retain then release dead tuples', () => {
+    const matching = horizonConstraintChecks({
+      assigned: {
+        holderXid: 100,
+        holderXmin: null,
+        deletingXid: 101,
+        retainedVersions: 1,
+        releasedVersions: 0,
+      },
+      prepared: {
+        holderXid: 200,
+        deletingXid: 201,
+        retainedVersions: 1,
+        releasedVersions: 0,
+      },
+    })
+    expect(matching.every((row) => row.verdict === 'MATCH')).toBe(true)
+    expect(horizonConstraintChecks({
+      assigned: {
+        holderXid: 100,
+        holderXmin: null,
+        deletingXid: 101,
+        retainedVersions: 0,
+        releasedVersions: 0,
+      },
+      prepared: {
+        holderXid: 200,
+        deletingXid: 201,
+        retainedVersions: 0,
+        releasedVersions: 0,
+      },
+    }).every((row) => row.verdict === 'DIVERGES')).toBe(true)
+  })
+
+  it('requires slot and standby-feedback cutoffs, not merely non-null fields', () => {
+    expect(logicalSlotHorizonCheck('slot xmins constrain cleanup', {
+      slotName: 'oracle_logical_horizon',
+      catalogXmin: 100,
+      snapshotXmin: 101,
+    })).toMatchObject({ verdict: 'MATCH' })
+    expect(logicalSlotHorizonCheck('slot xmins constrain cleanup', {
+      slotName: 'oracle_logical_horizon',
+      catalogXmin: 102,
+      snapshotXmin: 101,
+    })).toMatchObject({ verdict: 'DIVERGES' })
+
+    expect(standbyFeedbackHorizonCheck('standby feedback constrains cleanup', {
+      backendXmin: 200,
+      deletingXid: 201,
+      retainedVersions: 1,
+      releasedVersions: 0,
+    })).toMatchObject({ verdict: 'MATCH' })
+    expect(standbyFeedbackHorizonCheck('standby feedback constrains cleanup', {
+      backendXmin: 200,
+      deletingXid: 201,
+      retainedVersions: 0,
+      releasedVersions: 0,
+    })).toMatchObject({ verdict: 'DIVERGES' })
   })
 
   it('requires normal, redirect, dead, and reusable line-pointer states plus FSM space', () => {

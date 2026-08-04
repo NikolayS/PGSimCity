@@ -24,7 +24,7 @@ export const INDEX_WALK_STEPS = Object.freeze([
     number: '03',
     title: 'Use the indexed column',
     displaySql: 'WHERE id = 42',
-    sql: 'SELECT id, balance FROM accounts WHERE id = 42;',
+    sql: claim.statements.primaryKey,
     lesson: 'EXPLAIN reports whether PostgreSQL actually chose accounts_pkey.',
   }),
   Object.freeze({
@@ -32,7 +32,7 @@ export const INDEX_WALK_STEPS = Object.freeze([
     number: '04',
     title: 'Omit the partial-index predicate',
     displaySql: "WHERE owner = 'account-42'",
-    sql: "SELECT id, balance FROM accounts WHERE owner = 'account-42';",
+    sql: claim.statements.ownerOnly,
     lesson: 'The owner index is partial: without balance > 0, it is not a path for this query.',
   }),
 ])

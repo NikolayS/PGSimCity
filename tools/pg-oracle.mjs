@@ -408,15 +408,39 @@ export function parsePgControlWalSegmentSize(output) {
 
 function walPhysicalSummary(observation) {
   if (!observation) return 'WAL observation is absent'
-  return `${observation.allocatedFile} is ${observation.fileSize} bytes; current ${observation.fileName} offset ${observation.fileOffset}`
+  return `${observation.allocatedFile} is ${observation.fileSize} bytes; LSN ${observation.lsn} maps to ${observation.fileName} offset ${observation.fileOffset}`
+}
+
+export function walFileNameOffsetForLsn(lsn, timelineId, segmentBytes) {
+  const match = String(lsn ?? '').match(/^([0-9A-F]+)\/([0-9A-F]+)$/iu)
+  const size = BigInt(segmentBytes)
+  const timeline = Number(timelineId)
+  if (!match || size <= 0n || !Number.isInteger(timeline) || timeline < 0) return null
+  const location = (BigInt(`0x${match[1]}`) << 32n) + BigInt(`0x${match[2]}`)
+  if (location === 0n || 0x100000000n % size !== 0n) return null
+  const segmentNumber = location / size
+  const segmentsPerLogId = 0x100000000n / size
+  const logId = segmentNumber / segmentsPerLogId
+  const segmentId = segmentNumber % segmentsPerLogId
+  const hex = (value, width) => value.toString(16).toUpperCase().padStart(width, '0')
+  return {
+    fileName: `${hex(BigInt(timeline), 8)}${hex(logId, 8)}${hex(segmentId, 8)}`,
+    fileOffset: Number(location % size),
+  }
 }
 
 function validWalPhysicalObservation(observation, expectedBytes) {
+  const expected = walFileNameOffsetForLsn(
+    observation?.lsn,
+    observation?.timelineId,
+    expectedBytes,
+  )
   return /^[0-9A-F]{24}$/u.test(String(observation?.allocatedFile ?? ''))
     && /^[0-9A-F]{24}$/u.test(String(observation?.fileName ?? ''))
+    && observation?.allocatedFile === observation?.fileName
     && Number(observation?.fileSize) === expectedBytes
-    && Number(observation?.fileOffset) >= 0
-    && Number(observation?.fileOffset) < expectedBytes
+    && observation?.fileName === expected?.fileName
+    && Number(observation?.fileOffset) === expected?.fileOffset
 }
 
 export function walSegmentObservationChecks(city, claim, defaultObservation, alternateObservation) {
@@ -447,15 +471,14 @@ export function walSegmentObservationChecks(city, claim, defaultObservation, alt
       `an allocated WAL segment in the modeled configuration is ${citySummary}`,
       walPhysicalSummary(defaultObservation),
       /^[0-9A-F]{24}$/u.test(String(defaultObservation?.allocatedFile ?? ''))
+        && defaultObservation?.allocatedFile === defaultObservation?.fileName
         && Number(defaultObservation?.fileSize) === city.bytes,
     ),
     result(
       'WAL/default/file-name-offset',
       `WAL filename and offset arithmetic use ${citySummary} segments`,
       walPhysicalSummary(defaultObservation),
-      /^[0-9A-F]{24}$/u.test(String(defaultObservation?.fileName ?? ''))
-        && Number(defaultObservation?.fileOffset) >= 0
-        && Number(defaultObservation?.fileOffset) < city.bytes,
+      validWalPhysicalObservation(defaultObservation, city.bytes),
     ),
     result(
       'WAL/initdb-alternate/SHOW-wal_segment_size',
@@ -505,24 +528,28 @@ export function walSegmentObservationChecks(city, claim, defaultObservation, alt
 
 async function observeWalSegment(pgBin, dataDir, psql, query) {
   await psql('SELECT pg_catalog.pg_switch_wal()')
+  await psql(`
+    CREATE TABLE public.oracle_wal_probe (id integer PRIMARY KEY, payload text NOT NULL);
+    INSERT INTO public.oracle_wal_probe VALUES (1, pg_catalog.repeat('w', 8192))`)
   const shown = await psql('SHOW wal_segment_size')
   const [observation] = await query(`
     SELECT setting,
            unit,
+           pg_catalog.pg_current_wal_lsn()::text AS lsn,
+           control.timeline_id,
            wal.file_name,
            wal.file_offset,
            directory.name AS allocated_file,
            directory.size AS file_size
       FROM pg_catalog.pg_settings
+      CROSS JOIN pg_catalog.pg_control_checkpoint() AS control
       CROSS JOIN LATERAL pg_catalog.pg_walfile_name_offset(
         pg_catalog.pg_current_wal_lsn()
       ) AS wal
       LEFT JOIN LATERAL (
         SELECT name, size
           FROM pg_catalog.pg_ls_waldir()
-         WHERE name ~ '^[0-9A-F]{24}$'
-         ORDER BY size DESC, name
-         LIMIT 1
+         WHERE name = wal.file_name
       ) AS directory ON true
      WHERE pg_settings.name = 'wal_segment_size'`)
   const control = await run(path.join(pgBin, 'pg_controldata'), [dataDir])
@@ -530,6 +557,8 @@ async function observeWalSegment(pgBin, dataDir, psql, query) {
     show: shown.stdout.trim(),
     showBytes: unitValue(observation?.setting, observation?.unit, 'bytes'),
     controlBytes: parsePgControlWalSegmentSize(control.stdout),
+    lsn: String(observation?.lsn ?? ''),
+    timelineId: Number(observation?.timeline_id),
     fileName: String(observation?.file_name ?? ''),
     fileOffset: Number(observation?.file_offset),
     allocatedFile: String(observation?.allocated_file ?? ''),
@@ -1160,6 +1189,38 @@ function sortSummary(nodes) {
   ].join(' / ')).join(' | ')
 }
 
+export function workMemMultiplicationChecks(city, claim, observation) {
+  const hashNodes = observation?.multiHashNodes ?? []
+  const hashSummary = hashNodes.map((node) =>
+    `peak ${node['Peak Memory Usage'] ?? 'absent'} KiB / ${node['HashAgg Batches'] ?? 'absent'} batches`)
+    .join(' | ')
+  const tempFileDelta = Number(observation?.tempFilesAfter)
+    - Number(observation?.tempFilesBefore)
+  const tempByteDelta = Number(observation?.tempBytesAfter)
+    - Number(observation?.tempBytesBefore)
+  return [
+    result(
+      'work_mem/per-node-hash-allowance',
+      city.nodeDisclosure,
+      `${hashNodes.length} HashAggregate nodes: ${hashSummary || 'none'}`,
+      hashNodes.length >= 2
+        && hashNodes.every((node) =>
+          node['Node Type'] === 'Aggregate'
+          && node.Strategy === 'Hashed'
+          && Number(node['Peak Memory Usage']) > 0
+          && Number(node['HashAgg Batches']) >= 1),
+    ),
+    result(
+      'work_mem/concurrent-backends-multiply',
+      city.nodeDisclosure,
+      `${observation?.activeBackends ?? 0} controlled sort backends active together; concurrent phase added ${tempFileDelta} temp files and ${tempByteDelta} temp bytes`,
+      Number(observation?.activeBackends) === claim.concurrentBackends
+        && tempFileDelta >= claim.concurrentBackends
+        && tempByteDelta > 0,
+    ),
+  ]
+}
+
 async function checkWorkMemExecution(pgBin, psql, query, registry, port) {
   const claim = registry.claims.workMemExecution
   const city = registry.cityClaims.workMem
@@ -1208,6 +1269,31 @@ async function checkWorkMemExecution(pgBin, psql, query, registry, port) {
     (node) => node['Node Type'] === 'Aggregate' && node.Strategy === 'Hashed',
   )[0])
 
+  const multiHashPlan = await explainJson(psql, `
+    SET work_mem = '${claim.hashWorkMemMiB}MB';
+    SET hash_mem_multiplier = ${claim.hashMultipliers.at(-1)};
+    SET enable_sort = off`, `
+    WITH left_hash AS MATERIALIZED (
+      SELECT value % ${claim.hashRows / 4} AS key, pg_catalog.count(*) AS rows
+        FROM pg_catalog.generate_series(1, ${claim.hashRows}) AS value
+       GROUP BY key
+    ), right_hash AS MATERIALIZED (
+      SELECT value % ${claim.hashRows / 4} AS key, pg_catalog.count(*) AS rows
+        FROM pg_catalog.generate_series(1, ${claim.hashRows}) AS value
+       GROUP BY key
+    )
+    SELECT (SELECT pg_catalog.sum(rows) FROM left_hash),
+           (SELECT pg_catalog.sum(rows) FROM right_hash)`)
+  const multiHashNodes = planNodes(
+    multiHashPlan.Plan,
+    (node) => node['Node Type'] === 'Aggregate' && node.Strategy === 'Hashed',
+  )
+
+  const [concurrentBefore] = await query(`
+    SELECT temp_files, temp_bytes
+      FROM pg_catalog.pg_stat_database
+     WHERE datname = current_database()`)
+
   const concurrent = []
   for (let index = 0; index < claim.concurrentBackends; index++) {
     concurrent.push(psqlCommand(pgBin, port, `
@@ -1230,14 +1316,16 @@ async function checkWorkMemExecution(pgBin, psql, query, registry, port) {
     5_000,
   )
   await Promise.all(concurrent)
-  const after = await pollRow(
+  const concurrentAfter = await pollRow(
     query,
     `SELECT temp_files, temp_bytes
        FROM pg_catalog.pg_stat_database
       WHERE datname = current_database()`,
-    (row) => Number(row?.temp_files) > Number(before?.temp_files),
+    (row) => Number(row?.temp_files)
+      >= Number(concurrentBefore?.temp_files) + claim.concurrentBackends,
     5_000,
   )
+  const after = concurrentAfter
 
   const firstHash = hashNodes[0]
   const secondHash = hashNodes[1]
@@ -1280,12 +1368,14 @@ async function checkWorkMemExecution(pgBin, psql, query, registry, port) {
         && secondPeak > firstPeak
         && secondBatches <= firstBatches,
     ),
-    result(
-      'work_mem/concurrent-backends-multiply',
-      city.nodeDisclosure,
-      `${active?.active ?? 0} controlled sort backends were active together`,
-      Number(active?.active) === claim.concurrentBackends,
-    ),
+    ...workMemMultiplicationChecks(city, claim, {
+      multiHashNodes,
+      activeBackends: Number(active?.active),
+      tempFilesBefore: Number(concurrentBefore?.temp_files),
+      tempFilesAfter: Number(concurrentAfter?.temp_files),
+      tempBytesBefore: Number(concurrentBefore?.temp_bytes),
+      tempBytesAfter: Number(concurrentAfter?.temp_bytes),
+    }),
   ]
 }
 
@@ -1411,11 +1501,47 @@ function scanNode(plan) {
   return planNodes(plan, (node) => /Scan$/u.test(String(node['Node Type'])))[0] ?? null
 }
 
+export function partialIndexBehaviorChecks(city, observation) {
+  const expected = city.expectedLookupRow
+  const exactRow = (rows) => rows?.length === 1
+    && Number(rows[0]?.id) === expected.id
+    && Number(rows[0]?.balance) === expected.balance
+  const scanSummary = (scan, rows) =>
+    `${scan?.['Node Type'] ?? 'no scan'}${scan?.['Index Name'] ? ` using ${scan['Index Name']}` : ''}; rows ${JSON.stringify(rows ?? [])}`
+  return [
+    result(
+      'partial-index/predicate-not-implied',
+      city.finding,
+      scanSummary(observation?.ownerScan, observation?.ownerRows),
+      observation?.ownerScan?.['Node Type'] === 'Seq Scan'
+        && !observation?.ownerScan?.['Index Name']
+        && exactRow(observation?.ownerRows),
+    ),
+    result(
+      'partial-index/predicate-implied',
+      city.finding,
+      scanSummary(observation?.impliedScan, observation?.impliedRows),
+      observation?.impliedScan?.['Node Type'] === 'Index Scan'
+        && observation?.impliedScan?.['Index Name'] === city.partialIndex
+        && exactRow(observation?.impliedRows),
+    ),
+    result(
+      'partial-index/primary-key-plan',
+      city.finding,
+      scanSummary(observation?.primaryScan, observation?.primaryRows),
+      observation?.primaryScan?.['Node Type'] === 'Index Scan'
+        && observation?.primaryScan?.['Index Name'] === 'accounts_pkey'
+        && exactRow(observation?.primaryRows),
+    ),
+  ]
+}
+
 async function checkPartialIndexBehavior(psql, query, registry) {
-  const claim = registry.claims.partialIndexBehavior
   const city = registry.cityClaims.machineIndexWalk
+  const seed = city.seed
   await psql(`
     CREATE SCHEMA oracle_machine;
+    ALTER ROLE postgres SET search_path = oracle_machine, pg_catalog;
     CREATE TABLE oracle_machine.accounts (
       id integer PRIMARY KEY,
       owner text NOT NULL,
@@ -1426,66 +1552,57 @@ async function checkPartialIndexBehavior(psql, query, registry) {
       ON oracle_machine.accounts(owner) WHERE balance > 0;
     INSERT INTO oracle_machine.accounts
     SELECT value,
-           'account-' || value,
-           (1000 + value)::numeric(12, 2),
-           timestamptz '2026-01-01 00:00:00+00' + value * interval '1 minute'
-      FROM pg_catalog.generate_series(1, ${claim.rows}) AS value;
+           ${sqlLiteral(seed.ownerPrefix)} || value,
+           (${seed.balanceBase} + value)::numeric(12, 2),
+           timestamptz ${sqlLiteral(seed.updatedAt)} + value * interval '1 minute'
+      FROM pg_catalog.generate_series(1, ${seed.rows}) AS value;
     ANALYZE oracle_machine.accounts`)
-  const ownerLiteral = sqlLiteral(claim.owner)
-  const primaryPlan = await explainJson(psql, '', `
-    SELECT id, balance
-      FROM oracle_machine.accounts
-     WHERE id = 42`)
-  const ownerPlan = await explainJson(psql, '', `
-    SELECT id, balance
-      FROM oracle_machine.accounts
-     WHERE owner = ${ownerLiteral}`)
-  const impliedPlan = await explainJson(psql, '', `
-    SELECT id, balance
-      FROM oracle_machine.accounts
-     WHERE owner = ${ownerLiteral}
-       AND balance > 0`)
+  const primaryPlan = await explainJson(psql, '', city.statements.primaryKey)
+  const ownerPlan = await explainJson(psql, '', city.statements.ownerOnly)
+  const impliedPlan = await explainJson(psql, '', city.statements.ownerWithPredicate)
   const primaryScan = scanNode(primaryPlan.Plan)
   const ownerScan = scanNode(ownerPlan.Plan)
   const impliedScan = scanNode(impliedPlan.Plan)
-  const [rows] = await query(`
-    SELECT
-      (SELECT pg_catalog.count(*)
-         FROM oracle_machine.accounts
-        WHERE id = 42)::integer AS primary_rows,
-      (SELECT pg_catalog.count(*)
-         FROM oracle_machine.accounts
-        WHERE owner = ${ownerLiteral})::integer AS owner_rows,
-      (SELECT pg_catalog.count(*)
-         FROM oracle_machine.accounts
-        WHERE owner = ${ownerLiteral}
-          AND balance > 0)::integer AS implied_rows`)
-  return [
-    result(
-      'partial-index/predicate-not-implied',
-      city.finding,
-      `${ownerScan?.['Node Type'] ?? 'no scan'}${ownerScan?.['Index Name'] ? ` using ${ownerScan['Index Name']}` : ''}; ${rows?.owner_rows ?? 0} rows`,
-      ownerScan?.['Node Type'] === 'Seq Scan'
-        && !ownerScan?.['Index Name']
-        && Number(rows?.owner_rows) === 1,
-    ),
-    result(
-      'partial-index/predicate-implied',
-      city.finding,
-      `${impliedScan?.['Node Type'] ?? 'no scan'}${impliedScan?.['Index Name'] ? ` using ${impliedScan['Index Name']}` : ''}; ${rows?.implied_rows ?? 0} rows`,
-      impliedScan?.['Node Type'] === 'Index Scan'
-        && impliedScan?.['Index Name'] === city.partialIndex
-        && Number(rows?.implied_rows) === 1,
-    ),
-    result(
-      'partial-index/primary-key-plan',
-      city.finding,
-      `${primaryScan?.['Node Type'] ?? 'no scan'}${primaryScan?.['Index Name'] ? ` using ${primaryScan['Index Name']}` : ''}; ${rows?.primary_rows ?? 0} rows`,
-      primaryScan?.['Node Type'] === 'Index Scan'
-        && primaryScan?.['Index Name'] === 'accounts_pkey'
-        && Number(rows?.primary_rows) === 1,
-    ),
-  ]
+  const [primaryRows, ownerRows, impliedRows] = await Promise.all([
+    query(city.statements.primaryKey),
+    query(city.statements.ownerOnly),
+    query(city.statements.ownerWithPredicate),
+  ])
+  return partialIndexBehaviorChecks(city, {
+    primaryScan,
+    ownerScan,
+    impliedScan,
+    primaryRows,
+    ownerRows,
+    impliedRows,
+  })
+}
+
+export function logicalSlotHorizonCheck(definition, observation) {
+  return result(
+    'xmin-horizon/logical-slot',
+    definition,
+    observation
+      ? `logical slot ${observation.slotName}; catalog_xmin ${observation.catalogXmin}; current snapshot xmin ${observation.snapshotXmin}`
+      : 'logical slot observation is absent',
+    observation?.slotName === 'oracle_logical_horizon'
+      && Number(observation?.catalogXmin) > 0
+      && Number(observation?.catalogXmin) <= Number(observation?.snapshotXmin),
+  )
+}
+
+export function standbyFeedbackHorizonCheck(definition, observation) {
+  return result(
+    'xmin-horizon/standby-feedback',
+    definition,
+    observation
+      ? `walsender backend_xmin ${observation.backendXmin}; deleting XID ${observation.deletingXid}; physical versions ${observation.retainedVersions} while feedback held and ${observation.releasedVersions} after release`
+      : 'hot_standby_feedback removal observation is absent',
+    Number(observation?.backendXmin) > 0
+      && Number(observation?.backendXmin) <= Number(observation?.deletingXid)
+      && Number(observation?.retainedVersions) === 1
+      && Number(observation?.releasedVersions) === 0,
+  )
 }
 
 async function checkAsynchronousCommit(pgBin, registry, scratch) {
@@ -1561,7 +1678,11 @@ async function checkAsynchronousCommit(pgBin, registry, scratch) {
       'oracle_logical_horizon', 'pgoutput'
     )`)
     const [logicalSlot] = await query(`
-      SELECT slot_name, catalog_xmin::text AS catalog_xmin
+      SELECT slot_name,
+             catalog_xmin::text AS catalog_xmin,
+             pg_catalog.pg_snapshot_xmin(
+               pg_catalog.pg_current_snapshot()
+             )::text AS snapshot_xmin
         FROM pg_catalog.pg_replication_slots
        WHERE slot_name = 'oracle_logical_horizon'`)
     await psql("SELECT pg_catalog.pg_drop_replication_slot('oracle_logical_horizon')")
@@ -1683,14 +1804,13 @@ async function checkAsynchronousCommit(pgBin, registry, scratch) {
           : 'post-crash atomicity witness is absent',
         Number(afterCrash?.async_rows) === 0 || Number(afterCrash?.async_rows) === 2,
       ),
-      result(
-        'xmin-horizon/logical-slot',
+      logicalSlotHorizonCheck(
         registry.cityClaims.mvccVocabulary.xminHorizon.definition,
-        logicalSlot
-          ? `logical slot ${logicalSlot.slot_name}; catalog_xmin ${logicalSlot.catalog_xmin}`
-          : 'logical slot observation is absent',
-        logicalSlot?.slot_name === 'oracle_logical_horizon'
-          && Boolean(logicalSlot?.catalog_xmin),
+        logicalSlot && {
+          slotName: logicalSlot.slot_name,
+          catalogXmin: logicalSlot.catalog_xmin,
+          snapshotXmin: logicalSlot.snapshot_xmin,
+        },
       ),
     ]
   } finally {
@@ -1780,6 +1900,13 @@ async function checkNativeRecovery(
       branch text NOT NULL
     );
     INSERT INTO public.oracle_timeline_witness VALUES (1, 'before-backup')`)
+  await psql(`
+    CREATE EXTENSION IF NOT EXISTS pageinspect;
+    CREATE TABLE public.oracle_feedback_horizon (
+      id integer PRIMARY KEY,
+      note text NOT NULL
+    ) WITH (autovacuum_enabled = false);
+    INSERT INTO public.oracle_feedback_horizon VALUES (1, 'remove'), (2, 'survivor')`)
   await psql('CREATE DATABASE oracle_second_database')
   await psql(`
     CREATE TABLE public.oracle_cluster_witness (id integer PRIMARY KEY);
@@ -1838,20 +1965,38 @@ recovery_target_timeline = 'current'
       '-U', 'postgres', '-d', 'postgres',
       '-c', `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
         SELECT pg_catalog.count(*) FROM public.oracle_timeline_witness;
-        SELECT pg_catalog.pg_sleep(2);
+        SELECT pg_catalog.count(*) FROM public.oracle_feedback_horizon WHERE id = 1;
+        SELECT pg_catalog.pg_sleep(10);
+        SELECT pg_catalog.count(*) FROM public.oracle_feedback_horizon WHERE id = 1;
         COMMIT`,
     ], { allowFailure: true })
     standbyFeedback = await pollRow(
       query,
-      `SELECT application_name, backend_xmin::text AS backend_xmin
-         FROM pg_catalog.pg_stat_replication
-        WHERE backend_xmin IS NOT NULL
+      `SELECT replication.application_name,
+              replication.backend_xmin::text AS backend_xmin
+         FROM pg_catalog.pg_stat_replication AS replication
+        WHERE replication.backend_xmin IS NOT NULL
         ORDER BY pid
         LIMIT 1`,
       (row) => Boolean(row?.backend_xmin),
-      5_000,
+      8_000,
     )
-    await feedbackSession
+    const feedbackDelete = await psql(`
+      DELETE FROM public.oracle_feedback_horizon WHERE id = 1 RETURNING xmax::text`)
+    const feedbackDeletingXid = feedbackDelete.stdout.trim().split(/\r?\n/u)
+      .find((line) => /^\d+$/u.test(line.trim()))?.trim()
+    await psql('VACUUM (TRUNCATE OFF) public.oracle_feedback_horizon')
+    const [feedbackRetained] = await query(`
+      SELECT pg_catalog.count(*)::integer AS physical_versions
+        FROM public.heap_page_items(
+          public.get_raw_page('public.oracle_feedback_horizon', 0)
+        )
+       WHERE lp_flags <> 0
+         AND t_xmax::text = ${sqlLiteral(feedbackDeletingXid ?? '')}`)
+    const feedbackExecution = await feedbackSession
+    if (feedbackExecution.code !== 0) {
+      throw new Error(`standby-feedback fixture failed: ${feedbackExecution.stderr.trim()}`)
+    }
     await run(path.join(pgBin, 'pg_ctl'), ['-D', forkDir, '-w', 'promote'])
     const promoted = await pollRow(
       forkQuery,
@@ -1860,6 +2005,27 @@ recovery_target_timeline = 'current'
       10_000,
     )
     if (promoted?.in_recovery !== false) throw new Error('timeline fork did not promote')
+    await pollRow(
+      query,
+      `SELECT pg_catalog.count(*)::integer AS senders
+         FROM pg_catalog.pg_stat_replication`,
+      (row) => Number(row?.senders) === 0,
+      10_000,
+    )
+    await psql('VACUUM (TRUNCATE OFF) public.oracle_feedback_horizon')
+    const [feedbackReleased] = await query(`
+      SELECT pg_catalog.count(*)::integer AS physical_versions
+        FROM public.heap_page_items(
+          public.get_raw_page('public.oracle_feedback_horizon', 0)
+        )
+       WHERE lp_flags <> 0
+         AND t_xmax::text = ${sqlLiteral(feedbackDeletingXid ?? '')}`)
+    standbyFeedback = {
+      ...standbyFeedback,
+      deletingXid: feedbackDeletingXid,
+      retainedVersions: feedbackRetained?.physical_versions,
+      releasedVersions: feedbackReleased?.physical_versions,
+    }
 
     await forkPsql("INSERT INTO public.oracle_timeline_witness VALUES (2, 'timeline-2-child')")
     await psql("INSERT INTO public.oracle_timeline_witness VALUES (3, 'timeline-1-parent-tail')")
@@ -2122,13 +2288,14 @@ recovery_target_action = '${pause ? 'pause' : 'promote'}'
         && restoreTableDump.code !== 0
         && /does not exist/iu.test(`${restoreSelected.stderr}\n${restoreTableDump.stderr}`),
     ),
-    result(
-      'xmin-horizon/standby-feedback',
+    standbyFeedbackHorizonCheck(
       registry.cityClaims.mvccVocabulary.xminHorizon.definition,
-      standbyFeedback
-        ? `primary walsender ${standbyFeedback.application_name} reported backend_xmin ${standbyFeedback.backend_xmin}`
-        : 'hot_standby_feedback xmin was not observed',
-      Boolean(standbyFeedback?.backend_xmin),
+      standbyFeedback && {
+        backendXmin: standbyFeedback.backend_xmin,
+        deletingXid: standbyFeedback.deletingXid,
+        retainedVersions: standbyFeedback.retainedVersions,
+        releasedVersions: standbyFeedback.releasedVersions,
+      },
     ),
   ]
 }
@@ -2656,6 +2823,21 @@ async function checkStorageMvcc(psql, query, registry, major) {
     .map((row) => `${row.relation}: raw ${row.raw_size}, logical ${row.logical_size}, toast heap ${row.toast_heap_bytes}`)
     .join(' | ')
   await psql('SELECT pg_catalog.pg_stat_reset()')
+  const [inlineRead] = await query(`
+    SELECT (SELECT pg_catalog.octet_length(payload)
+              FROM public.oracle_toast_raised) AS raised_logical_bytes,
+           (SELECT pg_catalog.octet_length(payload)
+              FROM public.oracle_toast_compressed) AS compressed_logical_bytes`)
+  const [inlineReadPath] = await query(`
+    SELECT COALESCE(pg_catalog.sum(stats.heap_blks_read + stats.heap_blks_hit), 0) AS heap_accesses,
+           COALESCE(pg_catalog.sum(stats.idx_blks_read + stats.idx_blks_hit), 0) AS index_accesses
+      FROM pg_catalog.pg_statio_all_tables AS stats
+      JOIN pg_catalog.pg_class AS owner ON owner.reltoastrelid = stats.relid
+     WHERE owner.oid IN (
+       'public.oracle_toast_raised'::regclass,
+       'public.oracle_toast_compressed'::regclass
+     )`)
+  await psql('SELECT pg_catalog.pg_stat_reset()')
   await psql('SELECT pg_catalog.md5(payload) FROM public.oracle_toast_default')
   const toastReadPath = await pollRow(
     query,
@@ -2674,6 +2856,19 @@ async function checkStorageMvcc(psql, query, registry, major) {
     + Number(toastReadPath?.heap_blks_hit)
   const toastIndexAccesses = Number(toastReadPath?.idx_blks_read)
     + Number(toastReadPath?.idx_blks_hit)
+  const toastPathRows = toastReadPathChecks({
+    expectedLogicalBytes: toast.valueBytes,
+    expectedCompressedLogicalBytes: Number(compressedInline?.logical_size),
+    externalLogicalBytes: Number(defaultExternal?.logical_size),
+    externalHeapAccesses: toastHeapAccesses,
+    externalIndexAccesses: toastIndexAccesses,
+    inlineLogicalBytes: [
+      Number(inlineRead?.raised_logical_bytes),
+      Number(inlineRead?.compressed_logical_bytes),
+    ],
+    inlineHeapAccesses: Number(inlineReadPath?.heap_accesses),
+    inlineIndexAccesses: Number(inlineReadPath?.index_accesses),
+  })
 
   const [snapshot] = await query(`
     SELECT pg_catalog.split_part(pg_catalog.pg_current_snapshot()::text, ':', 1)::bigint AS snapshot_xmin,
@@ -2735,16 +2930,7 @@ async function checkStorageMvcc(psql, query, registry, major) {
       toastSummary,
       threeReadPaths,
     ),
-    result(
-      'TOAST/external-read-path',
-      'reading an out-of-line datum follows the TOAST index and chunk heap before returning the logical value',
-      toastReadPath
-        ? `TOAST heap read/hit ${toastReadPath.heap_blks_read}/${toastReadPath.heap_blks_hit}; index read/hit ${toastReadPath.idx_blks_read}/${toastReadPath.idx_blks_hit}; logical value ${defaultExternal?.logical_size} bytes`
-        : 'TOAST heap/index access observation is absent',
-      toastHeapAccesses > 0
-        && toastIndexAccesses > 0
-        && Number(defaultExternal?.logical_size) === toast.valueBytes,
-    ),
+    ...toastPathRows,
     result(
       'MVCC/snapshot-xmin-is-not-oldest-visible-creator',
       'a snapshot sees a committed tuple whose creator XID is older than snapshot xmin',
@@ -2758,6 +2944,30 @@ async function checkStorageMvcc(psql, query, registry, major) {
       'BEGIN READ ONLY can hold an assigned XID after pg_current_xact_id()',
       readOnlyObservation || 'read-only XID observation is absent',
       readOnlyObservation.length > 0,
+    ),
+  ]
+}
+
+export function toastReadPathChecks(observation) {
+  const inlineLogical = observation?.inlineLogicalBytes ?? []
+  return [
+    result(
+      'TOAST/external-read-path',
+      'reading an out-of-line datum follows the TOAST index and chunk heap before returning the logical value',
+      `TOAST heap accesses ${observation?.externalHeapAccesses ?? 'absent'}; index accesses ${observation?.externalIndexAccesses ?? 'absent'}; logical value ${observation?.externalLogicalBytes ?? 'absent'} bytes`,
+      Number(observation?.externalHeapAccesses) > 0
+        && Number(observation?.externalIndexAccesses) > 0
+        && Number(observation?.externalLogicalBytes)
+          === Number(observation?.expectedLogicalBytes),
+    ),
+    result(
+      'TOAST/inline-read-path',
+      'inline uncompressed and compressed datums return their logical values without a TOAST-index or chunk-heap fetch',
+      `logical values [${inlineLogical.join(', ')}] bytes; TOAST heap accesses ${observation?.inlineHeapAccesses ?? 'absent'}; index accesses ${observation?.inlineIndexAccesses ?? 'absent'}`,
+      Number(inlineLogical[0]) === Number(observation?.expectedLogicalBytes)
+        && Number(inlineLogical[1]) === Number(observation?.expectedCompressedLogicalBytes)
+        && Number(observation?.inlineHeapAccesses) === 0
+        && Number(observation?.inlineIndexAccesses) === 0,
     ),
   ]
 }
@@ -2789,6 +2999,64 @@ export function linePointerLifecycleChecks(vocabulary, observation) {
       Number.isFinite(freeSpaceBefore)
         && Number.isFinite(freeSpaceAfter)
         && freeSpaceAfter > freeSpaceBefore,
+    ),
+  ]
+}
+
+export function visibilityMapChecks(vocabulary, observation) {
+  const beforeScan = observation?.beforeScan
+  const changedScan = observation?.changedScan
+  const afterScan = observation?.afterScan
+  const scanSummary = (scan) =>
+    `${scan?.['Node Type'] ?? 'absent'} / heap fetches ${scan?.['Heap Fetches'] ?? 'absent'}`
+  return [
+    result(
+      'visibility-map/set-clear-set',
+      vocabulary.visibilityMap.definition,
+      `VACUUM FREEZE ${observation?.visibleBefore?.all_visible}/${observation?.visibleBefore?.all_frozen}; modification ${observation?.visibleChanged?.all_visible}/${observation?.visibleChanged?.all_frozen}; VACUUM FREEZE ${observation?.visibleAfter?.all_visible}/${observation?.visibleAfter?.all_frozen}`,
+      observation?.visibleBefore?.all_visible === true
+        && observation?.visibleBefore?.all_frozen === true
+        && observation?.visibleChanged?.all_visible === false
+        && observation?.visibleChanged?.all_frozen === false
+        && observation?.visibleAfter?.all_visible === true
+        && observation?.visibleAfter?.all_frozen === true,
+    ),
+    result(
+      'visibility-map/index-only-scan-effect',
+      vocabulary.visibilityMap.definition,
+      `set ${scanSummary(beforeScan)}; cleared ${scanSummary(changedScan)}; reset ${scanSummary(afterScan)}`,
+      [beforeScan, changedScan, afterScan].every(
+        (scan) => scan?.['Node Type'] === 'Index Only Scan',
+      )
+        && Number(beforeScan?.['Heap Fetches']) === 0
+        && Number(changedScan?.['Heap Fetches']) > 0
+        && Number(afterScan?.['Heap Fetches']) === 0,
+    ),
+  ]
+}
+
+export function horizonConstraintChecks(observation) {
+  const constrained = (entry) => Number(entry?.holderXid) < Number(entry?.deletingXid)
+    && Number(entry?.retainedVersions) === 1
+    && Number(entry?.releasedVersions) === 0
+  return [
+    result(
+      'xmin-horizon/assigned-xid-removal',
+      'an assigned backend XID can delay removal even while that backend holds no active snapshot',
+      observation?.assigned
+        ? `holder backend_xid ${observation.assigned.holderXid}, backend_xmin ${observation.assigned.holderXmin ?? 'null'}, deleting XID ${observation.assigned.deletingXid}; physical versions ${observation.assigned.retainedVersions} while held and ${observation.assigned.releasedVersions} after release`
+        : 'assigned-XID removal observation is absent',
+      constrained(observation?.assigned)
+        && (observation.assigned.holderXmin === null
+          || observation.assigned.holderXmin === undefined),
+    ),
+    result(
+      'xmin-horizon/prepared-transaction',
+      'an older prepared transaction delays removal until it finishes',
+      observation?.prepared
+        ? `prepared XID ${observation.prepared.holderXid}, deleting XID ${observation.prepared.deletingXid}; physical versions ${observation.prepared.retainedVersions} while prepared and ${observation.prepared.releasedVersions} after release`
+        : 'prepared-transaction removal observation is absent',
+      constrained(observation?.prepared),
     ),
   ]
 }
@@ -3072,18 +3340,70 @@ async function checkRemainingMvcc(pgBin, psql, query, registry, port) {
     SELECT pg_catalog.bool_and(all_visible) AS all_visible,
            pg_catalog.bool_and(all_frozen) AS all_frozen
       FROM public.pg_visibility_map('public.${visibility.relation}'::regclass)`)
+  const visibilityPlan = () => explainJson(psql, `
+    SET enable_seqscan = off;
+    SET enable_bitmapscan = off`, `
+    SELECT id
+      FROM public.${visibility.relation}
+     WHERE id BETWEEN 1 AND 100`)
+  const visibleBeforePlan = await visibilityPlan()
+  const visibleBeforeScan = scanNode(visibleBeforePlan.Plan)
   await psql(`UPDATE public.${visibility.relation} SET payload = payload + 1 WHERE id = 1`)
   const [visibleChanged] = await query(`
     SELECT all_visible, all_frozen
       FROM public.pg_visibility_map('public.${visibility.relation}'::regclass)
      WHERE blkno = 0`)
+  const visibleChangedPlan = await visibilityPlan()
+  const visibleChangedScan = scanNode(visibleChangedPlan.Plan)
   await psql(`VACUUM (FREEZE) public.${visibility.relation}`)
   const [visibleAfter] = await query(`
     SELECT pg_catalog.bool_and(all_visible) AS all_visible,
            pg_catalog.bool_and(all_frozen) AS all_frozen
       FROM public.pg_visibility_map('public.${visibility.relation}'::regclass)`)
+  const visibleAfterPlan = await visibilityPlan()
+  const visibleAfterScan = scanNode(visibleAfterPlan.Plan)
 
   const prepared = claim.preparedHorizon
+  const assignedRelation = 'oracle_assigned_horizon'
+  await psql(`
+    CREATE TABLE public.${assignedRelation} (id integer PRIMARY KEY, note text NOT NULL)
+      WITH (autovacuum_enabled = false);
+    INSERT INTO public.${assignedRelation} VALUES (1, 'remove'), (2, 'survivor')`)
+  const assignedHolderExecution = psqlCommand(pgBin, port, `
+    SET application_name = 'oracle_assigned_horizon';
+    BEGIN;
+    SELECT pg_catalog.pg_current_xact_id()::text;
+    \\! sleep 5
+    COMMIT`)
+  const assignedHolder = await pollRow(
+    query,
+    `SELECT backend_xid::text AS backend_xid,
+            backend_xmin::text AS backend_xmin,
+            state
+       FROM pg_catalog.pg_stat_activity
+      WHERE application_name = 'oracle_assigned_horizon'`,
+    (row) => Boolean(row?.backend_xid) && row?.state === 'idle in transaction',
+    5_000,
+  )
+  const assignedDelete = await psql(`
+    DELETE FROM public.${assignedRelation} WHERE id = 1 RETURNING xmax::text`)
+  const assignedDeletingXid = assignedDelete.stdout.trim().split(/\r?\n/u)
+    .find((line) => /^\d+$/u.test(line.trim()))?.trim()
+  await psql(`VACUUM (TRUNCATE OFF) public.${assignedRelation}`)
+  const [assignedRetained] = await query(`
+    SELECT pg_catalog.count(*)::integer AS physical_versions
+      FROM public.heap_page_items(public.get_raw_page('public.${assignedRelation}', 0))
+     WHERE lp_flags <> 0
+       AND t_xmax::text = ${sqlLiteral(assignedDeletingXid ?? '')}`)
+  await assignedHolderExecution
+  await psql(`VACUUM (TRUNCATE OFF) public.${assignedRelation}`)
+  const [assignedReleased] = await query(`
+    SELECT pg_catalog.count(*)::integer AS physical_versions
+      FROM public.heap_page_items(public.get_raw_page('public.${assignedRelation}', 0))
+     WHERE lp_flags <> 0
+       AND t_xmax::text = ${sqlLiteral(assignedDeletingXid ?? '')}`)
+
+  const preparedRelation = prepared.relation
   const horizonBackend = psqlCommand(pgBin, port, `
     SET application_name = 'oracle_horizon_backend';
     BEGIN ISOLATION LEVEL REPEATABLE READ;
@@ -3103,9 +3423,12 @@ async function checkRemainingMvcc(pgBin, psql, query, registry, port) {
   await horizonBackend
 
   await psql(`
-    CREATE TABLE public.oracle_prepared_horizon (id integer);
+    CREATE TABLE public.${preparedRelation} (id integer PRIMARY KEY, note text NOT NULL)
+      WITH (autovacuum_enabled = false);
+    INSERT INTO public.${preparedRelation} VALUES (1, 'remove'), (2, 'survivor')`)
+  await psql(`
     BEGIN;
-    INSERT INTO public.oracle_prepared_horizon VALUES (1);
+    SELECT pg_catalog.pg_current_xact_id()::text;
     PREPARE TRANSACTION '${prepared.gid}'`)
   const [preparedRow] = await query(`
     SELECT transaction::text AS prepared_xid,
@@ -3114,7 +3437,38 @@ async function checkRemainingMvcc(pgBin, psql, query, registry, port) {
            )::text AS snapshot_xmin
       FROM pg_catalog.pg_prepared_xacts
      WHERE gid = '${prepared.gid}'`)
+  const preparedDelete = await psql(`
+    DELETE FROM public.${preparedRelation} WHERE id = 1 RETURNING xmax::text`)
+  const preparedDeletingXid = preparedDelete.stdout.trim().split(/\r?\n/u)
+    .find((line) => /^\d+$/u.test(line.trim()))?.trim()
+  await psql(`VACUUM (TRUNCATE OFF) public.${preparedRelation}`)
+  const [preparedRetained] = await query(`
+    SELECT pg_catalog.count(*)::integer AS physical_versions
+      FROM public.heap_page_items(public.get_raw_page('public.${preparedRelation}', 0))
+     WHERE lp_flags <> 0
+       AND t_xmax::text = ${sqlLiteral(preparedDeletingXid ?? '')}`)
   await psql(`ROLLBACK PREPARED '${prepared.gid}'`)
+  await psql(`VACUUM (TRUNCATE OFF) public.${preparedRelation}`)
+  const [preparedReleased] = await query(`
+    SELECT pg_catalog.count(*)::integer AS physical_versions
+      FROM public.heap_page_items(public.get_raw_page('public.${preparedRelation}', 0))
+     WHERE lp_flags <> 0
+       AND t_xmax::text = ${sqlLiteral(preparedDeletingXid ?? '')}`)
+  const horizonRows = horizonConstraintChecks({
+    assigned: {
+      holderXid: assignedHolder?.backend_xid,
+      holderXmin: assignedHolder?.backend_xmin,
+      deletingXid: assignedDeletingXid,
+      retainedVersions: assignedRetained?.physical_versions,
+      releasedVersions: assignedReleased?.physical_versions,
+    },
+    prepared: {
+      holderXid: preparedRow?.prepared_xid,
+      deletingXid: preparedDeletingXid,
+      retainedVersions: preparedRetained?.physical_versions,
+      releasedVersions: preparedReleased?.physical_versions,
+    },
+  })
 
   const tupleSummary = tupleRows.map((row) =>
     `lp ${row.lp} xmin ${row.t_xmin} xmax ${row.t_xmax} ctid ${row.t_ctid} hoff ${row.t_hoff}`)
@@ -3178,17 +3532,14 @@ async function checkRemainingMvcc(pgBin, psql, query, registry, port) {
         && Number(heldHorizon?.physical_versions) === 1
         && Number(releasedHorizon?.physical_versions) === 0,
     ),
-    result(
-      'visibility-map/set-clear-set',
-      vocabulary.visibilityMap.definition,
-      `VACUUM FREEZE ${visibleBefore?.all_visible}/${visibleBefore?.all_frozen}; modification ${visibleChanged?.all_visible}/${visibleChanged?.all_frozen}; VACUUM FREEZE ${visibleAfter?.all_visible}/${visibleAfter?.all_frozen}`,
-      visibleBefore?.all_visible === true
-        && visibleBefore?.all_frozen === true
-        && visibleChanged?.all_visible === false
-        && visibleChanged?.all_frozen === false
-        && visibleAfter?.all_visible === true
-        && visibleAfter?.all_frozen === true,
-    ),
+    ...visibilityMapChecks(vocabulary, {
+      visibleBefore,
+      visibleChanged,
+      visibleAfter,
+      beforeScan: visibleBeforeScan,
+      changedScan: visibleChangedScan,
+      afterScan: visibleAfterScan,
+    }),
     result(
       'xmin-horizon/active-snapshot-and-assigned-xid',
       vocabulary.xminHorizon.definition,
@@ -3197,15 +3548,7 @@ async function checkRemainingMvcc(pgBin, psql, query, registry, port) {
         : 'active backend horizon observation is absent',
       Boolean(backendHorizon?.backend_xid) && Boolean(backendHorizon?.backend_xmin),
     ),
-    result(
-      'xmin-horizon/prepared-transaction',
-      vocabulary.xminHorizon.definition,
-      preparedRow
-        ? `prepared XID ${preparedRow.prepared_xid}; snapshot xmin ${preparedRow.snapshot_xmin}`
-        : 'prepared transaction observation is absent',
-      Boolean(preparedRow?.prepared_xid)
-        && Number(preparedRow?.snapshot_xmin) <= Number(preparedRow?.prepared_xid),
-    ),
+    ...horizonRows,
   ]
 }
 
