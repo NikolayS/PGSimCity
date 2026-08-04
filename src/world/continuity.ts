@@ -75,6 +75,10 @@ const cssHex = (c: number) => '#' + (c >>> 0).toString(16).padStart(6, '0')
 const historyName = (tli: number) => tli.toString(16).toUpperCase().padStart(8, '0') + '.history'
 
 export const TIMELINE_RECOVERY_PLATE_LABEL = CLAIM_VALUES.timelineRecovery.plate
+export const WAL_ARCHIVE_SILO_PLATE_LINES = [
+  `one silo = one city-model ${CLAIM_VALUES.walSegment.label} segment · one row = one timeline`,
+  ...CLAIM_VALUES.walSegment.postgresqlDisclosure,
+] as const
 
 /* ==========================================================================
  * Factory.
@@ -159,8 +163,13 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     color: number,
     opacity = 0.9,
     host: THREE.Object3D = gDetail,
+    background?: number,
   ): THREE.Mesh {
-    const tex = theme.textTexture(text, { size: 64, color: cssHex(color) })
+    const tex = theme.textTexture(text, {
+      size: 64,
+      color: cssHex(color),
+      ...(background === undefined ? {} : { bg: cssHex(background) }),
+    })
     const img = tex.image as { width: number; height: number }
     const aspect = img && img.height ? img.width / img.height : 6
     const m = new THREE.MeshBasicMaterial({
@@ -430,9 +439,12 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   }
   historyTablet.instanceMatrix.needsUpdate = true
 
-  plate('S3 OBJECT STORAGE', OS[0], 12.4, OS[2] - yardHalfZ - 6, Math.PI, 3.0, COLOR.archive, 0.9, gStore)
-  plate('one silo = one 16 MiB segment · one row = one timeline', OS[0], 9.0, OS[2] - yardHalfZ - 6.4, Math.PI, 1.45, COLOR.inkDim, 0.66)
-  plate('latest 8 shown · retained archive never wraps', OS[0], 6.8, OS[2] - yardHalfZ - 6.4, Math.PI, 1.2, COLOR.inkDim, 0.6)
+  plate('S3 OBJECT STORAGE', OS[0], 17.5, OS[2] - yardHalfZ - 6, Math.PI, 3.0, COLOR.archive, 0.9, gStore)
+  plate(WAL_ARCHIVE_SILO_PLATE_LINES[0], OS[0], 14.0, OS[2] - yardHalfZ - 6.4, Math.PI, 1.25, COLOR.archive, 0.94, gStore, COLOR.bg)
+  for (let i = 1; i < WAL_ARCHIVE_SILO_PLATE_LINES.length; i++) {
+    plate(WAL_ARCHIVE_SILO_PLATE_LINES[i], OS[0], 14.0 - i * 2.0, OS[2] - yardHalfZ - 6.4, Math.PI, 1.1, COLOR.archive, 0.92, gStore, COLOR.bg)
+  }
+  plate('latest 8 shown · retained archive never wraps', OS[0], 2.0, OS[2] - yardHalfZ - 6.4, Math.PI, 1.0, COLOR.inkDim, 0.72)
   plate('.history — small, and kept forever', OS[0] - 20, 5.6, OS[2] + 23, 0, 1.4, COLOR.inkDim, 0.66)
 
   /* ---------------------------------------------------------------------

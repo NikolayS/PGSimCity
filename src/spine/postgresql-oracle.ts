@@ -467,11 +467,8 @@ export const POSTGRESQL_ORACLE_CLAIMS = {
     defaultBytes: CLAIM_VALUES.walSegment.bytes,
     alternateMiB: 32,
     configurableClaim: 'WAL segment size is selected at initdb time with --wal-segsize',
-    unqualifiedFixedSurfaces: [
-      'src/world/wal.ts WAL-vault role',
-      'src/world/continuity.ts archive-silo plate',
-      'src/ui/docs-storage.ts WAL-vault summary',
-    ],
+    qualifiedFixedSurfaces: CLAIM_VALUES.walSegment.qualifiedProseSurfaces,
+    unqualifiedFixedSurfaces: [],
   },
   latencyWaitMappings: {
     relation: POSTGRESQL_WAIT_EVENTS.relation,

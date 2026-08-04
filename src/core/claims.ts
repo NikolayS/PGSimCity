@@ -32,6 +32,20 @@ const POSTGRESQL_VERSION = {
   sourceBranch: `REL_${POSTGRESQL_MAJOR}_STABLE`,
 } as const
 
+const WAL_SEGMENT_POSTGRESQL_DISCLOSURE = [
+  'PostgreSQL default: 16 MiB',
+  'Selected at initdb with --wal-segsize',
+  'Changing it requires reinitialising the cluster',
+  'pg_settings shows wal_segment_size',
+  'WAL filenames and pg_walfile_name arithmetic use that configured size',
+] as const
+
+const WAL_SEGMENT_QUALIFIED_PROSE_SURFACES = [
+  'src/world/wal.ts WAL-vault role',
+  'src/world/continuity.ts archive-silo plate',
+  'src/ui/docs-storage.ts WAL-vault summary',
+] as const
+
 export const CLAIM_VALUES = {
   appVersion: {
     label: BUILD_LABEL,
@@ -39,6 +53,9 @@ export const CLAIM_VALUES = {
   walSegment: {
     bytes: 16 * MIB,
     label: '16 MiB',
+    modelDisclosure: 'PGSimCity models 16 MiB WAL segments',
+    postgresqlDisclosure: WAL_SEGMENT_POSTGRESQL_DISCLOSURE,
+    qualifiedProseSurfaces: WAL_SEGMENT_QUALIFIED_PROSE_SURFACES,
   },
   bufferSample: {
     gridWidth: 32,
@@ -281,7 +298,11 @@ export const CLAIMS = {
   walSegment: {
     owner: 'src/core/claims.ts#CLAIM_VALUES.walSegment',
     value: CLAIM_VALUES.walSegment,
-    surfaces: ['model:wal.segmentSize', 'world:wal.vault plate', 'prose:WAL segment size'],
+    surfaces: [
+      'model:wal.segmentSize',
+      'world:wal.vault plate',
+      ...CLAIM_VALUES.walSegment.qualifiedProseSurfaces,
+    ],
   },
   bufferSample: {
     owner: 'src/core/claims.ts#CLAIM_VALUES.bufferSample',

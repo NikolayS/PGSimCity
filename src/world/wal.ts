@@ -46,6 +46,10 @@ const MB = 1024 * 1024
 
 export const WAL_SEGMENT_PLATE_LABEL = `pg_wal · ${CLAIM_VALUES.walSegment.label} segments`
 export const WAL_SEGMENT_SIZE_PLATE_LABEL = CLAIM_VALUES.walSegment.label
+export const WAL_VAULT_ROLE = [
+  `the write-ahead log on disk — ${CLAIM_VALUES.walSegment.modelDisclosure}`,
+  ...CLAIM_VALUES.walSegment.postgresqlDisclosure,
+].join('. ')
 
 export function walsenderReadout(s: SimState): string {
   const r = s.replication
@@ -1272,7 +1276,7 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
   ctx.register({
     id: 'wal.vault',
     name: 'pg_wal',
-    role: 'the write-ahead log on disk — 16 MiB segments',
+    role: WAL_VAULT_ROLE,
     kind: 'storage',
     district: 'wal',
     object: gVault,

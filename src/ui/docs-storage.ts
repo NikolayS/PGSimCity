@@ -27,6 +27,8 @@ function sumTables(s: SimState, pick: (t: TableSim) => number): number {
 
 const ratio = (a: number, b: number): number => (b > 0 ? a / b : 0)
 
+const WAL_SEGMENT_POSTGRESQL_DISCLOSURE = CLAIM_VALUES.walSegment.postgresqlDisclosure.join('. ')
+
 const standbyA = (s: SimState) => physicalStandby(s.replication, 'standbyA')
 
 /** Bytes currently sitting in pg_wal. */
@@ -206,11 +208,11 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     id: 'wal.vault',
     title: 'pg_wal',
     subtitle: 'the write-ahead log on disk',
-    tldr: 'A directory of 16 MiB segments holding every change, and the most common way a Postgres server dies.',
+    tldr: `A directory holding every change, and the most common way a Postgres server dies. ${CLAIM_VALUES.walSegment.modelDisclosure}. ${WAL_SEGMENT_POSTGRESQL_DISCLOSURE}.`,
     sections: [
       {
         heading: 'What is actually in there',
-        body: 'The write-ahead log is one enormous append-only byte stream, cut into files of 16 MiB (fixed at `initdb` time with `--wal-segsize`). A position in that stream is an **LSN**, printed as two hex halves like `1A/3F0C8B20`; it is simply a byte offset, so subtracting two LSNs gives you bytes of WAL, which is how every replication-lag query works. The 24-character filenames are not sequential prettiness: they are timeline, log id and segment number in hex, which is why `000000010000000000000023` follows `…22`.',
+        body: `The write-ahead log is one enormous append-only byte stream, cut into segment files. ${WAL_SEGMENT_POSTGRESQL_DISCLOSURE}. A position in that stream is an **LSN**, printed as two hex halves like \`1A/3F0C8B20\`; it is simply a byte offset, so subtracting two LSNs gives you bytes of WAL, which is how every replication-lag query works. The 24-character filenames are not sequential prettiness: they are timeline, log id and segment number in hex, which is why \`000000010000000000000023\` follows \`…22\`.`,
       },
       {
         heading: 'Why the opening segment is nearly full',

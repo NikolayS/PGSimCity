@@ -34,9 +34,9 @@ import { createInspector } from '../src/ui/panel'
 import type { UiContext } from '../src/ui/uikit'
 import { VACUUM_RECLAIM_PLATE_LINES } from '../src/world/maintenance'
 import { CONNECTION_POOLER_PLATE_LABEL } from '../src/world/clients'
-import { TIMELINE_RECOVERY_PLATE_LABEL } from '../src/world/continuity'
+import { TIMELINE_RECOVERY_PLATE_LABEL, WAL_ARCHIVE_SILO_PLATE_LINES } from '../src/world/continuity'
 import { SHARED_BUFFER_SAMPLE_PLATE_LABEL } from '../src/world/shmem'
-import { WAL_SEGMENT_PLATE_LABEL, WAL_SEGMENT_SIZE_PLATE_LABEL } from '../src/world/wal'
+import { WAL_SEGMENT_PLATE_LABEL, WAL_SEGMENT_SIZE_PLATE_LABEL, WAL_VAULT_ROLE } from '../src/world/wal'
 import { installTestDom } from './dom'
 import { createWalkCityHarness } from './walk-harness'
 
@@ -120,7 +120,38 @@ describe('claims and conventions spine', () => {
     expect(WAL_SEGMENT_PLATE_LABEL, 'walSegment: world:wal.vault plate omits the owned label')
       .toContain(CLAIM_VALUES.walSegment.label)
     expect(storageDocCopy('wal.vault'), 'walSegment: prose:WAL vault disagrees with the painted vault')
-      .toContain(`${CLAIM_VALUES.walSegment.label} segments`)
+      .toContain(CLAIM_VALUES.walSegment.modelDisclosure)
+  })
+
+  it('qualifies every fixed-size WAL prose surface with the initdb scope', () => {
+    const required = [
+      'PostgreSQL default',
+      'initdb',
+      'reinitialising',
+      'pg_settings',
+      'wal_segment_size',
+      'WAL filenames',
+      'pg_walfile_name arithmetic',
+    ]
+    const ownedDisclosure = CLAIM_VALUES.walSegment.postgresqlDisclosure.join('\n')
+    const sources = {
+      'src/world/wal.ts WAL-vault role': WAL_VAULT_ROLE,
+      'src/world/continuity.ts archive-silo plate': WAL_ARCHIVE_SILO_PLATE_LINES.join('\n'),
+      'src/ui/docs-storage.ts WAL-vault summary': DOCS_STORAGE.find((entry) => entry.id === 'wal.vault')?.tldr ?? '',
+    }
+    const missing = [
+      ...required.filter((phrase) => !ownedDisclosure.includes(phrase)).map((phrase) => `owned disclosure: ${phrase}`),
+      ...Object.entries(sources).flatMap(([surface, copy]) =>
+        CLAIM_VALUES.walSegment.postgresqlDisclosure
+          .filter((sentence) => !copy.includes(sentence))
+          .map((sentence) => `${surface}: ${sentence}`)),
+    ]
+
+    expect(Object.keys(sources)).toEqual([...CLAIM_VALUES.walSegment.qualifiedProseSurfaces])
+    expect(POSTGRESQL_ORACLE_CLAIMS.walSegment.qualifiedFixedSurfaces)
+      .toEqual(CLAIM_VALUES.walSegment.qualifiedProseSurfaces)
+    expect(POSTGRESQL_ORACLE_CLAIMS.walSegment.unqualifiedFixedSurfaces).toEqual([])
+    expect(missing, 'walSegment: fixed-size prose is missing the owned PostgreSQL scope').toEqual([])
   })
 
   it('distinguishes the 1,024-frame capacity from 256 active default frames', () => {
