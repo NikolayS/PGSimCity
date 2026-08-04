@@ -27,7 +27,7 @@ function registerBox(registry: Registry, id: string, x: number): THREE.Mesh {
 }
 
 describe('picker markers by camera mode', () => {
-  it('hides only hover while walking and restores orbit hover without a stale frame', () => {
+  it('draws no marker while walking and restores the selected state in orbit', () => {
     installTestDom()
     const bus = createBus()
     const registry = new Registry()
@@ -47,15 +47,21 @@ describe('picker markers by camera mode', () => {
     expect(hoverMarker.visible).toBe(true)
     expect(selectionMarker.visible).toBe(false)
 
-    bus.emit('camera:mode', { mode: 'walk' })
-    expect(hoverMarker.visible).toBe(false)
-
     bus.emit('select', { id: 'selected', source: 'building' })
     expect(selectionMarker.visible).toBe(true)
+
+    bus.emit('camera:mode', { mode: 'walk' })
+    expect(hoverMarker.visible).toBe(false)
+    expect(selectionMarker.visible).toBe(false)
 
     bus.emit('hover', { id: null })
     bus.emit('hover', { id: 'hovered' })
     expect(hoverMarker.visible).toBe(false)
+
+    bus.emit('select', { id: null })
+    bus.emit('select', { id: 'selected', source: 'building' })
+    picker.update(1)
+    expect(selectionMarker.visible).toBe(false)
 
     bus.emit('camera:mode', { mode: 'orbit' })
     expect(hoverMarker.visible).toBe(true)

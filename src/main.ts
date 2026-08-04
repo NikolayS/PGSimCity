@@ -280,6 +280,18 @@ async function boot(): Promise<void> {
     createWalkUpInteraction({
       walk,
       sites: createWorldHandleSites(uiCtx, handlesMod.handles),
+      onProximityChange: (site, actionable) => {
+        if (actionable && site?.handAction && site.handTarget) {
+          hands.setNearby(
+            site.handAction,
+            site.handTarget[0],
+            site.handTarget[1],
+            site.handTarget[2],
+          )
+        } else {
+          hands.clearNearby()
+        }
+      },
       onOperate: (site) => {
         if (!site.handAction || !site.handTarget) return
         hands.perform(

@@ -41,6 +41,8 @@ export interface WalkUpInteractionOptions {
   keyCode?: string
   keyLabel?: string
   onOperate?(site: WalkUpInteractionSite): void
+  /** Fires only when the nearest site or its operating-range state changes. */
+  onProximityChange?(site: WalkUpInteractionSite | null, actionable: boolean): void
 }
 
 /** Kept beyond arm's reach because solid cabinets stop the walker's capsule. */
@@ -100,6 +102,7 @@ export function createWalkUpInteraction(opts: WalkUpInteractionOptions): UiModul
     if (index === active && canOperate === actionable) return
     active = index
     actionable = canOperate
+    opts.onProximityChange?.(sites[index] ?? null, canOperate)
     hasPaintedState = false
     const site = sites[index]
     root.hidden = site === undefined
