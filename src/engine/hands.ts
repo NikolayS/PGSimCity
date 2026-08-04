@@ -7,10 +7,10 @@ import type { WalkController } from './walk'
 /* ============================================================================
  * FIRST-PERSON HANDS
  *
- * A low camera-space silhouette is present whenever the pedestrian is present.
- * It establishes a body without turning the teaching viewport into a cockpit.
- * World interactions project into a deliberately narrow lower-corner lane: an
- * arm can answer the lever or door without crossing a label or mechanism plate.
+ * Hands are an interaction cue, not permanent first-person furniture. One hand
+ * rises near an operable control, both answer a door or swimming stroke, and all
+ * of them recede below the viewport when they have nothing to do. World targets
+ * stay inside a deliberately narrow lower-corner lane.
  *
  * The frame path allocates nothing. Geometry, matrices, projections, motion
  * state, and every spring accumulator are built once and mutated in place.
@@ -51,6 +51,8 @@ export interface ViewmodelHandsApi {
   readonly action: HandAction | null
   update(dt: number): void
   setQuality(level: QualityLevel): void
+  setNearby(action: HandAction, x: number, y: number, z: number): void
+  clearNearby(): void
   perform(action: HandAction, x: number, y: number, z: number): void
   dispose(): void
 }
@@ -79,6 +81,10 @@ const REACH_X_MIN = 0.80
 const REACH_X_MAX = 0.84
 const REACH_Y_MIN = -0.52
 const REACH_Y_MAX = -0.38
+/** A nearby control raises the hand enough to clear the phone interaction prompt. */
+const NEARBY_POISE = 0.68
+/** Distance below the authored idle pose at which the silhouette is fully gone. */
+const HIDDEN_DROP = 0.34
 /** Model-space silhouette plus the largest inertial displacement. */
 const OCCLUSION_HALF_X = 0.145
 const OCCLUSION_HALF_Y = 0.165
@@ -97,9 +103,10 @@ const _fingerMatrix = new THREE.Matrix4()
 const _fingerPosition = new THREE.Vector3()
 const _fingerRotation = new THREE.Quaternion()
 const _fingerScale = new THREE.Vector3(1, 1, 1)
+const _fingerAxis = new THREE.Vector3(0, 0, 1)
 
 function viewportScale(aspect: number): number {
-  return Math.min(1, Math.max(0.28, aspect / PORTRAIT_SCALE_ASPECT))
+  return Math.min(0.82, Math.max(0.25, (aspect / PORTRAIT_SCALE_ASPECT) * 0.82))
 }
 
 function ndcRect(
@@ -189,53 +196,46 @@ function createHand(
   const root = new THREE.Group()
   root.name = side < 0 ? 'viewmodel-hand:left' : 'viewmodel-hand:right'
 
-  const forearm = new THREE.Mesh(theme.cyl(0.052, 0.076, 0.36, 7), sleeve)
+  const forearm = new THREE.Mesh(theme.cyl(0.044, 0.066, 0.34, 7), sleeve)
   forearm.name = `${root.name}:forearm`
-  forearm.position.set(side * 0.018, -0.205, 0.028)
+  forearm.position.set(side * 0.016, -0.19, 0.026)
   forearm.rotation.z = side * -0.11
   root.add(forearm)
 
-  const cuffMesh = new THREE.Mesh(theme.cyl(0.074, 0.07, 0.055, 7), cuff)
+  const cuffMesh = new THREE.Mesh(theme.cyl(0.062, 0.06, 0.048, 7), cuff)
   cuffMesh.name = `${root.name}:cuff`
-  cuffMesh.position.set(0, -0.018, 0.008)
+  cuffMesh.position.set(0, -0.02, 0.006)
   root.add(cuffMesh)
 
-  const palm = new THREE.Mesh(theme.box(0.132, 0.116, 0.065), glove)
+  const palm = new THREE.Mesh(theme.cyl(0.063, 0.048, 0.112, 6), glove)
   palm.name = `${root.name}:palm`
-  palm.position.set(0, 0.052, -0.005)
+  palm.position.set(0, 0.048, -0.004)
+  palm.scale.z = 0.5
   root.add(palm)
 
-  const thumb = new THREE.Mesh(theme.box(0.034, 0.078, 0.046), glove)
+  const thumb = new THREE.Mesh(theme.cyl(0.011, 0.017, 0.068, 5), glove)
   thumb.name = `${root.name}:thumb`
-  thumb.position.set(-side * 0.072, 0.047, -0.002)
-  thumb.rotation.z = side * 0.48
+  thumb.position.set(-side * 0.061, 0.045, -0.002)
+  thumb.rotation.z = side * 0.56
+  thumb.scale.z = 0.72
   root.add(thumb)
 
   const detail = new THREE.Group()
   detail.name = side < 0 ? 'viewmodel-hands:detail' : 'viewmodel-hands:detail:right'
-  const fingers = new THREE.InstancedMesh(theme.box(0.022, 0.072, 0.045), glove, 4)
+  const fingers = new THREE.InstancedMesh(theme.cyl(0.0075, 0.0105, 0.068, 5), glove, 4)
   fingers.name = `${root.name}:fingers`
   for (let i = 0; i < 4; i++) {
-    const across = (i - 1.5) * 0.029
-    const length = 1 - Math.abs(i - 1.5) * 0.055
-    _fingerPosition.set(across, 0.114 - Math.abs(i - 1.5) * 0.004, -0.004)
-    _fingerScale.set(1, length, 1)
+    const offset = i - 1.5
+    const across = offset * 0.027
+    const length = 1 - Math.abs(offset) * 0.065
+    _fingerPosition.set(across, 0.108 - Math.abs(offset) * 0.003, -0.004)
+    _fingerRotation.setFromAxisAngle(_fingerAxis, offset * -0.035)
+    _fingerScale.set(1, length, 0.86)
     _fingerMatrix.compose(_fingerPosition, _fingerRotation, _fingerScale)
     fingers.setMatrixAt(i, _fingerMatrix)
   }
   fingers.instanceMatrix.needsUpdate = true
   detail.add(fingers)
-
-  const knuckles = new THREE.InstancedMesh(theme.box(0.019, 0.018, 0.012), cuff, 4)
-  knuckles.name = `${root.name}:knuckles`
-  for (let i = 0; i < 4; i++) {
-    _fingerPosition.set((i - 1.5) * 0.029, 0.08, -0.039)
-    _fingerScale.set(1, 1, 1)
-    _fingerMatrix.compose(_fingerPosition, _fingerRotation, _fingerScale)
-    knuckles.setMatrixAt(i, _fingerMatrix)
-  }
-  knuckles.instanceMatrix.needsUpdate = true
-  detail.add(knuckles)
   root.add(detail)
   setMeshRules(root)
 
@@ -276,7 +276,7 @@ export function createViewmodelHands(opts: ViewmodelHandsOptions): ViewmodelHand
   group.visible = false
 
   const glove = theme.mat('viewmodel-hands.glove', {
-    color: 0x273342,
+    color: 0x354a5c,
     roughness: 0.9,
     metalness: 0.08,
     flatShading: true,
@@ -290,7 +290,7 @@ export function createViewmodelHands(opts: ViewmodelHandsOptions): ViewmodelHand
     surface: false,
   })
   const cuff = theme.mat('viewmodel-hands.cuff', {
-    color: 0x66758a,
+    color: 0x4f7892,
     roughness: 0.62,
     metalness: 0.38,
     flatShading: true,
@@ -312,6 +312,14 @@ export function createViewmodelHands(opts: ViewmodelHandsOptions): ViewmodelHand
   let actionT = 0
   let actionDuration = 1
   let actionSide: -1 | 1 = 1
+  let nearby: HandAction | null = null
+  let nearbyX = 0
+  let nearbyY = 0
+  let nearbyZ = 0
+  let nearbySide: -1 | 1 = 1
+  let displayedSide: -1 | 0 | 1 = 1
+  let presence = 0
+  let qualityEnabled = true
   const reach: ReachProjection = { x: REACH_X_MIN, y: REACH_Y_MIN, visible: true }
 
   let breathT = 0
@@ -339,8 +347,8 @@ export function createViewmodelHands(opts: ViewmodelHandsOptions): ViewmodelHand
     if (left.x === 0 && right.x === 0) {
       left.x = -IDLE_X * idleHalfW
       right.x = IDLE_X * idleHalfW
-      left.y = IDLE_Y * idleHalfH
-      right.y = IDLE_Y * idleHalfH
+      left.y = IDLE_Y * idleHalfH - HIDDEN_DROP * scale
+      right.y = IDLE_Y * idleHalfH - HIDDEN_DROP * scale
       left.z = -IDLE_DEPTH
       right.z = -IDLE_DEPTH
       left.root.position.set(left.x, left.y, left.z)
@@ -349,9 +357,26 @@ export function createViewmodelHands(opts: ViewmodelHandsOptions): ViewmodelHand
   }
 
   function setQuality(level: QualityLevel): void {
-    const articulated = level !== 'low' && level !== 'reduced'
-    left.detail.visible = articulated
-    right.detail.visible = articulated
+    qualityEnabled = level !== 'low' && level !== 'reduced'
+    left.detail.visible = qualityEnabled
+    right.detail.visible = qualityEnabled
+    if (!qualityEnabled) {
+      action = null
+      presence = 0
+      group.visible = false
+    }
+  }
+
+  function setNearby(next: HandAction, x: number, y: number, z: number): void {
+    if (disposed) return
+    nearby = next
+    nearbyX = x
+    nearbyY = y
+    nearbyZ = z
+  }
+
+  function clearNearby(): void {
+    nearby = null
   }
 
   function perform(next: HandAction, x: number, y: number, z: number): void {
@@ -387,6 +412,7 @@ export function createViewmodelHands(opts: ViewmodelHandsOptions): ViewmodelHand
     const side = hand.side
     let tx = side * IDLE_X * idleHalfW
     let ty = IDLE_Y * idleHalfH + breath * 0.006 * scale
+    ty -= (1 - presence) * HIDDEN_DROP * scale
     let tz = -IDLE_DEPTH
     let trx = -0.08
     let try_ = side * -0.08
@@ -413,7 +439,9 @@ export function createViewmodelHands(opts: ViewmodelHandsOptions): ViewmodelHand
       trz += side * (0.1 - extension * 0.24) * swimBlend
     }
 
-    let handAction = 0
+    let handAction = nearby !== null && action === null && side === nearbySide
+      ? presence * NEARBY_POISE
+      : 0
     if (action === 'door' || (action !== null && side === actionSide)) handAction = amount
     if (handAction > 0) {
       const targetX = action === 'door' ? side * REACH_X_MIN : reach.x
@@ -440,8 +468,13 @@ export function createViewmodelHands(opts: ViewmodelHandsOptions): ViewmodelHand
     if (camera.aspect !== aspect) applyLayout()
     group.position.copy(camera.position)
     group.quaternion.copy(camera.quaternion)
-    group.visible = walk.enabled
-    if (!walk.enabled) {
+    if (!walk.enabled || !qualityEnabled) {
+      group.visible = false
+      if (!walk.enabled) {
+        action = null
+        nearby = null
+        presence = 0
+      }
       lastYaw = camera.rotation.y
       lastPitch = camera.rotation.x
       return
@@ -452,6 +485,10 @@ export function createViewmodelHands(opts: ViewmodelHandsOptions): ViewmodelHand
     breathT += d * 0.92
 
     const swimming = walk.gait === 'swim' || walk.submerged
+    if (nearby !== null) {
+      projectReachTarget(camera, nearbyX, nearbyY, nearbyZ, reach)
+      nearbySide = reach.x < 0 ? -1 : 1
+    }
     moveBlend = damp(moveBlend, clamp01(walk.speed / 2.4), swimming ? 3.5 : 8, d)
     runBlend = damp(runBlend, walk.gait === 'run' ? 1 : 0, 6, d)
     swimBlend = damp(swimBlend, swimming ? 1 : 0, 4.2, d)
@@ -481,6 +518,15 @@ export function createViewmodelHands(opts: ViewmodelHandsOptions): ViewmodelHand
       }
     }
 
+    const hasIntent = swimming || action !== null || nearby !== null
+    if (swimming || action === 'door') displayedSide = 0
+    else if (action !== null) displayedSide = actionSide
+    else if (nearby !== null) displayedSide = nearbySide
+    presence = damp(presence, hasIntent ? 1 : 0, hasIntent ? 8 : 6, d)
+    group.visible = hasIntent || presence > 0.008
+    left.root.visible = displayedSide <= 0
+    right.root.visible = displayedSide >= 0
+
     const phase = walk.distance * (TAU / 1.55)
     const stride = noMotion ? 0 : Math.sin(phase)
     const breath = noMotion ? 0 : Math.sin(breathT)
@@ -507,6 +553,8 @@ export function createViewmodelHands(opts: ViewmodelHandsOptions): ViewmodelHand
     },
     update,
     setQuality,
+    setNearby,
+    clearNearby,
     perform,
     dispose,
   }

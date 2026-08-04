@@ -58,7 +58,7 @@ describe('first-person hand targeting', () => {
 })
 
 describe('first-person hand quality', () => {
-  it('drops articulated detail first while preserving both hand silhouettes', () => {
+  it('shows hands only for nearby controls, actions, and swimming', () => {
     const scene = new THREE.Scene()
     const camera = new THREE.PerspectiveCamera(52, 16 / 9, 0.5, 4000)
     const theme = createTheme()
@@ -82,21 +82,46 @@ describe('first-person hand quality', () => {
     const details = hands.group.getObjectByName('viewmodel-hands:detail')!
 
     hands.update(1 / 60)
-    expect(left.visible).toBe(true)
-    expect(right.visible).toBe(true)
+    expect(hands.group.visible).toBe(false)
     expect(details.visible).toBe(true)
 
     const idleY = right.position.y
     const idleZ = right.position.z
+    hands.setNearby('lever', 4, 2, -10)
+    for (let i = 0; i < 30; i++) hands.update(1 / 60)
+    expect(hands.group.visible).toBe(true)
+    expect(left.visible).toBe(false)
+    expect(right.visible).toBe(true)
+    expect(right.position.y).toBeGreaterThan(idleY + 0.02)
+
     hands.perform('lever', 4, 2, -10)
     for (let i = 0; i < 30; i++) hands.update(1 / 60)
     expect(right.position.y).toBeGreaterThan(idleY + 0.05)
     expect(right.position.z).toBeLessThan(idleZ - 0.02)
 
-    hands.setQuality('reduced' satisfies QualityLevel)
+    hands.clearNearby()
+    for (let i = 0; i < 120; i++) hands.update(1 / 60)
+    expect(hands.group.visible).toBe(false)
+
+    Object.defineProperty(walk, 'submerged', { value: true, configurable: true })
+    Object.defineProperty(walk, 'gait', { value: 'swim', configurable: true })
+    hands.update(1 / 60)
+    expect(hands.group.visible).toBe(true)
     expect(left.visible).toBe(true)
     expect(right.visible).toBe(true)
-    expect(details.visible).toBe(false)
+
+    hands.setQuality('reduced' satisfies QualityLevel)
+    hands.update(1 / 60)
+    expect(hands.group.visible).toBe(false)
+
+    hands.setQuality('low' satisfies QualityLevel)
+    hands.update(1 / 60)
+    expect(hands.group.visible).toBe(false)
+
+    hands.setQuality('medium' satisfies QualityLevel)
+    hands.update(1 / 60)
+    expect(hands.group.visible).toBe(true)
+    expect(details.visible).toBe(true)
 
     hands.dispose()
     expect(scene.getObjectByName('viewmodel-hands')).toBeUndefined()

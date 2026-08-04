@@ -11,10 +11,10 @@ import { clamp } from '../core/util'
  * `focus` on the bus: raycast at 25Hz against the registry roots, never while
  * the camera is being dragged, never when the pointer is on the HUD.
  *
- * Second, draw the selection. A wireframe box looks like a debug overlay and a
- * set of corner brackets looks like a sight, so the marker is neither: it is
- * the drawing an architect would hand you for this one building. A setting-out
- * circle on the ground, the footprint squared off inside it, the crown of the
+ * Second, draw the orbit-mode selection. A wireframe box looks like a debug
+ * overlay and a set of corner brackets looks like a sight, so the marker is
+ * neither: it is the drawing an architect would hand you for this one building.
+ * A setting-out circle on the ground, the footprint squared off inside it, the crown of the
  * massing repeated at roof level, two staffs tying the two together, and a
  * dimension line on each of the two exposed sides. Under all of it, a soft
  * band of light on the plot — the same lit-kerb language the district plinths
@@ -395,17 +395,22 @@ export function createPicker(opts: {
     }
   }
 
-  const offSelect = bus.on('select', ({ id }) => {
-    if (id === selectedId) return
-    selectedId = id
-    selDef = id ? registry.get(id) : undefined
+  /** The city-scale architectural drawing has no first-person representation. */
+  function refreshSelection(): void {
     boxT = 0
-    if (selDef) {
+    if (!walkMode && selDef) {
       applyAccent(sel, accentOf(selDef))
       applyBox(sel, selDef)
     } else {
       sel.root.visible = false
     }
+  }
+
+  const offSelect = bus.on('select', ({ id }) => {
+    if (id === selectedId) return
+    selectedId = id
+    selDef = id ? registry.get(id) : undefined
+    refreshSelection()
     refreshHover()
   })
 
@@ -421,6 +426,7 @@ export function createPicker(opts: {
     const walking = mode === 'walk'
     if (walking === walkMode) return
     walkMode = walking
+    refreshSelection()
     refreshHover()
   })
 
@@ -532,7 +538,7 @@ export function createPicker(opts: {
       }
     }
 
-    if (selDef) {
+    if (!walkMode && selDef) {
       boxT += dt
       if (boxT >= BOX_SEC) {
         boxT = 0

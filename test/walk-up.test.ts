@@ -80,7 +80,12 @@ describe('reusable walk-up interaction', () => {
     const target = site('lever', 0, 0, operate)
     target.approach = 'Approach the lever'
     target.approachRadius = WALK_UP_APPROACH_RADIUS
-    const interaction = createWalkUpInteraction({ walk: walk(position), sites: [target] })
+    const onProximityChange = vi.fn()
+    const interaction = createWalkUpInteraction({
+      walk: walk(position),
+      sites: [target],
+      onProximityChange,
+    })
     const root = document.querySelector<HTMLElement>('.walk-up-prompt')!
     const button = root.querySelector<HTMLButtonElement>('.walk-up-prompt__action')!
 
@@ -89,6 +94,7 @@ describe('reusable walk-up interaction', () => {
     expect(root.dataset.range).toBe('approach')
     expect(root.textContent).toContain('Approach the lever')
     expect(button.disabled).toBe(true)
+    expect(onProximityChange).toHaveBeenLastCalledWith(target, false)
 
     window.dispatchEvent(keyDown('KeyE'))
     expect(operate).not.toHaveBeenCalled()
@@ -98,6 +104,11 @@ describe('reusable walk-up interaction', () => {
     expect(root.dataset.range).toBe('operate')
     expect(button.disabled).toBe(false)
     expect(root.textContent).toContain('OPERATE')
+    expect(onProximityChange).toHaveBeenLastCalledWith(target, true)
+
+    position.set(WALK_UP_APPROACH_RADIUS + 1, 0, 0)
+    interaction.update(0)
+    expect(onProximityChange).toHaveBeenLastCalledWith(null, false)
 
     interaction.dispose()
   })
