@@ -216,7 +216,8 @@ describe('machine room portrait layout', () => {
       'Probe · #temporary-touch-target-probe: 1.00 × 1.00px is below 44 × 44px',
     ])
     expect(touchTargetFailures(reports)).toEqual([])
-  }, 90_000)
+  // Browser-slot queue time is not touch behavior; the CDP helper bounds its own waits.
+  }, 0)
 
   it('keeps every marked honesty disclosure visible and legible at 390px', async () => {
     const reports = await measureDisclosurePages([{
@@ -232,6 +233,7 @@ describe('machine room portrait layout', () => {
       name: 'City',
       path: '/',
       readySelector: '.control-center__sources',
+      probeVersionQualification: true,
       prepare: `(async () => {
         for (let attempt = 0; attempt < 120 && !window.PGSIMCITY; attempt += 1) {
           await new Promise((resolve) => setTimeout(resolve, 100))
@@ -285,7 +287,20 @@ describe('machine room portrait layout', () => {
       'Marker probe · TEMPORARY DISCLOSURE PROBE: 1px is below the 9px floor',
     ])
     expect(disclosureFailures(reports)).toEqual([])
-  }, 90_000)
+
+    const version = reports[1].versionQualification
+    expect(version.collapsed.found).toBe(true)
+    expect(version.collapsed.markerText).toContain('PostgreSQL 18.4')
+    expect(version.collapsed.fullVisible).toBe(false)
+    expect(version.collapsed.correctionVisible).toBe(false)
+    expect(version.collapsed.markerHeight).toBeGreaterThanOrEqual(version.collapsed.tapSize)
+    expect(version.collapsed.provenancePosition).toBe('absolute')
+    expect(version.expanded.fullVisible).toBe(true)
+    expect(version.expanded.correctionVisible).toBe(true)
+    expect(version.expanded.disclosureHeight).toBeGreaterThan(version.collapsed.markerHeight)
+    expect(version.expanded.hudHeight).toBeCloseTo(version.collapsed.hudHeight, 5)
+  // Browser-slot queue time is not layout behavior; the CDP helper bounds its own waits.
+  }, 0)
 
   it('keeps the deferred-flush risk state readable outside the mobile canvas', () => {
     expect(html).toMatch(

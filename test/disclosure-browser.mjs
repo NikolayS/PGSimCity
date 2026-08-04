@@ -304,12 +304,64 @@ export async function measureDisclosurePage(evaluatePage, page, viewport) {
       marked: marked.find((item) => item.id === 'temporary-probe'),
     }
   }
+  const versionQualification = page.probeVersionQualification
+    ? await evaluatePage(`(async () => {
+        const disclosure = document.querySelector('#city-version-provenance [data-version-qualification]')
+        const summary = disclosure?.querySelector('summary')
+        const full = disclosure?.querySelector('[data-version-qualification-full]')
+        const correction = disclosure?.querySelector('[data-correction-link="true"]')
+        const provenance = document.querySelector('#city-version-provenance')
+        const hud = document.querySelector('#hud-top')
+        const instruments = hud?.querySelector('.hud-bar')
+        const rendered = (element) => {
+          if (!element) return false
+          const style = getComputedStyle(element)
+          const rect = element.getBoundingClientRect()
+          return style.display !== 'none'
+            && style.visibility === 'visible'
+            && Number(style.opacity) > 0
+            && rect.width > 0
+            && rect.height > 0
+        }
+        const snapshot = () => {
+          const hudRect = hud?.getBoundingClientRect()
+          const instrumentRect = instruments?.getBoundingClientRect()
+          const markerRect = summary?.getBoundingClientRect()
+          const fullRect = full?.getBoundingClientRect()
+          const disclosureRect = disclosure?.getBoundingClientRect()
+          return {
+            found: Boolean(disclosure && summary && full && correction && hud && instruments),
+            markerText: summary?.textContent.replace(/\\s+/g, ' ').trim() ?? '',
+            provenancePosition: provenance ? getComputedStyle(provenance).position : '',
+            hudHeight: hudRect?.height ?? 0,
+            instrumentHeight: instrumentRect?.height ?? 0,
+            hudBottom: hudRect?.bottom ?? 0,
+            instrumentBottom: instrumentRect?.bottom ?? 0,
+            markerHeight: markerRect?.height ?? 0,
+            fullHeight: fullRect?.height ?? 0,
+            disclosureHeight: disclosureRect?.height ?? 0,
+            tapSize: Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tap')),
+            fullVisible: disclosure?.open === true && rendered(full),
+            correctionVisible: disclosure?.open === true && rendered(correction),
+            summaryFocused: document.activeElement === summary,
+            open: disclosure?.open ?? false,
+          }
+        }
+        const collapsed = snapshot()
+        summary?.click()
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+        const expanded = snapshot()
+        if (disclosure) disclosure.open = false
+        return { collapsed, expanded }
+      })()`)
+    : undefined
   return {
     name: page.name,
     viewport,
     authoredDisclosureCount,
     disclosures,
     markerProbe,
+    versionQualification,
   }
 }
 
@@ -355,6 +407,7 @@ const TOUCH_TARGET_EXPRESSION = `(async () => {
     // Skip links are intentionally parked outside the viewport until keyboard
     // focus reveals them; they are not a rendered touch target in that state.
     if (element.matches('.skip-link:not(:focus)')) return false
+    if (element.tagName !== 'SUMMARY' && element.closest('details:not([open])')) return false
     if (element.closest('[hidden], [inert], [aria-hidden="true"]')) return false
     const style = getComputedStyle(element)
     const rect = element.getBoundingClientRect()
@@ -379,7 +432,7 @@ const TOUCH_TARGET_EXPRESSION = `(async () => {
       && rect.height > 0)
   }
   const controls = Array.from(document.querySelectorAll(
-    'button, a, [role="button"], input:not([type="hidden"]), select',
+    'button, a, summary, [role="button"], input:not([type="hidden"]), select',
   )).filter(isRenderedControl)
   const measured = []
   for (const element of controls) {

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 
-import { CLAIM_VALUES } from '../src/core/claims'
+import { CLAIMS, CLAIM_VALUES } from '../src/core/claims'
 import {
   CORRECTION_URL_MAX_LENGTH,
   CORRECTION_ISSUE_TEMPLATE,
@@ -15,6 +15,7 @@ import {
   correctionActionNameFailures,
   correctionCoverageFailures,
   measureCorrectionPages,
+  versionQualificationFailures,
 } from './correction-browser.mjs'
 import {
   disclosureFailures,
@@ -139,6 +140,14 @@ describe('PostgreSQL correction reports', () => {
     expect(link!.textContent).toMatch(/\b(?:report|file|submit)\b/iu)
     expect(link!.textContent).toMatch(/\bGitHub\b/iu)
     expect(accessibleName).toMatch(/\b(?:report|file|submit)\b/iu)
+    const qualification = link!.closest<HTMLDetailsElement>('[data-version-qualification]')
+    expect(qualification).not.toBeNull()
+    expect(qualification!.open).toBe(false)
+    expect(qualification!.querySelector('summary')?.textContent)
+      .toContain(CLAIM_VALUES.postgresqlVersion.referenceLabel)
+    expect(qualification!.querySelector('[data-version-qualification-full]')?.textContent)
+      .toContain(`model and explanations describe ${CLAIM_VALUES.postgresqlVersion.referenceLabel}`)
+    expect(qualification!.querySelector('[data-disclosure]')).not.toBeNull()
 
     claim.textContent = 'PostgreSQL scans usage_count and selects a zero-valued victim.'
     link!.dispatchEvent(new Event('pointerdown'))
@@ -185,6 +194,14 @@ describe('PostgreSQL correction reports', () => {
     expect(template).toContain('what PostgreSQL does instead')
     expect(template).toContain('documentation section or PostgreSQL source')
     expect(CLAIM_VALUES.appVersion.label).toMatch(/^v\d+\.\d+\.\d+ · [0-9a-f]{7}$/)
+  })
+
+  it('keeps every claim-bearing rendering family on the shared correction path', () => {
+    for (const surface of CLAIMS.postgresqlVersion.claimSurfaces) {
+      const count = read(surface.source).match(/createCorrectionPath\(/g)?.length ?? 0
+      expect(count, `${surface.label} has no shared correction path in ${surface.source}`)
+        .toBe(surface.correctionPaths)
+    }
   })
 
   it('covers every claim-bearing panel rendered by each browser surface', async () => {
@@ -249,7 +266,8 @@ describe('PostgreSQL correction reports', () => {
         await window.MAGNUM.runQuery("SELECT '${SQL_SECRET}' AS private_input;")
         document.querySelector('#index-walk-open').click()
         document.querySelector('#comparison').hidden = false
-        document.querySelector('.measurement-rack [data-correction-link]')
+        document.querySelector('#machine-version-provenance').open = true
+        document.querySelector('#machine-version-provenance [data-correction-link]')
           ?.dispatchEvent(new Event('pointerdown'))
       })()`,
       sqlSecret: SQL_SECRET,
@@ -281,6 +299,7 @@ describe('PostgreSQL correction reports', () => {
     }])).toEqual([])
     expect(correctionCoverageFailures(reports)).toEqual([])
     expect(correctionActionNameFailures(reports)).toEqual([])
+    expect(versionQualificationFailures(reports)).toEqual([])
 
     const disclosureReports = reports.flatMap(
       (report) => report.disclosureReport ? [report.disclosureReport] : [],

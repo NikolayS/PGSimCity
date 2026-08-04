@@ -37,6 +37,9 @@ const MEASURE_EXPRESSION = `(() => {
       return {
         label: describe(element),
         pathCount: links.length,
+        versionQualificationCount: element.querySelectorAll(
+          '[data-correction-path="true"][data-version-qualification]',
+        ).length,
         links,
       }
     })
@@ -148,6 +151,15 @@ export function correctionActionNameFailures(reports) {
             `${report.name} · ${subject.label}: accessible name does not convey a reporting action`,
           )
         }
+export function versionQualificationFailures(reports) {
+  const failures = []
+  for (const report of reports) {
+    for (const subject of report.subjects) {
+      if (subject.pathCount === 0) continue
+      if (subject.versionQualificationCount !== subject.pathCount) {
+        failures.push(
+          `${report.name} · ${subject.label}: expected each correction path to carry one PostgreSQL version qualification, found ${subject.versionQualificationCount ?? 0} for ${subject.pathCount}`,
+        )
       }
     }
   }
