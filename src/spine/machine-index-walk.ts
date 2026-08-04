@@ -1,5 +1,18 @@
 export const MACHINE_INDEX_WALK = Object.freeze({
   partialIndex: 'accounts_positive_owner_idx',
+  seed: Object.freeze({
+    rows: 2_000,
+    ownerPrefix: 'account-',
+    balanceBase: 1_000,
+    updatedAt: '2026-01-01 00:00:00+00',
+  }),
+  statements: Object.freeze({
+    primaryKey: 'SELECT id, balance FROM accounts WHERE id = 42;',
+    ownerOnly: "SELECT id, balance FROM accounts WHERE owner = 'account-42';",
+    ownerWithPredicate:
+      "SELECT id, balance FROM accounts WHERE owner = 'account-42' AND balance > 0;",
+  }),
+  expectedLookupRow: Object.freeze({ id: 42, balance: 1_042 }),
   catalogSql: `SELECT
   c.relname AS index_name,
   am.amname AS access_method,

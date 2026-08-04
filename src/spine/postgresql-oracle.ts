@@ -461,6 +461,7 @@ export const POSTGRESQL_ORACLE_CLAIMS = {
     },
     preparedHorizon: {
       gid: 'oracle_prepared_horizon',
+      relation: 'oracle_prepared_horizon',
     },
   },
   walSegment: {
