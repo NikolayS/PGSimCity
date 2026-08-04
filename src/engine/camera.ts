@@ -39,6 +39,8 @@ export interface CameraRigOptions {
   reducedMotion?: boolean
 }
 
+type TouchGestureIntent = 'pending' | 'swipe' | 'twist' | 'pinch'
+
 /* --------------------------------------------------------------------------
  * Tuning. Every number here is a feel decision.
  * ------------------------------------------------------------------------*/
@@ -80,6 +82,14 @@ const PRECISION = 0.25
 /** Wheel: exp(px * k). One notch (~100px) ≈ 22%. */
 const ZOOM_K = 0.002
 const SPEED_K = 0.0018
+
+/* Six percent of the finger span is enough geometric evidence to classify.
+ * A 1.5x-dominant intent must repeat, while 3x locks immediately; the lifetime
+ * lock is the hysteresis. Twist uses the same endpoint-travel geometry. */
+const TOUCH_INTENT_FRACTION = 0.06
+const TOUCH_DOMINANCE = 1.5
+const TOUCH_DECISIVE_DOMINANCE = 3
+const TOUCH_TWIST_ANGLE = TOUCH_INTENT_FRACTION * 2
 
 const FOCUS_DUR = 1.05
 /** Upward framing bias for auto-derived focus directions. */
@@ -315,12 +325,27 @@ export function createCameraRig(
   const ptrIds: number[] = []
   const ptrX = new Map<number, number>()
   const ptrY = new Map<number, number>()
-  let pinchActive = false
-  let pinchDist = 0
-  let pinchMx = 0
-  let pinchMy = 0
-  /** Two-finger twist, radians, for yaw. NaN until the gesture has a reference. */
-  let pinchAngle = 0
+  let touchFrameActive = false
+  let touchPrevDist = 0
+  let touchPrevMx = 0
+  let touchPrevMy = 0
+  let touchPrevAngle = 0
+  let touchStartDist = 0
+  let touchStartMx = 0
+  let touchStartMy = 0
+  let touchAngleTotal = 0
+  const touchBasePivot = new THREE.Vector3()
+  const touchBasePivotT = new THREE.Vector3()
+  let touchBaseTheta = 0
+  let touchBasePhi = 0
+  let touchBaseDist = 0
+  let touchScale = 1
+  let touchYaw = 0
+  let touchTilt = 0
+  let touchTransformDirty = false
+  let touchIntent: TouchGestureIntent = 'pending'
+  let touchCandidate: TouchGestureIntent = 'pending'
+  let touchCandidateSamples = 0
 
   const keys = new Set<string>()
   let shiftDown = false
@@ -536,6 +561,149 @@ export function createCameraRig(
     panAnchorValid = pickGround(panNdcX, panNdcY, panAnchor)
   }
 
+  function clearTouchGesture(): void {
+    touchFrameActive = false
+    touchScale = 1
+    touchYaw = 0
+    touchTilt = 0
+    touchTransformDirty = false
+    touchAngleTotal = 0
+    touchIntent = 'pending'
+    touchCandidate = 'pending'
+    touchCandidateSamples = 0
+    velTheta = 0
+    velPhi = 0
+  }
+
+  function beginTouchGesture(ax: number, ay: number, bx: number, by: number): void {
+    const sx = ax - bx
+    const sy = ay - by
+    touchPrevDist = Math.sqrt(sx * sx + sy * sy) || 1
+    touchPrevMx = (ax + bx) * 0.5
+    touchPrevMy = (ay + by) * 0.5
+    touchPrevAngle = Math.atan2(sy, sx)
+    touchStartDist = touchPrevDist
+    touchStartMx = touchPrevMx
+    touchStartMy = touchPrevMy
+    touchBasePivot.copy(pivot)
+    touchBasePivotT.copy(pivotT)
+    touchBaseTheta = theta
+    touchBasePhi = phi
+    touchBaseDist = dist
+    touchFrameActive = true
+    touchScale = 1
+    touchYaw = 0
+    touchTilt = 0
+    touchTransformDirty = false
+    touchAngleTotal = 0
+    touchIntent = 'pending'
+    touchCandidate = 'pending'
+    touchCandidateSamples = 0
+  }
+
+  function classifyTouchGesture(
+    translation: number,
+    radial: number,
+    twistAngle: number,
+  ): TouchGestureIntent {
+    if (twistAngle >= TOUCH_TWIST_ANGLE) return 'twist'
+    const threshold = touchStartDist * TOUCH_INTENT_FRACTION
+    if (radial >= threshold && radial > translation * TOUCH_DOMINANCE) return 'pinch'
+    if (translation >= threshold && translation > radial * TOUCH_DOMINANCE) return 'swipe'
+    return 'pending'
+  }
+
+  /** Sample both contacts once per tick; pointer events only update their positions. */
+  function sampleTouchGesture(): void {
+    if (ptrIds.length < 2) return
+    const ax = ptrX.get(ptrIds[0])
+    const ay = ptrY.get(ptrIds[0])
+    const bx = ptrX.get(ptrIds[1])
+    const by = ptrY.get(ptrIds[1])
+    if (ax === undefined || ay === undefined || bx === undefined || by === undefined) return
+    if (!touchFrameActive) {
+      beginTouchGesture(ax, ay, bx, by)
+      return
+    }
+
+    const sx = ax - bx
+    const sy = ay - by
+    const distance = Math.sqrt(sx * sx + sy * sy) || 1
+    const mx = (ax + bx) * 0.5
+    const my = (ay + by) * 0.5
+    const angle = Math.atan2(sy, sx)
+    const dMidX = mx - touchPrevMx
+    const dMidY = my - touchPrevMy
+    let dAngle = angle - touchPrevAngle
+    if (dAngle > Math.PI) dAngle -= Math.PI * 2
+    else if (dAngle < -Math.PI) dAngle += Math.PI * 2
+
+    touchAngleTotal += dAngle
+    const totalMidX = mx - touchStartMx
+    const totalMidY = my - touchStartMy
+    const translation = Math.hypot(totalMidX, totalMidY)
+    const radial = Math.abs(distance - touchStartDist)
+    const twistAngle = Math.abs(touchAngleTotal)
+    const twistTravel = twistAngle * touchStartDist * 0.5
+    const moved = dMidX !== 0 || dMidY !== 0 || distance !== touchPrevDist || dAngle !== 0
+    if (touchIntent === 'pending' && moved) {
+      const candidate = classifyTouchGesture(translation, radial, twistAngle)
+      if (candidate === 'pending') {
+        touchCandidate = 'pending'
+        touchCandidateSamples = 0
+      } else {
+        if (candidate === touchCandidate) touchCandidateSamples += 1
+        else {
+          touchCandidate = candidate
+          touchCandidateSamples = 1
+        }
+        const competing = candidate === 'pinch'
+          ? Math.max(translation, twistTravel)
+          : candidate === 'swipe'
+            ? Math.max(radial, twistTravel)
+            : 0
+        const primary = candidate === 'pinch'
+          ? radial
+          : candidate === 'swipe'
+            ? translation
+            : twistTravel
+        const decisive = candidate === 'twist'
+          ? twistAngle >= TOUCH_TWIST_ANGLE * 2
+          : primary > competing * TOUCH_DECISIVE_DOMINANCE
+        if (decisive || touchCandidateSamples >= 2) {
+          touchIntent = candidate
+        }
+      }
+    }
+
+    if (touchIntent !== 'pending' && touchIntent !== 'pinch') {
+      // Twist follows the hand in every rotational mode; midpoint yaw/tilt is
+      // exclusive to a translation-dominant parallel swipe.
+      touchYaw = touchAngleTotal
+      if (touchIntent === 'swipe') {
+        touchYaw -= (Math.PI * 2 * totalMidX) / viewH
+        touchTilt = -(Math.PI * 2 * totalMidY) / viewH
+      }
+      if (
+        !rotateGestureAnnounced
+        && (Math.abs(touchAngleTotal) > 1e-4 || Math.abs(totalMidX) > 0.1 || Math.abs(totalMidY) > 0.1)
+      ) {
+        rotateGestureAnnounced = true
+        bus.emit('camera:gesture', { kind: 'rotate', pointer: 'touch' })
+      }
+    } else {
+      touchYaw = 0
+      touchTilt = 0
+    }
+    touchScale = touchStartDist / distance
+    touchTransformDirty = moved
+
+    touchPrevDist = distance
+    touchPrevMx = mx
+    touchPrevMy = my
+    touchPrevAngle = angle
+  }
+
   function onPointerDown(e: PointerEvent): void {
     // Right-click belongs to the contextual UI in every camera mode. Do not
     // capture it, cancel a scripted shot, or let it enter a look integrator.
@@ -558,16 +726,17 @@ export function createCameraRig(
     }
 
     if (e.pointerType === 'touch' && ptrIds.length >= 2) {
-      // Second finger: stop panning and start a pinch on the next move. Keep
-      // dragOrbit ON, because twist and tilt feed the same rotate integrator a
-      // mouse drag does — without it inRotX/inRotY accumulate and are thrown
-      // away, which is exactly why touch could zoom and pan but never turn.
+      // The first two contacts own one gesture until either is released.
       dragOrbit = true
       dragPan = false
-      pinchActive = false
-      const ax = ptrX.get(ptrIds[0]) ?? e.clientX
-      const ay = ptrY.get(ptrIds[0]) ?? e.clientY
-      beginRotateAt({ clientX: (ax + e.clientX) * 0.5, clientY: (ay + e.clientY) * 0.5 })
+      if (ptrIds.length === 2) {
+        const ax = ptrX.get(ptrIds[0]) ?? e.clientX
+        const ay = ptrY.get(ptrIds[0]) ?? e.clientY
+        const bx = ptrX.get(ptrIds[1]) ?? e.clientX
+        const by = ptrY.get(ptrIds[1]) ?? e.clientY
+        beginRotateAt({ clientX: (ax + bx) * 0.5, clientY: (ay + by) * 0.5 })
+        beginTouchGesture(ax, ay, bx, by)
+      }
       return
     }
 
@@ -611,63 +780,13 @@ export function createCameraRig(
       }
       return
     }
-    const dx = e.clientX - px
-    const dy = e.clientY - py
     ptrX.set(id, e.clientX)
     ptrY.set(id, e.clientY)
 
-    // two-finger: pinch dolly + midpoint orbit
-    if (ptrIds.length >= 2) {
-      const ax = ptrX.get(ptrIds[0])
-      const ay = ptrY.get(ptrIds[0])
-      const bx = ptrX.get(ptrIds[1])
-      const by = ptrY.get(ptrIds[1])
-      if (ax === undefined || ay === undefined || bx === undefined || by === undefined) return
-      const sx = ax - bx
-      const sy = ay - by
-      const d = Math.sqrt(sx * sx + sy * sy) || 1
-      const mx = (ax + bx) * 0.5
-      const my = (ay + by) * 0.5
-      // Map gestures, the set every phone user already knows: pinch to zoom,
-      // twist or drag both fingers sideways to yaw, and drag both fingers up or
-      // down to tilt. Panning stays on one finger, so each stays unambiguous.
-      const ang = Math.atan2(sy, sx)
-      if (pinchActive) {
-        pendingZoom *= clamp(pinchDist / d, 0.5, 2)
-        ndcFromEvent({ clientX: mx, clientY: my })
+    if (ptrIds.length >= 2) return
 
-        // Parallel horizontal drag matches the mouse rotate direction and scale.
-        const dMidX = mx - pinchMx
-        inRotX += dMidX
-
-        // twist -> yaw. Shortest-arc difference so crossing PI does not spin.
-        let dAng = ang - pinchAngle
-        if (dAng > Math.PI) dAng -= Math.PI * 2
-        else if (dAng < -Math.PI) dAng += Math.PI * 2
-        // inRotX is consumed as (2*PI*inRotX)/viewH radians, so convert back.
-        // Negated: screen Y points down, so a visually clockwise twist gives a
-        // POSITIVE atan2 delta, and feeding that straight in turned the city
-        // against the fingers. The map has to follow the hand.
-        inRotX -= (dAng * viewH) / (Math.PI * 2)
-
-        // both fingers moving together vertically -> tilt
-        const dMidY = my - pinchMy
-        inRotY += dMidY
-        if (
-          !rotateGestureAnnounced
-          && (Math.abs(dMidX) > 0.1 || Math.abs(dAng) > 1e-4 || Math.abs(dMidY) > 0.1)
-        ) {
-          rotateGestureAnnounced = true
-          bus.emit('camera:gesture', { kind: 'rotate', pointer: 'touch' })
-        }
-      }
-      pinchDist = d
-      pinchMx = mx
-      pinchMy = my
-      pinchAngle = ang
-      pinchActive = true
-      return
-    }
+    const dx = e.clientX - px
+    const dy = e.clientY - py
 
     if (mode === 'fly') {
       if (locked) {
@@ -713,7 +832,19 @@ export function createCameraRig(
         /* already released */
       }
     }
-    if (ptrIds.length < 2) pinchActive = false
+    if (ptrIds.length >= 2) {
+      if (i < 0 || i >= 2) return
+      const ax = ptrX.get(ptrIds[0])
+      const ay = ptrY.get(ptrIds[0])
+      const bx = ptrX.get(ptrIds[1])
+      const by = ptrY.get(ptrIds[1])
+      if (ax !== undefined && ay !== undefined && bx !== undefined && by !== undefined) {
+        beginRotateAt({ clientX: (ax + bx) * 0.5, clientY: (ay + by) * 0.5 })
+        beginTouchGesture(ax, ay, bx, by)
+      }
+      return
+    }
+    clearTouchGesture()
     if (wasMultiPointer && ptrIds.length === 1 && mode === 'orbit') {
       const remaining = ptrIds[0]
       const x = ptrX.get(remaining)
@@ -808,7 +939,7 @@ export function createCameraRig(
     dragPan = false
     dragLook = false
     keyboardOrbit = false
-    pinchActive = false
+    clearTouchGesture()
     panAnchorValid = false
     rotateAnchorValid = false
     ptrIds.length = 0
@@ -933,14 +1064,47 @@ export function createCameraRig(
     }
   }
 
+  /** Rebuild from the gesture baseline so partial contact delivery cannot leave path-dependent motion. */
+  function applyTouchTransform(): void {
+    if (!touchTransformDirty || !touchFrameActive || !rotateAnchorValid) return
+    touchTransformDirty = false
+    pivot.copy(touchBasePivot)
+    pivotT.copy(touchBasePivotT)
+    theta = touchBaseTheta
+    phi = touchBasePhi
+    dist = touchBaseDist
+    distT = touchBaseDist
+    zoomAnchored = false
+    velTheta = 0
+    velPhi = 0
+    applyOrbitTransform()
+
+    const requestedDist = clamp(touchBaseDist * touchScale, MIN_DIST, MAX_DIST)
+    const scale = allowedZoomScale(rotateAnchor, requestedDist / touchBaseDist)
+    if (Math.abs(scale - 1) >= 1e-12) {
+      pivot.sub(rotateAnchor).multiplyScalar(scale).add(rotateAnchor)
+      pivotT.sub(rotateAnchor).multiplyScalar(scale).add(rotateAnchor)
+      dist = touchBaseDist * scale
+      distT = dist
+      applyOrbitTransform()
+    }
+    if (touchYaw !== 0) rotateOrbit(WORLD_UP, touchYaw)
+    if (touchTilt !== 0) {
+      _right.setFromMatrixColumn(camera.matrixWorld, 0).normalize()
+      const limitedTilt = clamp(phi + touchTilt, PHI_MIN, PHI_MAX) - phi
+      if (limitedTilt !== 0) rotateOrbit(_right, limitedTilt)
+    }
+  }
+
   function tickOrbit(dt: number, sdt: number): void {
     inLookX = 0
     inLookY = 0
+    applyTouchTransform()
 
     /* rotate eye and look target around the ground pick made at drag start */
     let yawStep = 0
     let pitchStep = 0
-    if (dragOrbit) {
+    if (dragOrbit && !touchFrameActive) {
       const kx = (Math.PI * 2 * inRotX) / viewH
       const ky = (Math.PI * 2 * inRotY) / viewH
       yawStep = -kx
@@ -1085,6 +1249,7 @@ export function createCameraRig(
     camera.position.setFromSpherical(_sph).add(pivot)
     camera.up.copy(WORLD_UP)
     camera.lookAt(pivot)
+    camera.quaternion.normalize()
     camera.updateMatrixWorld()
   }
 
@@ -1429,6 +1594,7 @@ export function createCameraRig(
     // A tab that was hidden hands us a huge dt; clamp so nothing teleports.
     const d = dt > 0 ? (dt < 0.1 ? dt : 0.1) : 0
     const sdt = d > 1e-4 ? d : 1e-4
+    if (mode === 'orbit') sampleTouchGesture()
     if (mode === 'walk') {
       // The pedestrian writes the transform this frame. Keep re-deriving the
       // orbit state from it — the same trick the scripted modes use — so that
@@ -1456,6 +1622,7 @@ export function createCameraRig(
     inLookX = 0
     inLookY = 0
     pendingZoom = 1
+    touchTransformDirty = false
     rotateAnchorValid = false
     panAnchorValid = false
     zoomAnchored = false
