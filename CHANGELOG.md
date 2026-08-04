@@ -11,6 +11,68 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+## [0.39.0] - 2026-08-04
+
+Four defects Nik found by walking the city, and the tests that make each class
+impossible to reintroduce.
+
+### Fixed — text readable only in a mirror
+
+`REJOIN BAY` and its caption block rendered backwards. The cause: `plate()` built
+every text plane with `side: THREE.DoubleSide`, and a text plane seen from behind
+is mirrored. The plate sat on the far side of its wall facing *into* the
+structure.
+
+`DoubleSide` is why no test caught it — the plate existed, carried the right
+string, and rendered.
+
+**Ten plates across five modules were affected.** A geometric invariant now
+asserts, for every text plane, that its legible normal does not point into
+geometry, that its world matrix has positive determinant (a reflection mirrors
+text from either side, including via a parent group's negative scale), and that
+its up vector stays near world up. Failures name the offending plate by its text.
+
+### Fixed — the buffer pool stood above its own borders
+
+The water surface sat at Y 8.80, the deck at 3.05, and the indigo strip described
+in its own comment as *"the plaza's outline"* at 2.27–2.49 — below the deck. No
+basin, coping or retaining wall existed anywhere: nothing contained the water.
+
+Glazed coping now runs from the deck up past the water surface, collidable on all
+four sides with an access gate so swimming still works. The geometry now says the
+true thing: `shared_buffers` is a fixed allocation.
+
+### Fixed — rotation orbited the map centre, not the view
+
+Zoomed in near a map edge, rotation pivoted around the middle of the city. Three
+compounding causes: the pivot clamp pulled the pivot *inward* at the edges;
+rotation never re-anchored the pivot to what was under the viewport; and
+zoom-to-cursor capped its shift so the pivot trailed what you zoomed into.
+
+Camera gestures now follow the conventions hands already know — rotate and tilt
+about the ground point under the cursor or the view centre, zoom holding that
+point fixed, pan keeping the ground under your finger. The invariant asserted:
+after a rotate drag, the world point at the viewport centre is still at the
+viewport centre — tested at several distances and hard against the map edge.
+
+### Fixed — 16 MiB WAL segments are a default, not a constant
+
+Three surfaces stated fixed 16 MiB segments without the initdb scope. A real
+cluster built with `--wal-segsize=32` reports 32MB; `wal_segment_size` is chosen
+at initdb and cannot change afterwards. Found by the oracle, not by reading.
+
+### Added
+
+- **The city's layout in words** — districts, containment, adjacency and the
+  reason each adjacency is meaningful, generated from `layout.ts` so it cannot
+  drift, with a test that fails if a district exists in one and not the other.
+  It closes the layout gap `ACCESSIBILITY.md` named; it does not pretend to
+  replace the walk.
+- The oracle reached **211 checks**, now covering WAL segment size, wait-event
+  mappings, connection-local session behaviour and the remaining page-layout
+  experiments. 0 unexpected divergences.
+
+
 ## [0.38.1] - 2026-08-03
 
 ### Added — the city works without a mouse, and without sight where it can
