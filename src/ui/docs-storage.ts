@@ -313,6 +313,42 @@ export const DOCS_STORAGE: ComponentDoc[] = [
   },
 
   {
+    id: 'archive.status',
+    title: 'pg_wal/archive_status',
+    subtitle: 'the archiver’s local bookkeeping',
+    tldr: 'A .ready marker means a completed WAL segment still needs archiving; .done records successful archival so PostgreSQL may recycle it.',
+    sections: [
+      {
+        heading: 'The marker is not the archive',
+        body: 'When a WAL segment becomes archivable, PostgreSQL creates a zero-length `pg_wal/archive_status/<segment>.ready` file. After `archive_command` or `archive_library` reports success, the archiver renames that marker to `.done`. The marker contains no WAL and proves only PostgreSQL’s local record of the result; the actual segment must exist durably at the archive destination. Creating or removing these files by hand can make PostgreSQL skip required archival or repeat work.',
+      },
+      {
+        heading: 'What the city counts',
+        body: 'The `.ready` count is the modeled archive queue. The city shows at most the latest six `.done` markers and keeps no marker files, archive-command exit statuses or destination objects here; those mechanisms are represented by counters and the separate archive gate and object store.',
+      },
+    ],
+    metrics: [
+      { label: '.ready', get: (s) => fmtNum(s.wal.archiveQueue), hint: 'completed segments waiting for successful archival' },
+      { label: '.done shown', get: (s) => `${fmtNum(Math.min(s.wal.archived, 6))} / ${fmtNum(s.wal.archived)}`, hint: 'the drawing retains only the latest six markers' },
+    ],
+    knobs: ['walGArchiveCredentialsValid', 'tps', 'writeRatio'],
+    see: ['archiver', 'archive.gate', 'object.store', 'wal.vault'],
+    source: ['src/backend/access/transam/xlogarchive.c', 'src/backend/postmaster/pgarch.c'],
+    refs: {
+      docs: [
+        manual('continuous-archiving.html#BACKUP-ARCHIVING-WAL', '25.3.1. Setting Up WAL Archiving'),
+        manual('monitoring-stats.html#MONITORING-PG-STAT-ARCHIVER-VIEW', '27.2.12. pg_stat_archiver'),
+      ],
+      source: [
+        srcFile('src/backend/access/transam/xlogarchive.c', 'XLogArchiveNotify, XLogArchiveCheckDone, XLogArchiveForceDone'),
+        srcFile('src/backend/postmaster/pgarch.c', 'pgarch_ArchiverCopyLoop, pgarch_archiveXlog'),
+      ],
+      suzuki: suzuki(10, 'Online Backup and Point-In-Time Recovery (PITR)'),
+      rogov: rogov(R_WAL, 'Write-Ahead Log — recovery and continuous archiving'),
+    },
+  },
+
+  {
     id: 'object.store',
     title: 'WAL-G object storage',
     subtitle: 'WAL and base-backup objects in S3',
@@ -583,6 +619,37 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         { label: 'patroni/ha.py', url: 'https://github.com/patroni/patroni/blob/master/patroni/ha.py', symbol: 'Ha.run_cycle, Ha.demote' },
       ],
       rogov: rogov(R_WAL, 'Write-Ahead Log — recovery', 'the nearest honest chapter; Rogov does not cover Patroni or distributed consensus'),
+    },
+  },
+
+  {
+    id: 'ha.endpoint',
+    title: 'Service address',
+    subtitle: 'one stable client destination for the writable node',
+    tldr: 'A proxy, virtual IP, DNS name or service must direct new client connections to the node that currently holds Patroni’s leader lock.',
+    sections: [
+      {
+        heading: 'PostgreSQL does not move this address',
+        body: 'PostgreSQL can promote a standby, but it does not detect primary failure or migrate a client address. A Patroni deployment normally puts a separate routing layer in front: for example, HAProxy can health-check each Patroni REST API and admit only a node whose `/primary` or `/read-write` endpoint confirms that PostgreSQL is primary and holds the leader lock. Other deployments update a virtual IP, DNS record or Kubernetes Service. The routing mechanism and its failure semantics belong to that surrounding system, not to PostgreSQL itself.',
+      },
+      {
+        heading: 'What the city compresses',
+        body: 'The city points this address at `currentLeader` when a valid leader exists and makes it dark when no node may accept writes. It treats leader-key change and endpoint movement as one visible transition. It does not model proxy health-check intervals, DNS caching, virtual-IP convergence, load-balancer configuration, connection draining or client retries. Moving an endpoint affects new connections; it cannot move an already established TCP session to another server.',
+      },
+    ],
+    metrics: [
+      { label: 'Routes writes to', get: (s) => s.highAvailability.currentLeader ?? 'no node' },
+      { label: 'Leader-key lease', get: (s) => s.highAvailability.patroni.dcs.leaderKey.leaseValid ? 'valid' : 'expired' },
+      { label: 'Write admission', get: (s) => s.highAvailability.acceptingWrites ? 'open' : 'closed' },
+    ],
+    knobs: ['haPartition', 'standbyANetworkLag'],
+    actions: ['start-switchover', 'trigger-failover'],
+    see: ['ha.dcs', 'timeline.yard', 'ha.rejoin', 'replica.standby'],
+    refs: {
+      docs: [
+        manual('warm-standby-failover.html', '26.3. Failover'),
+        { label: 'Patroni REST API — primary health checks for load balancers', url: 'https://patroni.readthedocs.io/en/latest/rest_api.html' },
+      ],
     },
   },
 
@@ -1148,6 +1215,44 @@ export const DOCS_STORAGE: ComponentDoc[] = [
   },
 
   {
+    id: 'storage.tempfiles',
+    title: 'base/pgsql_tmp',
+    subtitle: 'executor spill files',
+    tldr: 'Sort and hash operations write temporary files when their working data exceeds the memory allowed to that operation.',
+    sections: [
+      {
+        heading: 'Why files appear here',
+        body: '`work_mem` is a base limit per query operation, not per query or server. A Sort can spill after crossing it; a hash operation uses `work_mem × hash_mem_multiplier` as its limit. With the default tablespace, PostgreSQL creates these files under the data directory’s `base/pgsql_tmp`; a non-default temporary tablespace gets its own `pgsql_tmp` directory. `pg_stat_database.temp_files` and `temp_bytes` are cumulative database-wide counters, while `EXPLAIN (ANALYZE)` shows the spill for one executed plan.',
+      },
+      {
+        heading: 'What the city models',
+        body: 'Only fixed Sort and HashAggregate nodes spill here; join nodes and their spills are absent. The model compares fixed teaching working sets with the Sort or hash allowance, charges one illustrative write-and-read pass to shared storage pressure, and increments counters shaped like `temp_files` and `temp_bytes`. It creates no files, does not choose a different plan when `work_mem` changes, and does not model multi-pass external sorts, temporary tables, tablespaces or `temp_file_limit` cancellation.',
+      },
+    ],
+    metrics: [
+      { label: 'Spilling now', get: (s) => fmtNum(s.workMem.spillingNodes), hint: 'modeled Sort and HashAggregate nodes' },
+      { label: 'Live spill bytes', get: (s) => fmtBytes(s.workMem.liveTempBytes) },
+      { label: 'Cumulative', get: (s) => `${fmtNum(s.workMem.tempFiles)} files · ${fmtBytes(s.workMem.tempBytes)}` },
+    ],
+    knobs: ['workMem', 'tps'],
+    see: ['backend.localmem', 'planner.plantree', 'disk.array'],
+    source: ['src/backend/utils/sort/tuplesort.c', 'src/backend/executor/nodeAgg.c', 'src/backend/storage/file/buffile.c'],
+    refs: {
+      docs: [
+        manual('runtime-config-resource.html#GUC-WORK-MEM', '19.4.1. Memory — work_mem'),
+        manual('runtime-config-resource.html#GUC-TEMP-FILE-LIMIT', '19.4.2. Disk — temp_file_limit'),
+        manual('monitoring-stats.html#MONITORING-PG-STAT-DATABASE-VIEW', '27.2.17. pg_stat_database — temp_files and temp_bytes'),
+        manual('storage-file-layout.html', '66.1. Database File Layout'),
+      ],
+      source: [
+        srcFile('src/backend/utils/sort/tuplesort.c', 'tuplesort_performsort'),
+        srcFile('src/backend/executor/nodeAgg.c', 'hash_agg_enter_spill_mode, hashagg_spill_tuple'),
+        srcFile('src/backend/storage/file/buffile.c', 'BufFileCreateTemp, BufFileWrite'),
+      ],
+    },
+  },
+
+  {
     id: 'storage.table',
     title: 'Heap file',
     subtitle: 'a table on disk',
@@ -1525,6 +1630,42 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       ],
       suzuki: suzuki(8, 'Buffer Manager (§8.5 Asynchronous I/O)'),
       rogov: rogov(R_WAL, 'Buffer Cache — choosing the buffer cache size, and double buffering'),
+    },
+  },
+
+  {
+    id: 'storage.durability',
+    title: 'Durability boundary',
+    subtitle: 'volatile kernel memory above, persistent storage below',
+    tldr: 'A successful write reaches the operating system; durability begins only when the required bytes have been forced to nonvolatile storage.',
+    sections: [
+      {
+        heading: 'Written is not durable',
+        body: 'Ordinary buffered writes can return while bytes remain in the operating system page cache, where a PostgreSQL process crash will not erase them but a machine or power failure can. PostgreSQL uses `fsync()` or an equivalent method to force the required WAL and data files through that volatile layer. Write-ahead logging adds the ordering rule: WAL describing a changed page must be durable before that data page may be written to durable storage.',
+      },
+      {
+        heading: 'What the line means in this city',
+        body: 'This is a static conceptual plane between the illustrative OS cache and storage. The city tracks WAL insert, write and flush positions and representative page writes, but it has no kernel-cache contents, filesystem, device cache, power-loss event or calibrated flush latency. Crossing the drawn line is not itself a simulated `fsync()`; the WAL flush frontier is the model’s durability fact.',
+      },
+    ],
+    metrics: [
+      { label: 'WAL durable through', get: (s) => fmtLsn(s.wal.flushLsn) },
+      { label: 'WAL not yet durable', get: (s) => fmtBytes(Math.max(0, s.wal.insertLsn - s.wal.flushLsn)) },
+      { label: 'Commit mode', get: (s) => s.knobs.synchronousCommit },
+    ],
+    knobs: ['synchronousCommit', 'fullPageWrites'],
+    see: ['os.cache', 'disk.array', 'walwriter', 'wal.vault'],
+    source: ['src/backend/access/transam/xlog.c', 'src/backend/storage/file/fd.c'],
+    refs: {
+      docs: [
+        manual('wal-reliability.html', '28.1. Reliability'),
+        manual('runtime-config-wal.html#GUC-FSYNC', '19.5.1. Settings — fsync'),
+      ],
+      source: [
+        srcFile('src/backend/access/transam/xlog.c', 'XLogFlush'),
+        srcFile('src/backend/storage/file/fd.c', 'pg_fsync'),
+      ],
+      rogov: rogov(R_WAL, 'Write-Ahead Log — durability and the WAL-before-data rule'),
     },
   },
 
@@ -2172,6 +2313,43 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       ],
       source: [srcFile('src/backend/replication/walreceiver.c', 'WalReceiverMain, XLogWalRcvFlush, XLogWalRcvSendHSFeedback')],
       suzuki: suzuki(11, 'Streaming Replication (§11.1)'),
+    },
+  },
+
+  {
+    id: 'lsn.ruler',
+    title: 'Replication LSN ruler',
+    subtitle: 'five frontiers on one WAL byte scale',
+    tldr: 'Primary flush, sent, standby write, standby flush and replay positions show which replication stage owns each byte gap.',
+    sections: [
+      {
+        heading: 'Read the positions, then subtract',
+        body: 'An LSN is a byte position in the WAL stream. The ruler adds the primary’s local flush position as a reference to the four positions PostgreSQL 18 exposes for each directly connected standby in `pg_stat_replication`: `sent_lsn`, `write_lsn`, `flush_lsn` and `replay_lsn`. Subtract adjacent LSNs to count bytes waiting at a stage. A sent-to-write gap focuses investigation on transport or receipt; write-to-flush on standby durability; flush-to-replay on recovery apply. Those gaps localise work but do not prove why it is slow.',
+      },
+      {
+        heading: 'What the ruler cannot tell you',
+        body: 'Byte distance is not elapsed time or a catch-up prediction. The `write_lag`, `flush_lag` and `replay_lag` columns are measurements of recent acknowledgement delay and can become NULL when an idle standby is caught up. The city dynamically rescales this ruler to keep gaps visible and advances a fixed teaching pipeline; it does not measure a socket, standby filesystem, WAL records or production replay throughput.',
+      },
+    ],
+    metrics: [
+      { label: 'Primary flush', get: (s) => fmtLsn(s.wal.flushLsn) },
+      { label: 'Sent', get: (s) => fmtLsn(standbyA(s).sentLsn) },
+      { label: 'Written', get: (s) => fmtLsn(standbyA(s).writtenLsn) },
+      { label: 'Flushed', get: (s) => fmtLsn(standbyA(s).flushedLsn) },
+      { label: 'Replayed', get: (s) => fmtLsn(standbyA(s).appliedLsn) },
+    ],
+    knobs: ['standbyAEnabled', 'standbyANetworkLag', 'standbyASlowApply', 'synchronousCommit'],
+    see: ['walsender', 'net.wire', 'walreceiver', 'startup.proc', 'replica.standby'],
+    source: ['src/backend/replication/walsender.c', 'src/backend/replication/walreceiver.c'],
+    refs: {
+      docs: [
+        manual('datatype-pg-lsn.html', '8.20. pg_lsn Type'),
+        manual('monitoring-stats.html#MONITORING-PG-STAT-REPLICATION-VIEW', '27.2.4. pg_stat_replication'),
+      ],
+      source: [
+        srcFile('src/backend/replication/walsender.c', 'WalSndLoop'),
+        srcFile('src/backend/replication/walreceiver.c', 'WalReceiverMain, XLogWalRcvFlush'),
+      ],
     },
   },
 

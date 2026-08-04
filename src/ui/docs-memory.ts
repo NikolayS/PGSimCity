@@ -299,6 +299,35 @@ export const DOCS_MEMORY: ComponentDoc[] = [
   },
 
   {
+    id: 'conn.conduits',
+    title: 'Connections',
+    subtitle: 'one PostgreSQL session per modeled duct',
+    tldr: 'Each lit duct is one open PostgreSQL server connection, not a query, packet, or pooled application client.',
+    sections: [
+      {
+        heading: 'What travels through one connection',
+        body: 'A client opens a connection, completes the PostgreSQL start-up and authentication exchange, then keeps using that same session for query cycles until either side closes it. PostgreSQL serves the session with one dedicated backend process. A pooler can hold many application-side connections while exposing fewer server connections here; it does not turn one PostgreSQL session into several simultaneous query workers.',
+      },
+      {
+        heading: 'What the city draws',
+        body: 'The city has one conduit for each of its sixteen fixed backend slots. A conduit reports whether that modeled server session is open; it does not simulate a socket, packets, bandwidth, TLS, authentication, kernel buffers, process memory or network failure. In pooled modes, clients waiting upstream do not light a conduit until the pool assigns a PostgreSQL server connection.',
+      },
+    ],
+    metrics: [
+      { label: 'Open server connections', get: (s) => `${fmtNum(nz(s.stats?.activeBackends))} / ${fmtNum(nz(s.maxConnections))}` },
+      { label: 'Idle in transaction', get: (s) => fmtNum(nIn(s, 'idle_in_xact')) },
+      { label: 'Pool mode', get: (s) => s.pooler.mode },
+    ],
+    knobs: ['clientConnections', 'poolMode', 'defaultPoolSize', 'maxClientConn'],
+    see: ['client.pool', 'client.pooler', 'conn.gate', 'backend.row'],
+    source: ['src/backend/postmaster/postmaster.c'],
+    refs: {
+      docs: [manual('protocol-flow.html', '54.2.1. Start-up')],
+      source: [srcFile('src/backend/postmaster/postmaster.c', 'BackendStartup')],
+    },
+  },
+
+  {
     id: 'client.pooler',
     title: 'PgBouncer Pooler',
     subtitle: 'many client connections, few PostgreSQL server processes',
