@@ -63,6 +63,13 @@ const DECK_BOT = CITY.deck.top - CITY.deck.thickness
 /** Everything that stands on the deck sits on a 0.7 plinth. */
 const MOUNT_Y = DECK_TOP + 0.7
 
+const POOL_HALF = GRID_SPAN / 2
+const POOL_SURFACE_Y = BASE_Y + MAX_RISE + 0.4
+const COPING_BOTTOM = DECK_TOP + 0.05
+const COPING_TOP = POOL_SURFACE_Y + 0.4
+const COPING_THICKNESS = 0.7
+const COPING_CAP_HEIGHT = 0.24
+
 const TAU = Math.PI * 2
 /** How many tiles behind the clock hand still show its trail. */
 const SWEEP_TRAIL = 26
@@ -276,6 +283,15 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
   const mStructLo = theme.mat('shmem.structLo', { color: 0x121a29, roughness: 0.82, metalness: 0.2 })
   const mStructHi = theme.mat('shmem.structHi', { color: 0x27334a, roughness: 0.55, metalness: 0.42 })
   const mPylon = theme.mat('shmem.pylon', { color: 0x0f1522, roughness: 0.88, metalness: 0.18 })
+  const mCoping = theme.mat('shmem.coping', {
+    color: 0x47658f,
+    roughness: 0.32,
+    metalness: 0.08,
+    transparent: true,
+    opacity: 0.42,
+    side: THREE.DoubleSide,
+    surface: false,
+  })
   const mRim = theme.neon(COLOR.shmem, 1.15)
 
   /** One material drives every instanced-colour mesh in the district. */
@@ -301,6 +317,29 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
   deck.name = 'shmem.deck'
   group.add(deck)
   const collisionBoxes: THREE.Box3[] = []
+
+  type Span = [number, number]
+  const gateSpans = (side: DeckGate['side']): Span[] => {
+    const out: Span[] = []
+    for (const g of DECK_GATES) if (g.side === side) out.push([g.at - g.width / 2, g.at + g.width / 2])
+    return out.sort((a, b) => a[0] - b[0])
+  }
+  const inGate = (spans: Span[], v: number): boolean => {
+    for (let i = 0; i < spans.length; i++) if (v > spans[i][0] && v < spans[i][1]) return true
+    return false
+  }
+  /** The lengths left between the access gates on one side. */
+  const solidSpans = (spans: Span[], lo: number, hi: number): Span[] => {
+    const out: Span[] = []
+    let cur = lo
+    for (const s of spans) {
+      if (s[1] <= cur) continue
+      if (s[0] > cur) out.push([cur, Math.min(s[0], hi)])
+      cur = Math.max(cur, s[1])
+    }
+    if (cur < hi) out.push([cur, hi])
+    return out
+  }
 
   // Body: inset so the cap above reads as a cantilevered edge with a shadow gap.
   const gDeckBody = keep(new THREE.BoxGeometry(DECK_W - 5, 1.5, DECK_D - 5))
@@ -343,12 +382,12 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
   markTextPlane(deckPlan, 'SHARED MEMORY SEGMENT floor plan')
   deck.add(deckPlan)
 
-  // Continuous indigo rim strip at the deck edge — the plaza's outline at night.
+  // Continuous indigo rim strip at the walking edge — the plaza's outline at night.
   {
     const rim = instanced(gRiser, mRim, 4)
     const a = rim.instanceMatrix.array as Float32Array
-    const h = 0.22
-    const y = DECK_TOP - 0.62
+    const h = 0.12
+    const y = DECK_TOP + 0.055
     setTRS(a, 0, 0, y, -DECK_D / 2 - 0.06, DECK_W + 0.5, h, 0.5)
     setTRS(a, 1, 0, y, DECK_D / 2 + 0.06, DECK_W + 0.5, h, 0.5)
     setTRS(a, 2, -DECK_W / 2 - 0.06, y, 0, 0.5, h, DECK_D + 0.5)
@@ -357,6 +396,74 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     rim.frustumCulled = true
     deck.add(rim)
   }
+
+  /*
+   * shared_buffers is a fixed-size allocation chosen at server start. These
+   * walls bound the exact sampled-frame footprint; the four causeway-aligned
+   * gaps are an access affordance for the city's swimming lesson, not another
+   * PostgreSQL mechanism.
+   */
+  const coping = new THREE.Group()
+  coping.name = 'shared.buffers.coping'
+  deck.add(coping)
+  const copingSpans = {
+    north: solidSpans(gateSpans('north'), -POOL_HALF - COPING_THICKNESS, POOL_HALF + COPING_THICKNESS),
+    south: solidSpans(gateSpans('south'), -POOL_HALF - COPING_THICKNESS, POOL_HALF + COPING_THICKNESS),
+    west: solidSpans(gateSpans('west'), -POOL_HALF - COPING_THICKNESS, POOL_HALF + COPING_THICKNESS),
+    east: solidSpans(gateSpans('east'), -POOL_HALF - COPING_THICKNESS, POOL_HALF + COPING_THICKNESS),
+  }
+  const copingCount =
+    copingSpans.north.length + copingSpans.south.length +
+    copingSpans.west.length + copingSpans.east.length
+  const copingWall = new THREE.InstancedMesh(gRiser, mCoping, copingCount)
+  copingWall.name = 'shared.buffers.coping.wall'
+  const copingWallMatrix = copingWall.instanceMatrix.array as Float32Array
+  const copingCap = new THREE.InstancedMesh(gRiser, mStructHi, copingCount)
+  copingCap.name = 'shared.buffers.coping.cap'
+  const copingCapMatrix = copingCap.instanceMatrix.array as Float32Array
+  const wallHeight = COPING_TOP - COPING_BOTTOM
+  const capBottom = COPING_TOP - COPING_CAP_HEIGHT / 2
+  const capThickness = COPING_THICKNESS + 0.3
+  let copingIndex = 0
+  const addCopingSpan = (side: DeckGate['side'], a: number, b: number): void => {
+    const mid = (a + b) / 2
+    const length = b - a
+    let minX: number
+    let maxX: number
+    let minZ: number
+    let maxZ: number
+    if (side === 'north' || side === 'south') {
+      const z = (side === 'north' ? -1 : 1) * (POOL_HALF + COPING_THICKNESS / 2)
+      setTRS(copingWallMatrix, copingIndex, mid, COPING_BOTTOM, z, length, wallHeight, COPING_THICKNESS)
+      setTRS(copingCapMatrix, copingIndex, mid, capBottom, z, length, COPING_CAP_HEIGHT, capThickness)
+      minX = a
+      maxX = b
+      minZ = z - capThickness / 2
+      maxZ = z + capThickness / 2
+    } else {
+      const x = (side === 'west' ? -1 : 1) * (POOL_HALF + COPING_THICKNESS / 2)
+      setTRS(copingWallMatrix, copingIndex, x, COPING_BOTTOM, mid, COPING_THICKNESS, wallHeight, length)
+      setTRS(copingCapMatrix, copingIndex, x, capBottom, mid, capThickness, COPING_CAP_HEIGHT, length)
+      minX = x - capThickness / 2
+      maxX = x + capThickness / 2
+      minZ = a
+      maxZ = b
+    }
+    collisionBoxes.push(
+      new THREE.Box3(
+        new THREE.Vector3(minX, COPING_BOTTOM, minZ),
+        new THREE.Vector3(maxX, COPING_TOP + COPING_CAP_HEIGHT / 2, maxZ),
+      ),
+    )
+    copingIndex++
+  }
+  for (const [a, b] of copingSpans.north) addCopingSpan('north', a, b)
+  for (const [a, b] of copingSpans.south) addCopingSpan('south', a, b)
+  for (const [a, b] of copingSpans.west) addCopingSpan('west', a, b)
+  for (const [a, b] of copingSpans.east) addCopingSpan('east', a, b)
+  copingWall.instanceMatrix.needsUpdate = true
+  copingCap.instanceMatrix.needsUpdate = true
+  coping.add(copingWall, copingCap)
 
   // Structural pylons diving into the excavation, with collars and X-bracing.
   const PYL_X = [-58, -20, 20, 58]
@@ -385,6 +492,29 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
   /** Fine structural detail — dropped when the camera is far away. */
   const fine = new THREE.Group()
   group.add(fine)
+  {
+    const copingLight = new THREE.InstancedMesh(gRiser, mRim, copingCount)
+    copingLight.name = 'shared.buffers.coping.edge'
+    const a = copingLight.instanceMatrix.array as Float32Array
+    let i = 0
+    const addEdge = (side: DeckGate['side'], from: number, to: number): void => {
+      const mid = (from + to) / 2
+      const length = to - from
+      if (side === 'north' || side === 'south') {
+        const z = (side === 'north' ? -1 : 1) * (POOL_HALF + COPING_THICKNESS / 2)
+        setTRS(a, i++, mid, COPING_TOP + COPING_CAP_HEIGHT / 2, z, length, 0.1, 0.12)
+      } else {
+        const x = (side === 'west' ? -1 : 1) * (POOL_HALF + COPING_THICKNESS / 2)
+        setTRS(a, i++, x, COPING_TOP + COPING_CAP_HEIGHT / 2, mid, 0.12, 0.1, length)
+      }
+    }
+    for (const [from, to] of copingSpans.north) addEdge('north', from, to)
+    for (const [from, to] of copingSpans.south) addEdge('south', from, to)
+    for (const [from, to] of copingSpans.west) addEdge('west', from, to)
+    for (const [from, to] of copingSpans.east) addEdge('east', from, to)
+    copingLight.instanceMatrix.needsUpdate = true
+    fine.add(copingLight)
+  }
   {
     const gCollar = keep(new THREE.CylinderGeometry(4.6, 3.2, 1.8, 10))
     const collars = new THREE.InstancedMesh(gCollar, mStructHi, PYL_X.length * PYL_Z.length)
@@ -435,28 +565,6 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     const nx = Math.floor((rx * 2) / step)
     const nz = Math.floor((rz * 2) / step)
 
-    type Span = [number, number]
-    const gateSpans = (side: DeckGate['side']): Span[] => {
-      const out: Span[] = []
-      for (const g of DECK_GATES) if (g.side === side) out.push([g.at - g.width / 2, g.at + g.width / 2])
-      return out.sort((a, b) => a[0] - b[0])
-    }
-    const inGate = (spans: Span[], v: number): boolean => {
-      for (let i = 0; i < spans.length; i++) if (v > spans[i][0] && v < spans[i][1]) return true
-      return false
-    }
-    /** The lengths of rail left between the gates on one side. */
-    const railBars = (spans: Span[], lo: number, hi: number): Span[] => {
-      const out: Span[] = []
-      let cur = lo
-      for (const s of spans) {
-        if (s[1] <= cur) continue
-        if (s[0] > cur) out.push([cur, Math.min(s[0], hi)])
-        cur = Math.max(cur, s[1])
-      }
-      if (cur < hi) out.push([cur, hi])
-      return out
-    }
     const gN = gateSpans('north')
     const gS = gateSpans('south')
     const gE = gateSpans('east')
@@ -480,10 +588,10 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     post.instanceMatrix.needsUpdate = true
     fine.add(post)
 
-    const nBars = railBars(gN, -rx, rx)
-    const sBars = railBars(gS, -rx, rx)
-    const wBars = railBars(gW, -rz, rz)
-    const eBars = railBars(gE, -rz, rz)
+    const nBars = solidSpans(gN, -rx, rx)
+    const sBars = solidSpans(gS, -rx, rx)
+    const wBars = solidSpans(gW, -rz, rz)
+    const eBars = solidSpans(gE, -rz, rz)
     const rail = new THREE.InstancedMesh(
       gRiser,
       theme.neon(COLOR.shmem, 0.55),
