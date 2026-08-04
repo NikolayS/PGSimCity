@@ -616,7 +616,7 @@ export function createCameraRig(
     ptrX.set(id, e.clientX)
     ptrY.set(id, e.clientY)
 
-    // two-finger: pinch dolly + midpoint pan
+    // two-finger: pinch dolly + midpoint orbit
     if (ptrIds.length >= 2) {
       const ax = ptrX.get(ptrIds[0])
       const ay = ptrY.get(ptrIds[0])
@@ -629,13 +629,16 @@ export function createCameraRig(
       const mx = (ax + bx) * 0.5
       const my = (ay + by) * 0.5
       // Map gestures, the set every phone user already knows: pinch to zoom,
-      // twist to swing the camera round, and drag both fingers up or down to
-      // tilt. Panning stays on one finger, so nothing here has to compete with
-      // it and each gesture stays unambiguous.
+      // twist or drag both fingers sideways to yaw, and drag both fingers up or
+      // down to tilt. Panning stays on one finger, so each stays unambiguous.
       const ang = Math.atan2(sy, sx)
       if (pinchActive) {
         pendingZoom *= clamp(pinchDist / d, 0.5, 2)
         ndcFromEvent({ clientX: mx, clientY: my })
+
+        // Parallel horizontal drag matches the mouse rotate direction and scale.
+        const dMidX = mx - pinchMx
+        inRotX += dMidX
 
         // twist -> yaw. Shortest-arc difference so crossing PI does not spin.
         let dAng = ang - pinchAngle
@@ -650,7 +653,10 @@ export function createCameraRig(
         // both fingers moving together vertically -> tilt
         const dMidY = my - pinchMy
         inRotY += dMidY
-        if (!rotateGestureAnnounced && (Math.abs(dAng) > 1e-4 || Math.abs(dMidY) > 0.1)) {
+        if (
+          !rotateGestureAnnounced
+          && (Math.abs(dMidX) > 0.1 || Math.abs(dAng) > 1e-4 || Math.abs(dMidY) > 0.1)
+        ) {
           rotateGestureAnnounced = true
           bus.emit('camera:gesture', { kind: 'rotate', pointer: 'touch' })
         }

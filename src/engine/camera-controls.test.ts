@@ -117,6 +117,18 @@ function expectAtScreenPoint(
   expect(Math.hypot(projected.x - (clientX / 400 - 1), projected.y - (1 - clientY / 300))).toBeLessThan(tolerance)
 }
 
+function signedYawAround(
+  anchor: THREE.Vector3,
+  before: THREE.Vector3,
+  after: THREE.Vector3,
+): number {
+  const ax = before.x - anchor.x
+  const az = before.z - anchor.z
+  const bx = after.x - anchor.x
+  const bz = after.z - anchor.z
+  return Math.atan2(az * bx - ax * bz, ax * bx + az * bz)
+}
+
 describe('map camera mouse controls', () => {
   let fixture: RigFixture
 
@@ -269,13 +281,14 @@ describe('map camera mouse controls', () => {
     expect(fixture.camera.position.y).toBeLessThan(eyeBefore.y)
   })
 
-  it('rotates with a two-finger touch twist', () => {
-    const rotationBefore = fixture.camera.quaternion.clone()
+  it('yaws with a parallel horizontal two-finger drag and keeps the centre anchored', () => {
+    const anchor = groundPointAt(fixture.camera, 400, 300)
+    const eyeBefore = fixture.camera.position.clone()
     fixture.dom.dispatchEvent(
       pointer('pointerdown', {
         pointerId: 1,
         pointerType: 'touch',
-        clientX: 300,
+        clientX: 350,
         clientY: 300,
       }),
     )
@@ -283,7 +296,7 @@ describe('map camera mouse controls', () => {
       pointer('pointerdown', {
         pointerId: 2,
         pointerType: 'touch',
-        clientX: 400,
+        clientX: 450,
         clientY: 300,
       }),
     )
@@ -291,7 +304,15 @@ describe('map camera mouse controls', () => {
       pointer('pointermove', {
         pointerId: 1,
         pointerType: 'touch',
-        clientX: 300,
+        clientX: 350,
+        clientY: 300,
+      }),
+    )
+    fixture.dom.dispatchEvent(
+      pointer('pointermove', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 390,
         clientY: 300,
       }),
     )
@@ -299,13 +320,53 @@ describe('map camera mouse controls', () => {
       pointer('pointermove', {
         pointerId: 2,
         pointerType: 'touch',
-        clientX: 380,
-        clientY: 330,
+        clientX: 490,
+        clientY: 300,
       }),
     )
     fixture.rig.update(1 / 60)
 
-    expect(fixture.camera.quaternion.angleTo(rotationBefore)).toBeGreaterThan(0.01)
+    expect(signedYawAround(anchor, eyeBefore, fixture.camera.position)).toBeCloseTo(
+      -(Math.PI * 2 * 40) / 600,
+      10,
+    )
+    expectAtScreenPoint(fixture.camera, anchor, 400, 300)
+  })
+
+  it('keeps two-finger twist yaw in the hand-following direction and scale', () => {
+    const anchor = groundPointAt(fixture.camera, 400, 300)
+    const eyeBefore = fixture.camera.position.clone()
+    const halfWidth = 50 * Math.cos(Math.PI / 6)
+
+    fixture.dom.dispatchEvent(
+      pointer('pointerdown', { pointerId: 1, pointerType: 'touch', clientX: 350, clientY: 300 }),
+    )
+    fixture.dom.dispatchEvent(
+      pointer('pointerdown', { pointerId: 2, pointerType: 'touch', clientX: 450, clientY: 300 }),
+    )
+    fixture.dom.dispatchEvent(
+      pointer('pointermove', { pointerId: 1, pointerType: 'touch', clientX: 350, clientY: 300 }),
+    )
+    fixture.dom.dispatchEvent(
+      pointer('pointermove', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 400 - halfWidth,
+        clientY: 275,
+      }),
+    )
+    fixture.dom.dispatchEvent(
+      pointer('pointermove', {
+        pointerId: 2,
+        pointerType: 'touch',
+        clientX: 400 + halfWidth,
+        clientY: 325,
+      }),
+    )
+    fixture.rig.update(1 / 60)
+
+    expect(signedYawAround(anchor, eyeBefore, fixture.camera.position)).toBeCloseTo(Math.PI / 6, 10)
+    expectAtScreenPoint(fixture.camera, anchor, 400, 300)
   })
 
   it('returns the remaining finger to one-finger pan after a two-finger gesture', () => {
