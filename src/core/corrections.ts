@@ -182,6 +182,51 @@ function reportFrom(options: CorrectionPathOptions): CorrectionReport {
   }
 }
 
+function versionQualification(
+  panel: HTMLElement,
+  disclosure: boolean,
+): HTMLDetailsElement {
+  const authoredChild = Array.from(panel.children).find((child) => (
+    child.tagName === 'DETAILS'
+      && Boolean((child as HTMLElement).dataset.versionQualification)
+  )) as HTMLDetailsElement | undefined
+  const authored = panel.tagName === 'DETAILS' && panel.dataset.versionQualification
+    ? panel as HTMLDetailsElement
+    : authoredChild
+  const details = authored ?? document.createElement('details')
+  details.open ??= false
+  details.classList.add('pg-correction', 'pg-version-qualification')
+  details.dataset.correctionPath = 'true'
+  details.dataset.versionQualification ||= 'claim'
+
+  let summary = Array.from(details.children).find(
+    (child): child is HTMLElement => child.tagName === 'SUMMARY',
+  )
+  if (!summary) {
+    summary = document.createElement('summary')
+    summary.textContent =
+      `${CLAIM_VALUES.postgresqlVersion.referenceLabel} · claim scope`
+    details.prepend(summary)
+  }
+  summary.dataset.versionQualificationMarker = 'true'
+  if (disclosure) summary.dataset.disclosure = 'correction-path'
+
+  let full = Array.from(details.children).find(
+    (child) => Boolean((child as HTMLElement).dataset.versionQualificationFull),
+  ) as HTMLElement | undefined
+  if (!full) {
+    full = document.createElement('span')
+    full.className = 'pg-version-qualification__full'
+    full.dataset.versionQualificationFull = 'true'
+    full.textContent =
+      `PGSimCity's model and explanations describe ${CLAIM_VALUES.postgresqlVersion.referenceLabel}.`
+    details.append(full)
+  }
+
+  if (!authored) panel.append(details)
+  return details
+}
+
 /**
  * Plausible's outboundLinks setting is dashboard-controlled, and its served custom-event
  * handler adds an anchor's full href even for named classes. Keep the provider opt-out class,
@@ -234,11 +279,7 @@ export function createCorrectionPath(
   anchor.addEventListener('click', refresh)
   protectCorrectionLink(anchor)
 
-  const path = document.createElement('p')
-  path.className = 'pg-correction'
-  path.dataset.correctionPath = 'true'
-  if (options.disclosure) path.dataset.disclosure = 'correction-path'
+  const path = versionQualification(panel, options.disclosure ?? false)
   path.append(anchor)
-  panel.append(path)
   return anchor
 }

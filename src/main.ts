@@ -80,7 +80,7 @@ const cityVersionProvenance = document.querySelector<HTMLElement>(
   '#city-version-provenance',
 )
 const cityVersionClaim = cityVersionProvenance?.querySelector<HTMLElement>(
-  '[data-disclosure="city-postgresql-version"]',
+  '[data-version-qualification-full]',
 )
 if (cityVersionProvenance && cityVersionClaim) {
   cityVersionClaim.textContent =
@@ -480,7 +480,7 @@ async function boot(): Promise<void> {
 
   finishBoot(bootSurface)
   if (cityVersionProvenance) {
-    document.getElementById('hud-top')?.append(cityVersionProvenance)
+    document.querySelector('#hud-top .hud-bar')?.append(cityVersionProvenance)
   }
 
   /* --- teardown (hot reload / navigation) ---------------------------------- */

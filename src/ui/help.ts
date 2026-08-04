@@ -25,7 +25,7 @@ import type { UiContext, UiModule } from './uikit'
  * ==========================================================================*/
 
 const FOCUSABLE =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  'a[href], button:not([disabled]), summary, input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
 export interface KeyRow {
   id: string
@@ -407,7 +407,8 @@ export function createHelp(ctx: UiContext): UiModule {
 
   function focusables(): HTMLElement[] {
     return Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
-      (n) => n.offsetParent !== null || n === dialog,
+      (n) => (n.tagName === 'SUMMARY' || !n.closest('details:not([open])'))
+        && (n.offsetParent !== null || n === dialog),
     )
   }
 

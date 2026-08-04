@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 
-import { CLAIM_VALUES } from '../src/core/claims'
+import { CLAIMS, CLAIM_VALUES } from '../src/core/claims'
 import {
   CORRECTION_URL_MAX_LENGTH,
   CORRECTION_ISSUE_TEMPLATE,
@@ -14,6 +14,7 @@ import { installTestDom } from './dom'
 import {
   correctionCoverageFailures,
   measureCorrectionPages,
+  versionQualificationFailures,
 } from './correction-browser.mjs'
 import {
   disclosureFailures,
@@ -131,7 +132,14 @@ describe('PostgreSQL correction reports', () => {
     expect(link!.href).toContain('template=postgresql-mismatch.md')
     expect(link!.dataset.noAnalytics).toBe('true')
     expect(link!.classList.contains('plausible-event-name--Correction+Link+Click')).toBe(true)
-    expect(link!.closest('[data-disclosure]')).not.toBeNull()
+    const qualification = link!.closest<HTMLDetailsElement>('[data-version-qualification]')
+    expect(qualification).not.toBeNull()
+    expect(qualification!.open).toBe(false)
+    expect(qualification!.querySelector('summary')?.textContent)
+      .toContain(CLAIM_VALUES.postgresqlVersion.referenceLabel)
+    expect(qualification!.querySelector('[data-version-qualification-full]')?.textContent)
+      .toContain(`model and explanations describe ${CLAIM_VALUES.postgresqlVersion.referenceLabel}`)
+    expect(qualification!.querySelector('[data-disclosure]')).not.toBeNull()
 
     claim.textContent = 'PostgreSQL scans usage_count and selects a zero-valued victim.'
     link!.dispatchEvent(new Event('pointerdown'))
@@ -180,22 +188,10 @@ describe('PostgreSQL correction reports', () => {
   })
 
   it('keeps every claim-bearing rendering family on the shared correction path', () => {
-    const renderers = [
-      ['src/ui/panel.ts', 1, 'inspector and component docs'],
-      ['src/ui/controls.ts', 1, 'control console'],
-      ['src/ui/anatomy.ts', 1, 'physical anatomy'],
-      ['src/ui/hud.ts', 2, 'latency and operator verdict panels'],
-      ['src/ui/tour.ts', 2, 'tour chapters and scenario beats'],
-      ['src/ui/control-center.ts', 1, 'control center'],
-      ['src/ui/help.ts', 1, 'help and reading guide'],
-      ['src/main.ts', 1, 'city PostgreSQL version provenance'],
-      ['src/observability/main.ts', 1, 'all Diagnose and Query flow cards'],
-      ['machine/magnum.js', 4, 'Machine workbench, board, index walk, and comparison'],
-    ] as const
-
-    for (const [file, expectedPaths, surface] of renderers) {
-      const count = read(file).match(/createCorrectionPath\(/g)?.length ?? 0
-      expect(count, `${surface} has no shared correction path in ${file}`).toBe(expectedPaths)
+    for (const surface of CLAIMS.postgresqlVersion.claimSurfaces) {
+      const count = read(surface.source).match(/createCorrectionPath\(/g)?.length ?? 0
+      expect(count, `${surface.label} has no shared correction path in ${surface.source}`)
+        .toBe(surface.correctionPaths)
     }
   })
 
@@ -261,7 +257,8 @@ describe('PostgreSQL correction reports', () => {
         await window.MAGNUM.runQuery("SELECT '${SQL_SECRET}' AS private_input;")
         document.querySelector('#index-walk-open').click()
         document.querySelector('#comparison').hidden = false
-        document.querySelector('.measurement-rack [data-correction-link]')
+        document.querySelector('#machine-version-provenance').open = true
+        document.querySelector('#machine-version-provenance [data-correction-link]')
           ?.dispatchEvent(new Event('pointerdown'))
       })()`,
       sqlSecret: SQL_SECRET,
@@ -292,6 +289,7 @@ describe('PostgreSQL correction reports', () => {
       orphanPaths: [],
     }])).toEqual([])
     expect(correctionCoverageFailures(reports)).toEqual([])
+    expect(versionQualificationFailures(reports)).toEqual([])
 
     const disclosureReports = reports.flatMap(
       (report) => report.disclosureReport ? [report.disclosureReport] : [],

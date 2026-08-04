@@ -79,6 +79,10 @@ const measurementRack = document.querySelector('.measurement-rack')
 const terminalBanner = document.querySelector('.terminal-banner')
 const machineDeck = document.querySelector('.deck')
 const machineVersionProvenance = document.querySelector('#machine-version-provenance')
+const machineVersionMarker = machineVersionProvenance?.querySelector('summary')
+const machineVersionClaim = machineVersionProvenance?.querySelector(
+  '[data-version-qualification-full]',
+)
 const terminalState = document.querySelector('#terminal-state')
 const terminalTranscript = document.querySelector('#terminal-transcript')
 const terminalForm = document.querySelector('#terminal-form')
@@ -148,6 +152,8 @@ if (
   || !terminalBanner
   || !machineDeck
   || !machineVersionProvenance
+  || !machineVersionMarker
+  || !machineVersionClaim
   || !terminalState
   || !terminalTranscript
   || !terminalForm
@@ -490,7 +496,7 @@ function safeWorkbenchClaim() {
   ].filter(Boolean).join('\n')
 }
 
-createCorrectionPath(measurementRack, {
+createCorrectionPath(machineVersionProvenance, {
   surface: 'Machine / Workbench',
   panel: 'psql terminal and modelled machine',
   source: 'machine/index.html#console-pane; machine/magnum.js; machine/postgres.js',
@@ -2956,7 +2962,12 @@ function updatePostgresUi() {
   const actualVersion = postgres.source?.versionText.match(
     /^PostgreSQL\s+\S+(?:\s+\(PGlite\s+[^)]+\))?/u,
   )?.[0]
-  machineVersionProvenance.textContent =
+  const actualReference = actualVersion?.match(/^PostgreSQL\s+\S+/u)?.[0]
+    ?? CLAIM_VALUES.pgliteVersion.referenceLabel
+  machineVersionMarker.textContent =
+    `${CLAIM_VALUES.postgresqlVersion.referenceLabel} model`
+    + ` · PGlite ${actualReference.replace(/^PostgreSQL\s+/u, '')} engine`
+  machineVersionClaim.textContent =
     `Model and explanations: ${CLAIM_VALUES.postgresqlVersion.referenceLabel}`
     + ` · PGlite engine: ${actualVersion ?? CLAIM_VALUES.pgliteVersion.reportedPrefix},`
     + ' checked separately with SELECT version().'
@@ -3379,8 +3390,11 @@ function restoreModalFocus(fallback) {
 
 function modalFocusables(root) {
   return [...root.querySelectorAll(
-    'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
-  )].filter((element) => !element.closest('[hidden], [inert]'))
+    'a[href], button:not([disabled]), summary, textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )].filter((element) => (
+    !element.closest('[hidden], [inert]')
+      && (element.tagName === 'SUMMARY' || !element.closest('details:not([open])'))
+  ))
 }
 
 function containModalTab(event) {

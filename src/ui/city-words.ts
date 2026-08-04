@@ -10,7 +10,7 @@ import { el, icon } from './uikit'
 import type { UiContext, UiModule } from './uikit'
 
 const FOCUSABLE =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  'a[href], button:not([disabled]), summary, input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
 export function createCityWords(ctx: UiContext): UiModule {
   const architecture = buildCityArchitecture()
@@ -187,7 +187,9 @@ export function createCityWords(ctx: UiContext): UiModule {
 
   function focusables(): HTMLElement[] {
     return Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
-      (node) => !node.closest('[inert]') && (node.offsetParent !== null || node === dialog),
+      (node) => !node.closest('[inert]')
+        && (node.tagName === 'SUMMARY' || !node.closest('details:not([open])'))
+        && (node.offsetParent !== null || node === dialog),
     )
   }
 

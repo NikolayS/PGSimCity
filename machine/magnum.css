@@ -16,15 +16,51 @@
 }
 
 .pg-correction {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 4px;
   margin: 0;
   color: #8c795c;
   font: 650 9px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   letter-spacing: 0.04em;
+  text-align: right;
   text-transform: uppercase;
+}
+
+.pg-version-qualification > summary,
+.machine-provenance > summary {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  color: #bda57b;
+  cursor: pointer;
+  list-style: none;
+}
+
+.pg-version-qualification > summary::-webkit-details-marker,
+.machine-provenance > summary::-webkit-details-marker {
+  display: none;
+}
+
+.pg-version-qualification > summary::before,
+.machine-provenance > summary::before {
+  content: '▸';
+  margin-right: 0.45em;
+  color: #8c795c;
+}
+
+.pg-version-qualification[open] > summary::before,
+.machine-provenance[open] > summary::before {
+  content: '▾';
+}
+
+.pg-version-qualification[open] > [data-version-qualification-full],
+.machine-provenance[open] > [data-version-qualification-full] {
+  display: block;
+  max-width: 72ch;
+  margin: 4px 0;
+}
+
+.pg-version-qualification[open] > .pg-correction__link,
+.machine-provenance[open] > .pg-correction__link {
+  display: inline-block;
 }
 
 .pg-correction__link {
@@ -133,7 +169,12 @@ textarea {
   color: #bda57b;
   font: 650 9px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   letter-spacing: 0.06em;
+  text-align: left;
   text-transform: uppercase;
+}
+
+.machine-provenance > summary {
+  min-height: 0;
 }
 
 .deck a,
@@ -1319,6 +1360,15 @@ button:focus-visible {
     line-height: 1.25;
   }
 
+  .machine-provenance > summary {
+    min-height: 44px;
+  }
+
+  .pg-version-qualification > summary {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
   .header-side {
     gap: 0;
   }
@@ -1337,6 +1387,14 @@ button:focus-visible {
 
   .machine-legal p {
     width: min(350px, calc(100vw - 16px));
+  }
+
+  .machine-legal summary {
+    display: inline-flex;
+    min-width: 44px;
+    min-height: 44px;
+    align-items: center;
+    justify-content: center;
   }
 
   .deck,
@@ -1381,7 +1439,8 @@ button:focus-visible {
     min-height: 44px;
   }
 
-  .pg-correction__link {
+  .pg-version-qualification[open] > .pg-correction__link,
+  .machine-provenance[open] > .pg-correction__link {
     display: inline-flex;
     min-width: 44px;
     min-height: 44px;

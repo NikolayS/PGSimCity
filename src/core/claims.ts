@@ -32,6 +32,20 @@ const POSTGRESQL_VERSION = {
   sourceBranch: `REL_${POSTGRESQL_MAJOR}_STABLE`,
 } as const
 
+const POSTGRESQL_VERSION_CLAIM_SURFACES = [
+  { source: 'src/ui/panel.ts', correctionPaths: 1, label: 'City inspector and component docs' },
+  { source: 'src/ui/controls.ts', correctionPaths: 1, label: 'City control console' },
+  { source: 'src/ui/anatomy.ts', correctionPaths: 1, label: 'City physical anatomy' },
+  { source: 'src/ui/hud.ts', correctionPaths: 2, label: 'City latency and operator verdict panels' },
+  { source: 'src/ui/tour.ts', correctionPaths: 2, label: 'City tour chapters and scenario beats' },
+  { source: 'src/ui/control-center.ts', correctionPaths: 1, label: 'City control center' },
+  { source: 'src/ui/help.ts', correctionPaths: 1, label: 'City help and reading guide' },
+  { source: 'src/ui/city-words.ts', correctionPaths: 1, label: 'City in words' },
+  { source: 'src/main.ts', correctionPaths: 1, label: 'City viewport and world claims' },
+  { source: 'src/observability/main.ts', correctionPaths: 1, label: 'Diagnose and Query flow cards' },
+  { source: 'machine/magnum.js', correctionPaths: 4, label: 'Machine workbench, boards, and lessons' },
+] as const
+
 const WAL_SEGMENT_POSTGRESQL_DISCLOSURE = [
   'PostgreSQL default: 16 MiB',
   'Selected at initdb with --wal-segsize',
@@ -393,6 +407,7 @@ export const CLAIMS = {
     owner: 'src/core/claims.ts#CLAIM_VALUES.postgresqlVersion',
     value: CLAIM_VALUES.postgresqlVersion,
     surfaces: ['README:target declaration', 'city:visible teaching target', 'Machine:model teaching target', 'Diagnose:visible teaching target and catalog prose', 'tour:version-specific claims', 'docs:manual and source links'],
+    claimSurfaces: POSTGRESQL_VERSION_CLAIM_SURFACES,
   },
   pgliteVersion: {
     owner: 'src/spine/pglite-version.ts#PGLITE_VERSION',

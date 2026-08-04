@@ -141,9 +141,16 @@
           data-correction-subject="city-postgresql-version"
           aria-label="PostgreSQL version provenance"
         >
-          <p data-disclosure="city-postgresql-version">
-            This city's model and explanations describe PostgreSQL 18.4.
-          </p>
+          <details
+            class="pg-correction pg-version-qualification"
+            data-correction-path="true"
+            data-version-qualification="city"
+          >
+            <summary data-disclosure="city-postgresql-version">PostgreSQL 18.4 · city claims</summary>
+            <span class="pg-version-qualification__full" data-version-qualification-full="true">
+              This city's model and explanations describe PostgreSQL 18.4.
+            </span>
+          </details>
         </section>
         <div class="boot-bar"><i id="boot-fill" style="width: 2%"></i></div>
         <p class="boot-status" id="boot-status">loading the city code…</p>

@@ -48,7 +48,7 @@ describe('keyboard and screen-reader lesson routes', () => {
       const touch = await measureTouchTargetPage(evaluate, page, viewport)
       const axNames = names(await accessibilityTree())
 
-      await evaluate(`document.querySelector('.city-words .pg-correction__link').focus()`)
+      await evaluate(`document.querySelector('.city-words .pg-version-qualification > summary').focus()`)
       await keyPress('Tab', { code: 'Tab' })
       const wrapped = await evaluate(`document.activeElement.getAttribute('aria-label')`)
       await keyPress('Escape', { code: 'Escape' })
