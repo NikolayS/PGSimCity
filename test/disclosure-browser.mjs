@@ -228,6 +228,9 @@ export async function inspectRenderedPages(pages, inspect) {
     const origin = `http://127.0.0.1:${address.port}`
     const reports = []
     for (const page of pages) {
+      const preload = page.beforeLoad
+        ? await send('Page.addScriptToEvaluateOnNewDocument', { source: page.beforeLoad })
+        : null
       await send('Emulation.setEmulatedMedia', {
         features: [{
           name: 'prefers-reduced-motion',
@@ -269,6 +272,9 @@ export async function inspectRenderedPages(pages, inspect) {
         send,
         viewport,
       }))
+      if (preload) {
+        await send('Page.removeScriptToEvaluateOnNewDocument', { identifier: preload.identifier })
+      }
     }
     return reports
   } finally {
