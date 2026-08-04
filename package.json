@@ -1,7 +1,7 @@
 {
   "name": "pgsimcity",
   "private": true,
-  "version": "0.39.1",
+  "version": "0.39.2",
   "type": "module",
   "engines": {
     "node": "^20.19.0 || >=22.12.0"

@@ -11,6 +11,61 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+## [0.39.2] - 2026-08-04
+
+### Fixed — the ground plate had no underside
+
+Nik kept seeing sky through the city's edge. The clients-forecourt overhang fixed
+in 0.39.1 was real but was not the whole story.
+
+The plate is cut to the Slonik outline with a 14-unit skirt for its poured depth —
+and nothing below or behind it. **All 417 outer-edge probes saw sky through the
+plate** on the first run of the new invariant. There is now an underside, an outer
+face carried down to the excavation floor, and a capped base.
+
+The invariant is a raycast over every outer-edge segment looking up and down, not
+a screenshot: no reachable camera position may see sky through the plate.
+
+The gantry visible in the report was checked and is sound — it is the HA rejoin
+bay projected across the edge, with all eight structural instances landing on
+physical plate ground about 209 m from the nearest edge.
+
+### Fixed — first person was uncomfortable
+
+- **The hands are now interaction-driven.** They are absent while you walk, one
+  reaches for the autovacuum lever, both appear for the control-centre door and
+  for swimming, and they recede again. The boxy mittens are replaced with tapered
+  low-poly palms, thumbs, fingers and forearms; `reduced` and `low` drop them
+  entirely.
+- **The selection marker is suppressed in walk mode.** `picker.ts` builds a
+  deliberate architect's drawing — setting-out circle, squared footprint,
+  roof-level crown, staffs and dimension lines — because that is *"what makes the
+  selection read from 400 m away."* Standing 1.7 m away you were inside it,
+  looking through a cage of green lines. Hover was already suppressed in walk
+  mode; the marker now is too. Selection state is unchanged.
+
+### Fixed — six components showed a reader an apology
+
+A stranger clicked the new *"This does not match PostgreSQL"* link out of
+curiosity, filled in nothing, and the pre-filled context still surfaced that
+`ha.endpoint` renders *"No notes for this one yet."*
+
+Measured honestly: **6 of 110** inspectable components had no documentation —
+`ha.endpoint`, `archive.status`, `conn.conduits`, `lsn.ruler`,
+`storage.durability`, `storage.tempfiles`. All six are written; coverage is
+110/110, enforced by a test that enumerates the production registry dynamically
+rather than a hand-maintained list.
+
+### Changed — a keyboard assertion that pinned a number
+
+The accessibility test asserted an exact nine-key sequence to a Diagnose verdict.
+The first-person work made the path one keystroke shorter, which is an
+improvement — but a test that pins an observed measurement is the failure this
+project has a rule against. It now asserts the durable property: the verdict is
+reachable by keyboard within a bounded number of keystrokes and exposed in the
+accessibility tree, with the actual sequence still reported for a human to read.
+
+
 ## [0.39.1] - 2026-08-04
 
 ### Fixed — the clients forecourt hung over nothing
