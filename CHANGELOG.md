@@ -11,6 +11,60 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+## [0.39.1] - 2026-08-04
+
+### Fixed — the clients forecourt hung over nothing
+
+`clients.ts` built its forecourt at x = -150…150 while `DISTRICT_BOUNDS.clients`
+declares -120…120, so the west edge overhung the ground plate by 30 units with
+nothing beneath it — visible from a phone as a slab floating over sky.
+
+`layout.ts` is meant to be the single source of truth for geography, and a module
+carrying its own extents is exactly the drift it exists to prevent. The forecourt
+now derives from layout geography, and `collision-coverage.test.ts` asserts every
+district surface stays inside its district **and** has physical ground under it.
+
+### Fixed — the city could only be navigated with a mouse
+
+A controls review against Google Maps/Earth conventions found that keyboard input
+moved the camera but never turned it: orbit keys translated only, and fly and
+walk both required pointer movement to look. **A keyboard reader could move
+through the city but could not turn toward anything in it.**
+
+(The keyboard path to a Diagnose verdict shipped in 0.38.1 was through the text
+surfaces and remains correct — this was the 3D camera.)
+
+Now, in orbit, fly and walk alike:
+
+| Keys | Action |
+|---|---|
+| `Shift` + ←/→ | Turn |
+| `Shift` + ↑/↓ | Tilt / look |
+| `+` / `-` | Zoom |
+| Arrows | Move, unchanged |
+
+Measured: keyboard rotation of 0.145 rad where previously heading never changed.
+
+### Fixed — reduced motion was only half honoured
+
+`focusOn()` already cut immediately, so component focus, Home, tour framing and
+walk exit did not tween. But orbit and pan **inertia were unchanged** — a
+reduced-motion run showed an angular tail identical to normal motion, and for a
+reader who set that preference because motion makes them unwell, the drift after
+every drag is the part that matters. The measured tail is now exactly `0`, while
+direct drag response is retained.
+
+### Also
+
+- Exiting the guided tour now cancels its in-flight camera move.
+- After a two-finger touch gesture, the remaining finger returns to one-finger
+  pan rather than staying in rotate.
+- Double-click remains **semantic component focus** rather than a Maps-style zoom
+  step — deliberate, and now documented rather than surprising.
+- Ground-anchored pan was reported as a defect and found to be already correct;
+  it is now protected by a test alongside the viewport-centre orbit invariant.
+
+
 ## [0.39.0] - 2026-08-04
 
 Four defects Nik found by walking the city, and the tests that make each class
