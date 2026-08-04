@@ -70,15 +70,37 @@ function drag(
   )
 }
 
-function wheel(dom: HTMLElement, deltaY: number): void {
+function wheel(dom: HTMLElement, deltaY: number, at: [number, number] = [400, 300]): void {
   const event = new Event('wheel', { cancelable: true })
   Object.defineProperties(event, {
     deltaY: { value: deltaY },
     deltaMode: { value: 0 },
-    clientX: { value: 400 },
-    clientY: { value: 300 },
+    clientX: { value: at[0] },
+    clientY: { value: at[1] },
   })
   dom.dispatchEvent(event)
+}
+
+function groundPointAt(camera: THREE.PerspectiveCamera, clientX: number, clientY: number): THREE.Vector3 {
+  const origin = camera.position.clone()
+  const direction = new THREE.Vector3(clientX / 400 - 1, 1 - clientY / 300, 0.5)
+    .unproject(camera)
+    .sub(origin)
+    .normalize()
+  const distance = -origin.y / direction.y
+  expect(distance).toBeGreaterThan(0)
+  return origin.addScaledVector(direction, distance)
+}
+
+function expectAtScreenPoint(
+  camera: THREE.PerspectiveCamera,
+  point: THREE.Vector3,
+  clientX: number,
+  clientY: number,
+  tolerance = 1e-6,
+): void {
+  const projected = point.clone().project(camera)
+  expect(Math.hypot(projected.x - (clientX / 400 - 1), projected.y - (1 - clientY / 300))).toBeLessThan(tolerance)
 }
 
 describe('map camera mouse controls', () => {
@@ -118,15 +140,94 @@ describe('map camera mouse controls', () => {
     expect(fixture.camera.quaternion.angleTo(rotationBefore)).toBeLessThan(1e-8)
   })
 
-  it('shift + left-drag rotates and tilts without panning', () => {
-    const pivotBefore = fixture.rig.pivot.clone()
+  it('shift + left-drag rotates and tilts around the ground under the cursor', () => {
+    const anchor = groundPointAt(fixture.camera, 280, 260)
     const rotationBefore = fixture.camera.quaternion.clone()
 
     drag(fixture.dom, { button: 0, shiftKey: true })
     fixture.rig.update(1 / 60)
 
     expect(fixture.camera.quaternion.angleTo(rotationBefore)).toBeGreaterThan(0.01)
-    expect(fixture.rig.pivot.distanceTo(pivotBefore)).toBeLessThan(1e-8)
+    expectAtScreenPoint(fixture.camera, anchor, 280, 260)
+  })
+
+  it.each([
+    { place: 'centre', x: 0, distance: 48 },
+    { place: 'centre', x: 0, distance: 180 },
+    { place: 'centre', x: 0, distance: 620 },
+    { place: 'edge', x: 1195, distance: 48 },
+    { place: 'edge', x: 1195, distance: 180 },
+    { place: 'edge', x: 1195, distance: 620 },
+  ])('keeps the viewport-centre ground point fixed after rotation at the $place from distance $distance', ({ place, x, distance }) => {
+    fixture.rig.focusOn({ target: [x, 18, 0], distance, dir: [-0.35, 0.55, 0.76] }, { instant: true })
+    const anchor = groundPointAt(fixture.camera, 400, 300)
+    if (place === 'edge') expect(anchor.x).toBeGreaterThan(1200)
+
+    drag(fixture.dom, { button: 0, shiftKey: true, from: [400, 300], to: [424, 318] })
+    fixture.rig.update(1 / 60)
+
+    expectAtScreenPoint(fixture.camera, anchor, 400, 300)
+  })
+
+  it('keeps the picked ground point fixed through a cursor zoom at the map edge', () => {
+    const cursor: [number, number] = [650, 390]
+    fixture.rig.focusOn({ target: [1195, 0, 0], distance: 80, dir: [-0.35, 0.55, 0.76] }, { instant: true })
+    const anchor = groundPointAt(fixture.camera, cursor[0], cursor[1])
+    expect(anchor.x).toBeGreaterThan(1200)
+
+    wheel(fixture.dom, 650, cursor)
+    for (let frame = 0; frame < 45; frame++) {
+      fixture.rig.update(1 / 60)
+      expectAtScreenPoint(fixture.camera, anchor, cursor[0], cursor[1])
+    }
+    expect(fixture.camera.position.x).toBeLessThanOrEqual(1200)
+  })
+
+  it('clips an edge rotation at the eye bound without moving its ground anchor', () => {
+    fixture.rig.focusOn({ target: [1210, 0, 0], distance: 48, dir: [-1, 0.5, 0] }, { instant: true })
+    const anchor = groundPointAt(fixture.camera, 400, 300)
+
+    drag(fixture.dom, { button: 0, shiftKey: true, from: [400, 300], to: [250, 300] })
+    fixture.rig.update(1 / 60)
+
+    expect(anchor.x).toBeGreaterThan(1200)
+    expect(fixture.camera.position.x).toBeLessThanOrEqual(1200)
+    expectAtScreenPoint(fixture.camera, anchor, 400, 300)
+  })
+
+  it('keeps grabbed ground under the cursor throughout a close high-tilt pan', () => {
+    const from: [number, number] = [360, 390]
+    fixture.rig.focusOn({ target: [0, 0, 0], distance: 36, dir: [-0.2, 0.18, 0.96] }, { instant: true })
+    const anchor = groundPointAt(fixture.camera, from[0], from[1])
+    fixture.dom.dispatchEvent(pointer('pointerdown', { button: 0, clientX: from[0], clientY: from[1] }))
+
+    for (const to of [[400, 400], [455, 415], [510, 430]] as const) {
+      fixture.dom.dispatchEvent(pointer('pointermove', { button: 0, clientX: to[0], clientY: to[1] }))
+      fixture.rig.update(1 / 60)
+      expectAtScreenPoint(fixture.camera, anchor, to[0], to[1])
+    }
+  })
+
+  it('does not tilt the orbit eye below the ground', () => {
+    fixture.rig.focusOn({ target: [0, 0, 0], distance: 40, dir: [0, 0.2, 1] }, { instant: true })
+
+    drag(fixture.dom, { button: 0, shiftKey: true, from: [400, 300], to: [400, -1000] })
+    fixture.rig.update(1 / 60)
+
+    expect(fixture.camera.position.y).toBeGreaterThanOrEqual(0)
+  })
+
+  it('allows an out-of-bounds scripted framing to rotate back toward the city', () => {
+    fixture.rig.focusOn({ target: [0, 0, 0], distance: 1000, dir: [0, 0.95, 0.31] }, { instant: true })
+    const eyeBefore = fixture.camera.position.clone()
+    const rotationBefore = fixture.camera.quaternion.clone()
+    expect(eyeBefore.y).toBeGreaterThan(900)
+
+    drag(fixture.dom, { button: 0, shiftKey: true, from: [400, 300], to: [400, 240] })
+    fixture.rig.update(1 / 60)
+
+    expect(fixture.camera.quaternion.angleTo(rotationBefore)).toBeGreaterThan(0.01)
+    expect(fixture.camera.position.y).toBeLessThan(eyeBefore.y)
   })
 
   it('rotates with a two-finger touch twist', () => {
