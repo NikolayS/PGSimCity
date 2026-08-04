@@ -151,6 +151,13 @@ export function correctionActionNameFailures(reports) {
             `${report.name} · ${subject.label}: accessible name does not convey a reporting action`,
           )
         }
+      }
+    }
+  }
+  return failures
+}
+
+/** Every correction path must carry the PostgreSQL version it is judged against. */
 export function versionQualificationFailures(reports) {
   const failures = []
   for (const report of reports) {
