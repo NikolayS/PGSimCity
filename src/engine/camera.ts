@@ -151,14 +151,12 @@ const WORLD_UP = new THREE.Vector3(0, 1, 0)
 /** Below this speed² a velocity is dust: snap it to zero so nothing creeps. */
 const DEAD_VEL = 1e-4
 
-/**
- * One box for the eye and the pivot alike, a little larger than the ground
- * plane. It is only enforced against *user-driven* motion: a scripted move or a
- * re-adopted pivot is never yanked back, which would show up as a snap.
- */
+/** User motion is bounded by the eye. The picked ground point is never clamped. */
 const LIMIT_XZ = 1200
 const LIMIT_Y_LO = -300
 const LIMIT_Y_HI = 900
+const GROUND_Y = 0
+const ORBIT_EYE_MIN_Y = 0.01
 
 /* --------------------------------------------------------------------------
  * Module-scope scratch. Nothing below allocates per frame.
@@ -263,6 +261,10 @@ export function createCameraRig(
   let pendingZoom = 1
   let zoomNdcX = 0
   let zoomNdcY = 0
+  let panNdcX = 0
+  let panNdcY = 0
+  let inputNdcX = 0
+  let inputNdcY = 0
 
   let dragOrbit = false
   let dragPan = false
@@ -272,6 +274,11 @@ export function createCameraRig(
   let locked = false
   let disposed = false
   let activePreset: 'plan' | null = null
+  const rotateAnchor = new THREE.Vector3()
+  const panAnchor = new THREE.Vector3()
+  let rotateAnchorValid = false
+  let panAnchorValid = false
+  let zoomAnchored = false
 
   // scripted moves
   let tweenT = 0
@@ -341,17 +348,86 @@ export function createCameraRig(
     _v2.setFromSpherical(_sph)
     pivot.copy(camera.position).sub(_v2)
     pivotT.copy(pivot)
+    zoomAnchored = false
   }
 
-  /** Applied only where the user actively drives the pivot. */
-  function clampPivotTarget(): void {
-    pivotT.x = clamp(pivotT.x, -LIMIT_XZ, LIMIT_XZ)
-    pivotT.y = clamp(pivotT.y, LIMIT_Y_LO, LIMIT_Y_HI)
-    pivotT.z = clamp(pivotT.z, -LIMIT_XZ, LIMIT_XZ)
+  function userEyeViolation(p: THREE.Vector3): number {
+    const dx = Math.max(-LIMIT_XZ - p.x, 0, p.x - LIMIT_XZ)
+    const dy = Math.max(ORBIT_EYE_MIN_Y - p.y, 0, p.y - LIMIT_Y_HI)
+    const dz = Math.max(-LIMIT_XZ - p.z, 0, p.z - LIMIT_XZ)
+    return dx * dx + dy * dy + dz * dz
+  }
+
+  /** Translate the whole orbit frame, clipping the motion where the eye meets its bounds. */
+  function translateOrbit(delta: THREE.Vector3): void {
+    delta.x = clamp(camera.position.x + delta.x, -LIMIT_XZ, LIMIT_XZ) - camera.position.x
+    delta.y = clamp(camera.position.y + delta.y, ORBIT_EYE_MIN_Y, LIMIT_Y_HI) - camera.position.y
+    delta.z = clamp(camera.position.z + delta.z, -LIMIT_XZ, LIMIT_XZ) - camera.position.z
+    camera.position.add(delta)
+    pivot.add(delta)
+    pivotT.add(delta)
+  }
+
+  /** Ray/ground-plane intersection. The caller owns `out`; `_v3` is scratch. */
+  function pickGround(ndcX: number, ndcY: number, out: THREE.Vector3): boolean {
+    _v3.set(ndcX, ndcY, 0.5).unproject(camera).sub(camera.position)
+    if (_v3.y >= -1e-8 || camera.position.y < GROUND_Y) return false
+    const t = (GROUND_Y - camera.position.y) / _v3.y
+    if (t < 0) return false
+    out.copy(camera.position).addScaledVector(_v3, t)
+    return true
+  }
+
+  function pickGroundOrCentre(ndcX: number, ndcY: number, out: THREE.Vector3): boolean {
+    return pickGround(ndcX, ndcY, out) || pickGround(0, 0, out)
+  }
+
+  /** Largest prefix of a user rotation whose eye remains inside the bounds. */
+  function allowedRotationFraction(axis: THREE.Vector3, angle: number): number {
+    const startViolation = userEyeViolation(camera.position)
+    _q1.setFromAxisAngle(axis, angle)
+    _v1.copy(camera.position).sub(rotateAnchor).applyQuaternion(_q1).add(rotateAnchor)
+    if (userEyeViolation(_v1) <= startViolation) return 1
+    if (startViolation > 0) return 0
+
+    let lo = 0
+    let hi = 1
+    for (let i = 0; i < 16; i++) {
+      const mid = (lo + hi) * 0.5
+      _q1.setFromAxisAngle(axis, angle * mid)
+      _v1.copy(camera.position).sub(rotateAnchor).applyQuaternion(_q1).add(rotateAnchor)
+      if (userEyeViolation(_v1) === 0) lo = mid
+      else hi = mid
+    }
+    return lo
+  }
+
+  /** Rotate eye and look target together, preserving the picked point's screen position. */
+  function rotateOrbit(axis: THREE.Vector3, angle: number): boolean {
+    if (!rotateAnchorValid || Math.abs(angle) < 1e-12) return true
+    const fraction = allowedRotationFraction(axis, angle)
+    if (fraction <= 0) return false
+    _q1.setFromAxisAngle(axis, angle * fraction)
+    camera.position.sub(rotateAnchor).applyQuaternion(_q1).add(rotateAnchor)
+    pivot.sub(rotateAnchor).applyQuaternion(_q1).add(rotateAnchor)
+    pivotT.sub(rotateAnchor).applyQuaternion(_q1).add(rotateAnchor)
+    camera.up.copy(WORLD_UP)
+    camera.lookAt(pivot)
+    camera.updateMatrixWorld()
+
+    _v1.copy(camera.position).sub(pivot)
+    _sph.setFromVector3(_v1)
+    theta = _sph.theta
+    phi = _sph.phi
+    dist = _sph.radius
+    distT = dist
+    return fraction > 1 - 1e-6
   }
 
   function syncOrbitFromCamera(d: number): void {
     adoptOrbit(d)
+    rotateAnchorValid = false
+    panAnchorValid = false
     velTheta = 0
     velPhi = 0
     velPivot.set(0, 0, 0)
@@ -401,10 +477,45 @@ export function createCameraRig(
     if (scriptedNow()) release()
   }
 
-  function ndcFromEvent(e: { clientX: number; clientY: number }): void {
+  function readEventNdc(e: { clientX: number; clientY: number }): void {
     const r = domElement.getBoundingClientRect()
-    zoomNdcX = ((e.clientX - r.left) / Math.max(1, r.width)) * 2 - 1
-    zoomNdcY = -(((e.clientY - r.top) / Math.max(1, r.height)) * 2 - 1)
+    inputNdcX = ((e.clientX - r.left) / Math.max(1, r.width)) * 2 - 1
+    inputNdcY = -(((e.clientY - r.top) / Math.max(1, r.height)) * 2 - 1)
+  }
+
+  function ndcFromEvent(e: { clientX: number; clientY: number }): void {
+    readEventNdc(e)
+    zoomNdcX = inputNdcX
+    zoomNdcY = inputNdcY
+  }
+
+  function beginRotateAt(e: { clientX: number; clientY: number }): void {
+    readEventNdc(e)
+    pivotT.copy(pivot)
+    distT = dist
+    zoomAnchored = false
+    panAnchorValid = false
+    velPivot.set(0, 0, 0)
+    kbVel.set(0, 0, 0)
+    rotateAnchorValid = pickGroundOrCentre(inputNdcX, inputNdcY, rotateAnchor)
+    if (!rotateAnchorValid) {
+      rotateAnchor.copy(pivot)
+      rotateAnchorValid = true
+    }
+  }
+
+  function beginPanAt(e: { clientX: number; clientY: number }): void {
+    readEventNdc(e)
+    panNdcX = inputNdcX
+    panNdcY = inputNdcY
+    pivotT.copy(pivot)
+    distT = dist
+    zoomAnchored = false
+    rotateAnchorValid = false
+    velTheta = 0
+    velPhi = 0
+    velPivot.set(0, 0, 0)
+    panAnchorValid = pickGround(panNdcX, panNdcY, panAnchor)
   }
 
   function onPointerDown(e: PointerEvent): void {
@@ -436,6 +547,9 @@ export function createCameraRig(
       dragOrbit = true
       dragPan = false
       pinchActive = false
+      const ax = ptrX.get(ptrIds[0]) ?? e.clientX
+      const ay = ptrY.get(ptrIds[0]) ?? e.clientY
+      beginRotateAt({ clientX: (ax + e.clientX) * 0.5, clientY: (ay + e.clientY) * 0.5 })
       return
     }
 
@@ -453,10 +567,16 @@ export function createCameraRig(
     // keeps its pan muscle memory, and right-click remains entirely available
     // to the contextual UI, which is the point of moving rotation off it.
     if (e.button === 0) {
-      if (e.shiftKey || e.ctrlKey || e.metaKey) dragOrbit = true
-      else dragPan = true
+      if (e.shiftKey || e.ctrlKey || e.metaKey) {
+        dragOrbit = true
+        beginRotateAt(e)
+      } else {
+        dragPan = true
+        beginPanAt(e)
+      }
     } else if (e.button === 1) {
       dragPan = true
+      beginPanAt(e)
       e.preventDefault()
     }
   }
@@ -546,6 +666,9 @@ export function createCameraRig(
     } else if (dragPan) {
       inPanX += dx
       inPanY += dy
+      readEventNdc(e)
+      panNdcX = inputNdcX
+      panNdcY = inputNdcY
       if (!panGestureAnnounced && (dx !== 0 || dy !== 0)) {
         panGestureAnnounced = true
         bus.emit('camera:gesture', { kind: 'pan', pointer: e.pointerType === 'touch' ? 'touch' : 'mouse' })
@@ -570,6 +693,7 @@ export function createCameraRig(
       dragOrbit = false
       dragPan = false
       dragLook = false
+      panAnchorValid = false
     }
   }
 
@@ -636,6 +760,8 @@ export function createCameraRig(
     dragPan = false
     dragLook = false
     pinchActive = false
+    panAnchorValid = false
+    rotateAnchorValid = false
     ptrIds.length = 0
     ptrX.clear()
     ptrY.clear()
@@ -689,45 +815,68 @@ export function createCameraRig(
     return (shiftDown ? BOOST : 1) * (altDown ? PRECISION : 1)
   }
 
-  /** Dolly toward the cursor ray. Keeping the point under the cursor put is the
-   *  single biggest quality-of-life difference from a plain distance zoom. */
+  function allowedZoomScale(anchor: THREE.Vector3, scale: number): number {
+    const startViolation = userEyeViolation(camera.position)
+    _v2.copy(camera.position).sub(anchor).multiplyScalar(scale).add(anchor)
+    if (userEyeViolation(_v2) <= startViolation) return scale
+    if (startViolation > 0) return 1
+
+    let lo = 0
+    let hi = 1
+    for (let i = 0; i < 16; i++) {
+      const mid = (lo + hi) * 0.5
+      const q = lerp(1, scale, mid)
+      _v2.copy(camera.position).sub(anchor).multiplyScalar(q).add(anchor)
+      if (userEyeViolation(_v2) === 0) lo = mid
+      else hi = mid
+    }
+    return lerp(1, scale, lo)
+  }
+
+  /** Dolly about the picked ground point; matched damping keeps it under the cursor. */
   function applyZoom(): void {
     if (pendingZoom === 1) return
-    const dOld = distT
-    const dNew = clamp(dOld * pendingZoom, MIN_DIST, MAX_DIST)
+    const requestedDist = clamp(distT * pendingZoom, MIN_DIST, MAX_DIST)
     pendingZoom = 1
-    if (dNew === dOld) return
+    if (Math.abs(requestedDist - dist) < 1e-10) return
 
-    _v1.set(zoomNdcX, zoomNdcY, 0.5).unproject(camera).sub(camera.position)
-    if (_v1.lengthSq() > 1e-8) {
-      _v1.normalize()
+    rotateAnchorValid = false
+    velTheta = 0
+    velPhi = 0
+    if (pickGroundOrCentre(zoomNdcX, zoomNdcY, _v1)) {
+      const scale = allowedZoomScale(_v1, requestedDist / dist)
+      pivotT.copy(pivot).sub(_v1).multiplyScalar(scale).add(_v1)
+      distT = dist * scale
+      zoomAnchored = true
+    } else {
+      _v2.set(zoomNdcX, zoomNdcY, 0.5).unproject(camera).sub(camera.position)
+      if (_v2.lengthSq() < 1e-8) return
+      _v2.normalize()
       _fwd.set(0, 0, -1).applyQuaternion(camera.quaternion)
-      // pivot' = pivot + (dOld - dNew) * (ray - view)  — derived from holding the
-      // cursor ray fixed while the distance changes.
-      _v1.sub(_fwd).multiplyScalar(dOld - dNew)
-      const maxShift = dOld * 0.75
-      if (_v1.lengthSq() > maxShift * maxShift) _v1.setLength(maxShift)
-      pivotT.add(_v1)
-      clampPivotTarget()
+      _v2.sub(_fwd).multiplyScalar(dist - requestedDist)
+      pivotT.copy(pivot).add(_v2)
+      distT = requestedDist
+      zoomAnchored = true
     }
-    distT = dNew
   }
 
   function tickOrbit(dt: number, sdt: number): void {
     inLookX = 0
     inLookY = 0
 
-    /* rotate — 1:1 while dragging, inertial afterwards */
+    /* rotate eye and look target around the ground pick made at drag start */
+    let yawStep = 0
+    let pitchStep = 0
     if (dragOrbit) {
       const kx = (Math.PI * 2 * inRotX) / viewH
       const ky = (Math.PI * 2 * inRotY) / viewH
-      theta -= kx
-      phi -= ky
+      yawStep = -kx
+      pitchStep = -ky
       velTheta = damp(velTheta, -kx / sdt, VEL_TRACK, sdt)
       velPhi = damp(velPhi, -ky / sdt, VEL_TRACK, sdt)
     } else {
-      theta += velTheta * dt
-      phi += velPhi * dt
+      yawStep = velTheta * dt
+      pitchStep = velPhi * dt
       velTheta = damp(velTheta, 0, SPIN_DECAY, dt)
       velPhi = damp(velPhi, 0, SPIN_DECAY, dt)
       if (velTheta < 1e-4 && velTheta > -1e-4) velTheta = 0
@@ -736,31 +885,49 @@ export function createCameraRig(
     inRotX = 0
     inRotY = 0
 
-    const clampedPhi = clamp(phi, PHI_MIN, PHI_MAX)
-    if (clampedPhi !== phi) {
-      phi = clampedPhi
-      velPhi = 0
+    if (yawStep !== 0 && !rotateOrbit(WORLD_UP, yawStep)) velTheta = 0
+    if (pitchStep !== 0) {
+      _right.setFromMatrixColumn(camera.matrixWorld, 0).normalize()
+      const limitedPitch = clamp(phi + pitchStep, PHI_MIN, PHI_MAX) - phi
+      if (limitedPitch !== pitchStep) velPhi = 0
+      if (!rotateOrbit(_right, limitedPitch)) velPhi = 0
     }
 
-    /* pan — screen-space 1:1 in the camera plane */
+    /* pan by solving the current cursor ray back to the ground grabbed on down */
     const wpp = (2 * Math.tan((camera.fov * Math.PI) / 360) * Math.max(dist, 1)) / viewH
     _right.setFromMatrixColumn(camera.matrixWorld, 0)
     _upv.setFromMatrixColumn(camera.matrixWorld, 1)
     if (dragPan) {
-      _v1.set(0, 0, 0)
-      _v1.addScaledVector(_right, -inPanX * wpp)
-      _v1.addScaledVector(_upv, inPanY * wpp)
-      pivot.add(_v1)
-      pivotT.add(_v1)
-      clampPivotTarget()
+      if (panAnchorValid && pickGround(panNdcX, panNdcY, _v2)) {
+        _v1.copy(panAnchor).sub(_v2)
+        _v1.y = 0
+      } else {
+        _v1.set(0, 0, 0)
+        _v1.addScaledVector(_right, -inPanX * wpp)
+        _v1.addScaledVector(_upv, inPanY * wpp)
+      }
+      translateOrbit(_v1)
+      camera.updateMatrixWorld()
       _v2.copy(_v1).divideScalar(sdt)
       velPivot.x = damp(velPivot.x, _v2.x, VEL_TRACK, sdt)
       velPivot.y = damp(velPivot.y, _v2.y, VEL_TRACK, sdt)
       velPivot.z = damp(velPivot.z, _v2.z, VEL_TRACK, sdt)
     } else if (velPivot.lengthSq() > DEAD_VEL) {
-      pivot.addScaledVector(velPivot, dt)
-      pivotT.addScaledVector(velPivot, dt)
-      clampPivotTarget()
+      _v1.copy(velPivot).multiplyScalar(dt)
+      translateOrbit(_v1)
+      if (
+        (camera.position.x <= -LIMIT_XZ && velPivot.x < 0)
+        || (camera.position.x >= LIMIT_XZ && velPivot.x > 0)
+      ) velPivot.x = 0
+      if (
+        (camera.position.y <= ORBIT_EYE_MIN_Y && velPivot.y < 0)
+        || (camera.position.y >= LIMIT_Y_HI && velPivot.y > 0)
+      ) velPivot.y = 0
+      if (
+        (camera.position.z <= -LIMIT_XZ && velPivot.z < 0)
+        || (camera.position.z >= LIMIT_XZ && velPivot.z > 0)
+      ) velPivot.z = 0
+      camera.updateMatrixWorld()
       velPivot.multiplyScalar(Math.exp(-PAN_DECAY * dt))
     } else {
       velPivot.set(0, 0, 0)
@@ -790,9 +957,15 @@ export function createCameraRig(
     kbVel.y = damp(kbVel.y, _v1.y, KEY_ACCEL, dt)
     kbVel.z = damp(kbVel.z, _v1.z, KEY_ACCEL, dt)
     if (kbVel.lengthSq() > DEAD_VEL) {
-      pivot.addScaledVector(kbVel, dt)
-      pivotT.addScaledVector(kbVel, dt)
-      clampPivotTarget()
+      if (zoomAnchored) {
+        pivotT.copy(pivot)
+        distT = dist
+        zoomAnchored = false
+      }
+      _v1.copy(kbVel).multiplyScalar(dt)
+      translateOrbit(_v1)
+      camera.updateMatrixWorld()
+      rotateAnchorValid = false
     } else if (_v1.lengthSq() === 0) {
       kbVel.set(0, 0, 0) // no residual drift once the key is up
     }
@@ -801,8 +974,14 @@ export function createCameraRig(
 
     /* smoothed quantities chase their targets */
     distT = clamp(distT, MIN_DIST, MAX_DIST)
+    const pivotRate = zoomAnchored ? DOLLY_RATE : PIVOT_RATE
     dist = damp(dist, distT, DOLLY_RATE, dt)
-    pivot.lerp(pivotT, 1 - Math.exp(-PIVOT_RATE * dt))
+    pivot.lerp(pivotT, 1 - Math.exp(-pivotRate * dt))
+    if (zoomAnchored && Math.abs(dist - distT) < 1e-6 && pivot.distanceToSquared(pivotT) < 1e-12) {
+      dist = distT
+      pivot.copy(pivotT)
+      zoomAnchored = false
+    }
 
     applyOrbitTransform()
   }
@@ -920,6 +1099,9 @@ export function createCameraRig(
   function focusOn(spec: FocusSpec, opts?: { instant?: boolean; duration?: number }, preservePreset = false): void {
     if (!preservePreset) setActivePreset(null)
     if (scriptedNow()) cancelScript()
+    rotateAnchorValid = false
+    panAnchorValid = false
+    zoomAnchored = false
 
     tweenTarget.set(spec.target[0], spec.target[1], spec.target[2])
     const d = clamp(spec.distance, MIN_DIST, MAX_DIST)
@@ -1130,10 +1312,21 @@ export function createCameraRig(
 
   function setPivot(p: THREE.Vector3 | [number, number, number]): void {
     setActivePreset(null)
-    if (Array.isArray(p)) pivotT.set(p[0], p[1], p[2])
-    else pivotT.copy(p)
-    clampPivotTarget()
+    if (zoomAnchored) {
+      pivotT.copy(pivot)
+      distT = dist
+      zoomAnchored = false
+    }
+    if (Array.isArray(p)) _v1.set(p[0], p[1], p[2])
+    else _v1.copy(p)
+    _v2.copy(_v1).sub(pivot)
+    _v2.x = clamp(camera.position.x + _v2.x, -LIMIT_XZ, LIMIT_XZ) - camera.position.x
+    _v2.y = clamp(camera.position.y + _v2.y, ORBIT_EYE_MIN_Y, LIMIT_Y_HI) - camera.position.y
+    _v2.z = clamp(camera.position.z + _v2.z, -LIMIT_XZ, LIMIT_XZ) - camera.position.z
+    pivotT.copy(pivot).add(_v2)
     velPivot.set(0, 0, 0)
+    rotateAnchorValid = false
+    zoomAnchored = false
   }
 
   function update(dt: number): void {
@@ -1167,6 +1360,9 @@ export function createCameraRig(
     inLookX = 0
     inLookY = 0
     pendingZoom = 1
+    rotateAnchorValid = false
+    panAnchorValid = false
+    zoomAnchored = false
   }
 
   function resize(w: number, h: number): void {
