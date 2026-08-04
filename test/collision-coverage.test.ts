@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { expect, it } from 'vitest'
+import { DISTRICT_BOUNDS } from '../src/world/layout'
 import type { TraversalRoute, WalkPoint } from './walk-harness'
 import { createWalkCityHarness } from './walk-harness'
 
@@ -212,6 +213,49 @@ it('covers every visible human-scale solid found by scene-graph enumeration', as
         passable: Object.fromEntries(passable),
       }))
     }
+  } finally {
+    city.dispose()
+  }
+})
+
+it('keeps the client forecourt within its district and over physical ground', async () => {
+  const city = await createWalkCityHarness()
+  try {
+    const surfaces = enumerateMeshes(city.scene).filter(
+      (record) => record.mesh.name === 'client.forecourt',
+    )
+    const point = new THREE.Vector3()
+    const gaps: { path: string; x: number; z: number }[] = []
+    const spacing = 8
+
+    for (const surface of surfaces) {
+      for (let x = surface.box.min.x + spacing / 2; x < surface.box.max.x; x += spacing) {
+        for (let z = surface.box.min.z + spacing / 2; z < surface.box.max.z; z += spacing) {
+          point.set(x, surface.box.max.y + 0.7, z)
+          if (city.collision.groundAt(point, 1.5) === null) {
+            gaps.push({ path: surface.path, x, z })
+          }
+        }
+      }
+    }
+
+    expect(surfaces).toHaveLength(1)
+    expect(gaps).toEqual([])
+    const clients = DISTRICT_BOUNDS.clients
+    expect(
+      surfaces
+        .filter((surface) => (
+          surface.box.min.x < clients.x[0]
+          || surface.box.max.x > clients.x[1]
+          || surface.box.min.z < clients.z[0]
+          || surface.box.max.z > clients.z[1]
+        ))
+        .map((surface) => ({
+          path: surface.path,
+          x: [surface.box.min.x, surface.box.max.x],
+          z: [surface.box.min.z, surface.box.max.z],
+        })),
+    ).toEqual([])
   } finally {
     city.dispose()
   }
