@@ -19,9 +19,17 @@ const MEASURE_EXPRESSION = `(() => {
         element.querySelectorAll('[data-correction-path="true"] > a[data-correction-link="true"]'),
       ).map((anchor) => {
         const url = new URL(anchor.href)
+        const visibleText = (anchor.innerText || anchor.textContent || '')
+          .replace(/\s+/g, ' ')
+          .trim()
         return {
           href: anchor.href,
           length: anchor.href.length,
+          visibleText,
+          accessibleName: (
+            anchor.getAttribute('aria-label')
+            || visibleText
+          ).replace(/\s+/g, ' ').trim(),
           title: url.searchParams.get('title'),
           body: url.searchParams.get('body'),
         }
@@ -119,6 +127,28 @@ export function correctionCoverageFailures(reports) {
       failures.push(
         `${report.name} · ${label}: correction path lacks the Plausible opt-out class`,
       )
+    }
+  }
+  return failures
+}
+
+/** Every rendered correction path must name the deliberate reporting action. */
+export function correctionActionNameFailures(reports) {
+  const failures = []
+  for (const report of reports) {
+    for (const subject of report.subjects) {
+      for (const link of subject.links) {
+        if (!/\b(?:report|file|submit)\b/iu.test(link.visibleText)) {
+          failures.push(
+            `${report.name} · ${subject.label}: visible text does not convey a reporting action`,
+          )
+        }
+        if (!/\b(?:report|file|submit)\b/iu.test(link.accessibleName)) {
+          failures.push(
+            `${report.name} · ${subject.label}: accessible name does not convey a reporting action`,
+          )
+        }
+      }
     }
   }
   return failures

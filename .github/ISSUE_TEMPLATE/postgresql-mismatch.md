@@ -1,10 +1,16 @@
 ---
-name: This does not match PostgreSQL
+name: Report a problem with a PostgreSQL claim
 about: Report a PGSimCity claim that disagrees with PostgreSQL
 title: "[PostgreSQL mismatch] "
 labels: ""
 assignees: ""
 ---
+
+## Before submitting
+
+Use this issue to report a problem with a PostgreSQL claim in PGSimCity. Fill in the correction and supporting evidence below.
+
+If you opened the reporting link out of curiosity or do not have a correction to report, close this tab without submitting the issue.
 
 ## Where
 

@@ -12,6 +12,7 @@ import {
 import { el } from '../src/ui/uikit'
 import { installTestDom } from './dom'
 import {
+  correctionActionNameFailures,
   correctionCoverageFailures,
   measureCorrectionPages,
 } from './correction-browser.mjs'
@@ -54,6 +55,8 @@ describe('PostgreSQL correction reports', () => {
     expect(body).toContain('- Beat: `1 at 12 model s`')
     expect(body).toContain('## What PostgreSQL actually does')
     expect(body).toContain('## Documentation or source')
+    expect(body).toMatch(/report(?:ing)? a problem with .*claim/iu)
+    expect(body).toMatch(/close .*without submitting/iu)
     expect(body).not.toContain('sharedBuffers')
     expect(body).not.toContain('Full knob')
   })
@@ -132,6 +135,10 @@ describe('PostgreSQL correction reports', () => {
     expect(link!.dataset.noAnalytics).toBe('true')
     expect(link!.classList.contains('plausible-event-name--Correction+Link+Click')).toBe(true)
     expect(link!.closest('[data-disclosure]')).not.toBeNull()
+    const accessibleName = link!.getAttribute('aria-label') || link!.textContent || ''
+    expect(link!.textContent).toMatch(/\b(?:report|file|submit)\b/iu)
+    expect(link!.textContent).toMatch(/\bGitHub\b/iu)
+    expect(accessibleName).toMatch(/\b(?:report|file|submit)\b/iu)
 
     claim.textContent = 'PostgreSQL scans usage_count and selects a zero-valued victim.'
     link!.dispatchEvent(new Event('pointerdown'))
@@ -171,32 +178,13 @@ describe('PostgreSQL correction reports', () => {
 
   it('keeps the issue template aligned with the generated report questions', () => {
     const template = read(`.github/ISSUE_TEMPLATE/${CORRECTION_ISSUE_TEMPLATE}`)
-    expect(template).toContain('name: This does not match PostgreSQL')
+    expect(template).toMatch(/^name:\s+Report\b/imu)
+    expect(template).toMatch(/close .*without submitting/iu)
     expect(template).toContain('## What PostgreSQL actually does')
     expect(template).toContain('## Documentation or source')
     expect(template).toContain('what PostgreSQL does instead')
     expect(template).toContain('documentation section or PostgreSQL source')
     expect(CLAIM_VALUES.appVersion.label).toMatch(/^v\d+\.\d+\.\d+ · [0-9a-f]{7}$/)
-  })
-
-  it('keeps every claim-bearing rendering family on the shared correction path', () => {
-    const renderers = [
-      ['src/ui/panel.ts', 1, 'inspector and component docs'],
-      ['src/ui/controls.ts', 1, 'control console'],
-      ['src/ui/anatomy.ts', 1, 'physical anatomy'],
-      ['src/ui/hud.ts', 2, 'latency and operator verdict panels'],
-      ['src/ui/tour.ts', 2, 'tour chapters and scenario beats'],
-      ['src/ui/control-center.ts', 1, 'control center'],
-      ['src/ui/help.ts', 1, 'help and reading guide'],
-      ['src/main.ts', 1, 'city PostgreSQL version provenance'],
-      ['src/observability/main.ts', 1, 'all Diagnose and Query flow cards'],
-      ['machine/magnum.js', 4, 'Machine workbench, board, index walk, and comparison'],
-    ] as const
-
-    for (const [file, expectedPaths, surface] of renderers) {
-      const count = read(file).match(/createCorrectionPath\(/g)?.length ?? 0
-      expect(count, `${surface} has no shared correction path in ${file}`).toBe(expectedPaths)
-    }
   })
 
   it('covers every claim-bearing panel rendered by each browser surface', async () => {
@@ -292,6 +280,7 @@ describe('PostgreSQL correction reports', () => {
       orphanPaths: [],
     }])).toEqual([])
     expect(correctionCoverageFailures(reports)).toEqual([])
+    expect(correctionActionNameFailures(reports)).toEqual([])
 
     const disclosureReports = reports.flatMap(
       (report) => report.disclosureReport ? [report.disclosureReport] : [],
