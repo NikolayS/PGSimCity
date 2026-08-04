@@ -86,7 +86,7 @@ export const APP_KEYS: KeyRow[] = [
   { id: 'help', keys: ['?'], what: 'This panel' },
   { id: 'labels', keys: ['L'], what: 'Toggle floating labels · View menu' },
   { id: 'theme', keys: ['N'], what: 'Night / golden hour / approximate local-time light · beside Sound' },
-  { id: 'sound', keys: ['M'], what: 'Sound on / off — audio starts off and remembers your choice' },
+  { id: 'sound', keys: ['M'], what: 'Walk sound on / off — starts off and remembers your choice' },
   { id: 'escape', keys: ['Esc'], what: 'Close the topmost overlay' },
   { id: 'districts', keys: ['1', '…', '8'], what: 'Jump to a district · View menu on phones' },
 ]

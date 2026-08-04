@@ -68,6 +68,7 @@ import { createTouchpad } from './ui/touchpad'
 import { createZoomContext } from './ui/zoom-context'
 import { createControlCenter } from './ui/control-center'
 import { createWalkUpInteraction } from './ui/walk-up'
+import { movementSoundEnabledToast } from './ui/sound'
 import { createWorldHandleSites } from './ui/world-handles'
 import { BOOT_STEPS, failBoot, finishBoot, presentBootStep } from './ui/boot'
 import type { UiContext, UiModule } from './ui/uikit'
@@ -324,7 +325,11 @@ async function boot(): Promise<void> {
       return
     }
     void audio.enable()
-      .then(() => bus.emit('toast', { text: 'Sound on', kind: 'good', ms: 1600 }))
+      .then(() => bus.emit('toast', {
+        text: movementSoundEnabledToast(rig.mode),
+        kind: 'good',
+        ms: 2200,
+      }))
       .catch(() => {})
   })
 
