@@ -83,13 +83,17 @@ const PRECISION = 0.25
 const ZOOM_K = 0.002
 const SPEED_K = 0.0018
 
-/* Six percent of the finger span is enough geometric evidence to classify.
- * A 1.5x-dominant intent must repeat, while 3x locks immediately; the lifetime
- * lock is the hysteresis. Twist uses the same endpoint-travel geometry. */
+/* Gesture evidence uses contact geometry, not delivered events or rendered
+ * frames. Six percent of the starting span clears proportional placement
+ * jitter; 1.5x acquires an intent, while a competing 2x signal releases it.
+ * Output cross-fades from equal evidence to 2x, so either threshold is smooth. */
 const TOUCH_INTENT_FRACTION = 0.06
 const TOUCH_DOMINANCE = 1.5
-const TOUCH_DECISIVE_DOMINANCE = 3
+const TOUCH_RELEASE_DOMINANCE = 2
 const TOUCH_TWIST_ANGLE = TOUCH_INTENT_FRACTION * 2
+/* Beyond about 21 degrees the changing contact axis is unambiguously a twist,
+ * even off-centre where its midpoint legitimately travels farther than its span. */
+const TOUCH_DECISIVE_TWIST_ANGLE = TOUCH_TWIST_ANGLE * 3
 
 const FOCUS_DUR = 1.05
 /** Upward framing bias for auto-derived focus directions. */
@@ -325,6 +329,7 @@ export function createCameraRig(
   const ptrIds: number[] = []
   const ptrX = new Map<number, number>()
   const ptrY = new Map<number, number>()
+  const touchReported = new Set<number>()
   let touchFrameActive = false
   let touchPrevDist = 0
   let touchPrevMx = 0
@@ -344,8 +349,6 @@ export function createCameraRig(
   let touchTilt = 0
   let touchTransformDirty = false
   let touchIntent: TouchGestureIntent = 'pending'
-  let touchCandidate: TouchGestureIntent = 'pending'
-  let touchCandidateSamples = 0
 
   const keys = new Set<string>()
   let shiftDown = false
@@ -563,14 +566,13 @@ export function createCameraRig(
 
   function clearTouchGesture(): void {
     touchFrameActive = false
+    touchReported.clear()
     touchScale = 1
     touchYaw = 0
     touchTilt = 0
     touchTransformDirty = false
     touchAngleTotal = 0
     touchIntent = 'pending'
-    touchCandidate = 'pending'
-    touchCandidateSamples = 0
     velTheta = 0
     velPhi = 0
   }
@@ -597,8 +599,14 @@ export function createCameraRig(
     touchTransformDirty = false
     touchAngleTotal = 0
     touchIntent = 'pending'
-    touchCandidate = 'pending'
-    touchCandidateSamples = 0
+    touchReported.clear()
+  }
+
+  function touchEvidence(intent: TouchGestureIntent, translation: number, radial: number, twist: number): number {
+    if (intent === 'swipe') return translation
+    if (intent === 'pinch') return radial
+    if (intent === 'twist') return twist
+    return 0
   }
 
   function classifyTouchGesture(
@@ -606,26 +614,63 @@ export function createCameraRig(
     radial: number,
     twistAngle: number,
   ): TouchGestureIntent {
-    if (twistAngle >= TOUCH_TWIST_ANGLE) return 'twist'
     const threshold = touchStartDist * TOUCH_INTENT_FRACTION
-    if (radial >= threshold && radial > translation * TOUCH_DOMINANCE) return 'pinch'
-    if (translation >= threshold && translation > radial * TOUCH_DOMINANCE) return 'swipe'
+    const twist = twistAngle * touchStartDist * 0.5
+    if (
+      twistAngle >= TOUCH_DECISIVE_TWIST_ANGLE
+      && radial <= twist * TOUCH_RELEASE_DOMINANCE
+    ) return 'twist'
+    if (translation >= threshold && translation > Math.max(radial, twist) * TOUCH_DOMINANCE) return 'swipe'
+    if (radial >= threshold && radial > Math.max(translation, twist) * TOUCH_DOMINANCE) return 'pinch'
+    if (twist >= threshold && twist > Math.max(translation, radial) * TOUCH_DOMINANCE) return 'twist'
     return 'pending'
   }
 
-  /** Sample both contacts once per tick; pointer events only update their positions. */
-  function sampleTouchGesture(): void {
-    if (ptrIds.length < 2) return
-    const ax = ptrX.get(ptrIds[0])
-    const ay = ptrY.get(ptrIds[0])
-    const bx = ptrX.get(ptrIds[1])
-    const by = ptrY.get(ptrIds[1])
-    if (ax === undefined || ay === undefined || bx === undefined || by === undefined) return
-    if (!touchFrameActive) {
-      beginTouchGesture(ax, ay, bx, by)
+  function updateTouchIntent(translation: number, radial: number, twistAngle: number): void {
+    const candidate = classifyTouchGesture(translation, radial, twistAngle)
+    if (candidate === 'pending' || candidate === touchIntent) return
+    if (touchIntent === 'pending') {
+      touchIntent = candidate
       return
     }
 
+    const twist = twistAngle * touchStartDist * 0.5
+    const candidateEvidence = touchEvidence(candidate, translation, radial, twist)
+    const activeEvidence = touchEvidence(touchIntent, translation, radial, twist)
+    const decisiveTwist = candidate === 'twist' && twistAngle >= TOUCH_DECISIVE_TWIST_ANGLE
+    if (decisiveTwist || candidateEvidence > activeEvidence * TOUCH_RELEASE_DOMINANCE) {
+      touchIntent = candidate
+    }
+  }
+
+  function evidenceWeight(value: number, threshold: number): number {
+    return clamp01((value - threshold) / threshold)
+  }
+
+  function dominanceWeight(primary: number, competing: number): number {
+    if (primary <= competing) return 0
+    if (competing <= 1e-9) return 1
+    return clamp01((primary / competing - 1) / (TOUCH_RELEASE_DOMINANCE - 1))
+  }
+
+  function hystereticDominanceWeight(
+    intent: TouchGestureIntent,
+    primary: number,
+    competing: number,
+  ): number {
+    const weight = dominanceWeight(primary, competing)
+    if (touchIntent !== intent || competing <= 1e-9) return weight
+    const ratio = primary / competing
+    const releaseRatio = 1 / TOUCH_RELEASE_DOMINANCE
+    const acquireWeight = dominanceWeight(TOUCH_DOMINANCE, 1)
+    const heldWeight = acquireWeight * clamp01(
+      (ratio - releaseRatio) / (TOUCH_DOMINANCE - releaseRatio),
+    )
+    return Math.max(weight, heldWeight)
+  }
+
+  /** Commit one mutually-current pair; no render tick may mix contact epochs. */
+  function commitTouchGesture(ax: number, ay: number, bx: number, by: number): void {
     const sx = ax - bx
     const sy = ay - by
     const distance = Math.sqrt(sx * sx + sy * sy) || 1
@@ -646,62 +691,52 @@ export function createCameraRig(
     const twistAngle = Math.abs(touchAngleTotal)
     const twistTravel = twistAngle * touchStartDist * 0.5
     const moved = dMidX !== 0 || dMidY !== 0 || distance !== touchPrevDist || dAngle !== 0
-    if (touchIntent === 'pending' && moved) {
-      const candidate = classifyTouchGesture(translation, radial, twistAngle)
-      if (candidate === 'pending') {
-        touchCandidate = 'pending'
-        touchCandidateSamples = 0
-      } else {
-        if (candidate === touchCandidate) touchCandidateSamples += 1
-        else {
-          touchCandidate = candidate
-          touchCandidateSamples = 1
-        }
-        const competing = candidate === 'pinch'
-          ? Math.max(translation, twistTravel)
-          : candidate === 'swipe'
-            ? Math.max(radial, twistTravel)
-            : 0
-        const primary = candidate === 'pinch'
-          ? radial
-          : candidate === 'swipe'
-            ? translation
-            : twistTravel
-        const decisive = candidate === 'twist'
-          ? twistAngle >= TOUCH_TWIST_ANGLE * 2
-          : primary > competing * TOUCH_DECISIVE_DOMINANCE
-        if (decisive || touchCandidateSamples >= 2) {
-          touchIntent = candidate
-        }
-      }
-    }
+    if (moved) updateTouchIntent(translation, radial, twistAngle)
 
-    if (touchIntent !== 'pending' && touchIntent !== 'pinch') {
-      // Twist follows the hand in every rotational mode; midpoint yaw/tilt is
-      // exclusive to a translation-dominant parallel swipe.
-      touchYaw = touchAngleTotal
-      if (touchIntent === 'swipe') {
-        touchYaw -= (Math.PI * 2 * totalMidX) / viewH
-        touchTilt = -(Math.PI * 2 * totalMidY) / viewH
-      }
-      if (
-        !rotateGestureAnnounced
-        && (Math.abs(touchAngleTotal) > 1e-4 || Math.abs(totalMidX) > 0.1 || Math.abs(totalMidY) > 0.1)
-      ) {
-        rotateGestureAnnounced = true
-        bus.emit('camera:gesture', { kind: 'rotate', pointer: 'touch' })
-      }
-    } else {
-      touchYaw = 0
-      touchTilt = 0
+    const threshold = touchStartDist * TOUCH_INTENT_FRACTION
+    const swipeWeight = evidenceWeight(translation, threshold)
+      * hystereticDominanceWeight('swipe', translation, radial)
+    const twistEvidence = evidenceWeight(twistTravel, threshold)
+    const twistDominance = hystereticDominanceWeight(
+      'twist',
+      twistTravel,
+      Math.max(translation, radial),
+    )
+    const decisiveTwist = clamp01(
+      (twistAngle - TOUCH_TWIST_ANGLE) / (TOUCH_DECISIVE_TWIST_ANGLE - TOUCH_TWIST_ANGLE),
+    )
+    const twistWeight = twistEvidence * Math.max(twistDominance, decisiveTwist)
+    const parallelWeight = swipeWeight * (1 - twistWeight)
+    touchYaw = touchAngleTotal * twistWeight - (Math.PI * 2 * totalMidX * parallelWeight) / viewH
+    touchTilt = -(Math.PI * 2 * totalMidY * parallelWeight) / viewH
+    if (
+      !rotateGestureAnnounced
+      && (Math.abs(touchYaw) > 1e-4 || Math.abs(touchTilt) > 1e-4)
+    ) {
+      rotateGestureAnnounced = true
+      bus.emit('camera:gesture', { kind: 'rotate', pointer: 'touch' })
     }
     touchScale = touchStartDist / distance
-    touchTransformDirty = moved
+    touchTransformDirty ||= moved
 
     touchPrevDist = distance
     touchPrevMx = mx
     touchPrevMy = my
     touchPrevAngle = angle
+  }
+
+  function commitCoherentTouchGesture(): void {
+    if (!touchFrameActive || ptrIds.length < 2) return
+    const aId = ptrIds[0]
+    const bId = ptrIds[1]
+    if (!touchReported.has(aId) || !touchReported.has(bId)) return
+    const ax = ptrX.get(aId)
+    const ay = ptrY.get(aId)
+    const bx = ptrX.get(bId)
+    const by = ptrY.get(bId)
+    if (ax === undefined || ay === undefined || bx === undefined || by === undefined) return
+    touchReported.clear()
+    commitTouchGesture(ax, ay, bx, by)
   }
 
   function onPointerDown(e: PointerEvent): void {
@@ -783,7 +818,14 @@ export function createCameraRig(
     ptrX.set(id, e.clientX)
     ptrY.set(id, e.clientY)
 
-    if (ptrIds.length >= 2) return
+    if (ptrIds.length >= 2) {
+      const owner = ptrIds.indexOf(id)
+      if (owner >= 0 && owner < 2) {
+        touchReported.add(id)
+        commitCoherentTouchGesture()
+      }
+      return
+    }
 
     const dx = e.clientX - px
     const dy = e.clientY - py
@@ -822,6 +864,17 @@ export function createCameraRig(
   function endPointer(e: PointerEvent): void {
     const wasMultiPointer = ptrIds.length >= 2
     const i = ptrIds.indexOf(e.pointerId)
+    if (wasMultiPointer && i >= 0 && i < 2) {
+      // A cancellation flushes already-delivered motion; its coordinates are
+      // not a new hardware sample and are unreliable on some WebKit paths.
+      if (e.type === 'pointerup') {
+        ptrX.set(e.pointerId, e.clientX)
+        ptrY.set(e.pointerId, e.clientY)
+      }
+      touchReported.add(e.pointerId)
+      commitCoherentTouchGesture()
+      if (mode === 'orbit') applyTouchTransform()
+    }
     if (i >= 0) ptrIds.splice(i, 1)
     ptrX.delete(e.pointerId)
     ptrY.delete(e.pointerId)
@@ -1594,7 +1647,6 @@ export function createCameraRig(
     // A tab that was hidden hands us a huge dt; clamp so nothing teleports.
     const d = dt > 0 ? (dt < 0.1 ? dt : 0.1) : 0
     const sdt = d > 1e-4 ? d : 1e-4
-    if (mode === 'orbit') sampleTouchGesture()
     if (mode === 'walk') {
       // The pedestrian writes the transform this frame. Keep re-deriving the
       // orbit state from it — the same trick the scripted modes use — so that

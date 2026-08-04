@@ -185,6 +185,37 @@ function beginTwoFingerGesture(fixture: RigFixture, a: [number, number], b: [num
   fixture.rig.update(1 / 60)
 }
 
+function moveTouch(fixture: RigFixture, pointerId: number, point: [number, number]): void {
+  fixture.dom.dispatchEvent(
+    pointer('pointermove', {
+      pointerId,
+      pointerType: 'touch',
+      clientX: point[0],
+      clientY: point[1],
+    }),
+  )
+}
+
+function moveTouchPair(
+  fixture: RigFixture,
+  a: [number, number],
+  b: [number, number],
+  updateAfterEachEvent = false,
+): void {
+  moveTouch(fixture, 1, a)
+  if (updateAfterEachEvent) fixture.rig.update(1 / 60)
+  moveTouch(fixture, 2, b)
+  fixture.rig.update(1 / 60)
+}
+
+function rotatePoint(point: [number, number], centre: [number, number], angle: number): [number, number] {
+  const dx = point[0] - centre[0]
+  const dy = point[1] - centre[1]
+  const cos = Math.cos(angle)
+  const sin = Math.sin(angle)
+  return [centre[0] + dx * cos - dy * sin, centre[1] + dx * sin + dy * cos]
+}
+
 interface GestureMeasurement {
   yaw: number
   distance: number
@@ -229,6 +260,75 @@ function measureParallelSwipe(
     )
     fixture.rig.update(1 / 60)
   }
+
+  return {
+    yaw: signedYawAround(anchor, eyeBefore, fixture.camera.position),
+    distance: fixture.camera.position.distanceTo(fixture.rig.pivot),
+    anchorError: screenErrorPx(fixture.camera, anchor, 400, 300),
+    position: fixture.camera.position.clone(),
+    pivot: fixture.rig.pivot.clone(),
+    quaternion: fixture.camera.quaternion.clone(),
+  }
+}
+
+type GestureUpdateCadence = 'event' | 'pair' | 'end'
+
+function measureMixedSwipe(fixture: RigFixture, cadence: GestureUpdateCadence): GestureMeasurement {
+  fixture.rig.focusOn(
+    { target: [1210, 0, 0], distance: 48, dir: [-0.6, 0.5, 0.8] },
+    { instant: true },
+  )
+  const anchor = groundPointAt(fixture.camera, 400, 300)
+  const eyeBefore = fixture.camera.position.clone()
+  beginTwoFingerGesture(fixture, [350, 300], [450, 300])
+
+  for (let step = 1; step <= 10; step++) {
+    const progress = step / 10
+    const midpoint = 400 + 60 * progress
+    const halfSpan = 50 + 12.5 * progress
+    moveTouch(fixture, 1, [midpoint - halfSpan, 300])
+    if (cadence === 'event') fixture.rig.update(1 / 60)
+    moveTouch(fixture, 2, [midpoint + halfSpan, 300])
+    if (cadence !== 'end') fixture.rig.update(1 / 60)
+  }
+  if (cadence === 'end') fixture.rig.update(1 / 60)
+
+  return {
+    yaw: signedYawAround(anchor, eyeBefore, fixture.camera.position),
+    distance: fixture.camera.position.distanceTo(fixture.rig.pivot),
+    anchorError: screenErrorPx(fixture.camera, anchor, 400, 300),
+    position: fixture.camera.position.clone(),
+    pivot: fixture.rig.pivot.clone(),
+    quaternion: fixture.camera.quaternion.clone(),
+  }
+}
+
+function measureTerminalSwipe(
+  fixture: RigFixture,
+  terminalEvent: 'pointerup' | 'pointercancel',
+): GestureMeasurement {
+  fixture.rig.focusOn(
+    { target: [1210, 0, 0], distance: 48, dir: [-0.6, 0.5, 0.8] },
+    { instant: true },
+  )
+  const anchor = groundPointAt(fixture.camera, 400, 300)
+  const eyeBefore = fixture.camera.position.clone()
+  beginTwoFingerGesture(fixture, [350, 300], [450, 300])
+
+  for (let step = 1; step <= 20; step++) {
+    const dx = (60 * step) / 20
+    moveTouch(fixture, 1, [350 + dx, 300])
+    moveTouch(fixture, 2, [450 + dx, 300])
+  }
+  fixture.dom.dispatchEvent(
+    pointer(terminalEvent, {
+      pointerId: 1,
+      pointerType: 'touch',
+      clientX: 410,
+      clientY: 300,
+    }),
+  )
+  fixture.rig.update(1 / 60)
 
   return {
     yaw: signedYawAround(anchor, eyeBefore, fixture.camera.position),
@@ -475,6 +575,220 @@ describe('map camera mouse controls', () => {
       expect(Math.abs(yawByDistance[i])).toBeGreaterThan(Math.abs(yawByDistance[i - 1]))
     }
     expectAtScreenPoint(fixture.camera, anchor, 400, 300)
+  })
+
+  it.each([
+    { first: 1, second: 2 },
+    { first: 2, second: 1 },
+  ])('keeps every half-delivered parallel-swipe frame free of dolly when pointer $first moves first', ({ first, second }) => {
+    fixture.rig.focusOn(
+      { target: [1210, 0, 0], distance: 48, dir: [-0.6, 0.5, 0.8] },
+      { instant: true },
+    )
+    beginTwoFingerGesture(fixture, [350, 300], [450, 300])
+    const startDistance = fixture.camera.position.distanceTo(fixture.rig.pivot)
+    let largestDistanceError = 0
+
+    for (let step = 1; step <= 12; step++) {
+      const dx = (180 * step) / 12
+      const positions: Record<number, [number, number]> = {
+        1: [350 + dx, 300],
+        2: [450 + dx, 300],
+      }
+      moveTouch(fixture, first, positions[first])
+      fixture.rig.update(1 / 60)
+      largestDistanceError = Math.max(
+        largestDistanceError,
+        Math.abs(fixture.camera.position.distanceTo(fixture.rig.pivot) - startDistance),
+      )
+      moveTouch(fixture, second, positions[second])
+      fixture.rig.update(1 / 60)
+      largestDistanceError = Math.max(
+        largestDistanceError,
+        Math.abs(fixture.camera.position.distanceTo(fixture.rig.pivot) - startDistance),
+      )
+    }
+
+    expect(largestDistanceError).toBeLessThan(startDistance * 1e-6)
+  })
+
+  it('is independent of whether rendering follows every event, every pair, or only the endpoint', () => {
+    const everyEvent = measureMixedSwipe(fixture, 'event')
+    fixture.rig.dispose()
+    fixture = createRigFixture()
+    const everyPair = measureMixedSwipe(fixture, 'pair')
+    fixture.rig.dispose()
+    fixture = createRigFixture()
+    const endpointOnly = measureMixedSwipe(fixture, 'end')
+
+    expect(Math.abs(everyEvent.yaw)).toBeGreaterThan(Math.PI / 8)
+    for (const measurement of [everyPair, endpointOnly]) {
+      expect(Math.abs(measurement.yaw - everyEvent.yaw)).toBeLessThan(1e-6)
+      expect(measurement.position.distanceTo(everyEvent.position)).toBeLessThan(1e-5)
+      expect(measurement.pivot.distanceTo(everyEvent.pivot)).toBeLessThan(1e-5)
+      expect(Math.abs(measurement.distance - everyEvent.distance)).toBeLessThan(1e-6)
+    }
+  })
+
+  it('changes from an early pinch to a later decisive twist', () => {
+    const anchor = groundPointAt(fixture.camera, 400, 300)
+    const eyeBefore = fixture.camera.position.clone()
+    const distanceBefore = fixture.camera.position.distanceTo(fixture.rig.pivot)
+    beginTwoFingerGesture(fixture, [350, 300], [450, 300])
+
+    for (const span of [104, 107, 108]) {
+      moveTouchPair(fixture, [400 - span / 2, 300], [400 + span / 2, 300])
+    }
+    const turn = Math.PI / 3
+    for (let step = 1; step <= 4; step++) {
+      const angle = (turn * step) / 4
+      moveTouchPair(
+        fixture,
+        rotatePoint([346, 300], [400, 300], angle),
+        rotatePoint([454, 300], [400, 300], angle),
+      )
+    }
+
+    const yaw = signedYawAround(anchor, eyeBefore, fixture.camera.position)
+    expect(yaw / turn).toBeGreaterThan(0.75)
+    expect(fixture.camera.position.distanceTo(fixture.rig.pivot)).toBeLessThan(distanceBefore)
+  })
+
+  it('does not let early span settling hijack a later parallel swipe', () => {
+    const anchor = groundPointAt(fixture.camera, 400, 300)
+    const eyeBefore = fixture.camera.position.clone()
+    beginTwoFingerGesture(fixture, [350, 300], [450, 300])
+
+    for (const span of [104, 107, 108]) {
+      moveTouchPair(fixture, [400 - span / 2, 300], [400 + span / 2, 300])
+    }
+    for (let step = 1; step <= 4; step++) {
+      const dx = (60 * step) / 4
+      moveTouchPair(fixture, [346 + dx, 300], [454 + dx, 300])
+    }
+
+    const yaw = signedYawAround(anchor, eyeBefore, fixture.camera.position)
+    expect(yaw).toBeLessThan(-Math.PI / 8)
+  })
+
+  it('does not let early twist noise hijack a later pinch', () => {
+    const anchor = groundPointAt(fixture.camera, 400, 300)
+    const eyeBefore = fixture.camera.position.clone()
+    const distanceBefore = fixture.camera.position.distanceTo(fixture.rig.pivot)
+    beginTwoFingerGesture(fixture, [350, 300], [450, 300])
+
+    for (const degrees of [7, 8]) {
+      const angle = THREE.MathUtils.degToRad(degrees)
+      moveTouchPair(
+        fixture,
+        rotatePoint([350, 300], [400, 300], angle),
+        rotatePoint([450, 300], [400, 300], angle),
+      )
+    }
+    const noiseAngle = THREE.MathUtils.degToRad(8)
+    for (const span of [150, 225, 300]) {
+      moveTouchPair(
+        fixture,
+        rotatePoint([400 - span / 2, 300], [400, 300], noiseAngle),
+        rotatePoint([400 + span / 2, 300], [400, 300], noiseAngle),
+      )
+    }
+
+    const yaw = signedYawAround(anchor, eyeBefore, fixture.camera.position)
+    expect(Math.abs(yaw)).toBeLessThan(THREE.MathUtils.degToRad(1))
+    expect(fixture.camera.position.distanceTo(fixture.rig.pivot)).toBeLessThan(distanceBefore * 0.55)
+  })
+
+  it('does not turn short-span contact settling into retained swipe yaw', () => {
+    const anchor = groundPointAt(fixture.camera, 400, 300)
+    const eyeBefore = fixture.camera.position.clone()
+    const distanceBefore = fixture.camera.position.distanceTo(fixture.rig.pivot)
+    beginTwoFingerGesture(fixture, [390, 300], [410, 300])
+
+    for (const dx of [1.5, 2]) {
+      moveTouchPair(fixture, [390 + dx, 300], [410 + dx, 300])
+    }
+    for (const span of [30, 45, 60]) {
+      moveTouchPair(fixture, [402 - span / 2, 300], [402 + span / 2, 300])
+    }
+
+    expect(Math.abs(signedYawAround(anchor, eyeBefore, fixture.camera.position))).toBeLessThan(
+      THREE.MathUtils.degToRad(0.1),
+    )
+    expect(fixture.camera.position.distanceTo(fixture.rig.pivot)).toBeLessThan(distanceBefore * 0.55)
+  })
+
+  it('changes continuously across the swipe-pinch classification boundary', () => {
+    const yawByTranslation: number[] = []
+    for (let translation = 55; translation <= 65; translation++) {
+      if (yawByTranslation.length > 0) {
+        fixture.rig.dispose()
+        fixture = createRigFixture()
+      }
+      const anchor = groundPointAt(fixture.camera, 400, 300)
+      const eyeBefore = fixture.camera.position.clone()
+      beginTwoFingerGesture(fixture, [350, 300], [450, 300])
+      for (const progress of [0.5, 1]) {
+        const midpoint = 400 + translation * progress
+        const halfSpan = 50 + 20 * progress
+        moveTouchPair(
+          fixture,
+          [midpoint - halfSpan, 300],
+          [midpoint + halfSpan, 300],
+        )
+      }
+      yawByTranslation.push(signedYawAround(anchor, eyeBefore, fixture.camera.position))
+    }
+
+    const onePixelYaw = (Math.PI * 2) / fixture.dom.clientHeight
+    let largestAdjacentChange = 0
+    for (let i = 1; i < yawByTranslation.length; i++) {
+      largestAdjacentChange = Math.max(
+        largestAdjacentChange,
+        Math.abs(yawByTranslation[i] - yawByTranslation[i - 1]),
+      )
+    }
+    expect(Math.max(...yawByTranslation.map(Math.abs))).toBeGreaterThan(onePixelYaw * 10)
+    expect(largestAdjacentChange).toBeLessThan(onePixelYaw * 6)
+  })
+
+  it.each(['pointerup', 'pointercancel'] as const)(
+    'commits coherent queued motion before %s removes a contact',
+    (terminalEvent) => {
+      const rendered = measureParallelSwipe(fixture, 60, 20, false)
+      fixture.rig.dispose()
+      fixture = createRigFixture()
+      const terminal = measureTerminalSwipe(fixture, terminalEvent)
+
+      expect(Math.abs(terminal.yaw)).toBeGreaterThan(Math.PI / 8)
+      expect(Math.abs(terminal.yaw - rendered.yaw)).toBeLessThan(1e-6)
+      expect(terminal.position.distanceTo(rendered.position)).toBeLessThan(1e-5)
+      expect(terminal.pivot.distanceTo(rendered.pivot)).toBeLessThan(1e-5)
+      expect(Math.abs(terminal.distance - rendered.distance)).toBeLessThan(1e-6)
+    },
+  )
+
+  it('starts clean after a cancelled two-finger gesture', () => {
+    measureTerminalSwipe(fixture, 'pointercancel')
+    fixture.dom.dispatchEvent(
+      pointer('pointercancel', {
+        pointerId: 2,
+        pointerType: 'touch',
+        clientX: 510,
+        clientY: 300,
+      }),
+    )
+
+    const anchor = groundPointAt(fixture.camera, 400, 300)
+    const eyeBefore = fixture.camera.position.clone()
+    const distanceBefore = fixture.camera.position.distanceTo(fixture.rig.pivot)
+    beginTwoFingerGesture(fixture, [350, 300], [450, 300])
+    moveTouchPair(fixture, [300, 300], [500, 300])
+
+    expect(Math.abs(signedYawAround(anchor, eyeBefore, fixture.camera.position))).toBeLessThan(
+      THREE.MathUtils.degToRad(0.1),
+    )
+    expect(fixture.camera.position.distanceTo(fixture.rig.pivot)).toBeLessThan(distanceBefore * 0.6)
   })
 
   it('returns the remaining finger to one-finger pan after a two-finger gesture', () => {
