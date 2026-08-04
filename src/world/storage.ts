@@ -905,6 +905,14 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
   const tbMat = toastBits.instanceMatrix.array as Float32Array
   const tbCol = toastBits.instanceColor!.array as Float32Array
   const tAge = new Float32Array(TOAST_SLOTS).fill(-1)
+  const hideToastBit = (index: number): void => {
+    const offset = index * 16
+    tbMat[offset] = 0.001
+    tbMat[offset + 5] = 0.001
+    tbMat[offset + 10] = 0.001
+  }
+  for (let i = 0; i < toastBits.count; i++) hideToastBit(i)
+  toastBits.instanceMatrix.needsUpdate = true
 
   {
     const proxy = new THREE.Mesh(gUnit, mPick)
@@ -1967,12 +1975,13 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     for (let i = 0; i < TOAST_SLOTS; i++) {
       const o = i * (1 + TOAST_CHUNKS)
       if (tAge[i] < 0) {
-        for (let k = 0; k <= TOAST_CHUNKS; k++) tbMat[(o + k) * 16 + 5] = 0.001
+        for (let k = 0; k <= TOAST_CHUNKS; k++) hideToastBit(o + k)
         continue
       }
       const a = (tAge[i] += dt * 0.85)
       if (a > 3.2) {
         tAge[i] = -1
+        for (let k = 0; k <= TOAST_CHUNKS; k++) hideToastBit(o + k)
         const storedChunks = TOAST_CHUNKS - 1
         toastChunks += storedChunks
         toastBytes += storedChunks * 2048
@@ -1991,15 +2000,15 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
         tbMat[o * 16 + 10] = d
         const k = 1.1 + comp * 0.4
         setColor3(tbCol, o, L_TOAST[0] * k, L_TOAST[1] * k, L_TOAST[2] * k)
-        for (let k2 = 0; k2 < TOAST_CHUNKS; k2++) tbMat[(o + 1 + k2) * 16 + 5] = 0.001
+        for (let k2 = 0; k2 < TOAST_CHUNKS; k2++) hideToastBit(o + 1 + k2)
       } else {
-        tbMat[o * 16 + 5] = 0.001
+        hideToastBit(o)
         const u = clamp01((a - 1.4) / 1.8)
         const chop = clamp01((a - 1.4) / 0.9)
         const storedChunks = TOAST_CHUNKS - 1
         for (let k2 = 0; k2 < TOAST_CHUNKS; k2++) {
           if (k2 >= storedChunks) {
-            tbMat[(o + 1 + k2) * 16 + 5] = 0.001
+            hideToastBit(o + 1 + k2)
             continue
           }
           const sx = 0.8 * (0.65 + chop * 0.35)

@@ -388,10 +388,14 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     const a = rim.instanceMatrix.array as Float32Array
     const h = 0.12
     const y = DECK_TOP + 0.055
-    setTRS(a, 0, 0, y, -DECK_D / 2 - 0.06, DECK_W + 0.5, h, 0.5)
-    setTRS(a, 1, 0, y, DECK_D / 2 + 0.06, DECK_W + 0.5, h, 0.5)
-    setTRS(a, 2, -DECK_W / 2 - 0.06, y, 0, 0.5, h, DECK_D + 0.5)
-    setTRS(a, 3, DECK_W / 2 + 0.06, y, 0, 0.5, h, DECK_D + 0.5)
+    const rimWidth = 0.5
+    const rimOffset = 0.06
+    const sideLength = DECK_D - 2 * (rimWidth / 2 - rimOffset)
+    setTRS(a, 0, 0, y, -DECK_D / 2 - rimOffset, DECK_W + rimWidth, h, rimWidth)
+    setTRS(a, 1, 0, y, DECK_D / 2 + rimOffset, DECK_W + rimWidth, h, rimWidth)
+    // Side strips butt against the inner faces of the full-width end strips.
+    setTRS(a, 2, -DECK_W / 2 - rimOffset, y, 0, rimWidth, h, sideLength)
+    setTRS(a, 3, DECK_W / 2 + rimOffset, y, 0, rimWidth, h, sideLength)
     rim.instanceColor = null // flat neon, no per-instance tint
     rim.frustumCulled = true
     deck.add(rim)
@@ -426,28 +430,33 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
   const capThickness = COPING_THICKNESS + 0.3
   let copingIndex = 0
   const addCopingSpan = (side: DeckGate['side'], a: number, b: number): void => {
-    const mid = (a + b) / 2
-    const length = b - a
+    const limit = POOL_HALF + COPING_THICKNESS
+    const clipsCorners = side === 'west' || side === 'east'
+    const wallA = clipsCorners && a <= -limit ? a + COPING_THICKNESS : a
+    const wallB = clipsCorners && b >= limit ? b - COPING_THICKNESS : b
+    const capInset = COPING_THICKNESS + (capThickness - COPING_THICKNESS) / 2
+    const capA = clipsCorners && a <= -limit ? a + capInset : a
+    const capB = clipsCorners && b >= limit ? b - capInset : b
     let minX: number
     let maxX: number
     let minZ: number
     let maxZ: number
     if (side === 'north' || side === 'south') {
       const z = (side === 'north' ? -1 : 1) * (POOL_HALF + COPING_THICKNESS / 2)
-      setTRS(copingWallMatrix, copingIndex, mid, COPING_BOTTOM, z, length, wallHeight, COPING_THICKNESS)
-      setTRS(copingCapMatrix, copingIndex, mid, capBottom, z, length, COPING_CAP_HEIGHT, capThickness)
+      setTRS(copingWallMatrix, copingIndex, (wallA + wallB) / 2, COPING_BOTTOM, z, wallB - wallA, wallHeight, COPING_THICKNESS)
+      setTRS(copingCapMatrix, copingIndex, (capA + capB) / 2, capBottom, z, capB - capA, COPING_CAP_HEIGHT, capThickness)
       minX = a
       maxX = b
       minZ = z - capThickness / 2
       maxZ = z + capThickness / 2
     } else {
       const x = (side === 'west' ? -1 : 1) * (POOL_HALF + COPING_THICKNESS / 2)
-      setTRS(copingWallMatrix, copingIndex, x, COPING_BOTTOM, mid, COPING_THICKNESS, wallHeight, length)
-      setTRS(copingCapMatrix, copingIndex, x, capBottom, mid, capThickness, COPING_CAP_HEIGHT, length)
+      setTRS(copingWallMatrix, copingIndex, x, COPING_BOTTOM, (wallA + wallB) / 2, COPING_THICKNESS, wallHeight, wallB - wallA)
+      setTRS(copingCapMatrix, copingIndex, x, capBottom, (capA + capB) / 2, capThickness, COPING_CAP_HEIGHT, capB - capA)
       minX = x - capThickness / 2
       maxX = x + capThickness / 2
-      minZ = a
-      maxZ = b
+      minZ = capA
+      maxZ = capB
     }
     collisionBoxes.push(
       new THREE.Box3(
@@ -498,14 +507,23 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     const a = copingLight.instanceMatrix.array as Float32Array
     let i = 0
     const addEdge = (side: DeckGate['side'], from: number, to: number): void => {
-      const mid = (from + to) / 2
-      const length = to - from
+      const limit = POOL_HALF + COPING_THICKNESS
+      const edgeThickness = 0.12
+      const cornerInset = COPING_THICKNESS / 2 + edgeThickness / 2
+      const edgeFrom = (side === 'west' || side === 'east') && from <= -limit
+        ? from + cornerInset
+        : from
+      const edgeTo = (side === 'west' || side === 'east') && to >= limit
+        ? to - cornerInset
+        : to
+      const mid = (edgeFrom + edgeTo) / 2
+      const length = edgeTo - edgeFrom
       if (side === 'north' || side === 'south') {
         const z = (side === 'north' ? -1 : 1) * (POOL_HALF + COPING_THICKNESS / 2)
-        setTRS(a, i++, mid, COPING_TOP + COPING_CAP_HEIGHT / 2, z, length, 0.1, 0.12)
+        setTRS(a, i++, mid, COPING_TOP + COPING_CAP_HEIGHT / 2, z, length, 0.1, edgeThickness)
       } else {
         const x = (side === 'west' ? -1 : 1) * (POOL_HALF + COPING_THICKNESS / 2)
-        setTRS(a, i++, x, COPING_TOP + COPING_CAP_HEIGHT / 2, mid, 0.12, 0.1, length)
+        setTRS(a, i++, x, COPING_TOP + COPING_CAP_HEIGHT / 2, mid, edgeThickness, 0.1, length)
       }
     }
     for (const [from, to] of copingSpans.north) addEdge('north', from, to)
