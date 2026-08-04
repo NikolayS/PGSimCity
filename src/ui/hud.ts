@@ -18,6 +18,12 @@ import type {
 import { SCENARIOS } from '../sim/scenarios'
 import { DISTRICT_BOUNDS } from '../world/layout'
 import { MODE_IDS, modeTokens } from './mode-exits'
+import {
+  MOVEMENT_SOUND_OFF,
+  MOVEMENT_SOUND_ON,
+  MOVEMENT_SOUND_READY,
+  movementSoundTitle,
+} from './sound'
 import { el, icon, setClass, setText, sparkline } from './uikit'
 import type { UiContext, UiModule } from './uikit'
 
@@ -528,14 +534,14 @@ export function createHud(ctx: UiContext): UiModule {
   )
   const paletteBtn = toolBtn('search', 'Command palette', '/', () => openPalette())
   const helpBtn = toolBtn('help', 'Keyboard & legend', '?', () => toggleHelp())
-  const audioLabel = el('span', { class: 'hud-audio__label', text: 'Sound off' })
+  const audioLabel = el('span', { class: 'hud-audio__label', text: MOVEMENT_SOUND_OFF })
   const audioBtn = el(
     'button',
     {
       class: 'pg-btn hud-tool hud-audio',
       type: 'button',
-      title: 'Turn sound on  (M)',
-      'aria-label': 'Turn sound on',
+      title: 'Turn walk sound on  (M)',
+      'aria-label': 'Turn walk sound on',
       'aria-pressed': 'false',
       on: { click: () => toggleAudio() },
     },
@@ -1882,17 +1888,17 @@ export function createHud(ctx: UiContext): UiModule {
     const state = ctx.getAudioState?.() ?? { enabled: false, preferred: false, volume: 0.35 }
     const enabled = state.enabled && state.volume > 0
     const ready = !enabled && state.preferred
-    const text = enabled ? 'Sound on' : ready ? 'Sound ready' : 'Sound off'
+    const text = enabled ? MOVEMENT_SOUND_ON : ready ? MOVEMENT_SOUND_READY : MOVEMENT_SOUND_OFF
     setText(audioLabel, text)
     setClass(audioBtn, 'is-active', enabled)
     setClass(audioBtn, 'is-ready', ready)
     audioBtn.setAttribute('aria-pressed', String(enabled))
-    audioBtn.setAttribute('aria-label', enabled ? 'Turn sound off' : 'Turn sound on')
+    audioBtn.setAttribute('aria-label', enabled ? 'Turn walk sound off' : 'Turn walk sound on')
     audioBtn.title = enabled
-      ? `Sound on · ${Math.round(state.volume * 100)}%  (M)`
+      ? movementSoundTitle(cameraMode, state.volume)
       : ready
-        ? 'Sound ready — interact to resume  (M)'
-        : 'Turn sound on  (M)'
+        ? 'Walk sound ready — interact to resume  (M)'
+        : 'Turn walk sound on  (M)'
   }
 
   function paintTheme(mode = themeMode()): void {

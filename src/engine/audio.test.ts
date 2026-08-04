@@ -196,8 +196,8 @@ describe('movement audio', () => {
 
   it('keeps a labelled, stateful sound control in the always-visible HUD', () => {
     expect(hudSource).toContain("class: 'pg-btn hud-tool hud-audio'")
-    expect(hudSource).toContain("text: 'Sound off'")
-    expect(hudSource).toContain("enabled ? 'Sound on'")
+    expect(hudSource).toContain("class: 'hud-audio__label'")
+    expect(hudSource).toContain("audioBtn.setAttribute('aria-pressed'")
     expect(hudSource).toMatch(/toolCluster[\s\S]*audioBtn/)
   })
 })
