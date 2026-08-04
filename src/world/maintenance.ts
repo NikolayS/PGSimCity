@@ -1275,7 +1275,8 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     const bx = b[0] - 4
     pushPaint([bx, PAINT_Y, b[2] - 6.4, 17, 0.06, 0.4])
     pushPaint([bx, PAINT_Y, b[2] + 6.4, 17, 0.06, 0.4])
-    pushPaint([bx - 8.4, PAINT_Y, b[2], 0.4, 0.06, 13])
+    // Stop at the inner faces of the two horizontal bay lines.
+    pushPaint([bx - 8.4, PAINT_Y, b[2], 0.4, 0.06, 12.4])
     for (let k = 0; k < 4; k++) {
       pushPaint([bx + 7 + k * 1.7, PAINT_Y, b[2] - 3.2 + k * 0.2, 2.6, 0.06, 0.6], chevQ)
       pushPaint([bx + 7 + k * 1.7, PAINT_Y, b[2] + 3.2 - k * 0.2, 2.6, 0.06, 0.6], chevQ)
@@ -1285,8 +1286,9 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   for (let i = 0; i < 24; i++) {
     routePoint(rid.vacGo(2), (i / 24) * 0.3, _p3)
     if (_p3.y < -2) break
-    pushPaint([_p3.x, PAINT_Y, _p3.z - 4.4, 2.4, 0.06, 0.34])
-    pushPaint([_p3.x, PAINT_Y, _p3.z + 4.4, 2.4, 0.06, 0.34])
+    // Road paint crosses bay markings; make the road the deliberate top layer.
+    pushPaint([_p3.x, PAINT_Y + 0.02, _p3.z - 4.4, 2.4, 0.06, 0.34])
+    pushPaint([_p3.x, PAINT_Y + 0.02, _p3.z + 4.4, 2.4, 0.06, 0.34])
   }
   // keep-clear hatching on the apron beside the tipping deck
   for (let i = 0; i < 6; i++) pushPaint([DECK_X - 6 + i * 2.6, PAINT_Y, LF[2] - 13, 0.5, 0.06, 6], chevQ)

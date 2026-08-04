@@ -489,12 +489,13 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
   setTRS(wwRoundMesh, 5, outletAt.x, outletAt.y, outletAt.z, 5.2, 1.8, 5.2, _q)
   wwRoundMesh.instanceMatrix.needsUpdate = true
 
+  const walkwayRailSpan = (WX + 13.4 - 0.06) - (WX - 5.4 + 0.06)
   const wwDetail: BoxSpec[] = [
     [HALL_CX, 14.35, WZ, 19, 0.3, 20], // walkway grating
     [HALL_CX, 20.05, WZ, 13.6, 0.28, 14.6],
     // walkway railings
-    [HALL_CX, 15.3, WZ - 9.9, 19, 0.12, 0.12],
-    [HALL_CX, 15.3, WZ + 9.9, 19, 0.12, 0.12],
+    [HALL_CX, 15.3, WZ - 9.9, walkwayRailSpan, 0.12, 0.12],
+    [HALL_CX, 15.3, WZ + 9.9, walkwayRailSpan, 0.12, 0.12],
     [WX - 5.4, 15.3, WZ, 0.12, 0.12, 20],
     [WX + 13.4, 15.3, WZ, 0.12, 0.12, 20],
     // recessed bands on the hall

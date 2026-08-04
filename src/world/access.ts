@@ -1032,7 +1032,11 @@ export const createAccess: AccessFactory = (ctx: WorldContext): AccessModule => 
     for (const px of [-58, -20, 20, 58]) {
       for (const pz of [-44, 44]) {
         bRimS.box(px, floorY + 0.05, pz, 7.4, 0.06, 0.5)
-        bRimS.box(px, floorY + 0.05, pz, 0.5, 0.06, 7.4)
+        const armLength = (7.4 - 0.5) / 2
+        const armOffset = 0.5 / 2 + armLength / 2
+        for (const side of [-1, 1]) {
+          bRimS.box(px, floorY + 0.05, pz + side * armOffset, 0.5, 0.06, armLength)
+        }
       }
     }
 
@@ -1085,8 +1089,9 @@ export const createAccess: AccessFactory = (ctx: WorldContext): AccessModule => 
       bRimS.box(cx, PARAPET_H + 0.04, cz, sx, 0.08, sz)
       box3(cx - sx / 2, 0, cz - sz / 2, cx + sx / 2, PARAPET_H, cz + sz / 2)
     }
-    for (const [a, b] of runs(gapsFor('north'), -CITY.pit.x, CITY.pit.x)) wall(a, -pz - PARAPET_T / 2, b, -pz + PARAPET_T / 2)
-    for (const [a, b] of runs(gapsFor('south'), -CITY.pit.x, CITY.pit.x)) wall(a, pz - PARAPET_T / 2, b, pz + PARAPET_T / 2)
+    const horizontalLimit = px - PARAPET_T / 2
+    for (const [a, b] of runs(gapsFor('north'), -horizontalLimit, horizontalLimit)) wall(a, -pz - PARAPET_T / 2, b, -pz + PARAPET_T / 2)
+    for (const [a, b] of runs(gapsFor('south'), -horizontalLimit, horizontalLimit)) wall(a, pz - PARAPET_T / 2, b, pz + PARAPET_T / 2)
     for (const [a, b] of runs(gapsFor('west'), -CITY.pit.z, CITY.pit.z)) wall(-px - PARAPET_T / 2, a, -px + PARAPET_T / 2, b)
     for (const [a, b] of runs(gapsFor('east'), -CITY.pit.z, CITY.pit.z)) wall(px - PARAPET_T / 2, a, px + PARAPET_T / 2, b)
   }
