@@ -11,6 +11,104 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+### Fixed — two fingers did not rotate the city
+
+Nik reported it on an iPhone twice, and the first fix was written against the
+wrong cause. A parallel two-finger swipe does produce near-zero twist, so making
+horizontal drag yaw looked like the answer. It was not.
+
+Pointer Events fire **per contact**. When one finger had moved and the other had
+not yet, the handler read the changed separation as a pinch, `applyZoom` cleared
+the rotation anchor, and the next yaw was discarded by `rotateOrbit`'s early
+return. **4% of the intended rotation survived** — 0.076 of 1.885 rad — with a
+spurious dolly from 48 to 45.2. The committed test passed throughout because it
+fed both contacts in before a single frame update, which never happens on a
+phone. That defect predated the swipe work and degraded twist too.
+
+Gesture state is now sampled from both contacts **together**, and a gesture delta
+is only committed once every active contact has reported since the last commit,
+so a frame cannot pair one finger's new position with the other's stale one.
+Yaw, tilt and scale derive from totals since gesture start rather than per-event
+increments, which makes the result independent of delivery order by construction.
+
+Two review panels then blocked the first rework and were right to. Also fixed:
+
+- **Visible zoom pumping.** Half-delivered frames expanded the view 17.65% or
+  contracted it 13.04% on every step. Now flat at the starting distance, maximum
+  error 1.6e-13.
+- **The gesture classifier could not change its mind.** A "lifetime lock" meant a
+  pinch that became a twist yawed 0° instead of 60°, and 2px of finger settling
+  could hijack an entire gesture. It also had a cliff: 59px of translation did
+  nothing where 61px gave a full 36.6°. Real hysteresis, continuous weighting,
+  and the largest adjacent-pixel jump is now 1.34°.
+- **Quick flicks were discarded.** Motion delivered between the last frame and
+  `pointerup`/`pointercancel` was lost entirely; correctness depended on a tick
+  winning a race against the finger lifting.
+
+Off-centre twist, which applied 163.9° for an intended 60°, is now 1.000×.
+
+### Added — the city is swept for things that look wrong
+
+Every recent visual defect was found the same way: Nik walked the city and saw
+it. Each got an invariant afterwards. This is the sweep that finds them first.
+
+Nine deterministic stations, enumerated from the live scene — 760 objects, 14,309
+rendered instances, 239 text planes, 101 borders and rims, 22,309 opaque
+horizontal triangles — checked for mirrored text, sky visible through ground,
+surfaces outside their district bounds or without ground beneath, rims sitting
+below the surface they border, and coplanar z-fighting.
+
+The strict first run reported **138 overlapping surface pairs**, which resolved
+to seven real geometry defects: deck-rim and coping corners in shared memory,
+pylon marker crosses, excavation parapets, WAL walkway rails, fifteen stacked
+inactive TOAST instances, and bay road paint. All fixed; no threshold relaxed.
+
+The sweep proves its own teeth by mirroring a live label and catching it:
+`"POSTGRESQL ADDRESS SPACE ENDS HERE" has mirrored world determinant -1556.820`.
+
+### Fixed — sound claimed a state it could not deliver
+
+Every audio call site in the codebase is in `walk.ts`. Outside first-person walk
+mode the toggle reported sound was on and produced silence, permanently, with no
+explanation. Measured: peak amplitude 0 in orbit, 0.043 while walking.
+
+The control now says **walk sound** everywhere — HUD, toast, title, accessible
+name and help — and says so from one module, so the surfaces cannot drift apart.
+An invariant derives the audio call sites from the production source, so adding
+one outside `walk.ts` fails the build rather than quietly making the label lie.
+No ambient soundscape was invented; that is a product decision, not a bug fix.
+
+### Fixed — the version disclosure was a billboard
+
+The PostgreSQL version statement filled three lines across the top of a 390px
+phone, in front of the city. It is load-bearing content, not chrome, so it could
+not simply be cut — but it did not need to be permanent furniture either. It is
+now a compact `PostgreSQL 18.4 · city claims` marker with the full statement one
+tap away, and the qualification travels with every claim-bearing surface
+enumerated from the claims registry.
+
+### Fixed — the correction link read as a statement, not an action
+
+Two GitHub issues arrived containing nothing but the unedited template. The link
+said *This does not match PostgreSQL*, which reads as an assertion; nothing
+signalled that clicking it opens a bug report. It now reads **Report a problem
+with this claim on GitHub**, with an accessible name to match and clearer
+guidance in the prefilled body.
+
+### Added — the oracle checks what the audit claimed it checked
+
+`ORACLE-AUDIT.md` stated the oracle implemented all ten server-checkable areas.
+Four were only partial. `machineIndexWalk` was the worst: it ran look-alike SQL
+and accepted any single row, so it was barely checking anything.
+
+Now 215 checks against PostgreSQL 18.3, 211 matching, 4 registered divergences, 0
+unexpected, with 44/44 on the focused 13 and 17 rails. Additions include
+independent WAL filename arithmetic from LSN, per-node hash allowance, the
+visibility map's index-only-scan effect (heap fetches 0 → 100 → 0), inline TOAST
+read paths, and tuple retention across assigned-XID, prepared-transaction and
+standby-feedback horizons. The machine's statements are owned in a spine module
+so they cannot drift from what the oracle runs.
+
 ## [0.39.2] - 2026-08-04
 
 ### Fixed — the ground plate had no underside
