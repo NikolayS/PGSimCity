@@ -322,8 +322,10 @@ function siteMasts(ring: Float64Array, ccw: boolean, want: number): [number, num
 
 /* --- the rim -------------------------------------------------------------- */
 
-/** Slab thickness. Invisible from above, unmistakable from a low orbit. */
-const SKIRT_DROP = 14
+/** The poured slab is closed at this depth, so its day surface is never visible from below. */
+const SLAB_DEPTH = 14
+/** The outer retaining face meets the excavation floor instead of opening onto sky above it. */
+const EXCAVATION_FLOOR_Y = CITY.storage.y - 8
 /** Kerb upstand. Chest height on a 1.8 m body — this is also the parapet. */
 const KERB_H = 1.15
 /** How far in from the true edge the kerb's inner face stands. At the plan
@@ -615,7 +617,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
 
   const kerbInner = offsetRing(ring, KERB_W, ccw)
 
-  const skirtGeo = ribbon(ring, 0, ring, -SKIRT_DROP) // the poured depth of the slab
+  const skirtGeo = ribbon(ring, 0, ring, EXCAVATION_FLOOR_Y)
   const kerbOutGeo = ribbon(ring, KERB_H, ring, 0) // the kerb's outer face
   const kerbTopGeo = ribbon(ring, KERB_H, kerbInner, KERB_H) // its capping
   const kerbInGeo = ribbon(kerbInner, KERB_H, kerbInner, 0) // and the face a walker meets
@@ -633,6 +635,28 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   )
   rimMat.name = 'ground.rim'
   mats.push(rimMat)
+
+  // The plate shader is intentionally double-sided for its cut excavation,
+  // but its daylight grid is not a credible soffit. Close the 14 m poured slab
+  // with the same cut shape before drawing the deeper outer retaining face.
+  const underside = new THREE.Mesh(plateGeo, rimMat)
+  underside.name = 'ground.underside'
+  underside.rotation.x = -Math.PI / 2
+  underside.position.y = -SLAB_DEPTH
+  underside.frustumCulled = false
+  underside.raycast = () => {}
+  group.add(underside)
+
+  // Close the retaining volume at the same level as the excavation floor.
+  // Fly mode can reach this depth, so leaving the base open would merely move
+  // the sky sightline from the edge to directly beneath the camera.
+  const foundationBase = new THREE.Mesh(plateGeo, rimMat)
+  foundationBase.name = 'ground.foundationBase'
+  foundationBase.rotation.x = -Math.PI / 2
+  foundationBase.position.y = EXCAVATION_FLOOR_Y
+  foundationBase.frustumCulled = false
+  foundationBase.raycast = () => {}
+  group.add(foundationBase)
 
   // The kerb's capping is lit. 2.2 m of it reads as a hairline from the
   // overview and as a lit edge to walk along when you are standing on it.
@@ -770,7 +794,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
 
   const px = CITY.pit.x
   const pz = CITY.pit.z
-  const pitFloorY = CITY.storage.y - 8
+  const pitFloorY = EXCAVATION_FLOOR_Y
   const pitDepth = -pitFloorY
 
   // The cut edge. A hard neon line reading "storage green": this is the exact

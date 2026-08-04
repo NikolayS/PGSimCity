@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { expect, it } from 'vitest'
-import { DISTRICT_BOUNDS } from '../src/world/layout'
+import { ANCHOR, CITY, DISTRICT_BOUNDS } from '../src/world/layout'
 import type { TraversalRoute, WalkPoint } from './walk-harness'
 import { createWalkCityHarness } from './walk-harness'
 
@@ -256,6 +256,131 @@ it('keeps the client forecourt within its district and over physical ground', as
           z: [surface.box.min.z, surface.box.max.z],
         })),
     ).toEqual([])
+  } finally {
+    city.dispose()
+  }
+})
+
+it('blocks excavation-depth camera sightlines beneath every plate edge', async () => {
+  const city = await createWalkCityHarness()
+  try {
+    const ground = city.registry.get('world.ground')?.object
+    if (!ground) throw new Error('world.ground is not registered')
+    const slonik = ground.userData.slonik as { ring: Float64Array }
+    const groundMeshes = enumerateMeshes(city.scene)
+    const rimMeshes = groundMeshes
+      .filter((record) => record.path.startsWith('world.ground/') && record.mesh.name === 'ground.rim')
+      .map((record) => record.mesh)
+    const capMeshes = groundMeshes
+      .filter(
+        (record) => record.path.startsWith('world.ground/')
+          && (record.mesh.name === 'ground.underside' || record.mesh.name === 'ground.foundationBase'),
+      )
+      .map((record) => record.mesh)
+    const eye = new THREE.Vector3(
+      ANCHOR.rejoinBay[0],
+      CITY.storage.y + 1.8,
+      ANCHOR.rejoinBay[2],
+    )
+    const midpoint = new THREE.Vector3()
+    const direction = new THREE.Vector3()
+    const raycaster = new THREE.Raycaster()
+    const hits: THREE.Intersection[] = []
+    const misses: { segment: number; edge: [number, number] }[] = []
+    const ring = slonik.ring
+
+    for (let i = 0; i < ring.length; i += 2) {
+      const next = (i + 2) % ring.length
+      midpoint.set(
+        (ring[i] + ring[next]) / 2,
+        eye.y,
+        (ring[i + 1] + ring[next + 1]) / 2,
+      )
+      direction.copy(midpoint).sub(eye)
+      const edgeDistance = direction.length()
+      direction.divideScalar(edgeDistance)
+      raycaster.set(eye, direction)
+      raycaster.near = 0
+      raycaster.far = edgeDistance + 24
+
+      let blocked = false
+      for (const mesh of rimMeshes) {
+        hits.length = 0
+        THREE.Mesh.prototype.raycast.call(mesh, raycaster, hits)
+        if (hits.some((hit) => hit.distance <= raycaster.far)) {
+          blocked = true
+          break
+        }
+      }
+      if (!blocked) {
+        misses.push({
+          segment: i / 2,
+          edge: [Number(midpoint.x.toFixed(2)), Number(midpoint.z.toFixed(2))],
+        })
+      }
+    }
+
+    expect(rimMeshes).toHaveLength(4)
+    expect(
+      { count: misses.length, examples: misses.slice(0, 8) },
+      'a fly camera can reach excavation eye height, where an open edge reveals the sky',
+    ).toEqual({ count: 0, examples: [] })
+
+    const openVerticalViews: string[] = []
+    for (const [view, y] of [['up', 1], ['down', -1]] as const) {
+      raycaster.set(eye, direction.set(0, y, 0))
+      raycaster.near = 0
+      raycaster.far = 100
+      let blocked = false
+      for (const mesh of capMeshes) {
+        hits.length = 0
+        THREE.Mesh.prototype.raycast.call(mesh, raycaster, hits)
+        if (hits.length > 0) {
+          blocked = true
+          break
+        }
+      }
+      if (!blocked) openVerticalViews.push(view)
+    }
+    expect(
+      openVerticalViews,
+      'the closed plate shell must not expose sky above or below the camera',
+    ).toEqual([])
+  } finally {
+    city.dispose()
+  }
+})
+
+it('keeps the rejoin-bay gantry supported inside the plate outline', async () => {
+  const city = await createWalkCityHarness()
+  try {
+    const meshes = enumerateMeshes(city.scene)
+    const plates = meshes.filter((record) => record.mesh.name === 'ground.plate')
+    const structures = meshes.filter(
+      (record) => record.path.includes('/ha.rejoin/ha.rejoin.struct'),
+    )
+    const unsupported: { path: string; x: number; z: number }[] = []
+    const raycaster = new THREE.Raycaster()
+    const origin = new THREE.Vector3()
+    const down = new THREE.Vector3(0, -1, 0)
+    const hits: THREE.Intersection[] = []
+
+    expect(plates).toHaveLength(1)
+    for (const structure of structures) {
+      for (const x of [structure.box.min.x, structure.box.max.x]) {
+        for (const z of [structure.box.min.z, structure.box.max.z]) {
+          raycaster.set(origin.set(x, 2, z), down)
+          raycaster.near = 0
+          raycaster.far = 3
+          hits.length = 0
+          THREE.Mesh.prototype.raycast.call(plates[0].mesh, raycaster, hits)
+          if (hits.length === 0) unsupported.push({ path: structure.path, x, z })
+        }
+      }
+    }
+
+    expect(structures).toHaveLength(8)
+    expect(unsupported).toEqual([])
   } finally {
     city.dispose()
   }

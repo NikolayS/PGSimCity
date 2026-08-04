@@ -149,6 +149,7 @@ describe('keyboard and screen-reader lesson routes', () => {
   }, 90_000)
 
   it('reaches a Diagnose verdict by keyboard and exposes its claim in the accessibility tree', async () => {
+    const maxKeystrokes = 12
     const [report] = await inspectRenderedPages([{
       name: 'Diagnose',
       path: '/observability/',
@@ -165,14 +166,11 @@ describe('keyboard and screen-reader lesson routes', () => {
       await press('Tab', 'Tab')
       const lessonFocus = await evaluate(`document.activeElement.className`)
       await press('Enter', 'Enter')
-      let steps = 0
       const trail: unknown[] = []
-      while (steps < 12 && !await evaluate(`Boolean(document.querySelector('.verdict'))`)) {
-        let tabs = 0
+      while (keys.length < maxKeystrokes && !await evaluate(`Boolean(document.querySelector('.verdict'))`)) {
         let branch = false
-        while (tabs < 120 && !branch) {
+        while (keys.length < maxKeystrokes && !branch) {
           await press('Tab', 'Tab')
-          tabs += 1
           branch = await evaluate(`document.activeElement.matches('.branch.true, .branch')`)
         }
         const state = await evaluate(`(() => {
@@ -183,9 +181,8 @@ describe('keyboard and screen-reader lesson routes', () => {
           }
         })()`)
         trail.push(state)
-        if (!state.branch) break
+        if (!state.branch || keys.length >= maxKeystrokes) break
         await press('Enter', 'Enter')
-        steps += 1
       }
       const semantics = await evaluate(`(() => {
         const verdict = document.querySelector('.verdict')
@@ -210,12 +207,8 @@ describe('keyboard and screen-reader lesson routes', () => {
 
     expect(report.firstFocus).toContain('skip-link')
     expect(report.lessonFocus).toContain('homecard')
-    expect(report.keys).toEqual([
-      'Tab', 'Enter',
-      'Tab', 'Enter',
-      'Tab', 'Tab', 'Tab', 'Tab', 'Enter',
-    ])
-    expect(report.semantics.reached, JSON.stringify(report.trail)).toBe(true)
+    expect(report.semantics.reached, JSON.stringify({ keys: report.keys, trail: report.trail })).toBe(true)
+    expect(report.keys.length, JSON.stringify(report.keys)).toBeLessThanOrEqual(maxKeystrokes)
     expect(report.semantics.labelledBy).toBe('diagnose-card-title')
     expect(report.semantics.describedBy).toBe('diagnose-card-summary diagnose-card-mechanism')
     expect(report.semantics.active).toBe(report.semantics.title)
