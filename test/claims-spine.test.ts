@@ -70,7 +70,7 @@ const REGISTERED_CLAIM_VALUE_READS = {
   standbyNames: { 'src/sim/model.ts': 8, 'src/ui/content.ts': 4 },
   physicalReplicationLink: {
     'src/sim/model.ts': 1,
-    'src/ui/docs-storage.ts': 1,
+    'src/ui/docs-storage.ts': 2,
   },
   modelDuration: {
     'src/core/trace-presentation.ts': 1,

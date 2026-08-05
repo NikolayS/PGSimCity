@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { CLAIM_VALUES } from '../core/claims'
 import { DEFAULT_KNOBS, N_BACKEND_SLOTS } from '../core/types'
 import { backendConcurrencyMultiplier } from './model'
 import { createAggregateSim } from './test-support'
@@ -77,6 +78,31 @@ describe('connection pooler', () => {
   it('keeps PgBouncer disabled in the stock city', () => {
     expect(DEFAULT_KNOBS.poolMode).toBe('disabled')
     expect(DEFAULT_KNOBS.queryWaitTimeout).toBe(120)
+  })
+
+  it('discloses batched single-statement transactions at visit granularity', () => {
+    function largestCompletedVisit(offeredTps: number): number {
+      const visits: number[] = []
+      const sim = createAggregateSim(undefined, (observation) => {
+        visits.push(observation.transactions)
+      })
+      sim.setKnob('clientConnections', 1_000)
+      sim.setKnob('poolMode', 'transaction')
+      sim.setKnob('defaultPoolSize', 8)
+      sim.setKnob('tps', offeredTps)
+      sim.setKnob('synchronousCommit', 'off')
+      sim.setKnob('autovacuum', false)
+      advanceBy(sim, 10)
+      return Math.max(...visits)
+    }
+
+    expect(largestCompletedVisit(18)).toBe(1)
+    expect(largestCompletedVisit(1_100)).toBe(31)
+
+    const disclosure = CLAIM_VALUES.connectionPooler.coverageDisclosure
+    expect(disclosure).toMatch(/batch of one or more single-statement transactions/i)
+    expect(disclosure).toMatch(/every constituent transaction boundary and statement boundary together at the end of that visit/i)
+    expect(disclosure).toMatch(/statement mode still rejects the city['’]s two open-transaction controls/i)
   })
 
   it('enforces autocommit by rejecting transaction blocks in statement mode', () => {

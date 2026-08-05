@@ -2643,7 +2643,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'The model boundary',
-        body: 'The city separates socket receipt, `write()` progress, and `fsync()` progress with bounded rates so their ordering is visible. It does not model kernel page-cache size, WAL receiver wakeups, partial system calls, compression, SSL, or network bandwidth; configured one-way delay and the resulting acknowledgement path are the teaching inputs.',
+        body: `The city separates socket receipt, \`write()\` progress, and \`fsync()\` progress with bounded rates so their ordering is visible. ${CLAIM_VALUES.physicalReplicationLink.disclosure} It does not model kernel page-cache size, WAL receiver wakeups, partial system calls, compression, SSL, TCP congestion or protocol framing. Configured one-way delay and the resulting acknowledgement path are additional teaching inputs.`,
       },
     ],
     metrics: [
