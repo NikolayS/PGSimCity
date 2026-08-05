@@ -1,3 +1,5 @@
+import type * as THREE from 'three'
+
 export interface PlanLabelRecord {
   readonly text: string
   readonly x: number
@@ -6,6 +8,61 @@ export interface PlanLabelRecord {
   readonly rotation: number
   readonly ratio: Readonly<Record<'day' | 'night', number>>
   readonly backing: Readonly<Record<'day' | 'night', string>>
+  readonly semantic?: PlanLabelSemanticRecord
+}
+
+export interface PlanLabelSemanticRecord {
+  readonly authoredColor: string
+  readonly color: number
+  readonly backingColor: string
+  readonly backingName: string
+  readonly x: number
+  readonly z: number
+  readonly width: number
+  readonly height: number
+  readonly rotation: number
+}
+
+/* A coloured square remains an identifiable patch when its companion glyphs
+ * are at the 17.5 px reading limit. A texture-pixel rule does not. */
+const SEMANTIC_CARRIER_EM = 0.58
+
+export interface MarkedPlanLabelSemanticCarrier {
+  readonly text: string
+  readonly center: readonly [number, number, number]
+  readonly up: readonly [number, number, number]
+  readonly across: readonly [number, number, number]
+  readonly width: number
+  readonly height: number
+  readonly authoredColor: string
+  readonly backingColor: string
+  readonly backingName: string
+  readonly material?: THREE.MeshBasicMaterial
+  readonly mesh?: THREE.Mesh
+}
+
+const PLAN_LABEL_SEMANTIC_CARRIERS = 'pgPlanLabelSemanticCarriers'
+
+/** Register the rendered mechanism-colour carrier for browser audits. */
+export function markPlanLabelSemanticCarrier(
+  object: THREE.Object3D,
+  carrier: MarkedPlanLabelSemanticCarrier,
+): void {
+  const data = object.userData as {
+    [PLAN_LABEL_SEMANTIC_CARRIERS]?: MarkedPlanLabelSemanticCarrier[]
+  }
+  const carriers = data[PLAN_LABEL_SEMANTIC_CARRIERS]
+    ?? (data[PLAN_LABEL_SEMANTIC_CARRIERS] = [])
+  carriers.push(carrier)
+}
+
+export function markedPlanLabelSemanticCarriers(
+  object: THREE.Object3D,
+): readonly MarkedPlanLabelSemanticCarrier[] {
+  const data = object.userData as {
+    [PLAN_LABEL_SEMANTIC_CARRIERS]?: MarkedPlanLabelSemanticCarrier[]
+  }
+  return data[PLAN_LABEL_SEMANTIC_CARRIERS] ?? []
 }
 
 interface Rgba {
@@ -46,6 +103,7 @@ export interface PlanLabelPainter {
     color: string,
     align?: CanvasTextAlign,
     rotation?: number,
+    semanticCarrier?: boolean,
   ): void
 }
 
@@ -167,7 +225,17 @@ export function createPlanLabelPainter(
   const records: PlanLabelRecord[] = []
   return {
     records,
-    draw(text, worldX, worldZ, size, color, align = 'center', rotation = 0): void {
+    draw(
+      text,
+      worldX,
+      worldZ,
+      size,
+      color,
+      align = 'center',
+      rotation = 0,
+      semanticCarrier = false,
+    ): void {
+      let semantic: PlanLabelSemanticRecord | undefined
       context.save()
       context.translate(options.x(worldX), options.y(worldZ))
       if (rotation) context.rotate(rotation)
@@ -180,23 +248,42 @@ export function createPlanLabelPainter(
       if (options.plate) {
         const paddingX = options.plate.paddingX * options.pixelsPerUnit
         const paddingY = options.plate.paddingY * options.pixelsPerUnit
-        const plateLeft = left - paddingX
+        const carrierSize = semanticCarrier
+          ? size * options.pixelsPerUnit * SEMANTIC_CARRIER_EM
+          : 0
+        const carrierGap = semanticCarrier ? paddingX * 0.45 : 0
+        const carrierOuterPadding = semanticCarrier ? paddingX * 0.35 : 0
+        const plateLeft = left - paddingX - carrierSize - carrierGap - carrierOuterPadding
         const plateTop = -height / 2 - paddingY
-        const plateWidth = width + paddingX * 2
+        const plateWidth = width + paddingX * 2 + carrierSize + carrierGap + carrierOuterPadding
         const plateHeight = height + paddingY * 2
         context.fillStyle = options.plate.background
         context.beginPath()
         context.roundRect(plateLeft, plateTop, plateWidth, plateHeight, paddingY * 0.7)
         context.fill()
-        /* The mechanism keeps its authored hue in a rule outside the ink box;
-         * the neutral label itself never impersonates semantic neon. */
-        context.fillStyle = color
-        context.fillRect(
-          plateLeft + paddingX * 0.3,
-          plateTop + paddingY * 0.45,
-          Math.max(2, options.pixelsPerUnit * 0.12),
-          plateHeight - paddingY * 0.9,
-        )
+        if (semanticCarrier) {
+          const carrierOffsetX = (
+            left - paddingX - carrierGap - carrierSize / 2
+          ) / options.pixelsPerUnit
+          const cosine = Math.cos(rotation)
+          const sine = Math.sin(rotation)
+          const semanticColor = parseColor(color)
+          semantic = {
+            authoredColor: color,
+            color: (
+              Math.round(semanticColor.r) << 16
+              | Math.round(semanticColor.g) << 8
+              | Math.round(semanticColor.b)
+            ),
+            backingColor: options.plate.background,
+            backingName: options.plate.name,
+            x: worldX + carrierOffsetX * cosine,
+            z: worldZ + carrierOffsetX * sine,
+            width: carrierSize / options.pixelsPerUnit,
+            height: carrierSize / options.pixelsPerUnit,
+            rotation,
+          }
+        }
       }
       const bounds = rotatedBounds(
         options.x(worldX),
@@ -236,6 +323,7 @@ export function createPlanLabelPainter(
           day: options.plate?.name ?? options.dayVeil?.name ?? options.surfaceName,
           night: options.plate?.name ?? options.surfaceName,
         },
+        semantic,
       })
     },
   }

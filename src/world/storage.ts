@@ -4,7 +4,7 @@ import { N_VAC_WORKERS } from '../core/types'
 import type { FlowRequest, SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, fmtBytes, fmtNum, fmtPct, makeRng } from '../core/util'
 import { ANCHOR, CITY, N_TABLES, TABLES, indexPos, rid, routeCurve, tableX } from './layout'
-import { createPlanLabelPainter } from './plan-label'
+import { createPlanLabelPainter, markPlanLabelSemanticCarrier } from './plan-label'
 import { markTextPlane, markTextTexture } from './text-plane'
 
 export function diskArrayReadout(s: SimState): string {
@@ -377,6 +377,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
   floorLabels.raycast = () => {}
   markTextTexture(floorLabelTex, 'DATA DIRECTORY floor plan')
   markTextPlane(floorLabels, 'DATA DIRECTORY floor plan', [0, 0, 0], [0, 1, 0], [0, 0, -1])
+  const gFloorLabelCarrier = keep(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2))
   for (const label of floorArtwork.labels) {
     markTextPlane(
       floorLabels,
@@ -387,6 +388,37 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
       true,
       { fontSize: label.size, ratio: label.ratio, backing: label.backing },
     )
+    const semantic = label.semantic
+    if (semantic) {
+      const material = theme.neon(semantic.color, 2, {
+        darkBacking: true,
+        polygonOffset: true,
+        polygonOffsetFactor: -3,
+        polygonOffsetUnits: -3,
+      })
+      const carrier = new THREE.Mesh(gFloorLabelCarrier, material)
+      carrier.name = `storage.planLabelSemantic:${label.text}`
+      carrier.position.set(semantic.x - floorCx, 0.004, semantic.z - floorCz)
+      carrier.rotation.y = -semantic.rotation
+      carrier.scale.set(semantic.width, 1, semantic.height)
+      carrier.renderOrder = 3
+      carrier.layers.mask = floorLabels.layers.mask
+      carrier.raycast = () => {}
+      floorLabels.add(carrier)
+      markPlanLabelSemanticCarrier(floorLabels, {
+        text: label.text,
+        center: [semantic.x - floorCx, 0, semantic.z - floorCz],
+        up: [Math.sin(semantic.rotation), 0, -Math.cos(semantic.rotation)],
+        across: [Math.cos(semantic.rotation), 0, Math.sin(semantic.rotation)],
+        width: semantic.width,
+        height: semantic.height,
+        authoredColor: semantic.authoredColor,
+        backingColor: semantic.backingColor,
+        backingName: semantic.backingName,
+        material,
+        mesh: carrier,
+      })
+    }
   }
   dirGroup.add(floorLabels)
   // Slab under the printed plan, so the floor has thickness from the side.
@@ -2322,7 +2354,8 @@ function mixLin(a: number, b: number, t: number): number {
 
 /**
  * The printed plan of the data directory. Structural survey marks stay in the
- * lit floor map; typography uses a non-emissive overlay above the daylight coat.
+ * lit floor map; neutral typography uses a non-emissive overlay above the
+ * daylight coat, with semantic colour carried by separate neon squares.
  */
 function buildFloorTexture(rng: () => number, W: number): {
   texture: THREE.CanvasTexture
@@ -2400,8 +2433,9 @@ function buildFloorTexture(rng: () => number, W: number): {
     color: string,
     align: CanvasTextAlign = 'center',
     rot = 0,
+    semanticCarrier = false,
   ) => {
-    labels.draw(text, wx, wz, size, color, align, rot)
+    labels.draw(text, wx, wz, size, color, align, rot, semanticCarrier)
   }
 
   /* Relation slots: one painted bay per heap file. */
@@ -2437,11 +2471,11 @@ function buildFloorTexture(rng: () => number, W: number): {
       g.stroke()
     }
 
-    label(def.name, tx, SLOT_Z0 - 3.4, 3.2, hexA(def.color, 0.92))
+    label(def.name, tx, SLOT_Z0 - 3.4, 3.2, hexA(def.color, 0.92), 'center', 0, true)
     label(`base/16384/${24591 + ti * 7}`, tx, SLOT_Z0 + 1.2, 1.9, 'rgba(143,165,196,0.75)')
     label(`${def.pages} pages · ${def.tuplesPerPage} tuples/page`, tx, SLOT_Z0 + 4.2, 1.5, 'rgba(143,165,196,0.5)')
-    label('_fsm', tx - PANEL_X - 2.6, FILE_Z0 + 6, 1.6, 'rgba(255,204,85,0.7)', 'center', -Math.PI / 2)
-    label('_vm', tx + PANEL_X + 2.6, FILE_Z0 + 6, 1.6, 'rgba(87,227,137,0.7)', 'center', Math.PI / 2)
+    label('_fsm', tx - PANEL_X - 2.6, FILE_Z0 + 6, 1.6, 'rgba(255,204,85,0.7)', 'center', -Math.PI / 2, true)
+    label('_vm', tx + PANEL_X + 2.6, FILE_Z0 + 6, 1.6, 'rgba(87,227,137,0.7)', 'center', Math.PI / 2, true)
 
     // Page ruler down the west flank: block numbers, every ten rows.
     g.fillStyle = 'rgba(120,150,200,0.5)'
@@ -2460,29 +2494,29 @@ function buildFloorTexture(rng: () => number, W: number): {
   g.strokeStyle = 'rgba(100,255,218,0.28)'
   g.strokeRect(X(-114), Y(2), 228 * px, 38 * px)
   g.restore()
-  label('I N D E X E S', 0, 44, 2.6, 'rgba(100,255,218,0.5)')
+  label('I N D E X E S', 0, 44, 2.6, 'rgba(100,255,218,0.5)', 'center', 0, true)
   for (let ti = 0; ti < N_TABLES; ti++) {
     const defs = TABLES[ti].indexes
     for (let k = 0; k < defs.length; k++) {
       const z = indexPos(ti)[2] + (k === 0 ? 4 : -18)
-      label(defs[k].name, tableX(ti), z + 6.4, 1.7, 'rgba(100,255,218,0.62)')
+      label(defs[k].name, tableX(ti), z + 6.4, 1.7, 'rgba(100,255,218,0.62)', 'center', 0, true)
       label(`${defs[k].kind} · ${defs[k].pages} pages`, tableX(ti), z + 9, 1.4, 'rgba(143,165,196,0.45)')
-      label('_fsm', tableX(ti) + 8.8, z + 4.2, 1.2, 'rgba(255,204,85,0.62)')
+      label('_fsm', tableX(ti) + 8.8, z + 4.2, 1.2, 'rgba(255,204,85,0.62)', 'center', 0, true)
     }
   }
 
   /* pg_toast yard + the annex. */
-  label('pg_toast', ANCHOR.toastYard[0], ANCHOR.toastYard[2] - 13, 2.6, 'rgba(255,143,90,0.75)')
+  label('pg_toast', ANCHOR.toastYard[0], ANCHOR.toastYard[2] - 13, 2.6, 'rgba(255,143,90,0.75)', 'center', 0, true)
   label('documents.body → 2 KiB chunks', ANCHOR.toastYard[0], ANCHOR.toastYard[2] - 10, 1.5, 'rgba(143,165,196,0.5)')
   for (const [name, ax, az] of ANNEX) {
     label(name + '/', ax, az + 7.5, 1.7, 'rgba(143,165,196,0.6)')
   }
   label('one tile = 12 × 8 KiB pages', -84, -88, 1.9, 'rgba(143,165,196,0.55)')
-  label('base/pgsql_tmp/ · backend spill files', 0, -92, 1.6, 'rgba(184,144,255,0.72)')
+  label('base/pgsql_tmp/ · backend spill files', 0, -92, 1.6, 'rgba(184,144,255,0.72)', 'center', 0, true)
   label('↑ N', -104, -80, 2.2, 'rgba(143,165,196,0.5)')
 
   /* District title. */
-  label('DATA DIRECTORY', 0, FLOOR_Z1 - 8, 4.4, 'rgba(85,214,160,0.34)')
+  label('DATA DIRECTORY', 0, FLOOR_Z1 - 8, 4.4, 'rgba(85,214,160,0.34)', 'center', 0, true)
   label(
     'base/  global/  pg_xact/  pg_tblspc/   ·   pg_wal shown in east vault',
     0,

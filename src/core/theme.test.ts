@@ -48,6 +48,7 @@ describe('bloom-off neon fallback', () => {
   })
 
   afterEach(() => {
+    setThemeMode('night', { persist: false })
     setBloomAvailable(true)
   })
 
@@ -77,6 +78,19 @@ describe('bloom-off neon fallback', () => {
     setBloomAvailable(true)
 
     expect(material.color.equals(authored)).toBe(true)
+
+    theme.dispose()
+  })
+
+  it('keeps gamut-bound hues readable on dark plates in night and day', () => {
+    const theme = createTheme()
+    const material = theme.neon(0x7b6cff, 2, { darkBacking: true })
+
+    setBloomAvailable(false)
+    expect(luminance(material.color)).toBeGreaterThanOrEqual(READABLE_LUMINANCE)
+
+    setThemeMode('day', { persist: false })
+    expect(luminance(material.color)).toBeGreaterThanOrEqual(READABLE_LUMINANCE)
 
     theme.dispose()
   })

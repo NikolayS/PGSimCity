@@ -1485,6 +1485,8 @@ export interface NeonOpts {
   polygonOffset?: boolean
   polygonOffsetFactor?: number
   polygonOffsetUnits?: number
+  /** Keep a flat semantic fill readable when it sits on a dark plate in daylight. */
+  darkBacking?: boolean
 }
 
 export interface TextTexOpts {
