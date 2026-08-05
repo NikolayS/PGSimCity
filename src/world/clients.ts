@@ -70,6 +70,16 @@ const PIER_T = [0.05, 0.19, 0.33, 0.6, 0.76, 0.9] as const
 /** Nothing may be planted inside the postmaster's apron. */
 const PM_KEEPOUT = { x: 16, z0: -232, z1: -198 }
 
+/* The pooler is a switchyard, not a lamp. Width carries the exact many-to-few
+ * ratio; repeated paths make each modeled PostgreSQL server connection count. */
+const POOLER_CLIENT_WIDTH = 24
+const POOLER_CLIENT_PATHS_HIGH = 24
+const POOLER_CLIENT_PATHS_LOW = 12
+const POOLER_DISPLAY_DIGITS = 4
+const DIGIT_SEGMENTS = 7
+const DIGIT_MASK = [63, 6, 91, 79, 102, 109, 125, 7, 127, 111] as const
+const RELEASE_BOUNDARIES = 3
+
 /**
  * The duct wall.
  *
@@ -206,6 +216,57 @@ function fillBoxes(mesh: THREE.InstancedMesh, specs: BoxSpec[]): void {
     mesh.setMatrixAt(i, _m)
   }
   mesh.instanceMatrix.needsUpdate = true
+}
+
+function setInstanceBox(
+  mesh: THREE.InstancedMesh,
+  index: number,
+  x: number,
+  y: number,
+  z: number,
+  w: number,
+  h: number,
+  d: number,
+): void {
+  _p.set(x, y, z)
+  _q.identity()
+  _sc.set(w, h, d)
+  _m.compose(_p, _q, _sc)
+  mesh.setMatrixAt(index, _m)
+}
+
+/** A unit box stretched between two points in the horizontal plane. */
+function setHorizontalBeam(
+  mesh: THREE.InstancedMesh,
+  index: number,
+  x0: number,
+  z0: number,
+  x1: number,
+  z1: number,
+  y: number,
+  thickness: number,
+): void {
+  const dx = x1 - x0
+  const dz = z1 - z0
+  _p.set((x0 + x1) / 2, y, (z0 + z1) / 2)
+  _e.set(0, Math.atan2(dx, dz), 0)
+  _q.setFromEuler(_e)
+  _sc.set(thickness, thickness, Math.hypot(dx, dz))
+  _m.compose(_p, _q, _sc)
+  mesh.setMatrixAt(index, _m)
+}
+
+function releaseBoundaryIndex(mode: SimState['pooler']['mode']): number {
+  switch (mode) {
+    case 'session':
+      return 0
+    case 'transaction':
+      return 1
+    case 'statement':
+      return 2
+    default:
+      return -1
+  }
 }
 
 /** How fast the duct's terminal-to-backend wall light travels. */
@@ -444,10 +505,12 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
   const poolerGroup = new THREE.Group()
   poolerGroup.name = 'client.pooler'
   const poolerMass: BoxSpec[] = [
-    [PB[0] - 8, 5.5, PB[2], 2.2, 11, 2.2],
-    [PB[0] + 8, 5.5, PB[2], 2.2, 11, 2.2],
-    [PB[0], 11.2, PB[2], 18.2, 2.2, 2.2],
-    [PB[0], 14.2, PB[2], 28, 4.0, 0.8],
+    [PB[0] - 17, 6, PB[2], 2.2, 12, 2.2],
+    [PB[0] + 17, 6, PB[2], 2.2, 12, 2.2],
+    [PB[0], 12.4, PB[2], 36.2, 2.2, 2.2],
+    [PB[0] - 9.2, 16.1, PB[2], 16.5, 5.2, 0.8],
+    [PB[0] + 9.2, 16.1, PB[2], 16.5, 5.2, 0.8],
+    [PB[0], 20.1, PB[2], 39, 2.4, 0.8],
   ]
   const poolerStruct = new THREE.InstancedMesh(unitBox, matStruct, poolerMass.length)
   fillBoxes(poolerStruct, poolerMass)
@@ -455,8 +518,8 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
   for (const spec of poolerMass) pushBoxEdges(edgeVerts, spec)
 
   const poolerGlowSpecs: BoxSpec[] = []
-  for (let i = 0; i < 8; i++) {
-    poolerGlowSpecs.push([PB[0] - 6.1 + i * 1.74, 10.9, PB[2] + 1.15, 0.8, 1.0, 0.16])
+  for (let i = 0; i < 12; i++) {
+    poolerGlowSpecs.push([PB[0] - 13.2 + i * 2.4, 11.1, PB[2] + 1.15, 0.9, 0.9, 0.16])
   }
   const poolerGlow = new THREE.InstancedMesh(unitBox, neonWhite, poolerGlowSpecs.length)
   fillBoxes(poolerGlow, poolerGlowSpecs)
@@ -465,8 +528,164 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
   poolerGlow.instanceColor!.setUsage(THREE.DynamicDrawUsage)
   poolerGroup.add(poolerGlow)
 
-  const poolerPlate = makePlate(CONNECTION_POOLER_PLATE_LABEL, 2.8, COLOR.client)
-  poolerPlate.position.set(PB[0], 14.2, PB[2] + 0.45)
+  /* Exact aggregate widths. The north bar is all admitted clients; the south
+   * bar is their currently open PostgreSQL server connections. */
+  const poolerClientBand = new THREE.InstancedMesh(unitBox, neonWhite, 1)
+  poolerClientBand.name = 'pooler.client-band'
+  poolerClientBand.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  poolerClientBand.frustumCulled = false
+  poolerClientBand.raycast = () => {}
+  setInstanceBox(poolerClientBand, 0, PB[0], 9.25, PB[2] - 1.05, POOLER_CLIENT_WIDTH, 0.62, 0.5)
+  _c.setHex(COLOR.client)
+  poolerClientBand.setColorAt(0, _c)
+  poolerClientBand.instanceColor!.setUsage(THREE.DynamicDrawUsage)
+  poolerGroup.add(poolerClientBand)
+
+  const poolerServerBand = new THREE.InstancedMesh(unitBox, neonWhite, 1)
+  poolerServerBand.name = 'pooler.server-band'
+  poolerServerBand.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  poolerServerBand.frustumCulled = false
+  poolerServerBand.raycast = () => {}
+  setInstanceBox(poolerServerBand, 0, PB[0], 9.25, PB[2] + 1.05, POOLER_CLIENT_WIDTH, 0.62, 0.5)
+  _c.setHex(COLOR.backend)
+  poolerServerBand.setColorAt(0, _c)
+  poolerServerBand.instanceColor!.setUsage(THREE.DynamicDrawUsage)
+  poolerGroup.add(poolerServerBand)
+
+  const poolerFunnel = new THREE.InstancedMesh(unitBox, neonWhite, 2)
+  poolerFunnel.name = 'pooler.funnel-rails'
+  poolerFunnel.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  poolerFunnel.frustumCulled = false
+  poolerFunnel.raycast = () => {}
+  _c.setHex(COLOR.client)
+  poolerFunnel.setColorAt(0, _c)
+  poolerFunnel.setColorAt(1, _c)
+  poolerFunnel.instanceColor!.setUsage(THREE.DynamicDrawUsage)
+  poolerGroup.add(poolerFunnel)
+
+  /* A bounded representative sample on the client side; the four-digit
+   * display and exact-width band retain the real value beyond this sample. */
+  const nPoolClientPaths = ctx.quality.level === 'low' || ctx.quality.level === 'reduced'
+    ? POOLER_CLIENT_PATHS_LOW
+    : POOLER_CLIENT_PATHS_HIGH
+  const clientPathSpecs: BoxSpec[] = []
+  const clientPathCols = nPoolClientPaths === POOLER_CLIENT_PATHS_LOW ? 6 : 8
+  const clientPathRows = Math.ceil(nPoolClientPaths / clientPathCols)
+  for (let i = 0; i < nPoolClientPaths; i++) {
+    const col = i % clientPathCols
+    const row = Math.floor(i / clientPathCols)
+    const x = clientPathCols > 1 ? -11.5 + col * 23 / (clientPathCols - 1) : 0
+    const y = 4.5 + row * (clientPathRows > 2 ? 1.9 : 2.5)
+    clientPathSpecs.push([PB[0] + x, y, PB[2] - 2.45, 0.28, 0.28, 2.9])
+  }
+  const poolerClientPaths = new THREE.InstancedMesh(unitBox, neonWhite, nPoolClientPaths)
+  poolerClientPaths.name = 'pooler.client-paths'
+  fillBoxes(poolerClientPaths, clientPathSpecs)
+  poolerClientPaths.frustumCulled = false
+  poolerClientPaths.raycast = () => {}
+  _c.setHex(COLOR.client).multiplyScalar(1.8)
+  for (let i = 0; i < nPoolClientPaths; i++) poolerClientPaths.setColorAt(i, _c)
+  poolerClientPaths.instanceColor!.setUsage(THREE.DynamicDrawUsage)
+  poolerGroup.add(poolerClientPaths)
+
+  /* Each live PostgreSQL connection owns the same number of segments. `count`
+   * therefore remains a scene-derived exact server-connection count. */
+  const serverPathSegments = ctx.quality.level === 'low' || ctx.quality.level === 'reduced' ? 2 : 4
+  const poolerServerPaths = new THREE.InstancedMesh(unitBox, neonWhite, N * serverPathSegments)
+  poolerServerPaths.name = 'pooler.server-paths'
+  poolerServerPaths.userData.segmentsPerConnection = serverPathSegments
+  poolerServerPaths.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  poolerServerPaths.frustumCulled = false
+  poolerServerPaths.raycast = () => {}
+  _c.setRGB(0, 0, 0)
+  for (let i = 0; i < N * serverPathSegments; i++) {
+    setInstanceBox(poolerServerPaths, i, PB[0], -1000, PB[2], 0.001, 0.001, 0.001)
+    poolerServerPaths.setColorAt(i, _c)
+  }
+  poolerServerPaths.instanceMatrix.needsUpdate = true
+  poolerServerPaths.instanceColor!.setUsage(THREE.DynamicDrawUsage)
+  poolerGroup.add(poolerServerPaths)
+
+  /* Direct mode is not a dim PgBouncer. One straight luminous run per open
+   * backend visibly bypasses the switchyard and preserves the 1:1 mapping. */
+  const directSpecs: BoxSpec[] = []
+  const directStartZ = ANCHOR.endpoint[2] + 8
+  const directEndZ = CONDUIT.boundaryZ - 1
+  for (let i = 0; i < N; i++) {
+    const col = i % 8
+    const row = Math.floor(i / 8)
+    directSpecs.push([
+      PB[0] - 12 + col * 24 / 7,
+      5.1 + row * 2.6,
+      (directStartZ + directEndZ) / 2,
+      0.34,
+      0.34,
+      directEndZ - directStartZ,
+    ])
+  }
+  const poolerDirectPaths = new THREE.InstancedMesh(unitBox, neonWhite, N)
+  poolerDirectPaths.name = 'pooler.direct-paths'
+  fillBoxes(poolerDirectPaths, directSpecs)
+  poolerDirectPaths.frustumCulled = false
+  poolerDirectPaths.raycast = () => {}
+  _c.setHex(COLOR.client).multiplyScalar(1.8)
+  for (let i = 0; i < N; i++) poolerDirectPaths.setColorAt(i, _c)
+  poolerDirectPaths.instanceColor!.setUsage(THREE.DynamicDrawUsage)
+  poolerGroup.add(poolerDirectPaths)
+
+  const releaseMarkerSpecs: BoxSpec[] = []
+  for (let i = 0; i < RELEASE_BOUNDARIES; i++) {
+    releaseMarkerSpecs.push([PB[0] - 10 + i * 10, 10.8, PB[2] + 1.5, 1.15, 2.5, 0.22])
+  }
+  const poolerReleaseMarkers = new THREE.InstancedMesh(unitBox, neonWhite, RELEASE_BOUNDARIES)
+  poolerReleaseMarkers.name = 'pooler.release-markers'
+  fillBoxes(poolerReleaseMarkers, releaseMarkerSpecs)
+  poolerReleaseMarkers.raycast = () => {}
+  _c.setHex(COLOR.inkDim).multiplyScalar(0.08)
+  for (let i = 0; i < RELEASE_BOUNDARIES; i++) poolerReleaseMarkers.setColorAt(i, _c)
+  poolerReleaseMarkers.instanceColor!.setUsage(THREE.DynamicDrawUsage)
+  poolerGroup.add(poolerReleaseMarkers)
+
+  function countDigitSpecs(centerX: number): BoxSpec[] {
+    const specs: BoxSpec[] = []
+    for (let digit = 0; digit < POOLER_DISPLAY_DIGITS; digit++) {
+      const x = centerX - 3.12 + digit * 2.08
+      const y = 16.15
+      const z = PB[2] + 0.52
+      specs.push(
+        [x, y + 1.34, z, 1.35, 0.24, 0.16],
+        [x + 0.72, y + 0.67, z, 0.24, 1.15, 0.16],
+        [x + 0.72, y - 0.67, z, 0.24, 1.15, 0.16],
+        [x, y - 1.34, z, 1.35, 0.24, 0.16],
+        [x - 0.72, y - 0.67, z, 0.24, 1.15, 0.16],
+        [x - 0.72, y + 0.67, z, 0.24, 1.15, 0.16],
+        [x, y, z, 1.35, 0.24, 0.16],
+      )
+    }
+    return specs
+  }
+
+  const clientDigitSpecs = countDigitSpecs(PB[0] - 9.2)
+  const poolerClientDigits = new THREE.InstancedMesh(unitBox, neonWhite, clientDigitSpecs.length)
+  poolerClientDigits.name = 'pooler.client-count'
+  fillBoxes(poolerClientDigits, clientDigitSpecs)
+  poolerClientDigits.raycast = () => {}
+  _c.setRGB(0, 0, 0)
+  for (let i = 0; i < clientDigitSpecs.length; i++) poolerClientDigits.setColorAt(i, _c)
+  poolerClientDigits.instanceColor!.setUsage(THREE.DynamicDrawUsage)
+  poolerGroup.add(poolerClientDigits)
+
+  const serverDigitSpecs = countDigitSpecs(PB[0] + 9.2)
+  const poolerServerDigits = new THREE.InstancedMesh(unitBox, neonWhite, serverDigitSpecs.length)
+  poolerServerDigits.name = 'pooler.server-count'
+  fillBoxes(poolerServerDigits, serverDigitSpecs)
+  poolerServerDigits.raycast = () => {}
+  for (let i = 0; i < serverDigitSpecs.length; i++) poolerServerDigits.setColorAt(i, _c)
+  poolerServerDigits.instanceColor!.setUsage(THREE.DynamicDrawUsage)
+  poolerGroup.add(poolerServerDigits)
+
+  const poolerPlate = makePlate(CONNECTION_POOLER_PLATE_LABEL, 1.9, 0xffffff)
+  poolerPlate.position.set(PB[0], 20.2, PB[2] + 0.5)
   const poolerPlateMaterial = poolerPlate.material as THREE.MeshBasicMaterial
   poolerPlateMaterial.color.setHex(0xffffff)
   poolerPlateMaterial.side = THREE.FrontSide
@@ -475,6 +694,38 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
   poolerPlateMaterial.needsUpdate = true
   poolerPlate.renderOrder = 4
   poolerGroup.add(poolerPlate)
+
+  const clientCountPlate = makePlate('CLIENTS', 1.0, 0xffffff)
+  clientCountPlate.position.set(PB[0] - 9.2, 13.75, PB[2] + 0.54)
+  clientCountPlate.renderOrder = 4
+  poolerGroup.add(clientCountPlate)
+  const serverCountPlate = makePlate('BACKENDS', 1.0, 0xffffff)
+  serverCountPlate.position.set(PB[0] + 9.2, 13.75, PB[2] + 0.54)
+  serverCountPlate.renderOrder = 4
+  poolerGroup.add(serverCountPlate)
+  const countArrowPlate = makePlate('→', 1.2, COLOR.ink)
+  countArrowPlate.position.set(PB[0], 16.15, PB[2] + 0.56)
+  countArrowPlate.renderOrder = 4
+  poolerGroup.add(countArrowPlate)
+
+  const poolModePlates = [
+    makePlate('DIRECT · 1:1 BYPASS', 1.35, 0xffffff),
+    makePlate('SESSION · RELEASE: DISCONNECT', 1.35, 0xffffff),
+    makePlate('TRANSACTION · RELEASE: COMMIT', 1.35, 0xffffff),
+    makePlate('STATEMENT · RELEASE: STATEMENT', 1.35, 0xffffff),
+  ]
+  for (let i = 0; i < poolModePlates.length; i++) {
+    const plate = poolModePlates[i]
+    plate.name = `pooler.mode.${i}`
+    plate.position.set(PB[0], 19.0, PB[2] + 0.58)
+    const material = plate.material as THREE.MeshBasicMaterial
+    material.depthTest = false
+    material.depthWrite = false
+    material.needsUpdate = true
+    plate.renderOrder = 4
+    plate.visible = i === 0
+    poolerGroup.add(plate)
+  }
   group.add(poolerGroup)
 
   /* =======================================================================
@@ -867,7 +1118,13 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
 
   /* --- text plate helper -------------------------------------------------- */
   function makePlate(text: string, height: number, color: number): THREE.Mesh {
-    const tex = theme.textTexture(text, { size: 64, color: '#dbe7ff', letterSpacing: '2px' })
+    const tex = theme.textTexture(text, {
+      size: 64,
+      // Literal white is reserved for text mounted on the pooler's dark count
+      // boards; neutral extremes remain white in both theme translations.
+      color: color === 0xffffff ? '#ffffff' : '#dbe7ff',
+      letterSpacing: '2px',
+    })
     const img = tex.image as { width: number; height: number }
     const aspect = img.width / Math.max(1, img.height)
     const geo = own(new THREE.PlaneGeometry(height * aspect, height))
@@ -898,12 +1155,11 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
     district: 'clients',
     object: poolerGroup,
     tier: 0,
-    focus: { target: [PB[0], 7, PB[2]], distance: 64, dir: [0.6, 0.65, 1] },
-    labelAt: [PB[0], 15.5, PB[2]],
+    focus: { target: [PB[0], 10, PB[2]], distance: 60, dir: [0.72, 0.44, 0.7] },
+    labelAt: [PB[0], 23, PB[2]],
     color: COLOR.client,
-    readout: (s) => s.pooler.mode === 'disabled'
-      ? `direct · ${s.pooler.acceptedClients} of ${s.pooler.clientConnections} clients admitted`
-      : `${s.pooler.acceptedClients} clients → ${s.pooler.serverConnections}/${s.pooler.serverCapacity} PostgreSQL backends`,
+    readout: (s) => `${s.pooler.mode === 'disabled' ? 'direct · ' : ''}`
+      + `${s.pooler.acceptedClients} clients → ${s.pooler.serverConnections}/${s.pooler.serverCapacity} PostgreSQL backends`,
   })
 
   ctx.register({
@@ -964,7 +1220,7 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
     object: gate,
     tier: 1,
     focus: { target: [0, 7, ANCHOR.connGate[2]], distance: 84, dir: [0.3, 0.26, 1] },
-    labelAt: [0, 16, ANCHOR.connGate[2]],
+    labelAt: [-34, 16, ANCHOR.connGate[2]],
     color: COLOR.ok,
     readout: (s) =>
       slotsFree === 0 || s.stats.activeBackends >= connectionCapacity(s)
@@ -992,6 +1248,39 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
   const cLit = new Float32Array(N)
   const cPh = new Float32Array(N)
   const cStuck = new Float32Array(N)
+
+  function paintPoolerDigits(
+    mesh: THREE.InstancedMesh,
+    specs: BoxSpec[],
+    rawValue: number,
+    hex: number,
+  ): void {
+    const value = Math.min(9999, Math.max(0, Math.floor(rawValue)))
+    mesh.userData.value = value
+    let divisor = 1000
+    let leading = true
+    for (let digit = 0; digit < POOLER_DISPLAY_DIGITS; digit++) {
+      const numeral = Math.floor(value / divisor) % 10
+      const show = !leading || numeral !== 0 || digit === POOLER_DISPLAY_DIGITS - 1
+      if (show) leading = false
+      const mask = show ? DIGIT_MASK[numeral] : 0
+      for (let segment = 0; segment < DIGIT_SEGMENTS; segment++) {
+        const index = digit * DIGIT_SEGMENTS + segment
+        const spec = specs[index]
+        if (show) {
+          setInstanceBox(mesh, index, spec[0], spec[1], spec[2], spec[3], spec[4], spec[5])
+        } else {
+          setInstanceBox(mesh, index, spec[0], -1000, spec[2], 0.001, 0.001, 0.001)
+        }
+        const on = (mask & (1 << segment)) !== 0
+        _c.setHex(on ? hex : COLOR.inkDim).multiplyScalar(on ? 2.15 : 0.035)
+        mesh.setColorAt(index, _c)
+      }
+      divisor /= 10
+    }
+    mesh.instanceMatrix.needsUpdate = true
+    mesh.instanceColor!.needsUpdate = true
+  }
 
   function spawnRing(): void {
     for (let r = 0; r < RING_SLOTS; r++) {
@@ -1136,13 +1425,157 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
     const waiting = sim.pooler.acceptedClients > 0
       ? clamp01(sim.pooler.waitingClients / sim.pooler.acceptedClients)
       : 0
-    _c.setHex(COLOR.client).multiplyScalar(pooled ? 1.2 + waiting * 2.4 : 0.12)
+    _c.setHex(COLOR.client).multiplyScalar(pooled ? 1.08 + waiting * 0.65 : 0.12)
     if (waiting > 0.5) {
-      _c2.setHex(COLOR.warn).multiplyScalar(1.8 + waiting)
+      _c2.setHex(COLOR.warn).multiplyScalar(1.25 + waiting * 0.35)
       _c.lerp(_c2, waiting)
     }
     for (let i = 0; i < poolerGlowSpecs.length; i++) poolerGlow.setColorAt(i, _c)
     poolerGlow.instanceColor!.needsUpdate = true
+
+    /* --- pooling switchyard --------------------------------------------- */
+    const acceptedClients = Math.max(0, Math.floor(sim.pooler.acceptedClients))
+    const serverConnections = Math.min(N, Math.max(0, Math.floor(sim.pooler.serverConnections)))
+    const ratio = acceptedClients > 0 ? clamp01(serverConnections / acceptedClients) : 0
+    const clientWidth = acceptedClients > 0 ? POOLER_CLIENT_WIDTH : 0.001
+    const serverWidth = acceptedClients > 0
+      ? Math.max(0.001, POOLER_CLIENT_WIDTH * ratio)
+      : 0.001
+
+    poolerClientBand.visible = pooled
+    poolerServerBand.visible = pooled
+    poolerFunnel.visible = pooled
+    poolerClientPaths.visible = pooled
+    poolerServerPaths.visible = pooled
+    poolerReleaseMarkers.visible = pooled
+    poolerDirectPaths.visible = !pooled
+
+    setInstanceBox(poolerClientBand, 0, PB[0], 9.25, PB[2] - 1.05, clientWidth, 0.62, 0.5)
+    setInstanceBox(poolerServerBand, 0, PB[0], 9.25, PB[2] + 1.05, serverWidth, 0.62, 0.5)
+    poolerClientBand.instanceMatrix.needsUpdate = true
+    poolerServerBand.instanceMatrix.needsUpdate = true
+    _c.setHex(COLOR.client).multiplyScalar(1.28)
+    poolerClientBand.setColorAt(0, _c)
+    _c.setHex(COLOR.backend).multiplyScalar(1.35)
+    poolerServerBand.setColorAt(0, _c)
+    poolerClientBand.instanceColor!.needsUpdate = true
+    poolerServerBand.instanceColor!.needsUpdate = true
+
+    setHorizontalBeam(
+      poolerFunnel,
+      0,
+      PB[0] - clientWidth / 2,
+      PB[2] - 0.8,
+      PB[0] - serverWidth / 2,
+      PB[2] + 0.8,
+      9.25,
+      0.24,
+    )
+    setHorizontalBeam(
+      poolerFunnel,
+      1,
+      PB[0] + clientWidth / 2,
+      PB[2] - 0.8,
+      PB[0] + serverWidth / 2,
+      PB[2] + 0.8,
+      9.25,
+      0.24,
+    )
+    poolerFunnel.instanceMatrix.needsUpdate = true
+    _c.setHex(COLOR.client).multiplyScalar(1.18)
+    poolerFunnel.setColorAt(0, _c)
+    poolerFunnel.setColorAt(1, _c)
+    poolerFunnel.instanceColor!.needsUpdate = true
+
+    const activeClientPaths = Math.min(nPoolClientPaths, acceptedClients)
+    poolerClientPaths.count = activeClientPaths
+    const warningPaths = Math.round(activeClientPaths * waiting)
+    for (let i = 0; i < activeClientPaths; i++) {
+      _c.setHex(i >= activeClientPaths - warningPaths ? COLOR.warn : COLOR.client)
+        .multiplyScalar(1.16)
+      poolerClientPaths.setColorAt(i, _c)
+    }
+    poolerClientPaths.instanceColor!.needsUpdate = true
+
+    const pathZ0 = PB[2] + 1.6
+    const pathZ1 = CONDUIT.boundaryZ - 0.9
+    const pathSpan = Math.max(0.1, pathZ1 - pathZ0)
+    const segmentFill = sim.pooler.mode === 'session'
+      ? 0.94
+      : sim.pooler.mode === 'transaction'
+        ? 0.68
+        : 0.4
+    poolerServerPaths.count = serverConnections * serverPathSegments
+    for (let connection = 0; connection < serverConnections; connection++) {
+      const row = Math.floor(connection / 8)
+      const col = connection % 8
+      const rowConnections = Math.min(8, serverConnections - row * 8)
+      const x = rowConnections > 1
+        ? PB[0] - serverWidth / 2 + serverWidth * col / (rowConnections - 1)
+        : PB[0]
+      const y = 4.8 + row * 2.6
+      for (let segment = 0; segment < serverPathSegments; segment++) {
+        const index = connection * serverPathSegments + segment
+        const z = pathZ0 + pathSpan * (segment + 0.5) / serverPathSegments
+        setInstanceBox(
+          poolerServerPaths,
+          index,
+          x,
+          y,
+          z,
+          0.34,
+          0.34,
+          pathSpan * segmentFill / serverPathSegments,
+        )
+        let intensity = 1.25
+        if (sim.pooler.mode === 'session') {
+          // Held links stay solid; the disconnect marker supplies the hand-off.
+          intensity += 0.08 * Math.sin(t * 0.32 + connection * 0.19)
+        } else if (sim.pooler.mode === 'transaction') {
+          // One synchronized wave marks release at a transaction boundary.
+          const phase = (t * 0.72 + segment / serverPathSegments) % 1
+          intensity = phase < 0.25 ? 1.9 : 0.48
+        } else if (sim.pooler.mode === 'statement') {
+          // Per-link stagger marks release after individual statements.
+          const phase = (t * 1.45 + connection * 0.17 + segment * 0.31) % 1
+          intensity = phase < 0.42 ? 1.85 : 0.3
+        }
+        _c.setHex(COLOR.backend).multiplyScalar(intensity)
+        poolerServerPaths.setColorAt(index, _c)
+      }
+    }
+    poolerServerPaths.instanceMatrix.needsUpdate = true
+    poolerServerPaths.instanceColor!.needsUpdate = true
+
+    poolerDirectPaths.count = Math.min(N, acceptedClients, serverConnections)
+    _c.setHex(COLOR.client).multiplyScalar(1.25)
+    for (let i = 0; i < poolerDirectPaths.count; i++) poolerDirectPaths.setColorAt(i, _c)
+    poolerDirectPaths.instanceColor!.needsUpdate = true
+
+    const selectedBoundary = releaseBoundaryIndex(sim.pooler.mode)
+    for (let i = 0; i < RELEASE_BOUNDARIES; i++) {
+      if (i !== selectedBoundary) {
+        _c.setHex(COLOR.inkDim).multiplyScalar(0.06)
+      } else {
+        const rate = i === 0 ? 1 / 15 : i === 1 ? 0.72 : 1.45
+        const phase = (t * rate) % 1
+        const pulse = Math.max(0, 1 - Math.abs(phase - 0.5) * 5)
+        _c.setHex(COLOR.client).multiplyScalar(1.16 + pulse * 0.84)
+      }
+      poolerReleaseMarkers.setColorAt(i, _c)
+    }
+    poolerReleaseMarkers.instanceColor!.needsUpdate = true
+
+    paintPoolerDigits(poolerClientDigits, clientDigitSpecs, acceptedClients, COLOR.client)
+    paintPoolerDigits(poolerServerDigits, serverDigitSpecs, serverConnections, COLOR.backend)
+    const modePlateIndex = sim.pooler.mode === 'disabled'
+      ? 0
+      : sim.pooler.mode === 'session'
+        ? 1
+        : sim.pooler.mode === 'transaction'
+          ? 2
+          : 3
+    for (let i = 0; i < poolModePlates.length; i++) poolModePlates[i].visible = i === modePlateIndex
 
     // fork rings travelling down the shaft
     let ringDirty = false
@@ -1216,8 +1649,12 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
     gatePlate.visible = level >= 2
     boundPlate.visible = level >= 2
     termPlate.visible = level >= 2
-    // Core identity, not decorative detail: keep the pool_mode plate on mobile.
+    // Counts, ratio and release boundary are the mechanism, not close-up trim.
     poolerPlate.visible = true
+    clientCountPlate.visible = true
+    serverCountPlate.visible = true
+    countArrowPlate.visible = true
+    // update() owns the one visible mode plate; fidelity never overrides it.
     lamps.visible = level >= 1
   }
 
@@ -1228,6 +1665,15 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
     podLamp.dispose()
     poolerStruct.dispose()
     poolerGlow.dispose()
+    poolerClientBand.dispose()
+    poolerServerBand.dispose()
+    poolerFunnel.dispose()
+    poolerClientPaths.dispose()
+    poolerServerPaths.dispose()
+    poolerDirectPaths.dispose()
+    poolerReleaseMarkers.dispose()
+    poolerClientDigits.dispose()
+    poolerServerDigits.dispose()
     termStruct.dispose()
     termGlow.dispose()
     pmStruct.dispose()

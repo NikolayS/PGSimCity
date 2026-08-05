@@ -16,6 +16,7 @@ export { rid } from '../core/route-ids'
  *
  *                              ▲ -Z  (north)
  *              CLIENT TERMINAL  z ≈ -352 .. -288   (outside the server)
+ *              PGBOUNCER        z = -264            (central database-facing tier)
  *              SERVER BOUNDARY  z = -252           (fence + gatehouse)
  *              POSTMASTER  z = -215
  *              BACKENDS    z = -130   x = -112 .. 112
@@ -78,8 +79,13 @@ export const ANCHOR = {
   controlCenter: [0, 27.8, -217],
   /** The gatehouse in the boundary fence — pg_hba.conf, at ground level. */
   connGate: [0, 0, -252],
-  /** PgBouncer gate on the open approach between the terminal and server fence. */
-  pooler: [0, 0, -276],
+  /**
+   * Centralized, database-facing PgBouncer tier. It stays outside PostgreSQL's
+   * boundary, before pg_hba.conf, and does not overlap the HA service address.
+   * Application-host/sidecar and database-host deployments are disclosed in
+   * the pooler inspector; this coordinate depicts only the centralized case.
+   */
+  pooler: [0, 0, -264],
   /** Where a connection is handed to the postmaster: its south door. */
   postmasterDoor: [0, 1.8, -206],
 
@@ -381,7 +387,8 @@ function route(
  * A street, walked at a walking pace, entirely at grade. */
 route('conn.in', [
   [0, 1.8, -288],
-  [0, 1.8, -270],
+  [ANCHOR.endpoint[0], 1.8, ANCHOR.endpoint[2]],
+  [ANCHOR.pooler[0], 1.8, ANCHOR.pooler[2]],
   [0, 1.8, CONDUIT.boundaryZ],
   [0, 1.8, -230],
   [ANCHOR.postmasterDoor[0], ANCHOR.postmasterDoor[1], ANCHOR.postmasterDoor[2]],

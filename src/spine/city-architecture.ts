@@ -38,7 +38,7 @@ export const CITY_ARCHITECTURE_CLAIMS = {
       name: 'Clients and connection approach',
       anchor: 'clientTerminal',
       represents:
-        'The application tier approaching PostgreSQL from outside the server boundary. The plan places PgBouncer and a pg_hba.conf policy gatehouse on the approach to the postmaster, then carries one persistent connection to one backend. The gatehouse is a boundary metaphor, not an authentication execution-order claim.',
+        'The application tier approaching PostgreSQL from outside the server boundary. The plan depicts a centralized, database-facing PgBouncer tier shared by those clients, followed by the pg_hba.conf policy gatehouse and postmaster. Application-host/sidecar and database-host PgBouncer deployments are legitimate alternatives, but they are not the topology drawn here. The gatehouse is a boundary metaphor, not an authentication execution-order claim.',
       contains: [
         'the external client terminal',
         'the PgBouncer gate and arrivals avenue',
@@ -47,7 +47,7 @@ export const CITY_ARCHITECTURE_CLAIMS = {
         'sixteen connection conduits that continue toward the backend row',
       ],
       scaleMeaning:
-        'The long northern approach makes the application tier visibly external to the server. Its distances are teaching distances, not connection latency.',
+        'The long northern approach makes the application tier visibly external to the server. PgBouncer stands close to the server boundary to identify this drawing as a centralized database-facing tier; all distances are teaching distances, not connection latency.',
     },
     backends: {
       name: 'Backend row',
@@ -173,7 +173,7 @@ export const CITY_ARCHITECTURE_CLAIMS = {
       from: 'clients',
       to: 'backends',
       placement:
-        'The client terminal is north of the server fence. The drawn arrivals avenue crosses the PgBouncer and pg_hba.conf gate metaphors, reaches the postmaster, and then fans into the backend row.',
+        'The client terminal is north of the server fence. The drawn arrivals avenue crosses the HA service address, the separate centralized PgBouncer tier, and the pg_hba.conf gate metaphor, reaches the postmaster, and then fans into the backend row.',
       why:
         'The real postmaster accepts the incoming connection and starts its child process; that child handles startup and authentication before becoming the session’s backend. The postmaster does not remain in the statement data path, so query and result traffic continue on the persistent client/backend connection. The gate’s position says “access policy at the boundary”, not “pg_hba.conf runs before the postmaster accepts”.',
       evidence: {
