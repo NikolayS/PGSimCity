@@ -196,6 +196,10 @@ function moveTouch(fixture: RigFixture, pointerId: number, point: [number, numbe
   )
 }
 
+function settlePointerBatch(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
 function moveTouchPair(
   fixture: RigFixture,
   a: [number, number],
@@ -612,6 +616,47 @@ describe('map camera mouse controls', () => {
     expect(largestDistanceError).toBeLessThan(startDistance * 1e-6)
   })
 
+  it('tracks a pinch continuously while its second contact stays stationary', async () => {
+    fixture.rig.focusOn(
+      { target: [0, 0, 0], distance: 48, dir: [-0.6, 0.5, 0.8] },
+      { instant: true },
+    )
+    beginTwoFingerGesture(fixture, [350, 300], [450, 300])
+
+    for (const x of [335, 320, 300]) {
+      moveTouch(fixture, 1, [x, 300])
+      await settlePointerBatch()
+      fixture.rig.update(1 / 60)
+
+      const span = 450 - x
+      expect(fixture.camera.position.distanceTo(fixture.rig.pivot)).toBeCloseTo(
+        (48 * 100) / span,
+        10,
+      )
+    }
+  })
+
+  it('does not freeze when one moving contact stops reporting', async () => {
+    fixture.rig.focusOn(
+      { target: [0, 0, 0], distance: 48, dir: [-0.6, 0.5, 0.8] },
+      { instant: true },
+    )
+    beginTwoFingerGesture(fixture, [350, 300], [450, 300])
+    moveTouchPair(fixture, [340, 300], [460, 300])
+
+    for (const x of [325, 310, 300]) {
+      moveTouch(fixture, 1, [x, 300])
+      await settlePointerBatch()
+      fixture.rig.update(1 / 60)
+
+      const span = 460 - x
+      expect(fixture.camera.position.distanceTo(fixture.rig.pivot)).toBeCloseTo(
+        (48 * 100) / span,
+        10,
+      )
+    }
+  })
+
   it('is independent of whether rendering follows every event, every pair, or only the endpoint', () => {
     const everyEvent = measureMixedSwipe(fixture, 'event')
     fixture.rig.dispose()
@@ -767,6 +812,62 @@ describe('map camera mouse controls', () => {
       expect(Math.abs(terminal.distance - rendered.distance)).toBeLessThan(1e-6)
     },
   )
+
+  it.each([
+    { terminalEvent: 'pointerup' as const, pointerId: 1 },
+    { terminalEvent: 'pointerup' as const, pointerId: 2 },
+    { terminalEvent: 'pointercancel' as const, pointerId: 1 },
+    { terminalEvent: 'pointercancel' as const, pointerId: 2 },
+  ])('preserves stationary-anchor motion when pointer $pointerId ends with $terminalEvent', ({
+    terminalEvent,
+    pointerId,
+  }) => {
+    fixture.rig.focusOn(
+      { target: [0, 0, 0], distance: 48, dir: [-0.6, 0.5, 0.8] },
+      { instant: true },
+    )
+    beginTwoFingerGesture(fixture, [350, 300], [450, 300])
+    moveTouch(fixture, 1, [300, 300])
+    fixture.dom.dispatchEvent(
+      pointer(terminalEvent, {
+        pointerId,
+        pointerType: 'touch',
+        clientX: pointerId === 1 ? 300 : 450,
+        clientY: 300,
+      }),
+    )
+    fixture.rig.update(1 / 60)
+
+    expect(fixture.camera.position.distanceTo(fixture.rig.pivot)).toBeCloseTo(32, 10)
+  })
+
+  it('rebases cleanly when a third contact replaces a gesture owner', () => {
+    fixture.rig.focusOn(
+      { target: [0, 0, 0], distance: 48, dir: [-0.6, 0.5, 0.8] },
+      { instant: true },
+    )
+    beginTwoFingerGesture(fixture, [350, 300], [450, 300])
+    fixture.dom.dispatchEvent(
+      pointer('pointerdown', { pointerId: 3, pointerType: 'touch', clientX: 550, clientY: 300 }),
+    )
+    moveTouchPair(fixture, [300, 300], [450, 300])
+    expect(fixture.camera.position.distanceTo(fixture.rig.pivot)).toBeCloseTo(32, 10)
+
+    fixture.dom.dispatchEvent(
+      pointer('pointerup', { pointerId: 1, pointerType: 'touch', clientX: 300, clientY: 300 }),
+    )
+    const rebasedDistance = fixture.camera.position.distanceTo(fixture.rig.pivot)
+    expect(rebasedDistance).toBeCloseTo(32, 10)
+
+    moveTouch(fixture, 2, [440, 300])
+    moveTouch(fixture, 3, [560, 300])
+    fixture.rig.update(1 / 60)
+
+    expect(fixture.camera.position.distanceTo(fixture.rig.pivot)).toBeCloseTo(
+      rebasedDistance * (100 / 120),
+      10,
+    )
+  })
 
   it('starts clean after a cancelled two-finger gesture', () => {
     measureTerminalSwipe(fixture, 'pointercancel')

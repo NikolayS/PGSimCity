@@ -25,6 +25,7 @@ interface TouchActionReport {
   targets: GestureTarget[]
   forcedAuto: GestureCounts
   restored: GestureCounts
+  stationaryDistances: number[]
 }
 
 const ENUMERATE_GESTURE_TARGETS = `(() => {
@@ -144,8 +145,8 @@ async function dispatchTwoFingerSwipe(
   await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
 }
 
-describe('native multi-touch gesture ownership', () => {
-  it('keeps every production gesture receiver out of browser touch arbitration', async () => {
+describe('native multi-touch gestures', () => {
+  it('keeps production gesture ownership and stationary geometry', async () => {
     const [report] = await inspectRenderedPages([{
       name: 'City',
       path: '/',
@@ -190,7 +191,54 @@ describe('native multi-touch gesture ownership', () => {
       const restored = await evaluate(`window.__pgNativeGestureProbe.counts()`) as GestureCounts
       await evaluate(`window.__pgNativeGestureProbe.dispose()`)
 
-      return { targets, forcedAuto, restored }
+      await send('Emulation.setDeviceMetricsOverride', {
+        width: 800,
+        height: 600,
+        deviceScaleFactor: 1,
+        mobile: true,
+      })
+      await evaluate(`(() => {
+        window.PGSIMCITY.rig.resize(800, 600)
+        window.PGSIMCITY.rig.focusOn(
+          { target: [0, 0, 0], distance: 48, dir: [-0.6, 0.5, 0.8] },
+          { instant: true },
+        )
+        window.__pgStationaryX = 350
+        document.querySelector('canvas').addEventListener('pointermove', (event) => {
+          if (event.clientX < 400) window.__pgStationaryX = event.clientX
+        })
+      })()`)
+      const stationaryPoints = (firstX: number) => [
+        { x: firstX, y: 300, id: 101, radiusX: 2, radiusY: 2, force: 1 },
+        { x: 450, y: 300, id: 102, radiusX: 2, radiusY: 2, force: 1 },
+      ]
+      await send('Input.dispatchTouchEvent', {
+        type: 'touchStart',
+        touchPoints: stationaryPoints(350),
+      })
+      const stationaryDistances: number[] = []
+      for (const x of [335, 320, 300]) {
+        await send('Input.dispatchTouchEvent', {
+          type: 'touchMove',
+          touchPoints: stationaryPoints(x),
+        })
+        stationaryDistances.push(await evaluate(`new Promise((resolve) => {
+          const afterDelivery = () => {
+            if (window.__pgStationaryX !== ${x}) {
+              setTimeout(afterDelivery, 0)
+              return
+            }
+            setTimeout(() => {
+              window.PGSIMCITY.rig.update(1 / 60)
+              resolve(window.PGSIMCITY.gfx.camera.position.distanceTo(window.PGSIMCITY.rig.pivot))
+            }, 0)
+          }
+          afterDelivery()
+        })`) as number)
+      }
+      await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+
+      return { targets, forcedAuto, restored, stationaryDistances }
     })
 
     expect(
@@ -218,5 +266,10 @@ describe('native multi-touch gesture ownership', () => {
       'Restoring touch-action: none must preserve the complete two-finger stream used by iOS '
         + 'Safari camera control; synthetic PointerEvents do not exercise this arbitration.',
     ).toEqual({ downs: 2, moves: 12, cancels: 0, ups: 2 })
+
+    expect(report.stationaryDistances).toHaveLength(3)
+    for (const [index, x] of [335, 320, 300].entries()) {
+      expect(report.stationaryDistances[index]).toBeCloseTo((48 * 100) / (450 - x), 10)
+    }
   }, 90_000)
 })

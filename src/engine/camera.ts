@@ -330,6 +330,7 @@ export function createCameraRig(
   const ptrX = new Map<number, number>()
   const ptrY = new Map<number, number>()
   const touchReported = new Set<number>()
+  let touchCommitTimer: number | null = null
   let touchFrameActive = false
   let touchPrevDist = 0
   let touchPrevMx = 0
@@ -564,7 +565,15 @@ export function createCameraRig(
     panAnchorValid = pickGround(panNdcX, panNdcY, panAnchor)
   }
 
+  function cancelTouchGestureCommit(): void {
+    if (touchCommitTimer !== null) {
+      window.clearTimeout(touchCommitTimer)
+      touchCommitTimer = null
+    }
+  }
+
   function clearTouchGesture(): void {
+    cancelTouchGestureCommit()
     touchFrameActive = false
     touchReported.clear()
     touchScale = 1
@@ -578,6 +587,7 @@ export function createCameraRig(
   }
 
   function beginTouchGesture(ax: number, ay: number, bx: number, by: number): void {
+    cancelTouchGestureCommit()
     const sx = ax - bx
     const sy = ay - by
     touchPrevDist = Math.sqrt(sx * sx + sy * sy) || 1
@@ -725,18 +735,33 @@ export function createCameraRig(
     touchPrevAngle = angle
   }
 
-  function commitCoherentTouchGesture(): void {
+  function commitCoherentTouchGesture(force = false): void {
     if (!touchFrameActive || ptrIds.length < 2) return
     const aId = ptrIds[0]
     const bId = ptrIds[1]
-    if (!touchReported.has(aId) || !touchReported.has(bId)) return
+    if (touchReported.size === 0) return
+    if (!force && (!touchReported.has(aId) || !touchReported.has(bId))) return
     const ax = ptrX.get(aId)
     const ay = ptrY.get(aId)
     const bx = ptrX.get(bId)
     const by = ptrY.get(bId)
     if (ax === undefined || ay === undefined || bx === undefined || by === undefined) return
+    cancelTouchGestureCommit()
     touchReported.clear()
     commitTouchGesture(ax, ay, bx, by)
+  }
+
+  function settleTouchGestureBatch(): void {
+    touchCommitTimer = null
+    commitCoherentTouchGesture(true)
+  }
+
+  function scheduleTouchGestureCommit(): void {
+    if (touchCommitTimer !== null) return
+    /* A zero-delay task lets co-timestamped pointer tasks finish in delivery
+     * order. At that boundary a missing owner did not move, so its last
+     * coordinate is current rather than stale. */
+    touchCommitTimer = window.setTimeout(settleTouchGestureBatch, 0)
   }
 
   function onPointerDown(e: PointerEvent): void {
@@ -823,6 +848,7 @@ export function createCameraRig(
       if (owner >= 0 && owner < 2) {
         touchReported.add(id)
         commitCoherentTouchGesture()
+        if (touchReported.size > 0) scheduleTouchGestureCommit()
       }
       return
     }
@@ -872,7 +898,7 @@ export function createCameraRig(
         ptrY.set(e.pointerId, e.clientY)
       }
       touchReported.add(e.pointerId)
-      commitCoherentTouchGesture()
+      commitCoherentTouchGesture(true)
       if (mode === 'orbit') applyTouchTransform()
     }
     if (i >= 0) ptrIds.splice(i, 1)
@@ -1691,6 +1717,7 @@ export function createCameraRig(
   function dispose(): void {
     disposed = true
     cancelScript()
+    cancelTouchGestureCommit()
     domElement.removeEventListener('pointerdown', onPointerDown)
     domElement.removeEventListener('pointermove', onPointerMove)
     domElement.removeEventListener('pointerup', endPointer)
