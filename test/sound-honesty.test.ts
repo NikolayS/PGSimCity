@@ -20,6 +20,15 @@ interface CopySurface {
   text: string
 }
 
+interface SoundControlMarkers {
+  actions: ReadonlySet<string>
+  keys: readonly string[]
+  nouns: ReadonlySet<string>
+  scopes: ReadonlySet<string>
+}
+
+const SOUND_COPY_MODULE = 'src/ui/sound.ts'
+
 function source(path: string): string {
   return readFileSync(resolve(ROOT, path), 'utf8')
 }
@@ -40,11 +49,125 @@ function trackedDocumentationFiles(): string[] {
   }).split('\0').filter(Boolean)
 }
 
-function describesSoundControl(text: string): boolean {
-  return (
-    /\b(?:toggle|turn|enable|disable|mute|unmute)\s+(?:the\s+)?(?:walk\s+)?(?:sound|audio)\b/i.test(text)
-    || /\b(?:walk\s+)?(?:sound|audio)\s+(?:(?:is|was|starts)\s+)?(?:on|off|ready)\b/i.test(text)
+function words(text: string): string[] {
+  return text.match(/[A-Za-z]+/g)?.map((word) => word.toLowerCase()) ?? []
+}
+
+function identifierWords(identifier: string): string[] {
+  return words(identifier.replace(/([a-z\d])([A-Z])/g, '$1 $2'))
+}
+
+let cachedSoundControlMarkers: SoundControlMarkers | undefined
+
+function soundControlMarkers(): SoundControlMarkers {
+  if (cachedSoundControlMarkers) return cachedSoundControlMarkers
+
+  const controlId = SOUND_COPY_MODULE.split('/').at(-1)?.replace(/\.ts$/, '')
+  const help = APP_KEYS.find((row) => row.id === controlId)
+  if (!controlId || !help) throw new Error(`${SOUND_COPY_MODULE} must own a keyboard-help control`)
+
+  const keys = help.keys.flatMap((key) => key.match(/[A-Za-z\d]+/g) ?? [])
+  const actions = new Set<string>()
+  const nouns = new Set<string>([controlId])
+  const scopes = new Set<string>([MOVEMENT_SOUND_MODE.toLowerCase()])
+
+  /* The M switch calls toggleAudio. Splitting the bound production handler
+     yields both the action and the audio alias without maintaining synonyms. */
+  for (const path of sourceFiles('src')) {
+    const file = ts.createSourceFile(path, source(path), ts.ScriptTarget.Latest, true)
+    const visit = (node: ts.Node): void => {
+      if (ts.isSwitchStatement(node)) {
+        for (const clause of node.caseBlock.clauses) {
+          if (
+            !ts.isCaseClause(clause)
+            || !ts.isStringLiteralLike(clause.expression)
+            || !keys.some((key) => key.toLowerCase() === clause.expression.text.toLowerCase())
+          ) continue
+
+          for (const statement of clause.statements) {
+            if (
+              !ts.isExpressionStatement(statement)
+              || !ts.isCallExpression(statement.expression)
+              || !ts.isIdentifier(statement.expression.expression)
+            ) continue
+            const tokens = identifierWords(statement.expression.expression.text)
+            if (tokens.length < 2) continue
+            actions.add(tokens[0])
+            nouns.add(tokens.at(-1)!)
+          }
+        }
+      }
+      ts.forEachChild(node, visit)
+    }
+    visit(file)
+  }
+
+  /* Accessible copy contributes verbs such as "turn" only when they directly
+     precede this control's derived scope and noun. */
+  const copy = ts.createSourceFile(
+    SOUND_COPY_MODULE,
+    source(SOUND_COPY_MODULE),
+    ts.ScriptTarget.Latest,
+    true,
   )
+  const visitCopy = (node: ts.Node): void => {
+    if (ts.isStringLiteralLike(node)) {
+      const tokens = words(node.text)
+      for (const [index, token] of tokens.entries()) {
+        if (!nouns.has(token)) continue
+        let previous = index - 1
+        while (previous >= 0 && scopes.has(tokens[previous])) previous -= 1
+        if (previous >= 0) actions.add(tokens[previous])
+      }
+    }
+    ts.forEachChild(node, visitCopy)
+  }
+  visitCopy(copy)
+
+  if (actions.size === 0 || nouns.size < 2 || keys.length === 0) {
+    throw new Error('sound-control markers must remain derivable from production wiring')
+  }
+  cachedSoundControlMarkers = { actions, keys, nouns, scopes }
+  return cachedSoundControlMarkers
+}
+
+function hasActionNounPair(text: string, markers: SoundControlMarkers): boolean {
+  const tokens = words(text)
+  return tokens.some((token, index) => {
+    if (!markers.actions.has(token)) return false
+    let next = index + 1
+    if (tokens[next] === 'the') next += 1
+    while (markers.scopes.has(tokens[next])) next += 1
+    return markers.nouns.has(tokens[next])
+  })
+}
+
+function mentionsKey(text: string, key: string): boolean {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(?:^|[^A-Za-z\\d])${escaped}(?:[^A-Za-z\\d]|$)`).test(text)
+}
+
+function hasKeyNounAssociation(text: string, markers: SoundControlMarkers): boolean {
+  const cells = text.split('|').map((cell) => cell.replace(/[`*_]/g, '').trim())
+  const keyCell = cells.some((cell) => markers.keys.includes(cell))
+  if (keyCell && cells.some((cell) => words(cell).some((word) => markers.nouns.has(word)))) {
+    return true
+  }
+
+  const clauses = text.split(/[.;!?]|\b(?:while|whereas)\b|,\s*(?:and|but)\b/i)
+  return clauses.some((clause) => (
+    markers.keys.some((key) => mentionsKey(clause, key))
+    && words(clause).some((word) => word !== 'sound' && markers.nouns.has(word))
+  ))
+}
+
+function describesSoundControl(text: string, path?: string): boolean {
+  const markers = soundControlMarkers()
+  if (
+    path === SOUND_COPY_MODULE
+    && words(text).some((word) => markers.nouns.has(word))
+  ) return true
+  return hasActionNounPair(text, markers) || hasKeyNounAssociation(text, markers)
 }
 
 function productionCopySurfaces(): CopySurface[] {
@@ -52,7 +175,7 @@ function productionCopySurfaces(): CopySurface[] {
   for (const path of sourceFiles('src')) {
     const file = ts.createSourceFile(path, source(path), ts.ScriptTarget.Latest, true)
     const visit = (node: ts.Node): void => {
-      if (ts.isStringLiteralLike(node) && describesSoundControl(node.text)) {
+      if (ts.isStringLiteralLike(node) && describesSoundControl(node.text, path)) {
         surfaces.push({
           file: path,
           line: file.getLineAndCharacterOfPosition(node.getStart()).line + 1,
@@ -230,6 +353,39 @@ function context(audioState: { enabled: boolean; preferred: boolean; volume: num
 }
 
 describe('honest movement sound controls', () => {
+  it.each([
+    [
+      'PostgreSQL version assessment',
+      'Lock-holder advice is sound on PostgreSQL 13, 17, and 18.',
+    ],
+    [
+      'an unrelated M key in the same sentence',
+      'Use the M key to mark model evidence; the resulting advice is sound on supported releases.',
+    ],
+    [
+      'an M-key sentence with adjectival sound',
+      'The M key is a sound choice for marking modelled evidence.',
+    ],
+    [
+      'separate M-key and audio clauses',
+      'The M key marks model evidence while the legal audit inventories audio assets.',
+    ],
+    [
+      'a legal inventory of media',
+      'The project contains no SimCity audio or game content.',
+    ],
+  ])('does not mistake %s for the sound control', (_case, text) => {
+    expect(describesSoundControl(text)).toBe(false)
+  })
+
+  it.each([
+    ['the README key row', '| `M` | Toggle sound |'],
+    ['an indirect key description', '`M` changes the audio preference.'],
+    ['a non-key action', 'Turn audio off.'],
+  ])('recognises %s as the sound control', (_case, text) => {
+    expect(describesSoundControl(text)).toBe(true)
+  })
+
   it('ignores untracked Markdown when inventorying documentation surfaces', () => {
     const file = `.sound-honesty-untracked-${process.pid}.md`
     const path = resolve(ROOT, file)
@@ -257,7 +413,7 @@ describe('honest movement sound controls', () => {
   })
 
   it('keeps production sound-control copy in the shared module', () => {
-    const scattered = productionCopySurfaces().filter(({ file }) => file !== 'src/ui/sound.ts')
+    const scattered = productionCopySurfaces().filter(({ file }) => file !== SOUND_COPY_MODULE)
     expect(
       scattered,
       `route production sound-control copy through src/ui/sound.ts:\n${formatSurfaces(scattered)}`,
