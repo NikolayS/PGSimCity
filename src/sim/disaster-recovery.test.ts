@@ -795,6 +795,7 @@ describe('disaster recovery', () => {
   it('gives four distinct current-timeline messages for four archive states', () => {
     function failureFor(
       prepare: (sim: Sim) => number | void,
+      whileRestoring?: (sim: Sim) => void,
     ): string {
       const sim = createSim(createBus(), { scheduledBackups: false })
       sim.setKnob('tps', 1_200)
@@ -805,6 +806,7 @@ describe('disaster recovery', () => {
 
       expect(sim.startPointInTimeRestore(targetAge)).toBe(true)
       const restore = sim.state.disasterRecovery.restore
+      whileRestoring?.(sim)
       advanceUntil(sim, () => restore.status === 'complete' || restore.status === 'failed')
       expect(restore.status).toBe('failed')
       return restore.failureReason
@@ -823,16 +825,41 @@ describe('disaster recovery', () => {
         return sim.state.t - targetTime
       }),
       queue: failureFor((sim) => {
+        sim.setKnob('walGArchiveCredentialsValid', false)
         sim.setKnob('tps', 6_000)
-        advanceUntil(sim, () => sim.state.disasterRecovery.archive.queueSegments > 0, 120)
+        advanceUntil(sim, () => sim.state.disasterRecovery.archive.queueSegments > 8, 120)
+        sim.setKnob('tps', 0)
+      }, (sim) => {
+        advanceUntil(sim, () => sim.state.disasterRecovery.restore.status === 'replaying')
+        const restore = sim.state.disasterRecovery.restore
+        // Repair wal-push only when replay is about to meet the archived edge,
+        // so the live archiver cannot erase the queue state under examination.
+        while (
+          restore.status === 'replaying'
+          && restore.walBytesAvailable - restore.walBytesReplayed > 2 * 1024 * 1024
+        ) {
+          sim.update(1 / 300)
+        }
+        expect(restore.status).toBe('replaying')
+        sim.setKnob('walGArchiveCredentialsValid', true)
+        advanceUntil(
+          sim,
+          () => restore.status === 'complete' || restore.status === 'failed',
+          10,
+          1 / 300,
+        )
       }),
       healthyTail: failureFor((sim) => {
         advanceUntil(sim, () => sim.state.disasterRecovery.archive.queueSegments === 0)
         advance(sim, 3)
+        sim.setKnob('tps', 0)
       }),
     }
 
-    expect(new Set(Object.values(messages)).size).toBe(4)
+    expect(
+      new Set(Object.values(messages)).size,
+      JSON.stringify(messages),
+    ).toBe(4)
     expect(messages.credentials).toMatch(/credentials.*invalid/i)
     expect(messages.minimal).toMatch(/wal_level=minimal/i)
     expect(messages.queue).toMatch(/\.ready queue drain|processes completed segments/i)
@@ -900,6 +927,7 @@ describe('disaster recovery', () => {
     takeBackup(sim)
     advanceUntil(sim, () => sim.state.disasterRecovery.archive.queueSegments === 0)
     advance(sim, 3)
+    sim.setKnob('tps', 0)
 
     const archive = sim.state.disasterRecovery.archive
     expect(archive.queueSegments).toBe(0)

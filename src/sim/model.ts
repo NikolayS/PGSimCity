@@ -1645,6 +1645,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   let flushT = 0
   let flushDur = 0
   let flushBytes = 0
+  let segmentSwitchCatchupLsn = initialLsn
   let archT = 0
   let archiveNextSeg = 0
   let archiveInFlight = -1
@@ -4014,7 +4015,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
             // WAL-G waits for the backup stop WAL to be archived. Model the
             // segment switch PostgreSQL requests at backup stop, then let the
             // ordinary wal-push queue decide when completion is durable.
+            const beforeSwitchLsn = wal.insertLsn
             wal.insertLsn = Math.max(wal.insertLsn, requiredArchiveLsn)
+            if (wal.insertLsn > beforeSwitchLsn) segmentSwitchCatchupLsn = wal.insertLsn
             if (backupWalRangesArchived()) {
               completeBaseBackup()
             } else backup.status = 'waiting_wal'
@@ -5265,11 +5268,15 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
     // One primary-side walsender and one packet queue per standby.
     if (wal.flushLsn > standby.sentLsn && runtime.wireCount < WIRE) {
+      /* A segment switch advances the LSN without entering wal.bytesPerSec, so
+       * its padding needs bandwidth independent of current writes. */
       const chunk = Math.min(
         wal.flushLsn - standby.sentLsn,
         Math.max(
           16 * 1024,
-          runtime.rejoining ? 24 * MIB * dt : 0,
+          (runtime.rejoining || standby.sentLsn < segmentSwitchCatchupLsn)
+            ? 24 * MIB * dt
+            : 0,
           wal.bytesPerSec * dt * 4,
         ),
       )
@@ -5539,6 +5546,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     flushCovered = lsn
     flushT = 0
     flushBytes = 0
+    segmentSwitchCatchupLsn = lsn
     walWriterT = 0
     maintenanceWalPending = 0
     maintenanceFpiPending = 0
@@ -5623,6 +5631,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     flushing = false
     flushTarget = wal.flushLsn
     flushCovered = wal.flushLsn
+    segmentSwitchCatchupLsn = wal.flushLsn
   }
 
   function resetTransition(
@@ -8742,6 +8751,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     flushCovered = lsn0
     flushT = 0
     flushBytes = 0
+    segmentSwitchCatchupLsn = lsn0
     walWriterT = 0
 
     ckpt.phase = 'idle'
