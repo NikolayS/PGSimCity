@@ -1,0 +1,124 @@
+{
+  "complete": true,
+  "protocol": {
+    "viewport": [
+      1280,
+      760
+    ],
+    "mode": "eye",
+    "quality": "high",
+    "simulation": "deterministic reset, then paused",
+    "labels": "Floating map labels are hidden in both conditions so district identity is judged from semantic colour and form without a text crutch.",
+    "comparison": "The before condition replaces only ground.kerbTop with an unlit material in browser memory. Geometry, draw count, camera, simulation, renderer thresholds, GTAO, PMREM and every semantic material remain unchanged."
+  },
+  "boot": {
+    "condition": "after",
+    "quality": "medium",
+    "theme": "day",
+    "material": {
+      "name": "ground.kerbTop",
+      "type": "MeshStandardMaterial",
+      "lit": true,
+      "color": "#5d769b",
+      "roughness": 0.893,
+      "metalness": 0.02
+    },
+    "camera": {
+      "mode": "orbit",
+      "position": [
+        -218,
+        216,
+        -342
+      ],
+      "quaternion": [
+        0.069071,
+        0.930766,
+        0.24467,
+        -0.262757
+      ]
+    },
+    "visibleLabels": [],
+    "rendererInfo": {
+      "calls": 1,
+      "triangles": 1,
+      "points": 0,
+      "lines": 0
+    }
+  },
+  "records": [
+    {
+      "condition": "before",
+      "theme": "day",
+      "station": "eye",
+      "label": "First-person east-perimeter kerb",
+      "screenshot": "before-day-eye-1280x760.png",
+      "quality": "high",
+      "material": {
+        "name": "ground.kerbTop",
+        "type": "MeshBasicMaterial",
+        "lit": false,
+        "color": "#4972b2",
+        "roughness": null,
+        "metalness": null
+      },
+      "camera": {
+        "mode": "walk",
+        "position": [
+          559.489,
+          1.75,
+          115.257
+        ],
+        "quaternion": [
+          -0.012634,
+          -0.775012,
+          -0.015502,
+          0.63163
+        ]
+      },
+      "visibleLabels": [],
+      "rendererInfo": {
+        "calls": 1,
+        "triangles": 1,
+        "points": 0,
+        "lines": 0
+      }
+    },
+    {
+      "condition": "after",
+      "theme": "day",
+      "station": "eye",
+      "label": "First-person east-perimeter kerb",
+      "screenshot": "after-day-eye-1280x760.png",
+      "quality": "high",
+      "material": {
+        "name": "ground.kerbTop",
+        "type": "MeshStandardMaterial",
+        "lit": true,
+        "color": "#5d769b",
+        "roughness": 0.893,
+        "metalness": 0.02
+      },
+      "camera": {
+        "mode": "walk",
+        "position": [
+          559.489,
+          1.75,
+          115.257
+        ],
+        "quaternion": [
+          -0.012634,
+          -0.775012,
+          -0.015502,
+          0.63163
+        ]
+      },
+      "visibleLabels": [],
+      "rendererInfo": {
+        "calls": 1,
+        "triangles": 1,
+        "points": 0,
+        "lines": 0
+      }
+    }
+  ]
+}

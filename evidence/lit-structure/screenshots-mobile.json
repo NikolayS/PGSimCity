@@ -1,0 +1,494 @@
+{
+  "complete": true,
+  "protocol": {
+    "viewport": [
+      390,
+      844
+    ],
+    "mode": "mobile",
+    "quality": "high",
+    "simulation": "deterministic reset, then paused",
+    "labels": "Floating map labels are hidden in both conditions so district identity is judged from semantic colour and form without a text crutch.",
+    "comparison": "The before condition replaces only ground.kerbTop with an unlit material in browser memory. Geometry, draw count, camera, simulation, renderer thresholds, GTAO, PMREM and every semantic material remain unchanged."
+  },
+  "boot": {
+    "condition": "after",
+    "quality": "low",
+    "theme": "day",
+    "material": {
+      "name": "ground.kerbTop",
+      "type": "MeshStandardMaterial",
+      "lit": true,
+      "color": "#5d769b",
+      "roughness": 0.893,
+      "metalness": 0.02
+    },
+    "camera": {
+      "mode": "orbit",
+      "position": [
+        -498,
+        518.4,
+        -798.4
+      ],
+      "quaternion": [
+        0.069071,
+        0.930766,
+        0.24467,
+        -0.262757
+      ]
+    },
+    "visibleLabels": [],
+    "rendererInfo": {
+      "calls": 1,
+      "triangles": 1,
+      "points": 0,
+      "lines": 0
+    }
+  },
+  "records": [
+    {
+      "condition": "before",
+      "theme": "day",
+      "station": "home",
+      "label": "400 m establishing view",
+      "screenshot": "before-day-home-390x844.png",
+      "quality": "high",
+      "material": {
+        "name": "ground.kerbTop",
+        "type": "MeshBasicMaterial",
+        "lit": false,
+        "color": "#4972b2",
+        "roughness": null,
+        "metalness": null
+      },
+      "camera": {
+        "mode": "orbit",
+        "position": [
+          -498,
+          518.4,
+          -798.4
+        ],
+        "quaternion": [
+          0.069071,
+          0.930766,
+          0.24467,
+          -0.262757
+        ]
+      },
+      "visibleLabels": [],
+      "rendererInfo": {
+        "calls": 1,
+        "triangles": 1,
+        "points": 0,
+        "lines": 0
+      }
+    },
+    {
+      "condition": "after",
+      "theme": "day",
+      "station": "home",
+      "label": "400 m establishing view",
+      "screenshot": "after-day-home-390x844.png",
+      "quality": "high",
+      "material": {
+        "name": "ground.kerbTop",
+        "type": "MeshStandardMaterial",
+        "lit": true,
+        "color": "#5d769b",
+        "roughness": 0.893,
+        "metalness": 0.02
+      },
+      "camera": {
+        "mode": "orbit",
+        "position": [
+          -498,
+          518.4,
+          -798.4
+        ],
+        "quaternion": [
+          0.069071,
+          0.930766,
+          0.24467,
+          -0.262757
+        ]
+      },
+      "visibleLabels": [],
+      "rendererInfo": {
+        "calls": 1,
+        "triangles": 1,
+        "points": 0,
+        "lines": 0
+      }
+    },
+    {
+      "condition": "before",
+      "theme": "day",
+      "station": "clients",
+      "label": "Clients at the south perimeter",
+      "screenshot": "before-day-clients-390x844.png",
+      "quality": "high",
+      "material": {
+        "name": "ground.kerbTop",
+        "type": "MeshBasicMaterial",
+        "lit": false,
+        "color": "#4972b2",
+        "roughness": null,
+        "metalness": null
+      },
+      "camera": {
+        "mode": "orbit",
+        "position": [
+          14.81,
+          50.429,
+          -182.587
+        ],
+        "quaternion": [
+          -0.170496,
+          0.058802,
+          0.010193,
+          0.983549
+        ]
+      },
+      "visibleLabels": [],
+      "rendererInfo": {
+        "calls": 1,
+        "triangles": 1,
+        "points": 0,
+        "lines": 0
+      }
+    },
+    {
+      "condition": "after",
+      "theme": "day",
+      "station": "clients",
+      "label": "Clients at the south perimeter",
+      "screenshot": "after-day-clients-390x844.png",
+      "quality": "high",
+      "material": {
+        "name": "ground.kerbTop",
+        "type": "MeshStandardMaterial",
+        "lit": true,
+        "color": "#5d769b",
+        "roughness": 0.893,
+        "metalness": 0.02
+      },
+      "camera": {
+        "mode": "orbit",
+        "position": [
+          14.81,
+          50.429,
+          -182.587
+        ],
+        "quaternion": [
+          -0.170496,
+          0.058802,
+          0.010193,
+          0.983549
+        ]
+      },
+      "visibleLabels": [],
+      "rendererInfo": {
+        "calls": 1,
+        "triangles": 1,
+        "points": 0,
+        "lines": 0
+      }
+    },
+    {
+      "condition": "before",
+      "theme": "day",
+      "station": "wal",
+      "label": "WAL at the east perimeter",
+      "screenshot": "before-day-wal-390x844.png",
+      "quality": "high",
+      "material": {
+        "name": "ground.kerbTop",
+        "type": "MeshBasicMaterial",
+        "lit": false,
+        "color": "#4972b2",
+        "roughness": null,
+        "metalness": null
+      },
+      "camera": {
+        "mode": "orbit",
+        "position": [
+          59.803,
+          73.974,
+          -36.945
+        ],
+        "quaternion": [
+          -0.150502,
+          -0.78568,
+          -0.210425,
+          0.561941
+        ]
+      },
+      "visibleLabels": [],
+      "rendererInfo": {
+        "calls": 1,
+        "triangles": 1,
+        "points": 0,
+        "lines": 0
+      }
+    },
+    {
+      "condition": "after",
+      "theme": "day",
+      "station": "wal",
+      "label": "WAL at the east perimeter",
+      "screenshot": "after-day-wal-390x844.png",
+      "quality": "high",
+      "material": {
+        "name": "ground.kerbTop",
+        "type": "MeshStandardMaterial",
+        "lit": true,
+        "color": "#5d769b",
+        "roughness": 0.893,
+        "metalness": 0.02
+      },
+      "camera": {
+        "mode": "orbit",
+        "position": [
+          59.803,
+          73.974,
+          -36.945
+        ],
+        "quaternion": [
+          -0.150502,
+          -0.78568,
+          -0.210425,
+          0.561941
+        ]
+      },
+      "visibleLabels": [],
+      "rendererInfo": {
+        "calls": 1,
+        "triangles": 1,
+        "points": 0,
+        "lines": 0
+      }
+    },
+    {
+      "condition": "before",
+      "theme": "night",
+      "station": "home",
+      "label": "400 m establishing view",
+      "screenshot": "before-night-home-390x844.png",
+      "quality": "high",
+      "material": {
+        "name": "ground.kerbTop",
+        "type": "MeshBasicMaterial",
+        "lit": false,
+        "color": "#808da1",
+        "roughness": null,
+        "metalness": null
+      },
+      "camera": {
+        "mode": "orbit",
+        "position": [
+          -498,
+          518.4,
+          -798.4
+        ],
+        "quaternion": [
+          0.069071,
+          0.930766,
+          0.24467,
+          -0.262757
+        ]
+      },
+      "visibleLabels": [],
+      "rendererInfo": {
+        "calls": 1,
+        "triangles": 1,
+        "points": 0,
+        "lines": 0
+      }
+    },
+    {
+      "condition": "after",
+      "theme": "night",
+      "station": "home",
+      "label": "400 m establishing view",
+      "screenshot": "after-night-home-390x844.png",
+      "quality": "high",
+      "material": {
+        "name": "ground.kerbTop",
+        "type": "MeshStandardMaterial",
+        "lit": true,
+        "color": "#808da1",
+        "roughness": 0.86,
+        "metalness": 0.08
+      },
+      "camera": {
+        "mode": "orbit",
+        "position": [
+          -498,
+          518.4,
+          -798.4
+        ],
+        "quaternion": [
+          0.069071,
+          0.930766,
+          0.24467,
+          -0.262757
+        ]
+      },
+      "visibleLabels": [],
+      "rendererInfo": {
+        "calls": 1,
+        "triangles": 1,
+        "points": 0,
+        "lines": 0
+      }
+    },
+    {
+      "condition": "before",
+      "theme": "night",
+      "station": "clients",
+      "label": "Clients at the south perimeter",
+      "screenshot": "before-night-clients-390x844.png",
+      "quality": "high",
+      "material": {
+        "name": "ground.kerbTop",
+        "type": "MeshBasicMaterial",
+        "lit": false,
+        "color": "#808da1",
+        "roughness": null,
+        "metalness": null
+      },
+      "camera": {
+        "mode": "orbit",
+        "position": [
+          14.81,
+          50.429,
+          -182.587
+        ],
+        "quaternion": [
+          -0.170496,
+          0.058802,
+          0.010193,
+          0.983549
+        ]
+      },
+      "visibleLabels": [],
+      "rendererInfo": {
+        "calls": 1,
+        "triangles": 1,
+        "points": 0,
+        "lines": 0
+      }
+    },
+    {
+      "condition": "after",
+      "theme": "night",
+      "station": "clients",
+      "label": "Clients at the south perimeter",
+      "screenshot": "after-night-clients-390x844.png",
+      "quality": "high",
+      "material": {
+        "name": "ground.kerbTop",
+        "type": "MeshStandardMaterial",
+        "lit": true,
+        "color": "#808da1",
+        "roughness": 0.86,
+        "metalness": 0.08
+      },
+      "camera": {
+        "mode": "orbit",
+        "position": [
+          14.81,
+          50.429,
+          -182.587
+        ],
+        "quaternion": [
+          -0.170496,
+          0.058802,
+          0.010193,
+          0.983549
+        ]
+      },
+      "visibleLabels": [],
+      "rendererInfo": {
+        "calls": 1,
+        "triangles": 1,
+        "points": 0,
+        "lines": 0
+      }
+    },
+    {
+      "condition": "before",
+      "theme": "night",
+      "station": "wal",
+      "label": "WAL at the east perimeter",
+      "screenshot": "before-night-wal-390x844.png",
+      "quality": "high",
+      "material": {
+        "name": "ground.kerbTop",
+        "type": "MeshBasicMaterial",
+        "lit": false,
+        "color": "#808da1",
+        "roughness": null,
+        "metalness": null
+      },
+      "camera": {
+        "mode": "orbit",
+        "position": [
+          59.803,
+          73.974,
+          -36.945
+        ],
+        "quaternion": [
+          -0.150502,
+          -0.78568,
+          -0.210425,
+          0.561941
+        ]
+      },
+      "visibleLabels": [],
+      "rendererInfo": {
+        "calls": 1,
+        "triangles": 1,
+        "points": 0,
+        "lines": 0
+      }
+    },
+    {
+      "condition": "after",
+      "theme": "night",
+      "station": "wal",
+      "label": "WAL at the east perimeter",
+      "screenshot": "after-night-wal-390x844.png",
+      "quality": "high",
+      "material": {
+        "name": "ground.kerbTop",
+        "type": "MeshStandardMaterial",
+        "lit": true,
+        "color": "#808da1",
+        "roughness": 0.86,
+        "metalness": 0.08
+      },
+      "camera": {
+        "mode": "orbit",
+        "position": [
+          59.803,
+          73.974,
+          -36.945
+        ],
+        "quaternion": [
+          -0.150502,
+          -0.78568,
+          -0.210425,
+          0.561941
+        ]
+      },
+      "visibleLabels": [],
+      "rendererInfo": {
+        "calls": 1,
+        "triangles": 1,
+        "points": 0,
+        "lines": 0
+      }
+    }
+  ]
+}

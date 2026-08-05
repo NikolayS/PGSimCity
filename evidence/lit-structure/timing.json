@@ -1,0 +1,1216 @@
+{
+  "complete": true,
+  "protocol": {
+    "viewport": [
+      1280,
+      760
+    ],
+    "theme": "day",
+    "station": "400 m establishing view",
+    "samplesPerRun": 12,
+    "passes": [
+      "forward",
+      "reverse"
+    ],
+    "frameBudgetMs": 22.22222222222222,
+    "note": "One synchronized warm/drain frame precedes each run. Each sample is one explicit full-pipeline render followed by WebGL finish. The adaptive governor receives a fixed 60 fps clock. No fidelity threshold is changed."
+  },
+  "boot": {
+    "condition": "after",
+    "quality": "medium",
+    "theme": "day",
+    "material": {
+      "name": "ground.kerbTop",
+      "type": "MeshStandardMaterial",
+      "lit": true,
+      "color": "#5d769b",
+      "roughness": 0.893,
+      "metalness": 0.02
+    },
+    "camera": {
+      "mode": "orbit",
+      "position": [
+        -218,
+        216,
+        -342
+      ],
+      "quaternion": [
+        0.069071,
+        0.930766,
+        0.24467,
+        -0.262757
+      ]
+    },
+    "visibleLabels": [],
+    "rendererInfo": {
+      "calls": 1,
+      "triangles": 1,
+      "points": 0,
+      "lines": 0
+    }
+  },
+  "measurements": [
+    {
+      "pass": "forward",
+      "condition": "before",
+      "level": "low",
+      "samples": [
+        6.2,
+        5.5,
+        17.1,
+        15.5,
+        7.8,
+        18,
+        12.9,
+        16,
+        9.6,
+        16.2,
+        8.6,
+        12.3
+      ],
+      "medianMs": 12.6,
+      "p95Ms": 18,
+      "state": {
+        "condition": "before",
+        "quality": "low",
+        "theme": "day",
+        "material": {
+          "name": "ground.kerbTop",
+          "type": "MeshBasicMaterial",
+          "lit": false,
+          "color": "#4972b2",
+          "roughness": null,
+          "metalness": null
+        },
+        "camera": {
+          "mode": "orbit",
+          "position": [
+            -218,
+            216,
+            -342
+          ],
+          "quaternion": [
+            0.069071,
+            0.930766,
+            0.24467,
+            -0.262757
+          ]
+        },
+        "visibleLabels": [],
+        "rendererInfo": {
+          "calls": 1,
+          "triangles": 1,
+          "points": 0,
+          "lines": 0
+        }
+      }
+    },
+    {
+      "pass": "forward",
+      "condition": "after",
+      "level": "low",
+      "samples": [
+        7.5,
+        7.2,
+        13,
+        12.6,
+        19,
+        8,
+        18.8,
+        16.1,
+        36,
+        16.7,
+        15.4,
+        17.2
+      ],
+      "medianMs": 15.75,
+      "p95Ms": 36,
+      "state": {
+        "condition": "after",
+        "quality": "low",
+        "theme": "day",
+        "material": {
+          "name": "ground.kerbTop",
+          "type": "MeshStandardMaterial",
+          "lit": true,
+          "color": "#5d769b",
+          "roughness": 0.893,
+          "metalness": 0.02
+        },
+        "camera": {
+          "mode": "orbit",
+          "position": [
+            -218,
+            216,
+            -342
+          ],
+          "quaternion": [
+            0.069071,
+            0.930766,
+            0.24467,
+            -0.262757
+          ]
+        },
+        "visibleLabels": [],
+        "rendererInfo": {
+          "calls": 1,
+          "triangles": 1,
+          "points": 0,
+          "lines": 0
+        }
+      }
+    },
+    {
+      "pass": "forward",
+      "condition": "before",
+      "level": "reduced",
+      "samples": [
+        16.2,
+        8.8,
+        14,
+        9.3,
+        10.7,
+        6.8,
+        7.2,
+        10.7,
+        14.2,
+        10,
+        13.1,
+        11.9
+      ],
+      "medianMs": 10.7,
+      "p95Ms": 16.2,
+      "state": {
+        "condition": "before",
+        "quality": "reduced",
+        "theme": "day",
+        "material": {
+          "name": "ground.kerbTop",
+          "type": "MeshBasicMaterial",
+          "lit": false,
+          "color": "#4972b2",
+          "roughness": null,
+          "metalness": null
+        },
+        "camera": {
+          "mode": "orbit",
+          "position": [
+            -218,
+            216,
+            -342
+          ],
+          "quaternion": [
+            0.069071,
+            0.930766,
+            0.24467,
+            -0.262757
+          ]
+        },
+        "visibleLabels": [],
+        "rendererInfo": {
+          "calls": 1,
+          "triangles": 1,
+          "points": 0,
+          "lines": 0
+        }
+      }
+    },
+    {
+      "pass": "forward",
+      "condition": "after",
+      "level": "reduced",
+      "samples": [
+        11.1,
+        4.7,
+        9.9,
+        20.2,
+        17,
+        10.6,
+        20.2,
+        7.5,
+        10.2,
+        17.2,
+        13.7,
+        9.6
+      ],
+      "medianMs": 10.85,
+      "p95Ms": 20.2,
+      "state": {
+        "condition": "after",
+        "quality": "reduced",
+        "theme": "day",
+        "material": {
+          "name": "ground.kerbTop",
+          "type": "MeshStandardMaterial",
+          "lit": true,
+          "color": "#5d769b",
+          "roughness": 0.893,
+          "metalness": 0.02
+        },
+        "camera": {
+          "mode": "orbit",
+          "position": [
+            -218,
+            216,
+            -342
+          ],
+          "quaternion": [
+            0.069071,
+            0.930766,
+            0.24467,
+            -0.262757
+          ]
+        },
+        "visibleLabels": [],
+        "rendererInfo": {
+          "calls": 1,
+          "triangles": 1,
+          "points": 0,
+          "lines": 0
+        }
+      }
+    },
+    {
+      "pass": "forward",
+      "condition": "before",
+      "level": "medium",
+      "samples": [
+        25.6,
+        19.6,
+        27.7,
+        14,
+        13.3,
+        22,
+        18.5,
+        13.5,
+        19.4,
+        19.2,
+        21.1,
+        23.4
+      ],
+      "medianMs": 19.5,
+      "p95Ms": 27.7,
+      "state": {
+        "condition": "before",
+        "quality": "medium",
+        "theme": "day",
+        "material": {
+          "name": "ground.kerbTop",
+          "type": "MeshBasicMaterial",
+          "lit": false,
+          "color": "#4972b2",
+          "roughness": null,
+          "metalness": null
+        },
+        "camera": {
+          "mode": "orbit",
+          "position": [
+            -218,
+            216,
+            -342
+          ],
+          "quaternion": [
+            0.069071,
+            0.930766,
+            0.24467,
+            -0.262757
+          ]
+        },
+        "visibleLabels": [],
+        "rendererInfo": {
+          "calls": 1,
+          "triangles": 1,
+          "points": 0,
+          "lines": 0
+        }
+      }
+    },
+    {
+      "pass": "forward",
+      "condition": "after",
+      "level": "medium",
+      "samples": [
+        21.6,
+        38.5,
+        29.2,
+        25.6,
+        32.6,
+        26.5,
+        85.4,
+        69.3,
+        19.4,
+        32.7,
+        19.7,
+        26.9
+      ],
+      "medianMs": 28.05,
+      "p95Ms": 85.4,
+      "state": {
+        "condition": "after",
+        "quality": "medium",
+        "theme": "day",
+        "material": {
+          "name": "ground.kerbTop",
+          "type": "MeshStandardMaterial",
+          "lit": true,
+          "color": "#5d769b",
+          "roughness": 0.893,
+          "metalness": 0.02
+        },
+        "camera": {
+          "mode": "orbit",
+          "position": [
+            -218,
+            216,
+            -342
+          ],
+          "quaternion": [
+            0.069071,
+            0.930766,
+            0.24467,
+            -0.262757
+          ]
+        },
+        "visibleLabels": [],
+        "rendererInfo": {
+          "calls": 1,
+          "triangles": 1,
+          "points": 0,
+          "lines": 0
+        }
+      }
+    },
+    {
+      "pass": "forward",
+      "condition": "before",
+      "level": "high",
+      "samples": [
+        20,
+        17.2,
+        18.6,
+        71,
+        31.6,
+        39.6,
+        95.3,
+        111.6,
+        76.3,
+        102.1,
+        50.7,
+        59.3
+      ],
+      "medianMs": 55,
+      "p95Ms": 111.6,
+      "state": {
+        "condition": "before",
+        "quality": "high",
+        "theme": "day",
+        "material": {
+          "name": "ground.kerbTop",
+          "type": "MeshBasicMaterial",
+          "lit": false,
+          "color": "#4972b2",
+          "roughness": null,
+          "metalness": null
+        },
+        "camera": {
+          "mode": "orbit",
+          "position": [
+            -218,
+            216,
+            -342
+          ],
+          "quaternion": [
+            0.069071,
+            0.930766,
+            0.24467,
+            -0.262757
+          ]
+        },
+        "visibleLabels": [],
+        "rendererInfo": {
+          "calls": 1,
+          "triangles": 1,
+          "points": 0,
+          "lines": 0
+        }
+      }
+    },
+    {
+      "pass": "forward",
+      "condition": "after",
+      "level": "high",
+      "samples": [
+        35.1,
+        76.3,
+        62.1,
+        66.7,
+        61.6,
+        68.7,
+        54.3,
+        47.6,
+        20.1,
+        16.2,
+        14.9,
+        46.4
+      ],
+      "medianMs": 50.95,
+      "p95Ms": 76.3,
+      "state": {
+        "condition": "after",
+        "quality": "high",
+        "theme": "day",
+        "material": {
+          "name": "ground.kerbTop",
+          "type": "MeshStandardMaterial",
+          "lit": true,
+          "color": "#5d769b",
+          "roughness": 0.893,
+          "metalness": 0.02
+        },
+        "camera": {
+          "mode": "orbit",
+          "position": [
+            -218,
+            216,
+            -342
+          ],
+          "quaternion": [
+            0.069071,
+            0.930766,
+            0.24467,
+            -0.262757
+          ]
+        },
+        "visibleLabels": [],
+        "rendererInfo": {
+          "calls": 1,
+          "triangles": 1,
+          "points": 0,
+          "lines": 0
+        }
+      }
+    },
+    {
+      "pass": "forward",
+      "condition": "before",
+      "level": "ultra",
+      "samples": [
+        22.1,
+        24.7,
+        24.4,
+        14.7,
+        54.6,
+        14.7,
+        57.1,
+        39.4,
+        95.1,
+        59.2,
+        35.1,
+        50.8
+      ],
+      "medianMs": 37.25,
+      "p95Ms": 95.1,
+      "state": {
+        "condition": "before",
+        "quality": "ultra",
+        "theme": "day",
+        "material": {
+          "name": "ground.kerbTop",
+          "type": "MeshBasicMaterial",
+          "lit": false,
+          "color": "#4972b2",
+          "roughness": null,
+          "metalness": null
+        },
+        "camera": {
+          "mode": "orbit",
+          "position": [
+            -218,
+            216,
+            -342
+          ],
+          "quaternion": [
+            0.069071,
+            0.930766,
+            0.24467,
+            -0.262757
+          ]
+        },
+        "visibleLabels": [],
+        "rendererInfo": {
+          "calls": 1,
+          "triangles": 1,
+          "points": 0,
+          "lines": 0
+        }
+      }
+    },
+    {
+      "pass": "forward",
+      "condition": "after",
+      "level": "ultra",
+      "samples": [
+        20.5,
+        21.2,
+        40.9,
+        36.4,
+        22.5,
+        15.6,
+        55,
+        31,
+        50.5,
+        18.3,
+        15.6,
+        14
+      ],
+      "medianMs": 21.85,
+      "p95Ms": 55,
+      "state": {
+        "condition": "after",
+        "quality": "ultra",
+        "theme": "day",
+        "material": {
+          "name": "ground.kerbTop",
+          "type": "MeshStandardMaterial",
+          "lit": true,
+          "color": "#5d769b",
+          "roughness": 0.893,
+          "metalness": 0.02
+        },
+        "camera": {
+          "mode": "orbit",
+          "position": [
+            -218,
+            216,
+            -342
+          ],
+          "quaternion": [
+            0.069071,
+            0.930766,
+            0.24467,
+            -0.262757
+          ]
+        },
+        "visibleLabels": [],
+        "rendererInfo": {
+          "calls": 1,
+          "triangles": 1,
+          "points": 0,
+          "lines": 0
+        }
+      }
+    },
+    {
+      "pass": "reverse",
+      "condition": "after",
+      "level": "low",
+      "samples": [
+        6.9,
+        15.3,
+        6.2,
+        6,
+        11.7,
+        6.6,
+        6.5,
+        10.4,
+        7.2,
+        19.5,
+        7.3,
+        14.9
+      ],
+      "medianMs": 7.25,
+      "p95Ms": 19.5,
+      "state": {
+        "condition": "after",
+        "quality": "low",
+        "theme": "day",
+        "material": {
+          "name": "ground.kerbTop",
+          "type": "MeshStandardMaterial",
+          "lit": true,
+          "color": "#5d769b",
+          "roughness": 0.893,
+          "metalness": 0.02
+        },
+        "camera": {
+          "mode": "orbit",
+          "position": [
+            -218,
+            216,
+            -342
+          ],
+          "quaternion": [
+            0.069071,
+            0.930766,
+            0.24467,
+            -0.262757
+          ]
+        },
+        "visibleLabels": [],
+        "rendererInfo": {
+          "calls": 1,
+          "triangles": 1,
+          "points": 0,
+          "lines": 0
+        }
+      }
+    },
+    {
+      "pass": "reverse",
+      "condition": "before",
+      "level": "low",
+      "samples": [
+        7.2,
+        8.6,
+        11.6,
+        25.6,
+        16.3,
+        33.1,
+        7.1,
+        12.2,
+        11.3,
+        5.9,
+        23.8,
+        14.3
+      ],
+      "medianMs": 11.9,
+      "p95Ms": 33.1,
+      "state": {
+        "condition": "before",
+        "quality": "low",
+        "theme": "day",
+        "material": {
+          "name": "ground.kerbTop",
+          "type": "MeshBasicMaterial",
+          "lit": false,
+          "color": "#4972b2",
+          "roughness": null,
+          "metalness": null
+        },
+        "camera": {
+          "mode": "orbit",
+          "position": [
+            -218,
+            216,
+            -342
+          ],
+          "quaternion": [
+            0.069071,
+            0.930766,
+            0.24467,
+            -0.262757
+          ]
+        },
+        "visibleLabels": [],
+        "rendererInfo": {
+          "calls": 1,
+          "triangles": 1,
+          "points": 0,
+          "lines": 0
+        }
+      }
+    },
+    {
+      "pass": "reverse",
+      "condition": "after",
+      "level": "reduced",
+      "samples": [
+        10.4,
+        16.1,
+        7.1,
+        22.1,
+        27.1,
+        8.3,
+        16.1,
+        18.9,
+        20.9,
+        6.3,
+        6.6,
+        10.2
+      ],
+      "medianMs": 13.25,
+      "p95Ms": 27.1,
+      "state": {
+        "condition": "after",
+        "quality": "reduced",
+        "theme": "day",
+        "material": {
+          "name": "ground.kerbTop",
+          "type": "MeshStandardMaterial",
+          "lit": true,
+          "color": "#5d769b",
+          "roughness": 0.893,
+          "metalness": 0.02
+        },
+        "camera": {
+          "mode": "orbit",
+          "position": [
+            -218,
+            216,
+            -342
+          ],
+          "quaternion": [
+            0.069071,
+            0.930766,
+            0.24467,
+            -0.262757
+          ]
+        },
+        "visibleLabels": [],
+        "rendererInfo": {
+          "calls": 1,
+          "triangles": 1,
+          "points": 0,
+          "lines": 0
+        }
+      }
+    },
+    {
+      "pass": "reverse",
+      "condition": "before",
+      "level": "reduced",
+      "samples": [
+        16,
+        6.8,
+        43,
+        14.1,
+        19.6,
+        12.7,
+        10.6,
+        9.7,
+        10.6,
+        6.5,
+        8.2,
+        6.6
+      ],
+      "medianMs": 10.6,
+      "p95Ms": 43,
+      "state": {
+        "condition": "before",
+        "quality": "reduced",
+        "theme": "day",
+        "material": {
+          "name": "ground.kerbTop",
+          "type": "MeshBasicMaterial",
+          "lit": false,
+          "color": "#4972b2",
+          "roughness": null,
+          "metalness": null
+        },
+        "camera": {
+          "mode": "orbit",
+          "position": [
+            -218,
+            216,
+            -342
+          ],
+          "quaternion": [
+            0.069071,
+            0.930766,
+            0.24467,
+            -0.262757
+          ]
+        },
+        "visibleLabels": [],
+        "rendererInfo": {
+          "calls": 1,
+          "triangles": 1,
+          "points": 0,
+          "lines": 0
+        }
+      }
+    },
+    {
+      "pass": "reverse",
+      "condition": "after",
+      "level": "medium",
+      "samples": [
+        15.7,
+        43.1,
+        24.9,
+        17,
+        22,
+        19.1,
+        29,
+        55.6,
+        40.2,
+        14,
+        15.4,
+        27.8
+      ],
+      "medianMs": 23.45,
+      "p95Ms": 55.6,
+      "state": {
+        "condition": "after",
+        "quality": "medium",
+        "theme": "day",
+        "material": {
+          "name": "ground.kerbTop",
+          "type": "MeshStandardMaterial",
+          "lit": true,
+          "color": "#5d769b",
+          "roughness": 0.893,
+          "metalness": 0.02
+        },
+        "camera": {
+          "mode": "orbit",
+          "position": [
+            -218,
+            216,
+            -342
+          ],
+          "quaternion": [
+            0.069071,
+            0.930766,
+            0.24467,
+            -0.262757
+          ]
+        },
+        "visibleLabels": [],
+        "rendererInfo": {
+          "calls": 1,
+          "triangles": 1,
+          "points": 0,
+          "lines": 0
+        }
+      }
+    },
+    {
+      "pass": "reverse",
+      "condition": "before",
+      "level": "medium",
+      "samples": [
+        19.7,
+        14.2,
+        52,
+        11.9,
+        11.4,
+        14.6,
+        22.9,
+        18.8,
+        35.4,
+        14.2,
+        12.7,
+        17.3
+      ],
+      "medianMs": 15.95,
+      "p95Ms": 52,
+      "state": {
+        "condition": "before",
+        "quality": "medium",
+        "theme": "day",
+        "material": {
+          "name": "ground.kerbTop",
+          "type": "MeshBasicMaterial",
+          "lit": false,
+          "color": "#4972b2",
+          "roughness": null,
+          "metalness": null
+        },
+        "camera": {
+          "mode": "orbit",
+          "position": [
+            -218,
+            216,
+            -342
+          ],
+          "quaternion": [
+            0.069071,
+            0.930766,
+            0.24467,
+            -0.262757
+          ]
+        },
+        "visibleLabels": [],
+        "rendererInfo": {
+          "calls": 1,
+          "triangles": 1,
+          "points": 0,
+          "lines": 0
+        }
+      }
+    },
+    {
+      "pass": "reverse",
+      "condition": "after",
+      "level": "high",
+      "samples": [
+        27.2,
+        38.3,
+        28.5,
+        16.8,
+        55.8,
+        54,
+        19.6,
+        14.7,
+        35.2,
+        35.8,
+        22.7,
+        16
+      ],
+      "medianMs": 27.85,
+      "p95Ms": 55.8,
+      "state": {
+        "condition": "after",
+        "quality": "high",
+        "theme": "day",
+        "material": {
+          "name": "ground.kerbTop",
+          "type": "MeshStandardMaterial",
+          "lit": true,
+          "color": "#5d769b",
+          "roughness": 0.893,
+          "metalness": 0.02
+        },
+        "camera": {
+          "mode": "orbit",
+          "position": [
+            -218,
+            216,
+            -342
+          ],
+          "quaternion": [
+            0.069071,
+            0.930766,
+            0.24467,
+            -0.262757
+          ]
+        },
+        "visibleLabels": [],
+        "rendererInfo": {
+          "calls": 1,
+          "triangles": 1,
+          "points": 0,
+          "lines": 0
+        }
+      }
+    },
+    {
+      "pass": "reverse",
+      "condition": "before",
+      "level": "high",
+      "samples": [
+        14.1,
+        47.2,
+        20.5,
+        29.1,
+        22.9,
+        24,
+        26.2,
+        15.6,
+        14.5,
+        33,
+        35.1,
+        16.3
+      ],
+      "medianMs": 23.45,
+      "p95Ms": 47.2,
+      "state": {
+        "condition": "before",
+        "quality": "high",
+        "theme": "day",
+        "material": {
+          "name": "ground.kerbTop",
+          "type": "MeshBasicMaterial",
+          "lit": false,
+          "color": "#4972b2",
+          "roughness": null,
+          "metalness": null
+        },
+        "camera": {
+          "mode": "orbit",
+          "position": [
+            -218,
+            216,
+            -342
+          ],
+          "quaternion": [
+            0.069071,
+            0.930766,
+            0.24467,
+            -0.262757
+          ]
+        },
+        "visibleLabels": [],
+        "rendererInfo": {
+          "calls": 1,
+          "triangles": 1,
+          "points": 0,
+          "lines": 0
+        }
+      }
+    },
+    {
+      "pass": "reverse",
+      "condition": "after",
+      "level": "ultra",
+      "samples": [
+        17.7,
+        30.8,
+        17.8,
+        52.9,
+        23.6,
+        38,
+        22.6,
+        34.3,
+        47.4,
+        13.8,
+        19.5,
+        14.6
+      ],
+      "medianMs": 23.1,
+      "p95Ms": 52.9,
+      "state": {
+        "condition": "after",
+        "quality": "ultra",
+        "theme": "day",
+        "material": {
+          "name": "ground.kerbTop",
+          "type": "MeshStandardMaterial",
+          "lit": true,
+          "color": "#5d769b",
+          "roughness": 0.893,
+          "metalness": 0.02
+        },
+        "camera": {
+          "mode": "orbit",
+          "position": [
+            -218,
+            216,
+            -342
+          ],
+          "quaternion": [
+            0.069071,
+            0.930766,
+            0.24467,
+            -0.262757
+          ]
+        },
+        "visibleLabels": [],
+        "rendererInfo": {
+          "calls": 1,
+          "triangles": 1,
+          "points": 0,
+          "lines": 0
+        }
+      }
+    },
+    {
+      "pass": "reverse",
+      "condition": "before",
+      "level": "ultra",
+      "samples": [
+        45.3,
+        37.1,
+        17.3,
+        34.5,
+        16.1,
+        28.3,
+        25.8,
+        14.3,
+        23.5,
+        15.7,
+        34.8,
+        18.5
+      ],
+      "medianMs": 24.65,
+      "p95Ms": 45.3,
+      "state": {
+        "condition": "before",
+        "quality": "ultra",
+        "theme": "day",
+        "material": {
+          "name": "ground.kerbTop",
+          "type": "MeshBasicMaterial",
+          "lit": false,
+          "color": "#4972b2",
+          "roughness": null,
+          "metalness": null
+        },
+        "camera": {
+          "mode": "orbit",
+          "position": [
+            -218,
+            216,
+            -342
+          ],
+          "quaternion": [
+            0.069071,
+            0.930766,
+            0.24467,
+            -0.262757
+          ]
+        },
+        "visibleLabels": [],
+        "rendererInfo": {
+          "calls": 1,
+          "triangles": 1,
+          "points": 0,
+          "lines": 0
+        }
+      }
+    }
+  ],
+  "summary": [
+    {
+      "level": "low",
+      "condition": "before",
+      "pairedMedianMs": 12.25,
+      "pairedP95Ms": 25.55
+    },
+    {
+      "level": "low",
+      "condition": "after",
+      "pairedMedianMs": 11.5,
+      "pairedP95Ms": 27.75
+    },
+    {
+      "level": "reduced",
+      "condition": "before",
+      "pairedMedianMs": 10.65,
+      "pairedP95Ms": 29.6
+    },
+    {
+      "level": "reduced",
+      "condition": "after",
+      "pairedMedianMs": 12.05,
+      "pairedP95Ms": 23.65
+    },
+    {
+      "level": "medium",
+      "condition": "before",
+      "pairedMedianMs": 17.73,
+      "pairedP95Ms": 39.85
+    },
+    {
+      "level": "medium",
+      "condition": "after",
+      "pairedMedianMs": 25.75,
+      "pairedP95Ms": 70.5
+    },
+    {
+      "level": "high",
+      "condition": "before",
+      "pairedMedianMs": 39.23,
+      "pairedP95Ms": 79.4
+    },
+    {
+      "level": "high",
+      "condition": "after",
+      "pairedMedianMs": 39.4,
+      "pairedP95Ms": 66.05
+    },
+    {
+      "level": "ultra",
+      "condition": "before",
+      "pairedMedianMs": 30.95,
+      "pairedP95Ms": 70.2
+    },
+    {
+      "level": "ultra",
+      "condition": "after",
+      "pairedMedianMs": 22.48,
+      "pairedP95Ms": 53.95
+    }
+  ]
+}
