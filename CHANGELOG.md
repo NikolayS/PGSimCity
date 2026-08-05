@@ -11,6 +11,148 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+## [0.39.5] - 2026-08-05
+
+### Fixed — a saved setting could load the city into a permanent stall
+
+Nik found this one, and he found it the way none of the instrumentation did: *"What
+helps is to press reset — after it TPS is not dying."*
+
+Knob preferences persist to `localStorage`. A saved set with the standbys
+disabled while `synchronous_standby_names` still named one is individually legal
+in every part and collectively a deadlock: on load the standbys disconnect,
+`synchronous_commit` waits for an acknowledgement that cannot arrive, and every
+backend lands in `commit_wait`. The city said so plainly — *"commits are waiting
+for a synchronous standby that is not there"* — and then offered no way out.
+
+Restore now reconciles the contradiction, keeps the disabled standby the reader
+chose, clears the impossible `synchronous_standby_names`, persists that, and says
+that local durability was selected. It does not silently rewrite a preference.
+Creating the same stall deliberately during a session still works, because it is a
+real PostgreSQL trap worth teaching. The registered remedy — enable the standby,
+name another, clear the setting, or use `synchronous_commit = local` — now reaches
+the toast, Diagnose and the inspector, and tapping it opens the exact control.
+
+Other persisted states that can stop the city were audited and left alone: split
+DCS, an isolated node with no promotable target, sustained writes under lock
+contention, and a disabled standby's slot filling `pg_wal`. Those are lessons.
+
+**Why three reproductions missed it:** every probe ran in a clean browser profile
+with empty storage. They were all testing a first-time visitor.
+
+### Fixed — the throughput gauge was lying
+
+Measured over 900 model seconds: the readout swung between 0.56 and 25.83 while
+actual commits, counted in independent ten-second windows, held steady between
+8.0 and 12.0. Checkpoints made no difference (9.79 against 9.82), nor did vacuum
+(9.86 against 9.64). The estimator, not the model, produced the alarm — and the
+HUD paints red below 40% of offered load, so a healthy city regularly announced
+itself as dead. It is now an explicit trailing window. The threshold is unchanged.
+
+### Fixed — the city loaded cold
+
+`reset()` warms the model for 420 quiet steps so "the city is never empty on
+load". Nothing called it on load. The buffer pool started empty, WAL was not
+flowing, and the checkpoint countdown sat at zero until the reader pressed a
+button they had no reason to press.
+
+### Fixed — the buffer pool had no water until you jumped
+
+Walking into the pool left the walker standing on the floor, dry, because the
+swim test asked whether the feet were above the bottom rather than whether there
+was water overhead. Jumping lifted them clear and swimming began abruptly.
+Standing on the bottom of a full pool is submerged; it now reads that way,
+entering by walking and by falling reach the same state, and no input is needed
+to change medium.
+
+### Changed — pooling is something you can see
+
+Switching between direct and `pool_mode = transaction` changed one glow value and
+nothing else. The central fact about a connection pooler — many client
+connections collapsing onto few server connections — existed only as a text
+readout while the geometry said nothing, and geometry teaches louder than text.
+
+Direct now shows sixteen 1:1 bypass links. Pooled modes show a hundred clients
+collapsing through a ratio funnel onto eight backend paths, and each mode states
+when it releases the server connection: on disconnect, on commit, on statement.
+That difference is temporal, so it is animated rather than coloured.
+
+PgBouncer also moved from `z=-276` to `z=-264`. Nik asked why it stood so close to
+the clients, and the honest answer is that there is no universal placement —
+PgBouncer's own FAQ and Azure's guidance both document application-host,
+database-side and centralized deployments. The city now depicts a centralized
+database-facing tier deliberately and discloses the alternatives.
+
+### Fixed — the city died after a minute, and had since v0.31.0
+
+Nik left the city running on a phone and reported it dead: nothing moving, the
+buffer pool still, TPS painted red at zero, P99 at 13,000 model ms.
+
+Throughput decayed over the first minute and flatlined. The scheduled base
+backup forced a WAL segment switch that advanced the LSN by up to 16 MiB, and
+that padding was excluded from the replication rate — so the standby caught up at
+roughly 480 KiB/s, fell 8.18 MiB behind, and under `synchronous_commit` every
+backend ended waiting on its acknowledgement. At model time 100, all sixteen
+backends sat in `commit_wait`. The city was not broken; it was waiting.
+
+It has behaved this way since `3c547a9` first shipped in **0.31.0**, nine minor
+releases ago. It needed someone to leave the city running and look.
+
+**The first fix was wrong in an instructive way.** It gave the segment-switch
+padding a privileged catch-up rate — and a reviewer staging real clusters found
+that the triggering event does not exist. The scheduled backup is sourced from
+the standby, and a standby cannot switch WAL: `pg_basebackup -X stream` from a
+standby moved the primary by **zero bytes** on 13.23, 17.9 and 18.3, and
+`pg_switch_wal()` there fails outright with *recovery is in progress*. The model
+was inventing a primary switch, and the fix tuned around the invention.
+
+The padding is not special either. With a standby stopped and eight switches
+forced, 134,217,728 LSN bytes produced 134,576,677 wire bytes — a ratio of
+1.0027. Zero padding is neither skipped nor compressed; it streams like every
+other byte. So the transport capacity is now one uniform per-link rate, owned by
+the claims registry and disclosed as a teaching rate — where previously the
+prose told readers the modelled link had *no* bandwidth while a hard-coded one
+decided whether commits stalled.
+
+The honest failure is still reachable: `synchronous_commit = remote_apply` with a
+slow standby still drives all sixteen backends into `commit_wait`. Only the
+accident was removed, not the lesson.
+
+### Fixed — the storage district was unreadable up close
+
+Measured rather than eyeballed: `ProcArray` at 4.47:1 against a 4.5 floor, and
+failures across relation paths, block rulers, `_fsm`/`_vm`, index names,
+`pg_toast`, directory names and spill-file captions.
+
+Labels now sit on a neutral matte overlay, ink at 10.25:1 or better and at least
+17.5 px projected, verified across 2,140 theme, tier and camera combinations.
+
+**And that fix was also wrong first.** Moving the mechanism's colour into a
+two-pixel rule put the meaning into a carrier that bloom never reaches and the
+no-bloom luminance floor never repaints — eight semantic classes fell below it,
+`SHARED MEMORY SEGMENT` at 0.054 and 1.82:1. The audit stayed green because it
+measured the neutral ink and never the colour. Colour is semantic in this city,
+so a carrier invisible at low quality carries nothing. The rule is now a half-em
+square routed through `theme.neon()`, and the audit covers 720 semantic
+combinations alongside the ink.
+
+### Added — PgBouncer statement pooling
+
+Hannu Krosing pointed out publicly that `statement` mode was missing: *"like
+transaction, but also enforces auto commit mode."* He was right — the control
+offered two of PgBouncer's three pooling modes, and nothing enumerated the set
+from an authoritative source, so the gap was invisible.
+
+Verified against a real PgBouncer 1.25.2 in front of PostgreSQL 18.3: statement
+mode releases the server connection after each query and rejects a transaction
+block with `FATAL 08P01: transaction blocks not allowed in statement pooling
+mode`. The city discloses that its ordinary simulated visits are one statement
+per transaction, so their queue timing matches transaction mode — the difference
+is stated rather than pretended.
+
+The mode set is now owned by the claims registry and the type derives from it, so
+a missing mode is a compile error rather than a reader's discovery.
+
 ### Fixed — the spines proved text, not wiring
 
 The claims spine gives every fact about PostgreSQL one owner, so no two surfaces
