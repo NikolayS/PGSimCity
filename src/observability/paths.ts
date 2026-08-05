@@ -19,7 +19,8 @@
 import { poolBytes, SHARED_BUFFERS_FULL_SAMPLE_MIB, SHARED_BUFFERS_MIN_MIB } from '../core/types'
 import type { Knobs, SimState } from '../core/types'
 import { configuredSynchronousStandby, worstConnectedStandbyLag } from '../core/replication'
-import { CLAIM_VALUES } from '../core/claims'
+import { renderAction, renderActions } from '../core/actions'
+import { CLAIM_VALUES, ordinaryConnectionCapacity } from '../core/claims'
 import { fmtBytes } from '../core/util'
 import type { Collector } from './collector'
 import type { Subsystem } from './catalog'
@@ -202,6 +203,14 @@ function gated(
  * -------------------------------------------------------------------------*/
 
 const share = (part: number, whole: number) => (whole > 0 ? part / whole : 0)
+
+function ordinaryCapacity(s: SimState): number {
+  return ordinaryConnectionCapacity(
+    s.maxConnections,
+    s.superuserReservedConnections,
+    s.reservedConnections,
+  )
+}
 
 /** The model's scaled relations make xmin trouble visible around 2–3% dead. */
 export const DIAGNOSTIC_BLOAT_RATIO = DIAGNOSTIC_GATES.deadTupleRatio.threshold
@@ -712,10 +721,11 @@ const STEPS: Step[] = [
       'wait_event_type and wait_event arrived in 9.6. On 9.5 and older, pg_stat_activity had a single boolean `waiting` column that told you a backend was stuck on a heavyweight lock and nothing else — which is why so much old advice assumes every wait is a lock.',
     branches: [
       {
-        label: 'Every connection slot is busy; new work is queueing outside PostgreSQL.',
+        label: 'Every ordinary connection slot is busy; new work is refused or queueing outside PostgreSQL.',
         next: 'v.saturation',
         ...gated('connectionSpareSlots', (s, c) =>
-          activityWaitCounts(s, c).total >= s.maxConnections - DIAGNOSTIC_GATES.connectionSpareSlots.threshold),
+          activityWaitCounts(s, c).total >= ordinaryCapacity(s)
+            - DIAGNOSTIC_GATES.connectionSpareSlots.threshold),
       },
       { label: 'Most of them are waiting on `Lock`.', next: 'lock.1', ...gated('lockWaitShare', (s, c) => share(activityWaitCounts(s, c).lock, activityWaitCounts(s, c).total) > DIAGNOSTIC_GATES.lockWaitShare.threshold) },
       { label: 'Most of them are waiting on `IO`.', next: 'io.1', ...gated('ioWaitShare', (s, c) => share(activityWaitCounts(s, c).io, activityWaitCounts(s, c).total) > DIAGNOSTIC_GATES.ioWaitShare.threshold) },
@@ -834,19 +844,36 @@ const STEPS: Step[] = [
   {
     id: 'bloat.autovacuum',
     kind: 'step',
-    title: 'Is routine autovacuum enabled?',
-    why: '`last_autovacuum` being null says that no pass has completed since statistics were reset; it does not say why. Read the setting before blaming the launcher.',
+    title: 'Is routine autovacuum enabled globally and for this relation?',
+    why: '`last_autovacuum` being null says that no pass has completed since statistics were reset; it does not say why. Read both the cluster setting and the relation storage parameters before blaming launcher capacity.',
     instrument: 'pg_settings',
-    projection: 'settings',
+    projection: 'autovacuum_settings',
     city: 'autovac.launcher',
     sql: `SELECT name, setting, unit, source
   FROM pg_settings
- WHERE name = 'autovacuum';`,
+ WHERE name = 'autovacuum';
+
+SELECT n.nspname, c.relname, c.relkind,
+       CASE c.relkind WHEN 'p' THEN 'partitioned table' ELSE 'storage relation' END AS relation_kind,
+       c.reloptions,
+       COALESCE((
+         SELECT option_value::boolean
+           FROM pg_options_to_table(c.reloptions)
+          WHERE option_name = 'autovacuum_enabled'
+       ), true) AS autovacuum_enabled,
+       s.n_dead_tup, s.last_autovacuum
+  FROM pg_class AS c
+  JOIN pg_namespace AS n ON n.oid = c.relnamespace
+  LEFT JOIN pg_stat_all_tables AS s ON s.relid = c.oid
+ WHERE c.relkind IN ('r', 'm', 'p')
+   AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+ ORDER BY s.n_dead_tup DESC NULLS LAST, n.nspname, c.relname;`,
     look:
-      '`last_autovacuum` and `autovacuum_count` are history. The `autovacuum` setting tells you whether routine workers may launch now. A null timestamp with the setting on can simply mean that no pass has completed yet — continue to the xmin horizon instead of diagnosing a disabled launcher.',
+      '`last_autovacuum` and `autovacuum_count` are history. The global setting tells you whether routine workers may launch; pg_class.reloptions can still exclude one relation with autovacuum_enabled=false. In a partitioned layout inspect the storage-owning children, not only the partitioned parent. A null timestamp with both levels enabled can simply mean that no pass has completed yet — continue to the xmin horizon.',
     branches: [
-      { label: '`autovacuum` is on; find what is preventing cleanup.', source: 'settings.rows', next: 'bloat.2', test: (s) => s.knobs.autovacuum },
-      { label: '`autovacuum` is off.', source: 'settings.rows', next: 'v.av_off', test: (s) => !s.knobs.autovacuum },
+      { label: '`autovacuum` is on globally, but an affected relation opts out.', source: 'autovacuum.settings', next: 'v.av_relation_off', test: (s) => s.knobs.autovacuum && s.tables.some((table) => !table.autovacuumEnabled && tableDeadRatio(table) >= DIAGNOSTIC_BLOAT_RATIO) },
+      { label: '`autovacuum` is on globally and for the affected relations; find what is preventing cleanup.', source: 'autovacuum.settings', next: 'bloat.2', test: (s) => s.knobs.autovacuum && s.tables.every((table) => table.autovacuumEnabled || tableDeadRatio(table) < DIAGNOSTIC_BLOAT_RATIO) },
+      { label: '`autovacuum` is off.', source: 'autovacuum.settings', next: 'v.av_off', test: (s) => !s.knobs.autovacuum },
     ],
   },
   {
@@ -999,7 +1026,7 @@ SELECT * FROM pg_buffercache_usage_counts();`,
     branches: [
       {
         label: 'Received and flushed are fine; only replay is sliding.',
-        next: 'v.replay',
+        next: 'replica.replay-state',
         ...gated('replayStageGapBytes', (s) => replicationRows(s).some(
           (standby) => standby.flushedLsn - standby.appliedLsn > DIAGNOSTIC_GATES.replayStageGapBytes.threshold,
         )),
@@ -1023,6 +1050,50 @@ SELECT * FROM pg_buffercache_usage_counts();`,
             && s.wal.writeLsn - standby.appliedLsn <= DIAGNOSTIC_GATES.currentPositionGapBytes.threshold
             && standby.flushedLsn - standby.appliedLsn <= DIAGNOSTIC_GATES.replayStageGapBytes.threshold)
         }),
+      },
+    ],
+  },
+  {
+    id: 'replica.replay-state',
+    kind: 'step',
+    title: 'Is recovery paused, stopped, or actually short of replay capacity?',
+    why: 'A paused startup process can keep receiving and flushing WAL while replay_lsn does not move. That is the same primary-side LSN shape as replay that cannot keep up, but it has a different first action.',
+    instrument: 'pg_is_wal_replay_paused',
+    projection: 'replay_state',
+    city: 'startup.proc',
+    sql: `SELECT pg_is_in_recovery(),
+       CASE WHEN pg_is_in_recovery()
+            THEN pg_is_wal_replay_paused()
+       END AS replay_paused;
+
+SELECT pid, state, wait_event_type, wait_event
+  FROM pg_stat_activity
+ WHERE backend_type = 'startup';
+
+SELECT status, receive_start_lsn, written_lsn, flushed_lsn,
+       latest_end_lsn, latest_end_time
+  FROM pg_stat_wal_receiver;`,
+    look:
+      'Run these checks on the affected standby, then read its PostgreSQL log. pg_is_wal_replay_paused() distinguishes an intentional pause; the startup-process row and wait event, walreceiver status, and standby log distinguish stopped recovery, receiver failure, conflicts, missing WAL, and replay work. Only an unpaused, running path warrants a replay-capacity verdict.',
+    note:
+      'PGSimCity can represent the paused flag and branch on it, but it does not model recovery conflicts, startup-process wait events, receiver failure, missing WAL, or standby server-log records.',
+    branches: [
+      {
+        label: 'Recovery is paused on a standby whose receive-to-replay gap is open.',
+        source: 'replication.standbys',
+        next: 'v.replay_paused',
+        test: (s) => replicationRows(s).some((standby) =>
+          standby.replayPaused
+          && standby.flushedLsn - standby.appliedLsn > DIAGNOSTIC_GATES.replayStageGapBytes.threshold),
+      },
+      {
+        label: 'Recovery is not paused; continue only after checking the startup process, walreceiver, and standby log.',
+        source: 'replication.standbys',
+        next: 'v.replay',
+        test: (s) => replicationRows(s).some((standby) =>
+          !standby.replayPaused
+          && standby.startupProcess !== 'stopped'
+          && standby.flushedLsn - standby.appliedLsn > DIAGNOSTIC_GATES.replayStageGapBytes.threshold),
       },
     ],
   },
@@ -1346,6 +1417,46 @@ const VERDICTS: Verdict[] = [
     ],
   },
   {
+    id: 'v.av_relation_off',
+    kind: 'verdict',
+    title: 'The affected relation opted out of routine autovacuum.',
+    because:
+      'Global autovacuum is on, but pg_class.reloptions contains autovacuum_enabled=false for a relation whose dead-tuple pressure is above the model alert boundary.',
+    mechanism:
+      'The launcher may be healthy and worker slots may be free, but routine autovacuum does not select a relation that explicitly disables it. Threshold and worker-capacity changes leave that exclusion in place; partitioned layouts require checking each storage-owning child.',
+    evidence: (s) => s.tables
+      .filter((table) => !table.autovacuumEnabled)
+      .map((table) => ({
+        label: table.def.name,
+        value: `autovacuum_enabled=false · ${(tableDeadRatio(table) * 100).toFixed(0)}% dead`,
+        tone: 'crit' as const,
+      })),
+    fix: renderAction('enableRelationAutovacuum'),
+    knobs: [KB.autovacuum, KB.autovacuumScaleFactor],
+    confirm: {
+      projection: 'tables',
+      instrument: 'pg_stat_all_tables',
+      sql: `SELECT n.nspname, c.relname, c.reloptions,
+       s.n_dead_tup, s.last_autovacuum, s.autovacuum_count
+  FROM pg_class AS c
+  JOIN pg_namespace AS n ON n.oid = c.relnamespace
+  LEFT JOIN pg_stat_all_tables AS s ON s.relid = c.oid
+ WHERE c.relkind IN ('r', 'm', 'p')
+ ORDER BY s.n_dead_tup DESC NULLS LAST;`,
+    },
+    resolved: (s) => {
+      const disabled = s.tables.filter((table) => !table.autovacuumEnabled)
+      return {
+        ok: disabled.length === 0,
+        reading: disabled.length === 0
+          ? 'all modeled relations are eligible for routine autovacuum'
+          : `${disabled.map((table) => table.def.name).join(', ')} still opt out with autovacuum_enabled=false`,
+      }
+    },
+    city: 'autovac.launcher',
+    reading: [DOC('sql-altertable.html', 'ALTER TABLE storage parameters')],
+  },
+  {
     id: 'v.av_tuning',
     kind: 'verdict',
     title: 'Vacuum is working — it is just losing the race.',
@@ -1358,8 +1469,7 @@ const VERDICTS: Verdict[] = [
       { label: 'worst table', value: `${[...s.tables].sort((a, b) => b.bloat - a.bloat)[0].def.name} · ${([...s.tables].sort((a, b) => b.bloat - a.bloat)[0].bloat * 100).toFixed(0)}% dead`, tone: 'warn' },
       { label: 'workers busy', value: `${s.autovac.workers.filter((w) => w.active).length} of 3` },
     ],
-    fix:
-      'Lower autovacuum_vacuum_scale_factor per table on your big hot relations — 0.01 or 0.02 is normal — and raise autovacuum_max_workers and the cost limits so a pass finishes before the next one is due. Vacuum that runs often is cheap. Vacuum that runs rarely is an outage.',
+    fix: renderAction('tuneAutovacuum'),
     knobs: [KB.autovacuumScaleFactor, KB.autovacuum],
     confirm: {
       projection: 'tables',
@@ -1505,7 +1615,7 @@ const VERDICTS: Verdict[] = [
       { label: 'waiters', value: String(s.locks.length), tone: 'crit' },
       { label: 'oldest wait', value: `${Math.max(0, ...s.locks.map((l) => l.ageSec)).toFixed(0)} ${CLAIM_VALUES.modelDuration.shortUnit}`, tone: 'crit' },
       { label: 'waited mode', value: [...new Set(s.locks.map((lock) => lock.mode))].join(', ') || '—', tone: 'crit' },
-      { label: 'connections in use', value: `${s.stats.activeBackends} of ${s.maxConnections}` },
+      { label: 'ordinary connections in use', value: `${s.stats.activeBackends} of ${ordinaryCapacity(s)}` },
     ],
     fix:
       'End the holder’s transaction, not the waiters’ queries. Ask the client to commit or roll back; if the session is abandoned, verify the PID, owner and abort consequences before pg_terminate_backend(). pg_cancel_backend() only cancels a current query and cannot clear an idle-in-transaction session. Only when waited_mode is AccessExclusiveLock and the waiter is DDL should SET lock_timeout be the specific prevention advice.',
@@ -1545,11 +1655,49 @@ const VERDICTS: Verdict[] = [
     reading: [DOC('explicit-locking.html', 'Explicit Locking')],
   },
   {
+    id: 'v.replay_paused',
+    kind: 'verdict',
+    title: 'Recovery is paused; this is not a replay-capacity verdict.',
+    because:
+      'The affected standby reports pg_is_wal_replay_paused() = true while receive and flush remain ahead of replay. Reducing primary WAL does not make a paused startup process apply what it already has.',
+    mechanism:
+      'pg_wal_replay_pause() stops replay without requiring the walreceiver to stop receiving or flushing. The resulting flush-to-replay gap is therefore indistinguishable from slow apply when viewed only through the primary pg_stat_replication row.',
+    evidence: (s) => s.replication.standbys
+      .filter((standby) => standby.enabled && standby.connected && standby.replayPaused)
+      .map((standby) => ({
+        label: standby.applicationName,
+        value: `paused · flush − replay ${fmtBytes(standby.flushedLsn - standby.appliedLsn)}`,
+        tone: 'crit' as const,
+      })),
+    fix: renderAction('resumePausedRecovery'),
+    knobs: [],
+    confirm: {
+      projection: 'replication',
+      instrument: 'pg_is_wal_replay_paused',
+      sql: `SELECT pg_is_in_recovery(),
+       CASE WHEN pg_is_in_recovery()
+            THEN pg_is_wal_replay_paused()
+       END AS replay_paused,
+       pg_last_wal_receive_lsn(), pg_last_wal_replay_lsn();`,
+    },
+    resolved: (s) => {
+      const paused = replicationRows(s).filter((standby) => standby.replayPaused)
+      return {
+        ok: paused.length === 0,
+        reading: paused.length === 0
+          ? 'no connected modeled standby is paused'
+          : `${paused.map((standby) => standby.applicationName).join(', ')} still paused`,
+      }
+    },
+    city: 'startup.proc',
+    reading: [DOC('functions-admin.html#FUNCTIONS-RECOVERY-CONTROL', 'Recovery Control Functions')],
+  },
+  {
     id: 'v.replay',
     kind: 'verdict',
-    title: 'A standby is receiving fine. It cannot replay fast enough.',
+    title: 'Recovery is unpaused and running; now investigate replay capacity.',
     because:
-      'sent_lsn, write_lsn and flush_lsn are all tracking the primary — the network is fine and the standby\'s disk is fine. Only replay_lsn is sliding backwards.',
+      'After excluding paused recovery and checking the startup process, walreceiver and standby log, sent_lsn, write_lsn and flush_lsn track the primary while replay_lsn falls behind. The LSN shape localises the investigation to apply; it does not by itself prove the capacity root cause.',
     mechanism:
       'Core PostgreSQL 18 uses one startup process for ordered WAL replay; recovery prefetch improves I/O but is not general parallel redo. Lag grows while sustained generation exceeds replay capacity, and the standby can catch up while the primary keeps writing whenever replay capacity exceeds the incoming rate. The city models that as one bounded applied-LSN rate per standby. A PostgreSQL read there would reflect replay_lsn, but the city has no replica query or row result.',
     evidence: (s) => {
@@ -1562,8 +1710,7 @@ const VERDICTS: Verdict[] = [
         { label: 'primary WAL rate', value: `${fmtBytes(s.wal.bytesPerSec)}/s` },
       ]
     },
-    fix:
-      'Reduce the WAL the primary produces, or accept the lag and route reads that need currency to the primary. Track pg_current_wal_lsn() minus replay_lsn in bytes and alert on it. And set max_slot_wal_keep_size, because a slot for a standby that falls far enough behind will otherwise consume the primary\'s whole volume.',
+    fix: renderActions('restoreReplayCapacity', 'limitSlotWalRetention'),
     knobs: [KB.standbyASlowApply, KB.standbyBSlowApply, KB.standbyANetworkLag, KB.standbyBNetworkLag],
     confirm: {
       projection: 'replication',
@@ -1655,21 +1802,21 @@ const VERDICTS: Verdict[] = [
   {
     id: 'v.saturation',
     kind: 'verdict',
-    title: 'Every connection slot is occupied, and new work is queueing.',
+    title: 'Every ordinary connection slot is occupied, and new work is refused or queueing.',
     because:
-      'All available server connection slots are in use and throughput is far below the offered load. The wait rows still matter, but they do not make another server slot available. Direct work queues outside PostgreSQL and is absent from the rolling latency. With PgBouncer transaction pooling, the city instead includes an estimated pool-slot queue in the end-to-end decomposition.',
+      'The client-backend count has reached ordinary admission capacity after protected reservations, even if max_connections itself has not been reached. The wait rows still matter, but they do not make another ordinary slot available. Direct work is refused or queues outside PostgreSQL and is absent from the rolling latency.',
     mechanism:
       `The city models sixteen backend slots, a fixed fork cadence, queued demand and an uncalibrated pressure curve driven only by active PostgreSQL backends, with a teaching-scale knee at ${CLAIM_VALUES.connectionPooler.concurrencyTarget}. Pooling does not change an assigned statement's plan or executor cost; it reuses connections and can keep PostgreSQL below that pressure curve. ${CLAIM_VALUES.connectionPooler.coverageDisclosure}`,
     evidence: (s) => [
       { label: 'application clients', value: `${s.pooler.acceptedClients} admitted · ${s.pooler.refusedClients} refused`, tone: s.pooler.refusedClients > 0 ? 'crit' : 'warn' },
-      { label: 'PostgreSQL backends', value: `${s.stats.activeBackends} of ${s.maxConnections}`, tone: 'crit' },
+      { label: 'PostgreSQL backends', value: `${s.stats.activeBackends} of ${ordinaryCapacity(s)}`, tone: 'crit' },
+      { label: 'configured / protected', value: `${s.maxConnections} max · ${s.superuserReservedConnections + s.reservedConnections} reserved` },
       { label: 'pool mode / waiting', value: `${s.pooler.mode} · ${s.pooler.waitingClients} clients` },
       { label: 'pool wait timeouts', value: String(Math.round(s.stats.poolerQueryWaitTimeouts)), tone: s.stats.poolerQueryWaitTimeouts > 0 ? 'crit' : undefined },
       { label: 'achieved tps', value: s.stats.tps.toFixed(0) },
       { label: 'offered tps', value: String(Math.round(s.knobs.tps)), tone: 'warn' },
     ],
-    fix:
-      `Put a measured concurrency limit in front of PostgreSQL. In PgBouncer, pool_mode chooses when a server connection returns to the pool, default_pool_size targets server connections per user/database pair, max_client_conn caps client sockets for the process, and query_wait_timeout disconnects an expired waiter. Transaction pooling multiplexes most aggressively but costs session state: ${CLAIM_VALUES.connectionPooler.transactionTradeoff} Compare PgBouncer SHOW POOLS cl_active, cl_waiting, sv_active and sv_idle with pg_stat_activity's PostgreSQL backend rows. pgcat and Odyssey are alternatives, not modeled implementations.`,
+    fix: renderAction('restoreConnectionCapacity'),
     knobs: [KB.clientConnections, KB.poolMode, KB.defaultPoolSize, KB.maxClientConn, KB.queryWaitTimeout, KB.tps],
     confirm: {
       projection: 'activity_agg',
@@ -1681,8 +1828,9 @@ const VERDICTS: Verdict[] = [
  ORDER BY 4 DESC;`,
     },
     resolved: (s) => ({
-      ok: s.stats.activeBackends < s.maxConnections - DIAGNOSTIC_GATES.connectionSpareSlots.threshold,
-      reading: `${s.pooler.acceptedClients} clients admitted by ${s.pooler.mode}; pg_stat_activity sees ${s.stats.activeBackends} of ${s.maxConnections} PostgreSQL backends, achieving ${s.stats.tps.toFixed(0)} tps against ${Math.round(s.knobs.tps)} offered`,
+      ok: s.stats.activeBackends < ordinaryCapacity(s)
+        - DIAGNOSTIC_GATES.connectionSpareSlots.threshold,
+      reading: `${s.pooler.acceptedClients} clients admitted by ${s.pooler.mode}; pg_stat_activity sees ${s.stats.activeBackends} of ${ordinaryCapacity(s)} ordinary PostgreSQL slots (${s.maxConnections} configured, ${s.superuserReservedConnections + s.reservedConnections} protected), achieving ${s.stats.tps.toFixed(0)} tps against ${Math.round(s.knobs.tps)} offered`,
     }),
     city: 'client.pooler',
     reading: [

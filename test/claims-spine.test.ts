@@ -948,11 +948,17 @@ describe('claims and conventions spine', () => {
     standby.appliedLsn = primary - CLAIM_VALUES.diagnoseBranchGates.replayStageGapBytes.threshold - 1
     extra.enabled = false
     const replica = ALL_STEPS.find((step) => step.id === 'replica.1')
-    const replay = replica?.branches.find((branch) => branch.next === 'v.replay')
+    const replay = replica?.branches.find((branch) => branch.next === 'replica.replay-state')
+    const replayState = ALL_STEPS.find((step) => step.id === 'replica.replay-state')
+    const capacity = replayState?.branches.find((branch) => branch.next === 'v.replay')
     const healthy = replica?.branches.find((branch) => branch.next === 'v.rep_ok')
     expect(
       replay?.test(replicaSim.state, replicaCollector),
-      'diagnoseBranchGates: Diagnose:replica.1 → v.replay rejects a replay-stage gap above its registered evidence boundary',
+      'diagnoseBranchGates: Diagnose:replica.1 → replica.replay-state rejects a replay-stage gap above its registered evidence boundary',
+    ).toBe(true)
+    expect(
+      capacity?.test(replicaSim.state, replicaCollector),
+      'action spine: Diagnose:replica.replay-state → v.replay rejects an unpaused running startup process',
     ).toBe(true)
     expect(
       healthy?.test(replicaSim.state, replicaCollector),

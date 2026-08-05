@@ -16,6 +16,7 @@
  *   replica.standby, lock.manager, proc.array, clog.slru
  * ==========================================================================*/
 
+import { renderAction, renderActions } from '../core/actions'
 import { CLAIM_VALUES } from '../core/claims'
 import type { ScenarioDef } from '../core/types'
 
@@ -182,7 +183,7 @@ export const SCENARIOS: ScenarioDef[] = [
       [70, 'Autovacuum comes back on', 'The scenario turns autovacuum on now. The launcher wakes and dispatches a worker down the violet road — and it is the worker, not the launcher, that reads the dead-row statistics and compares them with a threshold based on the separate pg_class.reltuples planner estimate. PostgreSQL 18 caps that threshold at 100 million.'],
       [88, 'What the modeled worker does', `${CLAIM_VALUES.vacuumReclaim.rule} The city runs heap scan, one aggregate pass per declared index, heap cleanup and a fixed truncate phase, charging representative page I/O. Its truncation uses a tail-density heuristic; it does not model that lock attempt or another session denying it. In this busy relation the heuristic normally leaves the file size unchanged.`],
       [112, 'Space is reused, not returned', `${CLAIM_VALUES.vacuumReclaim.rule} The city represents reclaimed space only as aggregate spare capacity that can delay relation extension; it has no per-page FSM entries or placement path. What you want in either case is for bloat to plateau instead of climbing.`],
-      [126, 'Tune it up, not down', 'The defaults are conservative for 2005 hardware. Lower autovacuum_vacuum_scale_factor on big tables, raise autovacuum_max_workers and the cost limits. Vacuum that runs often is cheap; vacuum that runs rarely is an outage.'],
+      [126, 'Qualify the action before tuning', renderActions('enableRelationAutovacuum', 'tuneAutovacuum')],
     ],
   },
 
@@ -277,8 +278,8 @@ export const SCENARIOS: ScenarioDef[] = [
       [32, 'Replay is single-threaded', 'Core PostgreSQL 18 uses one startup process to apply the ordered WAL stream; recovery prefetch can improve I/O but is not general parallel redo. Replay falls behind while sustained WAL generation exceeds replay capacity, and catches up whenever replay capacity becomes greater than the incoming rate.'],
       [50, 'Watch the disagreement open', 'standby_b received and flushed positions keep moving while applied falls behind. standby_a stays current on the same workload, proving the lag belongs to one startup process rather than to shared global state.'],
       [68, 'What replay means', 'On PostgreSQL, a standby read can see only changes through that node’s replayed LSN. The city tracks this visibility frontier but does not execute replica queries or store replica rows, so the two LSN positions—not query results—are the evidence here.'],
-      [86, 'Slots hold receipt, not replay', 'standby_b’s physical slot advances with durable receive, so slow apply grows its own pg_wal. Disconnect a standby instead and its slot restart_lsn stops advancing on the primary; without a configured retention limit or idle-slot timeout, primary pg_wal can then grow until the volume fills.'],
-      [104, 'Monitor replay, alert on bytes', 'Track pg_current_wal_lsn() minus replay_lsn for current byte backlog. The replay_lag interval estimates recent commit-delay impact, not current staleness or catch-up time, and can become NULL when idle. Set max_slot_wal_keep_size so a dead slot cannot consume the whole volume.'],
+      [86, 'Exclude paused recovery first', `standby_b’s physical slot advances with durable receive, so slow apply grows its own pg_wal. The same receive/flush/replay shape can also come from a deliberately paused startup process.\n\n${renderAction('resumePausedRecovery')}`],
+      [104, 'Act only after the path is qualified', renderActions('restoreReplayCapacity', 'limitSlotWalRetention')],
     ],
   },
 
@@ -404,7 +405,7 @@ export const SCENARIOS: ScenarioDef[] = [
       [0, 'Sixteen direct connection slots', 'All sixteen modeled clients are accepted and PostgreSQL can run one operating-system process for each; startup and teardown make the instantaneous count fluctuate. They offer the full 3,200 tps workload, churn connections and cross the city’s disclosed, uncalibrated concurrency-pressure curve. No rejected client contributes PostgreSQL contention.'],
       [14, 'A process is the expensive side', 'Every postmaster pulse starts a modeled backend. PostgreSQL also pays private memory, authentication, catalog warming and scheduler work; the city does not charge ProcArray scanning or any of those individual mechanisms. It charges only a synthetic active-backend pressure curve, never a fabricated PostgreSQL wait event.'],
       [28, 'Read the direct baseline', 'Open the Latency vital. Pool-slot queue is zero because there is no pooler; the model’s backend pressure remains in Active / unclassified. For direct connections, the rolling measurement excludes this client-side queue at the application, then includes the explicit transaction-pool queue after the switch. All sixteen clients are admitted here; any refused client would be a failure, not a fast response.'],
-      [44, 'Now reuse connections and bound concurrency', 'PgBouncer transaction pooling is now on. max_client_conn admits one thousand client sockets, while default_pool_size targets eight persistent PostgreSQL server connections. PgBouncer does not change an assigned statement’s plan or executor cost. Reuse removes modeled connection churn, and fewer active backends avoid part of the city’s disclosed concurrency-pressure curve.'],
+      [44, 'Now reuse connections and bound concurrency', `PgBouncer transaction pooling is now on. max_client_conn admits one thousand client sockets, while default_pool_size targets eight persistent PostgreSQL server connections. PgBouncer does not change an assigned statement’s plan or executor cost. Reuse removes modeled connection churn, and fewer active backends avoid part of the city’s disclosed concurrency-pressure curve.\n\n${renderAction('restoreConnectionCapacity')}`],
       [60, 'The wait moved to a pool slot', 'Excess transactions now wait before PostgreSQL and the Latency vital attributes their FIFO age to Pool-slot queue. pg_stat_activity sees only PostgreSQL backends; PgBouncer SHOW POOLS exposes the larger client side as cl_active and cl_waiting, beside sv_active and sv_idle. cl_active includes idle clients with no query waiting. query_wait_timeout defaults to 120 seconds, disconnects an expired waiter, and zero queues indefinitely.'],
       [76, 'Transaction pooling has a price', 'pool_mode=session keeps one server connection for the whole client session and preserves PostgreSQL features, but multiplexes less. pool_mode=transaction releases it after each transaction: no arbitrary SET/RESET state or session advisory lock can span transactions; SQL PREPARE is incompatible, protocol prepared statements need PgBouncer max_prepared_statements tracking, and LISTEN subscriptions do not work even though NOTIFY can be sent. pgcat and Odyssey are alternatives; neither is modeled here.'],
     ],

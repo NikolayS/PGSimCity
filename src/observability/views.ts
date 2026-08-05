@@ -72,6 +72,7 @@ export type ProjectionSource =
   | 'vacuum.progress_rows'
   | 'locks.rows'
   | 'settings.rows'
+  | 'autovacuum.settings'
   | 'slots.rows'
 
 const NULLC: Cell = { v: 'null', tone: 'dim' }
@@ -918,6 +919,46 @@ const replication: ProjectionFn = (s) => {
   }
 }
 
+const replayState: ProjectionFn = (s) => {
+  const standbys = replicationRows(s)
+  return {
+    cols: [
+      { key: 'standby', label: 'affected standby' },
+      { key: 'replay_paused', label: 'pg_is_wal_replay_paused()' },
+      { key: 'startup_process', label: 'startup process' },
+      { key: 'walreceiver', label: 'pg_stat_wal_receiver' },
+      { key: 'flush_lsn', label: 'flush_lsn' },
+      { key: 'replay_lsn', label: 'replay_lsn' },
+    ],
+    rows: standbys.map<Row>((standby) => ({
+      key: standby.nodeId,
+      tone: standby.replayPaused ? 'crit' : '',
+      cells: {
+        standby: standby.applicationName,
+        replay_paused: {
+          v: standby.replayPaused ? 'true' : 'false',
+          tone: standby.replayPaused ? 'crit' : 'ok',
+        },
+        startup_process: {
+          v: standby.startupProcess,
+          tone: standby.startupProcess === 'stopped' ? 'crit' : 'ok',
+        },
+        walreceiver: {
+          v: standby.walReceiver,
+          tone: standby.walReceiver === 'stopped' ? 'crit' : 'ok',
+        },
+        flush_lsn: fmtLsn(standby.flushedLsn),
+        replay_lsn: fmtLsn(standby.appliedLsn),
+      },
+    })),
+    empty: standbys.length === 0
+      ? 'No connected standby can be checked from this modeled primary.'
+      : undefined,
+    caption:
+      'These rows combine the three affected-standby checks printed above. PGSimCity models the paused flag and process lifecycle only; it has no standby log or startup-process wait event.',
+  }
+}
+
 /* ---------------------------------------------------------------------------
  * pg_stat_progress_vacuum
  * -------------------------------------------------------------------------*/
@@ -1070,6 +1111,8 @@ const settings: ProjectionFn = (s) => {
       row('shared_buffers', String(poolPages(k)), '8kB', postgresGucContext('shared_buffers')),
       row('wal_buffers', String(s.wal.bufferCapacity / PG_PAGE_BYTES), '8kB', postgresGucContext('wal_buffers')),
       row('max_connections', String(s.maxConnections), '', postgresGucContext('max_connections')),
+      row('superuser_reserved_connections', String(s.superuserReservedConnections), '', postgresGucContext('superuser_reserved_connections')),
+      row('reserved_connections', String(s.reservedConnections), '', postgresGucContext('reserved_connections')),
       row('checkpoint_timeout', String(Math.round(k.checkpointTimeout)), 's', postgresGucContext('checkpoint_timeout')),
       row('checkpoint_completion_target', k.checkpointCompletionTarget.toFixed(2), '', postgresGucContext('checkpoint_completion_target')),
       row('max_wal_size', String(Math.round(k.maxWalSize)), 'MB', postgresGucContext('max_wal_size')),
@@ -1087,6 +1130,53 @@ const settings: ProjectionFn = (s) => {
       'City controls take effect immediately only in the model. On a real server, user and superuser settings can take effect with SET, sighup settings need a reload, and postmaster settings need a restart and maintenance window. PostgreSQL 18 changed autovacuum_max_workers to sighup; PostgreSQL 17 and earlier report postmaster. track_io_timing is off by default, so blk_read_time, blk_write_time and every *_time column in pg_stat_io usually read zero: you can count I/Os, but cannot say whether they hurt.',
   }
 }
+
+const autovacuumSettings: ProjectionFn = (s) => ({
+  cols: [
+    { key: 'scope', label: 'scope' },
+    { key: 'relation', label: 'relation' },
+    { key: 'autovacuum_enabled', label: 'autovacuum_enabled' },
+    { key: 'reloptions', label: 'reloptions' },
+    { key: 'n_dead_tup', label: 'n_dead_tup', num: true },
+    { key: 'last_autovacuum', label: 'last_autovacuum' },
+  ],
+  rows: [
+    {
+      key: 'global',
+      cells: {
+        scope: 'pg_settings',
+        relation: 'all relations unless overridden',
+        autovacuum_enabled: { v: s.knobs.autovacuum ? 'on' : 'off', tone: s.knobs.autovacuum ? 'ok' : 'crit' },
+        reloptions: NULLC,
+        n_dead_tup: NULLC,
+        last_autovacuum: NULLC,
+      },
+    },
+    ...[...s.tables]
+      .sort((a, b) => b.deadTuples - a.deadTuples)
+      .map<Row>((table) => ({
+        key: table.def.id,
+        tone: table.autovacuumEnabled ? '' : 'crit',
+        cells: {
+          scope: 'pg_class.reloptions',
+          relation: table.def.name,
+          autovacuum_enabled: {
+            v: table.autovacuumEnabled ? 'true (default)' : 'false',
+            tone: table.autovacuumEnabled ? 'ok' : 'crit',
+          },
+          reloptions: table.autovacuumEnabled
+            ? NULLC
+            : '{autovacuum_enabled=false}',
+          n_dead_tup: n(table.deadTuples),
+          last_autovacuum: table.lastVacuum > 0
+            ? `${(s.t - table.lastVacuum).toFixed(0)} model s ago`
+            : NULLC,
+        },
+      })),
+  ],
+  caption:
+    'The first row is the global autovacuum setting. Relation rows expose the model-owned autovacuum_enabled storage parameter beside dead-tuple pressure; a partitioned production layout must inspect every storage-owning child.',
+})
 
 const slots: ProjectionFn = (s) => {
   if (s.knobs.walLevel === 'minimal') {
@@ -1169,9 +1259,11 @@ export const PROJECTIONS: Record<string, ProjectionFn> = {
   io,
   buffercache,
   replication,
+  replay_state: replayState,
   progress_vacuum: progressVacuum,
   locks,
   settings,
+  autovacuum_settings: autovacuumSettings,
   slots,
 }
 
@@ -1188,9 +1280,11 @@ export const PROJECTION_SOURCES: Record<string, ProjectionSource> = {
   io: 'io.rows',
   buffercache: 'buffercache.rows',
   replication: 'replication.standbys',
+  replay_state: 'replication.standbys',
   progress_vacuum: 'vacuum.progress_rows',
   locks: 'locks.rows',
   settings: 'settings.rows',
+  autovacuum_settings: 'autovacuum.settings',
   slots: 'slots.rows',
 }
 

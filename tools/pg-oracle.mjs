@@ -127,6 +127,7 @@ export async function loadOracleRegistry() {
   return {
     target: root.values.postgresqlVersion,
     claims: sources.claims,
+    actions: sources.actions,
     catalog: sources.catalog,
     indexWalk: sources.indexWalk,
     diagnosticSql: sources.diagnosticSql,
@@ -741,6 +742,81 @@ export async function checkGucContexts(query, registry, major) {
     ))
   }
   return results
+}
+
+export function operationalActionChecks(actions, observations, major) {
+  const specificity = actions.tuneAutovacuum.versionSpecificity
+  const variant = specificity.variants.find((candidate) =>
+    major >= candidate.from && (candidate.to === undefined || major <= candidate.to))
+  const capacity = observations.maxConnections
+    - observations.superuserReservedConnections
+    - observations.reservedConnections
+  const capacityPreconditions = actions.restoreConnectionCapacity.preconditions.join(' ')
+  const relationPreconditions = actions.enableRelationAutovacuum.preconditions.join(' ')
+  return [
+    result(
+      'action/autovacuum_max_workers/activation',
+      variant
+        ? `PostgreSQL ${major}: ${specificity.setting} requires ${variant.activation} (${variant.context})`
+        : `PostgreSQL ${major}: no registered activation rule`,
+      observations.workerContext ?? 'setting is absent',
+      variant !== undefined && observations.workerContext === variant.context,
+    ),
+    result(
+      'action/ordinary-connection-capacity',
+      `${observations.maxConnections} - ${observations.superuserReservedConnections} - ${observations.reservedConnections} = ${capacity} ordinary slots`,
+      `max_connections ${observations.maxConnections}; superuser_reserved_connections ${observations.superuserReservedConnections}; reserved_connections ${observations.reservedConnections}`,
+      capacity >= 0
+        && capacityPreconditions.includes('max_connections')
+        && capacityPreconditions.includes('superuser_reserved_connections')
+        && capacityPreconditions.includes('reserved_connections'),
+    ),
+    result(
+      'action/per-relation-autovacuum',
+      'Diagnose reads pg_class.reloptions before worker-capacity tuning',
+      observations.relationAutovacuumEnabled === false
+        ? 'autovacuum_enabled=false'
+        : String(observations.relationAutovacuumEnabled),
+      observations.relationAutovacuumEnabled === false
+        && relationPreconditions.includes('pg_class.reloptions')
+        && relationPreconditions.includes('autovacuum_enabled=false'),
+    ),
+  ]
+}
+
+export async function checkOperationalActions(psql, query, registry, major) {
+  await psql(`
+    DROP TABLE IF EXISTS public.oracle_action_autovacuum;
+    CREATE TABLE public.oracle_action_autovacuum (id integer)
+      WITH (autovacuum_enabled=false)`)
+  const [settings] = await query(`
+    SELECT max.setting::integer AS max_connections,
+           superuser.setting::integer AS superuser_reserved_connections,
+           COALESCE(reserved.setting, '0')::integer AS reserved_connections,
+           workers.context AS worker_context
+      FROM pg_catalog.pg_settings AS max
+      JOIN pg_catalog.pg_settings AS superuser
+        ON superuser.name = 'superuser_reserved_connections'
+      JOIN pg_catalog.pg_settings AS workers
+        ON workers.name = 'autovacuum_max_workers'
+      LEFT JOIN pg_catalog.pg_settings AS reserved
+        ON reserved.name = 'reserved_connections'
+     WHERE max.name = 'max_connections'`)
+  const [relation] = await query(`
+    SELECT COALESCE((
+             SELECT option_value::boolean
+               FROM pg_catalog.pg_options_to_table(c.reloptions)
+              WHERE option_name = 'autovacuum_enabled'
+           ), true) AS autovacuum_enabled
+      FROM pg_catalog.pg_class AS c
+     WHERE c.oid = 'public.oracle_action_autovacuum'::regclass`)
+  return operationalActionChecks(registry.actions, {
+    workerContext: settings?.worker_context,
+    maxConnections: Number(settings?.max_connections),
+    superuserReservedConnections: Number(settings?.superuser_reserved_connections),
+    reservedConnections: Number(settings?.reserved_connections),
+    relationAutovacuumEnabled: relation?.autovacuum_enabled,
+  }, major)
 }
 
 export function hotUpdateChecks(rows, major, since, expectedUpdates) {
@@ -3785,6 +3861,12 @@ async function runChecks(server, registry, major, pgBin) {
     ['asynchronous commit', () => checkAsynchronousCommit(pgBin, registry, server.scratch)],
     ['GUC defaults', () => checkGucDefaults(server.query, registry, major)],
     ['GUC contexts', () => checkGucContexts(server.query, registry, major)],
+    ['operational actions', () => checkOperationalActions(
+      server.psql,
+      server.query,
+      registry,
+      major,
+    )],
     ['catalog shapes', () => checkCatalog(server.psql, server.query, registry, major)],
     ['diagnostic SQL', () => checkDiagnosticSql(server.psql, registry, major)],
     ['wait events', () => checkWaitEvents(server.query, registry, major)],

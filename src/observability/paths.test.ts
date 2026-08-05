@@ -267,8 +267,12 @@ describe('diagnostic path contracts', () => {
     const step = NODES.get('replica.1')
     expect(step?.kind).toBe('step')
     if (!step || step.kind !== 'step') return
-    expect(step.branches.find((branch) => branch.next === 'v.replay')?.test(sim.state, collector)).toBe(true)
+    expect(step.branches.find((branch) => branch.next === 'replica.replay-state')?.test(sim.state, collector)).toBe(true)
     expect(step.branches.find((branch) => branch.next === 'v.rep_ok')?.test(sim.state, collector)).toBe(false)
+    const replayState = NODES.get('replica.replay-state')
+    expect(replayState?.kind).toBe('step')
+    if (!replayState || replayState.kind !== 'step') return
+    expect(replayState.branches.find((branch) => branch.next === 'v.replay')?.test(sim.state, collector)).toBe(true)
   })
 
   it('reports baseline health from the worst connected standby beside the two-row grid', () => {

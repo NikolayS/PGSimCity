@@ -43,6 +43,12 @@ export const POSTGRESQL_GUC_CONTEXTS = [
   { setting: 'shared_buffers', cityClaim: stableContextClaim, expected: stableContext('postmaster') },
   { setting: 'wal_buffers', cityClaim: stableContextClaim, expected: stableContext('postmaster') },
   { setting: 'max_connections', cityClaim: stableContextClaim, expected: stableContext('postmaster') },
+  { setting: 'superuser_reserved_connections', cityClaim: stableContextClaim, expected: stableContext('postmaster') },
+  {
+    setting: 'reserved_connections',
+    cityClaim: 'Available since PostgreSQL 16; postmaster context',
+    expected: { from: 16, context: 'postmaster' },
+  },
   { setting: 'max_locks_per_transaction', cityClaim: stableContextClaim, expected: stableContext('postmaster') },
   { setting: 'max_prepared_transactions', cityClaim: stableContextClaim, expected: stableContext('postmaster') },
   { setting: 'max_wal_senders', cityClaim: stableContextClaim, expected: stableContext('postmaster') },

@@ -1,4 +1,5 @@
 import { poolBytes } from '../core/types'
+import { renderAction } from '../core/actions'
 import { CLAIM_VALUES } from '../core/claims'
 import type { BookRef, CheckpointPhase, ComponentDoc, DocRef, SimState, TableSim, VacPhase, WalSegment } from '../core/types'
 import { configuredSynchronousStandby, physicalStandby } from '../core/replication'
@@ -1046,11 +1047,11 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'How a slot takes down a primary',
-        body: 'By default, inactive permanent slots do not expire: in PostgreSQL 18, `idle_replication_slot_timeout` defaults to zero (disabled). PostgreSQL 18 can invalidate an inactive slot when that timeout is configured, and `max_slot_wal_keep_size` can make a slot unusable once required WAL exceeds the limit. Without either guard, an abandoned consumer can pin `restart_lsn` while `pg_wal` grows toward a full volume. Monitor `active`, `restart_lsn`, `wal_status`, `safe_wal_size`, `invalidation_reason` and slot ownership; do not treat every inactive slot as abandoned.',
+        body: `By default, inactive permanent slots do not expire: in PostgreSQL 18, \`idle_replication_slot_timeout\` defaults to zero (disabled). An abandoned consumer can pin \`restart_lsn\` while \`pg_wal\` grows toward a full volume, but the retention guard spends continuity to protect the primary.\n\n${renderAction('limitSlotWalRetention')}`,
       },
       {
         heading: 'What you would see in production',
-        body: 'In `pg_stat_replication`, compare the four LSNs as stage boundaries. A gap from primary WAL to `sent_lsn` means backlog at or before transmission; inspect the walsender, WAL availability and the link. A `sent_lsn` to `write_lsn` gap focuses attention between sender and walreceiver, while `flush_lsn` close to `write_lsn` with `replay_lsn` behind focuses on apply. These gaps localise investigation but do not prove a root cause. If the row disappears, the walsender is gone and any surviving slot may begin retaining WAL.',
+        body: `In \`pg_stat_replication\`, compare the four LSNs as stage boundaries. A primary-to-sent gap focuses on transmission; sent-to-write focuses between sender and receiver; flush ahead of replay focuses on apply. If the row disappears, the walsender is gone and any surviving slot may retain WAL.\n\n${renderAction('restoreReplayCapacity')}`,
       },
       {
         heading: 'What the city models',
@@ -1891,11 +1892,11 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Throttling, and the trap in it',
-        body: 'Vacuum accumulates cost points as it reads and dirties pages, and sleeps for `autovacuum_vacuum_cost_delay` (2 ms since PostgreSQL 12) whenever it exceeds `autovacuum_vacuum_cost_limit` (200). That budget is shared across **all** workers, so raising `autovacuum_max_workers` from 3 to 6 without raising the cost limit gives you six workers each going half as fast, and no more throughput. On modern storage, raising the cost limit — to 1000 or more — is usually the change that matters. `max_workers` only helps when the problem is too many tables waiting, not too little bandwidth.',
+        body: `Vacuum accumulates cost points as it reads and dirties pages, and sleeps for \`autovacuum_vacuum_cost_delay\` (2 ms since PostgreSQL 12) whenever it exceeds \`autovacuum_vacuum_cost_limit\` (200). That budget is shared across **all** workers, so the worker count and cost capacity must be diagnosed together.\n\n${renderAction('tuneAutovacuum')}`,
       },
       {
         heading: 'What you would see in production',
-        body: 'The symptom is never "autovacuum is slow". It is a table growing while its row count is flat, or `pg_stat_user_tables.last_autovacuum` hours old on your busiest table, or three workers permanently occupied by three giant tables while everything else queues behind them. Watch `n_dead_tup` against a threshold computed from `pg_class.reltuples` — not `n_live_tup` — and use `pg_stat_progress_vacuum` to see what running workers are actually doing.',
+        body: `The symptom is a table growing while its row count is flat, \`pg_stat_user_tables.last_autovacuum\` hours old on a busy table, or every worker occupied while eligible relations queue. Read \`pg_class.reloptions\` before calling that a capacity problem.\n\n${renderAction('enableRelationAutovacuum')}`,
       },
       {
         heading: 'Where this model cheats',
@@ -2373,7 +2374,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What you would see in production',
-        body: 'A standby on identical hardware falling steadily behind a busy primary, with the replay LSN trailing while the flush LSN keeps pace, is the classic signature: the WAL arrives fine and cannot be applied fast enough. Big index builds, mass updates and anything that dirties a lot of pages at once make it worse. On the primary side, the corresponding number to care about is recovery time after a crash, which is bounded by how much WAL was written since the last checkpoint — that is the trade you make every time you raise `checkpoint_timeout`.',
+        body: `A flush-to-replay gap only localises investigation to apply. Before calling it insufficient replay capacity, inspect paused recovery, the startup process and wait event, the walreceiver, and the standby log.\n\n${renderAction('resumePausedRecovery')}`,
       },
       {
         heading: 'What the city models',
