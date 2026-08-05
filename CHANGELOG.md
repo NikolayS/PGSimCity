@@ -153,6 +153,8 @@ is stated rather than pretended.
 The mode set is now owned by the claims registry and the type derives from it, so
 a missing mode is a compile error rather than a reader's discovery.
 
+## [0.39.4] - 2026-08-05
+
 ### Fixed — the spines proved text, not wiring
 
 The claims spine gives every fact about PostgreSQL one owner, so no two surfaces
