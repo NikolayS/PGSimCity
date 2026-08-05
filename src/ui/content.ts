@@ -16,6 +16,8 @@ import { DOCS_STORAGE } from './docs-storage'
 
 export const DOCS: ComponentDoc[] = [...DOCS_MEMORY, ...DOCS_STORAGE]
 
+const CHECKPOINT_PARTNERS = CLAIM_VALUES.checkpointPolicy.partners
+
 const _byId = new Map<string, ComponentDoc>(DOCS.map((d) => [d.id, d]))
 
 export function doc(id: string | null | undefined): ComponentDoc | undefined {
@@ -269,8 +271,8 @@ export const KNOB_META: KnobMeta[] = [
     kind: 'select',
     options: [
       { value: 'none', label: 'empty — local durability only' },
-      { value: 'standbyA', label: 'standby_a — synchronous' },
-      { value: 'standbyB', label: 'standby_b — synchronous' },
+      { value: CLAIM_VALUES.standbyNames.internal[0], label: `${CLAIM_VALUES.standbyNames.display[0]} — synchronous` },
+      { value: CLAIM_VALUES.standbyNames.internal[1], label: `${CLAIM_VALUES.standbyNames.display[1]} — synchronous` },
     ],
     hint: 'Names one follower as synchronous. Clearing it and reloading releases SyncRep waiters but gives up remote durability; PostgreSQL manual §26.2.8 calls out this availability trade-off.',
     danger: true,
@@ -298,7 +300,7 @@ export const KNOB_META: KnobMeta[] = [
     danger: true,
   },
   {
-    key: 'maxWalSize',
+    key: CHECKPOINT_PARTNERS[0],
     label: 'max_wal_size',
     guc: 'max_wal_size',
     group: 'checkpoint',
@@ -310,7 +312,7 @@ export const KNOB_META: KnobMeta[] = [
     hint: 'The WAL-volume partner to checkpoint_timeout: crossing the model’s moving budget requests a checkpoint before the timer does.',
   },
   {
-    key: 'checkpointTimeout',
+    key: CHECKPOINT_PARTNERS[1],
     label: 'checkpoint_timeout',
     guc: 'checkpoint_timeout',
     group: 'checkpoint',

@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { COLOR } from '../core/theme'
-import { ordinaryConnectionCapacity } from '../core/claims'
+import { CLAIM_VALUES, ordinaryConnectionCapacity } from '../core/claims'
 import { N_BACKEND_SLOTS } from '../core/types'
 import type { BackendState, SimState, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, damp, fmtNum, lerp, makeRng } from '../core/util'
@@ -56,7 +56,7 @@ type BoxSpec = [number, number, number, number, number, number]
 const N = N_BACKEND_SLOTS
 const RING_SLOTS = 4
 const RING_DUR = 0.62
-export const CONNECTION_POOLER_PLATE_LABEL = 'PgBouncer · pool_mode'
+export const CONNECTION_POOLER_PLATE_LABEL = CLAIM_VALUES.connectionPooler.plateLabel
 
 /* --- conduit tessellation ------------------------------------------------- */
 /** Samples along one duct. 26 is smooth at the radius we draw. */

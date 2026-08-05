@@ -1,4 +1,6 @@
 import { readFileSync, readdirSync } from 'node:fs'
+import { posix } from 'node:path'
+import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
 import { cityComponentHref, cityComponentId } from '../src/core/city-route'
@@ -42,6 +44,146 @@ import { createWalkCityHarness } from './walk-harness'
 
 const read = (path: string): string => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8')
 
+const REGISTERED_CLAIM_VALUE_READS = {
+  appVersion: { 'src/core/corrections.ts': 1 },
+  walSegment: {
+    'src/sim/model.ts': 1,
+    'src/spine/postgresql-oracle.ts': 2,
+    'src/ui/docs-storage.ts': 2,
+    'src/world/continuity.ts': 2,
+    'src/world/wal.ts': 4,
+  },
+  bufferSample: {
+    'src/core/types.ts': 2,
+    'src/ui/content.ts': 2,
+    'src/ui/docs-storage.ts': 2,
+    'src/world/shmem.ts': 1,
+  },
+  bulkReadRing: { 'src/observability/paths.ts': 1, 'src/sim/model.ts': 1 },
+  checkpointPolicy: {
+    'src/core/types.ts': 2,
+    'src/spine/postgresql-oracle.ts': 2,
+    'src/ui/content.ts': 1,
+  },
+  standbyNames: { 'src/sim/model.ts': 8, 'src/ui/content.ts': 4 },
+  modelDuration: {
+    'src/core/trace-presentation.ts': 1,
+    'src/observability/paths.ts': 2,
+    'src/ui/docs-storage.ts': 1,
+  },
+  modelLatency: {
+    'src/observability/paths.ts': 7,
+    'src/sim/model.ts': 1,
+    'src/ui/docs-storage.ts': 15,
+    'src/ui/hud.ts': 12,
+    'src/ui/tour.ts': 2,
+  },
+  connectionPooler: {
+    'src/core/types.ts': 1,
+    'src/observability/paths.ts': 2,
+    'src/sim/model.ts': 9,
+    'src/sim/scenarios.ts': 1,
+    'src/ui/content.ts': 6,
+    'src/ui/docs-memory.ts': 9,
+    'src/ui/panel.ts': 1,
+    'src/world/clients.ts': 1,
+  },
+  workMem: {
+    'src/core/types.ts': 1,
+    'src/sim/model.ts': 7,
+    'src/spine/postgresql-oracle.ts': 3,
+    'src/ui/content.ts': 2,
+    'src/ui/docs-memory.ts': 5,
+    'src/ui/tour.ts': 1,
+  },
+  restoreDrill: {
+    'src/sim/model.ts': 3,
+    'src/ui/docs-storage.ts': 15,
+    'src/ui/panel.ts': 15,
+  },
+  timelineRecovery: {
+    'src/core/types.ts': 1,
+    'src/sim/model.ts': 2,
+    'src/spine/postgresql-oracle.ts': 3,
+    'src/ui/content.ts': 1,
+    'src/ui/docs-storage.ts': 8,
+    'src/ui/panel.ts': 1,
+    'src/world/continuity.ts': 1,
+  },
+  vacuumReclaim: {
+    'src/observability/paths.ts': 1,
+    'src/sim/scenarios.ts': 2,
+    'src/ui/docs-memory.ts': 1,
+    'src/ui/docs-storage.ts': 5,
+    'src/ui/tour.ts': 1,
+    'src/world/maintenance.ts': 1,
+  },
+  cityComponentRoute: { 'src/core/city-route.ts': 2 },
+  eventConvention: { 'src/ui/hud.ts': 1 },
+  diagnoseBranchGates: {
+    'src/observability/paths.ts': 1,
+    'src/observability/views.ts': 1,
+  },
+  postgresqlVersion: {
+    'machine/magnum.js': 2,
+    'src/core/corrections.ts': 2,
+    'src/main.ts': 1,
+    'src/observability/catalog.ts': 1,
+    'src/observability/main.ts': 4,
+    'src/observability/paths.ts': 1,
+    'src/spine/postgresql-oracle.ts': 1,
+    'src/ui/anatomy.ts': 10,
+    'src/ui/docs-memory.ts': 2,
+    'src/ui/docs-storage.ts': 4,
+    'src/ui/hud.ts': 1,
+  },
+  pgliteVersion: { 'machine/magnum.js': 2 },
+  reviewStatus: { 'src/main.ts': 1 },
+} as const satisfies Partial<Record<ClaimId, Readonly<Record<string, number>>>>
+
+interface RegisteredOwnerImportRead {
+  claimId: ClaimId
+  source: string
+  module: string
+  imported: string
+  uses: number
+}
+
+const REGISTERED_OWNER_IMPORT_READS: readonly RegisteredOwnerImportRead[] = [
+  { claimId: 'appVersion', source: 'src/core/claims.ts', module: './build', imported: 'BUILD_LABEL', uses: 1 },
+  { claimId: 'appVersion', source: 'src/observability/main.ts', module: '../core/build', imported: 'BUILD_LABEL', uses: 2 },
+  { claimId: 'appVersion', source: 'src/ui/help.ts', module: '../core/build', imported: 'BUILD_LABEL', uses: 2 },
+  { claimId: 'mvccVocabulary', source: 'src/core/claims.ts', module: '../spine/mvcc-vocabulary', imported: 'MVCC_VOCABULARY', uses: 1 },
+  { claimId: 'cityArchitecture', source: 'src/core/claims.ts', module: '../spine/city-architecture', imported: 'CITY_ARCHITECTURE_CLAIMS', uses: 1 },
+  { claimId: 'cityArchitecture', source: 'src/ui/city-words-model.ts', module: '../spine/city-architecture', imported: 'CITY_ARCHITECTURE_CLAIMS', uses: 8 },
+  { claimId: 'pgliteVersion', source: 'src/core/claims.ts', module: '../spine/pglite-version', imported: 'PGLITE_VERSION', uses: 1 },
+  { claimId: 'pgliteVersion', source: 'src/observability/real-postgres-runtime.ts', module: '../spine/pglite-version', imported: 'PGLITE_VERSION', uses: 1 },
+  { claimId: 'markdownRendering', source: 'src/ui/panel.ts', module: './content', imported: 'mdToHtml', uses: 1 },
+  { claimId: 'markdownRendering', source: 'src/ui/tour.ts', module: './content', imported: 'mdToHtml', uses: 2 },
+  { claimId: 'machineSynchronousCommitComparison', source: 'src/core/claims.ts', module: '../spine/machine-comparison', imported: 'MACHINE_SYNCHRONOUS_COMMIT_COMPARISON', uses: 1 },
+  { claimId: 'machineSynchronousCommitComparison', source: 'machine/comparison.js', module: '../src/spine/machine-comparison.ts', imported: 'MACHINE_SYNCHRONOUS_COMMIT_COMPARISON', uses: 9 },
+  { claimId: 'machineSynchronousCommitComparison', source: 'machine/magnum.js', module: './comparison.js', imported: 'SYNCHRONOUS_COMMIT_COMPARISON_CLAIM', uses: 4 },
+  { claimId: 'machineIndexWalk', source: 'src/core/claims.ts', module: '../spine/machine-index-walk', imported: 'MACHINE_INDEX_WALK', uses: 1 },
+  { claimId: 'machineIndexWalk', source: 'machine/index-walk.js', module: '../src/spine/machine-index-walk.ts', imported: 'MACHINE_INDEX_WALK', uses: 8 },
+  { claimId: 'machineIndexWalk', source: 'machine/magnum.js', module: './index-walk.js', imported: 'INDEX_WALK_CLAIM', uses: 3 },
+]
+
+const STRUCTURAL_CLAIM_PREDICATES = {
+  mvccVocabulary: 'semantic facets checked by test/mvcc-vocabulary-spine.test.ts',
+  componentNaming: 'registry identity checked by the inspector heading traversal below',
+  postgresqlOracle: 'owner resolution checked by tools/pg-oracle.test.mjs',
+} as const satisfies Partial<Record<ClaimId, string>>
+
+const CANONICAL_OWNER_EXPORTS = [
+  { claimId: 'appVersion', source: 'src/core/build.ts', imported: 'BUILD_LABEL' },
+  { claimId: 'mvccVocabulary', source: 'src/spine/mvcc-vocabulary.ts', imported: 'MVCC_VOCABULARY' },
+  { claimId: 'cityArchitecture', source: 'src/spine/city-architecture.ts', imported: 'CITY_ARCHITECTURE_CLAIMS' },
+  { claimId: 'pgliteVersion', source: 'src/spine/pglite-version.ts', imported: 'PGLITE_VERSION' },
+  { claimId: 'markdownRendering', source: 'src/ui/content.ts', imported: 'mdToHtml' },
+  { claimId: 'machineSynchronousCommitComparison', source: 'src/spine/machine-comparison.ts', imported: 'MACHINE_SYNCHRONOUS_COMMIT_COMPARISON' },
+  { claimId: 'machineIndexWalk', source: 'src/spine/machine-index-walk.ts', imported: 'MACHINE_INDEX_WALK' },
+] as const satisfies readonly { claimId: ClaimId, source: string, imported: string }[]
+
 function agrees<T>(claimId: ClaimId, surface: string, actual: T, expected: T): void {
   expect(
     actual,
@@ -66,7 +208,7 @@ function sourceFiles(directory = new URL('../src/', import.meta.url), prefix = '
     const surface = `${prefix}/${entry.name}`
     if (entry.isDirectory()) {
       files.push(...sourceFiles(new URL(`${entry.name}/`, directory), surface))
-    } else if (entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts')) {
+    } else if (/\.(?:ts|js)$/.test(entry.name) && !entry.name.includes('.test.')) {
       files.push({ surface, text: readFileSync(new URL(entry.name, directory), 'utf8') })
     }
   }
@@ -77,7 +219,155 @@ function lineOf(text: string, index: number): number {
   return text.slice(0, index).split('\n').length
 }
 
+function directClaimValueReads(): Map<ClaimId, Map<string, number>> {
+  const reads = new Map<ClaimId, Map<string, number>>()
+  const files = [
+    ...sourceFiles(),
+    ...sourceFiles(new URL('../machine/', import.meta.url), 'machine'),
+  ]
+  for (const { surface, text } of files) {
+    if (surface === 'src/core/claims.ts') continue
+    const file = ts.createSourceFile(surface, text, ts.ScriptTarget.Latest, true)
+    const visit = (node: ts.Node): void => {
+      if (
+        ts.isPropertyAccessExpression(node)
+        && ts.isIdentifier(node.expression)
+        && node.expression.text === 'CLAIM_VALUES'
+        && node.name.text in CLAIMS
+      ) {
+        const claimId = node.name.text as ClaimId
+        const sources = reads.get(claimId) ?? new Map<string, number>()
+        sources.set(surface, (sources.get(surface) ?? 0) + 1)
+        reads.set(claimId, sources)
+      }
+      ts.forEachChild(node, visit)
+    }
+    visit(file)
+  }
+  return reads
+}
+
+function ownerImportUses(contract: RegisteredOwnerImportRead): number | undefined {
+  const text = read(contract.source)
+  const file = ts.createSourceFile(contract.source, text, ts.ScriptTarget.Latest, true)
+  let local: ts.Identifier | undefined
+  for (const statement of file.statements) {
+    if (
+      !ts.isImportDeclaration(statement)
+      || !ts.isStringLiteralLike(statement.moduleSpecifier)
+      || statement.moduleSpecifier.text !== contract.module
+    ) continue
+    for (const element of statement.importClause?.namedBindings
+      && ts.isNamedImports(statement.importClause.namedBindings)
+      ? statement.importClause.namedBindings.elements
+      : []) {
+      if ((element.propertyName ?? element.name).text === contract.imported) {
+        local = element.name
+      }
+    }
+  }
+  if (!local) return undefined
+  let uses = 0
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) && node.text === local!.text && node !== local) uses++
+    ts.forEachChild(node, visit)
+  }
+  visit(file)
+  return uses
+}
+
+function resolvedImportSource(source: string, module: string): string {
+  const resolved = posix.normalize(posix.join(posix.dirname(source), module))
+  return /\.(?:ts|js)$/.test(resolved) ? resolved : `${resolved}.ts`
+}
+
+function canonicalOwnerImports(): string[] {
+  const imports: string[] = []
+  const files = [
+    ...sourceFiles(),
+    ...sourceFiles(new URL('../machine/', import.meta.url), 'machine'),
+  ]
+  for (const { surface, text } of files) {
+    const file = ts.createSourceFile(surface, text, ts.ScriptTarget.Latest, true)
+    for (const statement of file.statements) {
+      if (
+        !ts.isImportDeclaration(statement)
+        || !ts.isStringLiteralLike(statement.moduleSpecifier)
+        || !statement.importClause?.namedBindings
+        || !ts.isNamedImports(statement.importClause.namedBindings)
+      ) continue
+      const importedSource = resolvedImportSource(surface, statement.moduleSpecifier.text)
+      for (const element of statement.importClause.namedBindings.elements) {
+        const imported = (element.propertyName ?? element.name).text
+        const owner = CANONICAL_OWNER_EXPORTS.find((candidate) => (
+          candidate.source === importedSource && candidate.imported === imported
+        ))
+        if (owner) imports.push(`${owner.claimId}:${surface}:${statement.moduleSpecifier.text}:${imported}`)
+      }
+    }
+  }
+  return imports.sort()
+}
+
 describe('claims and conventions spine', () => {
+  it('wires every registered direct consumer to CLAIM_VALUES', () => {
+    /* This is deliberately an exact AST inventory, not a value comparison.
+     * Replacing any registered read with equal bytes lowers its source count. */
+    const actual = directClaimValueReads()
+    const claimIds = new Set<ClaimId>([
+      ...Object.keys(REGISTERED_CLAIM_VALUE_READS) as ClaimId[],
+      ...actual.keys(),
+    ])
+    const disagreements: string[] = []
+    for (const claimId of claimIds) {
+      const expected = REGISTERED_CLAIM_VALUE_READS[claimId as keyof typeof REGISTERED_CLAIM_VALUE_READS] ?? {}
+      const observed = actual.get(claimId) ?? new Map<string, number>()
+      const sources = new Set([...Object.keys(expected), ...observed.keys()])
+      for (const source of sources) {
+        const expectedCount = source in expected
+          ? expected[source as keyof typeof expected] as number
+          : 0
+        const actualCount = observed.get(source) ?? 0
+        if (actualCount !== expectedCount) {
+          disagreements.push(
+            `${claimId}: ${source} has ${actualCount} direct read(s), expected ${expectedCount}; it disagrees with ${CLAIMS[claimId].owner}`,
+          )
+        }
+      }
+    }
+    expect(disagreements).toEqual([])
+  })
+
+  it('wires imported-owner surfaces to their registered source', () => {
+    const disagreements = REGISTERED_OWNER_IMPORT_READS.flatMap((contract) => {
+      const actual = ownerImportUses(contract)
+      return actual === contract.uses ? [] : [
+        `${contract.claimId}: ${contract.source} has ${actual ?? 'no'} use(s) of ${contract.imported}, expected ${contract.uses}; it disagrees with ${CLAIMS[contract.claimId].owner}`,
+      ]
+    })
+    expect(disagreements).toEqual([])
+
+    const registeredCanonical = REGISTERED_OWNER_IMPORT_READS.filter((contract) => (
+      CANONICAL_OWNER_EXPORTS.some((owner) => (
+        owner.claimId === contract.claimId
+        && owner.source === resolvedImportSource(contract.source, contract.module)
+        && owner.imported === contract.imported
+      ))
+    )).map((contract) => (
+      `${contract.claimId}:${contract.source}:${contract.module}:${contract.imported}`
+    )).sort()
+    expect(canonicalOwnerImports()).toEqual(registeredCanonical)
+  })
+
+  it('assigns every claim a direct, imported, or structural forward predicate', () => {
+    const classified = new Set<ClaimId>([
+      ...Object.keys(REGISTERED_CLAIM_VALUE_READS) as ClaimId[],
+      ...REGISTERED_OWNER_IMPORT_READS.map((contract) => contract.claimId),
+      ...Object.keys(STRUCTURAL_CLAIM_PREDICATES) as ClaimId[],
+    ])
+    expect([...classified].sort()).toEqual((Object.keys(CLAIMS) as ClaimId[]).sort())
+  })
+
   it('owns exactly the twenty-six drift-prone contracts across both passes', () => {
     expect(Object.keys(CLAIMS)).toEqual([
       'appVersion',

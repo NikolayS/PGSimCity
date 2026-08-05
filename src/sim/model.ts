@@ -141,11 +141,12 @@ const PHYSICAL_STANDBY_KNOBS = [
 ] as const
 
 const PAGE = 8192
-const WAL_SEG = CLAIM_VALUES.walSegment.bytes
+const WAL_SEG: typeof CLAIM_VALUES.walSegment.bytes = CLAIM_VALUES.walSegment.bytes
 const INITIAL_WAL_SEGMENT_START = 0x1a000000
 const INITIAL_WAL_LSN = INITIAL_WAL_SEGMENT_START + Math.floor(WAL_SEG * 0.92)
 /** BAS_BULKREAD: a big seq scan gets a 256 KiB ring so it cannot evict the pool. */
-export const MODEL_BULK_READ_RING_FRAMES = CLAIM_VALUES.bulkReadRing.modelFrames
+export const MODEL_BULK_READ_RING_FRAMES: typeof CLAIM_VALUES.bulkReadRing.modelFrames =
+  CLAIM_VALUES.bulkReadRing.modelFrames
 const RING = MODEL_BULK_READ_RING_FRAMES
 const STEP_MAX = 1 / 30
 /** Keep UI disclosures tied to the first distortion documented in this file header. */
@@ -315,7 +316,8 @@ const SCENARIO_LOCK_TIMEOUT: Readonly<Record<string, { atSec: number; sec: numbe
  */
 const NOMINAL_TRIPS = 35
 /** Teaching-scale concurrency knee; it is not a claim about a production core count. */
-export const MODEL_BACKEND_CONCURRENCY_TARGET = 8
+export const MODEL_BACKEND_CONCURRENCY_TARGET: typeof CLAIM_VALUES.connectionPooler.concurrencyTarget =
+  CLAIM_VALUES.connectionPooler.concurrencyTarget
 /** Fixed teaching lifetime used to make session-pool binding observable. */
 export const MODEL_SESSION_CONNECTION_LIFETIME = 15
 /** Fixed storage for aggregate arrival cohorts; compaction preserves every transaction. */
@@ -344,7 +346,8 @@ const PAGE_OPS_PER_SEC = 60000
  */
 const IDX_BASE = 1 << 20
 const FLOW_BUDGET_PER_SEC = 420
-export const MODEL_LATENCY_WINDOW_TRIPS = CLAIM_VALUES.modelLatency.windowTrips
+export const MODEL_LATENCY_WINDOW_TRIPS: typeof CLAIM_VALUES.modelLatency.windowTrips =
+  CLAIM_VALUES.modelLatency.windowTrips
 const WAL_WRITER_DELAY = 0.2
 const BGW_DELAY = 0.2
 /** BgBufferSync's fixed horizon for scanning the whole pool while idle. */

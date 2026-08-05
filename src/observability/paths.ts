@@ -1615,7 +1615,7 @@ const VERDICTS: Verdict[] = [
     title: 'This sample shows reuse; it does not close the I/O investigation.',
     because: 'Reads are mostly hits and the usage-count sample contains reused buffers. The sample does not prove optimal sizing, necessary reads, physical device I/O or correct write attribution.',
     mechanism:
-      'A high hit ratio does not mean zero I/O or prove that the remaining reads are necessary. PostgreSQL 18 gives sequential scans of relations larger than a quarter of shared_buffers a bulk-read ring that starts at 256 KiB, grows with io_combine_limit × effective_io_concurrency and is capped. The ring limits cache pollution; it does not guarantee zero displacement or prove physical device reads. The current city model uses a historical fixed 32-frame approximation, so its sampled cache cannot validate PostgreSQL 18’s ring size.',
+      `A high hit ratio does not mean zero I/O or prove that the remaining reads are necessary. PostgreSQL 18 gives sequential scans of relations larger than a quarter of shared_buffers a bulk-read ring that starts at 256 KiB, grows with io_combine_limit × effective_io_concurrency and is capped. The ring limits cache pollution; it does not guarantee zero displacement or prove physical device reads. The current city model uses a historical ${CLAIM_VALUES.bulkReadRing.diagnoseDisclosure}, so its sampled cache cannot validate PostgreSQL 18’s ring size.`,
     evidence: (s) => [
       { label: 'cache hit ratio', value: `${s.stats.cacheHitPct.toFixed(1)}%`, tone: 'ok' },
       { label: 'sampled frames at usage_count 0', value: `${(coldBufferShare(s) * 100).toFixed(0)}%`, tone: 'ok' },
