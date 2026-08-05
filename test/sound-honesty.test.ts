@@ -1,4 +1,5 @@
-import { readdirSync, readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { relative, resolve } from 'node:path'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
@@ -31,22 +32,12 @@ function sourceFiles(directory: string): string[] {
   })
 }
 
-const IGNORED_DOCUMENTATION_DIRECTORIES = new Set([
-  '.claude',
-  '.git',
-  'coverage',
-  'dist',
-  'node_modules',
-])
-
-function documentationFiles(directory = ''): string[] {
-  return readdirSync(resolve(ROOT, directory), { withFileTypes: true }).flatMap((entry) => {
-    const path = directory ? `${directory}/${entry.name}` : entry.name
-    if (entry.isDirectory() && !IGNORED_DOCUMENTATION_DIRECTORIES.has(entry.name)) {
-      return documentationFiles(path)
-    }
-    return entry.isFile() && path.endsWith('.md') ? [path] : []
-  })
+function trackedDocumentationFiles(): string[] {
+  // Git's index is the source of truth; ignored and untracked developer notes are not repository docs.
+  return execFileSync('git', ['ls-files', '--cached', '-z', '--', '*.md'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+  }).split('\0').filter(Boolean)
 }
 
 function describesSoundControl(text: string): boolean {
@@ -77,7 +68,7 @@ function productionCopySurfaces(): CopySurface[] {
 
 function documentationCopySurfaces(): CopySurface[] {
   const surfaces: CopySurface[] = []
-  for (const path of documentationFiles()) {
+  for (const path of trackedDocumentationFiles()) {
     const lines = source(path).split('\n')
     let paragraph: string[] = []
     let paragraphLine = 1
@@ -239,6 +230,19 @@ function context(audioState: { enabled: boolean; preferred: boolean; volume: num
 }
 
 describe('honest movement sound controls', () => {
+  it('ignores untracked Markdown when inventorying documentation surfaces', () => {
+    const file = `.sound-honesty-untracked-${process.pid}.md`
+    const path = resolve(ROOT, file)
+    writeFileSync(path, 'Toggle sound.\n', { encoding: 'utf8', flag: 'wx' })
+    try {
+      expect(documentationCopySurfaces()).not.toContainEqual(
+        expect.objectContaining({ file }),
+      )
+    } finally {
+      unlinkSync(path)
+    }
+  })
+
   it('qualifies every production and documentation surface that describes the control', () => {
     const production = productionCopySurfaces()
     const documentation = documentationCopySurfaces()
