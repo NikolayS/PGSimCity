@@ -236,6 +236,9 @@ export const DEFAULT_KNOBS: Knobs = {
   paused: false,
 }
 
+/** Achieved TPS is reported over this trailing interval in model seconds. */
+export const TPS_MEASUREMENT_WINDOW_SECONDS = 5
+
 /* ---------------------------------------------------------------------------
  * Simulation state.
  * -------------------------------------------------------------------------*/

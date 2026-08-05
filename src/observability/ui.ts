@@ -6,6 +6,7 @@
  * 60 fps simulation and a layout thrash is visible.
  * ==========================================================================*/
 
+import { TPS_MEASUREMENT_WINDOW_SECONDS } from '../core/types'
 import type { Knobs, SimApi } from '../core/types'
 import { el, setText, sparkline } from '../ui/uikit'
 import { fmtBytes, fmtNum } from '../core/util'
@@ -212,7 +213,7 @@ export interface Vital {
 export const VITALS: Vital[] = [
   {
     key: 'tps',
-    label: 'tps',
+    label: `tps · ${TPS_MEASUREMENT_WINDOW_SECONDS}s`,
     color: 'var(--c-backend)',
     read: (sim) => ({ v: fmtNum(sim.state.stats.tps), tone: '' }),
     history: (sim) => sim.state.stats.history.tps,

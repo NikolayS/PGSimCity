@@ -62,6 +62,7 @@ import {
   N_VAC_WORKERS,
   N_WAL_SEG_SLOTS,
   SHARED_BUFFERS_FULL_SAMPLE_MIB,
+  TPS_MEASUREMENT_WINDOW_SECONDS,
 } from '../core/types'
 import { N_TABLES, TABLES } from '../core/catalog'
 import { CLAIM_VALUES, ordinaryConnectionCapacity } from '../core/claims'
@@ -1545,7 +1546,11 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   let traceStepArmed = false
   let scenarioQueryKind: QueryKind | null = null
   let scenarioQueryTable = -1
-  let commitsAcc = 0
+  const TPS_RATE_SAMPLES = Math.ceil(TPS_MEASUREMENT_WINDOW_SECONDS / 0.25) + 2
+  const tpsSampleAt = new Float64Array(TPS_RATE_SAMPLES)
+  const tpsSampleCommits = new Float64Array(TPS_RATE_SAMPLES)
+  let tpsSampleHead = 0
+  let tpsSampleCount = 0
   /*
    * A rolling distribution of completed trips. One trip can stand for several
    * transactions, so nearest-rank quantiles use latencyWeight rather than
@@ -7281,7 +7286,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     const rb = Math.min(x.txCount, Math.round(x.txCount * 0.003 + (rng() < 0.02 ? 1 : 0)))
     stats.rollbacks += rb
     stats.commits += x.txCount - rb
-    commitsAcc += x.txCount - rb
     if (x.writes) rememberCommittedWrites(x.commitLsn, x.txCount - rb)
     const table = tables[b.table]
     if (
@@ -7722,12 +7726,30 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
    * STATS
    * ====================================================================*/
 
+  function measureTps(): number {
+    tpsSampleAt[tpsSampleHead] = state.t
+    tpsSampleCommits[tpsSampleHead] = stats.commits
+    tpsSampleHead = (tpsSampleHead + 1) % TPS_RATE_SAMPLES
+    if (tpsSampleCount < TPS_RATE_SAMPLES) tpsSampleCount++
+    if (tpsSampleCount < 2) return 0
+
+    const target = state.t - TPS_MEASUREMENT_WINDOW_SECONDS
+    let sample = (tpsSampleHead - tpsSampleCount + TPS_RATE_SAMPLES) % TPS_RATE_SAMPLES
+    for (let i = 1; i < tpsSampleCount; i++) {
+      const next = (sample + 1) % TPS_RATE_SAMPLES
+      if (tpsSampleAt[next] > target) break
+      sample = next
+    }
+    const elapsed = state.t - tpsSampleAt[sample]
+    return elapsed > 0 ? (stats.commits - tpsSampleCommits[sample]) / elapsed : 0
+  }
+
   function tickStats(dt: number): void {
     rateT += dt
     if (rateT >= 0.25) {
       const iv = rateT
       rateT = 0
-      stats.tps = damp(stats.tps, commitsAcc / iv, 3, iv)
+      stats.tps = measureTps()
       refreshLatencyQuantiles()
       wal.bytesPerSec = damp(wal.bytesPerSec, walAcc / iv, 3, iv)
       stats.walBytesPerSec = wal.bytesPerSec
@@ -7759,10 +7781,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
       // The scale factor, re-derived in case the tps knob moved. NOT a
       // controller: nothing measured feeds back into it. stats.tps above is a
-      // pure observation of what the fleet actually committed.
+      // trailing observation of what the fleet actually committed.
       sizeBatch()
 
-      commitsAcc = 0
       walAcc = 0
       fpiAcc = 0
       ioReadAcc = 0
@@ -9069,7 +9090,11 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     resetTraceRecord()
     sizeBatch()
     syncPoolerState()
-    commitsAcc = walAcc = fpiAcc = ioReadAcc = ioWriteAcc = 0
+    walAcc = fpiAcc = ioReadAcc = ioWriteAcc = 0
+    tpsSampleAt.fill(0)
+    tpsSampleCommits.fill(0)
+    tpsSampleHead = 0
+    tpsSampleCount = 0
     maintenanceWalPending = maintenanceFpiPending = 0
     maintenanceWalQueued = maintenanceWalDrained = 0
     winHits = winMisses = 0
@@ -9095,13 +9120,18 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     beatIdx = 0
   }
 
-  function reset(): void {
+  function initializeWarmState(): void {
     hardReset()
-    // Warm up silently so the city is never empty on load: pool populated,
-    // WAL flowing, checkpoint countdown already part-way through.
     quiet = true
-    for (let i = 0; i < 420; i++) step(1 / 30)
-    quiet = false
+    try {
+      for (let i = 0; i < 420; i++) step(1 / 30)
+    } finally {
+      quiet = false
+    }
+  }
+
+  function reset(): void {
+    initializeWarmState()
     bus.emit('sim:reset', {})
   }
 
@@ -9130,7 +9160,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     applying = false
   })
 
-  reset()
+  // Every entry point receives a usable city: populated pool, flowing WAL,
+  // and a checkpoint countdown already under way. This is initialization, so
+  // it must not announce a user-requested reset.
+  initializeWarmState()
 
   return {
     state,

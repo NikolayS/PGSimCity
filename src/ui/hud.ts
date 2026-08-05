@@ -4,6 +4,7 @@ import { DESTINATIONS, destinationForDistrict } from '../core/destinations'
 import { CLAIM_VALUES } from '../core/claims'
 import { createCorrectionPath, displayedClaim } from '../core/corrections'
 import { COLOR, cssColor, onThemeMode, themeMode, toggleThemeMode } from '../core/theme'
+import { TPS_MEASUREMENT_WINDOW_SECONDS } from '../core/types'
 import { clamp, fmtBytes, fmtDuration, fmtNum } from '../core/util'
 import type {
   Bus,
@@ -11,7 +12,6 @@ import type {
   CameraMode,
   QualityLevel,
   ScenarioChoiceId,
-  SimApi,
   SimState,
   TraceStop,
 } from '../core/types'
@@ -104,10 +104,10 @@ interface VitalDef {
 const VITALS: VitalDef[] = [
   {
     key: 'tps',
-    label: 'TPS',
+    label: `TPS · ${TPS_MEASUREMENT_WINDOW_SECONDS}s`,
     focus: 'backend.row',
     color: cssColor('backend'),
-    hint: 'Transactions committed per second. Falls below the offered rate when the server is saturated.',
+    hint: `Transactions committed per second over the trailing ${TPS_MEASUREMENT_WINDOW_SECONDS} model seconds. Falls below the offered rate when the server is saturated.`,
   },
   {
     key: 'latency',
@@ -351,31 +351,6 @@ export function createHud(ctx: UiContext): UiModule {
   const bottomEl = mount('hud-bottom')
   const toastEl = mount('toast-stack')
   const compassEl = mount('compass')
-
-  /* -------------------------------------------------------------------------
-   * DEFENSIVE GUARD — re-entrant reset.
-   *
-   * sim.reset() ends by emitting 'sim:reset', and main.ts answers that event by
-   * calling sim.reset() again: an unbounded loop that hangs the tab (verified).
-   * Wrapping the shared SimApi makes a re-entrant reset a no-op, so the first
-   * call always completes exactly once. Restored on dispose(); harmless once
-   * the root cause in main.ts is fixed.
-   * ---------------------------------------------------------------------- */
-  const api = sim as SimApi
-  const originalReset = api.reset
-  let resetting = false
-  api.reset = function guardedReset(this: SimApi): void {
-    if (resetting) return
-    resetting = true
-    try {
-      originalReset.call(this)
-    } finally {
-      resetting = false
-    }
-  }
-  cleanup.push(() => {
-    api.reset = originalReset
-  })
 
   /* ------------------------------ live state ----------------------------- */
 
