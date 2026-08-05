@@ -11,6 +11,59 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+## [0.39.6] - 2026-08-05
+
+### Fixed — the buffer pool stood two storeys above the plaza
+
+Nik: *"pool surface is still much higher than ground level."* It was. The water
+sat at `y = 8.8` over a plaza at `y = 3.0`, walled by coping to `9.2` — a tank
+proud of the ground rather than a pool in it.
+
+Worse, the level was a constant. `SURFACE_Y` was computed once from the maximum
+tile rise and assigned once, so the water stood at full height no matter how much
+of `shared_buffers` was in use. The most natural way to show how full the pool is
+was showing nothing at all.
+
+The basin is now recessed — bottom `-2.1`, full waterline `3.12`, coping `3.58` —
+and **the level tracks occupancy**, `usedCount / sampleFrames`. The tiles keep
+their own fact, per-frame `usage_count` with transient pin and touch lifts, so the
+two carry different information rather than the same one twice. Both are
+disclosed.
+
+Because the surface now moves, the swim predicate follows the live level instead
+of a constant. Walking in, falling in, and standing on the bottom were re-verified
+at 40% and 100% occupancy.
+
+### Fixed — you could walk into the pool and stay dry
+
+The swim test asked whether the walker's feet were above the pool floor rather
+than whether there was water overhead, so walking in left you strolling across
+the bottom of a full pool. Jumping lifted your feet clear and swimming began
+abruptly. Standing on the bottom of a full pool is submerged, and now reads that
+way.
+
+### Documented — lighting the city further is not worth its frame budget
+
+Nik asked why a comparable browser scene looks better, and approved a narrow
+conversion: light the structural surfaces whose colour is not carrying meaning.
+
+The scope gate was written before any material changed, and it admitted **one
+surface**, `ground.kerbTop`. Lighting it added real form and weakened no district
+identity — and moved medium-tier frame time from **17.73 / 39.85 ms to 25.75 /
+70.50 ms** median / p95, crossing the 22.22 ms budget in both condition orders.
+
+It was reverted. No production material or fidelity threshold changed. The
+classification table, the reproduction tool, the screenshots and the raw timings
+are kept in `evidence/lit-structure/` so the question does not have to be asked
+again from scratch.
+
+The finding underneath is the useful one: almost every surface in this city is
+semantic. A district identity, a live state, or any colour the registry,
+inspector or legend names is information, and information stays unlit. What
+remains is concrete and kerbstone. The distance to an asset-driven scene is
+authored geometry and materials, which this project does not have and is not
+getting — not a lighting technique it forgot to switch on.
+
 ## [0.39.5] - 2026-08-05
 
 ### Fixed — a saved setting could load the city into a permanent stall
