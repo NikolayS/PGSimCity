@@ -11,6 +11,104 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+### Fixed — the spines proved text, not wiring
+
+The claims spine gives every fact about PostgreSQL one owner, so no two surfaces
+can disagree. That is the mechanism this project's credibility rests on.
+
+It did not work. Replacing `CLAIM_VALUES.bulkReadRing.modelFrames` with the bare
+literal `32` passed all twenty-six claims-spine tests. A full sweep — substitute
+each registered claim's literal value at each consuming surface — found that
+**twenty of twenty-two testable claims survived**. Only `postgresqlVersion` was
+caught; `reviewStatus` was not wired at all.
+
+The spine verified that today's rendered text equals today's registry output. It
+never verified that a surface *reads from* the registry. So a surface could be
+silently disconnected and a later correction would never reach it — precisely
+the failure the spine exists to prevent, latent since it was written.
+
+Wiring is now proven from the syntax tree rather than by comparing strings, and
+five model constants are branded so a raw literal will not compile. The honest
+limit: an unmarked `32` or `16 MiB` in prose carries no identity proving which
+claim it represents, so newly added anonymous copies cannot be discovered
+automatically.
+
+### Added — remedial actions have one owner
+
+Staging the city's operational advice on real PostgreSQL 13, 17 and 18 — not
+reading it, but following it literally as a tired operator would — produced five
+findings, recorded in `ADVICE-AUDIT.md`.
+
+Read together they were not five content errors but one structural one: **the
+correct qualification already existed in the city, just not where the operator
+acts.** The inspector said enforcing `max_slot_wal_keep_size` permits required
+WAL to be removed; the action that recommended it did not. The inspector said
+replication gaps localise investigation without proving a cause; the verdict
+prescribed capacity work anyway.
+
+Actions now have the single-source discipline facts already had. A Diagnose
+remedy that is not a registered action reference does not compile.
+
+Two of the five were not prose problems at all, and fixing the sentence would
+have buried them:
+
+- The connection-saturation gate marked trouble at `max_connections - 1`, so a
+  cluster whose ordinary slots were all held looked healthy whenever superuser
+  connections were reserved. Capacity is now counted after
+  `superuser_reserved_connections` and `reserved_connections`.
+- Raising `autovacuum_max_workers` needs a **restart** on 13 and 17 but only a
+  **reload** on 18. Silently version-specific advice is a trap; the difference is
+  registry data, checked by the oracle, now at 223 checks.
+
+### Added — mutation testing runs nightly
+
+Three holes this cycle were found the same way: break production code
+deliberately and see whether anything objects. A green suite of nine hundred
+tests found none of them. That was a thing someone had to remember to ask for.
+
+It now runs nightly, like the PostgreSQL oracle, with operators drawn from what
+actually went wrong rather than a generic catalogue — the one that found all
+three replaces a registry read with its current literal value.
+
+Its first run found nine survivors of one shape: **an honesty disclosure could be
+deleted and nothing objected.** `bulkReadRing.disclosure`,
+`modelLatency.disclosure` and `taxonomyDisclosure`,
+`connectionPooler.coverageDisclosure`, `workMem.coverageDisclosure`,
+`restoreDrill.smokeDisclosure` and `cadenceDisclosure`,
+`timelineRecovery.coverageDisclosure`, and one registered action risk — every one
+of them load-bearing content by rule 10, none of them enforced.
+
+Disclosures are now required to exist *and to reach the reader* on the surfaces
+making the qualified claim. Presence is not enough: a disclosure reduced to
+whitespace, or rendered where no reader sees it, fails with the registry path and
+the unqualified surfaces named. Because `panel.ts` builds each document section
+independently, a qualification in a neighbouring collapsed section no longer
+qualifies anything. Two unrelated threshold-boundary survivors surfaced during
+the fix and were killed with exact-boundary assertions.
+
+The harness mutates 228 of 95,553 production lines — **0.239%**, across 30 of
+144 eligible files. A mutation tool that silently sampled would be worse than
+none, because a green run reads as proof; `MUTATION-AUDIT.md` states exactly
+what it reaches and what it cannot.
+
+### Fixed — seventy-six things you could only see by walking
+
+The city's sweep looked at itself from above, so every defect visible only at
+eye level was structurally invisible to it. A first-person sweep now walks 1,036
+stations derived from the real walkable surfaces, sampling 3,752 poses.
+
+It found fifty near-plane intersections, hands passing through the autovacuum
+lever, a sign 860 px tall at walking distance, floor labels built to read at
+400 m and unreadable up close, coplanar surfaces, and an animated `commit_wait`
+torus escaping its collision envelope.
+
+Depth precision is now derived from the camera's situation rather than a single
+global value, after a reviewer measured that a uniform tight near plane costs
+5.0005× depth resolution at every distance and produced striping on the HA
+failure-domain platform at ordinary orbit range. Text atlases are split by
+record orientation; previously one horizontal record could move seventy-five
+walking labels onto an orbit-only layer.
+
 ## [0.39.3] - 2026-08-05
 
 ### Fixed — two fingers did not rotate the city
