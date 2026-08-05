@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { COLOR, atmosphere, onThemeMode } from '../core/theme'
-import { CLAIM_VALUES } from '../core/claims'
+import { CLAIM_VALUES, ordinaryConnectionCapacity } from '../core/claims'
 import { BUF_GRID, N_BACKEND_SLOTS, N_BUFFERS, poolBytes } from '../core/types'
 import type { SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, fmtBytes, fmtLsn, fmtNum, fmtPct, makeRng } from '../core/util'
@@ -12,7 +12,12 @@ import { markTextPlane, markTextTexture } from './text-plane'
 export const SHARED_BUFFER_SAMPLE_PLATE_LABEL = `SHARED_BUFFERS · REPRESENTATIVE SAMPLE · UP TO ${CLAIM_VALUES.bufferSample.capacityFrames.toLocaleString('en-US')} FRAMES`
 
 export function shmemDeckReadout(s: SimState): string {
-  return `${fmtBytes(poolBytes(s.knobs))} pool · ${fmtNum(s.buffers.sampleFrames)} sampled frames · ${s.stats.activeBackends}/${s.maxConnections} attached`
+  const capacity = ordinaryConnectionCapacity(
+    s.maxConnections,
+    s.superuserReservedConnections,
+    s.reservedConnections,
+  )
+  return `${fmtBytes(poolBytes(s.knobs))} pool · ${fmtNum(s.buffers.sampleFrames)} sampled frames · ${s.stats.activeBackends}/${capacity} attached`
 }
 
 export function sharedBuffersReadout(s: SimState): string {

@@ -1,5 +1,6 @@
 import { poolBytes, poolPages } from '../core/types'
-import { CLAIM_VALUES } from '../core/claims'
+import { renderAction } from '../core/actions'
+import { CLAIM_VALUES, ordinaryConnectionCapacity } from '../core/claims'
 import type { BackendSim, BackendState, BookRef, ComponentDoc, DocRef, PlanNode, SimState, TableSim } from '../core/types'
 import { fmtBytes, fmtDuration, fmtLsn, fmtNum, fmtPct } from '../core/util'
 
@@ -16,6 +17,12 @@ const nz = (v: number | undefined | null): number =>
   typeof v === 'number' && isFinite(v) ? v : 0
 
 const ratio = (a: number, b: number): number => (b > 0 ? nz(a) / b : 0)
+
+const connectionCapacity = (s: SimState): number => ordinaryConnectionCapacity(
+  s.maxConnections,
+  s.superuserReservedConnections,
+  s.reservedConnections,
+)
 
 const poolSize = (s: SimState): string => fmtBytes(poolBytes(s.knobs))
 
@@ -160,7 +167,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       },
     ],
     metrics: [
-      { label: 'Backend slots', get: (s) => `${fmtNum(nz(s.stats?.activeBackends))} / ${fmtNum(nz(s.maxConnections))}`, hint: 'modeled occupied slots / fixed capacity' },
+      { label: 'Backend slots', get: (s) => `${fmtNum(nz(s.stats?.activeBackends))} / ${fmtNum(connectionCapacity(s))}`, hint: 'modeled occupied ordinary slots / fixed ordinary capacity after reservations' },
       { label: 'Throughput', get: (s) => `${fmtNum(nz(s.stats?.tps))} tps` },
       { label: 'Uptime', get: (s) => fmtDuration(nz(s.t)), hint: 'simulated time since startup' },
       { label: 'Next xid', get: (s) => fmtNum(nz(s.xid)) },
@@ -280,8 +287,8 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       },
     ],
     metrics: [
-      { label: 'Connections', get: (s) => `${fmtNum(nz(s.stats?.activeBackends))} / ${fmtNum(nz(s.maxConnections))}` },
-      { label: 'Slots used', get: (s) => fmtPct(ratio(nz(s.stats?.activeBackends), nz(s.maxConnections))) },
+      { label: 'Connections', get: (s) => `${fmtNum(nz(s.stats?.activeBackends))} / ${fmtNum(connectionCapacity(s))}` },
+      { label: 'Slots used', get: (s) => fmtPct(ratio(nz(s.stats?.activeBackends), connectionCapacity(s))) },
       { label: 'Idle', get: (s) => fmtNum(nIn(s, 'idle')), hint: "connected, no query running" },
       { label: 'Idle in transaction', get: (s) => fmtNum(nIn(s, 'idle_in_xact')), hint: 'holding locks and possibly the horizon' },
       { label: 'Offered load', get: (s) => `${fmtNum(nz(s.knobs?.tps))} tps` },
@@ -314,7 +321,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       },
     ],
     metrics: [
-      { label: 'Open server connections', get: (s) => `${fmtNum(nz(s.stats?.activeBackends))} / ${fmtNum(nz(s.maxConnections))}` },
+      { label: 'Open server connections', get: (s) => `${fmtNum(nz(s.stats?.activeBackends))} / ${fmtNum(connectionCapacity(s))}` },
       { label: 'Idle in transaction', get: (s) => fmtNum(nIn(s, 'idle_in_xact')) },
       { label: 'Pool mode', get: (s) => s.pooler.mode },
     ],
@@ -345,7 +352,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'The queue and connection controls',
         body:
-          `PgBouncer's \`pool_mode\` chooses the release boundary and defaults to \`${CLAIM_VALUES.connectionPooler.pgBouncerDefaults.poolMode}\`. \`default_pool_size\` targets server connections per user/database pair and defaults to ${CLAIM_VALUES.connectionPooler.pgBouncerDefaults.defaultPoolSize}; \`max_client_conn\` caps client connections across the PgBouncer process and defaults to ${CLAIM_VALUES.connectionPooler.pgBouncerDefaults.maxClientConn}. \`query_wait_timeout\` defaults to ${CLAIM_VALUES.connectionPooler.pgBouncerDefaults.queryWaitTimeoutSeconds} seconds: expiry disconnects the waiting client, while zero queues indefinitely. PgBouncer does not coordinate its target with PostgreSQL \`max_connections\`. All user/database pools, reserve connections, PgBouncer processes and bypass clients must collectively leave PostgreSQL headroom, including slots protected by \`superuser_reserved_connections\` and \`reserved_connections\`.`,
+          `PgBouncer's \`pool_mode\` chooses the release boundary and defaults to \`${CLAIM_VALUES.connectionPooler.pgBouncerDefaults.poolMode}\`. \`default_pool_size\` targets server connections per user/database pair and defaults to ${CLAIM_VALUES.connectionPooler.pgBouncerDefaults.defaultPoolSize}; \`max_client_conn\` caps client connections across the PgBouncer process and defaults to ${CLAIM_VALUES.connectionPooler.pgBouncerDefaults.maxClientConn}. \`query_wait_timeout\` defaults to ${CLAIM_VALUES.connectionPooler.pgBouncerDefaults.queryWaitTimeoutSeconds} seconds: expiry disconnects the waiting client, while zero queues indefinitely. PgBouncer does not coordinate its target with PostgreSQL \`max_connections\`.\n\n${renderAction('restoreConnectionCapacity')}`,
       },
       {
         heading: 'How an operator sees the boundary',
@@ -409,7 +416,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     ],
     metrics: [
       { label: 'Connected', get: (s) => fmtNum(nz(s.stats?.activeBackends)) },
-      { label: 'Free slots', get: (s) => fmtNum(Math.max(0, nz(s.maxConnections) - nz(s.stats?.activeBackends))) },
+      { label: 'Free slots', get: (s) => fmtNum(Math.max(0, connectionCapacity(s) - nz(s.stats?.activeBackends))) },
       { label: 'Arrival rate', get: (s) => `${fmtNum(nz(s.knobs?.tps))} tps` },
     ],
     knobs: ['tps'],
@@ -464,7 +471,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     ],
     metrics: [
       { label: 'Children', get: (s) => `${fmtNum(nz(s.stats?.activeBackends))} backends` },
-      { label: 'Slots', get: (s) => `${fmtNum(nz(s.stats?.activeBackends))} / ${fmtNum(nz(s.maxConnections))}` },
+      { label: 'Slots', get: (s) => `${fmtNum(nz(s.stats?.activeBackends))} / ${fmtNum(connectionCapacity(s))}` },
       { label: 'Autovacuum', get: (s) => (s.autovac?.enabled ? 'launcher running' : 'off'), hint: 'the launcher is a postmaster child' },
       {
         label: 'Standby A',
@@ -701,7 +708,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     metrics: [
       { label: 'Buffer pool', get: poolSize, hint: 'shared_buffers; the visual sample is shown separately in the plaza' },
       { label: 'WAL buffers', get: (s) => fmtBytes(nz(s.wal?.bufferCapacity)) },
-      { label: 'Proc slots', get: (s) => `${fmtNum(nz(s.stats?.activeBackends))} / ${fmtNum(nz(s.maxConnections))}` },
+      { label: 'Proc slots', get: (s) => `${fmtNum(nz(s.stats?.activeBackends))} / ${fmtNum(connectionCapacity(s))}` },
       { label: 'Lock waits', get: (s) => fmtNum((s.locks ?? []).length), hint: 'edges currently in the wait-for graph' },
     ],
     knobs: ['sharedBuffers'],

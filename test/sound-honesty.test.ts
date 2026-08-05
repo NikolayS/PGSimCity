@@ -43,7 +43,8 @@ function trackedDocumentationFiles(): string[] {
 function describesSoundControl(text: string): boolean {
   return (
     /\b(?:toggle|turn|enable|disable|mute|unmute)\s+(?:the\s+)?(?:walk\s+)?(?:sound|audio)\b/i.test(text)
-    || /\b(?:walk\s+)?(?:sound|audio)\s+(?:(?:is|was|starts)\s+)?(?:on|off|ready)\b/i.test(text)
+    || /\bwalk\s+(?:sound|audio)\s+(?:on|off|ready)\b/i.test(text)
+    || /\b(?:sound|audio)\s+(?:is|was|starts)\s+(?:on|off|ready)\b/i.test(text)
   )
 }
 

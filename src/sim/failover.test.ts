@@ -108,7 +108,7 @@ describe('Patroni switchover and failover', () => {
     })
 
     expect.soft(sim.state.stats.commits).toBe(commitsAfterDrain)
-    expect.soft(waiters).toHaveLength(sim.state.maxConnections)
+    expect.soft(waiters).toHaveLength(sim.state.backends.length)
     expect.soft(waitEvents).toContain('SyncRep')
 
     sim.setKnob('synchronousStandbyNames', 'none')

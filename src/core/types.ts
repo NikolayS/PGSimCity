@@ -549,6 +549,8 @@ export interface MvccRowStory {
 
 export interface TableSim {
   def: TableDef
+  /** Per-relation storage parameter; false excludes routine autovacuum. */
+  autovacuumEnabled: boolean
   pages: number
   /** Live total across this table's index relation files, including bloat. */
   indexPages: number
@@ -781,6 +783,8 @@ export interface PhysicalStandbyState {
   lagBytes: number
   lagSec: number
   networkLagMs: number
+  /** True after pg_wal_replay_pause(); receipt may continue while apply stops. */
+  replayPaused: boolean
   applyActivity: number
   inFlight: number
   walSender: ReplicationProcessState
@@ -1182,7 +1186,10 @@ export interface SimState {
   /** Global visibility cutoff; a replacing xmax must precede it to be removable. */
   xminHorizon: number
   oldestSnapshotAge: number
+  /** Configured max_connections, including protected reservations. */
   maxConnections: number
+  superuserReservedConnections: number
+  reservedConnections: number
   pooler: PoolerState
   backends: BackendSim[]
   buffers: BufferPool

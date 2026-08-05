@@ -16,6 +16,7 @@ import {
   logicalSlotHorizonCheck,
   markdownTable,
   oracleSummary,
+  operationalActionChecks,
   parsePgControlWalSegmentSize,
   partialIndexBehaviorChecks,
   toastReadPathChecks,
@@ -113,6 +114,8 @@ describe('PostgreSQL oracle claim registry', () => {
       asynchronousCommit: { lossWindowMultiplier: 3 },
       partialIndexBehavior: { rows: 2_000 },
     })
+    expect(registry.actions.tuneAutovacuum.versionSpecificity.setting)
+      .toBe('autovacuum_max_workers')
 
     expect(registry.claims.gucDefaults.length).toBeGreaterThan(8)
     expect(registry.catalog.some((entry) => entry.id === 'pg_stat_io')).toBe(true)
@@ -178,6 +181,8 @@ describe('PostgreSQL oracle claim registry', () => {
       'shared_buffers',
       'wal_buffers',
       'max_connections',
+      'superuser_reserved_connections',
+      'reserved_connections',
       'max_locks_per_transaction',
       'max_prepared_transactions',
       'max_wal_senders',
@@ -206,6 +211,54 @@ describe('PostgreSQL oracle claim registry', () => {
         `every Diagnose SQL block needs a PostgreSQL ${major} form`,
       ).toEqual([])
     }
+  })
+
+  it('checks operational action facts at the selected server boundary', () => {
+    const actions = {
+      tuneAutovacuum: {
+        versionSpecificity: {
+          setting: 'autovacuum_max_workers',
+          variants: [
+            { from: 13, to: 17, context: 'postmaster', activation: 'server restart' },
+            { from: 18, context: 'sighup', activation: 'configuration reload' },
+          ],
+        },
+      },
+      restoreConnectionCapacity: {
+        preconditions: [
+          'Count max_connections minus superuser_reserved_connections and, where available, reserved_connections.',
+        ],
+      },
+      enableRelationAutovacuum: {
+        preconditions: ['Inspect pg_class.reloptions for autovacuum_enabled=false.'],
+      },
+    }
+    const observations = {
+      workerContext: 'postmaster',
+      maxConnections: 8,
+      superuserReservedConnections: 3,
+      reservedConnections: 0,
+      relationAutovacuumEnabled: false,
+    }
+
+    expect(operationalActionChecks(actions, observations, 17)).toEqual([
+      expect.objectContaining({
+        claim: 'action/autovacuum_max_workers/activation',
+        city: expect.stringMatching(/server restart/),
+        server: 'postmaster',
+        verdict: 'MATCH',
+      }),
+      expect.objectContaining({
+        claim: 'action/ordinary-connection-capacity',
+        city: expect.stringMatching(/8 - 3 - 0 = 5/),
+        verdict: 'MATCH',
+      }),
+      expect.objectContaining({
+        claim: 'action/per-relation-autovacuum',
+        server: 'autovacuum_enabled=false',
+        verdict: 'MATCH',
+      }),
+    ])
   })
 
   it('executes the registered Diagnose SQL form for the selected major', async () => {

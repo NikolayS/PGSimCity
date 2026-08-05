@@ -64,6 +64,7 @@ import {
   SHARED_BUFFERS_FULL_SAMPLE_MIB,
 } from '../core/types'
 import { N_TABLES, TABLES } from '../core/catalog'
+import { CLAIM_VALUES, ordinaryConnectionCapacity } from '../core/claims'
 import { traceStopBit, walTriggerBytes } from '../core/model-helpers'
 import { configuredSynchronousStandby } from '../core/replication'
 import { rid } from '../core/route-ids'
@@ -110,7 +111,6 @@ import {
   walSegName,
   weightedPick,
 } from '../core/util'
-import { CLAIM_VALUES } from '../core/claims'
 import { SCENARIOS, SCENARIO_NARRATION_SECONDS } from './scenarios'
 import {
   collectRepresentativeVersions,
@@ -635,6 +635,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
   const tables: TableSim[] = TABLES.map((def) => ({
     def,
+    autovacuumEnabled: true,
     pages: def.pages,
     indexPages: def.indexes.reduce((n, index) => n + index.pages, 0),
     liveTuples: def.pages * def.tuplesPerPage,
@@ -682,6 +683,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     lagBytes: 0,
     lagSec: 0,
     networkLagMs: DEFAULT_KNOBS.standbyANetworkLag,
+    replayPaused: false,
     applyActivity: 0,
     inFlight: 0,
     walSender: 'streaming',
@@ -705,6 +707,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     lagBytes: 0,
     lagSec: 0,
     networkLagMs: DEFAULT_KNOBS.standbyBNetworkLag,
+    replayPaused: false,
     applyActivity: 0,
     inFlight: 0,
     walSender: 'streaming',
@@ -738,7 +741,14 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     xid: 100000,
     xminHorizon: 100000,
     oldestSnapshotAge: 0,
-    maxConnections: N_BACKEND_SLOTS,
+    maxConnections:
+      N_BACKEND_SLOTS
+      + CLAIM_VALUES.connectionPooler.modelConnectionReservations.superuser
+      + CLAIM_VALUES.connectionPooler.modelConnectionReservations.reserved,
+    superuserReservedConnections:
+      CLAIM_VALUES.connectionPooler.modelConnectionReservations.superuser,
+    reservedConnections:
+      CLAIM_VALUES.connectionPooler.modelConnectionReservations.reserved,
     pooler: {
       mode: DEFAULT_KNOBS.poolMode,
       clientConnections: DEFAULT_KNOBS.clientConnections,
@@ -2055,7 +2065,11 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
   function acceptedClientConnections(): number {
     const admissionLimit = K.poolMode === 'disabled'
-      ? state.maxConnections
+      ? ordinaryConnectionCapacity(
+          state.maxConnections,
+          state.superuserReservedConnections,
+          state.reservedConnections,
+        )
       : K.maxClientConn
     return Math.min(K.clientConnections, admissionLimit)
   }
@@ -2068,7 +2082,11 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
   function serverConnectionCapacity(): number {
     return Math.max(1, Math.min(
-      state.maxConnections,
+      ordinaryConnectionCapacity(
+        state.maxConnections,
+        state.superuserReservedConnections,
+        state.reservedConnections,
+      ),
       configuredServerConnectionLimit(),
     ))
   }
@@ -4608,7 +4626,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     const candidates: { table: number; score: number }[] = []
     for (let i = 0; i < N_TABLES; i++) {
       const t = tables[i]
-      if (t.vacuuming) continue
+      if (t.vacuuming || !t.autovacuumEnabled) continue
       const sVac = t.deadTuples / Math.max(1, t.vacuumThreshold)
       const sIns = insSinceVacuum[i] / Math.max(1, vacuumInsThreshold[i])
       const score = Math.max(sVac, sIns)
@@ -5347,7 +5365,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       ? Math.max(24 * 1024, wal.bytesPerSec * 0.35)
       : Math.max(24 * MIB, wal.bytesPerSec * 4)
     const beforeApply = standby.appliedLsn
-    if (standby.appliedLsn < standby.flushedLsn) {
+    if (standby.appliedLsn < standby.flushedLsn && !standby.replayPaused) {
       standby.appliedLsn = Math.floor(
         Math.min(standby.flushedLsn, standby.appliedLsn + applyRate * dt),
       )
@@ -8515,7 +8533,14 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     state.xid = 100000
     state.xminHorizon = 100000
     state.oldestSnapshotAge = 0
-    state.maxConnections = N_BACKEND_SLOTS
+    state.maxConnections =
+      N_BACKEND_SLOTS
+      + CLAIM_VALUES.connectionPooler.modelConnectionReservations.superuser
+      + CLAIM_VALUES.connectionPooler.modelConnectionReservations.reserved
+    state.superuserReservedConnections =
+      CLAIM_VALUES.connectionPooler.modelConnectionReservations.superuser
+    state.reservedConnections =
+      CLAIM_VALUES.connectionPooler.modelConnectionReservations.reserved
     state.pooler.mode = DEFAULT_KNOBS.poolMode
     state.pooler.clientConnections = DEFAULT_KNOBS.clientConnections
     state.pooler.acceptedClients = DEFAULT_KNOBS.clientConnections
@@ -8785,6 +8810,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     for (let i = 0; i < N_TABLES; i++) {
       const t = tables[i]
       const d = TABLES[i]
+      t.autovacuumEnabled = true
       t.pages = d.pages
       t.liveTuples = d.pages * d.tuplesPerPage
       t.reltuples = t.liveTuples
@@ -8880,6 +8906,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       standby.lagBytes = 0
       standby.lagSec = 0
       standby.networkLagMs = K[knobKeys.networkLag]
+      standby.replayPaused = false
       standby.applyActivity = 0
       standby.inFlight = 0
       standby.walSender = enabled ? 'streaming' : 'stopped'

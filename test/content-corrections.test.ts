@@ -101,6 +101,8 @@ describe('PostgreSQL 18 content corrections', () => {
       shared_buffers: 'postmaster',
       wal_buffers: 'postmaster',
       max_connections: 'postmaster',
+      superuser_reserved_connections: 'postmaster',
+      reserved_connections: 'postmaster',
       checkpoint_timeout: 'sighup',
       checkpoint_completion_target: 'sighup',
       max_wal_size: 'sighup',

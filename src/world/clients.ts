@@ -1,11 +1,18 @@
 import * as THREE from 'three'
 import { COLOR } from '../core/theme'
+import { ordinaryConnectionCapacity } from '../core/claims'
 import { N_BACKEND_SLOTS } from '../core/types'
 import type { BackendState, SimState, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, damp, fmtNum, lerp, makeRng } from '../core/util'
 import { ANCHOR, CONDUIT, DISTRICT_BOUNDS, conduitX, rid, routeCurve } from './layout'
 import { OPACITY_TIER } from './storage'
 import { markTextPlane } from './text-plane'
+
+const connectionCapacity = (s: SimState): number => ordinaryConnectionCapacity(
+  s.maxConnections,
+  s.superuserReservedConnections,
+  s.reservedConnections,
+)
 
 /* ============================================================================
  * CLIENTS — the application tier, the server boundary, and the postmaster.
@@ -930,7 +937,7 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
       const open = s.stats.activeBackends
       return idleXact > 0
         ? `${open} open · ${idleXact} idle in transaction`
-        : `${open} / ${s.maxConnections} open`
+        : `${open} / ${connectionCapacity(s)} open`
     },
   })
 
@@ -945,7 +952,7 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
     focus: { target: [0, 18, ANCHOR.postmaster[2]], distance: 96, dir: [0.35, 0.34, 1] },
     labelAt: [0, PM_TOP + 6, ANCHOR.postmaster[2]],
     color: COLOR.postmaster,
-    readout: (s) => `${s.stats.activeBackends} / ${s.maxConnections} connections`,
+    readout: (s) => `${s.stats.activeBackends} / ${connectionCapacity(s)} connections`,
   })
 
   ctx.register({
@@ -960,7 +967,7 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
     labelAt: [0, 16, ANCHOR.connGate[2]],
     color: COLOR.ok,
     readout: (s) =>
-      slotsFree === 0 || s.stats.activeBackends >= s.maxConnections
+      slotsFree === 0 || s.stats.activeBackends >= connectionCapacity(s)
         ? 'FATAL: sorry, too many clients already'
         : `${fmtNum(accepted)} accepted · ${slotsFree}/${N} slots free`,
   })
@@ -1105,7 +1112,7 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
 
     /* --- postmaster ------------------------------------------------------- */
     beaconFlash = Math.max(0, beaconFlash - dt * 2.6)
-    const load = clamp01(sim.stats.activeBackends / Math.max(1, sim.maxConnections))
+    const load = clamp01(sim.stats.activeBackends / Math.max(1, connectionCapacity(sim)))
     const breathe = 0.55 + 0.45 * Math.sin(t * 1.5)
     const beaconLevel = 0.7 + breathe * 0.5 + beaconFlash * 3.2
     _c.setHex(COLOR.postmaster).multiplyScalar(beaconLevel * 2.4)
@@ -1176,7 +1183,7 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
     /* --- gate ------------------------------------------------------------- */
     gateFlash = Math.max(0, gateFlash - dt * 3.2)
     // "sorry, too many clients already" — every slot taken, or max_connections hit
-    const full = free === 0 || sim.stats.activeBackends >= sim.maxConnections
+    const full = free === 0 || sim.stats.activeBackends >= connectionCapacity(sim)
     rejectLevel = damp(rejectLevel, full ? 1 : 0, 6, dt)
 
     _c.setHex(COLOR.client).multiplyScalar(0.22 + gateFlash * 1.6)

@@ -16,6 +16,21 @@ const MIB = KIB * KIB
 const MODEL_MILLISECOND_UNIT = 'model ms'
 const POSTGRESQL_MAJOR = 18
 const POSTGRESQL_REFERENCE_MINOR = 4
+const MODEL_CONNECTION_RESERVATIONS = {
+  superuser: 3,
+  reserved: 0,
+} as const
+
+export function ordinaryConnectionCapacity(
+  maxConnections: number,
+  superuserReservedConnections: number,
+  reservedConnections: number,
+): number {
+  return Math.max(
+    0,
+    maxConnections - superuserReservedConnections - reservedConnections,
+  )
+}
 
 const VACUUM_TRUNCATION_LOCK = {
   mode: 'ACCESS EXCLUSIVE',
@@ -114,6 +129,7 @@ export const CLAIM_VALUES = {
     },
     modelDefaultPoolSize: 8,
     concurrencyTarget: 8,
+    modelConnectionReservations: MODEL_CONNECTION_RESERVATIONS,
     transactionTradeoff: 'Transaction pooling releases the server connection after each transaction. It cannot preserve arbitrary session state: SET/RESET and session-level advisory locks cannot span transactions; SQL PREPARE is incompatible and protocol-level named prepared statements need PgBouncer max_prepared_statements tracking; LISTEN subscriptions do not work, although NOTIFY can still be sent. Session pooling keeps one server connection for the client session and preserves PostgreSQL features, but it cannot multiplex idle client sessions at transaction boundaries.',
     absent: [
       'PgBouncer statement pool mode',
@@ -268,7 +284,7 @@ export const CLAIM_VALUES = {
     replayStageGapBytes: {
       threshold: 256 * KIB,
       source: 'replication.standbys',
-      branches: ['replica.1→v.replay', 'replica.1→v.rep_ok'],
+      branches: ['replica.1→replica.replay-state', 'replica.1→v.rep_ok'],
     },
     senderStageGapBytes: {
       threshold: 512 * KIB,
@@ -461,6 +477,10 @@ export const CLAIMS = {
         {
           role: 'diagnosticSql',
           owner: 'src/observability/paths.ts#DIAGNOSTIC_SQL',
+        },
+        {
+          role: 'actions',
+          owner: 'src/core/actions.ts#ACTIONS',
         },
         {
           role: 'walSegment',
