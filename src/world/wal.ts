@@ -149,8 +149,8 @@ const FACE_N: Record<Facing, [number, number, number]> = {
 }
 
 /* ============================================================================
- * SIGNAGE — one canvas atlas, one merged geometry, one draw call for every
- * piece of text in the district (including the 14 live segment file names).
+ * SIGNAGE — one canvas atlas, split into map and walking-reader geometry.
+ * The texture and dynamic attributes remain shared across the two draw calls.
  * ==========================================================================*/
 
 const SIGN_W = 512
@@ -176,8 +176,9 @@ class Signage {
   }[] = []
   private quads = 0
 
-  geometry: THREE.BufferGeometry | null = null
-  mesh: THREE.Mesh | null = null
+  private readonly geometries: THREE.BufferGeometry[] = []
+  private material: THREE.Material | null = null
+  mesh: THREE.Group | null = null
   private colorAttr: THREE.BufferAttribute | null = null
 
   constructor() {
@@ -266,15 +267,11 @@ class Signage {
     return [this.quads++, row]
   }
 
-  build(): THREE.Mesh {
-    const g = new THREE.BufferGeometry()
-    g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3))
-    g.setAttribute('uv', new THREE.Float32BufferAttribute(this.uv, 2))
+  build(): THREE.Group {
+    const position = new THREE.Float32BufferAttribute(this.pos, 3)
+    const uv = new THREE.Float32BufferAttribute(this.uv, 2)
     const ca = new THREE.Float32BufferAttribute(this.col, 3)
     ca.setUsage(THREE.DynamicDrawUsage)
-    g.setAttribute('color', ca)
-    g.setIndex(this.idx)
-    g.computeBoundingSphere()
     const mat = new THREE.MeshBasicMaterial({
       map: this.texture,
       transparent: true,
@@ -283,16 +280,34 @@ class Signage {
       toneMapped: false,
       side: THREE.FrontSide,
     })
-    const mesh = new THREE.Mesh(g, mat)
-    mesh.renderOrder = 5
-    mesh.raycast = () => {}
-    for (const plane of this.planes) {
-      markTextPlane(mesh, plane.text, plane.center, plane.normal, plane.up)
+    const group = new THREE.Group()
+    group.name = 'wal.signage'
+    for (const mapOnly of [false, true]) {
+      const planeIndexes = this.planes.flatMap((plane, planeIndex) => (
+        (Math.abs(plane.normal[1]) > 0.8) === mapOnly ? [planeIndex] : []
+      ))
+      if (planeIndexes.length === 0) continue
+      const g = new THREE.BufferGeometry()
+      g.setAttribute('position', position)
+      g.setAttribute('uv', uv)
+      g.setAttribute('color', ca)
+      g.setIndex(planeIndexes.flatMap((planeIndex) => this.idx.slice(planeIndex * 6, planeIndex * 6 + 6)))
+      g.computeBoundingSphere()
+      const mesh = new THREE.Mesh(g, mat)
+      mesh.name = mapOnly ? 'wal.signage.map' : 'wal.signage.walk'
+      mesh.renderOrder = 5
+      mesh.raycast = () => {}
+      for (const planeIndex of planeIndexes) {
+        const plane = this.planes[planeIndex]
+        markTextPlane(mesh, plane.text, plane.center, plane.normal, plane.up)
+      }
+      this.geometries.push(g)
+      group.add(mesh)
     }
-    this.geometry = g
-    this.mesh = mesh
+    this.material = mat
+    this.mesh = group
     this.colorAttr = ca
-    return mesh
+    return group
   }
 
   /** Repaint one row in place — used for the live segment file names. */
@@ -310,8 +325,8 @@ class Signage {
   }
 
   dispose(): void {
-    this.geometry?.dispose()
-    ;(this.mesh?.material as THREE.Material | undefined)?.dispose()
+    for (const geometry of this.geometries) geometry.dispose()
+    this.material?.dispose()
     this.texture.dispose()
   }
 }
@@ -1246,7 +1261,7 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
   edgeLines.renderOrder = 2
   group.add(edgeLines)
 
-  /* --- signage mesh (one draw call for every label in the district) -------- */
+  /* --- one shared atlas, split by camera-layer orientation ---------------- */
   const signMesh = signs.build()
   group.add(signMesh)
 

@@ -76,6 +76,10 @@ const MIN_FLY_SPEED = 4
 const MAX_FLY_SPEED = 400
 const DEFAULT_FLY_SPEED = 46
 
+const OVERVIEW_NEAR = 2
+const FIRST_PERSON_NEAR = 0.1
+const CAMERA_FAR = 4000
+
 const BOOST = 3
 const PRECISION = 0.25
 
@@ -360,7 +364,16 @@ export function createCameraRig(
 
   /* ---- helpers -----------------------------------------------------------*/
 
+  function applyClipping(m: CameraMode): void {
+    const near = m === 'walk' || m === 'fly' ? FIRST_PERSON_NEAR : OVERVIEW_NEAR
+    if (camera.near === near && camera.far === CAMERA_FAR) return
+    camera.near = near
+    camera.far = CAMERA_FAR
+    camera.updateProjectionMatrix()
+  }
+
   function setMode_(m: CameraMode): void {
+    applyClipping(m)
     if (m === mode) return
     mode = m
     if (m === 'orbit' || m === 'fly') userMode = m
@@ -369,6 +382,8 @@ export function createCameraRig(
 
   const scriptedNow = () => mode === 'focus' || mode === 'tour'
   const motionReduced = () => options.reducedMotion ?? reduceMotion()
+
+  applyClipping(mode)
 
   /**
    * Rebuild the orbit state from wherever the camera currently is, putting the

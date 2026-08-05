@@ -27,8 +27,11 @@ export function markTextPlane(
   const data = object.userData as { [TEXT_PLANES]?: TextPlaneRecord[] }
   const records = data[TEXT_PLANES] ?? (data[TEXT_PLANES] = [])
   records.push({ text, center, normal, up, fixed })
-  _layerNormal.fromArray(normal).applyQuaternion(object.quaternion)
-  if (fixed && Math.abs(_layerNormal.y) > 0.8) object.layers.set(MAP_TEXT_LAYER)
+  const mapOnly = records.every((record) => {
+    _layerNormal.fromArray(record.normal).applyQuaternion(object.quaternion)
+    return record.fixed && Math.abs(_layerNormal.y) > 0.8
+  })
+  object.layers.set(mapOnly ? MAP_TEXT_LAYER : 0)
 }
 
 export function markedTextPlanes(object: THREE.Object3D): readonly TextPlaneRecord[] {

@@ -11,6 +11,7 @@ interface SweepReport {
   districtSurfaces: number
   borderStrips: number
   opaqueHorizontalTriangles: number
+  depthBits: number
   findings: {
     invariant: string
     object: string
@@ -36,14 +37,16 @@ describe('live rendered city visual sweep', () => {
         }
         if (!window.PGSIMCITY) throw new Error('PGSimCity did not expose its browser handle')
         window.PGSIMCITY.sim.setKnob('paused', true)
-        window.PGSIMCITY.bus.emit('quality', { level: 'high' })
+        window.PGSIMCITY.setThemeMode('day', { persist: false })
+        window.PGSIMCITY.bus.emit('quality', { level: 'medium' })
       })()`,
     }], async ({ evaluate }) => evaluate(`(async () => {
       const sweep = await import('/test/visual-sweep-browser.ts')
       const report = await sweep.runVisualSweep(window.PGSIMCITY)
       const mirrorProof = await sweep.proveMirroredTextDetection(window.PGSIMCITY)
-      return { report, mirrorProof }
-    })()`)) as [{ report: SweepReport; mirrorProof: SweepFinding[] }]
+      const nearPlaneProof = await sweep.proveNearPlaneZFightDetection(window.PGSIMCITY)
+      return { report, mirrorProof, nearPlaneProof }
+    })()`)) as [{ report: SweepReport; mirrorProof: SweepFinding[]; nearPlaneProof: SweepFinding[] }]
 
     if (process.env.VISUAL_SWEEP_REPORT === '1') {
       console.info(JSON.stringify(result, null, 2))
@@ -58,9 +61,11 @@ describe('live rendered city visual sweep', () => {
           districtSurfaces: result.report.districtSurfaces,
           borderStrips: result.report.borderStrips,
           opaqueHorizontalTriangles: result.report.opaqueHorizontalTriangles,
+          depthBits: result.report.depthBits,
         },
         findings: result.report.findings,
         mirrorProof: result.mirrorProof,
+        nearPlaneProof: result.nearPlaneProof,
       }, null, 2))
     }
 
@@ -85,10 +90,18 @@ describe('live rendered city visual sweep', () => {
     expect(result.report.districtSurfaces).toBeGreaterThanOrEqual(3)
     expect(result.report.borderStrips).toBeGreaterThan(20)
     expect(result.report.opaqueHorizontalTriangles).toBeGreaterThan(10_000)
+    expect(result.report.depthBits).toBeGreaterThanOrEqual(24)
     expect(result.mirrorProof).toEqual([
       expect.objectContaining({
         invariant: 'text-legibility',
         detail: expect.stringContaining('mirrored world determinant'),
+      }),
+    ])
+    expect(result.nearPlaneProof).toEqual([
+      expect.objectContaining({
+        invariant: 'z-fighting',
+        object: expect.stringContaining('ha.failure-domain-platforms'),
+        detail: expect.stringContaining('depth buffer'),
       }),
     ])
     expect(result.report.findings).toEqual([])
