@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 
 import type { ComponentDef, DistrictId, FocusSpec } from '../src/core/types'
-import { DISTRICT_BOUNDS, type Bounds } from '../src/world/layout'
+import { CITY, DISTRICT_BOUNDS, type Bounds } from '../src/world/layout'
 import { markedTextPlanes, type TextPlaneRecord } from '../src/world/text-plane'
 
 const UP = new THREE.Vector3(0, 1, 0)
@@ -11,6 +11,8 @@ const BORDER_LEVEL_TOLERANCE = 0.01
 const Z_FIGHT_Y_TOLERANCE = 0.01
 const MIN_SURFACE_AREA = 64
 const MIN_TRIANGLE_AREA = 0.002
+const GROUND_PROBE_MAX_SPACING = 8
+const GROUND_BOUNDARY_TOLERANCE = 0.02
 const SURFACE_WORD = /(?:^|[.:/\s-])(ground|floor|deck|apron|forecourt|yard|platform|pad|plinth|surface|stylobate)(?:$|[.:/\s-])/i
 
 interface CityHandle {
@@ -988,14 +990,71 @@ function nearestDirectHit(
   return nearest
 }
 
-/** A district edge gets a downward ground acquisition, then a shallow ray
- * beyond the declaration. If either reaches sky, a walking camera can too. */
-function districtEdgeFindings(scene: THREE.Scene, stations: readonly Station[]): SweepFinding[] {
-  const meshes: THREE.Mesh[] = []
-  scene.traverse((object) => {
-    const mesh = object as THREE.Mesh
-    if (mesh.isMesh && visibleInTree(mesh) && materialsOf(mesh).some(solidMaterial)) meshes.push(mesh)
-  })
+interface GroundAperture {
+  readonly label: string
+  readonly x: readonly [number, number]
+  readonly z: readonly [number, number]
+}
+
+const EXPECTED_GROUND_APERTURES: readonly GroundAperture[] = [{
+  label: 'storage excavation',
+  x: [-CITY.pit.x, CITY.pit.x],
+  z: [-CITY.pit.z, CITY.pit.z],
+}]
+
+function belongsTo(object: THREE.Object3D, root: THREE.Object3D): boolean {
+  for (let current: THREE.Object3D | null = object; current; current = current.parent) {
+    if (current === root) return true
+  }
+  return false
+}
+
+function discoverGroundSurface(
+  records: readonly MeshRecord[],
+  registry: CityHandle['registry'],
+): { surface: MeshRecord | null; findings: SweepFinding[] } {
+  const roots = registry.all().filter((component) => component.id === 'world.ground')
+  const candidates = roots.length === 1
+    ? records.filter((record) => (
+        record.instanceId === null
+        && record.mesh.name === 'ground.plate'
+        && belongsTo(record.mesh, roots[0].object)
+        && record.materials.some(solidMaterial)
+      ))
+    : []
+  if (roots.length === 1 && candidates.length === 1) return { surface: candidates[0], findings: [] }
+  return {
+    surface: null,
+    findings: [{
+      invariant: 'no-sky',
+      station: 'world',
+      district: 'world',
+      object: 'world.ground/ground.plate',
+      position: [0, 0, 0],
+      detail: `registered world ground resolves to ${roots.length} roots and ${candidates.length} rendered plates`,
+    }],
+  }
+}
+
+function axisProbes(bounds: readonly [number, number]): number[] {
+  const start = bounds[0] + 1
+  const end = bounds[1] - 1
+  if (end <= start) return [(bounds[0] + bounds[1]) / 2]
+  const segments = Math.ceil((end - start) / GROUND_PROBE_MAX_SPACING)
+  return Array.from({ length: segments + 1 }, (_, index) => start + (end - start) * index / segments)
+}
+
+function insideExpectedAperture(x: number, z: number): boolean {
+  return EXPECTED_GROUND_APERTURES.some((aperture) => (
+    x > aperture.x[0] && x < aperture.x[1] && z > aperture.z[0] && z < aperture.z[1]
+  ))
+}
+
+/** An eight-unit district lattice targets the registered ground plate itself.
+ * Its ~3,650 direct raycasts add no painted frames; station renders still
+ * dominate runtime. Perimeter samples retain the outward sightline. */
+function districtGroundFindings(groundSurface: MeshRecord, stations: readonly Station[]): SweepFinding[] {
+  const meshes = [groundSurface.mesh]
   const raycaster = new THREE.Raycaster()
   const hits: THREE.Intersection[] = []
   const down = new THREE.Vector3(0, -1, 0)
@@ -1004,77 +1063,106 @@ function districtEdgeFindings(scene: THREE.Scene, stations: readonly Station[]):
   const findings: SweepFinding[] = []
   for (const station of stations) {
     if (station.district === 'world') continue
-    const { bounds } = station
-    const cx = (bounds.x[0] + bounds.x[1]) / 2
-    const cz = (bounds.z[0] + bounds.z[1]) / 2
-    const probes = [
-      { point: [bounds.x[0] + 1, cz] as const, outward: [-1, 0] as const },
-      { point: [bounds.x[1] - 1, cz] as const, outward: [1, 0] as const },
-      { point: [cx, bounds.z[0] + 1] as const, outward: [0, -1] as const },
-      { point: [cx, bounds.z[1] - 1] as const, outward: [0, 1] as const },
-    ]
-    for (let index = 0; index < probes.length; index++) {
-      const probe = probes[index]
-      origin.set(probe.point[0], station.target[1] + 24, probe.point[1])
-      raycaster.set(origin, down)
-      raycaster.near = 0
-      raycaster.far = 160
-      const ground = nearestDirectHit(meshes, raycaster, hits)
-      if (!ground) {
-        findings.push({
-          invariant: 'no-sky',
-          station: station.district,
-          district: station.district,
-          object: `declared edge[${index}]`,
-          position: pointTuple(origin),
-          detail: 'downward district-edge ray reaches sky before rendered ground',
-        })
-        continue
-      }
-      origin.set(
-        ground.point.x - probe.outward[0] * 2,
-        ground.point.y + 0.45,
-        ground.point.z - probe.outward[1] * 2,
-      )
-      direction.set(probe.outward[0], -0.2, probe.outward[1]).normalize()
-      raycaster.set(origin, direction)
-      raycaster.near = 0.05
-      raycaster.far = 10
-      if (!nearestDirectHit(meshes, raycaster, hits)) {
-        findings.push({
-          invariant: 'no-sky',
-          station: station.district,
-          district: station.district,
-          object: `declared edge[${index}]`,
-          position: pointTuple(ground.point),
-          detail: 'outward district-edge ray reaches sky where ground should continue',
-        })
+    const xProbes = axisProbes(station.bounds.x)
+    const zProbes = axisProbes(station.bounds.z)
+    for (let xIndex = 0; xIndex < xProbes.length; xIndex++) {
+      for (let zIndex = 0; zIndex < zProbes.length; zIndex++) {
+        const x = xProbes[xIndex]
+        const z = zProbes[zIndex]
+        if (insideExpectedAperture(x, z)) continue
+        origin.set(x, groundSurface.box.max.y + 2, z)
+        raycaster.set(origin, down)
+        raycaster.near = 0
+        raycaster.far = 4
+        const ground = nearestDirectHit(meshes, raycaster, hits)
+        const object = `declared ground lattice[${xIndex},${zIndex}]`
+        if (!ground) {
+          findings.push({
+            invariant: 'no-sky',
+            station: station.district,
+            district: station.district,
+            object,
+            position: pointTuple(origin),
+            detail: `downward district ray misses the registered ground plate on a ${GROUND_PROBE_MAX_SPACING}-unit lattice`,
+          })
+          continue
+        }
+        const outwards: readonly (readonly [number, number])[] = [
+          ...(xIndex === 0 ? [[-1, 0] as const] : []),
+          ...(xIndex === xProbes.length - 1 ? [[1, 0] as const] : []),
+          ...(zIndex === 0 ? [[0, -1] as const] : []),
+          ...(zIndex === zProbes.length - 1 ? [[0, 1] as const] : []),
+        ]
+        for (const outward of outwards) {
+          origin.set(
+            ground.point.x - outward[0] * 2,
+            ground.point.y + 0.45,
+            ground.point.z - outward[1] * 2,
+          )
+          direction.set(outward[0], -0.2, outward[1]).normalize()
+          raycaster.set(origin, direction)
+          raycaster.near = 0.05
+          raycaster.far = 10
+          if (!nearestDirectHit(meshes, raycaster, hits)) {
+            findings.push({
+              invariant: 'no-sky',
+              station: station.district,
+              district: station.district,
+              object,
+              position: pointTuple(ground.point),
+              detail: 'outward district-edge ray misses the registered ground plate where it should continue',
+            })
+          }
+        }
       }
     }
   }
   return findings
 }
 
+function loopBounds(loop: BoundaryLoop): { x: readonly [number, number]; z: readonly [number, number] } {
+  let minX = Infinity
+  let maxX = -Infinity
+  let minZ = Infinity
+  let maxZ = -Infinity
+  for (const point of loop.points) {
+    minX = Math.min(minX, point.x)
+    maxX = Math.max(maxX, point.x)
+    minZ = Math.min(minZ, point.y)
+    maxZ = Math.max(maxZ, point.y)
+  }
+  return { x: [minX, maxX], z: [minZ, maxZ] }
+}
+
+function matchesAperture(loop: BoundaryLoop, aperture: GroundAperture): boolean {
+  const bounds = loopBounds(loop)
+  const expectedArea = (aperture.x[1] - aperture.x[0]) * (aperture.z[1] - aperture.z[0])
+  return Math.abs(bounds.x[0] - aperture.x[0]) <= GROUND_BOUNDARY_TOLERANCE
+    && Math.abs(bounds.x[1] - aperture.x[1]) <= GROUND_BOUNDARY_TOLERANCE
+    && Math.abs(bounds.z[0] - aperture.z[0]) <= GROUND_BOUNDARY_TOLERANCE
+    && Math.abs(bounds.z[1] - aperture.z[1]) <= GROUND_BOUNDARY_TOLERANCE
+    && Math.abs(Math.abs(loop.area) - expectedArea) <= 0.25
+}
+
+function stationAtPoint(x: number, z: number, stations: readonly Station[]): DistrictId {
+  return [...stations]
+    .filter((station) => (
+      station.district !== 'world'
+      && x >= station.bounds.x[0]
+      && x <= station.bounds.x[1]
+      && z >= station.bounds.z[0]
+      && z <= station.bounds.z[1]
+    ))
+    .sort((a, b) => (
+      (a.bounds.x[1] - a.bounds.x[0]) * (a.bounds.z[1] - a.bounds.z[0])
+      - (b.bounds.x[1] - b.bounds.x[0]) * (b.bounds.z[1] - b.bounds.z[0])
+    ))[0]?.district ?? 'world'
+}
+
 function groundShellFindings(
-  records: readonly MeshRecord[],
-  solidTriangles: readonly HorizontalTriangle[],
+  groundSurface: MeshRecord,
   stations: readonly Station[],
 ): SweepFinding[] {
-  const areaByRecord = new Map<string, number>()
-  for (const triangle of solidTriangles) {
-    areaByRecord.set(triangle.record.key, (areaByRecord.get(triangle.record.key) ?? 0) + triangle.area)
-  }
-  const groundSurface = [...records]
-    .filter((record) => record.instanceId === null)
-    .sort((a, b) => (areaByRecord.get(b.key) ?? 0) - (areaByRecord.get(a.key) ?? 0))[0]
-  if (!groundSurface) return [{
-    invariant: 'no-sky',
-    station: 'world',
-    district: 'world',
-    object: 'scene',
-    position: [0, 0, 0],
-    detail: 'could not discover the city ground surface from live horizontal geometry',
-  }]
   const loops = boundaryLoops(groundSurface)
   if (loops.length === 0) return [{
     invariant: 'no-sky',
@@ -1086,13 +1174,51 @@ function groundShellFindings(
   }]
   const outer = loops[0]
   const holes = loops.slice(1)
+  const findings: SweepFinding[] = []
+  const matchedApertures = new Set<number>()
+  for (let index = 0; index < holes.length; index++) {
+    const hole = holes[index]
+    const apertureIndex = EXPECTED_GROUND_APERTURES.findIndex((aperture, candidate) => (
+      !matchedApertures.has(candidate) && matchesAperture(hole, aperture)
+    ))
+    if (apertureIndex >= 0) {
+      matchedApertures.add(apertureIndex)
+      continue
+    }
+    const bounds = loopBounds(hole)
+    const x = (bounds.x[0] + bounds.x[1]) / 2
+    const z = (bounds.z[0] + bounds.z[1]) / 2
+    const district = stationAtPoint(x, z, stations)
+    findings.push({
+      invariant: 'no-sky',
+      station: district,
+      district,
+      object: `${recordLabel(groundSurface)} interior boundary[${index}]`,
+      position: [round(x), round(groundSurface.box.max.y), round(z)],
+      detail: `rendered ground has undeclared ${round(bounds.x[1] - bounds.x[0])} × ${round(bounds.z[1] - bounds.z[0])} interior boundary (${round(Math.abs(hole.area))} square units)`,
+    })
+  }
+  for (let index = 0; index < EXPECTED_GROUND_APERTURES.length; index++) {
+    if (matchedApertures.has(index)) continue
+    const aperture = EXPECTED_GROUND_APERTURES[index]
+    const x = (aperture.x[0] + aperture.x[1]) / 2
+    const z = (aperture.z[0] + aperture.z[1]) / 2
+    findings.push({
+      invariant: 'no-sky',
+      station: 'world',
+      district: 'world',
+      object: recordLabel(groundSurface),
+      position: [round(x), round(groundSurface.box.max.y), round(z)],
+      detail: `rendered ground has no boundary matching the declared ${aperture.label}`,
+    })
+  }
   const sourceStation = [...stations]
     .filter((station) => {
       const point = new THREE.Vector2(station.target[0], station.target[2])
       return pointInPolygon(point, outer.points) && !holes.some((hole) => pointInPolygon(point, hole.points))
     })
     .sort((a, b) => Math.hypot(a.target[0], a.target[2]) - Math.hypot(b.target[0], b.target[2]))[0]
-  if (!sourceStation) return []
+  if (!sourceStation) return findings
   const lowestStationY = Math.min(...stations.map((station) => station.target[1]))
   const eye = new THREE.Vector3(sourceStation.target[0], lowestStationY + 1.8, sourceStation.target[2])
   const shellRoot = groundSurface.mesh.parent ?? groundSurface.mesh
@@ -1137,7 +1263,7 @@ function groundShellFindings(
       })
     }
   }
-  return misses
+  return [...findings, ...misses]
 }
 
 function recordsForStation(records: readonly MeshRecord[], station: Station): MeshRecord[] {
@@ -1224,10 +1350,12 @@ export async function runVisualSweep(city: CityHandle): Promise<VisualSweepRepor
     }))
     .filter((surface) => surface.area >= 0.2)
   const borders = discoverBorders(records, solidTrianglesByRecord, supportSurfaces)
+  const ground = discoverGroundSurface(records, city.registry)
   const findings = [
     ...textFindings(city, text, colliders),
-    ...districtEdgeFindings(scene, stations),
-    ...groundShellFindings(records, solidTriangles, stations),
+    ...ground.findings,
+    ...(ground.surface ? districtGroundFindings(ground.surface, stations) : []),
+    ...(ground.surface ? groundShellFindings(ground.surface, stations) : []),
     ...surfaceFindings(surfaces, solidTriangles),
     ...borderFindings(borders, supportSurfaces),
     ...zFightFindings(opaqueTriangles),
