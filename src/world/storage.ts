@@ -4,6 +4,7 @@ import { N_VAC_WORKERS } from '../core/types'
 import type { FlowRequest, SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, fmtBytes, fmtNum, fmtPct, makeRng } from '../core/util'
 import { ANCHOR, CITY, N_TABLES, TABLES, indexPos, rid, routeCurve, tableX } from './layout'
+import { createPlanLabelPainter } from './plan-label'
 import { markTextPlane, markTextTexture } from './text-plane'
 
 export function diskArrayReadout(s: SimState): string {
@@ -307,7 +308,9 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
   const floorCx = (FLOOR_X0 + FLOOR_X1) / 2
   const floorCz = (FLOOR_Z0 + FLOOR_Z1) / 2
 
-  const floorTex = keep(buildFloorTexture(rng, quality.level === 'low' ? 1024 : 1792))
+  const floorArtwork = buildFloorTexture(rng, quality.level === 'low' ? 1024 : 1792)
+  const floorTex = keep(floorArtwork.texture)
+  const floorLabelTex = keep(floorArtwork.labelTexture)
   const mFloor = keep(
     new THREE.MeshStandardMaterial({
       map: floorTex,
@@ -321,6 +324,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
   )
   const gFloor = keep(new THREE.PlaneGeometry(floorW, floorD).rotateX(-Math.PI / 2))
   const floor = new THREE.Mesh(gFloor, mFloor)
+  floor.name = 'storage.datadir.floor'
   floor.position.set(floorCx, FLOOR_Y + 0.02, floorCz)
   markTextTexture(floorTex, 'DATA DIRECTORY floor plan')
   markTextPlane(floor, 'DATA DIRECTORY floor plan', [0, 0, 0], [0, 1, 0], [0, 0, -1])
@@ -355,6 +359,36 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
   floorZone.userData.pgNoShadow = true
   floorZone.visible = false
   dirGroup.add(floorZone)
+
+  const mFloorLabels = keep(new THREE.MeshBasicMaterial({
+    map: floorLabelTex,
+    transparent: true,
+    depthWrite: false,
+    toneMapped: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+  }))
+  mFloorLabels.name = 'storage.planLabels'
+  const floorLabels = new THREE.Mesh(gFloor, mFloorLabels)
+  floorLabels.name = 'storage.planLabels'
+  floorLabels.position.set(floorCx, FLOOR_Y + 0.075, floorCz)
+  floorLabels.renderOrder = 2
+  floorLabels.raycast = () => {}
+  markTextTexture(floorLabelTex, 'DATA DIRECTORY floor plan')
+  markTextPlane(floorLabels, 'DATA DIRECTORY floor plan', [0, 0, 0], [0, 1, 0], [0, 0, -1])
+  for (const label of floorArtwork.labels) {
+    markTextPlane(
+      floorLabels,
+      label.text,
+      [label.x - floorCx, 0, label.z - floorCz],
+      [0, 1, 0],
+      [Math.sin(label.rotation), 0, -Math.cos(label.rotation)],
+      true,
+      { fontSize: label.size, ratio: label.ratio, backing: label.backing },
+    )
+  }
+  dirGroup.add(floorLabels)
   // Slab under the printed plan, so the floor has thickness from the side.
   addBox(boxLo, floorCx, FLOOR_Y - 0.5, floorCz, floorW, 1.0, floorD)
 
@@ -2287,17 +2321,24 @@ function mixLin(a: number, b: number, t: number): number {
 }
 
 /**
- * The printed plan of the data directory. Everything typographic in the underworld lives
- * in this one texture: relation slots with their file paths, page rulers, fork
- * names, the directory listing, and the district title.
+ * The printed plan of the data directory. Structural survey marks stay in the
+ * lit floor map; typography uses a non-emissive overlay above the daylight coat.
  */
-function buildFloorTexture(rng: () => number, W: number): THREE.CanvasTexture {
+function buildFloorTexture(rng: () => number, W: number): {
+  texture: THREE.CanvasTexture
+  labelTexture: THREE.CanvasTexture
+  labels: ReturnType<typeof createPlanLabelPainter>['records']
+} {
   const px = W / (FLOOR_X1 - FLOOR_X0)
   const H = Math.round((FLOOR_Z1 - FLOOR_Z0) * px)
   const cv = document.createElement('canvas')
   cv.width = W
   cv.height = H
   const g = cv.getContext('2d')!
+  const labelCanvas = document.createElement('canvas')
+  labelCanvas.width = W
+  labelCanvas.height = H
+  const labelContext = labelCanvas.getContext('2d', { willReadFrequently: true })!
   const X = (wx: number) => (wx - FLOOR_X0) * px
   const Y = (wz: number) => (wz - FLOOR_Z0) * px
 
@@ -2338,6 +2379,19 @@ function buildFloorTexture(rng: () => number, W: number): THREE.CanvasTexture {
   }
   g.stroke()
 
+  const labels = createPlanLabelPainter(labelContext, {
+    pixelsPerUnit: px,
+    x: X,
+    y: Y,
+    surfaceName: 'data-directory floor artwork',
+    plate: {
+      background: '#0b1422',
+      ink: '#f1f6ff',
+      name: 'neutral matte label plate',
+      paddingX: 0.48,
+      paddingY: 0.24,
+    },
+  })
   const label = (
     text: string,
     wx: number,
@@ -2347,15 +2401,7 @@ function buildFloorTexture(rng: () => number, W: number): THREE.CanvasTexture {
     align: CanvasTextAlign = 'center',
     rot = 0,
   ) => {
-    g.save()
-    g.translate(X(wx), Y(wz))
-    if (rot) g.rotate(rot)
-    g.textAlign = align
-    g.textBaseline = 'middle'
-    g.fillStyle = color
-    g.font = `600 ${Math.round(size * px)}px ui-monospace, SFMono-Regular, Menlo, monospace`
-    g.fillText(text, 0, 0)
-    g.restore()
+    labels.draw(text, wx, wz, size, color, align, rot)
   }
 
   /* Relation slots: one painted bay per heap file. */
@@ -2436,22 +2482,22 @@ function buildFloorTexture(rng: () => number, W: number): THREE.CanvasTexture {
   label('↑ N', -104, -80, 2.2, 'rgba(143,165,196,0.5)')
 
   /* District title. */
-  g.save()
-  g.textAlign = 'center'
-  g.textBaseline = 'middle'
-  g.fillStyle = 'rgba(85,214,160,0.34)'
-  if ('letterSpacing' in g) (g as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = '16px'
-  g.font = `700 ${Math.round(4.4 * px)}px ui-monospace, SFMono-Regular, Menlo, monospace`
-  g.fillText('DATA DIRECTORY', X(0), Y(FLOOR_Z1 - 8))
-  g.font = `600 ${Math.round(2.0 * px)}px ui-monospace, SFMono-Regular, Menlo, monospace`
-  g.fillStyle = 'rgba(143,165,196,0.45)'
-  g.fillText('base/  global/  pg_xact/  pg_tblspc/   ·   pg_wal shown in east vault', X(0), Y(FLOOR_Z1 - 3))
-  if ('letterSpacing' in g) (g as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = '0px'
-  g.restore()
+  label('DATA DIRECTORY', 0, FLOOR_Z1 - 8, 4.4, 'rgba(85,214,160,0.34)')
+  label(
+    'base/  global/  pg_xact/  pg_tblspc/   ·   pg_wal shown in east vault',
+    0,
+    FLOOR_Z1 - 3,
+    2,
+    'rgba(143,165,196,0.45)',
+  )
 
   const tex = new THREE.CanvasTexture(cv)
   tex.colorSpace = THREE.SRGBColorSpace
   tex.anisotropy = 8
   tex.needsUpdate = true
-  return tex
+  const labelTexture = new THREE.CanvasTexture(labelCanvas)
+  labelTexture.colorSpace = THREE.SRGBColorSpace
+  labelTexture.anisotropy = 8
+  labelTexture.needsUpdate = true
+  return { texture: tex, labelTexture, labels: labels.records }
 }

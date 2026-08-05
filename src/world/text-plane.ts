@@ -7,6 +7,13 @@ export interface TextPlaneRecord {
   readonly normal: readonly [number, number, number]
   readonly up: readonly [number, number, number]
   readonly fixed: boolean
+  readonly contrast?: TextPlaneContrast
+}
+
+export interface TextPlaneContrast {
+  readonly fontSize: number
+  readonly ratio: Readonly<Record<'day' | 'night', number>>
+  readonly backing: Readonly<Record<'day' | 'night', string>>
 }
 
 const TEXT_PLANES = 'pgTextPlanes'
@@ -14,6 +21,9 @@ const _layerNormal = new THREE.Vector3()
 
 /** City-plan floor lettering is an orbit aid, not first-person signage. */
 export const MAP_TEXT_LAYER = 2
+
+/** WCAG 2.x minimum for normal-size text, applied to authored 3D plan labels. */
+export const SMALL_TEXT_CONTRAST_RATIO = 4.5
 
 /** Mark one independently oriented text quad on an object, including an atlas mesh. */
 export function markTextPlane(
@@ -23,10 +33,11 @@ export function markTextPlane(
   normal: readonly [number, number, number] = [0, 0, 1],
   up: readonly [number, number, number] = [0, 1, 0],
   fixed = true,
+  contrast?: TextPlaneContrast,
 ): void {
   const data = object.userData as { [TEXT_PLANES]?: TextPlaneRecord[] }
   const records = data[TEXT_PLANES] ?? (data[TEXT_PLANES] = [])
-  records.push({ text, center, normal, up, fixed })
+  records.push({ text, center, normal, up, fixed, contrast })
   const mapOnly = records.every((record) => {
     _layerNormal.fromArray(record.normal).applyQuaternion(object.quaternion)
     return record.fixed && Math.abs(_layerNormal.y) > 0.8
