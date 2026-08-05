@@ -7,6 +7,7 @@ import { clamp, clamp01, fmtBytes, fmtLsn, fmtNum, fmtPct, makeRng } from '../co
 import { DECK_GATES } from './access'
 import type { DeckGate } from './access'
 import { ANCHOR, CITY, TABLES, bufferTilePos } from './layout'
+import { createPlanLabelPainter } from './plan-label'
 import { markTextPlane, markTextTexture } from './text-plane'
 
 export const SHARED_BUFFER_SAMPLE_PLATE_LABEL = `SHARED_BUFFERS · REPRESENTATIVE SAMPLE · UP TO ${CLAIM_VALUES.bufferSample.capacityFrames.toLocaleString('en-US')} FRAMES`
@@ -362,7 +363,9 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
   deck.add(deckEdge)
 
   // The walking surface, carrying the printed floor plan.
-  const deckTex = keep(makeDeckTexture(rng))
+  const deckArtwork = makeDeckTexture(rng)
+  const deckTex = keep(deckArtwork.texture)
+  const deckLabelTex = keep(deckArtwork.labelTexture)
   const mDeckTop = keep(
     new THREE.MeshStandardMaterial({
       map: deckTex,
@@ -381,11 +384,43 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
   )
   const gDeckPlan = keep(new THREE.PlaneGeometry(DECK_W - 0.6, DECK_D - 0.6))
   const deckPlan = new THREE.Mesh(gDeckPlan, mDeckTop)
+  deckPlan.name = 'shmem.deck.surface'
   deckPlan.rotation.x = -Math.PI / 2
   deckPlan.position.set(0, DECK_TOP + 0.05, 0)
   markTextTexture(deckTex, 'SHARED MEMORY SEGMENT floor plan')
   markTextPlane(deckPlan, 'SHARED MEMORY SEGMENT floor plan')
   deck.add(deckPlan)
+
+  const mDeckLabels = keep(new THREE.MeshBasicMaterial({
+    map: deckLabelTex,
+    transparent: true,
+    depthWrite: false,
+    toneMapped: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -3,
+    polygonOffsetUnits: -3,
+  }))
+  mDeckLabels.name = 'shmem.planLabels'
+  const deckLabels = new THREE.Mesh(gDeckPlan, mDeckLabels)
+  deckLabels.name = 'shmem.planLabels'
+  deckLabels.rotation.x = -Math.PI / 2
+  deckLabels.position.set(0, DECK_TOP + 0.08, 0)
+  deckLabels.renderOrder = 2
+  deckLabels.raycast = () => {}
+  markTextTexture(deckLabelTex, 'SHARED MEMORY SEGMENT floor plan')
+  markTextPlane(deckLabels, 'SHARED MEMORY SEGMENT floor plan')
+  for (const label of deckArtwork.labels) {
+    markTextPlane(
+      deckLabels,
+      label.text,
+      [label.x, -label.z, 0],
+      [0, 0, 1],
+      [Math.sin(label.rotation), Math.cos(label.rotation), 0],
+      true,
+      { fontSize: label.size, ratio: label.ratio, backing: label.backing },
+    )
+  }
+  deck.add(deckLabels)
 
   // Continuous indigo rim strip at the walking edge — the plaza's outline at night.
   {
@@ -2220,18 +2255,43 @@ function makeRadialTexture(): THREE.CanvasTexture {
 /**
  * The deck's printed floor plan: panel seams, hazard bands at the cantilevered
  * edges, the shared_buffers footprint with its column ruler, and the district
- * legends. One texture, one draw call, all of the typography in the plaza.
+ * legends. Structure stays in the lit deck map; typography gets a separate
+ * non-emissive overlay so a label can own its contrast without recolouring it.
  */
-function makeDeckTexture(rng: () => number): THREE.CanvasTexture {
+function makeDeckTexture(rng: () => number): {
+  texture: THREE.CanvasTexture
+  labelTexture: THREE.CanvasTexture
+  labels: ReturnType<typeof createPlanLabelPainter>['records']
+} {
   const W = 2048
   const H = Math.round((W * DECK_D) / DECK_W)
   const cv = document.createElement('canvas')
   cv.width = W
   cv.height = H
   const g = cv.getContext('2d')!
+  const labelCanvas = document.createElement('canvas')
+  labelCanvas.width = W
+  labelCanvas.height = H
+  const labelContext = labelCanvas.getContext('2d', { willReadFrequently: true })!
   const px = W / DECK_W
   const X = (wx: number) => (wx + DECK_W / 2) * px
   const Y = (wz: number) => (wz + DECK_D / 2) * px
+  const labels = createPlanLabelPainter(labelContext, {
+    pixelsPerUnit: px,
+    x: X,
+    y: Y,
+    surfaceName: 'shared-memory deck artwork',
+    plate: {
+      background: '#0b1422',
+      ink: '#f1f6ff',
+      name: 'neutral matte label plate',
+      paddingX: 0.48,
+      paddingY: 0.24,
+    },
+  })
+  const label = (text: string, wx: number, wz: number, size = 2.4, align: CanvasTextAlign = 'center', color = 'rgba(143,165,196,0.85)') => {
+    labels.draw(text, wx, wz, size, color, align)
+  }
 
   g.fillStyle = '#0a0f1a'
   g.fillRect(0, 0, W, H)
@@ -2324,28 +2384,17 @@ function makeDeckTexture(rng: () => number): THREE.CanvasTexture {
 
   // Column / row ruler around the grid — 32 × 32 frames.
   g.fillStyle = 'rgba(120,150,200,0.75)'
-  g.font = `500 ${Math.round(1.7 * px)}px ui-monospace, SFMono-Regular, Menlo, monospace`
-  g.textAlign = 'center'
-  g.textBaseline = 'middle'
   for (let c = 0; c < BUF_GRID; c += 4) {
     const wx = -HALF_GRID + c * PITCH
-    g.fillText(String(c), X(wx), Y(-b0 - 2.6))
+    label(String(c), wx, -b0 - 2.6, 1.7, 'center', 'rgba(120,150,200,0.75)')
     g.fillRect(X(wx) - 1, Y(-b0 - 1.2), 2, 0.8 * px)
   }
-  g.textAlign = 'right'
   for (let r = 0; r < BUF_GRID; r += 4) {
     const wz = -HALF_GRID + r * PITCH
-    g.fillText(String(r * BUF_GRID), X(-b0 - 1.8), Y(wz))
+    label(String(r * BUF_GRID), -b0 - 1.8, wz, 1.7, 'right', 'rgba(120,150,200,0.75)')
   }
 
   // Legends.
-  const label = (text: string, wx: number, wz: number, size = 2.4, align: CanvasTextAlign = 'center', color = 'rgba(143,165,196,0.85)') => {
-    g.textAlign = align
-    g.fillStyle = color
-    g.font = `600 ${Math.round(size * px)}px ui-monospace, SFMono-Regular, Menlo, monospace`
-    g.fillText(text, X(wx), Y(wz))
-  }
-
   label(SHARED_BUFFER_SAMPLE_PLATE_LABEL, 0, b0 + 3.4, 2.4, 'center', 'rgba(63,167,255,0.7)')
   label('CLOCK SWEEP →', -HALF_GRID + 10, -b0 - 5.2, 1.9, 'center', 'rgba(255,204,85,0.65)')
   label('wal_buffers', ANCHOR.walBuffers[0], ANCHOR.walBuffers[2] + 13.6, 2.3, 'center', 'rgba(255,176,58,0.8)')
@@ -2361,12 +2410,7 @@ function makeDeckTexture(rng: () => number): THREE.CanvasTexture {
   label('(relation, block) → buffer id', ANCHOR.bufMapping[0], ANCHOR.bufMapping[2] + 10.2, 1.5)
 
   // District title along the south edge.
-  g.textAlign = 'center'
-  g.fillStyle = 'rgba(123,108,255,0.42)'
-  if ('letterSpacing' in g) (g as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = '18px'
-  g.font = `700 ${Math.round(3.4 * px)}px ui-monospace, SFMono-Regular, Menlo, monospace`
-  g.fillText('SHARED MEMORY SEGMENT', X(0), Y(DECK_D / 2 - 6.4))
-  if ('letterSpacing' in g) (g as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = '0px'
+  label('SHARED MEMORY SEGMENT', 0, DECK_D / 2 - 6.4, 3.4, 'center', 'rgba(123,108,255,0.42)')
 
   // North mark, because the client sky is that way.
   g.strokeStyle = 'rgba(143,165,196,0.5)'
@@ -2386,5 +2430,11 @@ function makeDeckTexture(rng: () => number): THREE.CanvasTexture {
   tex.wrapS = THREE.ClampToEdgeWrapping
   tex.wrapT = THREE.ClampToEdgeWrapping
   tex.needsUpdate = true
-  return tex
+  const labelTexture = new THREE.CanvasTexture(labelCanvas)
+  labelTexture.colorSpace = THREE.SRGBColorSpace
+  labelTexture.anisotropy = 8
+  labelTexture.wrapS = THREE.ClampToEdgeWrapping
+  labelTexture.wrapT = THREE.ClampToEdgeWrapping
+  labelTexture.needsUpdate = true
+  return { texture: tex, labelTexture, labels: labels.records }
 }
