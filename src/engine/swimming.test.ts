@@ -10,6 +10,7 @@ import { createBufferWater, waterReflectionScale } from './water'
 import { createWalkController } from './walk'
 
 const POOL_HALF = ((CITY.buf.grid - 1) * CITY.buf.pitch + CITY.buf.tile) / 2
+const POOL_BOTTOM = CITY.buf.baseY
 const POOL_SURFACE = CITY.buf.baseY + CITY.buf.maxRise + 0.4
 
 function fakeAudio(): AudioApi {
@@ -92,7 +93,7 @@ describe('buffer-pool swimming', () => {
     expect(waterReflectionScale('ultra')).toBe(0.5)
   })
 
-  it('keeps a walker on the deck grounded while crossing the buffer tile field', () => {
+  it('enters the pool by walking without needing a jump or crouch', () => {
     const harness = createWalkHarness()
     const { audio, walk } = harness
     walk.position.set(0, CITY.deck.top, POOL_HALF + 0.12)
@@ -104,10 +105,34 @@ describe('buffer-pool swimming', () => {
     for (let i = 0; i < 8; i++) walk.update(0.02)
 
     expect(walk.position.z).toBeLessThan(POOL_HALF)
-    expect(walk.grounded).toBe(true)
-    expect(walk.gait).not.toBe('swim')
-    expect(walk.surface).toBe('deck')
-    expect(audio.splash).not.toHaveBeenCalled()
+    expect(walk.grounded).toBe(false)
+    expect(walk.gait).toBe('swim')
+    expect(walk.submerged).toBe(true)
+    expect(walk.surface).toBe('water')
+    expect(audio.splash).toHaveBeenCalledTimes(1)
+    harness.dispose()
+  })
+
+  it('submerges a walker standing on the pool bottom without input', () => {
+    const harness = createWalkHarness()
+    const { audio, walk } = harness
+    walk.position.set(0, POOL_BOTTOM, 0)
+
+    walk.update(0.02)
+
+    expect(walk.gait).toBe('swim')
+    expect(walk.submerged).toBe(true)
+    expect(walk.grounded).toBe(false)
+    expect(walk.surface).toBe('water')
+    expect(audio.step).toHaveBeenLastCalledWith(
+      expect.any(Number),
+      expect.objectContaining({
+        gait: 'swim',
+        grounded: false,
+        submerged: true,
+        surface: 'water',
+      }),
+    )
     harness.dispose()
   })
 
@@ -124,21 +149,21 @@ describe('buffer-pool swimming', () => {
     harness.dispose()
   })
 
-  it('lands on the pool bottom without treating bottom contact as an exit splash', () => {
+  it('remains submerged on the pool bottom without an exit splash', () => {
     const harness = createWalkHarness()
     const splash = vi.mocked(harness.audio.splash)
     harness.walk.position.set(0, CITY.deck.top + 1, 0)
     harness.walk.setTouchCrouch(true)
     harness.walk.update(0.02)
 
-    for (let i = 0; i < 500 && !harness.walk.grounded; i++) {
-      harness.walk.update(0.02)
-    }
+    for (let i = 0; i < 500; i++) harness.walk.update(0.02)
     harness.walk.setTouchCrouch(false)
 
-    expect(harness.walk.position.y).toBeCloseTo(CITY.deck.top, 4)
-    expect(harness.walk.grounded).toBe(true)
-    expect(harness.walk.gait).not.toBe('swim')
+    expect(harness.walk.position.y).toBeCloseTo(POOL_BOTTOM, 4)
+    expect(harness.walk.grounded).toBe(false)
+    expect(harness.walk.gait).toBe('swim')
+    expect(harness.walk.submerged).toBe(true)
+    expect(harness.walk.surface).toBe('water')
     expect(harness.walk.verticalSpeed).toBe(0)
     expect(splash).toHaveBeenCalledTimes(1)
     harness.dispose()
@@ -156,6 +181,9 @@ describe('buffer-pool swimming', () => {
     expect(splash).toHaveBeenCalledTimes(1)
     expect(harness.walk.position.y).toBeGreaterThan(POOL_SURFACE - 0.5)
     expect(harness.walk.verticalSpeed).toBeLessThan(0)
+    expect(harness.walk.gait).toBe('swim')
+    expect(harness.walk.grounded).toBe(false)
+    expect(harness.walk.surface).toBe('water')
     harness.dispose()
   })
 
