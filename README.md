@@ -165,7 +165,7 @@ Press **`?`** in the city for the city control map and colour legend.
 | `?` | Keyboard map and colour legend |
 | `L` | Toggle the floating labels |
 | `N` | Cycle night / golden hour / approximate local-time light |
-| `M` | Toggle sound |
+| `M` | Toggle walk sound |
 | `K` or `P` | Pause / resume |
 | `,` `.` | Slower / faster (0.1× – 5×) |
 | `R` | Reset to the default settings |

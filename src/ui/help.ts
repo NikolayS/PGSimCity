@@ -7,6 +7,7 @@ import { COLOR, onThemeMode } from '../core/theme'
 import type { Bus, ColorKey } from '../core/types'
 import { MODE_IDS } from './mode-exits'
 import { NO_EA_CONTENT, TRADEMARK_NOTICE } from './legal'
+import { MOVEMENT_SOUND_HELP } from './sound'
 import { el, icon } from './uikit'
 import { emitLoose } from './hud'
 import type { UiContext, UiModule } from './uikit'
@@ -86,7 +87,7 @@ export const APP_KEYS: KeyRow[] = [
   { id: 'help', keys: ['?'], what: 'This panel' },
   { id: 'labels', keys: ['L'], what: 'Toggle floating labels · View menu' },
   { id: 'theme', keys: ['N'], what: 'Night / golden hour / approximate local-time light · beside Sound' },
-  { id: 'sound', keys: ['M'], what: 'Walk sound on / off — starts off and remembers your choice' },
+  { id: 'sound', keys: ['M'], what: MOVEMENT_SOUND_HELP },
   { id: 'escape', keys: ['Esc'], what: 'Close the topmost overlay' },
   { id: 'districts', keys: ['1', '…', '8'], what: 'Jump to a district · View menu on phones' },
 ]

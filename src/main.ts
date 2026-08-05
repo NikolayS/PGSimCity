@@ -68,7 +68,7 @@ import { createTouchpad } from './ui/touchpad'
 import { createZoomContext } from './ui/zoom-context'
 import { createControlCenter } from './ui/control-center'
 import { createWalkUpInteraction } from './ui/walk-up'
-import { movementSoundEnabledToast } from './ui/sound'
+import { MOVEMENT_SOUND_OFF, movementSoundEnabledToast } from './ui/sound'
 import { createWorldHandleSites } from './ui/world-handles'
 import { BOOT_STEPS, failBoot, finishBoot, presentBootStep } from './ui/boot'
 import type { UiContext, UiModule } from './ui/uikit'
@@ -321,7 +321,7 @@ async function boot(): Promise<void> {
   const offAudioToggle = bus.on('audio:toggle', () => {
     if (audio.enabled) {
       audio.disable()
-      bus.emit('toast', { text: 'Sound off', kind: 'info', ms: 1600 })
+      bus.emit('toast', { text: MOVEMENT_SOUND_OFF, kind: 'info', ms: 1600 })
       return
     }
     void audio.enable()
