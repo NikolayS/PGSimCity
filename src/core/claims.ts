@@ -21,6 +21,20 @@ const MODEL_CONNECTION_RESERVATIONS = {
   reserved: 0,
 } as const
 
+declare const registeredClaimValueBrand: unique symbol
+
+/** A claim-bearing primitive that cannot be replaced by an unowned literal. */
+export type RegisteredClaimValue<Path extends string, Value> = Value & {
+  readonly [registeredClaimValueBrand]: Path
+}
+
+function registeredClaimValue<const Path extends string, Value>(
+  _path: Path,
+  value: Value,
+): RegisteredClaimValue<Path, Value> {
+  return value as RegisteredClaimValue<Path, Value>
+}
+
 export function ordinaryConnectionCapacity(
   maxConnections: number,
   superuserReservedConnections: number,
@@ -80,19 +94,19 @@ export const CLAIM_VALUES = {
     label: BUILD_LABEL,
   },
   walSegment: {
-    bytes: 16 * MIB,
+    bytes: registeredClaimValue('walSegment.bytes', 16 * MIB),
     label: '16 MiB',
     modelDisclosure: 'PGSimCity models 16 MiB WAL segments',
     postgresqlDisclosure: WAL_SEGMENT_POSTGRESQL_DISCLOSURE,
     qualifiedProseSurfaces: WAL_SEGMENT_QUALIFIED_PROSE_SURFACES,
   },
   bufferSample: {
-    gridWidth: 32,
-    capacityFrames: 32 * 32,
-    defaultActiveFrames: 256,
+    gridWidth: registeredClaimValue('bufferSample.gridWidth', 32),
+    capacityFrames: registeredClaimValue('bufferSample.capacityFrames', 32 * 32),
+    defaultActiveFrames: registeredClaimValue('bufferSample.defaultActiveFrames', 256),
   },
   bulkReadRing: {
-    modelFrames: 32,
+    modelFrames: registeredClaimValue('bulkReadRing.modelFrames', 32),
     disclosure: 'fixed 32-frame ring',
     diagnoseDisclosure: 'fixed 32-frame approximation',
   },
@@ -113,7 +127,7 @@ export const CLAIM_VALUES = {
   modelLatency: {
     unit: MODEL_MILLISECOND_UNIT,
     quantiles: ['p50', 'p99'],
-    windowTrips: 512,
+    windowTrips: registeredClaimValue('modelLatency.windowTrips', 512),
     disclosure: 'weighted rolling window of 512 completed backend trips',
     componentDisclosure: 'each modeled component is its own weighted quantile',
     taxonomyDisclosure: 'Pool-slot wait is a client-side PgBouncer queue estimate (transaction hand-off or initial session assignment) and is not visible in pg_stat_activity; buffer-read phase is the synthetic exec_io phase, not accumulated DataFileRead events; dirty-victim I/O is trip attribution rather than a distinct live activity state; temp-file I/O is attributed inside the fixed sort/hash-aggregate teaching phase rather than projected as live PostgreSQL wait events; commit durability is an umbrella for WalSync or SyncRep; relation lock maps directly to Lock/relation; active / unclassified is a non-wait residual containing CPU, parse, result-send and unclassified WAL-buffer stalls, which PostgreSQL reports separately as waits such as LWLock/WALWrite',
@@ -128,7 +142,7 @@ export const CLAIM_VALUES = {
       queryWaitTimeoutSeconds: 120,
     },
     modelDefaultPoolSize: 8,
-    concurrencyTarget: 8,
+    concurrencyTarget: registeredClaimValue('connectionPooler.concurrencyTarget', 8),
     modelConnectionReservations: MODEL_CONNECTION_RESERVATIONS,
     transactionTradeoff: 'Transaction pooling releases the server connection after each transaction. It cannot preserve arbitrary session state: SET/RESET and session-level advisory locks cannot span transactions; SQL PREPARE is incompatible and protocol-level named prepared statements need PgBouncer max_prepared_statements tracking; LISTEN subscriptions do not work, although NOTIFY can still be sent. Session pooling keeps one server connection for the client session and preserves PostgreSQL features, but it cannot multiplex idle client sessions at transaction boundaries.',
     absent: [
@@ -143,6 +157,7 @@ export const CLAIM_VALUES = {
       'pgcat and Odyssey runtime behavior',
     ],
     coverageDisclosure: 'PGSimCity models one PgBouncer-shaped user/database pool: client admission, persistent PostgreSQL server connections, transaction-mode queue age, query_wait_timeout disconnects, and session clients bound for a fixed fifteen-model-second connection lifetime. The tps control is aggregate work assigned to the admitted cohort, so changing refused socket count alone does not rescale it; session mode admits only the bound sessions’ share. The connection-storm scenario’s uncalibrated pressure curve follows active PostgreSQL backends only. Production session-lifetime distributions, client identities, reconnect backoff and all session-level SQL state are absent; queue time is a modelled client-side estimate, not a PgBouncer timing sample.',
+    plateLabel: 'PgBouncer · pool_mode',
   },
   workMem: {
     defaultMiB: 4,

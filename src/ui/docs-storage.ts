@@ -2196,7 +2196,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What the city models',
-        body: 'The link is a bounded queue of modeled WAL positions with a configurable one-way delay and acknowledgement paths. It has no TCP packets, PostgreSQL protocol, bandwidth, congestion, reconnect timing or socket failures. The network setting can hold modeled commits in commit_wait, but displayed statement time remains deliberately stretched model time rather than production latency.',
+        body: `The link is a bounded queue of modeled WAL positions with a configurable one-way delay and acknowledgement paths. It has no TCP packets, PostgreSQL protocol, bandwidth, congestion, reconnect timing or socket failures. The network setting can hold modeled commits in commit_wait, but displayed statement time remains deliberately stretched ${CLAIM_VALUES.modelDuration.prose} rather than production latency.`,
       },
     ],
     metrics: [
@@ -2574,7 +2574,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     sections: [
       {
         heading: 'Three servers, not one shared truth',
-        body: 'The primary, `standby_a`, and `standby_b` each own a separate buffer pool (`shared_buffers`), `pg_wal`, and data directory. Each standby has its own primary-side walsender, network stream, walreceiver, and startup process. A fast standby cannot advance the slow one’s applied LSN, and disconnecting one does not disconnect the other. The city gives every node the same 1,024-frame sample capacity; at the default 2 GiB setting 256 frames are active on each node. It does not emulate three operating systems, storage controllers, or PostgreSQL postmasters.',
+        body: `The primary, \`standby_a\`, and \`standby_b\` each own a separate buffer pool (\`shared_buffers\`), \`pg_wal\`, and data directory. Each standby has its own primary-side walsender, network stream, walreceiver, and startup process. A fast standby cannot advance the slow one’s applied LSN, and disconnecting one does not disconnect the other. The city gives every node the same ${CLAIM_VALUES.bufferSample.capacityFrames.toLocaleString('en-US')}-frame sample capacity; at the default 2 GiB setting ${CLAIM_VALUES.bufferSample.defaultActiveFrames} frames are active on each node. It does not emulate three operating systems, storage controllers, or PostgreSQL postmasters.`,
       },
       {
         heading: 'Received, flushed, and applied are different facts',

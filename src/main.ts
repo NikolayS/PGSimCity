@@ -78,6 +78,10 @@ const bootCorrectionLink = document.querySelector<HTMLAnchorElement>(
   '#boot a[data-correction-link="true"]',
 )
 if (bootCorrectionLink) protectCorrectionLink(bootCorrectionLink)
+const bootReviewStatus = document.querySelector<HTMLElement>('.boot-honesty strong')
+if (bootReviewStatus) {
+  bootReviewStatus.textContent = CLAIM_VALUES.reviewStatus.bootLabel
+}
 const cityVersionProvenance = document.querySelector<HTMLElement>(
   '#city-version-provenance',
 )

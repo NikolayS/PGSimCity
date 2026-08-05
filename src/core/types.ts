@@ -8,14 +8,17 @@
 
 import type * as THREE from 'three'
 import { CLAIM_VALUES } from './claims'
+import type { RegisteredClaimValue } from './claims'
 
 /* ---------------------------------------------------------------------------
  * City constants — geometry and simulation must agree on these counts.
  * -------------------------------------------------------------------------*/
 
 /** Shared-buffer visual sample is BUF_GRID x BUF_GRID frame tiles. */
-export const BUF_GRID = CLAIM_VALUES.bufferSample.gridWidth
-export const N_BUFFERS = CLAIM_VALUES.bufferSample.capacityFrames
+export const BUF_GRID: RegisteredClaimValue<'bufferSample.gridWidth', number> =
+  CLAIM_VALUES.bufferSample.gridWidth
+export const N_BUFFERS: RegisteredClaimValue<'bufferSample.capacityFrames', number> =
+  CLAIM_VALUES.bufferSample.capacityFrames
 export type SampleFrames = number & { readonly __sampleFrames: unique symbol }
 /** PostgreSQL's standard block size. */
 export const PG_PAGE_BYTES = 8 * 1024
