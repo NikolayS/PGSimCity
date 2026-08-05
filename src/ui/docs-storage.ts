@@ -2192,7 +2192,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'The availability trap',
-        body: 'Synchronous replication is a durability feature that reduces availability. If the only synchronous standby stops responding, commits wait until it returns or the configuration changes. PostgreSQL’s `ANY 1 (s1, s2)` is **quorum-based synchronous replication**: a commit needs one eligible standby acknowledgement. It is not a leader-election or consensus quorum and does not make PostgreSQL a consensus system. That commit quorum is separate from the DCS voting majority used by etcd and from Patroni’s ownership of the DCS leader lock.',
+        body: 'Synchronous replication is a durability feature that reduces availability. If the only synchronous standby stops responding, commits wait until it returns or the configuration changes. PostgreSQL’s `ANY 1 (s1, s2)` is **quorum-based synchronous replication**: a commit needs one eligible standby acknowledgement. It is not a leader-election or consensus quorum and does not make PostgreSQL a consensus system. That commit quorum is separate from the DCS voting majority used by etcd and from Patroni’s ownership of the DCS leader lock.\n\n' + renderAction('restoreSynchronousCommitAvailability'),
       },
       {
         heading: 'What the city models',

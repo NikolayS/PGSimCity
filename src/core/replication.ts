@@ -7,6 +7,20 @@ import type {
 
 export type PhysicalStandbyId = PhysicalStandbyState['nodeId']
 
+type SynchronousCommitKnobs = Pick<
+  Knobs,
+  | 'synchronousCommit'
+  | 'synchronousStandbyNames'
+  | 'walLevel'
+  | 'standbyAEnabled'
+  | 'standbyBEnabled'
+>
+
+export interface SynchronousStandbyBlocker {
+  standbyId: PhysicalStandbyId
+  reason: 'physical-replication-disabled' | 'standby-disabled'
+}
+
 export function physicalStandby(
   replication: ReplicationState,
   nodeId: PhysicalStandbyId,
@@ -23,6 +37,43 @@ export function synchronousStandbyId(
   if (leader === 'standbyA') return 'standbyB'
   if (leader === 'standbyB') return 'standbyA'
   return knobs.synchronousStandbyNames
+}
+
+/** The commit modes that enter SyncRep when a standby name is configured. */
+export function synchronousCommitNeedsRemoteAck(
+  knobs: Pick<Knobs, 'synchronousCommit' | 'synchronousStandbyNames'>,
+): boolean {
+  return knobs.synchronousStandbyNames !== 'none'
+    && (
+      knobs.synchronousCommit === 'remote_write'
+      || knobs.synchronousCommit === 'on'
+      || knobs.synchronousCommit === 'remote_apply'
+    )
+}
+
+/** Whether this knob set can create the physical stream that supplies acknowledgements. */
+export function physicalStandbyCanStream(
+  knobs: Pick<Knobs, 'walLevel' | 'standbyAEnabled' | 'standbyBEnabled'>,
+  standbyId: PhysicalStandbyId,
+): boolean {
+  if (knobs.walLevel === 'minimal') return false
+  return standbyId === 'standbyA' ? knobs.standbyAEnabled : knobs.standbyBEnabled
+}
+
+/** A missing prerequisite that would leave every committing backend in SyncRep. */
+export function synchronousStandbyBlocker(
+  knobs: SynchronousCommitKnobs,
+  leader: SimState['highAvailability']['currentLeader'],
+): SynchronousStandbyBlocker | null {
+  if (!synchronousCommitNeedsRemoteAck(knobs)) return null
+  const standbyId = synchronousStandbyId(knobs, leader)
+  if (!standbyId) return null
+  if (knobs.walLevel === 'minimal') {
+    return { standbyId, reason: 'physical-replication-disabled' }
+  }
+  return physicalStandbyCanStream(knobs, standbyId)
+    ? null
+    : { standbyId, reason: 'standby-disabled' }
 }
 
 export function configuredSynchronousStandby(

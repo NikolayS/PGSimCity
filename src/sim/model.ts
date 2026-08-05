@@ -66,8 +66,14 @@ import {
 } from '../core/types'
 import { N_TABLES, TABLES } from '../core/catalog'
 import { CLAIM_VALUES, ordinaryConnectionCapacity } from '../core/claims'
+import { renderActionToast } from '../core/actions'
 import { traceStopBit, walTriggerBytes } from '../core/model-helpers'
-import { configuredSynchronousStandby } from '../core/replication'
+import {
+  configuredSynchronousStandby,
+  physicalStandbyCanStream,
+  synchronousCommitNeedsRemoteAck,
+  synchronousStandbyBlocker,
+} from '../core/replication'
 import { rid } from '../core/route-ids'
 import type {
   BackendSim,
@@ -75,6 +81,7 @@ import type {
   BaseBackupWalRange,
   BufferPool,
   Bus,
+  BusEvents,
   ClusterNodeId,
   ClusterNodeWalState,
   FlowKind,
@@ -1924,9 +1931,23 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     bus.emit('flow', req)
   }
 
-  function toast(text: string, kind: 'info' | 'warn' | 'good' = 'info', ms = 4200): void {
+  function toast(
+    text: string,
+    kind: 'info' | 'warn' | 'good' = 'info',
+    ms = 4200,
+    action?: BusEvents['toast']['action'],
+  ): void {
     if (quiet) return
-    bus.emit('toast', { text, kind, ms })
+    bus.emit('toast', { text, kind, ms, action })
+  }
+
+  function synchronousAvailabilityWarning(prefix: string): void {
+    toast(
+      `${prefix}. ${renderActionToast('restoreSynchronousCommitAvailability')}`,
+      'warn',
+      12_000,
+      { label: 'Open sync controls', consoleKey: 'synchronousStandbyNames' },
+    )
   }
 
   /** 1-in-n sampler used to keep particle emission under the budget. */
@@ -5236,7 +5257,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       return
     }
 
-    if (!enabled || K.walLevel === 'minimal') {
+    if (!physicalStandbyCanStream(K, standby.nodeId)) {
       if (standby.connected) {
         standby.connected = false
         resetPhysicalRuntime(runtime, standby.appliedLsn)
@@ -7595,10 +7616,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
           let done = false
           if (sc === 'off') {
             done = true
-          } else if (
-            (sc === 'remote_write' || sc === 'on' || sc === 'remote_apply')
-            && K.synchronousStandbyNames !== 'none'
-          ) {
+          } else if (synchronousCommitNeedsRemoteAck(K)) {
             const syncStandby = synchronousStandby()
             const acknowledged = sc === 'remote_write'
               ? syncStandby.acknowledgedWriteLsn
@@ -7608,7 +7626,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
             done = wal.flushLsn >= x.commitLsn && acknowledged >= x.commitLsn
             if (!syncStandby.connected && state.t - degradeWarnT > 20) {
               degradeWarnT = state.t
-              toast('commits are waiting for a synchronous standby that is not there', 'warn', 6000)
+              synchronousAvailabilityWarning(
+                'Commits are waiting for a synchronous standby that is not there',
+              )
             }
           } else {
             // With synchronous_standby_names empty, remote modes collapse to
@@ -8375,6 +8395,11 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       case 'walLevel':
         rep.logicalEnabled = K.walLevel === 'logical'
         syncHorizonPin()
+        if (synchronousStandbyBlocker(K, ha.currentLeader)) {
+          synchronousAvailabilityWarning(
+            'The named synchronous standby cannot acknowledge this configuration, so commits will wait',
+          )
+        }
         break
       case 'fullPageWrites':
         fpiGeneration++
@@ -8385,24 +8410,30 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         break
       case 'synchronousCommit':
         if (K.synchronousCommit === 'off') toast("synchronous_commit=off — commits no longer wait for fsync", 'warn', 5000)
-        else if (
-          (K.synchronousCommit === 'remote_write'
-            || K.synchronousCommit === 'on'
-            || K.synchronousCommit === 'remote_apply')
-          && K.synchronousStandbyNames !== 'none'
-          && !synchronousStandby().connected
-        ) {
-          toast('commits will wait until the named synchronous standby returns or synchronous_standby_names is cleared and reloaded', 'warn', 7000)
+        else if (synchronousStandbyBlocker(K, ha.currentLeader) || (
+          synchronousCommitNeedsRemoteAck(K) && !synchronousStandby().connected
+        )) {
+          synchronousAvailabilityWarning(
+            'Commits will wait because the named synchronous standby cannot acknowledge them',
+          )
         }
         break
       case 'synchronousStandbyNames':
-        toast(
-          K.synchronousStandbyNames !== 'none'
-            ? `synchronous_standby_names loaded with ${synchronousStandby().applicationName} — remote commit durability now reduces availability`
-            : 'synchronous_standby_names cleared and reloaded — SyncRep waiters released with local durability only',
-          K.synchronousStandbyNames !== 'none' ? 'warn' : 'good',
-          7000,
-        )
+        if (synchronousStandbyBlocker(K, ha.currentLeader) || (
+          synchronousCommitNeedsRemoteAck(K) && !synchronousStandby().connected
+        )) {
+          synchronousAvailabilityWarning(
+            'synchronous_standby_names names a standby that cannot acknowledge commits',
+          )
+        } else {
+          toast(
+            K.synchronousStandbyNames !== 'none'
+              ? `synchronous_standby_names loaded with ${synchronousStandby().applicationName} — remote commit durability now reduces availability`
+              : 'synchronous_standby_names cleared and reloaded — SyncRep waiters released with local durability only',
+            K.synchronousStandbyNames !== 'none' ? 'warn' : 'good',
+            7000,
+          )
+        }
         break
       case 'walGArchiveCredentialsValid':
         toast(

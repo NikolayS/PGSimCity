@@ -1262,7 +1262,7 @@ export function createHud(ctx: UiContext): UiModule {
     text: string,
     kind: 'info' | 'warn' | 'good' = 'info',
     ms = 3600,
-    action?: { label: string; quality: QualityLevel },
+    action?: BusEvents['toast']['action'],
     opts?: { className?: string; onDrop?: () => void },
   ): Toast {
     const node = el(
@@ -1282,7 +1282,8 @@ export function createHud(ctx: UiContext): UiModule {
       onDrop: opts?.onDrop,
     }
     node.addEventListener('click', () => {
-      if (action) bus.emit('quality', { level: action.quality })
+      if (action && 'quality' in action) bus.emit('quality', { level: action.quality })
+      else if (action) bus.emit('ui:console', { open: true, key: action.consoleKey })
       dropToast(t)
     })
     toasts.push(t)

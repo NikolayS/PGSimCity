@@ -1,6 +1,10 @@
 import type { Knobs, SimApi } from '../core/types'
 import { DEFAULT_KNOBS } from '../core/types'
 import { createCorrectionPath, displayedClaim } from '../core/corrections'
+import {
+  synchronousStandbyBlocker,
+} from '../core/replication'
+import type { SynchronousStandbyBlocker } from '../core/replication'
 import { fmtBytes, fmtDuration, fmtNum } from '../core/util'
 import { SCENARIOS } from '../sim/scenarios'
 import { KNOB_GROUPS, KNOB_META, knobsInGroup } from './content'
@@ -67,6 +71,11 @@ const LEGACY_KNOB_KEYS = {
 
 type StoredKnobs = Partial<Record<keyof Knobs, KnobValue>>
 
+export interface KnobPreferenceLoadResult {
+  synchronousStandby: SynchronousStandbyBlocker | null
+  rejectedKeys: (keyof Knobs)[]
+}
+
 function readStoredKnobs(): Record<string, unknown> {
   try {
     const raw = window.localStorage.getItem(KNOB_PREFERENCES_STORAGE_KEY)
@@ -122,14 +131,42 @@ function writeStoredKnobs(stored: StoredKnobs): void {
   }
 }
 
-export function loadKnobPreferences(sim: SimApi): void {
+function storedKnobsFromState(sim: SimApi): StoredKnobs {
+  const stored: StoredKnobs = {}
+  for (const meta of KNOB_META) {
+    const value = sim.state.knobs[meta.key]
+    if (value !== DEFAULT_KNOBS[meta.key]) stored[meta.key] = value
+  }
+  return stored
+}
+
+export function loadKnobPreferences(sim: SimApi): KnobPreferenceLoadResult {
   const stored = normalizedStoredKnobs(readStoredKnobs())
+  /* normalizedStoredKnobs has already restored the key/value correlation that
+   * Partial<Record<keyof Knobs, KnobValue>> cannot express to TypeScript. */
+  const requested = { ...DEFAULT_KNOBS, ...stored } as Knobs
+  const synchronousStandby = synchronousStandbyBlocker(requested, 'primary')
+  if (synchronousStandby) {
+    /* A restored preference must not strand a returning reader before the UI
+     * can explain the lesson. Runtime knob changes remain deliberately unsafe. */
+    requested.synchronousStandbyNames = 'none'
+    stored.synchronousStandbyNames = 'none'
+  }
+
   const set = sim.setKnob as unknown as LooseSetter
   for (const meta of KNOB_META) {
     const value = stored[meta.key]
     if (value !== undefined) set(meta.key, value)
   }
-  writeStoredKnobs(stored)
+
+  const rejectedKeys: (keyof Knobs)[] = []
+  for (const meta of KNOB_META) {
+    if (requested[meta.key] !== sim.state.knobs[meta.key]) rejectedKeys.push(meta.key)
+  }
+  /* setKnob owns clamping and cross-knob rejection. Persist its actual result,
+   * not the contradictory request that it refused. */
+  writeStoredKnobs(storedKnobsFromState(sim))
+  return { synchronousStandby, rejectedKeys }
 }
 
 function persistKnobPreference(sim: SimApi, key: keyof Knobs): void {
@@ -510,11 +547,12 @@ export function createControls(ctx: UiContext): UiModule {
     return { update() {}, dispose() {} }
   }
 
-  loadKnobPreferences(ctx.sim)
+  const restored = loadKnobPreferences(ctx.sim)
 
   const host = el('div', { class: 'pgc-host pgc-host--left' })
   const looseBus = ctx.bus
   const controls: KnobControl[] = []
+  const knobTargets = new Map<keyof Knobs, { control: KnobControl; section: Collapse; group: string }>()
   const groupBadges: { metas: KnobMeta[]; node: HTMLElement }[] = []
 
   /* --- open / collapsed state ------------------------------------------- */
@@ -646,6 +684,7 @@ export function createControls(ctx: UiContext): UiModule {
     for (const meta of metas) {
       const control = createKnobControl(ctx, meta)
       controls.push(control)
+      knobTargets.set(meta.key, { control, section, group: group.id })
       section.body.append(control.root)
     }
 
@@ -762,10 +801,46 @@ export function createControls(ctx: UiContext): UiModule {
     planPreset = preset === 'plan'
     applyOpen()
   })
-  const offConsole = looseBus.on('ui:console', () => setOpen(true))
+  const offConsole = looseBus.on('ui:console', ({ open: requestedOpen, key }) => {
+    setOpen(requestedOpen ?? true)
+    if (!key) return
+    const target = knobTargets.get(key as keyof Knobs)
+    if (!target) return
+    target.section.setOpen(true)
+    saveFlag(GROUP_KEY(target.group), true)
+    window.requestAnimationFrame(() => {
+      target.control.root.scrollIntoView({ block: 'center' })
+      const input = target.control.root.querySelector<HTMLElement>('input')
+        ?? target.control.root.querySelector<HTMLElement>('select')
+        ?? target.control.root.querySelector<HTMLElement>('button')
+      input?.focus()
+    })
+  })
 
   applyOpen()
   refresh()
+
+  if (restored.synchronousStandby) {
+    const standby = restored.synchronousStandby.standbyId === 'standbyA'
+      ? 'standby_a'
+      : 'standby_b'
+    const unavailable = restored.synchronousStandby.reason === 'physical-replication-disabled'
+      ? 'wal_level=minimal made it unavailable'
+      : 'it was disabled'
+    ctx.bus.emit('toast', {
+      text: `Saved settings named ${standby} for synchronous commits, but ${unavailable}. Loaded with synchronous_standby_names empty, using local durability so commits keep moving.`,
+      kind: 'warn',
+      ms: 12_000,
+      action: { label: 'Open sync controls', consoleKey: 'synchronousStandbyNames' },
+    })
+  }
+  if (restored.rejectedKeys.length > 0) {
+    ctx.bus.emit('toast', {
+      text: `Saved settings ${restored.rejectedKeys.join(', ')} contradicted the restored set and were not retained.`,
+      kind: 'warn',
+      ms: 7000,
+    })
+  }
 
   let acc = 0
   return {

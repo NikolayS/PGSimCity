@@ -74,4 +74,21 @@ describe('latency HUD', () => {
     expect(panel.querySelector('a[href*="pg-stat-monitor"]')).not.toBeNull()
     hud.dispose()
   })
+
+  it('turns a remedial toast action into an exact console-control request', () => {
+    const ctx = context()
+    const requests: { open?: boolean; key?: string }[] = []
+    ctx.bus.on('ui:console', (request) => requests.push(request))
+    const hud = createHud(ctx)
+
+    ctx.bus.emit('toast', {
+      text: 'Commits are waiting for an unavailable synchronous standby.',
+      kind: 'warn',
+      action: { label: 'Open sync controls', consoleKey: 'synchronousStandbyNames' },
+    })
+    document.querySelector<HTMLButtonElement>('.hud-toast')?.click()
+
+    expect(requests).toEqual([{ open: true, key: 'synchronousStandbyNames' }])
+    hud.dispose()
+  })
 })

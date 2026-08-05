@@ -38,6 +38,7 @@ interface ActionOperationalTarget {
 interface ActionContract {
   owner: string
   label: string
+  toast?: string
   what: string
   preconditions: readonly string[]
   risks: readonly string[]
@@ -47,6 +48,26 @@ interface ActionContract {
 }
 
 export const ACTIONS = {
+  restoreSynchronousCommitAvailability: {
+    owner: 'src/core/actions.ts#ACTIONS.restoreSynchronousCommitAvailability',
+    label: 'Restore synchronous-commit availability',
+    toast:
+      'Enable or rename the standby, clear synchronous_standby_names, or use synchronous_commit=local.',
+    what:
+      'Enable and repair the named standby, name another streaming standby, clear synchronous_standby_names, or use synchronous_commit=local when local durability is acceptable.',
+    preconditions: [
+      'Confirm that the blocked backends are waiting on IPC / SyncRep, identify the named standby and its write, flush, and replay positions, and agree which remote durability guarantee the workload requires before changing it.',
+    ],
+    risks: [
+      'Clearing the standby name or using local acknowledges commits after only the primary flushes them, so failover can lose transactions absent from the promoted standby; enabling or naming an unhealthy standby can preserve or recreate the outage.',
+    ],
+    versionSpecificity: null,
+    operationalTargets: [],
+    surfaces: [
+      { kind: 'diagnose-verdict', id: 'v.sync_remote' },
+      { kind: 'inspector-section', doc: 'net.wire', section: 'The availability trap' },
+    ],
+  },
   restoreReplayCapacity: {
     owner: 'src/core/actions.ts#ACTIONS.restoreReplayCapacity',
     label: 'Restore replay capacity',
@@ -239,4 +260,10 @@ export function renderAction(actionId: ActionId): RegisteredActionRemedy {
 
 export function renderActions(...actionIds: readonly ActionId[]): RegisteredActionRemedy {
   return actionIds.map(renderAction).join('\n\n') as RegisteredActionRemedy
+}
+
+/** Compact registered copy for transient surfaces that cannot render Markdown sections. */
+export function renderActionToast(actionId: ActionId): string {
+  const action: ActionContract = ACTIONS[actionId]
+  return action.toast ?? `${action.label}: ${action.what}`
 }
