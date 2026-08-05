@@ -13,6 +13,12 @@ import { installTestDom } from './dom'
 
 const ROOT = resolve(import.meta.dirname, '..')
 
+interface CopySurface {
+  file: string
+  line: number
+  text: string
+}
+
 function source(path: string): string {
   return readFileSync(resolve(ROOT, path), 'utf8')
 }
@@ -23,6 +29,84 @@ function sourceFiles(directory: string): string[] {
     if (entry.isDirectory()) return sourceFiles(path)
     return entry.isFile() && path.endsWith('.ts') && !path.endsWith('.test.ts') ? [path] : []
   })
+}
+
+const IGNORED_DOCUMENTATION_DIRECTORIES = new Set([
+  '.claude',
+  '.git',
+  'coverage',
+  'dist',
+  'node_modules',
+])
+
+function documentationFiles(directory = ''): string[] {
+  return readdirSync(resolve(ROOT, directory), { withFileTypes: true }).flatMap((entry) => {
+    const path = directory ? `${directory}/${entry.name}` : entry.name
+    if (entry.isDirectory() && !IGNORED_DOCUMENTATION_DIRECTORIES.has(entry.name)) {
+      return documentationFiles(path)
+    }
+    return entry.isFile() && path.endsWith('.md') ? [path] : []
+  })
+}
+
+function describesSoundControl(text: string): boolean {
+  return (
+    /\b(?:toggle|turn|enable|disable|mute|unmute)\s+(?:the\s+)?(?:walk\s+)?(?:sound|audio)\b/i.test(text)
+    || /\b(?:walk\s+)?(?:sound|audio)\s+(?:(?:is|was|starts)\s+)?(?:on|off|ready)\b/i.test(text)
+  )
+}
+
+function productionCopySurfaces(): CopySurface[] {
+  const surfaces: CopySurface[] = []
+  for (const path of sourceFiles('src')) {
+    const file = ts.createSourceFile(path, source(path), ts.ScriptTarget.Latest, true)
+    const visit = (node: ts.Node): void => {
+      if (ts.isStringLiteralLike(node) && describesSoundControl(node.text)) {
+        surfaces.push({
+          file: path,
+          line: file.getLineAndCharacterOfPosition(node.getStart()).line + 1,
+          text: node.text,
+        })
+      }
+      ts.forEachChild(node, visit)
+    }
+    visit(file)
+  }
+  return surfaces
+}
+
+function documentationCopySurfaces(): CopySurface[] {
+  const surfaces: CopySurface[] = []
+  for (const path of documentationFiles()) {
+    const lines = source(path).split('\n')
+    let paragraph: string[] = []
+    let paragraphLine = 1
+    const inspect = (text: string, line: number): void => {
+      if (describesSoundControl(text)) surfaces.push({ file: path, line, text })
+    }
+    const flush = (): void => {
+      if (paragraph.length > 0) inspect(paragraph.join(' '), paragraphLine)
+      paragraph = []
+    }
+
+    for (const [index, line] of lines.entries()) {
+      if (/^\s*\|/.test(line)) {
+        flush()
+        inspect(line, index + 1)
+      } else if (line.trim() === '') {
+        flush()
+      } else {
+        if (paragraph.length === 0) paragraphLine = index + 1
+        paragraph.push(line.trim())
+      }
+    }
+    flush()
+  }
+  return surfaces
+}
+
+function formatSurfaces(surfaces: readonly CopySurface[]): string {
+  return surfaces.map(({ file, line, text }) => `${file}:${line} ${text}`).join('\n')
 }
 
 function cameraModes(): string[] {
@@ -155,6 +239,27 @@ function context(audioState: { enabled: boolean; preferred: boolean; volume: num
 }
 
 describe('honest movement sound controls', () => {
+  it('qualifies every production and documentation surface that describes the control', () => {
+    const production = productionCopySurfaces()
+    const documentation = documentationCopySurfaces()
+    expect(production, 'production sources must describe the sound control').not.toHaveLength(0)
+    expect(documentation, 'documentation must describe the sound control').not.toHaveLength(0)
+
+    const unqualified = [...production, ...documentation].filter(({ text }) => !/\bwalk\b/i.test(text))
+    expect(
+      unqualified,
+      `sound-control surfaces must disclose their walk-only scope:\n${formatSurfaces(unqualified)}`,
+    ).toEqual([])
+  })
+
+  it('keeps production sound-control copy in the shared module', () => {
+    const scattered = productionCopySurfaces().filter(({ file }) => file !== 'src/ui/sound.ts')
+    expect(
+      scattered,
+      `route production sound-control copy through src/ui/sound.ts:\n${formatSurfaces(scattered)}`,
+    ).toEqual([])
+  })
+
   it('qualifies an enabled control outside its producing mode and stays truthful inside it', () => {
     const dom = installTestDom()
     for (const id of ['hud-top', 'hud-bottom', 'toast-stack', 'compass']) dom.mount(id)
