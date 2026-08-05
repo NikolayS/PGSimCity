@@ -414,8 +414,6 @@ async function boot(): Promise<void> {
     hands.setQuality(gfx.quality.level)
   })
 
-  bus.on('sim:reset', () => sim.reset())
-
   /* --- resize -------------------------------------------------------------- */
 
   const onResize = () => {
