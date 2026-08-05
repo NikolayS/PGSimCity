@@ -79,6 +79,54 @@ describe('connection pooler', () => {
     expect(DEFAULT_KNOBS.queryWaitTimeout).toBe(120)
   })
 
+  it('enforces autocommit by rejecting transaction blocks in statement mode', () => {
+    const transaction = createAggregateSim()
+    transaction.setKnob('poolMode', 'transaction')
+    transaction.setKnob('longRunningXact', true)
+
+    expect(transaction.state.knobs.longRunningXact).toBe(true)
+    expect(transaction.state.pooler.statementTransactionRejects).toBe(0)
+    expect(transaction.state.pooler.disconnectedClients).toBe(0)
+
+    transaction.setKnob('poolMode', 'statement')
+    expect(transaction.state.knobs.longRunningXact).toBe(false)
+    expect(transaction.state.pooler.statementTransactionRejects).toBe(1)
+    expect(transaction.state.pooler.disconnectedClients).toBe(1)
+
+    const statement = createAggregateSim()
+    statement.setKnob('poolMode', 'statement')
+    statement.setKnob('longRunningXact', true)
+
+    expect(statement.state.knobs.longRunningXact).toBe(false)
+    expect(statement.state.pooler.statementTransactionRejects).toBe(1)
+    expect(statement.state.pooler.disconnectedClients).toBe(1)
+
+    statement.setKnob('lockContention', true)
+    expect(statement.state.knobs.lockContention).toBe(false)
+    expect(statement.state.pooler.statementTransactionRejects).toBe(2)
+    expect(statement.state.pooler.disconnectedClients).toBe(2)
+  })
+
+  it('uses the multiplexed query queue and wait timeout in statement mode', () => {
+    const sim = createAggregateSim()
+    sim.setKnob('clientConnections', 1_000)
+    sim.setKnob('poolMode', 'statement')
+    sim.setKnob('defaultPoolSize', 8)
+    sim.setKnob('maxClientConn', 1_000)
+    sim.setKnob('queryWaitTimeout', 20)
+    sim.setKnob('tps', 3_200)
+    sim.setKnob('synchronousCommit', 'off')
+    sim.setKnob('autovacuum', false)
+    advanceBy(sim, 40, 0.1)
+
+    expect(sim.state.pooler.acceptedClients).toBe(1_000)
+    expect(sim.state.pooler.boundClients).toBe(0)
+    expect(sim.state.stats.activeBackends).toBeLessThanOrEqual(8)
+    expect(sim.state.stats.latency.p99.waits.poolSlotMs).toBeGreaterThan(0)
+    expect(sim.state.stats.poolerQueryWaitTimeouts).toBeGreaterThan(0)
+    expect(sim.state.pooler.disconnectedClients).toBeGreaterThan(0)
+  })
+
   it('keeps every transaction queued until query_wait_timeout expires', () => {
     const sim = createAggregateSim()
     sim.setKnob('clientConnections', 1_000)

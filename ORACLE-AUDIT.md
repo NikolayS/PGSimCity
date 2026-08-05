@@ -74,6 +74,31 @@ families also made 44 matching observations on PostgreSQL 13.23 in 21.06 seconds
 and 44 on PostgreSQL 17.9 in 19.18 seconds. The table below is therefore the
 implemented expansion boundary, not merely the intended one.
 
+## PgBouncer mode spot oracle
+
+PgBouncer was not installed system-wide. On 2026-08-05, the PGDG PgBouncer
+1.25.2 package was downloaded and unpacked into a temporary directory, then run
+against an isolated PostgreSQL 18.3 cluster with `default_pool_size = 1`. This
+was a separate manual third-party oracle, not an observation made by the stock
+PostgreSQL oracle above.
+
+One client ran a query and stayed connected while a second client attempted to
+use the one-server pool. Session mode kept the server assigned and the second
+client remained queued. Transaction mode released the server after the first
+client's autocommit transaction, but retained it while that client sat after a
+separate `BEGIN`. Statement mode released after the autocommit query. A separate
+`BEGIN` in statement mode returned `FATAL`, SQLSTATE `08P01`, with
+`transaction blocks not allowed in statement pooling mode`; PgBouncer then
+closed that client connection. The PgBouncer log recorded the same closure
+reason.
+
+The owned mode set and release boundaries remain cited to PgBouncer's official
+configuration and feature documentation. The exact failure is additionally
+tied to the tagged PgBouncer 1.25.2 rejection path and is labeled with that
+verified version in reader-facing copy. Repository tests cover the city model
+and cross-surface mode-set invariant; this manual spot oracle is not a nightly
+PgBouncer compatibility matrix.
+
 ## Survey boundary
 
 For this survey, **server-checkable** means a controlled fixture can obtain a

@@ -471,8 +471,8 @@ const KB = {
     key: 'poolMode',
     guc: 'PgBouncer pool_mode',
     kind: 'choice',
-    choices: ['disabled', 'session', 'transaction'],
-    help: 'Transaction mode reuses a server after each transaction and gives up arbitrary session state. disabled is the city comparison, not a PgBouncer value.',
+    choices: ['disabled', ...CLAIM_VALUES.pgBouncerPoolModes.modes],
+    help: 'Session mode releases on disconnect, transaction mode after a transaction, and statement mode after a query while rejecting transaction blocks. disabled is the city comparison, not a PgBouncer value.',
   },
   defaultPoolSize: {
     key: 'defaultPoolSize',
