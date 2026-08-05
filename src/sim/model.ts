@@ -84,6 +84,7 @@ import type {
   PhysicalReplicationSlotState,
   PhysicalStandbyState,
   PlanNode,
+  PoolMode,
   QueryKind,
   RestoreDrillLevel,
   SampleFrames,
@@ -122,6 +123,13 @@ import {
 } from './mvcc'
 
 export { traceStopBit, walTriggerBytes } from '../core/model-helpers'
+
+const STATEMENT_TRANSACTION_ERROR =
+  CLAIM_VALUES.pgBouncerPoolModes.statementTransactionError
+
+function usesMultiplexedPoolQueue(mode: PoolMode): boolean {
+  return mode === 'transaction' || mode === 'statement'
+}
 
 /* --------------------------------------------------------------------------
  * Constants
@@ -761,6 +769,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       sessionPendingTransactions: Array(N_BACKEND_SLOTS).fill(0),
       waitingClients: 0,
       disconnectedClients: 0,
+      statementTransactionRejects: 0,
       serverConnections: 0,
       serverLimit: N_BACKEND_SLOTS,
       serverCapacity: N_BACKEND_SLOTS,
@@ -2026,8 +2035,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     return taken > 0 ? weightedAge / taken : 0
   }
 
-  function expireTransactionPoolWaiters(): void {
-    if (K.poolMode !== 'transaction' || K.queryWaitTimeout <= 0) return
+  function expireMultiplexedPoolWaiters(): void {
+    if (!usesMultiplexedPoolQueue(K.poolMode) || K.queryWaitTimeout <= 0) return
     const deadline = state.t - K.queryWaitTimeout
     let expired = 0
     while (
@@ -2139,7 +2148,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     }
     pooler.waitingClients = K.poolMode === 'session'
       ? Math.max(0, pooler.acceptedClients - pooler.boundClients)
-      : K.poolMode === 'transaction'
+      : usesMultiplexedPoolQueue(K.poolMode)
         ? Math.min(
             pooler.acceptedClients,
             Math.ceil(queuedRandomTx / Math.max(1, batchSize)),
@@ -6736,11 +6745,11 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       ? sessionPendingTx[slot]
       : Math.max(0, pendingTx - traceQueue.length)
     const take = requested ? 1 : Math.max(1, Math.min(randomPending, batchSize))
-    const transactionPoolWait = requested || K.poolMode === 'session'
+    const multiplexedPoolWait = requested || K.poolMode === 'session'
       ? 0
       : dequeueArrivals(take)
-    const poolSlotWait = K.poolMode === 'transaction'
-      ? transactionPoolWait
+    const poolSlotWait = usesMultiplexedPoolQueue(K.poolMode)
+      ? multiplexedPoolWait
       : K.poolMode === 'session'
         ? x.nextSessionPoolWaitT
         : 0
@@ -7298,8 +7307,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       table.mvcc.nextSampleAt = state.t + MVCC_SAMPLE_SECONDS
       refreshRepresentativeRow(table.mvcc, state.xminHorizon)
     }
-    // The transaction is over: its xid is no longer live, so the backend stops
-    // holding back the xmin horizon.
+    /* Ordinary visits contain one query in one transaction, so transaction and
+     * statement pooling both release here; statement mode rejects open blocks. */
+    // The xid is no longer live, so the backend stops holding back xmin.
     b.xid = 0
     b.state = 'idle'
     b.stateT = 0
@@ -7699,7 +7709,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   function tickPostmaster(dt: number): void {
     forkCooldown -= dt
     state.forkPulse = damp(state.forkPulse, 0, 3.2, dt)
-    expireTransactionPoolWaiters()
+    expireMultiplexedPoolWaiters()
     expireSessionPoolWaiters()
     stats.poolerQueuedTransactions = K.poolMode === 'disabled'
       ? 0
@@ -8208,6 +8218,16 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
    * KNOBS
    * ====================================================================*/
 
+  function rejectStatementTransactionBlock(): void {
+    state.pooler.statementTransactionRejects++
+    state.pooler.disconnectedClients++
+    toast(
+      `PgBouncer ${STATEMENT_TRANSACTION_ERROR.severity} ${STATEMENT_TRANSACTION_ERROR.sqlstate} — ${STATEMENT_TRANSACTION_ERROR.message}; client disconnected`,
+      'warn',
+      7000,
+    )
+  }
+
   function setKnob<Key extends keyof Knobs>(key: Key, value: Knobs[Key], source?: 'user'): void {
     const previousCheckpointTimeout = K.checkpointTimeout
     const previousPoolMode = K.poolMode
@@ -8253,10 +8273,25 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         } else if (previousPoolMode === 'session' && K.poolMode !== 'session') {
           moveSessionQueueToArrivals()
         }
-        if (previousPoolMode === 'disabled' && K.poolMode === 'transaction') {
+        if (
+          previousPoolMode === 'disabled'
+          && usesMultiplexedPoolQueue(K.poolMode)
+        ) {
           // Work already waiting at the application enters PgBouncer now; its
           // pool wait cannot predate the pooler's introduction.
           markQueuedArrivalsAt(state.t)
+        }
+        if (K.poolMode === 'statement') {
+          if (K.longRunningXact) {
+            K.longRunningXact = false
+            rejectStatementTransactionBlock()
+          }
+          if (K.lockContention) {
+            K.lockContention = false
+            releaseLock()
+            rejectStatementTransactionBlock()
+          }
+          syncHorizonPin()
         }
         for (let i = 0; i < N_BACKEND_SLOTS; i++) {
           extras[i].sessionAgeT = 0
@@ -8307,13 +8342,25 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       case 'longRunningXact':
       case 'standbyALongQuery':
       case 'standbyBLongQuery':
+        if (
+          key === 'longRunningXact'
+          && K.poolMode === 'statement'
+          && K.longRunningXact
+        ) {
+          K.longRunningXact = false
+          rejectStatementTransactionBlock()
+        }
         if (key !== 'longRunningXact' && K[key] && !standbyFeedbackActive()) {
           toast('hot_standby_feedback needs a connected standby — there is none', 'warn', 5000)
         }
         syncHorizonPin()
         break
       case 'lockContention':
-        if (!K.lockContention) releaseLock()
+        if (K.poolMode === 'statement' && K.lockContention) {
+          K.lockContention = false
+          releaseLock()
+          rejectStatementTransactionBlock()
+        } else if (!K.lockContention) releaseLock()
         break
       case 'standbyAEnabled':
       case 'standbyBEnabled':
@@ -8561,6 +8608,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     state.pooler.sessionPendingTransactions.fill(0)
     state.pooler.waitingClients = 0
     state.pooler.disconnectedClients = 0
+    state.pooler.statementTransactionRejects = 0
     state.pooler.serverConnections = 0
     state.pooler.serverLimit = N_BACKEND_SLOTS
     state.pooler.serverCapacity = N_BACKEND_SLOTS

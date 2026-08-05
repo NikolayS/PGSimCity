@@ -268,7 +268,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'Why poolers exist',
         body:
-          'Applications open connections per worker thread and hold them idle, so a fleet of app servers can easily demand thousands of connections from a database with sixteen cores. PostgreSQL can accept them and then spend time context switching and contending over shared structures instead of running queries. PgBouncer transaction mode multiplexes many client connections onto fewer PostgreSQL backends. It does not change an assigned statement’s plan or executor cost, but connection reuse removes repeated connect, authentication and backend-startup work, while bounding actual backend concurrency can reduce elapsed time during overload.',
+          'Applications open connections per worker thread and hold them idle, so a fleet of app servers can easily demand thousands of connections from a database with sixteen cores. PostgreSQL can accept them and then spend time context switching and contending over shared structures instead of running queries. PgBouncer’s transaction and statement modes multiplex many client connections onto fewer PostgreSQL backends at different release boundaries. It does not change an assigned statement’s plan or executor cost, but connection reuse removes repeated connect, authentication and backend-startup work, while bounding actual backend concurrency can reduce elapsed time during overload.',
       },
       {
         heading: 'max_connections is a memory commitment',
@@ -283,7 +283,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What the city models',
         body:
-          `The city has sixteen backend slots, a fixed startup cadence, direct and pooled client admission, one PgBouncer-shaped pool and achieved TPS. In the connection-storm experiment it charges an uncalibrated concurrency-pressure curve from the PostgreSQL backends actually connected, never from rejected or pool-waiting clients, and attributes modeled transaction hand-off or initial session-assignment wait to the Latency vital. That experiment removes its modeled direct connection churn when pooling is enabled, but the city does not separately price TCP, authentication, backend memory, catalog or plan-cache warming, real operating-system scheduling or ProcArray scans. ${CLAIM_VALUES.connectionPooler.coverageDisclosure}`,
+          `The city has sixteen backend slots, a fixed startup cadence, direct and pooled client admission, one PgBouncer-shaped pool and achieved TPS. In the connection-storm experiment it charges an uncalibrated concurrency-pressure curve from the PostgreSQL backends actually connected, never from rejected or pool-waiting clients, and attributes modeled transaction/statement hand-off or initial session-assignment wait to the Latency vital. That experiment removes its modeled direct connection churn when pooling is enabled, but the city does not separately price TCP, authentication, backend memory, catalog or plan-cache warming, real operating-system scheduling or ProcArray scans. ${CLAIM_VALUES.connectionPooler.coverageDisclosure}`,
       },
     ],
     metrics: [
@@ -346,8 +346,8 @@ export const DOCS_MEMORY: ComponentDoc[] = [
           'PgBouncer does not change the plan or executor cost of a statement after a server connection accepts it. Reusing connections does remove repeated connect, authentication and backend-startup cost, and limiting active PostgreSQL backends can reduce an individual query’s elapsed time during overload. When demand exceeds the server pool, clients wait for a pool slot instead of creating another PostgreSQL process.',
       },
       {
-        heading: 'Transaction versus session pooling',
-        body: CLAIM_VALUES.connectionPooler.transactionTradeoff,
+        heading: 'Session, transaction and statement pooling',
+        body: CLAIM_VALUES.connectionPooler.poolModeTradeoff,
       },
       {
         heading: 'The queue and connection controls',
@@ -370,17 +370,17 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       { label: 'Bound sessions', get: (s) => fmtNum(s.pooler.boundClients), hint: 'session mode only; binding lasts for the modeled client connection lifetime' },
       { label: 'Waiting', get: (s) => `${fmtNum(s.pooler.waitingClients)} clients` },
       { label: 'Queued transactions', get: (s) => fmtNum(s.stats.poolerQueuedTransactions) },
-      { label: 'Wait timeouts', get: (s) => `${fmtNum(s.stats.poolerQueryWaitTimeouts)} queries · ${fmtNum(s.pooler.disconnectedClients)} clients disconnected`, hint: 'cumulative since reset; query_wait_timeout=0 disables expiry' },
+      { label: 'Wait timeouts', get: (s) => `${fmtNum(s.stats.poolerQueryWaitTimeouts)} queries`, hint: 'cumulative since reset; query_wait_timeout=0 disables expiry' },
+      { label: 'Statement transaction rejects', get: (s) => `${fmtNum(s.pooler.statementTransactionRejects)} rejects · ${fmtNum(s.pooler.disconnectedClients)} total pooler disconnects`, hint: 'statement mode rejects BEGIN/open transactions and closes that client connection' },
       { label: 'PostgreSQL backends', get: (s) => `${fmtNum(s.pooler.serverConnections)} / ${fmtNum(s.pooler.serverCapacity)} capacity` },
       { label: 'PgBouncer server target', get: (s) => `${fmtNum(s.pooler.serverLimit)} · ${fmtNum(s.pooler.serverConnectionErrors)} unavailable` },
-      { label: 'Pool-slot p99', get: (s) => `${fmtNum(s.stats.latency.p99.waits.poolSlotMs)} model ms`, hint: 'transaction hand-off or initial session-assignment estimate; absent in direct mode' },
+      { label: 'Pool-slot p99', get: (s) => `${fmtNum(s.stats.latency.p99.waits.poolSlotMs)} model ms`, hint: 'transaction/statement hand-off or initial session-assignment estimate; absent in direct mode' },
     ],
     knobs: ['clientConnections', 'poolMode', 'defaultPoolSize', 'maxClientConn', 'queryWaitTimeout'],
     see: ['client.pool', 'postmaster', 'backend.row'],
     refs: {
       docs: [
-        { label: 'PgBouncer configuration', url: 'https://www.pgbouncer.org/config' },
-        { label: 'PgBouncer feature map by pool mode', url: 'https://www.pgbouncer.org/features.html' },
+        ...CLAIM_VALUES.pgBouncerPoolModes.sources,
         manual('monitoring-stats.html', '27.2.3. pg_stat_activity — one row per server process'),
       ],
       source: [],

@@ -78,8 +78,9 @@ export interface TableDef {
  * -------------------------------------------------------------------------*/
 
 export type SyncCommit = 'off' | 'local' | 'remote_write' | 'on' | 'remote_apply'
+export type PgBouncerPoolMode = typeof CLAIM_VALUES.pgBouncerPoolModes.modes[number]
 /** `disabled` is PGSimCity's direct-connection comparison, not a PgBouncer value. */
-export type PoolMode = 'disabled' | 'session' | 'transaction'
+export type PoolMode = 'disabled' | PgBouncerPoolMode
 export type WalLevel = 'minimal' | 'replica' | 'logical'
 export type SynchronousStandbyNames = 'none' | 'standbyA' | 'standbyB'
 export type HaPartition =
@@ -1047,8 +1048,10 @@ export interface PoolerState {
   sessionPendingTransactions: number[]
   /** Clients with modeled work waiting for a pooled server connection. */
   waitingClients: number
-  /** Cumulative client disconnects caused by query_wait_timeout. */
+  /** Cumulative modeled client disconnects at the pooler boundary. */
   disconnectedClients: number
+  /** Transaction blocks rejected by statement mode since reset. */
+  statementTransactionRejects: number
   /** PostgreSQL client backends currently visible in pg_stat_activity. */
   serverConnections: number
   /** Direct demand or PgBouncer's configured default_pool_size. */

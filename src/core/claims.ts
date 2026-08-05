@@ -20,6 +20,26 @@ const MODEL_CONNECTION_RESERVATIONS = {
   superuser: 3,
   reserved: 0,
 } as const
+const PGBOUNCER_POOL_MODE_CLAIM = {
+  modes: ['session', 'transaction', 'statement'],
+  releaseBoundary: {
+    session: 'client disconnect',
+    transaction: 'transaction finish',
+    statement: 'query finish',
+  },
+  statementTransactionError: {
+    severity: 'FATAL',
+    sqlstate: '08P01',
+    message: 'transaction blocks not allowed in statement pooling mode',
+    consequence: 'PgBouncer closes the client connection',
+    verifiedAgainst: 'PgBouncer 1.25.2',
+  },
+  sources: [
+    { label: 'PgBouncer pool_mode configuration', url: 'https://www.pgbouncer.org/config#pool_mode' },
+    { label: 'PgBouncer pooling-mode feature map', url: 'https://www.pgbouncer.org/features.html' },
+    { label: 'PgBouncer 1.25.2 transaction-block rejection', url: 'https://github.com/pgbouncer/pgbouncer/blob/pgbouncer_1_25_2/src/server.c#L396' },
+  ],
+} as const
 
 declare const registeredClaimValueBrand: unique symbol
 
@@ -130,10 +150,11 @@ export const CLAIM_VALUES = {
     windowTrips: registeredClaimValue('modelLatency.windowTrips', 512),
     disclosure: 'weighted rolling window of 512 completed backend trips',
     componentDisclosure: 'each modeled component is its own weighted quantile',
-    taxonomyDisclosure: 'Pool-slot wait is a client-side PgBouncer queue estimate (transaction hand-off or initial session assignment) and is not visible in pg_stat_activity; buffer-read phase is the synthetic exec_io phase, not accumulated DataFileRead events; dirty-victim I/O is trip attribution rather than a distinct live activity state; temp-file I/O is attributed inside the fixed sort/hash-aggregate teaching phase rather than projected as live PostgreSQL wait events; commit durability is an umbrella for WalSync or SyncRep; relation lock maps directly to Lock/relation; active / unclassified is a non-wait residual containing CPU, parse, result-send and unclassified WAL-buffer stalls, which PostgreSQL reports separately as waits such as LWLock/WALWrite',
+    taxonomyDisclosure: 'Pool-slot wait is a client-side PgBouncer queue estimate (transaction/statement hand-off or initial session assignment) and is not visible in pg_stat_activity; buffer-read phase is the synthetic exec_io phase, not accumulated DataFileRead events; dirty-victim I/O is trip attribution rather than a distinct live activity state; temp-file I/O is attributed inside the fixed sort/hash-aggregate teaching phase rather than projected as live PostgreSQL wait events; commit durability is an umbrella for WalSync or SyncRep; relation lock maps directly to Lock/relation; active / unclassified is a non-wait residual containing CPU, parse, result-send and unclassified WAL-buffer stalls, which PostgreSQL reports separately as waits such as LWLock/WALWrite',
     batchDisclosure: 'transactions carried by one backend trip share one latency observation, so within-batch variance is not modeled',
     resolutionDisclosure: '30 Hz integration quantizes observations to 33.33 model ms steps',
   },
+  pgBouncerPoolModes: PGBOUNCER_POOL_MODE_CLAIM,
   connectionPooler: {
     pgBouncerDefaults: {
       poolMode: 'session',
@@ -144,9 +165,9 @@ export const CLAIM_VALUES = {
     modelDefaultPoolSize: 8,
     concurrencyTarget: registeredClaimValue('connectionPooler.concurrencyTarget', 8),
     modelConnectionReservations: MODEL_CONNECTION_RESERVATIONS,
-    transactionTradeoff: 'Transaction pooling releases the server connection after each transaction. It cannot preserve arbitrary session state: SET/RESET and session-level advisory locks cannot span transactions; SQL PREPARE is incompatible and protocol-level named prepared statements need PgBouncer max_prepared_statements tracking; LISTEN subscriptions do not work, although NOTIFY can still be sent. Session pooling keeps one server connection for the client session and preserves PostgreSQL features, but it cannot multiplex idle client sessions at transaction boundaries.',
+    poolModeTradeoff: `Session pooling keeps one server connection for the client session and preserves PostgreSQL features, but it cannot multiplex idle client sessions. Transaction pooling releases the server connection after each transaction. It cannot preserve arbitrary session state across transactions: SET/RESET and session-level advisory locks cannot span them; SQL PREPARE is incompatible and protocol-level named prepared statements need PgBouncer max_prepared_statements tracking; LISTEN subscriptions do not work, although NOTIFY can still be sent. Statement pooling releases the server after every statement; PgBouncer's configuration describes that boundary as query finish. PgBouncer documents it as transaction pooling with a stricter twist, so the transaction-mode restrictions still apply and no session state can be relied on across queries. It enforces autocommit by disallowing transactions that span statements. In ${PGBOUNCER_POOL_MODE_CLAIM.statementTransactionError.verifiedAgainst}, BEGIN receives ${PGBOUNCER_POOL_MODE_CLAIM.statementTransactionError.severity} SQLSTATE ${PGBOUNCER_POOL_MODE_CLAIM.statementTransactionError.sqlstate}, “${PGBOUNCER_POOL_MODE_CLAIM.statementTransactionError.message}”, and PgBouncer closes the client connection.`,
     absent: [
-      'PgBouncer statement pool mode',
+      'multi-statement workload generation beyond rejecting the two modeled open-transaction controls',
       'production session-lifetime distribution and reconnect backoff',
       'session variables and SET/RESET effects',
       'advisory-lock ownership across transactions',
@@ -156,7 +177,7 @@ export const CLAIM_VALUES = {
       'PgBouncer authentication, TLS, DNS, cancellation forwarding and admin console',
       'pgcat and Odyssey runtime behavior',
     ],
-    coverageDisclosure: 'PGSimCity models one PgBouncer-shaped user/database pool: client admission, persistent PostgreSQL server connections, transaction-mode queue age, query_wait_timeout disconnects, and session clients bound for a fixed fifteen-model-second connection lifetime. The tps control is aggregate work assigned to the admitted cohort, so changing refused socket count alone does not rescale it; session mode admits only the bound sessions’ share. The connection-storm scenario’s uncalibrated pressure curve follows active PostgreSQL backends only. Production session-lifetime distributions, client identities, reconnect backoff and all session-level SQL state are absent; queue time is a modelled client-side estimate, not a PgBouncer timing sample.',
+    coverageDisclosure: 'PGSimCity models one PgBouncer-shaped user/database pool: client admission, persistent PostgreSQL server connections, transaction- and statement-mode queue age, query_wait_timeout disconnects, statement-mode rejection of the city’s two open-transaction controls, and session clients bound for a fixed fifteen-model-second connection lifetime. Each ordinary pooled backend visit represents one statement in one transaction, so transaction and statement release boundaries have the same queue timing in this workload; the model does not fabricate a timing difference between them. The tps control is aggregate work assigned to the admitted cohort, so changing refused socket count alone does not rescale it; session mode admits only the bound sessions’ share. The connection-storm scenario’s uncalibrated pressure curve follows active PostgreSQL backends only. Production session-lifetime distributions, client identities, reconnect backoff and all session-level SQL state are absent; queue time is a modelled client-side estimate, not a PgBouncer timing sample.',
     plateLabel: 'PgBouncer · pool_mode',
   },
   workMem: {
@@ -457,6 +478,11 @@ export const CLAIMS = {
         { kind: 'hud-visible', marker: 'work-mem-latency-scope' },
       ],
     }),
+  },
+  pgBouncerPoolModes: {
+    owner: 'src/core/claims.ts#CLAIM_VALUES.pgBouncerPoolModes',
+    value: CLAIM_VALUES.pgBouncerPoolModes,
+    surfaces: ['contracts:PoolMode', 'controls:pool_mode choices', 'Diagnose:pool_mode choices', 'model:release boundary and transaction-block rejection', 'inspector:pooling-mode behavior'],
   },
   connectionPooler: {
     owner: 'src/core/claims.ts#CLAIM_VALUES.connectionPooler',

@@ -79,6 +79,12 @@ const REGISTERED_CLAIM_VALUE_READS = {
     'src/ui/hud.ts': 12,
     'src/ui/tour.ts': 2,
   },
+  pgBouncerPoolModes: {
+    'src/observability/paths.ts': 1,
+    'src/sim/model.ts': 1,
+    'src/ui/content.ts': 1,
+    'src/ui/docs-memory.ts': 1,
+  },
   connectionPooler: {
     'src/core/types.ts': 1,
     'src/observability/paths.ts': 2,
@@ -570,7 +576,7 @@ describe('claims and conventions spine', () => {
     expect([...classified].sort()).toEqual((Object.keys(CLAIMS) as ClaimId[]).sort())
   })
 
-  it('owns exactly the twenty-six drift-prone contracts across both passes', () => {
+  it('owns exactly the twenty-seven drift-prone contracts across both passes', () => {
     expect(Object.keys(CLAIMS)).toEqual([
       'appVersion',
       'walSegment',
@@ -580,6 +586,7 @@ describe('claims and conventions spine', () => {
       'standbyNames',
       'modelDuration',
       'modelLatency',
+      'pgBouncerPoolModes',
       'connectionPooler',
       'workMem',
       'restoreDrill',
@@ -837,9 +844,19 @@ describe('claims and conventions spine', () => {
     const poolSize = KNOB_META.find((knob) => knob.key === 'defaultPoolSize')
     const clientLimit = KNOB_META.find((knob) => knob.key === 'maxClientConn')
     const waitTimeout = KNOB_META.find((knob) => knob.key === 'queryWaitTimeout')
+    const registeredPoolModes = CLAIM_VALUES.pgBouncerPoolModes
+    expect(registeredPoolModes.modes)
+      .toEqual(['session', 'transaction', 'statement'])
+    expect(Object.keys(registeredPoolModes.releaseBoundary))
+      .toEqual([...registeredPoolModes.modes])
     expect(poolMode?.options?.map((option) => option.value))
-      .toEqual(['disabled', 'session', 'transaction'])
-    expect(poolMode?.hint).toContain(claim.transactionTradeoff)
+      .toEqual(['disabled', ...registeredPoolModes.modes])
+    const diagnosePoolMode = ALL_VERDICTS
+      .flatMap((verdict) => verdict.knobs)
+      .find((knob) => knob.key === 'poolMode')
+    expect(diagnosePoolMode?.choices)
+      .toEqual(['disabled', ...registeredPoolModes.modes])
+    expect(poolMode?.hint).toContain(claim.poolModeTradeoff)
     expect(poolMode?.hint).toContain(claim.coverageDisclosure)
     expect(poolSize?.hint).toContain(String(claim.pgBouncerDefaults.defaultPoolSize))
     expect(clientLimit?.hint).toContain(String(claim.pgBouncerDefaults.maxClientConn))
@@ -853,8 +870,16 @@ describe('claims and conventions spine', () => {
       pooler?.tldr ?? '',
       ...(pooler?.sections.map((section) => section.body) ?? []),
     ].join('\n')
-    expect(copy).toContain(claim.transactionTradeoff)
+    expect(copy).toContain(claim.poolModeTradeoff)
     expect(copy).toContain(claim.coverageDisclosure)
+    expect(copy).toContain(registeredPoolModes.statementTransactionError.message)
+    expect(copy).toContain(registeredPoolModes.statementTransactionError.severity)
+    expect(copy).toContain(registeredPoolModes.statementTransactionError.sqlstate)
+    expect(copy).toContain(registeredPoolModes.statementTransactionError.verifiedAgainst)
+    const poolerRefUrls = pooler?.refs.docs.map((ref) => ref.url) ?? []
+    for (const source of registeredPoolModes.sources) {
+      expect(poolerRefUrls).toContain(source.url)
+    }
     expect(copy).toMatch(/pg_stat_activity.*server process/is)
     expect(copy).toMatch(/pgcat.*Odyssey/is)
     expect(copy).toMatch(/connect.*authentication.*backend[- ]startup/is)
@@ -864,7 +889,7 @@ describe('claims and conventions spine', () => {
     expect(copy).not.toMatch(/not a speed feature/i)
     expect(copy).not.toMatch(/client_active|client_waiting|server_active|server_idle/i)
     expect(claim.absent).toEqual([
-      'PgBouncer statement pool mode',
+      'multi-statement workload generation beyond rejecting the two modeled open-transaction controls',
       'production session-lifetime distribution and reconnect backoff',
       'session variables and SET/RESET effects',
       'advisory-lock ownership across transactions',

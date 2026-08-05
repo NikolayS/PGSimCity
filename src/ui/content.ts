@@ -2,7 +2,7 @@ import {
   SHARED_BUFFERS_MAX_MIB,
   SHARED_BUFFERS_MIN_MIB,
 } from '../core/types'
-import type { ComponentDoc, Knobs } from '../core/types'
+import type { ComponentDoc, Knobs, PgBouncerPoolMode } from '../core/types'
 import { CLAIM_VALUES } from '../core/claims'
 import { DOCS_MEMORY } from './docs-memory'
 import { DOCS_STORAGE } from './docs-storage'
@@ -17,6 +17,16 @@ import { DOCS_STORAGE } from './docs-storage'
 export const DOCS: ComponentDoc[] = [...DOCS_MEMORY, ...DOCS_STORAGE]
 
 const CHECKPOINT_PARTNERS = CLAIM_VALUES.checkpointPolicy.partners
+const POOL_MODE_CLAIM = CLAIM_VALUES.pgBouncerPoolModes
+const POOL_MODE_LABELS: Record<PgBouncerPoolMode, string> = {
+  session: 'session — release after disconnect',
+  transaction: 'transaction — release after transaction',
+  statement: 'statement — release after query',
+}
+const PGBOUNCER_POOL_MODE_OPTIONS = POOL_MODE_CLAIM.modes.map((value) => ({
+  value,
+  label: POOL_MODE_LABELS[value],
+}))
 
 const _byId = new Map<string, ComponentDoc>(DOCS.map((d) => [d.id, d]))
 
@@ -126,10 +136,9 @@ export const KNOB_META: KnobMeta[] = [
     kind: 'select',
     options: [
       { value: 'disabled', label: 'direct — no PgBouncer' },
-      { value: 'session', label: 'session — release on disconnect' },
-      { value: 'transaction', label: 'transaction — release on commit' },
+      ...PGBOUNCER_POOL_MODE_OPTIONS,
     ],
-    hint: `${CLAIM_VALUES.connectionPooler.transactionTradeoff} “direct” is PGSimCity's comparison state, not a PgBouncer pool_mode value. ${CLAIM_VALUES.connectionPooler.coverageDisclosure}`,
+    hint: `${CLAIM_VALUES.connectionPooler.poolModeTradeoff} “direct” is PGSimCity's comparison state, not a PgBouncer pool_mode value. ${CLAIM_VALUES.connectionPooler.coverageDisclosure}`,
     disclosure: 'pool-mode-cost',
   },
   {
