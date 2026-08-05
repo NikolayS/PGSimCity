@@ -229,7 +229,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What you would see in production',
-        body: 'Disk usage climbs steadily on the WAL volume while everything else looks healthy, and then the server PANICs with `could not write to file … No space left on device` and restarts. Do not delete files from `pg_wal` by hand — that is how a recoverable incident becomes an unrecoverable one. Fix the cause: repair or temporarily neuter archiving, drop the abandoned slot with `pg_drop_replication_slot`, and set `max_slot_wal_keep_size` (PostgreSQL 13 and later) so a dead slot is invalidated rather than allowed to take the primary down with it.',
+        body: `Disk usage climbs steadily on the WAL volume while everything else looks healthy, and then the server PANICs with \`could not write to file … No space left on device\` and restarts. Do not delete files from \`pg_wal\` by hand — that is how a recoverable incident becomes an unrecoverable one. Fix the cause: repair or temporarily neuter archiving, drop the abandoned slot with \`pg_drop_replication_slot\`, and set \`max_slot_wal_keep_size\` (PostgreSQL 13 and later) so a dead slot is invalidated rather than allowed to take the primary down with it.\n\n${renderAction('limitSlotWalRetention')}`,
       },
       {
         heading: 'How to watch it',
@@ -1888,7 +1888,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'Why the defaults are too timid',
-        body: 'Twenty percent is a sensible default for a 10,000-row table and a catastrophe for a 500-million-row one, where it means waiting for 100 million dead tuples before doing anything, then vacuuming for hours. Set it per table: `ALTER TABLE orders SET (autovacuum_vacuum_scale_factor = 0.01, autovacuum_vacuum_threshold = 1000)`. Frequent small vacuums are dramatically cheaper than rare large ones, because each pass re-reads less and has a better chance of finishing before the next one is due.',
+        body: `Twenty percent is a sensible default for a 10,000-row table and a catastrophe for a 500-million-row one, where it means waiting for 100 million dead tuples before doing anything, then vacuuming for hours. Set it per table: \`ALTER TABLE orders SET (autovacuum_vacuum_scale_factor = 0.01, autovacuum_vacuum_threshold = 1000)\`. Frequent small vacuums are dramatically cheaper than rare large ones, because each pass re-reads less and has a better chance of finishing before the next one is due.\n\n${renderAction('tuneAutovacuum')}`,
       },
       {
         heading: 'Throttling, and the trap in it',

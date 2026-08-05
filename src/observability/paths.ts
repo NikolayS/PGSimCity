@@ -19,7 +19,12 @@
 import { poolBytes, SHARED_BUFFERS_FULL_SAMPLE_MIB, SHARED_BUFFERS_MIN_MIB } from '../core/types'
 import type { Knobs, SimState } from '../core/types'
 import { configuredSynchronousStandby, worstConnectedStandbyLag } from '../core/replication'
-import { renderAction, renderActions } from '../core/actions'
+import { diagnosticGuidance, renderAction, renderActions } from '../core/actions'
+import type {
+  DiagnoseActionVerdictId,
+  DiagnoseRemedy,
+  RegisteredActionRemedy,
+} from '../core/actions'
 import { CLAIM_VALUES, ordinaryConnectionCapacity } from '../core/claims'
 import { fmtBytes } from '../core/util'
 import type { Collector } from './collector'
@@ -149,7 +154,7 @@ export interface Verdict {
   /** live numbers that back the call */
   evidence: (s: SimState, c: Collector) => { label: string; value: string; tone?: 'ok' | 'warn' | 'crit' }[]
   /** what an operator does about it */
-  fix: string
+  fix: DiagnoseRemedy
   knobs: KnobSpec[]
   /** what to re-read to confirm the fix worked */
   confirm?: { projection: string; instrument: string } & DiagnosticSqlBlock
@@ -164,6 +169,15 @@ export interface Verdict {
   reading: { label: string; url: string }[]
   /** load-bearing scope qualification retained at narrow widths */
   disclosure?: string
+}
+
+function registeredActionVerdict<
+  const V extends Verdict & {
+    id: DiagnoseActionVerdictId
+    fix: RegisteredActionRemedy
+  },
+>(verdict: V): V {
+  return verdict
 }
 
 export interface Symptom {
@@ -1215,8 +1229,9 @@ const VERDICTS: Verdict[] = [
       { label: 'wal_fpi rate', value: `${c.rate.walFpi.toFixed(1)}/s`, tone: 'warn' },
       { label: 'wal_bytes rate', value: `${fmtBytes(c.rate.walBytes)}/s`, tone: 'warn' },
     ],
-    fix:
+    fix: diagnosticGuidance(
       'Because this model exposes WAL pressure as the cause, raise max_wal_size against its measured peak WAL rate and headroom, then verify the pressure stops. On a real server, first exclude explicit CHECKPOINT, backup and shutdown requests; changing max_wal_size cannot fix those. checkpoint_timeout also trades full-page-image frequency against crash-recovery work.',
+    ),
     knobs: [KB.maxWalSize, KB.checkpointTimeout],
     confirm: {
       projection: 'checkpointer',
@@ -1244,8 +1259,9 @@ const VERDICTS: Verdict[] = [
       { label: 'max_wal_size', value: `${s.knobs.maxWalSize} MB` },
       { label: 'requested share', value: `${(checkpointRequestedShare(c) * 100).toFixed(0)}%`, tone: 'warn' },
     ],
-    fix:
+    fix: diagnosticGuidance(
       'For this modeled cause, size max_wal_size from measured peak WAL rate, available disk and recovery objectives, then confirm the WAL-triggered requests stop. In production, confirm the request reason from checkpoint messages and surrounding activity rather than treating num_requested as a cause code.',
+    ),
     knobs: [KB.maxWalSize],
     confirm: {
       projection: 'checkpointer',
@@ -1277,8 +1293,9 @@ const VERDICTS: Verdict[] = [
         { label: 'modeled pg_wal', value: fmtBytes(s.disasterRecovery.archive.pgWalBytes) },
       ]
     },
-    fix:
+    fix: diagnosticGuidance(
       'Identify the slot owner and recovery intent first. If the consumer is required, restore consumption or add measured temporary headroom and verify its catch-up rate. If the slot is abandoned, stop and detach that consumer before dropping the slot. Dropping a slot removes its retention guarantee but does not delete WAL already in pg_wal. A physical standby can continue while its required WAL remains in pg_wal or is available through the archive; it needs a new base backup only when the necessary WAL is unavailable from every source.',
+    ),
     knobs: [],
     confirm: {
       projection: 'slots',
@@ -1316,8 +1333,9 @@ const VERDICTS: Verdict[] = [
         { label: 'model alert boundary', value: fmtBytes(DIAGNOSTIC_GATES.slotRetainedBytes.threshold) },
       ]
     },
-    fix:
+    fix: diagnosticGuidance(
       'Inspect checkpoint completion, pg_stat_archiver, backup activity, wal_keep_size and the filesystem view of pg_wal. Do not drop a slot that the evidence does not show retaining the growth.',
+    ),
     knobs: [],
     city: 'wal.vault',
     reading: [DOC('wal-configuration.html', 'WAL Configuration')],
@@ -1336,8 +1354,9 @@ const VERDICTS: Verdict[] = [
       { label: 'num_done', value: String(Math.round(c.total.ckptDone)), tone: 'ok' },
       { label: 'buffers_written', value: String(Math.round(c.total.ckptBuffers)) },
     ],
-    fix:
+    fix: diagnosticGuidance(
       'On PostgreSQL, if writes still stall periodically, next inspect checkpoint sync_time and autovacuum activity against an external latency trace. The city has no checkpoint sync_time; its rolling modeled latency can correlate I/O and counter pressure but cannot replace that production trace.',
+    ),
     knobs: [KB.checkpointTimeout],
     city: 'checkpointer',
     reading: [DOC('wal-configuration.html', 'WAL Configuration')],
@@ -1356,8 +1375,9 @@ const VERDICTS: Verdict[] = [
       { label: 'dead tuples', value: Math.round(s.tables.reduce((a, t) => a + t.deadTuples, 0)).toLocaleString(), tone: 'crit' },
       { label: 'worst table', value: `${[...s.tables].sort((a, b) => b.bloat - a.bloat)[0].def.name} · ${([...s.tables].sort((a, b) => b.bloat - a.bloat)[0].bloat * 100).toFixed(0)}% dead`, tone: 'crit' },
     ],
-    fix:
+    fix: diagnosticGuidance(
       'Release the transaction and watch the horizon jump forward — every dead row becomes removable at once and the next pass actually collects. Then prevent the same failure: idle_in_transaction_session_timeout ends a transaction left idle between statements. statement_timeout limits only the time while a statement is being processed; it is valuable against runaway statements, but it does not stop an idle transaction.',
+    ),
     knobs: [KB.longRunningXact, KB.autovacuumScaleFactor],
     confirm: {
       projection: 'tables',
@@ -1394,8 +1414,9 @@ const VERDICTS: Verdict[] = [
       { label: 'autovacuum', value: 'off', tone: 'crit' },
       { label: 'dead tuples', value: Math.round(s.tables.reduce((a, t) => a + t.deadTuples, 0)).toLocaleString(), tone: 'crit' },
     ],
-    fix:
+    fix: diagnosticGuidance(
       'Turn it on. There is no production configuration in which off is correct — and if someone turned it off to "reduce I/O", they traded a steady trickle for an eventual emergency VACUUM FULL that takes an ACCESS EXCLUSIVE lock on the table.',
+    ),
     knobs: [KB.autovacuum, KB.autovacuumScaleFactor],
     confirm: {
       projection: 'tables',
@@ -1416,7 +1437,7 @@ const VERDICTS: Verdict[] = [
       DOC('storage-hot.html', 'Heap-Only Tuples'),
     ],
   },
-  {
+  registeredActionVerdict({
     id: 'v.av_relation_off',
     kind: 'verdict',
     title: 'The affected relation opted out of routine autovacuum.',
@@ -1455,8 +1476,8 @@ const VERDICTS: Verdict[] = [
     },
     city: 'autovac.launcher',
     reading: [DOC('sql-altertable.html', 'ALTER TABLE storage parameters')],
-  },
-  {
+  }),
+  registeredActionVerdict({
     id: 'v.av_tuning',
     kind: 'verdict',
     title: 'Vacuum is working — it is just losing the race.',
@@ -1488,7 +1509,7 @@ const VERDICTS: Verdict[] = [
     },
     city: 'autovac.launcher',
     reading: [DOC('runtime-config-autovacuum.html', 'Automatic Vacuuming settings')],
-  },
+  }),
   {
     id: 'v.no_bloat',
     kind: 'verdict',
@@ -1497,8 +1518,9 @@ const VERDICTS: Verdict[] = [
     mechanism:
       `A relation can have a low current dead-tuple estimate and still contain reusable space from earlier churn; its indexes or TOAST relation can also be the growth. Conversely, dead tuples can occupy reusable space without requiring a physical shrink. ${CLAIM_VALUES.vacuumReclaim.rule} The city can distinguish modeled live-row, heap-page and aggregate index growth, but it has no TOAST relation or chunk state.`,
     evidence: (s) => s.tables.slice(0, 3).map((t) => ({ label: t.def.name, value: `${(t.bloat * 100).toFixed(1)}% dead`, tone: 'ok' as const })),
-    fix:
+    fix: diagnosticGuidance(
       'Graph pg_relation_size(), pg_indexes_size() and pg_total_relation_size() alongside row counts. If the physical question justifies a page scan, use pgstattuple or an equivalent inspection tool; do not declare “no bloat” from n_dead_tup alone.',
+    ),
     knobs: [KB.autovacuumScaleFactor],
     city: 'storage.datadir',
     reading: [DOC('routine-vacuuming.html', 'Routine Vacuuming')],
@@ -1524,8 +1546,9 @@ const VERDICTS: Verdict[] = [
         { label: 'sample bgwriter cleans/s', value: c.rate.bgwClean.toFixed(1), tone: (s.knobs.bgwriterEnabled ? 'warn' : 'crit') as 'warn' | 'crit' },
       ]
     },
-    fix:
+    fix: diagnosticGuidance(
       'First compare write rates and bytes across contexts, inspect checkpointer/background-writer capacity, and on PostgreSQL 18 join pg_stat_get_backend_io(pid) to pg_stat_activity. Test shared_buffers or background-writer changes only after workload reuse and allocation pressure support them, then compare before/after rates rather than cumulative totals.',
+    ),
     knobs: [KB.sharedBuffers, KB.bgwriterLruMaxpages, KB.bgwriterEnabled],
     confirm: {
       projection: 'io',
@@ -1569,8 +1592,9 @@ const VERDICTS: Verdict[] = [
       { label: 'sampled frames at usage_count 0', value: `${(coldBufferShare(s) * 100).toFixed(0)}%`, tone: 'crit' },
       { label: 'reads/sec', value: s.stats.ioReadPerSec.toFixed(0) },
     ],
-    fix:
+    fix: diagnosticGuidance(
       'Identify one-pass and bulk-read queries, compare relation and reusable working-set sizes, and measure repeated-access hit/read rates. Only then test a shared_buffers change with before/after rates; a larger pool cannot create reuse that the workload does not have.',
+    ),
     knobs: [KB.sharedBuffers],
     confirm: {
       projection: 'buffercache',
@@ -1597,8 +1621,9 @@ const VERDICTS: Verdict[] = [
       { label: 'sampled frames at usage_count 0', value: `${(coldBufferShare(s) * 100).toFixed(0)}%`, tone: 'ok' },
       { label: 'reads/sec', value: s.stats.ioReadPerSec.toFixed(0) },
     ],
-    fix:
+    fix: diagnosticGuidance(
       'Look at what is reading rather than at how much. pg_stat_all_tables.seq_scan against a large relation, and pg_stat_all_indexes.idx_scan sitting at zero on an index you are paying to maintain, are both more actionable than a hit-ratio target.',
+    ),
     knobs: [KB.sharedBuffers],
     city: 'shared.buffers',
     reading: [DOC('monitoring-stats.html', 'The Cumulative Statistics System')],
@@ -1617,8 +1642,9 @@ const VERDICTS: Verdict[] = [
       { label: 'waited mode', value: [...new Set(s.locks.map((lock) => lock.mode))].join(', ') || '—', tone: 'crit' },
       { label: 'ordinary connections in use', value: `${s.stats.activeBackends} of ${ordinaryCapacity(s)}` },
     ],
-    fix:
+    fix: diagnosticGuidance(
       'End the holder’s transaction, not the waiters’ queries. Ask the client to commit or roll back; if the session is abandoned, verify the PID, owner and abort consequences before pg_terminate_backend(). pg_cancel_backend() only cancels a current query and cannot clear an idle-in-transaction session. Only when waited_mode is AccessExclusiveLock and the waiter is DDL should SET lock_timeout be the specific prevention advice.',
+    ),
     knobs: [KB.lockContention],
     confirm: {
       projection: 'locks',
@@ -1649,12 +1675,12 @@ const VERDICTS: Verdict[] = [
       { label: 'lock waiters', value: '0', tone: 'ok' },
       { label: 'active backends', value: String(s.stats.runningBackends) },
     ],
-    fix: 'Go back to pg_stat_activity and read the wait buckets again — whatever they are queuing on, it is not the lock manager.',
+    fix: diagnosticGuidance('Go back to pg_stat_activity and read the wait buckets again — whatever they are queuing on, it is not the lock manager.'),
     knobs: [KB.lockContention],
     city: 'lock.manager',
     reading: [DOC('explicit-locking.html', 'Explicit Locking')],
   },
-  {
+  registeredActionVerdict({
     id: 'v.replay_paused',
     kind: 'verdict',
     title: 'Recovery is paused; this is not a replay-capacity verdict.',
@@ -1691,8 +1717,8 @@ const VERDICTS: Verdict[] = [
     },
     city: 'startup.proc',
     reading: [DOC('functions-admin.html#FUNCTIONS-RECOVERY-CONTROL', 'Recovery Control Functions')],
-  },
-  {
+  }),
+  registeredActionVerdict({
     id: 'v.replay',
     kind: 'verdict',
     title: 'Recovery is unpaused and running; now investigate replay capacity.',
@@ -1734,7 +1760,7 @@ const VERDICTS: Verdict[] = [
       DOC('warm-standby.html', 'Log-Shipping Standby Servers'),
       DOC('runtime-config-replication.html', 'Replication settings'),
     ],
-  },
+  }),
   {
     id: 'v.network',
     kind: 'verdict',
@@ -1752,7 +1778,7 @@ const VERDICTS: Verdict[] = [
         { label: 'records in flight', value: String(standby.inFlight) },
       ]
     },
-    fix: 'Inspect the walsender and link together. Fix sender scheduling or WAL-read constraints when they are responsible; fix link throughput or congestion when the transport is responsible. Use byte-rate evidence rather than latency alone.',
+    fix: diagnosticGuidance('Inspect the walsender and link together. Fix sender scheduling or WAL-read constraints when they are responsible; fix link throughput or congestion when the transport is responsible. Use byte-rate evidence rather than latency alone.'),
     knobs: [KB.standbyANetworkLag, KB.standbyBNetworkLag],
     confirm: {
       projection: 'replication',
@@ -1793,13 +1819,14 @@ const VERDICTS: Verdict[] = [
         { label: 'connected rows', value: String(replicationRows(s).length) },
       ]
     },
-    fix:
+    fix: diagnosticGuidance(
       'Set up the alert while it is healthy. Check pg_replication_slots for ownership, restart_lsn, wal_status and safe_wal_size; inactive permanent slots retain WAL by default, while configured timeout or max_slot_wal_keep_size can invalidate them.',
+    ),
     knobs: [KB.standbyASlowApply, KB.standbyBSlowApply],
     city: 'walsender',
     reading: [DOC('warm-standby.html', 'Log-Shipping Standby Servers')],
   },
-  {
+  registeredActionVerdict({
     id: 'v.saturation',
     kind: 'verdict',
     title: 'Every ordinary connection slot is occupied, and new work is refused or queueing.',
@@ -1839,7 +1866,7 @@ const VERDICTS: Verdict[] = [
       { label: 'PgBouncer feature map by pool mode', url: 'https://www.pgbouncer.org/features.html' },
     ],
     disclosure: 'connection-pooler-diagnosis-scope',
-  },
+  }),
   {
     id: 'v.idle',
     kind: 'verdict',
@@ -1852,8 +1879,9 @@ const VERDICTS: Verdict[] = [
       { label: 'tps', value: s.stats.tps.toFixed(0) },
       { label: 'cache hit', value: `${s.stats.cacheHitPct.toFixed(1)}%`, tone: 'ok' },
     ],
-    fix:
+    fix: diagnosticGuidance(
       'Raise the offered load here to give the model something to do, or take the finding upstream: if the database is idle and the users are waiting, the queue is in front of it.',
+    ),
     knobs: [KB.tps],
     city: 'backend.row',
     reading: [DOC('monitoring-stats.html', 'The Cumulative Statistics System')],
@@ -1871,8 +1899,9 @@ const VERDICTS: Verdict[] = [
       { label: 'waiting to commit', value: String(activityWaitCounts(s, c).commit), tone: 'warn' },
       { label: 'insert − flush', value: fmtBytes(s.wal.insertLsn - s.wal.flushLsn) },
     ],
-    fix:
+    fix: diagnosticGuidance(
       'Decide per transaction, not per cluster. synchronous_commit is a session setting: money moves may need remote_apply, while disposable telemetry may accept off. Turning it off preserves crash consistency but can lose the last few hundred milliseconds of **acknowledged** transactions after a PostgreSQL server, operating-system or power failure.',
+    ),
     knobs: [KB.synchronousCommit, KB.fullPageWrites],
     confirm: {
       projection: 'wal_lsn',
@@ -1911,8 +1940,9 @@ const VERDICTS: Verdict[] = [
         { label: 'model replay delay', value: standby ? `${standby.lagSec.toFixed(2)} s` : '—' },
       ]
     },
-    fix:
+    fix: diagnosticGuidance(
       'Confirm the guarantee you meant to buy. remote_write is cheaper but does not survive standby operating-system or power failure; on waits for its durable flush; remote_apply also waits for visibility. Measure commit latency and the selected standby stage directly. If remote durability is not required, local avoids the round trip.',
+    ),
     knobs: [KB.synchronousCommit, KB.synchronousStandbyNames, KB.standbyANetworkLag, KB.standbyBNetworkLag],
     confirm: {
       projection: 'wal_lsn',
@@ -1942,8 +1972,9 @@ const VERDICTS: Verdict[] = [
       { label: 'insert − flush', value: fmtBytes(s.wal.insertLsn - s.wal.flushLsn), tone: 'ok' },
       { label: 'WAL rate', value: `${fmtBytes(s.wal.bytesPerSec)}/s` },
     ],
-    fix:
+    fix: diagnosticGuidance(
       'Try switching synchronous_commit to remote_apply and watch the modeled commit_wait queue and stretched trip duration change. This demonstrates the dependency, not production commit latency.',
+    ),
     knobs: [KB.synchronousCommit],
     city: 'walwriter',
     reading: [DOC('runtime-config-wal.html', 'Write Ahead Log settings')],
@@ -1966,8 +1997,9 @@ const VERDICTS: Verdict[] = [
         { label: 'model replay delay', value: standby ? `${standby.lagSec.toFixed(2)} s` : '—', tone: 'ok' },
       ]
     },
-    fix:
+    fix: diagnosticGuidance(
       'Pick any other complaint on the left. Each one puts this same server into a state that produces that symptom, and walks you to the column that proves it. The numbers you just learned are the ones that will look wrong.',
+    ),
     knobs: [KB.tps, KB.sharedBuffers],
     city: 'shared.buffers',
     reading: [DOC('monitoring-stats.html', 'The Cumulative Statistics System')],
