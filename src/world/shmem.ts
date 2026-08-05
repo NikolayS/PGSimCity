@@ -7,7 +7,7 @@ import { clamp, clamp01, fmtBytes, fmtLsn, fmtNum, fmtPct, makeRng } from '../co
 import { DECK_GATES } from './access'
 import type { DeckGate } from './access'
 import { ANCHOR, CITY, TABLES, bufferTilePos } from './layout'
-import { createPlanLabelPainter } from './plan-label'
+import { createPlanLabelPainter, markPlanLabelSemanticCarrier } from './plan-label'
 import { markTextPlane, markTextTexture } from './text-plane'
 
 export const SHARED_BUFFER_SAMPLE_PLATE_LABEL = `SHARED_BUFFERS · REPRESENTATIVE SAMPLE · UP TO ${CLAIM_VALUES.bufferSample.capacityFrames.toLocaleString('en-US')} FRAMES`
@@ -409,6 +409,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
   deckLabels.raycast = () => {}
   markTextTexture(deckLabelTex, 'SHARED MEMORY SEGMENT floor plan')
   markTextPlane(deckLabels, 'SHARED MEMORY SEGMENT floor plan')
+  const gDeckLabelCarrier = keep(new THREE.PlaneGeometry(1, 1))
   for (const label of deckArtwork.labels) {
     markTextPlane(
       deckLabels,
@@ -419,6 +420,37 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
       true,
       { fontSize: label.size, ratio: label.ratio, backing: label.backing },
     )
+    const semantic = label.semantic
+    if (semantic) {
+      const material = theme.neon(semantic.color, 2, {
+        darkBacking: true,
+        polygonOffset: true,
+        polygonOffsetFactor: -4,
+        polygonOffsetUnits: -4,
+      })
+      const carrier = new THREE.Mesh(gDeckLabelCarrier, material)
+      carrier.name = `shmem.planLabelSemantic:${label.text}`
+      carrier.position.set(semantic.x, -semantic.z, 0.004)
+      carrier.rotation.z = -semantic.rotation
+      carrier.scale.set(semantic.width, semantic.height, 1)
+      carrier.renderOrder = 3
+      carrier.layers.mask = deckLabels.layers.mask
+      carrier.raycast = () => {}
+      deckLabels.add(carrier)
+      markPlanLabelSemanticCarrier(deckLabels, {
+        text: label.text,
+        center: [semantic.x, -semantic.z, 0],
+        up: [Math.sin(semantic.rotation), Math.cos(semantic.rotation), 0],
+        across: [Math.cos(semantic.rotation), -Math.sin(semantic.rotation), 0],
+        width: semantic.width,
+        height: semantic.height,
+        authoredColor: semantic.authoredColor,
+        backingColor: semantic.backingColor,
+        backingName: semantic.backingName,
+        material,
+        mesh: carrier,
+      })
+    }
   }
   deck.add(deckLabels)
 
@@ -2255,8 +2287,8 @@ function makeRadialTexture(): THREE.CanvasTexture {
 /**
  * The deck's printed floor plan: panel seams, hazard bands at the cantilevered
  * edges, the shared_buffers footprint with its column ruler, and the district
- * legends. Structure stays in the lit deck map; typography gets a separate
- * non-emissive overlay so a label can own its contrast without recolouring it.
+ * legends. Structure stays in the lit deck map; neutral typography gets a
+ * non-emissive overlay while separate semantic squares follow theme.neon().
  */
 function makeDeckTexture(rng: () => number): {
   texture: THREE.CanvasTexture
@@ -2289,8 +2321,16 @@ function makeDeckTexture(rng: () => number): {
       paddingY: 0.24,
     },
   })
-  const label = (text: string, wx: number, wz: number, size = 2.4, align: CanvasTextAlign = 'center', color = 'rgba(143,165,196,0.85)') => {
-    labels.draw(text, wx, wz, size, color, align)
+  const label = (
+    text: string,
+    wx: number,
+    wz: number,
+    size = 2.4,
+    align: CanvasTextAlign = 'center',
+    color = 'rgba(143,165,196,0.85)',
+    semanticCarrier = false,
+  ) => {
+    labels.draw(text, wx, wz, size, color, align, 0, semanticCarrier)
   }
 
   g.fillStyle = '#0a0f1a'
@@ -2395,22 +2435,22 @@ function makeDeckTexture(rng: () => number): {
   }
 
   // Legends.
-  label(SHARED_BUFFER_SAMPLE_PLATE_LABEL, 0, b0 + 3.4, 2.4, 'center', 'rgba(63,167,255,0.7)')
-  label('CLOCK SWEEP →', -HALF_GRID + 10, -b0 - 5.2, 1.9, 'center', 'rgba(255,204,85,0.65)')
-  label('wal_buffers', ANCHOR.walBuffers[0], ANCHOR.walBuffers[2] + 13.6, 2.3, 'center', 'rgba(255,176,58,0.8)')
+  label(SHARED_BUFFER_SAMPLE_PLATE_LABEL, 0, b0 + 3.4, 2.4, 'center', 'rgba(63,167,255,0.7)', true)
+  label('CLOCK SWEEP →', -HALF_GRID + 10, -b0 - 5.2, 1.9, 'center', 'rgba(255,204,85,0.65)', true)
+  label('wal_buffers', ANCHOR.walBuffers[0], ANCHOR.walBuffers[2] + 13.6, 2.3, 'center', 'rgba(255,176,58,0.8)', true)
   label('circular · insert → write → flush', ANCHOR.walBuffers[0], ANCHOR.walBuffers[2] + 16.4, 1.5)
-  label('ProcArray', ANCHOR.procArray[0], ANCHOR.procArray[2] - 15.4, 2.3, 'center', 'rgba(90,209,255,0.8)')
+  label('ProcArray', ANCHOR.procArray[0], ANCHOR.procArray[2] - 15.4, 2.3, 'center', 'rgba(90,209,255,0.8)', true)
   label('PGPROC[16] · snapshots · xmin', ANCHOR.procArray[0], ANCHOR.procArray[2] - 12.6, 1.5)
-  label('LOCK MANAGER', ANCHOR.lockManager[0], ANCHOR.lockManager[2] - 16.4, 2.3, 'center', 'rgba(255,92,92,0.75)')
+  label('LOCK MANAGER', ANCHOR.lockManager[0], ANCHOR.lockManager[2] - 16.4, 2.3, 'center', 'rgba(255,92,92,0.75)', true)
   label('16 hash partitions · wait-for graph', ANCHOR.lockManager[0], ANCHOR.lockManager[2] - 13.6, 1.5)
-  label('pg_xact · SLRU', ANCHOR.clogSlru[0], ANCHOR.clogSlru[2] + 9.6, 2.3, 'center', 'rgba(87,227,137,0.75)')
+  label('pg_xact · SLRU', ANCHOR.clogSlru[0], ANCHOR.clogSlru[2] + 9.6, 2.3, 'center', 'rgba(87,227,137,0.75)', true)
   label('2 bits per transaction', ANCHOR.clogSlru[0], ANCHOR.clogSlru[2] + 12.2, 1.5)
   label('CUMULATIVE STATISTICS', ANCHOR.statsShmem[0], ANCHOR.statsShmem[2] + 7.4, 2.1)
-  label('buffer mapping', ANCHOR.bufMapping[0], ANCHOR.bufMapping[2] + 7.6, 2.1, 'center', 'rgba(123,108,255,0.8)')
+  label('buffer mapping', ANCHOR.bufMapping[0], ANCHOR.bufMapping[2] + 7.6, 2.1, 'center', 'rgba(123,108,255,0.8)', true)
   label('(relation, block) → buffer id', ANCHOR.bufMapping[0], ANCHOR.bufMapping[2] + 10.2, 1.5)
 
   // District title along the south edge.
-  label('SHARED MEMORY SEGMENT', 0, DECK_D / 2 - 6.4, 3.4, 'center', 'rgba(123,108,255,0.42)')
+  label('SHARED MEMORY SEGMENT', 0, DECK_D / 2 - 6.4, 3.4, 'center', 'rgba(123,108,255,0.42)', true)
 
   // North mark, because the client sky is that way.
   g.strokeStyle = 'rgba(143,165,196,0.5)'

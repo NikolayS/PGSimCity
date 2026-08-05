@@ -838,6 +838,7 @@ function paintMat(m: THREE.MeshStandardMaterial, s: MatSpec, target: ThemeMode):
 interface NeonSpec {
   color: number
   intensity: number
+  darkBacking: boolean
 }
 
 /** Linear luminance floor for semantic colour when no halo can carry it. */
@@ -845,6 +846,26 @@ const NO_BLOOM_NEON_LUMINANCE = 0.24
 
 function colorLuminance(c: THREE.Color): number {
   return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
+}
+
+/** Lift a non-bloom fill to the semantic floor, including gamut-bound hues. */
+function paintReadableNeonColor(color: THREE.Color, hex: number, intensity: number): void {
+  color.setHex(hex)
+  const luminance = colorLuminance(color)
+  if (luminance <= 0) return
+  const maxChannel = Math.max(color.r, color.g, color.b)
+  const target = Math.min(1, Math.max(
+    NO_BLOOM_NEON_LUMINANCE,
+    luminance * Math.min(1.35, Math.max(1, intensity)),
+  ))
+  color.multiplyScalar(Math.min(target / luminance, 1 / maxChannel))
+
+  const liftedLuminance = colorLuminance(color)
+  if (liftedLuminance >= target) return
+  const white = (target - liftedLuminance) / (1 - liftedLuminance)
+  color.r += (1 - color.r) * white
+  color.g += (1 - color.g) * white
+  color.b += (1 - color.b) * white
 }
 
 /**
@@ -858,14 +879,7 @@ function paintNightNeonColor(color: THREE.Color, hex: number, intensity: number)
     return
   }
 
-  const luminance = colorLuminance(color)
-  if (luminance <= 0) return
-  const maxChannel = Math.max(color.r, color.g, color.b)
-  const target = Math.max(
-    NO_BLOOM_NEON_LUMINANCE,
-    luminance * Math.min(1.35, Math.max(1, intensity)),
-  )
-  color.multiplyScalar(Math.min(target / luminance, 1 / maxChannel))
+  paintReadableNeonColor(color, hex, intensity)
 }
 
 function paintNeon(m: THREE.MeshBasicMaterial, s: NeonSpec, target: ThemeMode): void {
@@ -875,7 +889,8 @@ function paintNeon(m: THREE.MeshBasicMaterial, s: NeonSpec, target: ThemeMode): 
     const intensity = target === 'day'
       ? dayNeonIntensity(s.intensity)
       : clockNeonIntensity(s.intensity, daylight)
-    m.color.setHex(color).multiplyScalar(intensity)
+    if (s.darkBacking) paintReadableNeonColor(m.color, color, intensity)
+    else m.color.setHex(color).multiplyScalar(intensity)
   } else {
     paintNightNeonColor(
       m.color,
@@ -1182,6 +1197,7 @@ export function createTheme(): ThemeApi {
       opts.polygonOffset ? 1 : 0,
       opts.polygonOffsetFactor ?? 0,
       opts.polygonOffsetUnits ?? 0,
+      opts.darkBacking ? 1 : 0,
     ].join('|')
     let m = neons.get(key)
     if (!m) {
@@ -1196,7 +1212,7 @@ export function createTheme(): ThemeApi {
       })
       m.name = `neon:${key}`
       userData(m).pgTheme = true
-      const spec: NeonSpec = { color, intensity }
+      const spec: NeonSpec = { color, intensity, darkBacking: opts.darkBacking ?? false }
       neonSpecs.set(key, spec)
       neons.set(key, m)
       paintNeon(m, spec, mode)
