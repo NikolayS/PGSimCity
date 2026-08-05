@@ -19,7 +19,12 @@
 import { poolBytes, SHARED_BUFFERS_FULL_SAMPLE_MIB, SHARED_BUFFERS_MIN_MIB } from '../core/types'
 import type { Knobs, SimState } from '../core/types'
 import { configuredSynchronousStandby, worstConnectedStandbyLag } from '../core/replication'
-import { diagnosticGuidance, renderAction, renderActions } from '../core/actions'
+import {
+  diagnosticGuidance,
+  operationalReference,
+  renderAction,
+  renderActions,
+} from '../core/actions'
 import type {
   DiagnoseActionVerdictId,
   DiagnoseRemedy,
@@ -1819,9 +1824,9 @@ const VERDICTS: Verdict[] = [
         { label: 'connected rows', value: String(replicationRows(s).length) },
       ]
     },
-    fix: diagnosticGuidance(
+    fix: diagnosticGuidance(operationalReference(
       'Set up the alert while it is healthy. Check pg_replication_slots for ownership, restart_lsn, wal_status and safe_wal_size; inactive permanent slots retain WAL by default, while configured timeout or max_slot_wal_keep_size can invalidate them.',
-    ),
+    )),
     knobs: [KB.standbyASlowApply, KB.standbyBSlowApply],
     city: 'walsender',
     reading: [DOC('warm-standby.html', 'Log-Shipping Standby Servers')],

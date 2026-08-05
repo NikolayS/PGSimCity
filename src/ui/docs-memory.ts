@@ -1,5 +1,5 @@
 import { poolBytes, poolPages } from '../core/types'
-import { renderAction } from '../core/actions'
+import { operationalReference, renderAction } from '../core/actions'
 import { CLAIM_VALUES, ordinaryConnectionCapacity } from '../core/claims'
 import type { BackendSim, BackendState, BookRef, ComponentDoc, DocRef, PlanNode, SimState, TableSim } from '../core/types'
 import { fmtBytes, fmtDuration, fmtLsn, fmtNum, fmtPct } from '../core/util'
@@ -531,8 +531,9 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       },
       {
         heading: 'What the city charges and leaves out',
-        body:
+        body: operationalReference(
           `The city has sixteen fixed slots, a fixed fork cadence and, when the application fleet exceeds max_connections, an uncalibrated pressure curve once more than ${CLAIM_VALUES.connectionPooler.concurrencyTarget} PostgreSQL backends are active. That aggregate curve makes a concurrency cap measurable but does not identify a PostgreSQL wait. Backend memory, authentication, real scheduler/context-switch work, shared-lock contention and ProcArray scans remain absent.`,
+        ),
       },
     ],
     metrics: [
@@ -633,8 +634,9 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       },
       {
         heading: 'The other two budgets',
-        body:
+        body: operationalReference(
           '`maintenance_work_mem` (default 64 MiB) is used by `VACUUM`, `CREATE INDEX` and `ALTER TABLE`, not by ordinary queries — there are few of these running at once, so it can be far larger than `work_mem`, and index builds get dramatically faster with more of it. Autovacuum workers use `autovacuum_work_mem` if it is set, otherwise the same value, multiplied by `autovacuum_max_workers`. `temp_buffers` (default 8 MiB) is a per-session cache for temporary tables only; it is allocated lazily and cannot be changed once the session has touched a temp table.',
+        ),
       },
       {
         heading: 'What you would see in production',
@@ -686,8 +688,9 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       },
       {
         heading: 'Why it cannot grow',
-        body:
+        body: operationalReference(
           'The postmaster maps the segment once and then forks; every child inherits the same mapping at the same address, so a pointer to a buffer descriptor means the same thing in every process. Growing the segment would mean remapping it in every existing backend at a moment when they might be in the middle of using it. So the size is computed once at startup, and the parameters it is derived from — `shared_buffers`, `max_connections`, `max_locks_per_transaction`, `max_prepared_transactions`, `max_wal_senders`, `max_replication_slots` — all require a restart.',
+        ),
       },
       {
         heading: 'Huge pages and the OS view',
@@ -1142,8 +1145,9 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       },
       {
         heading: 'What autovacuum does with them',
-        body:
+        body: operationalReference(
           'Autovacuum workers read the cumulative dead-tuple counter, but the scale term comes from `pg_class.reltuples` — the planner estimate refreshed by `VACUUM` or `ANALYZE`, not `pg_stat_user_tables.n_live_tup`. The PostgreSQL 18 vacuum threshold is the smaller of `autovacuum_vacuum_max_threshold` and `autovacuum_vacuum_threshold + autovacuum_vacuum_scale_factor × reltuples`: 100 million versus 50 plus 20% by default; PostgreSQL 17 and older have no cap. Analyze has its own threshold, and since PG 13 inserts alone can trigger a vacuum through `autovacuum_vacuum_insert_threshold`, so that append-only tables still get their visibility map maintained.',
+        ),
       },
       {
         heading: 'Two things people conflate',

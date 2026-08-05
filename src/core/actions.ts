@@ -11,8 +11,8 @@ export type ActionSurface =
 declare const diagnoseRemedyBrand: unique symbol
 declare const registeredActionRemedyBrand: unique symbol
 
-/* Diagnose fixes must be deliberately classified. Registry-rendered actions
- * receive this brand directly; investigation-only copy uses diagnosticGuidance. */
+/* These brands prevent accidental mixing only; a TypeScript assertion can
+ * forge either one. The binding-aware action-spine test proves production use. */
 export type DiagnoseRemedy = string & { readonly [diagnoseRemedyBrand]: true }
 export type RegisteredActionRemedy = DiagnoseRemedy & {
   readonly [registeredActionRemedyBrand]: true
@@ -212,6 +212,14 @@ function renderVersionSpecificity(
 
 export function diagnosticGuidance(copy: string): DiagnoseRemedy {
   return copy as DiagnoseRemedy
+}
+
+/**
+ * Marks an exact registered target name as explanatory rather than prescriptive.
+ * This review marker is not a semantic or runtime boundary.
+ */
+export function operationalReference(copy: string): string {
+  return copy
 }
 
 export function renderAction(actionId: ActionId): RegisteredActionRemedy {

@@ -79,6 +79,10 @@ const DEFAULT_FLY_SPEED = 46
 const OVERVIEW_NEAR = 2
 const FIRST_PERSON_NEAR = 0.1
 const CAMERA_FAR = 4000
+/** Tight while the eye frames first-person-scale space; blend to the overview
+ * plane as the live eye-to-subject distance grows. */
+const TIGHT_NEAR_DISTANCE = 32
+const OVERVIEW_NEAR_DISTANCE = 120
 
 const BOOST = 3
 const PRECISION = 0.25
@@ -322,6 +326,15 @@ export function createCameraRig(
   let tweenD0 = 0
   let tweenD1 = 0
 
+  /* A new mode or subject cannot create clearance at an unchanged eye. Keep
+   * the last tight-eye height until the camera itself rises out of that space. */
+  let tightNearAnchored = false
+  let tightNearEyeY = 0
+  let tightNearCanRestoreOverview = false
+  let tightNearEntryX = 0
+  let tightNearEntryY = 0
+  let tightNearEntryZ = 0
+
   let pathPos: THREE.CatmullRomCurve3 | null = null
   let pathLook: THREE.CatmullRomCurve3 | null = null
   const pathLookFixed = new THREE.Vector3()
@@ -364,8 +377,42 @@ export function createCameraRig(
 
   /* ---- helpers -----------------------------------------------------------*/
 
-  function applyClipping(m: CameraMode): void {
-    const near = m === 'walk' || m === 'fly' ? FIRST_PERSON_NEAR : OVERVIEW_NEAR
+  function nearForFramingDistance(distance: number | undefined): number {
+    if (distance === undefined || distance <= TIGHT_NEAR_DISTANCE) return FIRST_PERSON_NEAR
+    if (distance >= OVERVIEW_NEAR_DISTANCE) return OVERVIEW_NEAR
+    const t = (distance - TIGHT_NEAR_DISTANCE)
+      / (OVERVIEW_NEAR_DISTANCE - TIGHT_NEAR_DISTANCE)
+    const smooth = t * t * (3 - 2 * t)
+    return lerp(FIRST_PERSON_NEAR, OVERVIEW_NEAR, smooth)
+  }
+
+  function applyClipping(): void {
+    let framingDistance: number | undefined
+    if (mode === 'orbit') framingDistance = camera.position.distanceTo(pivot)
+    else if (mode === 'focus') framingDistance = camera.position.distanceTo(tweenTarget)
+    else if (mode === 'tour') framingDistance = camera.position.distanceTo(_v2)
+    let near = nearForFramingDistance(framingDistance)
+    if (tightNearCanRestoreOverview && (
+      Math.abs(camera.position.x - tightNearEntryX) > 1e-8
+      || Math.abs(camera.position.y - tightNearEntryY) > 1e-8
+      || Math.abs(camera.position.z - tightNearEntryZ) > 1e-8
+    )) tightNearCanRestoreOverview = false
+    if (near === FIRST_PERSON_NEAR) {
+      tightNearAnchored = true
+      tightNearEyeY = camera.position.y
+    } else if (tightNearCanRestoreOverview) {
+      /* Entering and immediately cancelling first person changed no camera
+       * state, so restoring its already-safe overview plane is not a jump. */
+      tightNearAnchored = false
+      tightNearCanRestoreOverview = false
+    } else if (tightNearAnchored) {
+      const verticalClearance = Math.max(0, camera.position.y - tightNearEyeY)
+      near = Math.min(
+        near,
+        nearForFramingDistance(TIGHT_NEAR_DISTANCE + verticalClearance),
+      )
+      if (near === OVERVIEW_NEAR) tightNearAnchored = false
+    }
     if (camera.near === near && camera.far === CAMERA_FAR) return
     camera.near = near
     camera.far = CAMERA_FAR
@@ -373,17 +420,27 @@ export function createCameraRig(
   }
 
   function setMode_(m: CameraMode): void {
-    applyClipping(m)
-    if (m === mode) return
+    if (m === mode) {
+      applyClipping()
+      return
+    }
+    if (
+      (m === 'walk' || m === 'fly')
+      && camera.near === OVERVIEW_NEAR
+    ) {
+      tightNearCanRestoreOverview = true
+      tightNearEntryX = camera.position.x
+      tightNearEntryY = camera.position.y
+      tightNearEntryZ = camera.position.z
+    }
     mode = m
     if (m === 'orbit' || m === 'fly') userMode = m
+    applyClipping()
     bus.emit('camera:mode', { mode: m })
   }
 
   const scriptedNow = () => mode === 'focus' || mode === 'tour'
   const motionReduced = () => options.reducedMotion ?? reduceMotion()
-
-  applyClipping(mode)
 
   /**
    * Rebuild the orbit state from wherever the camera currently is, putting the
@@ -1554,6 +1611,8 @@ export function createCameraRig(
       if (lookAt && lookAt.length === 1) pathLookFixed.set(lookAt[0][0], lookAt[0][1], lookAt[0][2])
       else pathLookFixed.copy(CITY_CENTER)
     }
+    if (pathLook) pathLook.getPointAt(0, _v2)
+    else _v2.copy(pathLookFixed)
 
     pathT = 0
     pathDur = Math.max(0.1, duration)
@@ -1694,6 +1753,7 @@ export function createCameraRig(
       // standing back up is a mode flip with no snap.
       dropPendingInput()
       syncOrbitFromCamera(clamp(dist, 25, 420))
+      applyClipping()
       return
     }
     if (mode === 'focus') {
@@ -1704,6 +1764,7 @@ export function createCameraRig(
       tickPath(d)
     } else if (mode === 'fly') tickFly(d)
     else tickOrbit(d, sdt)
+    applyClipping()
   }
 
   /** Scripted moves swallow input; anything that mattered already called release(). */
@@ -1766,6 +1827,7 @@ export function createCameraRig(
   phi = clamp(_sph.phi, PHI_MIN, PHI_MAX)
   applyOrbitTransform()
   syncFlyFromCamera()
+  applyClipping()
 
   const rig: CameraRig = {
     camera,

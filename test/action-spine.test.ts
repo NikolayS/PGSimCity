@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs'
+import { readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
@@ -39,11 +39,18 @@ interface OperationalCopyOccurrence {
   target: string
 }
 
-let cachedActionSurfaces: SourceActionSurface[] | undefined
-
-function source(path: string): string {
-  return readFileSync(resolve(ROOT, path), 'utf8')
+interface RegistryBindings {
+  checker: ts.TypeChecker
+  renderers: ReadonlySet<ts.Symbol>
+  references: ReadonlySet<ts.Symbol>
 }
+
+interface ActionAnalysis extends RegistryBindings {
+  program: ts.Program
+}
+
+let cachedActionSurfaces: SourceActionSurface[] | undefined
+let cachedActionAnalysis: ActionAnalysis | undefined
 
 function sourceFiles(directory = 'src'): string[] {
   return readdirSync(resolve(ROOT, directory), { withFileTypes: true }).flatMap((entry) => {
@@ -75,11 +82,80 @@ function numberValue(expression: ts.Expression | undefined): number | undefined 
   return Number(expression.text)
 }
 
+function resolveSymbol(checker: ts.TypeChecker, node: ts.Node): ts.Symbol | undefined {
+  let symbol = checker.getSymbolAtLocation(node)
+  const seen = new Set<ts.Symbol>()
+  while (symbol && (symbol.flags & ts.SymbolFlags.Alias) !== 0 && !seen.has(symbol)) {
+    seen.add(symbol)
+    symbol = checker.getAliasedSymbol(symbol)
+  }
+  return symbol
+}
+
+function canonicalFunctionSymbols(
+  program: ts.Program,
+  checker: ts.TypeChecker,
+  fileName: string,
+  names: ReadonlySet<string>,
+): Set<ts.Symbol> {
+  const file = program.getSourceFile(fileName)
+  if (!file) throw new Error(`binding proof cannot load ${fileName}`)
+  const symbols = new Set<ts.Symbol>()
+  for (const statement of file.statements) {
+    if (
+      ts.isFunctionDeclaration(statement)
+      && statement.name
+      && names.has(statement.name.text)
+    ) {
+      const symbol = resolveSymbol(checker, statement.name)
+      if (symbol) symbols.add(symbol)
+    }
+  }
+  return symbols
+}
+
+function bindingsFor(program: ts.Program, actionsFile: string): RegistryBindings {
+  const checker = program.getTypeChecker()
+  return {
+    checker,
+    renderers: canonicalFunctionSymbols(
+      program,
+      checker,
+      actionsFile,
+      new Set(['renderAction', 'renderActions']),
+    ),
+    references: canonicalFunctionSymbols(
+      program,
+      checker,
+      actionsFile,
+      new Set(['operationalReference']),
+    ),
+  }
+}
+
+function productionActionAnalysis(): ActionAnalysis {
+  if (cachedActionAnalysis) return cachedActionAnalysis
+  const configPath = resolve(ROOT, 'tsconfig.json')
+  const config = ts.readConfigFile(configPath, ts.sys.readFile)
+  if (config.error) {
+    throw new Error(ts.flattenDiagnosticMessageText(config.error.messageText, '\n'))
+  }
+  const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, ROOT)
+  const program = ts.createProgram({ rootNames: parsed.fileNames, options: parsed.options })
+  cachedActionAnalysis = {
+    program,
+    ...bindingsFor(program, resolve(ROOT, 'src/core/actions.ts')),
+  }
+  return cachedActionAnalysis
+}
+
 function productionActionSurfaces(): SourceActionSurface[] {
   if (cachedActionSurfaces) return cachedActionSurfaces
+  const analysis = productionActionAnalysis()
   const surfaces: SourceActionSurface[] = []
   for (const path of sourceFiles()) {
-    const file = ts.createSourceFile(path, source(path), ts.ScriptTarget.Latest, true)
+    const file = analysis.program.getSourceFile(resolve(ROOT, path))
+    if (!file) throw new Error(`binding proof cannot load ${path}`)
     const add = (surface: ActionSurface, expression: ts.Expression): void => {
       surfaces.push({
         file: path,
@@ -130,12 +206,18 @@ function productionActionSurfaces(): SourceActionSurface[] {
 }
 
 function registryCalls(expression: ts.Expression): Set<ActionId> {
+  return registryCallsWithBindings(expression, productionActionAnalysis())
+}
+
+function registryCallsWithBindings(
+  expression: ts.Expression,
+  bindings: RegistryBindings,
+): Set<ActionId> {
   const actionIds = new Set<ActionId>()
   const visit = (node: ts.Node): void => {
     if (
       ts.isCallExpression(node)
-      && ts.isIdentifier(node.expression)
-      && (node.expression.text === 'renderAction' || node.expression.text === 'renderActions')
+      && bindings.renderers.has(resolveSymbol(bindings.checker, node.expression) as ts.Symbol)
     ) {
       for (const argument of node.arguments) {
         if (ts.isStringLiteralLike(argument) && argument.text in ACTIONS) {
@@ -149,43 +231,81 @@ function registryCalls(expression: ts.Expression): Set<ActionId> {
   return actionIds
 }
 
+function bindingFixture(files: Readonly<Record<string, string>>): {
+  expression: ts.Expression
+  bindings: RegistryBindings
+} {
+  const root = '/action-binding-fixture'
+  const options: ts.CompilerOptions = {
+    target: ts.ScriptTarget.ES2022,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    strict: true,
+  }
+  const virtual = new Map(Object.entries(files).map(([name, text]) => [
+    `${root}/${name}`,
+    text,
+  ]))
+  const base = ts.createCompilerHost(options)
+  const host: ts.CompilerHost = {
+    ...base,
+    directoryExists: (directory) => (
+      [...virtual.keys()].some((fileName) => fileName.startsWith(`${directory}/`))
+      || base.directoryExists?.(directory)
+      || false
+    ),
+    fileExists: (fileName) => virtual.has(fileName) || base.fileExists(fileName),
+    readFile: (fileName) => virtual.get(fileName) ?? base.readFile(fileName),
+    getSourceFile: (fileName, languageVersion, onError, shouldCreateNewSourceFile) => {
+      const text = virtual.get(fileName)
+      return text === undefined
+        ? base.getSourceFile(fileName, languageVersion, onError, shouldCreateNewSourceFile)
+        : ts.createSourceFile(fileName, text, languageVersion, true)
+    },
+  }
+  const program = ts.createProgram({
+    rootNames: [...virtual.keys()],
+    options,
+    host,
+  })
+  const file = program.getSourceFile(`${root}/surface.ts`)
+  if (!file) throw new Error('binding fixture has no surface.ts')
+  for (const statement of file.statements) {
+    if (!ts.isVariableStatement(statement)) continue
+    for (const declaration of statement.declarationList.declarations) {
+      if (
+        ts.isIdentifier(declaration.name)
+        && declaration.name.text === 'surface'
+        && declaration.initializer
+      ) {
+        return {
+          expression: declaration.initializer,
+          bindings: bindingsFor(program, `${root}/actions.ts`),
+        }
+      }
+    }
+  }
+  throw new Error('binding fixture has no surface expression')
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-function prescribesTarget(
+function mentionsTarget(
   copy: string,
-  target: { kind: 'configuration' | 'function'; name: string },
+  target: { name: string },
 ): boolean {
   const name = escapeRegExp(target.name)
-  const markdownGap = '[\\s`*_()=]+'
-  if (target.kind === 'configuration') {
-    return new RegExp(
-      `(?:\\bset${markdownGap}${name}\\b|\\balter\\s+(?:system|table)\\b[^.;]{0,240}\\b${name}\\b|\\b(?:raise|lower|enable|disable|change)\\b[^.;]{0,120}\\b${name}\\b)`,
-      'i',
-    ).test(copy)
-  }
-  return new RegExp(
-    `\\b(?:run|call|execute|use|resume|drop)\\b[^.;]{0,100}\\b${name}\\b`,
-    'i',
-  ).test(copy)
+  return new RegExp(`(?:^|[^A-Za-z0-9_])${name}(?=$|[^A-Za-z0-9_])`).test(copy)
 }
 
 function productionOperationalCopy(): OperationalCopyOccurrence[] {
   const surfaces = productionActionSurfaces()
+  const bindings = productionActionAnalysis()
   const occurrences: OperationalCopyOccurrence[] = []
-  for (const path of sourceFiles()) {
-    const file = ts.createSourceFile(path, source(path), ts.ScriptTarget.Latest, true)
-    const ownerRanges = file.statements.flatMap((statement) => {
-      if (!ts.isVariableStatement(statement)) return []
-      return statement.declarationList.declarations.flatMap((declaration) => (
-        ts.isIdentifier(declaration.name)
-        && declaration.name.text === 'ACTIONS'
-        && declaration.initializer
-          ? [{ start: declaration.initializer.getStart(), end: declaration.initializer.getEnd() }]
-          : []
-      ))
-    })
+  for (const surface of surfaces) {
+    const file = surface.expression.getSourceFile()
     const visit = (node: ts.Node): void => {
       if (
         ts.isStringLiteralLike(node)
@@ -194,31 +314,34 @@ function productionOperationalCopy(): OperationalCopyOccurrence[] {
         || ts.isTemplateTail(node)
       ) {
         const start = node.getStart()
-        const owned = ownerRanges.some((range) => start >= range.start && start < range.end)
-        if (!owned) {
-          const surface = surfaces.find((candidate) => (
-            candidate.file === path
-            && start >= candidate.expression.getStart()
-            && start < candidate.expression.getEnd()
-          ))
+        let explicitlyReferenceOnly = false
+        for (let parent = node.parent; parent && parent !== surface.expression.parent; parent = parent.parent) {
+          if (
+            ts.isCallExpression(parent)
+            && bindings.references.has(resolveSymbol(bindings.checker, parent.expression) as ts.Symbol)
+          ) {
+            explicitlyReferenceOnly = true
+            break
+          }
+        }
+        if (!explicitlyReferenceOnly) {
           for (const [actionId, action] of Object.entries(ACTIONS) as [ActionId, (typeof ACTIONS)[ActionId]][]) {
             for (const target of action.operationalTargets) {
-              if (prescribesTarget(node.text, target)) {
-                occurrences.push({
-                  actionId,
-                  file: path,
-                  line: file.getLineAndCharacterOfPosition(start).line + 1,
-                  surface,
-                  target: target.name,
-                })
-              }
+              if (!mentionsTarget(node.text, target)) continue
+              occurrences.push({
+                actionId,
+                file: surface.file,
+                line: file.getLineAndCharacterOfPosition(start).line + 1,
+                surface,
+                target: target.name,
+              })
             }
           }
         }
       }
       ts.forEachChild(node, visit)
     }
-    visit(file)
+    visit(surface.expression)
   }
   return occurrences
 }
@@ -260,6 +383,95 @@ function actionDisagreements(
 }
 
 describe('operator action spine', () => {
+  it('finds an exact operational target without classifying English verbs', () => {
+    expect(mentionsTarget(
+      'Constrain max_slot_wal_keep_size only after measuring retention and recovery cost.',
+      { name: 'max_slot_wal_keep_size' },
+    )).toBe(true)
+  })
+
+  it.each([
+    {
+      attack: 'shadows an aliased canonical import with the trusted spelling',
+      files: {
+        'actions.ts': "export function renderAction(id: string): string { return id }",
+        'surface.ts': `
+          import { renderAction as canonicalAction } from './actions'
+          const renderAction = (id: string): string => id
+          const surface = \`${'${'}renderAction('tuneAutovacuum')}\`
+          void canonicalAction
+        `,
+      },
+    },
+    {
+      attack: 'reassigns a local renderer before the call',
+      files: {
+        'actions.ts': "export function renderAction(id: string): string { return id }",
+        'surface.ts': `
+          import { renderAction as canonicalAction } from './actions'
+          let renderAction = canonicalAction
+          renderAction = (id: string): string => id
+          const surface = \`${'${'}renderAction('tuneAutovacuum')}\`
+        `,
+      },
+    },
+    {
+      attack: 'imports the trusted spelling through a fake re-export',
+      files: {
+        'actions.ts': "export function renderAction(id: string): string { return id }",
+        'fake.ts': "export function renderAction(id: string): string { return id }",
+        'bridge.ts': "export { renderAction } from './fake'",
+        'surface.ts': `
+          import { renderAction } from './bridge'
+          const surface = \`${'${'}renderAction('tuneAutovacuum')}\`
+        `,
+      },
+    },
+    {
+      attack: 'calls the canonical renderer through an indirect local',
+      files: {
+        'actions.ts': "export function renderAction(id: string): string { return id }",
+        'surface.ts': `
+          import * as actions from './actions'
+          const renderAction = actions.renderAction
+          const surface = \`${'${'}renderAction('tuneAutovacuum')}\`
+        `,
+      },
+    },
+  ])('rejects a delinked registry call that $attack', ({ files }) => {
+    const fixture = bindingFixture(files)
+    expect(registryCallsWithBindings(fixture.expression, fixture.bindings))
+      .not.toContain('tuneAutovacuum')
+  })
+
+  it.each([
+    {
+      route: 'a direct import alias',
+      files: {
+        'actions.ts': "export function renderAction(id: string): string { return id }",
+        'surface.ts': `
+          import { renderAction as canonicalAction } from './actions'
+          const surface = \`${'${'}canonicalAction('tuneAutovacuum')}\`
+        `,
+      },
+    },
+    {
+      route: 'a genuine re-export',
+      files: {
+        'actions.ts': "export function renderAction(id: string): string { return id }",
+        'bridge.ts': "export { renderAction } from './actions'",
+        'surface.ts': `
+          import { renderAction } from './bridge'
+          const surface = \`${'${'}renderAction('tuneAutovacuum')}\`
+        `,
+      },
+    },
+  ])('accepts the canonical registry binding through $route', ({ files }) => {
+    const fixture = bindingFixture(files)
+    expect(registryCallsWithBindings(fixture.expression, fixture.bindings))
+      .toContain('tuneAutovacuum')
+  })
+
   it('wires every registered surface to its registry call', () => {
     const sources = new Map(productionActionSurfaces().map((surface) => [
       actionSurfaceLabel(surface.surface),
@@ -279,9 +491,10 @@ describe('operator action spine', () => {
     }
   })
 
-  it('registers production copy that prescribes an owned operational target', () => {
-    /* This reverse pass recognizes imperative uses of registry-owned machine
-     * identifiers. Dynamic copy and identifier-free paraphrases are not inferable. */
+  it('classifies every exact target mention in a static action-capable surface', () => {
+    /* This mechanical pass covers static verdict fixes, scenario beats and
+     * inspector bodies. Dynamic copy, identifier-free paraphrases and exact
+     * mentions explicitly marked by operationalReference are outside it. */
     const violations: string[] = []
     for (const occurrence of productionOperationalCopy()) {
       const action = ACTIONS[occurrence.actionId]
@@ -296,7 +509,7 @@ describe('operator action spine', () => {
       )
       if (!registered || !calls.has(occurrence.actionId)) {
         violations.push(
-          `${occurrence.file}:${occurrence.line} ${label} prescribes ${occurrence.target} but bypasses ${action.owner}`,
+          `${occurrence.file}:${occurrence.line} ${label} mentions ${occurrence.target} but bypasses ${action.owner}`,
         )
       }
     }
