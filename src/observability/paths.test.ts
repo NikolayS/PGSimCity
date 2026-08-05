@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { createBus } from '../core/bus'
+import { renderAction } from '../core/actions'
 import { DEFAULT_KNOBS } from '../core/types'
 import type { Knobs, SimApi, SimState } from '../core/types'
 import { createSim } from '../sim/model'
@@ -111,6 +112,21 @@ function reachableVerdicts(
 }
 
 describe('diagnostic path contracts', () => {
+  it('makes a missing synchronous standby actionable from the registered remedy', () => {
+    const verdict = ALL_VERDICTS.find((candidate) => candidate.id === 'v.sync_remote')!
+
+    expect(verdict.fix).toBe(renderAction('restoreSynchronousCommitAvailability'))
+    expect(verdict.fix).toMatch(
+      /enable and repair the named standby|name another streaming standby|clear synchronous_standby_names|synchronous_commit=local/is,
+    )
+    expect(verdict.knobs.map(({ key }) => key)).toEqual(expect.arrayContaining([
+      'synchronousCommit',
+      'synchronousStandbyNames',
+      'standbyAEnabled',
+      'standbyBEnabled',
+    ]))
+  })
+
   it('reports the observed row-lock wait mode without turning it into DDL', () => {
     const sim = createSim(createBus())
     const collector = createCollector(sim)

@@ -415,6 +415,25 @@ const KB = {
     choices: ['none', 'standbyA', 'standbyB'],
     help: 'Selects the named synchronous follower. none releases SyncRep waiters and gives up remote durability.',
   },
+  walLevel: {
+    key: 'walLevel',
+    guc: 'wal_level',
+    kind: 'choice',
+    choices: ['minimal', 'replica', 'logical'],
+    help: 'Physical streaming requires replica or logical. Changing wal_level from minimal requires a server restart in PostgreSQL.',
+  },
+  standbyAEnabled: {
+    key: 'standbyAEnabled',
+    guc: 'standby_a streaming',
+    kind: 'toggle',
+    help: 'Restore standby_a only after repairing the reason its physical stream stopped.',
+  },
+  standbyBEnabled: {
+    key: 'standbyBEnabled',
+    guc: 'standby_b streaming',
+    kind: 'toggle',
+    help: 'Restore standby_b only after repairing the reason its physical stream stopped.',
+  },
   standbyASlowApply: {
     key: 'standbyASlowApply',
     guc: 'a standby that cannot keep up',
@@ -1927,7 +1946,7 @@ const VERDICTS: Verdict[] = [
     city: 'walwriter',
     reading: [DOC('runtime-config-wal.html', 'Write Ahead Log settings')],
   },
-  {
+  registeredActionVerdict({
     id: 'v.sync_remote',
     kind: 'verdict',
     title: 'Every commit is waiting for a standby to answer.',
@@ -1941,14 +1960,22 @@ const VERDICTS: Verdict[] = [
         { label: 'synchronous_commit', value: s.knobs.synchronousCommit, tone: 'warn' },
         { label: 'waiting to commit', value: String(activityWaitCounts(s, c).commit), tone: 'warn' },
         { label: 'synchronous standby', value: standby?.applicationName ?? 'none' },
+        { label: 'standby state', value: standby?.connected ? 'streaming' : 'not connected', tone: standby?.connected ? undefined : 'crit' },
+        { label: 'wal_level', value: s.knobs.walLevel, tone: s.knobs.walLevel === 'minimal' ? 'crit' : undefined },
         { label: 'one-way delay', value: standby ? `${standby.networkLagMs} ms` : '—' },
         { label: 'model replay delay', value: standby ? `${standby.lagSec.toFixed(2)} s` : '—' },
       ]
     },
-    fix: diagnosticGuidance(
-      'Confirm the guarantee you meant to buy. remote_write is cheaper but does not survive standby operating-system or power failure; on waits for its durable flush; remote_apply also waits for visibility. Measure commit latency and the selected standby stage directly. If remote durability is not required, local avoids the round trip.',
-    ),
-    knobs: [KB.synchronousCommit, KB.synchronousStandbyNames, KB.standbyANetworkLag, KB.standbyBNetworkLag],
+    fix: renderAction('restoreSynchronousCommitAvailability'),
+    knobs: [
+      KB.synchronousCommit,
+      KB.synchronousStandbyNames,
+      KB.walLevel,
+      KB.standbyAEnabled,
+      KB.standbyBEnabled,
+      KB.standbyANetworkLag,
+      KB.standbyBNetworkLag,
+    ],
     confirm: {
       projection: 'wal_lsn',
       instrument: 'pg_current_wal_lsn',
@@ -1959,12 +1986,12 @@ const VERDICTS: Verdict[] = [
       const commitWaits = activityWaitCounts(s, c).commit
       return {
         ok: commitWaits === 0,
-        reading: `synchronous_commit = ${s.knobs.synchronousCommit} with ${standby?.applicationName ?? 'no synchronous standby'}${standby ? ` at ${standby.networkLagMs} ms one way` : ''} · ${commitWaits} backend${commitWaits === 1 ? '' : 's'} still waiting for the standby`,
+        reading: `synchronous_commit = ${s.knobs.synchronousCommit} with ${standby?.applicationName ?? 'no synchronous standby'}${standby ? ` ${standby.connected ? 'streaming' : 'not connected'} at ${standby.networkLagMs} ms one way` : ''} · ${commitWaits} backend${commitWaits === 1 ? '' : 's'} still waiting for the standby`,
       }
     },
     city: 'walsender',
     reading: [DOC('runtime-config-replication.html', 'Replication settings')],
-  },
+  }),
   {
     id: 'v.commit_ok',
     kind: 'verdict',

@@ -1299,7 +1299,9 @@ export interface BusEvents {
     text: string
     kind?: 'info' | 'warn' | 'good'
     ms?: number
-    action?: { label: string; quality: QualityLevel }
+    action?:
+      | { label: string; quality: QualityLevel }
+      | { label: string; consoleKey: keyof Knobs }
   }
   narrate: { title: string; body: string; seconds?: number } | null
   'tour:start': { chapter?: number; source?: 'button' | 'keyboard' }
