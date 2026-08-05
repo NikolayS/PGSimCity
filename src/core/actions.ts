@@ -8,6 +8,16 @@ export type ActionSurface =
   | { kind: 'scenario-beat'; scenario: string; at: number }
   | { kind: 'inspector-section'; doc: string; section: string }
 
+declare const diagnoseRemedyBrand: unique symbol
+declare const registeredActionRemedyBrand: unique symbol
+
+/* Diagnose fixes must be deliberately classified. Registry-rendered actions
+ * receive this brand directly; investigation-only copy uses diagnosticGuidance. */
+export type DiagnoseRemedy = string & { readonly [diagnoseRemedyBrand]: true }
+export type RegisteredActionRemedy = DiagnoseRemedy & {
+  readonly [registeredActionRemedyBrand]: true
+}
+
 interface ActionVersionVariant {
   from: number
   to?: number
@@ -20,6 +30,11 @@ interface ActionVersionSpecificity {
   variants: readonly ActionVersionVariant[]
 }
 
+interface ActionOperationalTarget {
+  kind: 'configuration' | 'function'
+  name: string
+}
+
 interface ActionContract {
   owner: string
   label: string
@@ -27,6 +42,7 @@ interface ActionContract {
   preconditions: readonly string[]
   risks: readonly string[]
   versionSpecificity: ActionVersionSpecificity | null
+  operationalTargets: readonly ActionOperationalTarget[]
   surfaces: readonly ActionSurface[]
 }
 
@@ -44,6 +60,7 @@ export const ACTIONS = {
       'Reducing primary WAL can shed or delay production work, and accepting lag can serve stale reads; neither move resumes paused recovery or repairs a stopped receiver.',
     ],
     versionSpecificity: null,
+    operationalTargets: [],
     surfaces: [
       { kind: 'diagnose-verdict', id: 'v.replay' },
       { kind: 'scenario-beat', scenario: 'replication-lag', at: 104 },
@@ -62,6 +79,9 @@ export const ACTIONS = {
       'Resuming recovery applies queued WAL and can move the standby beyond the state an operator intentionally paused to inspect; that state cannot be recovered without another recovery procedure.',
     ],
     versionSpecificity: null,
+    operationalTargets: [
+      { kind: 'function', name: 'pg_wal_replay_resume' },
+    ],
     surfaces: [
       { kind: 'diagnose-verdict', id: 'v.replay_paused' },
       { kind: 'scenario-beat', scenario: 'replication-lag', at: 86 },
@@ -80,9 +100,14 @@ export const ACTIONS = {
       'Enforcing the cap intentionally permits required WAL to be removed, can invalidate the slot and strand its standby, and can require a rebuild from a new base backup when the removed WAL is unavailable from every archive or other source.',
     ],
     versionSpecificity: null,
+    operationalTargets: [
+      { kind: 'configuration', name: 'max_slot_wal_keep_size' },
+      { kind: 'function', name: 'pg_drop_replication_slot' },
+    ],
     surfaces: [
       { kind: 'diagnose-verdict', id: 'v.replay' },
       { kind: 'scenario-beat', scenario: 'replication-lag', at: 104 },
+      { kind: 'inspector-section', doc: 'wal.vault', section: 'What you would see in production' },
       { kind: 'inspector-section', doc: 'walsender', section: 'How a slot takes down a primary' },
     ],
   },
@@ -98,6 +123,9 @@ export const ACTIONS = {
       'Terminating a backend aborts its transaction and disconnects its client. A newly introduced pooler cannot open its first ordinary server connection while ordinary capacity is already exhausted, and an undersized or incompatible pool can move the outage into its queue.',
     ],
     versionSpecificity: null,
+    operationalTargets: [
+      { kind: 'configuration', name: 'max_connections' },
+    ],
     surfaces: [
       { kind: 'diagnose-verdict', id: 'v.saturation' },
       { kind: 'scenario-beat', scenario: 'connection-storm', at: 44 },
@@ -116,6 +144,9 @@ export const ACTIONS = {
       'Reenabling autovacuum introduces cleanup I/O and can expose an already accumulated maintenance backlog; schedule and observe that work instead of assuming the first launcher pass is free.',
     ],
     versionSpecificity: null,
+    operationalTargets: [
+      { kind: 'configuration', name: 'autovacuum_enabled' },
+    ],
     surfaces: [
       { kind: 'diagnose-verdict', id: 'v.av_relation_off' },
       { kind: 'scenario-beat', scenario: 'bloat-and-vacuum', at: 126 },
@@ -140,15 +171,27 @@ export const ACTIONS = {
         { from: 18, context: 'sighup', activation: 'configuration reload' },
       ],
     },
+    operationalTargets: [
+      { kind: 'configuration', name: 'autovacuum_vacuum_scale_factor' },
+      { kind: 'configuration', name: 'autovacuum_vacuum_threshold' },
+      { kind: 'configuration', name: 'autovacuum_vacuum_cost_limit' },
+      { kind: 'configuration', name: 'autovacuum_max_workers' },
+    ],
     surfaces: [
       { kind: 'diagnose-verdict', id: 'v.av_tuning' },
       { kind: 'scenario-beat', scenario: 'bloat-and-vacuum', at: 126 },
+      { kind: 'inspector-section', doc: 'autovac.launcher', section: 'Why the defaults are too timid' },
       { kind: 'inspector-section', doc: 'autovac.launcher', section: 'Throttling, and the trap in it' },
     ],
   },
 } as const satisfies Record<string, ActionContract>
 
 export type ActionId = keyof typeof ACTIONS
+type DiagnoseActionSurface = Extract<
+  (typeof ACTIONS)[ActionId]['surfaces'][number],
+  { kind: 'diagnose-verdict' }
+>
+export type DiagnoseActionVerdictId = DiagnoseActionSurface['id']
 
 export function actionSurfaceLabel(surface: ActionSurface): string {
   if (surface.kind === 'diagnose-verdict') return `Diagnose:${surface.id}`
@@ -167,7 +210,11 @@ function renderVersionSpecificity(
   }).join(' ')
 }
 
-export function renderAction(actionId: ActionId): string {
+export function diagnosticGuidance(copy: string): DiagnoseRemedy {
+  return copy as DiagnoseRemedy
+}
+
+export function renderAction(actionId: ActionId): RegisteredActionRemedy {
   const action = ACTIONS[actionId]
   const sections = [
     `**Action — ${action.label}:** ${action.what}`,
@@ -179,9 +226,9 @@ export function renderAction(actionId: ActionId): string {
       `**Version specificity:** ${renderVersionSpecificity(action.versionSpecificity)}`,
     )
   }
-  return sections.join('\n\n')
+  return sections.join('\n\n') as RegisteredActionRemedy
 }
 
-export function renderActions(...actionIds: readonly ActionId[]): string {
-  return actionIds.map(renderAction).join('\n\n')
+export function renderActions(...actionIds: readonly ActionId[]): RegisteredActionRemedy {
+  return actionIds.map(renderAction).join('\n\n') as RegisteredActionRemedy
 }

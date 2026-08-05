@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -18,6 +21,207 @@ import { createSim } from '../src/sim/model'
 import { SCENARIOS } from '../src/sim/scenarios'
 import { DOCS_MEMORY } from '../src/ui/docs-memory'
 import { DOCS_STORAGE } from '../src/ui/docs-storage'
+
+const ROOT = resolve(import.meta.dirname, '..')
+
+interface SourceActionSurface {
+  file: string
+  line: number
+  surface: ActionSurface
+  expression: ts.Expression
+}
+
+interface OperationalCopyOccurrence {
+  actionId: ActionId
+  file: string
+  line: number
+  surface?: SourceActionSurface
+  target: string
+}
+
+let cachedActionSurfaces: SourceActionSurface[] | undefined
+
+function source(path: string): string {
+  return readFileSync(resolve(ROOT, path), 'utf8')
+}
+
+function sourceFiles(directory = 'src'): string[] {
+  return readdirSync(resolve(ROOT, directory), { withFileTypes: true }).flatMap((entry) => {
+    const path = `${directory}/${entry.name}`
+    if (entry.isDirectory()) return sourceFiles(path)
+    return entry.isFile() && path.endsWith('.ts') && !path.endsWith('.test.ts') ? [path] : []
+  })
+}
+
+function property(
+  object: ts.ObjectLiteralExpression,
+  name: string,
+): ts.PropertyAssignment | undefined {
+  return object.properties.find((candidate): candidate is ts.PropertyAssignment => (
+    ts.isPropertyAssignment(candidate)
+    && (
+      (ts.isIdentifier(candidate.name) && candidate.name.text === name)
+      || (ts.isStringLiteralLike(candidate.name) && candidate.name.text === name)
+    )
+  ))
+}
+
+function stringValue(expression: ts.Expression | undefined): string | undefined {
+  return expression && ts.isStringLiteralLike(expression) ? expression.text : undefined
+}
+
+function numberValue(expression: ts.Expression | undefined): number | undefined {
+  if (!expression || !ts.isNumericLiteral(expression)) return undefined
+  return Number(expression.text)
+}
+
+function productionActionSurfaces(): SourceActionSurface[] {
+  if (cachedActionSurfaces) return cachedActionSurfaces
+  const surfaces: SourceActionSurface[] = []
+  for (const path of sourceFiles()) {
+    const file = ts.createSourceFile(path, source(path), ts.ScriptTarget.Latest, true)
+    const add = (surface: ActionSurface, expression: ts.Expression): void => {
+      surfaces.push({
+        file: path,
+        line: file.getLineAndCharacterOfPosition(expression.getStart()).line + 1,
+        surface,
+        expression,
+      })
+    }
+    const visit = (node: ts.Node): void => {
+      if (ts.isObjectLiteralExpression(node)) {
+        const id = stringValue(property(node, 'id')?.initializer)
+        const kind = stringValue(property(node, 'kind')?.initializer)
+        const fix = property(node, 'fix')?.initializer
+        if (id && kind === 'verdict' && fix) {
+          add({ kind: 'diagnose-verdict', id }, fix)
+        }
+
+        const beats = property(node, 'beats')?.initializer
+        if (id && beats && ts.isArrayLiteralExpression(beats)) {
+          for (const beat of beats.elements) {
+            if (!ts.isArrayLiteralExpression(beat)) continue
+            const at = numberValue(beat.elements[0] as ts.Expression | undefined)
+            const body = beat.elements[2]
+            if (at !== undefined && body && ts.isExpression(body)) {
+              add({ kind: 'scenario-beat', scenario: id, at }, body)
+            }
+          }
+        }
+
+        const sections = property(node, 'sections')?.initializer
+        if (id && sections && ts.isArrayLiteralExpression(sections)) {
+          for (const section of sections.elements) {
+            if (!ts.isObjectLiteralExpression(section)) continue
+            const heading = stringValue(property(section, 'heading')?.initializer)
+            const body = property(section, 'body')?.initializer
+            if (heading && body) {
+              add({ kind: 'inspector-section', doc: id, section: heading }, body)
+            }
+          }
+        }
+      }
+      ts.forEachChild(node, visit)
+    }
+    visit(file)
+  }
+  cachedActionSurfaces = surfaces
+  return cachedActionSurfaces
+}
+
+function registryCalls(expression: ts.Expression): Set<ActionId> {
+  const actionIds = new Set<ActionId>()
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isCallExpression(node)
+      && ts.isIdentifier(node.expression)
+      && (node.expression.text === 'renderAction' || node.expression.text === 'renderActions')
+    ) {
+      for (const argument of node.arguments) {
+        if (ts.isStringLiteralLike(argument) && argument.text in ACTIONS) {
+          actionIds.add(argument.text as ActionId)
+        }
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(expression)
+  return actionIds
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function prescribesTarget(
+  copy: string,
+  target: { kind: 'configuration' | 'function'; name: string },
+): boolean {
+  const name = escapeRegExp(target.name)
+  const markdownGap = '[\\s`*_()=]+'
+  if (target.kind === 'configuration') {
+    return new RegExp(
+      `(?:\\bset${markdownGap}${name}\\b|\\balter\\s+(?:system|table)\\b[^.;]{0,240}\\b${name}\\b|\\b(?:raise|lower|enable|disable|change)\\b[^.;]{0,120}\\b${name}\\b)`,
+      'i',
+    ).test(copy)
+  }
+  return new RegExp(
+    `\\b(?:run|call|execute|use|resume|drop)\\b[^.;]{0,100}\\b${name}\\b`,
+    'i',
+  ).test(copy)
+}
+
+function productionOperationalCopy(): OperationalCopyOccurrence[] {
+  const surfaces = productionActionSurfaces()
+  const occurrences: OperationalCopyOccurrence[] = []
+  for (const path of sourceFiles()) {
+    const file = ts.createSourceFile(path, source(path), ts.ScriptTarget.Latest, true)
+    const ownerRanges = file.statements.flatMap((statement) => {
+      if (!ts.isVariableStatement(statement)) return []
+      return statement.declarationList.declarations.flatMap((declaration) => (
+        ts.isIdentifier(declaration.name)
+        && declaration.name.text === 'ACTIONS'
+        && declaration.initializer
+          ? [{ start: declaration.initializer.getStart(), end: declaration.initializer.getEnd() }]
+          : []
+      ))
+    })
+    const visit = (node: ts.Node): void => {
+      if (
+        ts.isStringLiteralLike(node)
+        || ts.isTemplateHead(node)
+        || ts.isTemplateMiddle(node)
+        || ts.isTemplateTail(node)
+      ) {
+        const start = node.getStart()
+        const owned = ownerRanges.some((range) => start >= range.start && start < range.end)
+        if (!owned) {
+          const surface = surfaces.find((candidate) => (
+            candidate.file === path
+            && start >= candidate.expression.getStart()
+            && start < candidate.expression.getEnd()
+          ))
+          for (const [actionId, action] of Object.entries(ACTIONS) as [ActionId, (typeof ACTIONS)[ActionId]][]) {
+            for (const target of action.operationalTargets) {
+              if (prescribesTarget(node.text, target)) {
+                occurrences.push({
+                  actionId,
+                  file: path,
+                  line: file.getLineAndCharacterOfPosition(start).line + 1,
+                  surface,
+                  target: target.name,
+                })
+              }
+            }
+          }
+        }
+      }
+      ts.forEachChild(node, visit)
+    }
+    visit(file)
+  }
+  return occurrences
+}
 
 function surfaceCopy(surface: ActionSurface): string {
   if (surface.kind === 'diagnose-verdict') {
@@ -56,6 +260,49 @@ function actionDisagreements(
 }
 
 describe('operator action spine', () => {
+  it('wires every registered surface to its registry call', () => {
+    const sources = new Map(productionActionSurfaces().map((surface) => [
+      actionSurfaceLabel(surface.surface),
+      surface,
+    ]))
+
+    for (const [actionId, action] of Object.entries(ACTIONS) as [ActionId, (typeof ACTIONS)[ActionId]][]) {
+      for (const surface of action.surfaces) {
+        const label = actionSurfaceLabel(surface)
+        const production = sources.get(label)
+        expect(production, `${actionId}: ${label} has no production copy expression`).toBeDefined()
+        expect(
+          production && registryCalls(production.expression),
+          `${actionId}: ${label} contains rendered bytes but is not wired to ${action.owner}`,
+        ).toContain(actionId)
+      }
+    }
+  })
+
+  it('registers production copy that prescribes an owned operational target', () => {
+    /* This reverse pass recognizes imperative uses of registry-owned machine
+     * identifiers. Dynamic copy and identifier-free paraphrases are not inferable. */
+    const violations: string[] = []
+    for (const occurrence of productionOperationalCopy()) {
+      const action = ACTIONS[occurrence.actionId]
+      const label = occurrence.surface
+        ? actionSurfaceLabel(occurrence.surface.surface)
+        : `source:${occurrence.file}:${occurrence.line}`
+      const calls = occurrence.surface
+        ? registryCalls(occurrence.surface.expression)
+        : new Set<ActionId>()
+      const registered = action.surfaces.some(
+        (surface) => actionSurfaceLabel(surface) === label,
+      )
+      if (!registered || !calls.has(occurrence.actionId)) {
+        violations.push(
+          `${occurrence.file}:${occurrence.line} ${label} prescribes ${occurrence.target} but bypasses ${action.owner}`,
+        )
+      }
+    }
+    expect([...new Set(violations)]).toEqual([])
+  })
+
   it('renders every registered surface with its owned preconditions and risks', () => {
     for (const [actionId, action] of Object.entries(ACTIONS) as [ActionId, (typeof ACTIONS)[ActionId]][]) {
       expect(action.owner).toBe(`src/core/actions.ts#ACTIONS.${actionId}`)
