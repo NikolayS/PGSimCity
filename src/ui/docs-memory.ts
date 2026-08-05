@@ -777,7 +777,7 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       {
         heading: 'What the city measures',
         body:
-          'The engine models a representative buffer sample, tags, pins, usage counts, page LSNs, dirty victims, a clock sweep and background cleaning. It does not model content-lock acquisition, cleanup-lock failure or per-page visibility checks. A backend dirty-victim eviction waits for the shared WAL flush when its page LSN is not durable, then adds representative page-write time to that statement and increments sampled counters; rolling p50/p99 model-time quantiles expose each component’s own distribution. There is no calibrated storage time, and the OS-cache route does not change the cost.',
+          'The engine models a representative buffer sample, tags, pins, usage counts, page LSNs, dirty victims, a clock sweep and background cleaning. The basin waterline is the occupied fraction of that representative sample (`usedCount / sampleFrames`); it is not a measurement of host RAM or a second encoding of tile height, which shows each frame’s `usage_count` plus short-lived touch and pin lifts. It does not model content-lock acquisition, cleanup-lock failure or per-page visibility checks. A backend dirty-victim eviction waits for the shared WAL flush when its page LSN is not durable, then adds representative page-write time to that statement and increments sampled counters; rolling p50/p99 model-time quantiles expose each component’s own distribution. There is no calibrated storage time, and the OS-cache route does not change the cost.',
       },
     ],
     metrics: [

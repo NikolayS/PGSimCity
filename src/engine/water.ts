@@ -1,9 +1,9 @@
 import * as THREE from 'three'
 import { Reflector } from 'three/examples/jsm/objects/Reflector.js'
 import { atmosphere } from '../core/theme'
-import type { QualityLevel, QualitySettings } from '../core/types'
+import type { BufferPool, QualityLevel, QualitySettings } from '../core/types'
 import { damp, makeRng } from '../core/util'
-import { CITY } from '../world/layout'
+import { bufferPoolSurfaceY, CITY } from '../world/layout'
 
 export interface BufferWaterApi {
   group: THREE.Group
@@ -15,16 +15,17 @@ export interface BufferWaterApi {
 }
 
 export interface BufferWaterOptions {
+  /** Live model source: water height is representative-sample occupancy. */
+  buffers: Pick<BufferPool, 'sampleFrames' | 'usedCount'>
   /** Test override; production reads prefers-reduced-motion once at creation. */
   reducedMotion?: boolean
   /** Keeps the fixed particulate field close enough to give a swimmer parallax. */
   camera?: THREE.Camera
 }
 
-const SPAN = (CITY.buf.grid - 1) * CITY.buf.pitch + CITY.buf.tile
-const SURFACE_Y = CITY.buf.baseY + CITY.buf.maxRise + 0.4
+const SPAN = CITY.buf.span
 const BOTTOM_Y = CITY.buf.baseY
-const DEPTH = SURFACE_Y - BOTTOM_Y
+const MAX_DEPTH = CITY.buf.fullSurfaceY - BOTTOM_Y
 const RIPPLE_COUNT = 6
 const RIPPLE_SECONDS = 1.15
 const PARTICULATE_COUNT = 192
@@ -184,11 +185,15 @@ interface Ripple {
  */
 export function createBufferWater(
   scene: THREE.Scene,
-  quality: Pick<QualitySettings, 'level'> = DEFAULT_QUALITY,
-  opts: BufferWaterOptions = {},
+  quality: Pick<QualitySettings, 'level'> | undefined,
+  opts: BufferWaterOptions,
 ): BufferWaterApi {
+  const resolvedQuality = quality ?? DEFAULT_QUALITY
   const reducedMotion = opts.reducedMotion ?? prefersReducedMotion()
   const particulateCamera = opts.camera
+  const buffers = opts.buffers
+  let surfaceY = bufferPoolSurfaceY(buffers)
+  let depth = surfaceY - BOTTOM_Y
   const group = new THREE.Group()
   group.name = 'buffer.water'
 
@@ -207,7 +212,8 @@ export function createBufferWater(
   surfaceMaterial.fog = true
   surface.name = 'buffer.water.surface'
   surface.rotation.x = -Math.PI / 2
-  surface.position.y = SURFACE_Y
+  surface.position.y = surfaceY
+  surface.visible = depth > 0.001
   surface.renderOrder = 3
   surface.raycast = () => {}
   surface.userData.pgPlanarReflection = true
@@ -220,11 +226,11 @@ export function createBufferWater(
   const texelSize = surfaceMaterial.uniforms.uTexelSize.value as THREE.Vector2
   const renderReflection = surface.onBeforeRender
   surface.onBeforeRender = (renderer, activeScene, camera, geometry, material, renderGroup): void => {
-    const scale = waterReflectionScale(quality.level)
+    const scale = waterReflectionScale(resolvedQuality.level)
     const enabled =
       scale > 0 &&
       atmosphere().daylight &&
-      camera.position.y > SURFACE_Y + 0.05
+      camera.position.y > surfaceY + 0.05
     surfaceMaterial.uniforms.uReflectionStrength.value = enabled ? 0.9 : 0
     if (!enabled) return
 
@@ -240,7 +246,7 @@ export function createBufferWater(
 
   // A faint inside face gives the volume a boundary at grazing angles without
   // changing collision or hiding the live-height buffer columns.
-  const volumeGeometry = new THREE.BoxGeometry(SPAN, DEPTH, SPAN)
+  const volumeGeometry = new THREE.BoxGeometry(SPAN, 1, SPAN)
   const volumeMaterial = new THREE.MeshBasicMaterial({
     color: 0x356fd0,
     transparent: true,
@@ -250,14 +256,17 @@ export function createBufferWater(
   })
   const volume = new THREE.Mesh(volumeGeometry, volumeMaterial)
   volume.name = 'buffer.water.volume'
-  volume.position.y = BOTTOM_Y + DEPTH * 0.5
+  volume.position.y = BOTTOM_Y + depth * 0.5
+  volume.scale.y = Math.max(depth, 0.001)
+  volume.visible = depth > 0.001
   volume.renderOrder = 2
   volume.raycast = () => {}
   group.add(volume)
 
   const grid = new THREE.GridHelper(SPAN, 16, 0x8fd6ff, 0x477ed0)
   grid.name = 'buffer.water.surface-grid'
-  grid.position.y = SURFACE_Y + 0.025
+  grid.position.y = surfaceY + 0.025
+  grid.visible = depth > 0.001
   const gridMaterial = grid.material as THREE.LineBasicMaterial
   gridMaterial.transparent = true
   gridMaterial.opacity = 0.16
@@ -276,7 +285,7 @@ export function createBufferWater(
   for (let i = 0; i < PARTICULATE_COUNT; i++) {
     const offset = i * 3
     particulatePositions[offset] = (particulateRng() - 0.5) * PARTICULATE_FIELD
-    particulatePositions[offset + 1] = BOTTOM_Y + 0.12 + particulateRng() * (DEPTH - 0.24)
+    particulatePositions[offset + 1] = BOTTOM_Y + 0.12 + particulateRng() * (MAX_DEPTH - 0.24)
     particulatePositions[offset + 2] = (particulateRng() - 0.5) * PARTICULATE_FIELD
   }
   const particulatePosition = new THREE.BufferAttribute(particulatePositions, 3)
@@ -338,7 +347,7 @@ export function createBufferWater(
     const mesh = new THREE.Mesh(rippleGeometry, material)
     mesh.name = 'buffer.water.ripple'
     mesh.rotation.x = -Math.PI / 2
-    mesh.position.y = SURFACE_Y + 0.055 + i * 0.002
+    mesh.position.y = surfaceY + 0.055 + i * 0.002
     mesh.visible = false
     mesh.renderOrder = 4
     mesh.raycast = () => {}
@@ -363,6 +372,7 @@ export function createBufferWater(
     ripple.age = 0
     ripple.strength = strength
     ripple.mesh.position.x = x
+    ripple.mesh.position.y = bufferPoolSurfaceY(buffers) + 0.055
     ripple.mesh.position.z = z
     ripple.mesh.scale.setScalar(0.65 + strength * 0.35)
     ripple.mesh.material.opacity = 0.42 + strength * 0.3
@@ -371,11 +381,22 @@ export function createBufferWater(
 
   function update(dt: number, submerged: boolean): void {
     const d = dt > 0 ? dt : 0
+    surfaceY = bufferPoolSurfaceY(buffers)
+    depth = surfaceY - BOTTOM_Y
+    const hasWater = depth > 0.001
+    surface.position.y = surfaceY
+    surface.visible = hasWater
+    grid.position.y = surfaceY + 0.025
+    grid.visible = hasWater
+    volume.position.y = BOTTOM_Y + depth * 0.5
+    volume.scale.y = Math.max(depth, 0.001)
+    volume.visible = hasWater
     if (!reducedMotion) waterTime += d
     surfaceMaterial.uniforms.uTime.value = waterTime
     for (let i = 0; i < ripples.length; i++) {
       const ripple = ripples[i]
       if (!ripple.mesh.visible) continue
+      ripple.mesh.position.y = surfaceY + 0.055 + i * 0.002
       ripple.age += d
       if (ripple.age >= RIPPLE_SECONDS) {
         ripple.mesh.visible = false
@@ -414,7 +435,7 @@ export function createBufferWater(
         while (particulatePositions[offset] < centreX - fieldHalf) {
           particulatePositions[offset] += PARTICULATE_FIELD
         }
-        if (particulatePositions[offset + 1] > SURFACE_Y - 0.08) {
+        if (particulatePositions[offset + 1] > surfaceY - 0.08) {
           particulatePositions[offset + 1] = BOTTOM_Y + 0.08
         }
         while (particulatePositions[offset + 2] > centreZ + fieldHalf) {
@@ -460,7 +481,7 @@ export function createBufferWater(
     surfaceMaterial.uniforms.uOpacity.value = 0.18 + fogAmount * 0.13
     volumeMaterial.opacity = 0.025 + fogAmount * 0.055
     particulateMaterial.opacity = PARTICULATE_OPACITY * fogAmount
-    particulate.visible = fogAmount > 0.002
+    particulate.visible = hasWater && fogAmount > 0.002
   }
 
   function dispose(): void {

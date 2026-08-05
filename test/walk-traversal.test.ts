@@ -111,10 +111,10 @@ const STRUCTURES: TraversalRoute[] = [
   solidRoute('conn.gate.fence', [30, 0.02, -244], [30, 0.02, -252]),
   solidRoute('conn.conduit.pier', [-82.25, 0.02, -250], [-82.25, 0.02, -260]),
   solidRoute('shmem.pylon', [50, -52, 44], [58, -52, 44]),
-  solidRoute('buffer-pool.coping-south', [18, 3.2, 48], [18, 3.2, 42]),
-  solidRoute('buffer-pool.coping-north', [-18, 3.2, -48], [-18, 3.2, -42]),
-  solidRoute('buffer-pool.coping-west', [-48, 3.2, 18], [-42, 3.2, 18]),
-  solidRoute('buffer-pool.coping-east', [48, 3.2, -18], [42, 3.2, -18]),
+  solidRoute('buffer-pool.coping-south', [18, 3.05, 48], [18, 3.05, 42]),
+  solidRoute('buffer-pool.coping-north', [-18, 3.05, -48], [-18, 3.05, -42]),
+  solidRoute('buffer-pool.coping-west', [-48, 3.05, 18], [-42, 3.05, 18]),
+  solidRoute('buffer-pool.coping-east', [48, 3.05, -18], [42, 3.05, -18]),
   solidRoute('storage.annex', [-88, -52, 52], [-96, -52, 52]),
   {
     ...solidRoute('storage.index-mast', [-96, -52, 30], [-104, -52, 30]),
@@ -162,16 +162,20 @@ const PLAZA_ROUTES: TraversalRoute[] = [
   ...bothDirections('plaza:north-south', [
     [0, 3, -58],
     [0, 3.2, -46],
+    [0, 3.2, -42],
     [30, 3.2, -38],
     [30, 3.2, 38],
+    [3.78, 3.2, 42],
     [3.78, 3.2, 46],
     [3.78, 3, 58],
   ]),
   ...bothDirections('plaza:east-west', [
     [-72, 3, -11.175],
     [-46, 3.2, -11.175],
+    [-42, 3.2, -11.175],
     [-38, 3.2, -15],
     [38, 3.2, -15],
+    [42, 3.2, 26.075],
     [46, 3.2, 26.075],
     [72, 3, 26.075],
   ]),
@@ -242,19 +246,23 @@ describe('real-city first-person traversal', () => {
     }
   })
 
-  it('contains the buffer-water column behind coping above its surface', () => {
+  it('recesses the basin behind a low curb at plaza level', () => {
     const coping = city.scene.getObjectByName('shared.buffers.coping')
     const bounds = new THREE.Box3().setFromObject(coping ?? new THREE.Object3D())
     const poolHalf = ((CITY.buf.grid - 1) * CITY.buf.pitch + CITY.buf.tile) / 2
-    const surfaceY = CITY.buf.baseY + CITY.buf.maxRise + 0.4
 
     expect(bounds.isEmpty()).toBe(false)
     expect(bounds.min.x).toBeLessThanOrEqual(-poolHalf)
     expect(bounds.max.x).toBeGreaterThanOrEqual(poolHalf)
     expect(bounds.min.z).toBeLessThanOrEqual(-poolHalf)
     expect(bounds.max.z).toBeGreaterThanOrEqual(poolHalf)
-    expect(bounds.min.y).toBeLessThanOrEqual(CITY.deck.top + 0.05)
-    expect(bounds.max.y).toBeGreaterThan(surfaceY)
+    expect(bounds.min.y).toBeCloseTo(CITY.buf.baseY, 5)
+    expect(bounds.max.y).toBeGreaterThan(CITY.buf.fullSurfaceY)
+    expect(bounds.max.y).toBeLessThanOrEqual(CITY.deck.top + 0.6)
+    expect(
+      city.collision.groundAt(new THREE.Vector3(3.78, 4, CITY.buf.halfSpan + 4), 8),
+    ).toBeCloseTo(CITY.deck.top, 1)
+    expect(city.collision.groundAt(new THREE.Vector3(20, 4, 20), 8)).toBeNull()
   })
 
   it('walks the complete plate perimeter at slow-frame cadence', () => {
@@ -301,7 +309,15 @@ describe('real-city first-person traversal', () => {
       `final=${JSON.stringify(result.finalPosition)}, minY=${result.minFeetY}, ` +
         `collisions=${result.collisions}, last=${JSON.stringify(result.steps.at(-7))}`,
     ).toBe(true)
-    expect(result.minFeetY).toBeGreaterThanOrEqual(3)
+    const deepest = result.steps.reduce(
+      (current, step) => step.position[1] < current.position[1] ? step : current,
+      result.steps[0],
+    )
+    expect(
+      result.minFeetY,
+      `deepest=${JSON.stringify(deepest)} final=${JSON.stringify(result.finalPosition)}`,
+    ).toBeGreaterThanOrEqual(CITY.buf.baseY - 0.001)
+    expect(result.steps.some((step) => step.gait === 'swim')).toBe(true)
     expect(result.steps.at(-1)?.grounded).toBe(true)
   })
 

@@ -3,7 +3,7 @@ import { N_TABLES, TABLES } from '../core/catalog'
 import { rid } from '../core/route-ids'
 import { COLOR } from '../core/theme'
 import { N_BACKEND_SLOTS, N_VAC_WORKERS, N_WAL_SEG_SLOTS, BUF_GRID } from '../core/types'
-import type { RouteDef } from '../core/types'
+import type { BufferPool, RouteDef } from '../core/types'
 
 export { N_TABLES, TABLES } from '../core/catalog'
 export { rid } from '../core/route-ids'
@@ -34,8 +34,25 @@ export { rid } from '../core/route-ids'
 export const CITY = {
   /** shared-memory plaza deck */
   deck: { w: 156, d: 124, top: 3, thickness: 2.4 },
-  /** shared buffer grid */
-  buf: { pitch: 2.9, tile: 2.3, baseY: 3.2, maxRise: 5.2, grid: BUF_GRID },
+  /**
+   * Shared-buffer basin. The sampled frames rise from below the deck; at
+   * usage_count 5 an ordinary column reaches the full-pool waterline.
+   */
+  buf: {
+    pitch: 2.9,
+    tile: 2.3,
+    baseY: -2.1,
+    maxRise: 5.2,
+    grid: BUF_GRID,
+    span: (BUF_GRID - 1) * 2.9 + 2.3,
+    halfSpan: ((BUF_GRID - 1) * 2.9 + 2.3) / 2,
+    /** Full representative sample: water meets the plaza instead of topping a tank. */
+    fullSurfaceY: 3.12,
+    /** Overall top of the low architectural curb around the recessed basin. */
+    copingTopY: 3.58,
+    /** Horizontal length of each submerged access ramp. */
+    accessRun: 5,
+  },
   /** backend row */
   backend: { z: -130, span: 224, w: 10, minH: 12, maxH: 26 },
   /** underground storage */
@@ -57,6 +74,62 @@ export const CITY = {
   /** fog */
   fog: { near: 220, far: 1150 },
 } as const
+
+export interface BufferPoolGate {
+  side: 'north' | 'south' | 'east' | 'west'
+  /** Centre of the opening: x for north/south, z for east/west. */
+  at: number
+  /** Clear span of the opening. */
+  width: number
+}
+
+/** The four plaza approaches continue down the basin wall at these openings. */
+export const BUFFER_POOL_GATES: readonly BufferPoolGate[] = [
+  { side: 'north', at: 0, width: 7.2 },
+  { side: 'south', at: 3.78, width: 7.2 },
+  { side: 'east', at: 26.075, width: 7.2 },
+  { side: 'west', at: -11.175, width: 7.2 },
+]
+
+type BufferOccupancy = Pick<BufferPool, 'sampleFrames' | 'usedCount'>
+
+/** Occupied fraction of the representative frame sample, clamped for presentation. */
+export function bufferPoolOccupancy(buffers: BufferOccupancy): number {
+  const capacity = buffers.sampleFrames
+  if (!(capacity > 0)) return 0
+  const occupancy = buffers.usedCount / capacity
+  return occupancy <= 0 ? 0 : occupancy >= 1 ? 1 : occupancy
+}
+
+/** Water level is a direct linear reading of representative-sample occupancy. */
+export function bufferPoolSurfaceY(buffers: BufferOccupancy): number {
+  const occupancy = bufferPoolOccupancy(buffers)
+  if (occupancy === 0) return CITY.buf.baseY
+  if (occupancy === 1) return CITY.buf.fullSurfaceY
+  return CITY.buf.baseY + occupancy * (CITY.buf.fullSurfaceY - CITY.buf.baseY)
+}
+
+/**
+ * Basin floor under a swimmer. Four gate-aligned ramps meet the plaza without
+ * turning the low coping into an invisible collision wall.
+ */
+export function bufferPoolBottomY(x: number, z: number): number {
+  const half = CITY.buf.halfSpan
+  const run = CITY.buf.accessRun
+  for (let i = 0; i < BUFFER_POOL_GATES.length; i++) {
+    const gate = BUFFER_POOL_GATES[i]
+    const across = gate.side === 'north' || gate.side === 'south' ? x : z
+    if (Math.abs(across - gate.at) > gate.width / 2) continue
+    let inward: number
+    if (gate.side === 'north') inward = z + half
+    else if (gate.side === 'south') inward = half - z
+    else if (gate.side === 'west') inward = x + half
+    else inward = half - x
+    if (inward < 0 || inward > run) continue
+    return CITY.deck.top + (CITY.buf.baseY - CITY.deck.top) * (inward / run)
+  }
+  return CITY.buf.baseY
+}
 
 /* --------------------------------------------------------------------------
  * Named anchors. `[x, y, z]`.
@@ -360,6 +433,7 @@ export function bufferTilePos(idx: number): [number, number, number] {
  * ------------------------------------------------------------------------*/
 
 const R: Record<string, RouteDef> = {}
+const BUFFER_FLOW_Y = CITY.buf.baseY + CITY.buf.maxRise + 0.7
 
 function route(
   id: string,
@@ -442,11 +516,11 @@ for (let i = 0; i < N_BACKEND_SLOTS; i++) {
     [bx, 10, bz + 4],
     [lean, 12, -96],
     [lean * 0.5, 9, -68],
-    [lean * 0.28, 7, -46],
+    [lean * 0.28, BUFFER_FLOW_Y, -46],
   ], { color: COLOR.backend, speed: 105, size: 1.0 })
 
   route(rid.bufRet(i), [
-    [lean * 0.28, 7, -46],
+    [lean * 0.28, BUFFER_FLOW_Y, -46],
     [lean * 0.5 + 2, 10, -70],
     [lean + 2, 13, -98],
     [bx + 2, 10, bz + 4],
@@ -479,19 +553,19 @@ for (let t = 0; t < N_TABLES; t++) {
     [tx, CITY.storage.y + 6, -99],
     [tx * 0.85, CITY.osCache.y, -34],
     [tx * 0.45, -8, -6],
-    [tx * 0.22, 6, 22],
+    [tx * 0.22, BUFFER_FLOW_Y, 22],
   ], { color: c, speed: 78, size: 1.2, visible: true, roadOpacity: 0.08 })
 
   // kernel-cache hit: the short path never descends to the disk rack
   route(rid.ioReadCache(t), [
     [tx * 0.85, CITY.osCache.y, -34],
     [tx * 0.45, -8, -6],
-    [tx * 0.22, 6, 22],
+    [tx * 0.22, BUFFER_FLOW_Y, 22],
   ], { color: COLOR.ok, speed: 92, size: 1.05, visible: true, roadOpacity: 0.05 })
 
   // eviction / checkpoint write: shared buffers → kernel → disk rack
   route(rid.ioWrite(t), [
-    [tx * 0.22 - 3, 6, 26],
+    [tx * 0.22 - 3, BUFFER_FLOW_Y, 26],
     [tx * 0.45 - 3, -8, -2],
     [tx * 0.85 - 3, CITY.osCache.y, -32],
     [tx, CITY.storage.y + 6, -99],
