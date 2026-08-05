@@ -559,7 +559,8 @@ const RESPONSE_CONTRACTS = {
   backupRetention: {
     target: 1,
     measure(value: number) {
-      const sim = createSim(createBus())
+      const sim = createSim(createBus(), { scheduledBackups: false })
+      setWorkload(sim, 6_000)
       sim.setKnob('backupRetention', value)
       takeBackup(sim)
       advance(sim, 8)

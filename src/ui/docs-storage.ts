@@ -726,7 +726,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What this backup-push means',
-        body: 'WAL-G 3.0.8 runs locally on this city’s standby_a and pushes compressed tar objects, backup-label material, metadata and the backup-stop sentinel directly to S3. The model reads the logical data-directory size at a fixed 384 MiB/s teaching rate and stores an illustrative 65% compressed size. PostgreSQL 18 still coordinates backup start and stop; at 100% copied the operation remains `waiting_wal` until the stop WAL is archived.',
+        body: 'WAL-G 3.0.8 runs locally on this city’s standby_a and pushes compressed tar objects, backup-label material, metadata and the backup-stop sentinel directly to S3. The model reads the logical data-directory size at a fixed 384 MiB/s teaching rate and stores an illustrative 65% compressed size. PostgreSQL 18 still coordinates backup start and stop; at 100% copied the operation remains `waiting_wal` until the stop WAL is archived. Because this backup comes from a standby, its backup stop cannot switch WAL on the primary. The city does not invent a separate primary-side `pg_switch_wal()` call, so ordinary primary WAL generation must finish that segment before the backup can complete.',
       },
       {
         heading: 'Daily, on a compressed teaching clock',
@@ -2196,7 +2196,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What the city models',
-        body: `The link is a bounded queue of modeled WAL positions with a configurable one-way delay and acknowledgement paths. It has no TCP packets, PostgreSQL protocol, bandwidth, congestion, reconnect timing or socket failures. The network setting can hold modeled commits in commit_wait, but displayed statement time remains deliberately stretched ${CLAIM_VALUES.modelDuration.prose} rather than production latency.`,
+        body: `${CLAIM_VALUES.physicalReplicationLink.disclosure} The link is represented as a bounded queue of modeled WAL positions with a configurable one-way delay and acknowledgement paths. It has no TCP packets, PostgreSQL protocol framing, congestion, reconnect timing or socket failures. The network setting can hold modeled commits in commit_wait, but displayed statement time remains deliberately stretched ${CLAIM_VALUES.modelDuration.prose} rather than production latency.`,
       },
     ],
     metrics: [

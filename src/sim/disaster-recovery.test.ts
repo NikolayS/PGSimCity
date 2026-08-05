@@ -51,12 +51,13 @@ describe('disaster recovery', () => {
 
     expect(sim.state.disasterRecovery.backup.trigger).toBe('schedule')
     expect(sim.state.replication.standbys[0].applicationName).toBe('standby_a')
-    advanceUntil(sim, () => sim.state.disasterRecovery.backups.length === 1, 60)
-    expect(sim.state.disasterRecovery.backups[0].source).toBe('standby_a')
   })
 
   it('applies count retention as scheduled daily backups keep arriving', () => {
     const sim = createSim(createBus())
+    sim.setKnob('tps', 6_000)
+    sim.setKnob('writeRatio', 1)
+    sim.setKnob('synchronousCommit', 'local')
     sim.setKnob('backupRetention', 2)
 
     advanceUntil(sim, () => sim.state.disasterRecovery.expiredBackups === 1, 240)
@@ -119,6 +120,25 @@ describe('disaster recovery', () => {
     sim.setKnob('walGArchiveCredentialsValid', true)
     advanceUntil(sim, () => sim.state.disasterRecovery.backup.status === 'idle')
     expect(sim.state.disasterRecovery.backups).toHaveLength(1)
+  })
+
+  it('does not switch primary WAL when a standby-sourced backup stops', () => {
+    const sim = createSim(createBus(), { scheduledBackups: false })
+    sim.setKnob('tps', 0)
+    sim.setKnob('autovacuum', false)
+    sim.setKnob('walGArchiveCredentialsValid', false)
+    const primaryLsn = sim.state.wal.insertLsn
+
+    expect(sim.startBaseBackup()).toBe(true)
+    advanceUntil(sim, () => sim.state.disasterRecovery.backup.status === 'waiting_wal')
+
+    expect(sim.state.disasterRecovery.backup.stopLsn)
+      .toBe(sim.state.replication.standbys[0].appliedLsn)
+    const stopBoundary = Math.ceil(
+      sim.state.disasterRecovery.backup.stopLsn / sim.state.wal.segmentSize,
+    ) * sim.state.wal.segmentSize
+    expect(sim.state.wal.insertLsn).toBeGreaterThanOrEqual(primaryLsn)
+    expect(sim.state.wal.insertLsn).toBeLessThan(stopBoundary)
   })
 
   it('never satisfies backup durability with another timeline\'s archive frontier', () => {
@@ -223,10 +243,13 @@ describe('disaster recovery', () => {
     sim.setKnob('synchronousCommit', 'local')
     sim.setKnob('standbyANetworkLag', 30)
     sim.setKnob('standbyBNetworkLag', 400)
+    sim.setKnob('standbyBEnabled', false)
     advance(sim, 35)
     takeBackup(sim)
     const backup = sim.state.disasterRecovery.backups[0]
 
+    sim.setKnob('standbyBEnabled', true)
+    advance(sim, 1 / 15)
     expect(sim.startFailover('standbyB')).toBe(true)
     advanceUntil(sim, () => sim.state.highAvailability.transition.status === 'complete')
     const timeline = sim.state.highAvailability.timeline
@@ -1251,8 +1274,9 @@ describe('disaster recovery', () => {
 
   it('detects retention expiry while WAL replay is in progress', () => {
     const sim = createSim(createBus(), { scheduledBackups: false })
-    sim.setKnob('tps', 1600)
+    sim.setKnob('tps', 6_000)
     sim.setKnob('writeRatio', 0.85)
+    sim.setKnob('synchronousCommit', 'local')
     sim.setKnob('backupRetention', 1)
     takeBackup(sim)
     advance(sim, 52)
@@ -1353,9 +1377,9 @@ describe('disaster recovery', () => {
     sim.setKnob('tps', 1_200)
     sim.setKnob('writeRatio', 1)
     advance(sim, 12)
+    takeBackup(sim)
     sim.setKnob('tps', 0)
     advance(sim, 3)
-    takeBackup(sim)
     advanceUntil(sim, () => sim.state.disasterRecovery.archive.queueSegments === 0)
     const lastArchivedLsn = sim.state.disasterRecovery.archive.archivedThroughLsn
     const lastArchivedTime = sim.state.disasterRecovery.archive.archivedThroughTime

@@ -77,15 +77,20 @@ describe('representative MVCC row', () => {
     const initialRevision = row.versions[row.versions.length - 1].revision
 
     sim.setKnob('longRunningXact', true)
-    sim.request('update', tableIndex, { hot: false })
-    for (let tick = 0; tick < 900; tick++) {
-      sim.update(1 / 30)
-      if (
-        sim.state.trace.stop === 'done'
-        && (sim.state.trace.visited & traceStopBit('done')) !== 0
-      ) {
-        break
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const previousXid = sim.state.trace.lastXid
+      sim.request('update', tableIndex, { hot: false })
+      for (let tick = 0; tick < 900; tick++) {
+        sim.update(1 / 30)
+        if (
+          sim.state.trace.stop === 'done'
+          && (sim.state.trace.visited & traceStopBit('done')) !== 0
+          && sim.state.trace.lastXid !== previousXid
+        ) {
+          break
+        }
       }
+      if (row.versions[row.versions.length - 1].revision > initialRevision) break
     }
 
     expect(row.earlierSnapshot.active).toBe(true)
