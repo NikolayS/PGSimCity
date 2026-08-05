@@ -11,6 +11,8 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+## [0.39.3] - 2026-08-05
+
 ### Fixed — two fingers did not rotate the city
 
 Nik reported it on an iPhone twice, and the first fix was written against the
@@ -70,10 +72,12 @@ The sweep proves its own teeth by mirroring a live label and catching it:
 
 Every audio call site in the codebase is in `walk.ts`. Outside first-person walk
 mode the toggle reported sound was on and produced silence, permanently, with no
-explanation. Measured: peak amplitude 0 in orbit, 0.043 while walking.
+explanation. Measured in a real browser: peak amplitude is exactly zero in orbit
+and non-zero while walking. The walking figure varies by host, so the test — and
+this note — assert the durable property rather than a number.
 
-The control now says **walk sound** everywhere — HUD, toast, title, accessible
-name and help — and says so from one module, so the surfaces cannot drift apart.
+The control now says **walk sound** on every surface that describes it, from one
+module, so those surfaces cannot drift apart.
 An invariant derives the audio call sites from the production source, so adding
 one outside `walk.ts` fails the build rather than quietly making the label lie.
 No ambient soundscape was invented; that is a product decision, not a bug fix.
