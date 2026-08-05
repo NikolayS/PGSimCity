@@ -334,6 +334,67 @@ export const CLAIM_VALUES = {
   },
 } as const
 
+export type ClaimDisclosureSurface =
+  | {
+    kind: 'markdown-blockquote'
+    file: 'README.md'
+    anchor: string
+  }
+  | {
+    kind: 'diagnose-verdict'
+    id: string
+    field: 'because' | 'mechanism' | 'fix'
+  }
+  | {
+    kind: 'inspector-section'
+    doc: string
+    section: string
+  }
+  | {
+    kind: 'inspector-visible'
+    doc: string
+    marker: string
+  }
+  | {
+    kind: 'hud-visible'
+    marker: string
+  }
+  | {
+    kind: 'tour-chapter'
+    id: string
+  }
+
+type DisclosureFields<Value extends Record<string, unknown>> = {
+  [Field in keyof Value as Value[Field] extends string ? Field : never]?:
+    readonly ClaimDisclosureSurface[]
+}
+
+function registeredDisclosures<
+  const Value extends Record<string, unknown>,
+  const Fields extends DisclosureFields<Value>,
+>(_value: Value, fields: Fields): Fields {
+  return fields
+}
+
+export function claimDisclosureSurfaceLabel(surface: ClaimDisclosureSurface): string {
+  if (surface.kind === 'markdown-blockquote') {
+    return `${surface.file}:blockquote containing ${surface.anchor}`
+  }
+  if (surface.kind === 'diagnose-verdict') {
+    return `Diagnose:${surface.id}.${surface.field}`
+  }
+  if (surface.kind === 'inspector-section') {
+    return `inspector:${surface.doc}/${surface.section}`
+  }
+  if (surface.kind === 'inspector-visible') {
+    return `inspector:${surface.doc}/[data-disclosure=${surface.marker}]`
+  }
+  if (surface.kind === 'hud-visible') {
+    return `HUD:[data-disclosure=${surface.marker}]`
+  }
+  return `tour:${surface.id}`
+}
+
 export const CLAIMS = {
   appVersion: {
     owner: 'src/core/build.ts#BUILD_LABEL',
@@ -358,6 +419,15 @@ export const CLAIMS = {
     owner: 'src/core/claims.ts#CLAIM_VALUES.bulkReadRing',
     value: CLAIM_VALUES.bulkReadRing,
     surfaces: ['model:bulk-read ring', 'README:bulk-read disclosure', 'Diagnose:cache verdict'],
+    disclosures: registeredDisclosures(CLAIM_VALUES.bulkReadRing, {
+      disclosure: [
+        {
+          kind: 'markdown-blockquote',
+          file: 'README.md',
+          anchor: "PostgreSQL 18's bulk-read strategy",
+        },
+      ],
+    }),
   },
   checkpointPolicy: {
     owner: 'src/core/claims.ts#CLAIM_VALUES.checkpointPolicy',
@@ -378,26 +448,85 @@ export const CLAIMS = {
     owner: 'src/core/claims.ts#CLAIM_VALUES.modelLatency',
     value: CLAIM_VALUES.modelLatency,
     surfaces: ['model:latency quantiles', 'HUD:latency vital', 'prose:latency observability'],
+    disclosures: registeredDisclosures(CLAIM_VALUES.modelLatency, {
+      disclosure: [
+        { kind: 'inspector-section', doc: 'checkpointer', section: 'What the city measures' },
+      ],
+      taxonomyDisclosure: [
+        { kind: 'inspector-section', doc: 'bgwriter', section: 'What the city measures' },
+        { kind: 'hud-visible', marker: 'work-mem-latency-scope' },
+      ],
+    }),
   },
   connectionPooler: {
     owner: 'src/core/claims.ts#CLAIM_VALUES.connectionPooler',
     value: CLAIM_VALUES.connectionPooler,
     surfaces: ['model:pooler admission and concurrency cap', 'controls:PgBouncer settings', 'world:PgBouncer gate', 'scenario:connection storm', 'Diagnose:connection saturation verdict', 'prose:pooling tradeoff and absences', 'HUD:pool-slot latency'],
+    disclosures: registeredDisclosures(CLAIM_VALUES.connectionPooler, {
+      coverageDisclosure: [
+        { kind: 'diagnose-verdict', id: 'v.saturation', field: 'mechanism' },
+        { kind: 'inspector-section', doc: 'client.pool', section: 'What the city models' },
+        { kind: 'inspector-section', doc: 'client.pooler', section: 'What the city leaves absent' },
+        { kind: 'inspector-visible', doc: 'client.pool', marker: 'connection-pooler-model-scope' },
+        { kind: 'inspector-visible', doc: 'client.pooler', marker: 'connection-pooler-model-scope' },
+        { kind: 'inspector-visible', doc: 'client.pooler', marker: 'pool-mode-cost' },
+      ],
+    }),
   },
   workMem: {
     owner: 'src/core/claims.ts#CLAIM_VALUES.workMem',
     value: CLAIM_VALUES.workMem,
     surfaces: ['model:Sort and HashAggregate spill', 'controls:work_mem dial', 'world:private memory and temp files', 'prose:work_mem limits'],
+    disclosures: registeredDisclosures(CLAIM_VALUES.workMem, {
+      coverageDisclosure: [
+        { kind: 'inspector-section', doc: 'backend.localmem', section: 'What the city models' },
+        { kind: 'inspector-section', doc: 'planner.executor', section: 'What the city models' },
+        { kind: 'inspector-section', doc: 'planner.plantree', section: 'What the city shows' },
+        { kind: 'inspector-visible', doc: 'backend.localmem', marker: 'work-mem-model-scope' },
+        { kind: 'tour-chapter', id: 'backend' },
+      ],
+    }),
   },
   restoreDrill: {
     owner: 'src/core/claims.ts#CLAIM_VALUES.restoreDrill',
     value: CLAIM_VALUES.restoreDrill,
     surfaces: ['model:restore-drill evidence rank', 'inspector:restore-drill evidence', 'prose:restore-drill limits'],
+    disclosures: registeredDisclosures(CLAIM_VALUES.restoreDrill, {
+      physicalScopeDisclosure: [
+        { kind: 'inspector-section', doc: 'recovery.ground', section: 'Cost and cadence are policy' },
+        { kind: 'inspector-visible', doc: 'recovery.ground', marker: 'restore-drill-physical-scope' },
+      ],
+      checksumDisclosure: [
+        { kind: 'inspector-section', doc: 'recovery.ground', section: 'Checksum names matter' },
+      ],
+      smokeDisclosure: [
+        { kind: 'inspector-section', doc: 'recovery.ground', section: 'Checksum names matter' },
+        { kind: 'inspector-visible', doc: 'recovery.ground', marker: 'restore-drill-smoke' },
+      ],
+      timeDisclosure: [
+        { kind: 'inspector-visible', doc: 'recovery.ground', marker: 'restore-drill-time' },
+      ],
+      cadenceDisclosure: [
+        { kind: 'inspector-section', doc: 'recovery.ground', section: 'Cost and cadence are policy' },
+        { kind: 'inspector-visible', doc: 'recovery.ground', marker: 'restore-drill-cadence' },
+      ],
+    }),
   },
   timelineRecovery: {
     owner: 'src/core/claims.ts#CLAIM_VALUES.timelineRecovery',
     value: CLAIM_VALUES.timelineRecovery,
     surfaces: ['model:timeline-aware archive and restore', 'controls:recovery_target_timeline', 'world:timeline switchyard plate', 'prose:timeline recovery scope'],
+    disclosures: registeredDisclosures(CLAIM_VALUES.timelineRecovery, {
+      coverageDisclosure: [
+        { kind: 'inspector-section', doc: 'timeline.yard', section: 'Restore follows history; it never merges it' },
+        { kind: 'inspector-section', doc: 'recovery.ground', section: 'Crossing the one modeled fork' },
+        { kind: 'inspector-section', doc: 'recovery.clock', section: 'Choosing the history' },
+        { kind: 'inspector-visible', doc: 'timeline.yard', marker: 'one-fork-timeline-recovery-visible-scope' },
+        { kind: 'inspector-visible', doc: 'recovery.ground', marker: 'one-fork-timeline-recovery-visible-scope' },
+        { kind: 'inspector-visible', doc: 'recovery.clock', marker: 'one-fork-timeline-recovery-visible-scope' },
+        { kind: 'inspector-visible', doc: 'recovery.clock', marker: 'recovery-target-timeline-scope' },
+      ],
+    }),
   },
   vacuumReclaim: {
     owner: 'src/core/claims.ts#CLAIM_VALUES.vacuumReclaim',

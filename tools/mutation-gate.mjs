@@ -397,6 +397,7 @@ async function loadRegistryValues() {
     const actions = require(path.join(buildDirectory, 'src/core/actions.js'))
     return {
       claimValues: claims.CLAIM_VALUES,
+      claims: claims.CLAIMS,
       actions: actions.ACTIONS,
       renderAction: actions.renderAction,
     }
@@ -548,27 +549,16 @@ async function actionGuardMutations() {
   return mutations
 }
 
-const DISCLOSURE_PATHS = [
-  ['bulkReadRing', 'disclosure'],
-  ['modelLatency', 'disclosure'],
-  ['modelLatency', 'taxonomyDisclosure'],
-  ['connectionPooler', 'coverageDisclosure'],
-  ['workMem', 'coverageDisclosure'],
-  ['restoreDrill', 'physicalScopeDisclosure'],
-  ['restoreDrill', 'checksumDisclosure'],
-  ['restoreDrill', 'smokeDisclosure'],
-  ['restoreDrill', 'timeDisclosure'],
-  ['restoreDrill', 'cadenceDisclosure'],
-  ['timelineRecovery', 'coverageDisclosure'],
-]
-
-async function disclosureStringMutations() {
+async function disclosureStringMutations(registry) {
   const file = 'src/core/claims.ts'
   const source = await readFile(path.join(REPO_ROOT, file), 'utf8')
   const parsed = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
   const claims = objectVariable(parsed, 'CLAIM_VALUES')
   const mutations = []
-  for (const parts of DISCLOSURE_PATHS) {
+  const disclosurePaths = Object.entries(registry.claims).flatMap(([claimId, claim]) => (
+    Object.keys(claim.disclosures ?? {}).map((field) => [claimId, field])
+  ))
+  for (const parts of disclosurePaths) {
     const expression = claims && objectPathExpression(claims, parts)
     const pathLabel = `CLAIM_VALUES.${parts.join('.')}`
     if (!expression || !ts.isStringLiteralLike(expression)) {
@@ -795,7 +785,7 @@ async function buildMutations() {
     ...await claimDelinkMutations(files, registry),
     ...await actionDelinkMutations(files, registry),
     ...await actionGuardMutations(),
-    ...await disclosureStringMutations(),
+    ...await disclosureStringMutations(registry),
     ...await staticMutations(),
   ]
   return mutations.sort((left, right) => (

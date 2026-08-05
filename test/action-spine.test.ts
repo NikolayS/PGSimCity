@@ -382,7 +382,47 @@ function actionDisagreements(
   })
 }
 
+function actionRequirementFailures(
+  overrides: ReadonlyMap<string, string> = new Map(),
+): string[] {
+  const failures: string[] = []
+  for (const [actionId, action] of Object.entries(ACTIONS) as [ActionId, (typeof ACTIONS)[ActionId]][]) {
+    const surfaceLabels = action.surfaces.map(actionSurfaceLabel)
+    for (const field of ['preconditions', 'risks'] as const) {
+      for (let index = 0; index < action[field].length; index++) {
+        const path = `${actionId}.${field}[${index}]`
+        const requirement = overrides.get(path) ?? action[field][index]
+        if (requirement.trim().length === 0) {
+          failures.push(
+            `${path}: requirement is blank; surfaces left unqualified: ${surfaceLabels.join(', ')}`,
+          )
+          continue
+        }
+        for (const surface of action.surfaces) {
+          const label = actionSurfaceLabel(surface)
+          if (!surfaceCopy(surface).includes(requirement)) {
+            failures.push(`${path}: ${label} is rendered without the requirement`)
+          }
+        }
+      }
+    }
+  }
+  return failures
+}
+
 describe('operator action spine', () => {
+  it('keeps every registered precondition and risk nonblank on every reader surface', () => {
+    expect(actionRequirementFailures()).toEqual([])
+  })
+
+  it('rejects a whitespace-only action requirement and names every affected surface', () => {
+    const [actionId, action] = Object.entries(ACTIONS)[0] as [ActionId, (typeof ACTIONS)[ActionId]]
+    const path = `${actionId}.preconditions[0]`
+    expect(actionRequirementFailures(new Map([[path, ' ']]))).toEqual([
+      `${path}: requirement is blank; surfaces left unqualified: ${action.surfaces.map(actionSurfaceLabel).join(', ')}`,
+    ])
+  })
+
   it('finds an exact operational target without classifying English verbs', () => {
     expect(mentionsTarget(
       'Constrain max_slot_wal_keep_size only after measuring retention and recovery cost.',
