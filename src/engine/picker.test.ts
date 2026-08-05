@@ -46,6 +46,7 @@ describe('picker markers by camera mode', () => {
     bus.emit('hover', { id: 'hovered' })
     expect(hoverMarker.visible).toBe(true)
     expect(selectionMarker.visible).toBe(false)
+    expect(document.body.style.cursor).toBe('pointer')
 
     bus.emit('select', { id: 'selected', source: 'building' })
     expect(selectionMarker.visible).toBe(true)
@@ -53,10 +54,12 @@ describe('picker markers by camera mode', () => {
     bus.emit('camera:mode', { mode: 'walk' })
     expect(hoverMarker.visible).toBe(false)
     expect(selectionMarker.visible).toBe(false)
+    expect(document.body.style.cursor).toBe('')
 
     bus.emit('hover', { id: null })
     bus.emit('hover', { id: 'hovered' })
     expect(hoverMarker.visible).toBe(false)
+    expect(document.body.style.cursor).toBe('')
 
     bus.emit('select', { id: null })
     bus.emit('select', { id: 'selected', source: 'building' })
@@ -66,6 +69,7 @@ describe('picker markers by camera mode', () => {
     bus.emit('camera:mode', { mode: 'orbit' })
     expect(hoverMarker.visible).toBe(true)
     expect(selectionMarker.visible).toBe(true)
+    expect(document.body.style.cursor).toBe('pointer')
 
     bus.emit('camera:mode', { mode: 'walk' })
     expect(hoverMarker.visible).toBe(false)

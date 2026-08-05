@@ -10,6 +10,10 @@ export interface TextPlaneRecord {
 }
 
 const TEXT_PLANES = 'pgTextPlanes'
+const _layerNormal = new THREE.Vector3()
+
+/** City-plan floor lettering is an orbit aid, not first-person signage. */
+export const MAP_TEXT_LAYER = 2
 
 /** Mark one independently oriented text quad on an object, including an atlas mesh. */
 export function markTextPlane(
@@ -23,6 +27,8 @@ export function markTextPlane(
   const data = object.userData as { [TEXT_PLANES]?: TextPlaneRecord[] }
   const records = data[TEXT_PLANES] ?? (data[TEXT_PLANES] = [])
   records.push({ text, center, normal, up, fixed })
+  _layerNormal.fromArray(normal).applyQuaternion(object.quaternion)
+  if (fixed && Math.abs(_layerNormal.y) > 0.8) object.layers.set(MAP_TEXT_LAYER)
 }
 
 export function markedTextPlanes(object: THREE.Object3D): readonly TextPlaneRecord[] {

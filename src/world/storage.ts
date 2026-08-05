@@ -253,6 +253,11 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
   /** One material for every instanced-colour mesh down here. */
   const mData = keep(new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true, toneMapped: false }))
   mData.name = 'storage.liveData'
+  const mHeapPage = keep(mData.clone())
+  mHeapPage.name = 'storage.heapPage'
+  mHeapPage.polygonOffset = true
+  mHeapPage.polygonOffsetFactor = -1
+  mHeapPage.polygonOffsetUnits = -1
   // Kernel memory is a conceptual region, not physical matter: the one
   // deliberately translucent material in this district.
   const mVolume = keep(
@@ -454,7 +459,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     rowTotal += rowCap[i]
   }
 
-  const tiles = instanced(gRiser, mData, tileCap)
+  const tiles = instanced(gRiser, mHeapPage, tileCap)
   tiles.raycast = () => {} // picked through per-table proxies instead
   heapGroup.add(tiles)
   const tileMat = tiles.instanceMatrix.array as Float32Array
@@ -1008,9 +1013,10 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
     const img = tex.image as { width: number; height: number }
     const mLabel = keep(new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, toneMapped: false }))
     const gLabel = keep(new THREE.PlaneGeometry(1, 1))
+    const labelHeight = 1.2
     for (const side of [-1, 1]) {
       const label = new THREE.Mesh(gLabel, mLabel)
-      label.scale.set(42, 42 / Math.max(1, img.width / img.height), 1)
+      label.scale.set(labelHeight * Math.max(1, img.width / img.height), labelHeight, 1)
       label.position.set(0, CITY.durability.y + 1.8, side * (d / 2 + 0.2))
       label.rotation.y = side < 0 ? Math.PI : 0
       label.raycast = () => {}

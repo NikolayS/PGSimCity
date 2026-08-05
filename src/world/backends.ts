@@ -834,7 +834,10 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
       const rl = ringLevel[i]
       if (rl > 0.01) {
         const y = 2.2 + ringPhase[i] * (H[i] - 3.5)
-        const rad = BW / 2 + 1.7
+        // Keep the animated ring inside the static plinth collision envelope.
+        // Its TorusGeometry tube adds 4.5% to the scaled outer radius; the old
+        // +1.7 m radius could surround a camera correctly stopped at the wall.
+        const rad = BW / 2 + 1.3
         _p.set(XS[i], y, BZ)
         _e.set(-Math.PI / 2, 0, 0)
         _q.setFromEuler(_e)

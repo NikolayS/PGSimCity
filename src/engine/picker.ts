@@ -418,7 +418,7 @@ export function createPicker(opts: {
     if (id === hoveredId) return
     hoveredId = id
     hovDef = id ? registry.get(id) : undefined
-    document.body.style.cursor = id ? 'pointer' : ''
+    document.body.style.cursor = !walkMode && id ? 'pointer' : ''
     refreshHover()
   })
 
@@ -426,6 +426,7 @@ export function createPicker(opts: {
     const walking = mode === 'walk'
     if (walking === walkMode) return
     walkMode = walking
+    document.body.style.cursor = !walkMode && hoveredId ? 'pointer' : ''
     refreshSelection()
     refreshHover()
   })
