@@ -952,7 +952,9 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     [BX + 16.4, 2.6, YARD_Z, 1.2, 5.2, 24],
     [BX, 4.0, YARD_Z + 8, 16, 8.0, 8], // vault head-house
     [BX, 8.4, YARD_Z + 8, 17, 0.8, 9],
-    [BX, 3.0, (SHAFT_Z + YARD_Z - 12) / 2, 6.0, 0.6, YARD_Z - 12 - SHAFT_Z], // conveyor off the deck
+    // Tuck the conveyor below the shaft-head plate instead of sharing its
+    // exact top plane, which shimmered under a pedestrian's feet.
+    [BX, 2.95, (SHAFT_Z + YARD_Z - 12) / 2, 6.0, 0.5, YARD_Z - 12 - SHAFT_Z], // conveyor off the deck
   ]
   const storeStruct = batch(gStore, unitBox, matCool, storeMass, true)
 

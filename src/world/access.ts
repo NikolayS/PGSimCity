@@ -612,6 +612,11 @@ export const createAccess: AccessFactory = (ctx: WorldContext): AccessModule => 
   /* --- materials: matte structure, neon meaning -------------------------- */
 
   const mDeck = theme.mat('access.deck', { color: 0x1b2434, roughness: 0.8, metalness: 0.22 })
+  // Ramps terminate on host decks. They are a deliberate top coat there, so
+  // give the shared walking surface a stable depth winner at each seam.
+  mDeck.polygonOffset = true
+  mDeck.polygonOffsetFactor = -1
+  mDeck.polygonOffsetUnits = -1
   const mStruct = theme.mat('access.struct', { color: 0x121a29, roughness: 0.86, metalness: 0.2 })
   const mSteel = theme.mat('access.steel', { color: 0x27334a, roughness: 0.54, metalness: 0.44 })
   const mTread = theme.mat('access.tread', { color: 0x33415c, roughness: 0.6, metalness: 0.4 })

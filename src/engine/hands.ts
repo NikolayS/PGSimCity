@@ -73,8 +73,10 @@ interface HandRig {
 }
 
 const FOV_HALF_TAN = Math.tan((52 * Math.PI) / 360)
-const IDLE_DEPTH = 0.92
-const REACH_DEPTH = 1.06
+/** Keep the viewmodel inside the walker's 0.35 m collision capsule. */
+const VIEWMODEL_DEPTH_SCALE = 0.3
+const IDLE_DEPTH = 0.92 * VIEWMODEL_DEPTH_SCALE
+const REACH_DEPTH = 1.06 * VIEWMODEL_DEPTH_SCALE
 const IDLE_X = 0.84
 const IDLE_Y = -0.79
 const REACH_X_MIN = 0.80
@@ -107,6 +109,7 @@ const _fingerAxis = new THREE.Vector3(0, 0, 1)
 
 function viewportScale(aspect: number): number {
   return Math.min(0.82, Math.max(0.25, (aspect / PORTRAIT_SCALE_ASPECT) * 0.82))
+    * VIEWMODEL_DEPTH_SCALE
 }
 
 function ndcRect(

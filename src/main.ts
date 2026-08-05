@@ -55,6 +55,7 @@ import type { AccessModule } from './world/access'
 import { createControlCenterWorld } from './world/control-center'
 import { createWorldHandles } from './world/handles'
 import { createSilhouetteDetails } from './world/silhouette'
+import { MAP_TEXT_LAYER } from './world/text-plane'
 
 import { createContextMenu } from './ui/context-menu'
 import { createHud, setCompassCamera } from './ui/hud'
@@ -361,7 +362,10 @@ async function boot(): Promise<void> {
   // The HUD's F key asks for a mode change; the rig announces the mode it ended
   // up in. Guard so the two can't ping-pong.
   let applyingMode = false
+  gfx.camera.layers.enable(MAP_TEXT_LAYER)
   bus.on('camera:mode', ({ mode }) => {
+    if (mode === 'walk') gfx.camera.layers.disable(MAP_TEXT_LAYER)
+    else gfx.camera.layers.enable(MAP_TEXT_LAYER)
     if (applyingMode || rig.mode === mode) return
     applyingMode = true
     try {

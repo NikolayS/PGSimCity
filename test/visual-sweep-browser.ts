@@ -15,7 +15,7 @@ const GROUND_PROBE_MAX_SPACING = 8
 const GROUND_BOUNDARY_TOLERANCE = 0.02
 const SURFACE_WORD = /(?:^|[.:/\s-])(ground|floor|deck|apron|forecourt|yard|platform|pad|plinth|surface|stylobate)(?:$|[.:/\s-])/i
 
-interface CityHandle {
+export interface CityHandle {
   readonly gfx: {
     readonly scene: THREE.Scene
     readonly camera: THREE.PerspectiveCamera
@@ -71,7 +71,7 @@ interface Station {
   readonly focus: FocusSpec
 }
 
-interface MeshRecord {
+export interface MeshRecord {
   readonly mesh: THREE.Mesh
   readonly instanceId: number | null
   readonly key: string
@@ -82,7 +82,7 @@ interface MeshRecord {
   readonly materials: readonly THREE.Material[]
 }
 
-interface HorizontalTriangle {
+export interface HorizontalTriangle {
   readonly key: string
   readonly record: MeshRecord
   readonly material: THREE.Material
@@ -100,9 +100,10 @@ interface SurfaceRecord {
   readonly area: number
 }
 
-interface TextInstance {
+export interface TextInstance {
   readonly object: THREE.Object3D
   readonly record: TextPlaneRecord
+  readonly planeIndex: number
   readonly district: DistrictId | null
   readonly path: string
 }
@@ -115,7 +116,7 @@ function pointTuple(point: THREE.Vector3): [number, number, number] {
   return [round(point.x), round(point.y), round(point.z)]
 }
 
-function objectPath(object: THREE.Object3D): string {
+export function objectPath(object: THREE.Object3D): string {
   const parts: string[] = []
   let current: THREE.Object3D | null = object
   while (current && !current.isScene) {
@@ -125,7 +126,7 @@ function objectPath(object: THREE.Object3D): string {
   return parts.reverse().join('/')
 }
 
-function visibleInTree(object: THREE.Object3D): boolean {
+export function visibleInTree(object: THREE.Object3D): boolean {
   let current: THREE.Object3D | null = object
   while (current) {
     if (!current.visible) return false
@@ -134,23 +135,23 @@ function visibleInTree(object: THREE.Object3D): boolean {
   return true
 }
 
-function renderedMaterial(material: THREE.Material): boolean {
+export function renderedMaterial(material: THREE.Material): boolean {
   return material.visible && material.colorWrite && material.opacity > 0.01
 }
 
-function solidMaterial(material: THREE.Material): boolean {
+export function solidMaterial(material: THREE.Material): boolean {
   return renderedMaterial(material) && material.opacity >= 0.98 && material.depthWrite !== false
 }
 
-function opaqueMaterial(material: THREE.Material): boolean {
+export function opaqueMaterial(material: THREE.Material): boolean {
   return solidMaterial(material) && !material.transparent
 }
 
-function materialsOf(mesh: THREE.Mesh): readonly THREE.Material[] {
+export function materialsOf(mesh: THREE.Mesh): readonly THREE.Material[] {
   return Array.isArray(mesh.material) ? mesh.material : [mesh.material]
 }
 
-function districtResolver(registry: CityHandle['registry']): (object: THREE.Object3D) => DistrictId | null {
+export function districtResolver(registry: CityHandle['registry']): (object: THREE.Object3D) => DistrictId | null {
   const roots = new Map<THREE.Object3D, DistrictId>()
   for (const component of registry.all()) roots.set(component.object, component.district)
   const districtNames = new Set(Object.keys(DISTRICT_BOUNDS) as DistrictId[])
@@ -212,7 +213,7 @@ function createStations(registry: CityHandle['registry']): Station[] {
   })
 }
 
-function enumerateMeshes(
+export function enumerateMeshes(
   scene: THREE.Scene,
   resolveDistrict: (object: THREE.Object3D) => DistrictId | null,
 ): MeshRecord[] {
@@ -269,7 +270,7 @@ function enumerateMeshes(
   return records
 }
 
-function materialForTriangle(
+export function materialForTriangle(
   record: MeshRecord,
   triangleOffset: number,
 ): THREE.Material | null {
@@ -281,7 +282,7 @@ function materialForTriangle(
   return record.materials[group?.materialIndex ?? 0] ?? null
 }
 
-function horizontalTriangles(record: MeshRecord, opaqueOnly: boolean): HorizontalTriangle[] {
+export function horizontalTriangles(record: MeshRecord, opaqueOnly: boolean): HorizontalTriangle[] {
   const geometry = record.mesh.geometry
   const position = geometry.getAttribute('position')
   if (!position) return []
@@ -342,15 +343,22 @@ function mappedText(mesh: THREE.Mesh): string[] {
   return text
 }
 
-function enumerateText(
+export function enumerateText(
   scene: THREE.Scene,
   resolveDistrict: (object: THREE.Object3D) => DistrictId | null,
 ): { instances: TextInstance[]; unmarked: string[] } {
   const instances: TextInstance[] = []
   const unmarked: string[] = []
   scene.traverse((object) => {
-    for (const record of markedTextPlanes(object)) {
-      instances.push({ object, record, district: resolveDistrict(object), path: objectPath(object) })
+    const records = markedTextPlanes(object)
+    for (let planeIndex = 0; planeIndex < records.length; planeIndex++) {
+      instances.push({
+        object,
+        record: records[planeIndex],
+        planeIndex,
+        district: resolveDistrict(object),
+        path: objectPath(object),
+      })
     }
     const mesh = object as THREE.Mesh
     if (!mesh.isMesh || !visibleInTree(mesh)) return
@@ -362,7 +370,7 @@ function enumerateText(
   return { instances, unmarked }
 }
 
-function enumerateColliders(debug: THREE.LineSegments): THREE.Box3[] {
+export function enumerateColliders(debug: THREE.LineSegments): THREE.Box3[] {
   const position = debug.geometry.getAttribute('position')
   const boxes: THREE.Box3[] = []
   const point = new THREE.Vector3()
@@ -522,7 +530,7 @@ function discoverSurfaces(
   return surfaces
 }
 
-function recordLabel(record: MeshRecord): string {
+export function recordLabel(record: MeshRecord): string {
   return record.instanceId === null ? record.path : `${record.path}[${record.instanceId}]`
 }
 
@@ -541,7 +549,7 @@ function sampleSurfacePoints(surface: SurfaceRecord): THREE.Vector3[] {
   return samples
 }
 
-function pointInTriangle(point: THREE.Vector2, triangle: HorizontalTriangle): boolean {
+export function pointInTriangle(point: THREE.Vector2, triangle: HorizontalTriangle): boolean {
   const sign = (p1: THREE.Vector2, p2: THREE.Vector2, p3: THREE.Vector2): number => (
     (p1.x - p3.x) * (p2.y - p3.y) - (p2.x - p3.x) * (p1.y - p3.y)
   )
@@ -965,7 +973,7 @@ function pointInPolygon(point: THREE.Vector2, polygon: readonly THREE.Vector2[])
   return insidePolygon
 }
 
-function directRaycast(mesh: THREE.Mesh, raycaster: THREE.Raycaster, hits: THREE.Intersection[]): void {
+export function directRaycast(mesh: THREE.Mesh, raycaster: THREE.Raycaster, hits: THREE.Intersection[]): void {
   if ((mesh as THREE.InstancedMesh).isInstancedMesh) {
     THREE.InstancedMesh.prototype.raycast.call(mesh, raycaster, hits)
   } else {
@@ -973,7 +981,7 @@ function directRaycast(mesh: THREE.Mesh, raycaster: THREE.Raycaster, hits: THREE
   }
 }
 
-function nearestDirectHit(
+export function nearestDirectHit(
   meshes: readonly THREE.Mesh[],
   raycaster: THREE.Raycaster,
   hits: THREE.Intersection[],
@@ -1279,7 +1287,7 @@ function recordsForStation(records: readonly MeshRecord[], station: Station): Me
   })
 }
 
-function waitFrames(count = 2): Promise<void> {
+export function waitFrames(count = 2): Promise<void> {
   return new Promise((resolve) => {
     const next = (remaining: number): void => {
       if (remaining <= 0) {

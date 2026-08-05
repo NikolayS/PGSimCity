@@ -377,7 +377,9 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     previous?.dispose()
   }
 
-  const camera = new THREE.PerspectiveCamera(52, measureAspect(), 0.5, 4000)
+  // A pedestrian can approach to the 0.35 m collision capsule. Keeping the
+  // near plane well inside it prevents walls from slicing across the viewport.
+  const camera = new THREE.PerspectiveCamera(52, measureAspect(), 0.1, 4000)
   // Establishing shot: high above the plaza, looking north up the city axis.
   // engine/camera.ts takes over on its first update.
   camera.position.set(0, 205, 415)
