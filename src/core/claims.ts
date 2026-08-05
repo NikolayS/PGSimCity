@@ -119,6 +119,11 @@ export const CLAIM_VALUES = {
     internal: ['standbyA', 'standbyB'],
     display: ['standby_a', 'standby_b'],
   },
+  physicalReplicationLink: {
+    bytesPerSec: registeredClaimValue('physicalReplicationLink.bytesPerSec', 24 * MIB),
+    label: '24 MiB/s',
+    disclosure: 'PGSimCity gives each physical standby link a fixed 24 MiB/s teaching capacity for the ordinary sequential WAL byte stream, including segment-switch padding. This scaled constant is not a production estimate, measurement, or benchmark.',
+  },
   modelDuration: {
     shortUnit: 'model s',
     millisecondUnit: MODEL_MILLISECOND_UNIT,
@@ -438,6 +443,16 @@ export const CLAIMS = {
     owner: 'src/core/claims.ts#CLAIM_VALUES.standbyNames',
     value: CLAIM_VALUES.standbyNames,
     surfaces: ['model:physical standbys', 'controls:synchronous standby choices', 'Diagnose:replication rows'],
+  },
+  physicalReplicationLink: {
+    owner: 'src/core/claims.ts#CLAIM_VALUES.physicalReplicationLink',
+    value: CLAIM_VALUES.physicalReplicationLink,
+    surfaces: ['model:physical walsender transport', 'prose:replication link scope'],
+    disclosures: registeredDisclosures(CLAIM_VALUES.physicalReplicationLink, {
+      disclosure: [
+        { kind: 'inspector-section', doc: 'net.wire', section: 'What the city models' },
+      ],
+    }),
   },
   modelDuration: {
     owner: 'src/core/claims.ts#CLAIM_VALUES.modelDuration',

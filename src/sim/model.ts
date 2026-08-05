@@ -161,6 +161,10 @@ const MVCC_SAMPLE_SECONDS = 3
 const MAX_STEPS = 20
 const IDLE_REAP = 22
 const MIB = 1024 * 1024
+/** Per-standby physical stream capacity in unstretched model bytes per second. */
+export const MODEL_PHYSICAL_REPLICATION_LINK_BYTES_PER_SEC:
+  typeof CLAIM_VALUES.physicalReplicationLink.bytesPerSec =
+    CLAIM_VALUES.physicalReplicationLink.bytesPerSec
 const WORK_MEM_HASH_MULTIPLIER = CLAIM_VALUES.workMem.hashMemMultiplier
 const WORK_MEM_SPILL_PENALTY = CLAIM_VALUES.workMem.spillSlowdown - 1
 const AUTOVACUUM_VACUUM_THRESHOLD = 50
@@ -1645,7 +1649,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   let flushT = 0
   let flushDur = 0
   let flushBytes = 0
-  let segmentSwitchCatchupLsn = initialLsn
   let archT = 0
   let archiveNextSeg = 0
   let archiveInFlight = -1
@@ -4009,15 +4012,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
           if (ha.currentLeader === 'standbyA') {
             failBaseBackup('Full backup failed: standby_a was promoted during the online backup, so pg_backup_stop cannot finish it')
           } else {
+            // Backup stop on standby_a cannot switch the current primary's WAL.
             backup.stopLsn = rep.standbys[0].appliedLsn
             backup.stopTimeline = ha.timeline.current
-            const requiredArchiveLsn = backupArchiveBoundary(backup.stopLsn)
-            // WAL-G waits for the backup stop WAL to be archived. Model the
-            // segment switch PostgreSQL requests at backup stop, then let the
-            // ordinary wal-push queue decide when completion is durable.
-            const beforeSwitchLsn = wal.insertLsn
-            wal.insertLsn = Math.max(wal.insertLsn, requiredArchiveLsn)
-            if (wal.insertLsn > beforeSwitchLsn) segmentSwitchCatchupLsn = wal.insertLsn
             if (backupWalRangesArchived()) {
               completeBaseBackup()
             } else backup.status = 'waiting_wal'
@@ -5268,17 +5265,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
     // One primary-side walsender and one packet queue per standby.
     if (wal.flushLsn > standby.sentLsn && runtime.wireCount < WIRE) {
-      /* A segment switch advances the LSN without entering wal.bytesPerSec, so
-       * its padding needs bandwidth independent of current writes. */
       const chunk = Math.min(
         wal.flushLsn - standby.sentLsn,
-        Math.max(
-          16 * 1024,
-          (runtime.rejoining || standby.sentLsn < segmentSwitchCatchupLsn)
-            ? 24 * MIB * dt
-            : 0,
-          wal.bytesPerSec * dt * 4,
-        ),
+        MODEL_PHYSICAL_REPLICATION_LINK_BYTES_PER_SEC * dt,
       )
       standby.sentLsn = Math.floor(standby.sentLsn + chunk)
       runtime.wireLsn[runtime.wireHead] = standby.sentLsn
@@ -5546,7 +5535,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     flushCovered = lsn
     flushT = 0
     flushBytes = 0
-    segmentSwitchCatchupLsn = lsn
     walWriterT = 0
     maintenanceWalPending = 0
     maintenanceFpiPending = 0
@@ -5631,7 +5619,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     flushing = false
     flushTarget = wal.flushLsn
     flushCovered = wal.flushLsn
-    segmentSwitchCatchupLsn = wal.flushLsn
   }
 
   function resetTransition(
@@ -8751,7 +8738,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     flushCovered = lsn0
     flushT = 0
     flushBytes = 0
-    segmentSwitchCatchupLsn = lsn0
     walWriterT = 0
 
     ckpt.phase = 'idle'

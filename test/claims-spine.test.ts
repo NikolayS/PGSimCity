@@ -25,6 +25,7 @@ import {
   MODEL_BACKEND_CONCURRENCY_TARGET,
   MODEL_BULK_READ_RING_FRAMES,
   MODEL_LATENCY_WINDOW_TRIPS,
+  MODEL_PHYSICAL_REPLICATION_LINK_BYTES_PER_SEC,
   createSim,
 } from '../src/sim/model'
 import { SCENARIOS } from '../src/sim/scenarios'
@@ -67,6 +68,10 @@ const REGISTERED_CLAIM_VALUE_READS = {
     'src/ui/content.ts': 1,
   },
   standbyNames: { 'src/sim/model.ts': 8, 'src/ui/content.ts': 4 },
+  physicalReplicationLink: {
+    'src/sim/model.ts': 1,
+    'src/ui/docs-storage.ts': 1,
+  },
   modelDuration: {
     'src/core/trace-presentation.ts': 1,
     'src/observability/paths.ts': 2,
@@ -570,7 +575,7 @@ describe('claims and conventions spine', () => {
     expect([...classified].sort()).toEqual((Object.keys(CLAIMS) as ClaimId[]).sort())
   })
 
-  it('owns exactly the twenty-six drift-prone contracts across both passes', () => {
+  it('owns exactly the twenty-seven drift-prone contracts across both passes', () => {
     expect(Object.keys(CLAIMS)).toEqual([
       'appVersion',
       'walSegment',
@@ -578,6 +583,7 @@ describe('claims and conventions spine', () => {
       'bulkReadRing',
       'checkpointPolicy',
       'standbyNames',
+      'physicalReplicationLink',
       'modelDuration',
       'modelLatency',
       'connectionPooler',
@@ -740,6 +746,17 @@ describe('claims and conventions spine', () => {
     const rows = PROJECTIONS.replication(sim.state, createCollector(sim), 'total').rows
     expect(rows.map((row) => row.cells.application_name), 'standbyNames: Diagnose:replication rows disagree')
       .toEqual(CLAIM_VALUES.standbyNames.display)
+  })
+
+  it('owns the physical replication link teaching capacity and disclosure', () => {
+    agrees(
+      'physicalReplicationLink',
+      'model:physical walsender transport',
+      MODEL_PHYSICAL_REPLICATION_LINK_BYTES_PER_SEC,
+      CLAIM_VALUES.physicalReplicationLink.bytesPerSec,
+    )
+    expect(storageDocCopy('net.wire'), 'physicalReplicationLink: prose omits its teaching-rate scope')
+      .toContain(CLAIM_VALUES.physicalReplicationLink.disclosure)
   })
 
   it('labels deliberately stretched durations as model time', () => {

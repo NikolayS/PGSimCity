@@ -23,6 +23,15 @@ const diagnosticCopy = [...ALL_STEPS, ...ALL_VERDICTS]
   .join('\n')
 
 describe('PostgreSQL 18 content corrections', () => {
+  it('discloses the replication link teaching capacity', () => {
+    const link = DOCS_STORAGE.find((doc) => doc.id === 'net.wire')!
+    const copy = link.sections.map((section) => section.body).join('\n')
+
+    expect(copy).not.toMatch(/has no [^.]*bandwidth/i)
+    expect(copy).toMatch(/fixed .*teaching capacity/i)
+    expect(copy).toMatch(/not .*production (?:estimate|measurement|benchmark)/i)
+  })
+
   it('keeps every storage entry cited with current recovery section numbering', () => {
     expect(
       DOCS_STORAGE.filter((doc) => !doc.refs).map((doc) => doc.id),
