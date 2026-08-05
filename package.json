@@ -31,6 +31,7 @@
     "dev": "vite",
     "bake:light": "node tools/bake-indirect.mjs",
     "build": "vite build",
+    "mutation": "node tools/mutation-gate.mjs",
     "oracle": "node tools/pg-oracle.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
