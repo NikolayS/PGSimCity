@@ -1,7 +1,12 @@
 import * as THREE from 'three'
 import type { Bus, SimState } from '../core/types'
 import { clamp, clamp01, damp, easeInOutCubic } from '../core/util'
-import { CITY } from '../world/layout'
+import {
+  bufferPoolBottomY,
+  bufferPoolOccupancy,
+  bufferPoolSurfaceY,
+  CITY,
+} from '../world/layout'
 import type { AudioApi, Gait, Surface } from './audio'
 import { createMoveResult } from './collision'
 import type { CollisionWorld, MoveResult } from './collision'
@@ -209,10 +214,8 @@ const DEG_TO_RAD = Math.PI / 180
 
 /** The shared-buffer grid's exact outside edge. */
 const POOL_HALF = ((CITY.buf.grid - 1) * CITY.buf.pitch + CITY.buf.tile) / 2
-/** The water starts above the walkable deck, where the buffer columns begin. */
-const POOL_BOTTOM = CITY.buf.baseY
-/** Top of the conceptual water volume: the tallest ordinary usage_count column. */
-const POOL_SURFACE = CITY.buf.baseY + CITY.buf.maxRise + 0.4
+/** Ignore a zero-depth surface when the representative sample is empty. */
+const POOL_MIN_DEPTH = 0.05
 /** Swimming thrust meets hydrodynamic drag at roughly 1.55 m/s. */
 const SWIM_SPEED = 1.55
 const SWIM_THRUST = 2.25
@@ -384,7 +387,6 @@ export function createWalkController(opts: WalkOptions): WalkController {
   const { camera, dom, collision, audio, sim, bus, water, scene } = opts
   const T: WalkTuning = { ...DEFAULT_TUNING, ...(opts.tuning ?? {}) }
   const jumpSpeed = Math.sqrt(2 * T.gravity * T.jumpHeight)
-  const poolSurfaceFeet = POOL_SURFACE - T.eyeStand + 0.12
   const noBob = opts.reducedMotion ?? prefersReducedMotion()
   const bodyShadow = scene ? createBodyShadow() : null
   if (bodyShadow) scene?.add(bodyShadow)
@@ -394,6 +396,8 @@ export function createWalkController(opts: WalkOptions): WalkController {
   let enabled = false
   let grounded = false
   let swimming = false
+  let poolContact = false
+  let plunging = false
   let submerged = false
   let gait: Gait = 'walk'
   let surface: Surface = 'ground'
@@ -562,7 +566,8 @@ export function createWalkController(opts: WalkOptions): WalkController {
     const block = valid ? b.blk[tile] : 0
     const size = Math.max(1, b.sampleFrames)
     const clockDistance = active ? (tile - b.clockHand + size) % size : 0
-    const key = `${state}|${pinned ? 1 : 0}|${usage}|${rel}|${block}|${clockDistance}`
+    const waterPct = Math.round(bufferPoolOccupancy(b) * 100)
+    const key = `${state}|${pinned ? 1 : 0}|${usage}|${rel}|${block}|${clockDistance}|${waterPct}`
     if (tile !== lastPoolTile) {
       lastPoolTile = tile
       poolTitle.textContent = `Buffer pool (shared_buffers) · frame ${String(tile).padStart(4, '0')}`
@@ -572,7 +577,7 @@ export function createWalkController(opts: WalkOptions): WalkController {
       const pin = pinned ? ' · PINNED' : ''
       const owner = valid ? ` · ${rel} block ${block}` : ''
       const clock = active ? (clockDistance === 0 ? ' · CLOCK SWEEP HERE' : ` · clock +${clockDistance}`) : ''
-      poolState.textContent = `${state.toUpperCase()}${pin} · usage_count ${usage} → height${owner}${clock}`
+      poolState.textContent = `${state.toUpperCase()}${pin} · usage_count ${usage} → height${owner}${clock} · water level ${waterPct}% sample occupancy`
       poolState.style.color =
         state === 'dirty' ? '#ff6b82' : state === 'clean' ? '#69bfff' : pinned ? '#ffd36a' : '#8fa5c4'
     }
@@ -803,6 +808,8 @@ export function createWalkController(opts: WalkOptions): WalkController {
     vy = 0
     grounded = false
     swimming = false
+    poolContact = false
+    plunging = false
     submerged = false
     gait = 'walk'
     surface = 'ground'
@@ -881,6 +888,8 @@ export function createWalkController(opts: WalkOptions): WalkController {
     vy = 0
     grounded = false
     swimming = false
+    poolContact = false
+    plunging = false
     submerged = false
     gait = 'walk'
     lostGroundT = 0
@@ -949,6 +958,8 @@ export function createWalkController(opts: WalkOptions): WalkController {
     fadeT = -1
     fadePending = false
     swimming = false
+    poolContact = false
+    plunging = false
     submerged = false
     gait = 'walk'
     updatePoolReadout(0)
@@ -991,6 +1002,8 @@ export function createWalkController(opts: WalkOptions): WalkController {
     pitch = clamp(pose.pitch, -T.pitchLimit, T.pitchLimit)
     grounded = false
     swimming = false
+    poolContact = false
+    plunging = false
     submerged = false
     gait = 'walk'
     surface = 'ground'
@@ -1033,20 +1046,37 @@ export function createWalkController(opts: WalkOptions): WalkController {
    */
   function step(d: number): void {
     const poolXZ = inPoolXZ(pos.x, pos.z)
+    const poolSurface = bufferPoolSurfaceY(sim.buffers)
+    const poolBottom = bufferPoolBottomY(pos.x, pos.z)
+    const poolSurfaceFeet = poolSurface - T.eyeStand + 0.12
     // Enter when the body intersects the water column. The floor is a volume
     // boundary, not an exit, while the excavation below remains dry.
-    const nextSwimming =
-      poolXZ && pos.y + eyeNow >= POOL_BOTTOM && pos.y <= POOL_SURFACE
+    const nextPoolContact =
+      poolXZ && poolSurface - poolBottom > POOL_MIN_DEPTH &&
+      pos.y + eyeNow >= poolBottom && pos.y <= poolSurface
+    const nextSwimming = nextPoolContact
+    if (nextPoolContact !== poolContact) {
+      poolContact = nextPoolContact
+      const overshoot = poolSurface - pos.y
+      const entrySpeed = vy < 0
+        ? Math.sqrt(Math.max(0, vy * vy - 2 * T.gravity * Math.max(0, overshoot)))
+        : Math.abs(vy)
+      splash(
+        poolContact
+          ? 0.18 + entrySpeed / 11
+          : 0.2 + Math.abs(vy) / 12 + Math.hypot(vel.x, vel.z) * 0.08,
+      )
+    }
     if (nextSwimming !== swimming) {
       swimming = nextSwimming
       if (swimming) {
-        splash(0.18 + Math.abs(vy) / 11)
+        plunging = pos.y + eyeNow >= poolSurface
         grounded = false
         coyoteT = 0
         lostGroundT = 0
         surface = 'water'
       } else {
-        splash(0.2 + Math.abs(vy) / 12 + Math.hypot(vel.x, vel.z) * 0.08)
+        plunging = false
         submerged = false
       }
     }
@@ -1155,28 +1185,41 @@ export function createWalkController(opts: WalkOptions): WalkController {
 
     /* --- vertical -------------------------------------------------------- */
     if (swimming) {
+      // Horizontal motion may cross the last slice of an access ramp during
+      // this substep. Clamp against the new XZ, or the old lower ramp height
+      // leaves the feet just below the deck where the ground ray cannot land.
+      const verticalPoolBottom = inPoolXZ(pos.x, pos.z)
+        ? bufferPoolBottomY(pos.x, pos.z)
+        : CITY.deck.top
       const vy0 = vy
-      let verticalThrust =
-        Math.max(0, Math.sin(pitch)) * inputMagnitude * SWIM_LOOK_THRUST
-      if (keys.has('Space') || touchJump) verticalThrust += SWIM_KEY_RISE_THRUST
-      if (keys.has('KeyC') || touchCrouch) verticalThrust -= SWIM_KEY_DIVE_THRUST
-      const buoyancy = clamp(
-        (poolSurfaceFeet - pos.y) * SWIM_BUOYANCY,
-        -SWIM_BUOYANCY_MAX,
-        SWIM_BUOYANCY_MAX,
-      )
-      const damping = noBob ? SWIM_BUOYANCY_DAMPING_REDUCED : SWIM_BUOYANCY_DAMPING
-      vy += (buoyancy - vy * damping + verticalThrust) * d
+      if (plunging) {
+        // Preserve a real downward entry until the camera crosses the surface;
+        // otherwise buoyancy catches a walker by the ankles at the pool edge.
+        vy -= T.gravity * 0.65 * d
+      } else {
+        let verticalThrust =
+          Math.max(0, Math.sin(pitch)) * inputMagnitude * SWIM_LOOK_THRUST
+        if (keys.has('Space') || touchJump) verticalThrust += SWIM_KEY_RISE_THRUST
+        if (keys.has('KeyC') || touchCrouch) verticalThrust -= SWIM_KEY_DIVE_THRUST
+        const buoyancy = clamp(
+          (poolSurfaceFeet - pos.y) * SWIM_BUOYANCY,
+          -SWIM_BUOYANCY_MAX,
+          SWIM_BUOYANCY_MAX,
+        )
+        const damping = noBob ? SWIM_BUOYANCY_DAMPING_REDUCED : SWIM_BUOYANCY_DAMPING
+        vy += (buoyancy - vy * damping + verticalThrust) * d
+      }
       pos.y += (vy0 + vy) * 0.5 * d
       const ascentSpeed = vy > 0 ? vy : 0
-      if (pos.y < POOL_BOTTOM) {
-        pos.y = POOL_BOTTOM
+      if (pos.y < verticalPoolBottom) {
+        pos.y = verticalPoolBottom
         if (vy < 0) vy = 0
       } else if (pos.y > poolSurfaceFeet && vy > 0) {
         pos.y = poolSurfaceFeet
         vy = 0
       }
-      const nextSubmerged = pos.y + eyeNow < POOL_SURFACE
+      const nextSubmerged = pos.y + eyeNow < poolSurface
+      if (nextSubmerged) plunging = false
       if (submerged && !nextSubmerged) {
         splash(0.24 + ascentSpeed * 0.42 + Math.hypot(vel.x, vel.z) * 0.12)
       }

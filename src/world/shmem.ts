@@ -6,7 +6,7 @@ import type { SimState, WorldContext, WorldFactory, WorldModule } from '../core/
 import { clamp, clamp01, fmtBytes, fmtLsn, fmtNum, fmtPct, makeRng } from '../core/util'
 import { DECK_GATES } from './access'
 import type { DeckGate } from './access'
-import { ANCHOR, CITY, TABLES, bufferTilePos } from './layout'
+import { ANCHOR, bufferPoolOccupancy, CITY, TABLES, bufferTilePos } from './layout'
 import { createPlanLabelPainter, markPlanLabelSemanticCarrier } from './plan-label'
 import { markTextPlane, markTextTexture } from './text-plane'
 
@@ -24,7 +24,9 @@ export function shmemDeckReadout(s: SimState): string {
 export function sharedBuffersReadout(s: SimState): string {
   return `hit ${fmtPct(s.buffers.hitRatio, 1)} · ${fmtNum(s.buffers.sampleFrames)}-frame sample · ${fmtBytes(
     poolBytes(s.knobs),
-  )} pool · ${fmtNum(s.buffers.usedCount)}/${fmtNum(s.buffers.sampleFrames)} sample frames used`
+  )} pool · ${fmtNum(s.buffers.usedCount)}/${fmtNum(s.buffers.sampleFrames)} sample frames used · water level ${fmtPct(
+    bufferPoolOccupancy(s.buffers),
+  )} sample occupancy`
 }
 
 export function procArrayReadout(s: SimState): string {
@@ -60,7 +62,7 @@ const TILE = CITY.buf.tile
 const BASE_Y = CITY.buf.baseY
 const MAX_RISE = CITY.buf.maxRise
 const HALF_GRID = ((G - 1) * PITCH) / 2
-const GRID_SPAN = (G - 1) * PITCH + TILE
+const GRID_SPAN = CITY.buf.span
 
 const DECK_W = CITY.deck.w
 const DECK_D = CITY.deck.d
@@ -69,12 +71,12 @@ const DECK_BOT = CITY.deck.top - CITY.deck.thickness
 /** Everything that stands on the deck sits on a 0.7 plinth. */
 const MOUNT_Y = DECK_TOP + 0.7
 
-const POOL_HALF = GRID_SPAN / 2
-const POOL_SURFACE_Y = BASE_Y + MAX_RISE + 0.4
-const COPING_BOTTOM = DECK_TOP + 0.05
-const COPING_TOP = POOL_SURFACE_Y + 0.4
+const POOL_HALF = CITY.buf.halfSpan
+const COPING_BOTTOM = BASE_Y
+const COPING_TOP = CITY.buf.copingTopY
 const COPING_THICKNESS = 0.7
 const COPING_CAP_HEIGHT = 0.24
+const COPING_WALL_TOP = COPING_TOP - COPING_CAP_HEIGHT
 
 const TAU = Math.PI * 2
 /** How many tiles behind the clock hand still show its trail. */
@@ -203,6 +205,39 @@ function withWhite(g: THREE.BufferGeometry): THREE.BufferGeometry {
   const n = g.attributes.position.count
   g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 3).fill(1), 3))
   return g
+}
+
+/** A UV-compatible PlaneGeometry with the buffer basin cut out of its centre. */
+function rectangularFramePlane(width: number, depth: number, holeHalf: number): THREE.BufferGeometry {
+  const positions: number[] = []
+  const normals: number[] = []
+  const uvs: number[] = []
+  const indices: number[] = []
+  const halfW = width / 2
+  const halfD = depth / 2
+  const addQuad = (x0: number, y0: number, x1: number, y1: number): void => {
+    const base = positions.length / 3
+    positions.push(x0, y0, 0, x1, y0, 0, x1, y1, 0, x0, y1, 0)
+    normals.push(0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1)
+    uvs.push(
+      (x0 + halfW) / width, (y0 + halfD) / depth,
+      (x1 + halfW) / width, (y0 + halfD) / depth,
+      (x1 + halfW) / width, (y1 + halfD) / depth,
+      (x0 + halfW) / width, (y1 + halfD) / depth,
+    )
+    indices.push(base, base + 1, base + 2, base, base + 2, base + 3)
+  }
+  addQuad(-halfW, -halfD, halfW, -holeHalf)
+  addQuad(-halfW, holeHalf, halfW, halfD)
+  addQuad(-halfW, -holeHalf, -holeHalf, holeHalf)
+  addQuad(holeHalf, -holeHalf, halfW, holeHalf)
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3))
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
+  geometry.setIndex(indices)
+  geometry.computeBoundingSphere()
+  return geometry
 }
 
 /** Write a translate+scale matrix straight into an instance buffer (no compose). */
@@ -347,20 +382,33 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     return out
   }
 
-  // Body: inset so the cap above reads as a cantilevered edge with a shadow gap.
-  const gDeckBody = keep(new THREE.BoxGeometry(DECK_W - 5, 1.5, DECK_D - 5))
-  const deckBody = new THREE.Mesh(gDeckBody, mStructLo)
-  deckBody.position.set(0, DECK_BOT + 0.75, 0)
+  const setDeckFrame = (
+    matrices: Float32Array,
+    width: number,
+    depth: number,
+    bottom: number,
+    height: number,
+  ): void => {
+    const sideWidth = width / 2 - POOL_HALF
+    const endDepth = depth / 2 - POOL_HALF
+    setTRS(matrices, 0, 0, bottom, -POOL_HALF - endDepth / 2, width, height, endDepth)
+    setTRS(matrices, 1, 0, bottom, POOL_HALF + endDepth / 2, width, height, endDepth)
+    setTRS(matrices, 2, -POOL_HALF - sideWidth / 2, bottom, 0, sideWidth, height, POOL_HALF * 2)
+    setTRS(matrices, 3, POOL_HALF + sideWidth / 2, bottom, 0, sideWidth, height, POOL_HALF * 2)
+  }
+
+  // The slab is a real frame: collision rays and daylight can both see the basin.
+  const deckBody = new THREE.InstancedMesh(gRiser, mStructLo, 4)
+  deckBody.name = 'shmem.deck.body'
+  setDeckFrame(deckBody.instanceMatrix.array as Float32Array, DECK_W - 5, DECK_D - 5, DECK_BOT, 1.5)
+  deckBody.instanceMatrix.needsUpdate = true
   deck.add(deckBody)
 
-  // Cap: the full-width top plate, chamfering out over the body.
-  const gDeckCap = keep(new THREE.BoxGeometry(DECK_W, 0.9, DECK_D))
-  const deckCap = new THREE.Mesh(gDeckCap, mStruct)
-  deckCap.position.set(0, DECK_TOP - 0.45, 0)
+  const deckCap = new THREE.InstancedMesh(gRiser, mStruct, 4)
+  deckCap.name = 'shmem.deck.cap'
+  setDeckFrame(deckCap.instanceMatrix.array as Float32Array, DECK_W, DECK_D, DECK_TOP - 0.9, 0.9)
+  deckCap.instanceMatrix.needsUpdate = true
   deck.add(deckCap)
-  const deckEdge = theme.edges(gDeckCap, COLOR.gridBright, 0.34)
-  deckEdge.position.copy(deckCap.position)
-  deck.add(deckEdge)
 
   // The walking surface, carrying the printed floor plan.
   const deckArtwork = makeDeckTexture(rng)
@@ -382,7 +430,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
       polygonOffsetUnits: -2,
     }),
   )
-  const gDeckPlan = keep(new THREE.PlaneGeometry(DECK_W - 0.6, DECK_D - 0.6))
+  const gDeckPlan = keep(rectangularFramePlane(DECK_W - 0.6, DECK_D - 0.6, POOL_HALF))
   const deckPlan = new THREE.Mesh(gDeckPlan, mDeckTop)
   deckPlan.name = 'shmem.deck.surface'
   deckPlan.rotation.x = -Math.PI / 2
@@ -497,8 +545,8 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
   const copingCap = new THREE.InstancedMesh(gRiser, mStructHi, copingCount)
   copingCap.name = 'shared.buffers.coping.cap'
   const copingCapMatrix = copingCap.instanceMatrix.array as Float32Array
-  const wallHeight = COPING_TOP - COPING_BOTTOM
-  const capBottom = COPING_TOP - COPING_CAP_HEIGHT / 2
+  const wallHeight = COPING_WALL_TOP - COPING_BOTTOM
+  const capBottom = COPING_WALL_TOP
   const capThickness = COPING_THICKNESS + 0.3
   let copingIndex = 0
   const addCopingSpan = (side: DeckGate['side'], a: number, b: number): void => {
@@ -533,7 +581,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     collisionBoxes.push(
       new THREE.Box3(
         new THREE.Vector3(minX, COPING_BOTTOM, minZ),
-        new THREE.Vector3(maxX, COPING_TOP + COPING_CAP_HEIGHT / 2, maxZ),
+        new THREE.Vector3(maxX, COPING_TOP, maxZ),
       ),
     )
     copingIndex++
@@ -592,10 +640,10 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
       const length = edgeTo - edgeFrom
       if (side === 'north' || side === 'south') {
         const z = (side === 'north' ? -1 : 1) * (POOL_HALF + COPING_THICKNESS / 2)
-        setTRS(a, i++, mid, COPING_TOP + COPING_CAP_HEIGHT / 2, z, length, 0.1, edgeThickness)
+        setTRS(a, i++, mid, COPING_TOP + 0.01, z, length, 0.1, edgeThickness)
       } else {
         const x = (side === 'west' ? -1 : 1) * (POOL_HALF + COPING_THICKNESS / 2)
-        setTRS(a, i++, x, COPING_TOP + COPING_CAP_HEIGHT / 2, mid, edgeThickness, 0.1, length)
+        setTRS(a, i++, x, COPING_TOP + 0.01, mid, edgeThickness, 0.1, length)
       }
     }
     for (const [from, to] of copingSpans.north) addEdge('north', from, to)
@@ -752,7 +800,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
       polygonOffsetUnits: -3,
     }),
   )
-  const gHaze = keep(new THREE.PlaneGeometry(DECK_W + 60, DECK_D + 60))
+  const gHaze = keep(rectangularFramePlane(DECK_W + 60, DECK_D + 60, POOL_HALF))
   const haze = new THREE.Mesh(gHaze, mHaze)
   haze.rotation.x = -Math.PI / 2
   haze.position.set(0, DECK_TOP + 0.06, 0)

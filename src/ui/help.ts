@@ -122,7 +122,7 @@ const LEGEND: LegendRow[] = [
 const READING: { h: string; p: string }[] = [
   {
     h: 'The plaza',
-    p: 'The lit grid in the centre is a representative sample of <code>shared_buffers</code> — one tile per sampled frame, blue when its 8 KiB page matches disk, red when it has been modified in memory and not yet written. The rotating hand is the clock sweep looking for a frame to reuse.',
+    p: 'The lit grid in the centre is a representative sample of <code>shared_buffers</code> — one tile per sampled frame, blue when its 8 KiB page matches disk, red when it has been modified in memory and not yet written. Tile height is that frame’s <code>usage_count</code>; the basin waterline is the occupied fraction of the representative sample, not host RAM use. The rotating hand is the clock sweep looking for a frame to reuse.',
   },
   {
     h: 'The pit',

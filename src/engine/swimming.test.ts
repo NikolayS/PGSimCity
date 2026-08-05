@@ -3,15 +3,18 @@ import { describe, expect, it, vi } from 'vitest'
 import { createBus } from '../core/bus'
 import type { SimState } from '../core/types'
 import { createSim } from '../sim/model'
-import { CITY } from '../world/layout'
+import { bufferPoolSurfaceY, CITY } from '../world/layout'
 import type { AudioApi } from './audio'
 import { createCollisionWorld } from './collision'
 import { createBufferWater, waterReflectionScale } from './water'
 import { createWalkController } from './walk'
 
-const POOL_HALF = ((CITY.buf.grid - 1) * CITY.buf.pitch + CITY.buf.tile) / 2
+const POOL_HALF = CITY.buf.halfSpan
 const POOL_BOTTOM = CITY.buf.baseY
-const POOL_SURFACE = CITY.buf.baseY + CITY.buf.maxRise + 0.4
+
+function fullPoolSurface(): number {
+  return CITY.buf.fullSurfaceY
+}
 
 function fakeAudio(): AudioApi {
   return {
@@ -31,7 +34,8 @@ function fakeAudio(): AudioApi {
 interface WalkHarness {
   audio: AudioApi
   collision: ReturnType<typeof createCollisionWorld>
-  deck: THREE.Mesh
+  deck: THREE.Group
+  sim: SimState
   visualSplash: ReturnType<typeof vi.fn>
   walk: ReturnType<typeof createWalkController>
   dispose(): void
@@ -39,29 +43,40 @@ interface WalkHarness {
 
 function createWalkHarness(
   tuning?: Parameters<typeof createWalkController>[0]['tuning'],
+  occupancy = 1,
 ): WalkHarness {
   const bus = createBus()
   const audio = fakeAudio()
   const visualSplash = vi.fn()
   const collision = createCollisionWorld()
-  const deck = new THREE.Mesh(
-    new THREE.PlaneGeometry(CITY.deck.w, CITY.deck.d),
-    new THREE.MeshBasicMaterial(),
-  )
-  deck.rotation.x = -Math.PI / 2
-  deck.position.y = CITY.deck.top
+  const deck = new THREE.Group()
+  const deckMaterial = new THREE.MeshBasicMaterial()
+  const addDeckPlane = (width: number, depth: number, x: number, z: number): void => {
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(width, depth), deckMaterial)
+    plane.rotation.x = -Math.PI / 2
+    plane.position.set(x, CITY.deck.top, z)
+    deck.add(plane)
+  }
+  const sideWidth = CITY.deck.w / 2 - POOL_HALF
+  const endDepth = CITY.deck.d / 2 - POOL_HALF
+  addDeckPlane(CITY.deck.w, endDepth, 0, -POOL_HALF - endDepth / 2)
+  addDeckPlane(CITY.deck.w, endDepth, 0, POOL_HALF + endDepth / 2)
+  addDeckPlane(sideWidth, POOL_HALF * 2, -POOL_HALF - sideWidth / 2, 0)
+  addDeckPlane(sideWidth, POOL_HALF * 2, POOL_HALF + sideWidth / 2, 0)
   deck.updateMatrixWorld(true)
   collision.addWalkable(deck, 'deck')
 
   const camera = new THREE.PerspectiveCamera()
   camera.position.set(0, 30, 40)
   const dom = new EventTarget() as HTMLElement
+  const sim = createSim(bus).state as SimState
+  sim.buffers.usedCount = Math.round(sim.buffers.sampleFrames * occupancy) as typeof sim.buffers.usedCount
   const walk = createWalkController({
     camera,
     dom,
     collision,
     audio,
-    sim: createSim(bus).state as SimState,
+    sim,
     bus,
     water: { splash: visualSplash },
     tuning,
@@ -73,13 +88,17 @@ function createWalkHarness(
     audio,
     collision,
     deck,
+    sim,
     visualSplash,
     walk,
     dispose(): void {
       walk.dispose()
       collision.dispose()
-      deck.geometry.dispose()
-      ;(deck.material as THREE.Material).dispose()
+      deck.traverse((object) => {
+        const mesh = object as THREE.Mesh
+        if (mesh.isMesh) mesh.geometry.dispose()
+      })
+      deckMaterial.dispose()
     },
   }
 }
@@ -102,7 +121,7 @@ describe('buffer-pool swimming', () => {
     expect(walk.surface).toBe('deck')
 
     walk.setTouchMove(0, 1)
-    for (let i = 0; i < 8; i++) walk.update(0.02)
+    for (let i = 0; i < 50 && !walk.submerged; i++) walk.update(0.02)
 
     expect(walk.position.z).toBeLessThan(POOL_HALF)
     expect(walk.grounded).toBe(false)
@@ -136,10 +155,38 @@ describe('buffer-pool swimming', () => {
     harness.dispose()
   })
 
+  it.each([0.4, 1])(
+    'keeps bottom-standing and falling entries coherent at %s sample occupancy',
+    (occupancy) => {
+      const bottomHarness = createWalkHarness(undefined, occupancy)
+      const surfaceY = bufferPoolSurfaceY(bottomHarness.sim.buffers)
+      bottomHarness.walk.position.set(0, POOL_BOTTOM, 0)
+      bottomHarness.walk.update(0.02)
+
+      expect(surfaceY).toBeGreaterThan(POOL_BOTTOM + 1.7)
+      expect(bottomHarness.walk.gait).toBe('swim')
+      expect(bottomHarness.walk.submerged).toBe(true)
+      expect(bottomHarness.walk.grounded).toBe(false)
+      expect(bottomHarness.walk.surface).toBe('water')
+      bottomHarness.dispose()
+
+      const fallingHarness = createWalkHarness({ gravity: 10 }, occupancy)
+      fallingHarness.walk.position.set(0, surfaceY + 0.3, 0)
+      for (let frame = 0; frame < 100 && fallingHarness.walk.surface !== 'water'; frame++) {
+        fallingHarness.walk.update(0.02)
+      }
+
+      expect(fallingHarness.walk.gait).toBe('swim')
+      expect(fallingHarness.walk.grounded).toBe(false)
+      expect(fallingHarness.walk.surface).toBe('water')
+      fallingHarness.dispose()
+    },
+  )
+
   it('swims in the water column without treating the deck as ground', () => {
     const harness = createWalkHarness()
     const { walk } = harness
-    walk.position.set(0, CITY.deck.top + 1, 0)
+    walk.position.set(0, POOL_BOTTOM + 1, 0)
     walk.update(0.02)
 
     expect(walk.gait).toBe('swim')
@@ -152,7 +199,7 @@ describe('buffer-pool swimming', () => {
   it('remains submerged on the pool bottom without an exit splash', () => {
     const harness = createWalkHarness()
     const splash = vi.mocked(harness.audio.splash)
-    harness.walk.position.set(0, CITY.deck.top + 1, 0)
+    harness.walk.position.set(0, POOL_BOTTOM + 1, 0)
     harness.walk.setTouchCrouch(true)
     harness.walk.update(0.02)
 
@@ -172,14 +219,14 @@ describe('buffer-pool swimming', () => {
   it('keeps downward entry at the surface instead of teleporting to float depth', () => {
     const harness = createWalkHarness({ gravity: 10 })
     const splash = vi.mocked(harness.audio.splash)
-    harness.walk.position.set(0, POOL_SURFACE + 0.2, 0)
+    harness.walk.position.set(0, fullPoolSurface() + 0.2, 0)
 
     for (let i = 0; i < 80 && splash.mock.calls.length === 0; i++) {
       harness.walk.update(0.02)
     }
 
     expect(splash).toHaveBeenCalledTimes(1)
-    expect(harness.walk.position.y).toBeGreaterThan(POOL_SURFACE - 0.5)
+    expect(harness.walk.position.y).toBeGreaterThan(fullPoolSurface() - 0.5)
     expect(harness.walk.verticalSpeed).toBeLessThan(0)
     expect(harness.walk.gait).toBe('swim')
     expect(harness.walk.grounded).toBe(false)
@@ -191,7 +238,7 @@ describe('buffer-pool swimming', () => {
     function drop(height: number): number {
       const harness = createWalkHarness({ gravity: 10 })
       const splash = vi.mocked(harness.audio.splash)
-      harness.walk.position.set(0, POOL_SURFACE + height, 0)
+      harness.walk.position.set(0, fullPoolSurface() + height, 0)
       for (let i = 0; i < 80 && splash.mock.calls.length === 0; i++) {
         harness.walk.update(0.02)
       }
@@ -211,11 +258,11 @@ describe('buffer-pool swimming', () => {
 
   it('limits horizontal speed in water below the same input in air', () => {
     const waterHarness = createWalkHarness()
-    waterHarness.walk.position.set(0, CITY.deck.top + 1, 0)
+    waterHarness.walk.position.set(0, POOL_BOTTOM + 1, 0)
     waterHarness.walk.setTouchMove(0, 1)
 
     const airHarness = createWalkHarness()
-    airHarness.walk.position.set(POOL_HALF + 4, POOL_SURFACE + 2, 0)
+    airHarness.walk.position.set(POOL_HALF + 4, fullPoolSurface() + 2, 0)
     airHarness.walk.setTouchMove(0, 1)
 
     for (let i = 0; i < 25; i++) {
@@ -232,8 +279,8 @@ describe('buffer-pool swimming', () => {
   it('builds water momentum in fixed substeps and coasts instead of stopping like a walker', () => {
     const fine = createWalkHarness()
     const coarse = createWalkHarness()
-    fine.walk.position.set(0, CITY.deck.top + 1, 0)
-    coarse.walk.position.set(0, CITY.deck.top + 1, 0)
+    fine.walk.position.set(0, POOL_BOTTOM + 1, 0)
+    coarse.walk.position.set(0, POOL_BOTTOM + 1, 0)
     fine.walk.setTouchMove(0, 1)
     coarse.walk.setTouchMove(0, 1)
 
@@ -255,14 +302,14 @@ describe('buffer-pool swimming', () => {
   it('floats an idle swimmer to a restrained surface rest and recovers after a touch dive', () => {
     const harness = createWalkHarness()
     const splash = vi.mocked(harness.audio.splash)
-    const startY = CITY.deck.top + 1
+    const startY = POOL_BOTTOM + 1
     harness.walk.position.set(0, startY, 0)
 
     for (let i = 0; i < 250; i++) harness.walk.update(0.02)
 
     const restY = harness.walk.position.y
     expect(restY).toBeGreaterThan(startY + 2)
-    expect(restY).toBeLessThanOrEqual(POOL_SURFACE - 1.4)
+    expect(restY).toBeLessThanOrEqual(fullPoolSurface() - 1.4)
     expect(Math.abs(harness.walk.verticalSpeed)).toBeLessThan(0.08)
     expect(harness.walk.gait).toBe('swim')
     expect(harness.walk.submerged).toBe(false)
@@ -283,7 +330,7 @@ describe('buffer-pool swimming', () => {
 
   it('leaves the pool onto the deck without falling through it', () => {
     const harness = createWalkHarness()
-    harness.walk.position.set(0, CITY.deck.top + 1, -POOL_HALF + 1)
+    harness.walk.position.set(0, fullPoolSurface() - 0.2, -POOL_HALF + 1)
     harness.walk.setTouchMove(0, 1)
     harness.walk.update(0.02)
 
@@ -300,7 +347,7 @@ describe('buffer-pool swimming', () => {
     expect(harness.walk.surface).toBe('deck')
     expect(harness.walk.grounded).toBe(true)
     expect(harness.walk.position.y).toBeCloseTo(CITY.deck.top, 5)
-    expect(minY).toBeGreaterThanOrEqual(CITY.deck.top)
+    expect(minY).toBeGreaterThanOrEqual(POOL_BOTTOM)
     harness.dispose()
   })
 
@@ -308,7 +355,7 @@ describe('buffer-pool swimming', () => {
     const harness = createWalkHarness()
     const { audio, visualSplash, walk } = harness
 
-    walk.position.set(0, CITY.deck.top + 1, 0)
+    walk.position.set(0, POOL_BOTTOM + 1, 0)
     walk.setTouchMove(0, 1)
     walk.update(0.1)
     expect(walk.gait).toBe('swim')
@@ -322,7 +369,7 @@ describe('buffer-pool swimming', () => {
     expect(walk.speed).toBeGreaterThan(0)
     expect(walk.speed).toBeLessThan(moving)
 
-    walk.position.set(60, CITY.deck.top + 1, 0)
+    walk.position.set(60, POOL_BOTTOM + 1, 0)
     walk.update(0.1)
     expect(audio.splash).toHaveBeenCalledTimes(2)
     expect(visualSplash).toHaveBeenCalledTimes(2)
@@ -331,9 +378,11 @@ describe('buffer-pool swimming', () => {
   })
 
   it('renders a readable top boundary and replaces long-range air clarity underwater', () => {
+    const sim = createSim(createBus()).state
+    sim.buffers.usedCount = sim.buffers.sampleFrames
     const scene = new THREE.Scene()
     scene.fog = new THREE.Fog(0x101820, 220, 1150)
-    const water = createBufferWater(scene)
+    const water = createBufferWater(scene, undefined, { buffers: sim.buffers })
     const surface = water.group.getObjectByName('buffer.water.surface') as THREE.Mesh
     const volume = water.group.getObjectByName('buffer.water.volume') as THREE.Mesh
 
@@ -361,9 +410,11 @@ describe('buffer-pool swimming', () => {
   })
 
   it('adds sparse depth-tested particulate motion without washing out the buffer tiles', () => {
+    const sim = createSim(createBus()).state
+    sim.buffers.usedCount = sim.buffers.sampleFrames
     const scene = new THREE.Scene()
     scene.fog = new THREE.Fog(0x101820, 220, 1150)
-    const water = createBufferWater(scene)
+    const water = createBufferWater(scene, undefined, { buffers: sim.buffers })
     const particulate = water.group.getObjectByName('buffer.water.particulate') as THREE.Points
 
     expect(particulate).toBeInstanceOf(THREE.Points)
@@ -383,9 +434,11 @@ describe('buffer-pool swimming', () => {
   })
 
   it('keeps underwater depth cues static when reduced motion is requested', () => {
+    const sim = createSim(createBus()).state
+    sim.buffers.usedCount = sim.buffers.sampleFrames
     const scene = new THREE.Scene()
     scene.fog = new THREE.Fog(0x101820, 220, 1150)
-    const water = createBufferWater(scene, undefined, { reducedMotion: true })
+    const water = createBufferWater(scene, undefined, { buffers: sim.buffers, reducedMotion: true })
     const particulate = water.group.getObjectByName('buffer.water.particulate') as THREE.Points
     const surface = water.group.getObjectByName('buffer.water.surface') as THREE.Mesh
     const positions = particulate.geometry.getAttribute('position') as THREE.BufferAttribute
@@ -397,4 +450,20 @@ describe('buffer-pool swimming', () => {
     expect((surface.material as THREE.ShaderMaterial).uniforms.uTime.value).toBe(0)
     water.dispose()
   })
+
+  it.each(['low', 'ultra'] as const)(
+    'keeps the modeled level at %s fidelity',
+    (level) => {
+      const sim = createSim(createBus()).state
+      sim.buffers.usedCount = Math.round(sim.buffers.sampleFrames * 0.5) as typeof sim.buffers.usedCount
+      const scene = new THREE.Scene()
+      const water = createBufferWater(scene, { level }, { buffers: sim.buffers })
+      const surface = water.group.getObjectByName('buffer.water.surface') as THREE.Mesh
+
+      water.update(0.02, false)
+
+      expect(surface.position.y).toBeCloseTo(bufferPoolSurfaceY(sim.buffers), 6)
+      water.dispose()
+    },
+  )
 })

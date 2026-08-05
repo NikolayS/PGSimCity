@@ -173,6 +173,9 @@ export async function createWalkCityHarness(options: WalkCityHarnessOptions = {}
   const camera = new THREE.PerspectiveCamera(55, 16 / 9, 0.1, 5000)
   const bus = createBus()
   const sim = createSim(bus)
+  sim.state.buffers.usedCount = Math.round(
+    sim.state.buffers.sampleFrames * 0.4,
+  ) as typeof sim.state.buffers.usedCount
   const registry = new Registry()
   const theme = createTheme()
   const modules: WorldModule[] = []

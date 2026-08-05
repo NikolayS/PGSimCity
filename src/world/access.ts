@@ -1,7 +1,8 @@
 import * as THREE from 'three'
 import { COLOR } from '../core/theme'
 import type { SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
-import { CITY, ROUTES, routeCurve } from './layout'
+import { BUFFER_POOL_GATES, CITY, ROUTES, routeCurve } from './layout'
+import type { BufferPoolGate } from './layout'
 import { markTextPlane, markTextTexture } from './text-plane'
 
 /* ============================================================================
@@ -64,13 +65,7 @@ import { markTextPlane, markTextTexture } from './text-plane'
  * The contract with shmem.ts: where the deck railing opens.
  * -------------------------------------------------------------------------*/
 
-export interface DeckGate {
-  side: 'north' | 'south' | 'east' | 'west'
-  /** Centre of the opening: x for north/south, z for east/west. */
-  at: number
-  /** Clear span of the opening. */
-  width: number
-}
+export type DeckGate = BufferPoolGate
 
 /**
  * The deck railing is otherwise continuous: 84 posts on a 7.56 m (north/south)
@@ -79,12 +74,7 @@ export interface DeckGate {
  * is deleted — the one at x = 0 on the north rail, where the backend approach
  * lands on the city's axis. The rest become the gate jambs.
  */
-export const DECK_GATES: readonly DeckGate[] = [
-  { side: 'north', at: 0, width: 7.2 },
-  { side: 'south', at: 3.78, width: 7.2 },
-  { side: 'east', at: 26.075, width: 7.2 },
-  { side: 'west', at: -11.175, width: 7.2 },
-]
+export const DECK_GATES: readonly DeckGate[] = BUFFER_POOL_GATES
 
 /* ---------------------------------------------------------------------------
  * Human scale. Every number here is a dimension a walker can check against
@@ -1138,30 +1128,27 @@ export const createAccess: AccessFactory = (ctx: WorldContext): AccessModule => 
   }
 
   /* =====================================================================
-   * 3c. FOUR RAMPS ONTO THE BUFFER TRAY.
+   * 3c. FOUR RAMPS INTO THE BUFFER BASIN.
    *
-   * The cache floor is a 97 x 97 m plate at y = 3.20, i.e. 0.20 m above the
-   * deck a walker arrives on. Twenty centimetres is nothing to step over — but
-   * the tray is a raycast surface rather than a collider box, so the step-up
-   * allowance never sees it and the walker just stops at the lip. One 2.4 m
-   * ramp on each causeway axis fixes it, and gives every gate a threshold onto
-   * the cache floor.
+   * Each causeway-aligned coping gap continues down to the recessed cache
+   * floor. walk.ts uses the same run and endpoints for its no-allocation swim
+   * floor, so the visible ramp, collision surface and buoyancy boundary agree.
    * ===================================================================*/
 
   {
-    const tray = 48.6
-    const trayY = CITY.buf.baseY
+    const pool = CITY.buf.halfSpan
+    const floorY = CITY.buf.baseY
     const w = WAY_W
     for (const c of CAUSEWAYS) {
       const dir = Math.sign(c.inner - c.outer)
-      const a = -dir * (tray + 2.4)
-      const b = -dir * tray
+      const a = -dir * pool
+      const b = a + dir * CITY.buf.accessRun
       if (c.axis === 'z') {
-        surfaces.ramp('z', a, b, DECK_TOP, trayY, c.centre, w, 0.3)
-        for (const s of [-1, 1]) kerbRun('z', a, b, DECK_TOP, trayY, c.centre + s * (w / 2 - KERB_W / 2), bRimP)
+        surfaces.ramp('z', a, b, DECK_TOP, floorY, c.centre, w, 0.3)
+        for (const s of [-1, 1]) kerbRun('z', a, b, DECK_TOP, floorY, c.centre + s * (w / 2 - KERB_W / 2), bRimP)
       } else {
-        surfaces.ramp('x', a, b, DECK_TOP, trayY, c.centre, w, 0.3)
-        for (const s of [-1, 1]) kerbRun('x', a, b, DECK_TOP, trayY, c.centre + s * (w / 2 - KERB_W / 2), bRimP)
+        surfaces.ramp('x', a, b, DECK_TOP, floorY, c.centre, w, 0.3)
+        for (const s of [-1, 1]) kerbRun('x', a, b, DECK_TOP, floorY, c.centre + s * (w / 2 - KERB_W / 2), bRimP)
       }
     }
   }
