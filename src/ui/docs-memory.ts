@@ -347,7 +347,12 @@ export const DOCS_MEMORY: ComponentDoc[] = [
       },
       {
         heading: 'Session, transaction and statement pooling',
-        body: CLAIM_VALUES.connectionPooler.poolModeTradeoff,
+        body: `${CLAIM_VALUES.connectionPooler.poolModeTradeoff}\n\nThe gate animation teaches the release boundary, not a measured hand-off rate: session links stay visibly held, transaction links hand off together at commit, and statement links hand off after individual statements. Its cadence is scaled teaching motion. The city's ordinary modeled visit is one statement in one transaction, so transaction and statement queue timing remains the same even though the selected release boundary is visibly different.`,
+      },
+      {
+        heading: 'Where this city places PgBouncer',
+        body:
+          'This city depicts a centralized, database-facing PgBouncer service shared by the application fleet. It stands immediately outside the PostgreSQL server boundary so a client reaches PgBouncer before PgBouncer opens and authenticates its own PostgreSQL server connections; the distance is topology, not a latency measurement. This is one legitimate deployment, not a universal default. PgBouncer also supports installation on an application host, including an application sidecar, on a dedicated centralized tier, on the database host, or at both ends. The right choice depends on connection setup latency, whether many application hosts should share one pool, failure behavior, and the extra query latency of another hop.',
       },
       {
         heading: 'The queue and connection controls',
@@ -381,6 +386,14 @@ export const DOCS_MEMORY: ComponentDoc[] = [
     refs: {
       docs: [
         ...CLAIM_VALUES.pgBouncerPoolModes.sources,
+        {
+          label: 'PgBouncer FAQ — application or database server placement',
+          url: 'https://www.pgbouncer.org/faq.html#should-pgbouncer-be-installed-on-the-web-server-or-database-server',
+        },
+        {
+          label: 'Azure — application, centralized, and database-host PgBouncer patterns',
+          url: 'https://learn.microsoft.com/en-us/azure/postgresql/connectivity/concepts-connection-pooling-best-practices',
+        },
         manual('monitoring-stats.html', '27.2.3. pg_stat_activity — one row per server process'),
       ],
       source: [],
