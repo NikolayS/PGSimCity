@@ -770,7 +770,15 @@ export function createInspector(ctx: UiContext): UiModule {
       class: 'pgc-content pg-enter',
       data: { correctionSubject: 'city-inspector' },
     })
-    if (id === 'backend.localmem') wrap.dataset.disclosure = 'work-mem-model-scope'
+    if (id === 'backend.localmem') {
+      wrap.append(
+        el('p', {
+          class: 'pgc-block pg-hint',
+          data: { disclosure: 'work-mem-model-scope' },
+          text: CLAIM_VALUES.workMem.coverageDisclosure,
+        }),
+      )
+    }
     if (id === 'client.pool' || id === 'client.pooler') {
       wrap.append(
         el('p', {

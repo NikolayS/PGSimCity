@@ -7,11 +7,12 @@ import { cityComponentHref, cityComponentId } from '../src/core/city-route'
 import {
   CLAIMS,
   CLAIM_VALUES,
+  claimDisclosureSurfaceLabel,
 } from '../src/core/claims'
 import { MACHINE_SYNCHRONOUS_COMMIT_COMPARISON } from '../src/spine/machine-comparison'
 import { MACHINE_INDEX_WALK } from '../src/spine/machine-index-walk'
 import { POSTGRESQL_ORACLE_CLAIMS } from '../src/spine/postgresql-oracle'
-import type { ClaimId } from '../src/core/claims'
+import type { ClaimDisclosureSurface, ClaimId } from '../src/core/claims'
 import { DESTINATIONS } from '../src/core/destinations'
 import { formatModelMilliseconds } from '../src/core/trace-presentation'
 import { N_BACKEND_SLOTS, N_BUFFERS } from '../src/core/types'
@@ -27,11 +28,11 @@ import {
   createSim,
 } from '../src/sim/model'
 import { SCENARIOS } from '../src/sim/scenarios'
-import { CHAPTERS } from '../src/ui/tour'
+import { CHAPTERS, createTour } from '../src/ui/tour'
 import { DOCS_MEMORY } from '../src/ui/docs-memory'
 import { DOCS_STORAGE } from '../src/ui/docs-storage'
 import { KNOB_META, doc, mdToHtml } from '../src/ui/content'
-import { MODEL_LATENCY_VITAL_LABEL, emitLoose } from '../src/ui/hud'
+import { MODEL_LATENCY_VITAL_LABEL, createHud, emitLoose } from '../src/ui/hud'
 import { createInspector } from '../src/ui/panel'
 import type { UiContext } from '../src/ui/uikit'
 import { VACUUM_RECLAIM_PLATE_LINES } from '../src/world/maintenance'
@@ -94,6 +95,7 @@ const REGISTERED_CLAIM_VALUE_READS = {
     'src/spine/postgresql-oracle.ts': 3,
     'src/ui/content.ts': 2,
     'src/ui/docs-memory.ts': 5,
+    'src/ui/panel.ts': 1,
     'src/ui/tour.ts': 1,
   },
   restoreDrill: {
@@ -195,6 +197,191 @@ function storageDocCopy(id: string): string {
   const entry = DOCS_STORAGE.find((candidate) => candidate.id === id)
   expect(entry, `missing documentation surface ${id}`).toBeDefined()
   return [entry!.tldr, ...entry!.sections.map((section) => section.body)].join('\n')
+}
+
+interface DisclosureSurfaceResult {
+  reached: boolean
+  text: string
+  detail?: string
+}
+
+interface RegisteredDisclosureClaim {
+  value: Record<string, unknown>
+  disclosures: Record<string, readonly ClaimDisclosureSurface[]>
+}
+
+function renderedNodeText(node: HTMLElement | null | undefined): string {
+  if (!node) return ''
+  return [
+    node.textContent,
+    node.innerHTML,
+    ...Array.from(node.querySelectorAll<HTMLElement>('*')).map((child) => child.innerHTML),
+  ].join('\n')
+}
+
+function disclosureUiContext(): UiContext {
+  const bus = createBus()
+  return {
+    bus,
+    sim: createSim(bus),
+    registry: { get: () => undefined } as UiContext['registry'],
+    getFps: () => 60,
+    getQuality: () => ({
+      level: 'low',
+      pixelRatio: 0.6,
+      bloom: false,
+      shadows: false,
+      maxParticles: 1,
+      maxLabels: 1,
+      antialias: false,
+    }),
+    getFlowStats: () => ({ active: 0, dropped: 0 }),
+  }
+}
+
+function inspectorDisclosureSurface(
+  surface: Extract<ClaimDisclosureSurface, { kind: 'inspector-section' | 'inspector-visible' }>,
+): DisclosureSurfaceResult {
+  const dom = installTestDom()
+  dom.mount('hud-right')
+  const ctx = disclosureUiContext()
+  const inspector = createInspector(ctx)
+  try {
+    ctx.bus.emit('select', { id: surface.doc })
+    if (surface.kind === 'inspector-visible') {
+      const node = document.querySelector<HTMLElement>(
+        `[data-disclosure="${surface.marker}"]`,
+      )
+      return {
+        reached: Boolean(node && !node.closest('.pgc-section')),
+        text: renderedNodeText(node),
+        detail: node ? 'qualification is trapped in a collapsed section' : 'marker was not rendered',
+      }
+    }
+
+    const section = Array.from(document.querySelectorAll<HTMLElement>('.pgc-section'))
+      .find((candidate) => (
+        candidate.querySelector('.pg-collapse__head')?.textContent === surface.section
+      ))
+    const head = section?.querySelector<HTMLButtonElement>('.pg-collapse__head')
+    if (head?.getAttribute('aria-expanded') !== 'true') head?.click()
+    const body = section?.querySelector<HTMLElement>('.pg-collapse__body')
+    return {
+      reached: Boolean(body && head?.getAttribute('aria-expanded') === 'true'),
+      text: renderedNodeText(body),
+      detail: section ? 'section body could not be opened' : 'section was not rendered',
+    }
+  } finally {
+    inspector.dispose()
+  }
+}
+
+function hudDisclosureSurface(
+  surface: Extract<ClaimDisclosureSurface, { kind: 'hud-visible' }>,
+): DisclosureSurfaceResult {
+  const dom = installTestDom()
+  for (const id of ['hud-top', 'hud-bottom', 'toast-stack', 'compass']) dom.mount(id)
+  const ctx = disclosureUiContext()
+  const hud = createHud(ctx)
+  try {
+    const latency = Array.from(document.querySelectorAll<HTMLElement>('.hud-vital'))
+      .find((candidate) => candidate.textContent?.includes('Latency p50'))
+    latency?.click()
+    const panel = document.getElementById('hud-latency-panel')
+    const node = panel?.querySelector<HTMLElement>(
+      `[data-disclosure="${surface.marker}"]`,
+    )
+    return {
+      reached: Boolean(node && panel && !panel.hidden),
+      text: renderedNodeText(node),
+      detail: panel ? 'disclosure was not rendered in the opened HUD panel' : 'HUD panel was not rendered',
+    }
+  } finally {
+    hud.dispose()
+  }
+}
+
+function tourDisclosureSurface(
+  surface: Extract<ClaimDisclosureSurface, { kind: 'tour-chapter' }>,
+): DisclosureSurfaceResult {
+  const dom = installTestDom()
+  dom.mount('tour-layer')
+  dom.mount('canvas-root')
+  const ctx = disclosureUiContext()
+  const tour = createTour(ctx)
+  try {
+    const chapter = CHAPTERS.findIndex((candidate) => candidate.id === surface.id)
+    if (chapter >= 0) ctx.bus.emit('tour:start', { chapter })
+    const body = document.getElementById('tour-card-body')
+    return {
+      reached: chapter >= 0 && Boolean(body),
+      text: renderedNodeText(body),
+      detail: chapter >= 0 ? 'tour body was not rendered' : 'tour chapter is absent',
+    }
+  } finally {
+    tour.dispose()
+  }
+}
+
+function renderedDisclosureSurface(surface: ClaimDisclosureSurface): DisclosureSurfaceResult {
+  if (surface.kind === 'inspector-section' || surface.kind === 'inspector-visible') {
+    return inspectorDisclosureSurface(surface)
+  }
+  if (surface.kind === 'hud-visible') return hudDisclosureSurface(surface)
+  if (surface.kind === 'tour-chapter') return tourDisclosureSurface(surface)
+  if (surface.kind === 'diagnose-verdict') {
+    const verdict = ALL_VERDICTS.find((candidate) => candidate.id === surface.id)
+    const value = verdict?.[surface.field]
+    return {
+      reached: typeof value === 'string',
+      text: typeof value === 'string' ? value : '',
+      detail: 'verdict field was not rendered by the Diagnose content model',
+    }
+  }
+
+  const lines = read(surface.file).split(/\r?\n/u)
+  const anchor = lines.findIndex((line) => line.startsWith('>') && line.includes(surface.anchor))
+  if (anchor < 0) return { reached: false, text: '', detail: 'blockquote anchor is absent' }
+  let first = anchor
+  let last = anchor
+  while (first > 0 && lines[first - 1].startsWith('>')) first--
+  while (last + 1 < lines.length && lines[last + 1].startsWith('>')) last++
+  return {
+    reached: true,
+    text: lines.slice(first, last + 1).join('\n'),
+  }
+}
+
+function registeredDisclosureFailures(
+  overrides: ReadonlyMap<string, unknown> = new Map(),
+): string[] {
+  const failures: string[] = []
+  for (const [claimId, candidate] of Object.entries(CLAIMS)) {
+    if (!('disclosures' in candidate)) continue
+    const claim = candidate as unknown as RegisteredDisclosureClaim
+    for (const [field, surfaces] of Object.entries(claim.disclosures)) {
+      const path = `${claimId}.${field}`
+      const disclosure = overrides.has(path) ? overrides.get(path) : claim.value[field]
+      const labels = surfaces.map(claimDisclosureSurfaceLabel)
+      if (typeof disclosure !== 'string' || disclosure.trim().length === 0) {
+        failures.push(`${path}: disclosure is blank; surfaces left unqualified: ${labels.join(', ')}`)
+        continue
+      }
+      if (surfaces.length === 0) {
+        failures.push(`${path}: no reader surfaces are registered`)
+        continue
+      }
+      for (let index = 0; index < surfaces.length; index++) {
+        const rendered = renderedDisclosureSurface(surfaces[index])
+        if (!rendered.reached) {
+          failures.push(`${path}: ${labels[index]} is unreachable (${rendered.detail})`)
+        } else if (!rendered.text.includes(disclosure)) {
+          failures.push(`${path}: ${labels[index]} is rendered without its disclosure`)
+        }
+      }
+    }
+  }
+  return failures
 }
 
 interface SourceFile {
@@ -310,6 +497,21 @@ function canonicalOwnerImports(): string[] {
 }
 
 describe('claims and conventions spine', () => {
+  it('renders every registered disclosure on each exact reader surface', () => {
+    expect(registeredDisclosureFailures()).toEqual([])
+  })
+
+  it('rejects a whitespace-only disclosure and names every unqualified surface', () => {
+    const [claimId, candidate] = Object.entries(CLAIMS)
+      .find(([, claim]) => 'disclosures' in claim)!
+    const claim = candidate as unknown as RegisteredDisclosureClaim
+    const [field, surfaces] = Object.entries(claim.disclosures)[0]
+    const path = `${claimId}.${field}`
+    expect(registeredDisclosureFailures(new Map([[path, ' ']]))).toEqual([
+      `${path}: disclosure is blank; surfaces left unqualified: ${surfaces.map(claimDisclosureSurfaceLabel).join(', ')}`,
+    ])
+  })
+
   it('wires every registered direct consumer to CLAIM_VALUES', () => {
     /* This is deliberately an exact AST inventory, not a value comparison.
      * Replacing any registered read with equal bytes lowers its source count. */
@@ -1200,6 +1402,35 @@ describe('claims and conventions spine', () => {
       branch?.test(sim.state, collector),
       'diagnoseBranchGates: Diagnose:io.1 → v.backend_writes disagrees with Diagnose:pg_stat_io client-backend-write warning range',
     ).toBe(true)
+  })
+
+  it('keeps exact Diagnose share boundaries in only their non-warning branches', () => {
+    const sim = createSim(createBus())
+
+    const ioCollector = createCollector(sim)
+    const ioThreshold = CLAIM_VALUES.diagnoseBranchGates.clientBackendWriteShare.threshold
+    ioCollector.total.backendWrites = ioThreshold * 100
+    ioCollector.total.ckptBuffers = 0
+    ioCollector.total.bgwClean = (1 - ioThreshold) * 100
+    ioCollector.total.blksHit = 100
+    ioCollector.total.blksRead = 0
+    const io = ALL_STEPS.find((step) => step.id === 'io.1')
+    const backendWrites = io?.branches.find((branch) => branch.next === 'v.backend_writes')
+    const ioOk = io?.branches.find((branch) => branch.next === 'v.io_ok')
+    expect(backendWrites?.test(sim.state, ioCollector)).toBe(false)
+    expect(ioOk?.test(sim.state, ioCollector)).toBe(true)
+
+    const checkpointCollector = createCollector(sim)
+    const checkpointThreshold =
+      CLAIM_VALUES.diagnoseBranchGates.requestedCheckpointShare.threshold
+    checkpointCollector.total.ckptRequested = checkpointThreshold * 100
+    checkpointCollector.total.ckptTimed = (1 - checkpointThreshold) * 100
+    checkpointCollector.total.ckptDone = 100
+    const checkpoint = ALL_STEPS.find((step) => step.id === 'stall.1')
+    const requested = checkpoint?.branches.find((branch) => branch.next === 'stall.2')
+    const timed = checkpoint?.branches.find((branch) => branch.next === 'v.ckpt_ok')
+    expect(requested?.test(sim.state, checkpointCollector)).toBe(false)
+    expect(timed?.test(sim.state, checkpointCollector)).toBe(true)
   })
 
   it('keeps table and replication evidence boundaries disjoint from healthy verdicts', () => {

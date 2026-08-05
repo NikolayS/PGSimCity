@@ -472,6 +472,7 @@ export const KNOB_META: KnobMeta[] = [
       { value: 'current', label: 'current (backup timeline)' },
     ],
     hint: `latest may follow 00000002.history from a pre-fork timeline-1 backup into timeline 2. current stays on the backup timeline: it succeeds if that timeline’s archived WAL reaches the selected time, or replays to its archive frontier and reports that the target was not reached. ${CLAIM_VALUES.timelineRecovery.coverageDisclosure}`,
+    disclosure: 'recovery-target-timeline-scope',
   },
   {
     key: 'restoreDrillFault',
