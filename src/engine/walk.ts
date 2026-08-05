@@ -1033,8 +1033,10 @@ export function createWalkController(opts: WalkOptions): WalkController {
    */
   function step(d: number): void {
     const poolXZ = inPoolXZ(pos.x, pos.z)
+    // Enter when the body intersects the water column. The floor is a volume
+    // boundary, not an exit, while the excavation below remains dry.
     const nextSwimming =
-      poolXZ && pos.y > POOL_BOTTOM && pos.y <= POOL_SURFACE
+      poolXZ && pos.y + eyeNow >= POOL_BOTTOM && pos.y <= POOL_SURFACE
     if (nextSwimming !== swimming) {
       swimming = nextSwimming
       if (swimming) {
@@ -1044,10 +1046,7 @@ export function createWalkController(opts: WalkOptions): WalkController {
         lostGroundT = 0
         surface = 'water'
       } else {
-        // Reaching the solid bottom is a landing, not a surface crossing.
-        if (!poolXZ || pos.y > POOL_SURFACE) {
-          splash(0.2 + Math.abs(vy) / 12 + Math.hypot(vel.x, vel.z) * 0.08)
-        }
+        splash(0.2 + Math.abs(vy) / 12 + Math.hypot(vel.x, vel.z) * 0.08)
         submerged = false
       }
     }
