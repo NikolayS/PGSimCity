@@ -8,17 +8,23 @@ const UP = new THREE.Vector3(0, 1, 0)
 const TEXT_CLEARANCE = 2.5
 const SURFACE_SUPPORT_GAP = 0.15
 const BORDER_LEVEL_TOLERANCE = 0.01
-const Z_FIGHT_Y_TOLERANCE = 0.01
 const MIN_SURFACE_AREA = 64
 const MIN_TRIANGLE_AREA = 0.002
 const GROUND_PROBE_MAX_SPACING = 8
 const GROUND_BOUNDARY_TOLERANCE = 0.02
 const SURFACE_WORD = /(?:^|[.:/\s-])(ground|floor|deck|apron|forecourt|yard|platform|pad|plinth|surface|stylobate)(?:$|[.:/\s-])/i
+const DEPTH_LEVELS_AT_RISK = 1
+const REVIEW_ORBIT = {
+  target: [0, 3, 0] as const,
+  distance: 600,
+  dir: [329.9175, 95.9760, 491.8770] as const,
+}
 
 export interface CityHandle {
   readonly gfx: {
     readonly scene: THREE.Scene
     readonly camera: THREE.PerspectiveCamera
+    readonly renderer: THREE.WebGLRenderer
   }
   readonly rig: {
     focusOn(spec: FocusSpec, options?: { instant?: boolean }): void
@@ -61,6 +67,7 @@ export interface VisualSweepReport {
   readonly districtSurfaces: number
   readonly borderStrips: number
   readonly opaqueHorizontalTriangles: number
+  readonly depthBits: number
   readonly findings: readonly SweepFinding[]
 }
 
@@ -283,6 +290,13 @@ export function materialForTriangle(
 }
 
 export function horizontalTriangles(record: MeshRecord, opaqueOnly: boolean): HorizontalTriangle[] {
+  return horizontalTrianglesMatching(record, opaqueOnly ? opaqueMaterial : solidMaterial)
+}
+
+function horizontalTrianglesMatching(
+  record: MeshRecord,
+  acceptsMaterial: (material: THREE.Material) => boolean,
+): HorizontalTriangle[] {
   const geometry = record.mesh.geometry
   const position = geometry.getAttribute('position')
   if (!position) return []
@@ -298,7 +312,7 @@ export function horizontalTriangles(record: MeshRecord, opaqueOnly: boolean): Ho
 
   for (let offset = 0; offset + 2 < count; offset += 3) {
     const material = materialForTriangle(record, offset)
-    if (!material || !(opaqueOnly ? opaqueMaterial(material) : solidMaterial(material))) continue
+    if (!material || !acceptsMaterial(material)) continue
     const ia = index ? index.getX(offset) : offset
     const ib = index ? index.getX(offset + 1) : offset + 1
     const ic = index ? index.getX(offset + 2) : offset + 2
@@ -790,7 +804,7 @@ function lineIntersection(
   return new THREE.Vector2(a.x + t * rx, a.y + t * ry)
 }
 
-function triangleOverlapArea(a: HorizontalTriangle, b: HorizontalTriangle): number {
+function triangleOverlapPolygon(a: HorizontalTriangle, b: HorizontalTriangle): THREE.Vector2[] {
   let polygon = [a.a.clone(), a.b.clone(), a.c.clone()]
   const clip = [b.a, b.b, b.c]
   const orientation = Math.sign(signedArea(clip)) || 1
@@ -810,11 +824,25 @@ function triangleOverlapArea(a: HorizontalTriangle, b: HorizontalTriangle): numb
       previous = current
     }
   }
+  return polygon
+}
+
+function triangleOverlapArea(a: HorizontalTriangle, b: HorizontalTriangle): number {
+  const polygon = triangleOverlapPolygon(a, b)
   return polygon.length >= 3 ? Math.abs(signedArea(polygon)) : 0
 }
 
-function zFightFindings(triangles: readonly HorizontalTriangle[]): SweepFinding[] {
+function depthBufferValue(distance: number, near: number, far: number): number {
+  return far / (far - near) - (far * near) / ((far - near) * distance)
+}
+
+function depthBufferZFightFindings(
+  triangles: readonly HorizontalTriangle[],
+  camera: THREE.PerspectiveCamera,
+  depthBits: number,
+): SweepFinding[] {
   const surfaceLayer = (record: MeshRecord): boolean => {
+    if (markedTextPlanes(record.mesh).length > 0) return false
     const thickness = record.box.max.y - record.box.min.y
     return thickness <= 0.2
       || record.mesh.geometry.type === 'PlaneGeometry'
@@ -824,14 +852,14 @@ function zFightFindings(triangles: readonly HorizontalTriangle[]): SweepFinding[
   const cellSize = 32
   const cells = new Map<string, HorizontalTriangle[]>()
   for (const triangle of triangles) {
-    const yBucket = Math.floor(triangle.y / Z_FIGHT_Y_TOLERANCE)
+    if (!surfaceLayer(triangle.record)) continue
     const x0 = Math.floor(triangle.bounds.min.x / cellSize)
     const x1 = Math.floor(triangle.bounds.max.x / cellSize)
     const z0 = Math.floor(triangle.bounds.min.y / cellSize)
     const z1 = Math.floor(triangle.bounds.max.y / cellSize)
     for (let x = x0; x <= x1; x++) {
       for (let z = z0; z <= z1; z++) {
-        const key = `${yBucket}:${x}:${z}`
+        const key = `${x}:${z}`
         const bucket = cells.get(key) ?? []
         bucket.push(triangle)
         cells.set(key, bucket)
@@ -840,20 +868,45 @@ function zFightFindings(triangles: readonly HorizontalTriangle[]): SweepFinding[
   }
 
   const compared = new Set<string>()
-  const overlaps = new Map<string, { a: HorizontalTriangle; b: HorizontalTriangle; area: number }>()
-  for (const [key, bucket] of cells) {
-    const [rawY, rawX, rawZ] = key.split(':').map(Number)
-    const neighbours: HorizontalTriangle[] = []
-    for (let y = rawY - 1; y <= rawY + 1; y++) {
-      neighbours.push(...(cells.get(`${y}:${rawX}:${rawZ}`) ?? []))
+  const overlaps = new Map<string, {
+    a: HorizontalTriangle
+    b: HorizontalTriangle
+    area: number
+    depthLevels: number
+    position: THREE.Vector3
+  }>()
+  const levels = 2 ** depthBits - 1
+  const aView = new THREE.Vector3()
+  const bView = new THREE.Vector3()
+  const minimumBoxDepthLevels = (a: HorizontalTriangle, b: HorizontalTriangle): number => {
+    const x0 = Math.max(a.bounds.min.x, b.bounds.min.x)
+    const x1 = Math.min(a.bounds.max.x, b.bounds.max.x)
+    const z0 = Math.max(a.bounds.min.y, b.bounds.min.y)
+    const z1 = Math.min(a.bounds.max.y, b.bounds.max.y)
+    let minimum = Number.POSITIVE_INFINITY
+    for (let xi = 0; xi < 2; xi++) {
+      const x = xi === 0 ? x0 : x1
+      for (let zi = 0; zi < 2; zi++) {
+        const z = zi === 0 ? z0 : z1
+        aView.set(x, a.y, z).applyMatrix4(camera.matrixWorldInverse)
+        bView.set(x, b.y, z).applyMatrix4(camera.matrixWorldInverse)
+        const aDistance = -aView.z
+        const bDistance = -bView.z
+        if (aDistance <= camera.near || bDistance <= camera.near) continue
+        if (aDistance >= camera.far || bDistance >= camera.far) continue
+        const aLevel = depthBufferValue(aDistance, camera.near, camera.far) * levels
+        const bLevel = depthBufferValue(bDistance, camera.near, camera.far) * levels
+        minimum = Math.min(minimum, Math.abs(aLevel - bLevel))
+      }
     }
+    return minimum
+  }
+  for (const bucket of cells.values()) {
     for (const a of bucket) {
-      for (const b of neighbours) {
+      for (const b of bucket) {
         if (
           a === b
           || a.record.key === b.record.key
-          || !surfaceLayer(a.record)
-          || !surfaceLayer(b.record)
         ) continue
         const pair = a.record.key < b.record.key
           ? `${a.record.key}|${b.record.key}|${round(Math.min(a.y, b.y))}`
@@ -861,33 +914,60 @@ function zFightFindings(triangles: readonly HorizontalTriangle[]): SweepFinding[
         const trianglePair = a.key < b.key ? `${a.key}|${b.key}` : `${b.key}|${a.key}`
         if (compared.has(trianglePair)) continue
         compared.add(trianglePair)
-        if (Math.abs(a.y - b.y) > Z_FIGHT_Y_TOLERANCE + 1e-7) continue
-        if (a.material.polygonOffset || b.material.polygonOffset || !a.bounds.intersectsBox(b.bounds)) continue
-        const area = triangleOverlapArea(a, b)
+        if (!a.bounds.intersectsBox(b.bounds)) continue
+        if (
+          Math.abs(a.y - b.y) < SURFACE_SUPPORT_GAP
+          && (a.material.polygonOffset || b.material.polygonOffset)
+        ) continue
+        if (minimumBoxDepthLevels(a, b) > DEPTH_LEVELS_AT_RISK) continue
+        const polygon = triangleOverlapPolygon(a, b)
+        const area = polygon.length >= 3 ? Math.abs(signedArea(polygon)) : 0
         if (area <= 0.001) continue
+        const overlapPoint = polygon.reduce(
+          (sum, point) => sum.add(point),
+          new THREE.Vector2(),
+        ).multiplyScalar(1 / polygon.length)
+        aView.set(overlapPoint.x, a.y, overlapPoint.y).applyMatrix4(camera.matrixWorldInverse)
+        bView.set(overlapPoint.x, b.y, overlapPoint.y).applyMatrix4(camera.matrixWorldInverse)
+        const aDistance = -aView.z
+        const bDistance = -bView.z
+        if (aDistance <= camera.near || bDistance <= camera.near) continue
+        if (aDistance >= camera.far || bDistance >= camera.far) continue
+        const aLevel = depthBufferValue(aDistance, camera.near, camera.far) * levels
+        const bLevel = depthBufferValue(bDistance, camera.near, camera.far) * levels
+        const depthLevels = Math.abs(aLevel - bLevel)
+        if (depthLevels > DEPTH_LEVELS_AT_RISK) continue
         const existing = overlaps.get(pair)
-        if (existing) existing.area += area
-        else overlaps.set(pair, { a, b, area })
+        if (existing) {
+          existing.area += area
+          if (depthLevels < existing.depthLevels) {
+            existing.depthLevels = depthLevels
+            existing.position.set(overlapPoint.x, (a.y + b.y) / 2, overlapPoint.y)
+          }
+        } else {
+          overlaps.set(pair, {
+            a,
+            b,
+            area,
+            depthLevels,
+            position: new THREE.Vector3(overlapPoint.x, (a.y + b.y) / 2, overlapPoint.y),
+          })
+        }
       }
     }
   }
 
   return [...overlaps.values()]
-    .filter((overlap) => overlap.area > 0.01)
-    .map(({ a, b, area }) => {
+    .filter((overlap) => overlap.area >= MIN_SURFACE_AREA)
+    .map(({ a, b, area, depthLevels, position }) => {
       const district = stationForDistrict(a.record.district ?? b.record.district)
-      const position = new THREE.Vector3(
-        (Math.max(a.bounds.min.x, b.bounds.min.x) + Math.min(a.bounds.max.x, b.bounds.max.x)) / 2,
-        (a.y + b.y) / 2,
-        (Math.max(a.bounds.min.y, b.bounds.min.y) + Math.min(a.bounds.max.y, b.bounds.max.y)) / 2,
-      )
       return {
         invariant: 'z-fighting' as const,
-        station: district,
+        station: 'orbit-depth',
         district,
         object: `${recordLabel(a.record)} ↔ ${recordLabel(b.record)}`,
         position: pointTuple(position),
-        detail: `opaque horizontal surfaces differ by ${Math.abs(a.y - b.y).toFixed(4)} units and overlap ${area.toFixed(3)} square units in XZ`,
+        detail: `${depthBits}-bit depth buffer separates overlapping surfaces by only ${depthLevels.toFixed(3)} levels (${Math.abs(a.y - b.y).toFixed(4)} m world-y, ${area.toFixed(3)} m² XZ overlap)`,
       }
     })
 }
@@ -1347,6 +1427,12 @@ export async function runVisualSweep(city: CityHandle): Promise<VisualSweepRepor
   }
   const solidTriangles = [...solidTrianglesByRecord.values()].flat()
   const opaqueTriangles = [...opaqueTrianglesByRecord.values()].flat()
+  const depthTriangles = records.flatMap((record) => horizontalTrianglesMatching(
+    record,
+    (material) => renderedMaterial(material)
+      && material.depthTest !== false
+      && material.blending === THREE.NormalBlending,
+  ))
   const text = enumerateText(scene, resolveDistrict)
   const colliders = enumerateColliders(city.collision.debugMesh())
   const surfaces = discoverSurfaces(records, solidTrianglesByRecord)
@@ -1359,6 +1445,12 @@ export async function runVisualSweep(city: CityHandle): Promise<VisualSweepRepor
     .filter((surface) => surface.area >= 0.2)
   const borders = discoverBorders(records, solidTrianglesByRecord, supportSurfaces)
   const ground = discoverGroundSurface(records, city.registry)
+  city.rig.focusOn(REVIEW_ORBIT, { instant: true })
+  await waitFrames(1)
+  scene.updateMatrixWorld(true)
+  const gl = city.gfx.renderer.getContext()
+  const depthBits = Number(gl.getParameter(gl.DEPTH_BITS))
+  const depthFindings = depthBufferZFightFindings(depthTriangles, city.gfx.camera, depthBits)
   const findings = [
     ...textFindings(city, text, colliders),
     ...ground.findings,
@@ -1366,7 +1458,7 @@ export async function runVisualSweep(city: CityHandle): Promise<VisualSweepRepor
     ...(ground.surface ? groundShellFindings(ground.surface, stations) : []),
     ...surfaceFindings(surfaces, solidTriangles),
     ...borderFindings(borders, supportSurfaces),
-    ...zFightFindings(opaqueTriangles),
+    ...depthFindings,
   ]
 
   const stationReports = stationSnapshots.map(({ station, records: localRecords, objects, camera }) => {
@@ -1393,6 +1485,7 @@ export async function runVisualSweep(city: CityHandle): Promise<VisualSweepRepor
     districtSurfaces: surfaces.length,
     borderStrips: borders.length,
     opaqueHorizontalTriangles: opaqueTriangles.length,
+    depthBits,
     findings,
   }
 }
@@ -1412,6 +1505,43 @@ export async function proveMirroredTextDetection(city: CityHandle): Promise<Swee
   } finally {
     candidate.object.scale.x *= -1
     city.gfx.scene.updateMatrixWorld(true)
+    await waitFrames(1)
+  }
+}
+
+/** Calibration proof: restore the global tight near plane at the reviewer's orbit pose. */
+export async function proveNearPlaneZFightDetection(city: CityHandle): Promise<SweepFinding[]> {
+  const camera = city.gfx.camera
+  const originalNear = camera.near
+  const originalPosition = camera.position.clone()
+  const originalQuaternion = camera.quaternion.clone()
+  camera.position.set(329.9175, 98.9760, 491.8770)
+  camera.lookAt(0, 3, 0)
+  camera.near = 0.1
+  camera.updateProjectionMatrix()
+  camera.updateMatrixWorld(true)
+  city.gfx.scene.updateMatrixWorld(true)
+  try {
+    const resolveDistrict = districtResolver(city.registry)
+    const triangles = enumerateMeshes(city.gfx.scene, resolveDistrict)
+      .flatMap((record) => horizontalTrianglesMatching(
+        record,
+        (material) => renderedMaterial(material)
+          && material.depthTest !== false
+          && material.blending === THREE.NormalBlending,
+      ))
+    const gl = city.gfx.renderer.getContext()
+    const depthBits = Number(gl.getParameter(gl.DEPTH_BITS))
+    return depthBufferZFightFindings(triangles, camera, depthBits).filter((finding) => (
+      finding.object.includes('ha.failure-domain-platforms')
+      && finding.object.includes('ground.zone.replication')
+    ))
+  } finally {
+    camera.position.copy(originalPosition)
+    camera.quaternion.copy(originalQuaternion)
+    camera.near = originalNear
+    camera.updateProjectionMatrix()
+    camera.updateMatrixWorld(true)
     await waitFrames(1)
   }
 }

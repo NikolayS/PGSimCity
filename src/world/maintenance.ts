@@ -202,8 +202,8 @@ function advanceAngle(cur: number, target: number, maxStep: number): number {
 }
 
 /* ============================================================================
- * SIGNAGE — one canvas atlas, one merged geometry, one draw call for every
- * piece of text in the yard, including the three live worker status panels.
+ * SIGNAGE — one canvas atlas split by camera-layer orientation, including the
+ * three live worker status panels in the walking-reader geometry.
  * ==========================================================================*/
 
 const SIGN_W = 384
@@ -266,8 +266,9 @@ class Signage {
   }[] = []
   private quads = 0
 
-  private geometry: THREE.BufferGeometry | null = null
-  mesh: THREE.Mesh | null = null
+  private readonly geometries: THREE.BufferGeometry[] = []
+  private material: THREE.Material | null = null
+  mesh: THREE.Group | null = null
   private posAttr: THREE.BufferAttribute | null = null
   private uvAttr: THREE.BufferAttribute | null = null
   private colorAttr: THREE.BufferAttribute | null = null
@@ -405,18 +406,13 @@ class Signage {
     a.needsUpdate = true
   }
 
-  build(): THREE.Mesh {
-    const g = new THREE.BufferGeometry()
+  build(): THREE.Group {
     const pa = new THREE.Float32BufferAttribute(this.pos, 3)
     pa.setUsage(THREE.DynamicDrawUsage)
-    g.setAttribute('position', pa)
     const ua = new THREE.Float32BufferAttribute(this.uv, 2)
     ua.setUsage(THREE.DynamicDrawUsage)
-    g.setAttribute('uv', ua)
     const ca = new THREE.Float32BufferAttribute(this.col, 3)
     ca.setUsage(THREE.DynamicDrawUsage)
-    g.setAttribute('color', ca)
-    g.setIndex(this.idx)
     const mat = new THREE.MeshBasicMaterial({
       map: this.texture,
       // Alpha is a glyph cutout, not object translucency. Alpha testing keeps
@@ -426,24 +422,41 @@ class Signage {
       toneMapped: false,
       side: THREE.FrontSide,
     })
-    const mesh = new THREE.Mesh(g, mat)
-    mesh.renderOrder = 5
-    mesh.frustumCulled = false // live plates move; the atlas is one draw call
-    mesh.raycast = () => {}
-    for (const plane of this.planes) {
-      markTextPlane(mesh, plane.text, plane.center, plane.normal, plane.up, plane.fixed)
+    const group = new THREE.Group()
+    group.name = 'maintenance.signage'
+    for (const mapOnly of [false, true]) {
+      const planeIndexes = this.planes.flatMap((plane, planeIndex) => (
+        (plane.fixed && Math.abs(plane.normal[1]) > 0.8) === mapOnly ? [planeIndex] : []
+      ))
+      if (planeIndexes.length === 0) continue
+      const g = new THREE.BufferGeometry()
+      g.setAttribute('position', pa)
+      g.setAttribute('uv', ua)
+      g.setAttribute('color', ca)
+      g.setIndex(planeIndexes.flatMap((planeIndex) => this.idx.slice(planeIndex * 6, planeIndex * 6 + 6)))
+      const mesh = new THREE.Mesh(g, mat)
+      mesh.name = mapOnly ? 'maintenance.signage.map' : 'maintenance.signage.walk'
+      mesh.renderOrder = 5
+      mesh.frustumCulled = false // live plates move within the shared attributes
+      mesh.raycast = () => {}
+      for (const planeIndex of planeIndexes) {
+        const plane = this.planes[planeIndex]
+        markTextPlane(mesh, plane.text, plane.center, plane.normal, plane.up, plane.fixed)
+      }
+      this.geometries.push(g)
+      group.add(mesh)
     }
-    this.geometry = g
-    this.mesh = mesh
+    this.material = mat
+    this.mesh = group
     this.posAttr = pa
     this.uvAttr = ua
     this.colorAttr = ca
-    return mesh
+    return group
   }
 
   dispose(): void {
-    this.geometry?.dispose()
-    ;(this.mesh?.material as THREE.Material | undefined)?.dispose()
+    for (const geometry of this.geometries) geometry.dispose()
+    this.material?.dispose()
     this.texture.dispose()
   }
 }
