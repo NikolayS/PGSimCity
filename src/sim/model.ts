@@ -7294,8 +7294,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       table.mvcc.nextSampleAt = state.t + MVCC_SAMPLE_SECONDS
       refreshRepresentativeRow(table.mvcc, state.xminHorizon)
     }
-    /* Ordinary visits contain one query in one transaction, so transaction and
-     * statement pooling both release here; statement mode rejects open blocks. */
+    /* Each represented transaction contains one query. The scale model releases
+     * every boundary in the batch here; statement mode rejects open blocks. */
     // The xid is no longer live, so the backend stops holding back xmin.
     b.xid = 0
     b.state = 'idle'

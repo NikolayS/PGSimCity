@@ -9,10 +9,11 @@ import { ALL_STEPS, ALL_VERDICTS } from '../src/observability/paths'
 import { PROJECTIONS } from '../src/observability/views'
 import { createSim } from '../src/sim/model'
 import { SCENARIOS } from '../src/sim/scenarios'
+import { DOCS } from '../src/ui/content'
 import { DOCS_MEMORY } from '../src/ui/docs-memory'
 import { DOCS_STORAGE } from '../src/ui/docs-storage'
 
-const bodies = [...DOCS_MEMORY, ...DOCS_STORAGE]
+const bodies = DOCS
   .flatMap((doc) => [doc.tldr, ...doc.sections.map((section) => section.body)])
   .join('\n')
 
@@ -23,13 +24,22 @@ const diagnosticCopy = [...ALL_STEPS, ...ALL_VERDICTS]
   .join('\n')
 
 describe('PostgreSQL 18 content corrections', () => {
-  it('discloses the replication link teaching capacity', () => {
-    const link = DOCS_STORAGE.find((doc) => doc.id === 'net.wire')!
-    const copy = link.sections.map((section) => section.body).join('\n')
+  it('keeps every documentation surface consistent with the replication link capacity', () => {
+    const contradictions = DOCS.flatMap((entry) => {
+      const copy = [
+        entry.title,
+        entry.subtitle,
+        entry.tldr,
+        ...entry.sections.flatMap((section) => [section.heading, section.body]),
+        ...(entry.metrics ?? []).flatMap((metric) => [metric.label, metric.hint ?? '']),
+      ].join('\n')
+      return /(?:does not model|has no)[^.]{0,160}network bandwidth/i.test(copy)
+        ? [entry.id]
+        : []
+    })
 
-    expect(copy).not.toMatch(/has no [^.]*bandwidth/i)
-    expect(copy).toMatch(/fixed .*teaching capacity/i)
-    expect(copy).toMatch(/not .*production (?:estimate|measurement|benchmark)/i)
+    expect(contradictions).toEqual([])
+    expect(bodies).toContain(CLAIM_VALUES.physicalReplicationLink.disclosure)
   })
 
   it('keeps every storage entry cited with current recovery section numbering', () => {
