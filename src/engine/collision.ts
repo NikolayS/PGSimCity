@@ -14,10 +14,11 @@ import type { Surface } from './audio'
  *
  * The city is heavily instanced — 1024 shared-buffer tiles, 14 WAL segments,
  * five warehouses of pages — so colliding against meshes is out of the
- * question. Instead the whole static city is reduced ONCE, at build time, to a
- * few hundred axis-aligned boxes taken straight from the component registry,
- * and those boxes are bucketed into a uniform grid. A walker only ever tests
- * the handful of boxes in the cells it is standing in.
+ * question. Instead the static city is reduced ONCE, at build time, to a few
+ * hundred axis-aligned boxes taken straight from the component registry, and
+ * those boxes are bucketed into a uniform grid. The small set of animated
+ * solids is resnapshotted into a separate live tier. A walker only ever tests
+ * the handful of boxes in the cells it is standing in plus that live tier.
  *
  * WHY REGISTRY BOXES. Every district already publishes a pickable root per
  * component. `Box3.setFromObject` on that root is exactly the volume the user
@@ -140,6 +141,14 @@ export interface CollisionWorld {
   /** Reduce one rendered object to static boxes and add them to this world. */
   addSolid(obj: THREE.Object3D, surface?: Surface): void
   /**
+   * Register rendered solids whose transforms change after boot. Their boxes
+   * are kept outside the static spatial grid and replaced by syncDynamic().
+   * Call after the static world is complete.
+   */
+  setDynamicSolids(objects: readonly THREE.Object3D[]): void
+  /** Resnapshot registered moving solids after their animation update. */
+  syncDynamic(): void
+  /**
    * Add `userData.collisionSolids` Object3Ds and `userData.collisionBoxes`
    * Box3s published anywhere below a scene root.
    */
@@ -151,10 +160,16 @@ export interface CollisionWorld {
    * Height of the highest surface under `p` that lies in
    * `[p.y - maxDrop, p.y + tolerance]`, or null if there is nothing there.
    * Considers both the walkable meshes (one downward raycast) and the tops of
-   * the static boxes, so you can stand on a backend tower without anyone having
+   * the solid boxes, so you can stand on a backend tower without anyone having
    * registered its roof.
    */
   groundAt(p: THREE.Vector3, maxDrop: number): number | null
+  /**
+   * Underside of the lowest solid box above `p`, where `p` is the capsule's
+   * current head position. The box must overlap the capsule's horizontal
+   * radius and lie no more than `maxRise` above the head.
+   */
+  ceilingAt(p: THREE.Vector3, radius: number, maxRise: number): number | null
   /** Surface selected by the most recent successful groundAt() query. */
   readonly groundSurface: Surface
   /**
@@ -176,7 +191,7 @@ export interface CollisionWorld {
    */
   solidNear(x: number, z: number, radius: number): boolean
   /**
-   * Does a static collider sit wholly between two world-space points?
+   * Does a collider sit wholly between two world-space points?
    *
    * Colliders containing `to` are ignored: component label anchors commonly
    * sit inside the object they name, and that object must not occlude itself.
@@ -207,7 +222,8 @@ export interface CollisionWorld {
  *                    whose flat pieces would pave over the hole you are meant
  *                    to be able to fall into; ground.ts publishes exact wall
  *                    boxes and the floor is a raycast walkable
- *   client.pool      the client sky, 40‥80 m up
+ *   client.pool      its app pods move; build() would leave ghost colliders,
+ *                    so main.ts re-registers the root in the live tier
  *   conn.gate        a 300 m sparse fence: boxing or voxelising its registered
  *                    root fills the real central opening; clients.ts publishes
  *                    exact post, wall, pylon, and header boxes instead
@@ -215,9 +231,8 @@ export interface CollisionWorld {
  *   storage.tempfiles
  *                    its registry object is an invisible selection proxy twice
  *                    as tall as a walker; the visible bay is only a 0.36 m step
- *   autovac.worker.N the vacuum trucks DRIVE. build() is a boot snapshot, so a
- *                    box for one of these is a ghost wall parked wherever the
- *                    truck happened to be at t = 0.
+ *   autovac.worker.N the vacuum trucks drive; main.ts re-registers each root in
+ *                    the live tier after excluding its boot snapshot here
  */
 export const DEFAULT_EXCLUDE_IDS: readonly string[] = (() => {
   const ids = [
@@ -356,6 +371,9 @@ export function createCollisionWorld(): CollisionWorld {
   let data = new Float32Array(256 * 6)
   let boxSurface = new Uint8Array(256)
   let n = 0
+  let dynamicN = 0
+  let addingDynamic = false
+  const dynamicRoots: THREE.Object3D[] = []
 
   // uniform grid, CSR-encoded
   let cell: number = DEFAULTS.cell
@@ -412,6 +430,21 @@ export function createCollisionWorld(): CollisionWorld {
     boxSurface = nextSurface
   }
 
+  function ensureCandidateCapacity(count: number): void {
+    if (cand.length >= count) return
+    const capacity = Math.max(count, cand.length * 2)
+    const nextCandidates = new Int32Array(capacity)
+    nextCandidates.set(cand)
+    cand = nextCandidates
+    const nextStamp = new Int32Array(capacity)
+    nextStamp.set(stamp)
+    stamp = nextStamp
+  }
+
+  function currentBuildCount(): number {
+    return addingDynamic ? dynamicN : n
+  }
+
   function surfaceCode(surface: Surface): number {
     switch (surface) {
       case 'ground':
@@ -428,16 +461,18 @@ export function createCollisionWorld(): CollisionWorld {
   }
 
   function pushBox(b: THREE.Box3, pad: number, surface: Surface): void {
-    ensureCapacity(n + 1)
-    const o = n * 6
+    const index = addingDynamic ? n + dynamicN : n
+    ensureCapacity(index + 1)
+    const o = index * 6
     data[o] = b.min.x - pad
     data[o + 1] = b.min.y
     data[o + 2] = b.min.z - pad
     data[o + 3] = b.max.x + pad
     data[o + 4] = b.max.y
     data[o + 5] = b.max.z + pad
-    boxSurface[n] = surfaceCode(surface)
-    n++
+    boxSurface[index] = surfaceCode(surface)
+    if (addingDynamic) dynamicN++
+    else n++
     debugStale = true
   }
 
@@ -671,10 +706,10 @@ export function createCollisionWorld(): CollisionWorld {
     let visitedChildren = false
     if (!mesh.isMesh && depth < o.maxDepth && obj.children.length > 0) {
       visitedChildren = true
-      const before = n
+      const before = currentBuildCount()
       const kids = obj.children
       for (let i = 0; i < kids.length; i++) addObject(kids[i], depth + 1, o, surface)
-      if (n > before) return
+      if (currentBuildCount() > before) return
       visibleBounds(obj, _box)
       if (_box.isEmpty()) return
     }
@@ -684,10 +719,10 @@ export function createCollisionWorld(): CollisionWorld {
       return
     }
     if (!visitedChildren && depth < o.maxDepth && obj.children.length > 0) {
-      const before = n
+      const before = currentBuildCount()
       const kids = obj.children
       for (let i = 0; i < kids.length; i++) addObject(kids[i], depth + 1, o, surface)
-      if (n > before) return
+      if (currentBuildCount() > before) return
     }
     // Nothing underneath to look at — a merged mesh, a container of decals, or
     // the depth limit. Dropping it here is what let the owner walk through nine
@@ -713,6 +748,9 @@ export function createCollisionWorld(): CollisionWorld {
     activeBuildOptions = o
     cell = o.cell > 1 ? o.cell : DEFAULTS.cell
     n = 0
+    dynamicN = 0
+    dynamicRoots.length = 0
+    addingDynamic = false
 
     const skipId = new Set(o.excludeIds)
     const skipDistrict = new Set<DistrictId>(o.excludeDistricts)
@@ -759,6 +797,28 @@ export function createCollisionWorld(): CollisionWorld {
     rebuildGrid()
   }
 
+  function syncDynamic(): void {
+    dynamicN = 0
+    addingDynamic = true
+    try {
+      for (let i = 0; i < dynamicRoots.length; i++) {
+        const root = dynamicRoots[i]
+        root.updateWorldMatrix(true, true)
+        addObject(root, 0, activeBuildOptions, 'metal')
+      }
+    } finally {
+      addingDynamic = false
+    }
+    ensureCandidateCapacity(n + dynamicN)
+    debugStale = true
+  }
+
+  function setDynamicSolids(objects: readonly THREE.Object3D[]): void {
+    dynamicRoots.length = 0
+    for (let i = 0; i < objects.length; i++) dynamicRoots.push(objects[i])
+    syncDynamic()
+  }
+
   function addPublished(root: THREE.Object3D): void {
     root.traverse((obj) => {
       const solids = obj.userData.collisionSolids as THREE.Object3D[] | undefined
@@ -779,11 +839,7 @@ export function createCollisionWorld(): CollisionWorld {
   /* ---- the spatial hash --------------------------------------------------*/
 
   function rebuildGrid(): void {
-    if (cand.length < n) {
-      cand = new Int32Array(Math.max(n, cand.length * 2))
-      stamp = new Int32Array(cand.length)
-      gen = 0
-    }
+    ensureCandidateCapacity(n + dynamicN)
     if (n === 0) {
       gw = 0
       gh = 0
@@ -864,31 +920,43 @@ export function createCollisionWorld(): CollisionWorld {
    */
   function queryRect(minX: number, minZ: number, maxX: number, maxZ: number): void {
     candN = 0
-    if (gw === 0) return
-    let ix0 = Math.floor(minX / cell) - gx0
-    let ix1 = Math.floor(maxX / cell) - gx0
-    let iz0 = Math.floor(minZ / cell) - gz0
-    let iz1 = Math.floor(maxZ / cell) - gz0
-    if (ix1 < 0 || iz1 < 0 || ix0 > gw - 1 || iz0 > gh - 1) return
-    if (ix0 < 0) ix0 = 0
-    if (iz0 < 0) iz0 = 0
-    if (ix1 > gw - 1) ix1 = gw - 1
-    if (iz1 > gh - 1) iz1 = gh - 1
+    if (gw > 0) {
+      let ix0 = Math.floor(minX / cell) - gx0
+      let ix1 = Math.floor(maxX / cell) - gx0
+      let iz0 = Math.floor(minZ / cell) - gz0
+      let iz1 = Math.floor(maxZ / cell) - gz0
+      if (!(ix1 < 0 || iz1 < 0 || ix0 > gw - 1 || iz0 > gh - 1)) {
+        if (ix0 < 0) ix0 = 0
+        if (iz0 < 0) iz0 = 0
+        if (ix1 > gw - 1) ix1 = gw - 1
+        if (iz1 > gh - 1) iz1 = gh - 1
 
-    gen++
-    for (let iz = iz0; iz <= iz1; iz++) {
-      const row = iz * gw
-      for (let ix = ix0; ix <= ix1; ix++) {
-        const c = row + ix
-        const s = cellStart[c]
-        const e = cellStart[c + 1]
-        for (let k = s; k < e; k++) {
-          const idx = cellItems[k]
-          if (stamp[idx] === gen) continue
-          stamp[idx] = gen
-          cand[candN++] = idx
+        gen++
+        for (let iz = iz0; iz <= iz1; iz++) {
+          const row = iz * gw
+          for (let ix = ix0; ix <= ix1; ix++) {
+            const c = row + ix
+            const s = cellStart[c]
+            const e = cellStart[c + 1]
+            for (let k = s; k < e; k++) {
+              const idx = cellItems[k]
+              if (stamp[idx] === gen) continue
+              stamp[idx] = gen
+              cand[candN++] = idx
+            }
+          }
         }
       }
+    }
+    // Moving solids are few and never enter the static CSR grid. A linear
+    // bounds pass avoids rebuilding thousands of static cell memberships on
+    // every animation frame.
+    for (let i = 0; i < dynamicN; i++) {
+      const index = n + i
+      const o = index * 6
+      if (data[o + 3] < minX || data[o] > maxX) continue
+      if (data[o + 5] < minZ || data[o + 2] > maxZ) continue
+      cand[candN++] = index
     }
   }
 
@@ -904,8 +972,8 @@ export function createCollisionWorld(): CollisionWorld {
     let bny = 1
     let bnz = 0
 
-    // (a) tops of the static boxes directly under the point
-    if (n > 0) {
+    // (a) tops of the solid boxes directly under the point
+    if (n + dynamicN > 0) {
       queryRect(p.x, p.z, p.x, p.z)
       for (let i = 0; i < candN; i++) {
         const o = cand[i] * 6
@@ -980,7 +1048,7 @@ export function createCollisionWorld(): CollisionWorld {
   }
 
   function solidNear(x: number, z: number, radius: number): boolean {
-    if (n === 0 || radius <= 0) return false
+    if (n + dynamicN === 0 || radius <= 0) return false
     queryRect(x - radius, z - radius, x + radius, z + radius)
     const r2 = radius * radius
     for (let i = 0; i < candN; i++) {
@@ -994,11 +1062,28 @@ export function createCollisionWorld(): CollisionWorld {
     return false
   }
 
+  function ceilingAt(p: THREE.Vector3, radius: number, maxRise: number): number | null {
+    if (n + dynamicN === 0 || maxRise < 0) return null
+    queryRect(p.x - radius, p.z - radius, p.x + radius, p.z + radius)
+    const hi = p.y + maxRise
+    let best = Infinity
+    for (let i = 0; i < candN; i++) {
+      const o = cand[i] * 6
+      if (p.x + radius <= data[o] || p.x - radius >= data[o + 3]) continue
+      if (p.z + radius <= data[o + 2] || p.z - radius >= data[o + 5]) continue
+      const underside = data[o + 1]
+      if (underside >= p.y - EPS && underside <= hi + EPS && underside < best) {
+        best = underside
+      }
+    }
+    return best === Infinity ? null : best
+  }
+
   function occluded(from: THREE.Vector3, to: THREE.Vector3): boolean {
     const dx = to.x - from.x
     const dy = to.y - from.y
     const dz = to.z - from.z
-    if (dx * dx + dy * dy + dz * dz <= EPS * EPS || n === 0) return false
+    if (dx * dx + dy * dy + dz * dz <= EPS * EPS || n + dynamicN === 0) return false
 
     queryRect(
       from.x < to.x ? from.x : to.x,
@@ -1147,7 +1232,7 @@ export function createCollisionWorld(): CollisionWorld {
     out.hitZ = false
     out.blocked = false
     out.stepped = 0
-    if (n === 0) return out
+    if (n + dynamicN === 0) return out
 
     const feet = from.y
     const wallY = feet + stepHeight
@@ -1164,6 +1249,57 @@ export function createCollisionWorld(): CollisionWorld {
     let z = from.z
     let dx = to.x - from.x
     let dz = to.z - from.z
+    // A moving solid can arrive around an idle capsule between calls. Static
+    // overlaps are intentionally escapable spawns; live overlaps instead push
+    // the body to the nearest face so a parked user cannot be swallowed.
+    for (let pass = 0; pass < 4 && dynamicN > 0; pass++) {
+      let best = Infinity
+      let pushX = x
+      let pushZ = z
+      let axisX = false
+      let found = false
+      for (let i = 0; i < candN; i++) {
+        const index = cand[i]
+        if (index < n) continue
+        const o = index * 6
+        if (data[o + 4] <= wallY || data[o + 1] >= headY) continue
+        const minX = data[o] - radius
+        const maxX = data[o + 3] + radius
+        const minZ = data[o + 2] - radius
+        const maxZ = data[o + 5] + radius
+        if (x <= minX + EPS || x >= maxX - EPS || z <= minZ + EPS || z >= maxZ - EPS) continue
+        const left = x - minX
+        const right = maxX - x
+        const north = z - minZ
+        const south = maxZ - z
+        const distance = Math.min(left, right, north, south)
+        if (distance >= best) continue
+        best = distance
+        found = true
+        if (distance === left) {
+          pushX = minX - EPS
+          pushZ = z
+          axisX = true
+        } else if (distance === right) {
+          pushX = maxX + EPS
+          pushZ = z
+          axisX = true
+        } else if (distance === north) {
+          pushX = x
+          pushZ = minZ - EPS
+          axisX = false
+        } else {
+          pushX = x
+          pushZ = maxZ + EPS
+          axisX = false
+        }
+      }
+      if (!found) break
+      x = pushX
+      z = pushZ
+      if (axisX) out.hitX = true
+      else out.hitZ = true
+    }
     // Contact, then sweep the remaining tangent. Three passes resolve both
     // faces of a corner without distance-dependent tunnelling.
     for (let pass = 0; pass < 3 && (Math.abs(dx) > EPS || Math.abs(dz) > EPS); pass++) {
@@ -1268,14 +1404,15 @@ export function createCollisionWorld(): CollisionWorld {
     if (!debugStale) return debug
     debugStale = false
     // 12 edges x 2 vertices x 3 floats
-    const pos = new Float32Array(n * 72)
+    const total = n + dynamicN
+    const pos = new Float32Array(total * 72)
     let w = 0
     const put = (x: number, y: number, z: number) => {
       pos[w++] = x
       pos[w++] = y
       pos[w++] = z
     }
-    for (let i = 0; i < n; i++) {
+    for (let i = 0; i < total; i++) {
       const o = i * 6
       const x0 = data[o]
       const y0 = data[o + 1]
@@ -1310,6 +1447,9 @@ export function createCollisionWorld(): CollisionWorld {
 
   function clear(): void {
     n = 0
+    dynamicN = 0
+    dynamicRoots.length = 0
+    addingDynamic = false
     gw = 0
     gh = 0
     groundSurface = 'ground'
@@ -1334,10 +1474,13 @@ export function createCollisionWorld(): CollisionWorld {
     build,
     addBox,
     addSolid,
+    setDynamicSolids,
+    syncDynamic,
     addPublished,
     addWalkable,
     removeWalkable,
     groundAt,
+    ceilingAt,
     get groundSurface(): Surface {
       return groundSurface
     },
@@ -1353,7 +1496,7 @@ export function createCollisionWorld(): CollisionWorld {
       stepHeight = v > 0 ? v : 0
     },
     get boxCount(): number {
-      return n
+      return n + dynamicN
     },
     clear,
     dispose,

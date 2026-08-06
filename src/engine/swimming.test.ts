@@ -155,6 +155,51 @@ describe('buffer-pool swimming', () => {
     harness.dispose()
   })
 
+  it('keeps the empty basin floor solid until rising water reaches the walker', () => {
+    const harness = createWalkHarness(undefined, 0)
+    const { sim, walk } = harness
+    walk.position.set(0, POOL_BOTTOM, 0)
+
+    for (let i = 0; i < 20; i++) walk.update(0.02)
+
+    expect(walk.position.y).toBeCloseTo(POOL_BOTTOM, 5)
+    expect(walk.grounded).toBe(true)
+    expect(walk.gait).toBe('walk')
+    expect(walk.surface).not.toBe('water')
+
+    sim.buffers.usedCount = sim.buffers.sampleFrames
+    walk.update(0.02)
+
+    expect(walk.position.y).toBeGreaterThanOrEqual(POOL_BOTTOM)
+    expect(walk.grounded).toBe(false)
+    expect(walk.gait).toBe('swim')
+    expect(walk.submerged).toBe(true)
+    expect(walk.surface).toBe('water')
+    harness.dispose()
+  })
+
+  it('lands on the basin floor when the water drains completely under a swimmer', () => {
+    const harness = createWalkHarness()
+    const { sim, walk } = harness
+    walk.position.set(0, POOL_BOTTOM + 1, 0)
+    walk.update(0.02)
+    expect(walk.gait).toBe('swim')
+
+    sim.buffers.usedCount = 0 as typeof sim.buffers.usedCount
+    let minFeetY = walk.position.y
+    for (let i = 0; i < 120; i++) {
+      walk.update(0.02)
+      minFeetY = Math.min(minFeetY, walk.position.y)
+    }
+
+    expect(minFeetY).toBeGreaterThanOrEqual(POOL_BOTTOM)
+    expect(walk.position.y).toBeCloseTo(POOL_BOTTOM, 5)
+    expect(walk.grounded).toBe(true)
+    expect(walk.gait).toBe('walk')
+    expect(walk.surface).not.toBe('water')
+    harness.dispose()
+  })
+
   it.each([0.4, 1])(
     'keeps bottom-standing and falling entries coherent at %s sample occupancy',
     (occupancy) => {
@@ -382,7 +427,9 @@ describe('buffer-pool swimming', () => {
     sim.buffers.usedCount = sim.buffers.sampleFrames
     const scene = new THREE.Scene()
     scene.fog = new THREE.Fog(0x101820, 220, 1150)
-    const water = createBufferWater(scene, undefined, { buffers: sim.buffers })
+    const camera = new THREE.PerspectiveCamera()
+    camera.position.set(0, (POOL_BOTTOM + fullPoolSurface()) * 0.5, 0)
+    const water = createBufferWater(scene, undefined, { buffers: sim.buffers, camera })
     const surface = water.group.getObjectByName('buffer.water.surface') as THREE.Mesh
     const volume = water.group.getObjectByName('buffer.water.volume') as THREE.Mesh
 
@@ -400,7 +447,7 @@ describe('buffer-pool swimming', () => {
     )
     expect(new THREE.Box3().setFromObject(volume).min.y).toBeCloseTo(CITY.buf.baseY, 5)
 
-    water.update(0.5, true)
+    water.update(0.5)
     expect(surfaceMaterial.uniforms.uTime.value).toBeCloseTo(0.5)
     expect((scene.fog as THREE.Fog).far).toBeLessThan(90)
     water.splash(0, 0, 1)
@@ -409,12 +456,50 @@ describe('buffer-pool swimming', () => {
     water.dispose()
   })
 
+  it('derives underwater atmosphere from camera position across camera modes', () => {
+    const sim = createSim(createBus()).state
+    sim.buffers.usedCount = sim.buffers.sampleFrames
+    const scene = new THREE.Scene()
+    scene.fog = new THREE.Fog(0x101820, 220, 1150)
+    const camera = new THREE.PerspectiveCamera()
+    camera.position.set(0, (POOL_BOTTOM + fullPoolSurface()) * 0.5, 0)
+    const water = createBufferWater(scene, undefined, { buffers: sim.buffers, camera })
+
+    // The same physical camera position is underwater whether it was reached
+    // in walk, fly, or orbit mode. No input-mode flag participates here.
+    water.update(0.5)
+    expect((scene.fog as THREE.Fog).far).toBeLessThan(90)
+
+    camera.position.x = POOL_HALF + 2
+    water.update(1)
+    expect((scene.fog as THREE.Fog).far).toBeGreaterThan(1100)
+
+    water.dispose()
+  })
+
+  it('updates the camera medium while simulation time is paused', () => {
+    const sim = createSim(createBus()).state
+    sim.buffers.usedCount = sim.buffers.sampleFrames
+    const scene = new THREE.Scene()
+    scene.fog = new THREE.Fog(0x101820, 220, 1150)
+    const camera = new THREE.PerspectiveCamera()
+    camera.position.set(0, (POOL_BOTTOM + fullPoolSurface()) * 0.5, 0)
+    const water = createBufferWater(scene, undefined, { buffers: sim.buffers, camera })
+
+    water.update(0, 0.5)
+
+    expect((scene.fog as THREE.Fog).far).toBeLessThan(90)
+    water.dispose()
+  })
+
   it('adds sparse depth-tested particulate motion without washing out the buffer tiles', () => {
     const sim = createSim(createBus()).state
     sim.buffers.usedCount = sim.buffers.sampleFrames
     const scene = new THREE.Scene()
     scene.fog = new THREE.Fog(0x101820, 220, 1150)
-    const water = createBufferWater(scene, undefined, { buffers: sim.buffers })
+    const camera = new THREE.PerspectiveCamera()
+    camera.position.set(0, (POOL_BOTTOM + fullPoolSurface()) * 0.5, 0)
+    const water = createBufferWater(scene, undefined, { buffers: sim.buffers, camera })
     const particulate = water.group.getObjectByName('buffer.water.particulate') as THREE.Points
 
     expect(particulate).toBeInstanceOf(THREE.Points)
@@ -427,7 +512,7 @@ describe('buffer-pool swimming', () => {
     expect(material.blending).toBe(THREE.NormalBlending)
     expect(material.opacity).toBeLessThan(0.25)
 
-    water.update(0.5, true)
+    water.update(0.5)
     expect(particulate.visible).toBe(true)
     expect(positions.getY(0)).not.toBe(y0)
     water.dispose()
@@ -438,13 +523,19 @@ describe('buffer-pool swimming', () => {
     sim.buffers.usedCount = sim.buffers.sampleFrames
     const scene = new THREE.Scene()
     scene.fog = new THREE.Fog(0x101820, 220, 1150)
-    const water = createBufferWater(scene, undefined, { buffers: sim.buffers, reducedMotion: true })
+    const camera = new THREE.PerspectiveCamera()
+    camera.position.set(0, (POOL_BOTTOM + fullPoolSurface()) * 0.5, 0)
+    const water = createBufferWater(scene, undefined, {
+      buffers: sim.buffers,
+      reducedMotion: true,
+      camera,
+    })
     const particulate = water.group.getObjectByName('buffer.water.particulate') as THREE.Points
     const surface = water.group.getObjectByName('buffer.water.surface') as THREE.Mesh
     const positions = particulate.geometry.getAttribute('position') as THREE.BufferAttribute
     const y0 = positions.getY(0)
 
-    water.update(0.5, true)
+    water.update(0.5)
     expect(particulate.visible).toBe(true)
     expect(positions.getY(0)).toBe(y0)
     expect((surface.material as THREE.ShaderMaterial).uniforms.uTime.value).toBe(0)
@@ -460,7 +551,7 @@ describe('buffer-pool swimming', () => {
       const water = createBufferWater(scene, { level }, { buffers: sim.buffers })
       const surface = water.group.getObjectByName('buffer.water.surface') as THREE.Mesh
 
-      water.update(0.02, false)
+      water.update(0.02)
 
       expect(surface.position.y).toBeCloseTo(bufferPoolSurfaceY(sim.buffers), 6)
       water.dispose()

@@ -203,6 +203,16 @@ export async function createWalkCityHarness(options: WalkCityHarnessOptions = {}
   addModule(scene, modules, createPlanner(ctx))
   addModule(scene, modules, createContinuity(ctx))
   if (options.includeControlCenter) addModule(scene, modules, createControlCenterWorld(ctx))
+  for (let i = 0; i < modules.length; i++) {
+    const module = modules[i]
+    if (
+      module.id === 'clients'
+      || module.id === 'backends'
+      || module.id === 'wal'
+      || module.id === 'maintenance'
+      || module.id === 'continuity'
+    ) module.update(0, sim.state, sim.state.t)
+  }
   scene.updateMatrixWorld(true)
 
   const collision = createCollisionWorld()
@@ -211,6 +221,11 @@ export async function createWalkCityHarness(options: WalkCityHarnessOptions = {}
   collision.addWalkable(shmem.group.getObjectByName('shmem.deck') ?? shmem.group, 'deck')
   collision.addPublished(scene)
   access.installCollision(collision)
+  collision.setDynamicSolids(
+    registry.all()
+      .filter((def) => def.id === 'client.pool' || def.id.startsWith('autovac.worker.'))
+      .map((def) => def.object),
+  )
   const slonik = ground.group.userData.slonik as {
     ring: Float64Array
     contains(x: number, z: number): boolean
