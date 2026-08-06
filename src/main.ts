@@ -360,6 +360,10 @@ async function boot(): Promise<void> {
       console.warn(`[PGSimCity] focus on unknown component "${id}"`)
       return
     }
+    /* Focus is another camera owner. A tour chapter, scenario, destination key,
+     * or picked component may request it while the pedestrian still owns the
+     * transform, so stand up before the scripted rig starts its move. */
+    if (walk.enabled) bus.emit('camera:mode', { mode: 'orbit' })
     rig.focusOn(def.focus, { instant })
   })
 

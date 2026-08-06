@@ -35,6 +35,7 @@
     "oracle": "node tools/pg-oracle.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:input-fuzz": "vitest run test/input-fuzz.browser.test.ts --maxWorkers=1",
     "test:layout": "node tools/verify-hud-layout.mjs",
     "test:watch": "vitest",
     "preview": "vite preview --port 4173"
