@@ -208,7 +208,20 @@ async function boot(): Promise<void> {
   add(createSilhouetteDetails(ctx))
 
   // --- collision + the pedestrian -------------------------------------------
-  // Every district is in the scene, so the registry's bounding boxes are final.
+  // These collision-bearing dynamic instance buffers start as identity
+  // matrices. Pose only their owners before the snapshot; advancing unrelated
+  // modules here changes their one-time visual lifecycle before the first frame.
+  for (let i = 0; i < modules.length; i++) {
+    const module = modules[i]
+    if (
+      module.id === 'clients'
+      || module.id === 'backends'
+      || module.id === 'wal'
+      || module.id === 'maintenance'
+      || module.id === 'continuity'
+    ) module.update(0, sim.state, sim.state.t)
+  }
+  // Every district is in the scene and collision-bearing instances have a live pose.
   scene.updateMatrixWorld(true)
   const collision = createCollisionWorld()
   // The deck is excluded because its registry box is a solid 156 x 124 slab —
@@ -228,6 +241,11 @@ async function boot(): Promise<void> {
   // MUST follow build(): build() resets the box array and would discard these.
   collision.addPublished(scene)
   access.installCollision(collision)
+  collision.setDynamicSolids(
+    registry.all()
+      .filter((def) => def.id === 'client.pool' || def.id.startsWith('autovac.worker.'))
+      .map((def) => def.object),
+  )
   const water = createBufferWater(scene, gfx.quality, { camera, buffers: sim.state.buffers })
   scene.add(water.group)
   const walk = createWalkController({
@@ -377,18 +395,23 @@ async function boot(): Promise<void> {
         rig.setMode('walk') // the rig stops driving the camera…
         void walk.enter() // …and the walker drops in from wherever it was
       } else if (walk.enabled) {
-        // Stand up. The walker hands back a vantage point up and behind the way
-        // it was looking, and the rig flies to it, so leaving reads as stepping
-        // back out of the model rather than as a cut.
         const view = walk.exit()
-        const dx = view.position[0] - view.target[0]
-        const dy = view.position[1] - view.target[1]
-        const dz = view.position[2] - view.target[2]
-        rig.setMode('orbit')
-        rig.focusOn(
-          { target: view.target, distance: Math.hypot(dx, dy, dz), dir: [dx, dy, dz] },
-          { duration: 1.1 },
-        )
+        if (mode === 'fly') {
+          // Fly takes over the walk camera in place. Sending this through the
+          // orbit exit animation silently discarded the user's F command.
+          rig.setMode('fly')
+        } else {
+          // Orbit receives a vantage point up and behind the walker so leaving
+          // reads as stepping back out of the model rather than as a cut.
+          const dx = view.position[0] - view.target[0]
+          const dy = view.position[1] - view.target[1]
+          const dz = view.position[2] - view.target[2]
+          rig.setMode('orbit')
+          rig.focusOn(
+            { target: view.target, distance: Math.hypot(dx, dy, dz), dir: [dx, dy, dz] },
+            { duration: 1.1 },
+          )
+        }
       } else {
         rig.setMode(mode)
       }
@@ -456,7 +479,7 @@ async function boot(): Promise<void> {
     rig.update(dt)
     walk.update(dt)
     hands.update(dt)
-    water.update(cityDt, walk.enabled && walk.submerged)
+    water.update(cityDt, dt)
     // On foot you are always up against the detail, wherever you stand.
     const nextDetail: 0 | 1 | 2 = walk.enabled ? 2 : detailFor(rig.altitude)
     if (nextDetail !== detail) {
@@ -466,6 +489,7 @@ async function boot(): Promise<void> {
 
     // 3. the city
     for (let i = 0; i < modules.length; i++) modules[i].update(cityDt, s, s.t)
+    collision.syncDynamic()
     flows.update(cityDt)
     picker.update(dt)
 

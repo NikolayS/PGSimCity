@@ -1083,7 +1083,17 @@ export function createWalkController(opts: WalkOptions): WalkController {
 
     /* --- stance ---------------------------------------------------------- */
     const touchMagnitude = Math.min(1, Math.hypot(touchForward, touchStrafe))
-    crouching = !swimming && (keys.has('KeyC') || touchCrouch)
+    const crouchRequested = !swimming && (keys.has('KeyC') || touchCrouch)
+    let nextCrouching = crouchRequested
+    if (!swimming && crouching && !crouchRequested) {
+      _probe.set(pos.x, pos.y + T.capsuleHeightCrouch, pos.z)
+      nextCrouching = collision.ceilingAt(
+        _probe,
+        T.capsuleRadius,
+        T.capsuleHeight - T.capsuleHeightCrouch,
+      ) !== null
+    }
+    crouching = nextCrouching
     running =
       !swimming &&
       !crouching &&
@@ -1238,6 +1248,14 @@ export function createWalkController(opts: WalkOptions): WalkController {
     // the difference between a jump that peaks at 0.90 m and one that peaks at
     // 0.85 m and changes height when the frame rate does.
     pos.y += (vy0 + vy) * 0.5 * d
+    if (pos.y > yBefore) {
+      _probe.set(pos.x, yBefore + capsuleH, pos.z)
+      const ceiling = collision.ceilingAt(_probe, T.capsuleRadius, pos.y - yBefore)
+      if (ceiling !== null) {
+        pos.y = ceiling - capsuleH
+        vy = 0
+      }
+    }
 
     /*
      * SWEEP, DO NOT SAMPLE. Ask what was under the feet across the whole step,
@@ -1259,12 +1277,22 @@ export function createWalkController(opts: WalkOptions): WalkController {
     // can never become a second, sneakier way to climb a wall.
     const slopeTol = wasGrounded ? Math.min(stepTravel * SLOPE_RISE_PER_M, T.stepHeight) : 0
     _probe.set(pos.x, yBefore + slopeTol, pos.z)
-    const g = collision.groundAt(_probe, (fell > 0 ? fell : 0) + snap + slopeTol)
+    let g = collision.groundAt(_probe, (fell > 0 ? fell : 0) + snap + slopeTol)
+    let poolFloor = false
+    if (inPoolXZ(pos.x, pos.z)) {
+      const bottom = bufferPoolBottomY(pos.x, pos.z)
+      const searchBottom = pos.y - snap
+      const searchTop = yBefore + slopeTol + 0.05
+      if (bottom >= searchBottom && bottom <= searchTop && (g === null || bottom > g)) {
+        g = bottom
+        poolFloor = true
+      }
+    }
     if (g !== null && vy <= 0) {
-      const ny = collision.groundNormal.y
+      const ny = poolFloor ? 1 : collision.groundNormal.y
       if (ny >= MIN_GROUND_NY) {
         if (!wasGrounded && vy < -6) landDip = clamp01(-vy / 14) * 0.11
-        surface = collision.groundSurface
+        surface = poolFloor ? 'deck' : collision.groundSurface
         if (!wasGrounded) audio.land(-vy)
         pos.y = g
         vy = 0

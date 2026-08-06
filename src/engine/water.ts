@@ -3,12 +3,12 @@ import { Reflector } from 'three/examples/jsm/objects/Reflector.js'
 import { atmosphere } from '../core/theme'
 import type { BufferPool, QualityLevel, QualitySettings } from '../core/types'
 import { damp, makeRng } from '../core/util'
-import { bufferPoolSurfaceY, CITY } from '../world/layout'
+import { bufferPoolBottomY, bufferPoolSurfaceY, CITY } from '../world/layout'
 
 export interface BufferWaterApi {
   group: THREE.Group
-  /** Advances the fixed ripple pool and the underwater atmosphere. */
-  update(dt: number, submerged: boolean): void
+  /** Advances water motion on simulation time and atmosphere on render time. */
+  update(dt: number, wallDt?: number): void
   /** Surface-space one-shot. Uses a preallocated ripple slot. */
   splash(x: number, z: number, intensity: number): void
   dispose(): void
@@ -190,7 +190,7 @@ export function createBufferWater(
 ): BufferWaterApi {
   const resolvedQuality = quality ?? DEFAULT_QUALITY
   const reducedMotion = opts.reducedMotion ?? prefersReducedMotion()
-  const particulateCamera = opts.camera
+  const camera = opts.camera
   const buffers = opts.buffers
   let surfaceY = bufferPoolSurfaceY(buffers)
   let depth = surfaceY - BOTTOM_Y
@@ -379,11 +379,19 @@ export function createBufferWater(
     ripple.mesh.visible = true
   }
 
-  function update(dt: number, submerged: boolean): void {
+  function update(dt: number, wallDt = dt): void {
     const d = dt > 0 ? dt : 0
+    const atmosphereDt = wallDt > 0 ? wallDt : 0
     surfaceY = bufferPoolSurfaceY(buffers)
     depth = surfaceY - BOTTOM_Y
     const hasWater = depth > 0.001
+    const submerged =
+      hasWater &&
+      camera !== undefined &&
+      Math.abs(camera.position.x) <= SPAN * 0.5 &&
+      Math.abs(camera.position.z) <= SPAN * 0.5 &&
+      camera.position.y > bufferPoolBottomY(camera.position.x, camera.position.z) &&
+      camera.position.y < surfaceY
     surface.position.y = surfaceY
     surface.visible = hasWater
     grid.position.y = surfaceY + 0.025
@@ -412,16 +420,16 @@ export function createBufferWater(
 
     if (submerged && !reducedMotion && d > 0) {
       const fieldHalf = PARTICULATE_FIELD * 0.5
-      const centreX = particulateCamera
+      const centreX = camera
         ? Math.max(
             -SPAN * 0.5 + fieldHalf,
-            Math.min(SPAN * 0.5 - fieldHalf, particulateCamera.position.x),
+            Math.min(SPAN * 0.5 - fieldHalf, camera.position.x),
           )
         : 0
-      const centreZ = particulateCamera
+      const centreZ = camera
         ? Math.max(
             -SPAN * 0.5 + fieldHalf,
-            Math.min(SPAN * 0.5 - fieldHalf, particulateCamera.position.z),
+            Math.min(SPAN * 0.5 - fieldHalf, camera.position.z),
           )
         : 0
       for (let i = 0; i < PARTICULATE_COUNT; i++) {
@@ -461,7 +469,7 @@ export function createBufferWater(
       airFar = fog.far
     }
     wasSubmerged = submerged
-    fogAmount = damp(fogAmount, submerged ? 1 : 0, FOG_SETTLE, d)
+    fogAmount = damp(fogAmount, submerged ? 1 : 0, FOG_SETTLE, atmosphereDt)
     if (!submerged && fogAmount < 0.001) fogAmount = 0
 
     const ar = ((airFog >> 16) & 255) / 255

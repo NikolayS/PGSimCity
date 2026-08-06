@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { createMoveResult } from '../src/engine/collision'
 import { WALK_UP_RADIUS } from '../src/ui/walk-up'
 import { CITY, routePoint } from '../src/world/layout'
 import type { TraversalRoute, WalkCityHarness, WalkPoint } from './walk-harness'
@@ -61,6 +62,11 @@ const DISTRICT_BOUNDARIES: TraversalRoute[] = [
   ...bothDirections('boundary:shmem-replication', [[3.78, 3, 55], [3.78, 0.02, 160]]),
   ...bothDirections('boundary:wal-replication', [[260, 0.62, 118], [260, 0.62, 150]]),
   ...bothDirections('boundary:maintenance-world', [[-254, 0.62, 80], [-280, 0.02, 120]]),
+]
+
+const ARRIVAL_APERTURES: TraversalRoute[] = [
+  ...bothDirections('aperture:pooler-gatehouse:walk', [[0, 0.02, -280], [0, 0.02, -244]], 'walk'),
+  ...bothDirections('aperture:pooler-gatehouse:run', [[0, 0.02, -280], [0, 0.02, -244]], 'run'),
 ]
 
 interface SolidProbe {
@@ -246,6 +252,20 @@ describe('real-city first-person traversal', () => {
     }
   })
 
+  it('poses animated instances before collision snapshots the centre of the pool', () => {
+    const result = createMoveResult()
+    city.collision.move(
+      new THREE.Vector3(0, 0, 6),
+      new THREE.Vector3(0, 0, -6),
+      0.35,
+      1.8,
+      result,
+    )
+
+    expect(result.blocked).toBe(false)
+    expect(result.position.z).toBe(-6)
+  })
+
   it('recesses the basin behind a low curb at plaza level', () => {
     const coping = city.scene.getObjectByName('shared.buffers.coping')
     const bounds = new THREE.Box3().setFromObject(coping ?? new THREE.Object3D())
@@ -263,6 +283,87 @@ describe('real-city first-person traversal', () => {
       city.collision.groundAt(new THREE.Vector3(3.78, 4, CITY.buf.halfSpan + 4), 8),
     ).toBeCloseTo(CITY.deck.top, 1)
     expect(city.collision.groundAt(new THREE.Vector3(20, 4, 20), 8)).toBeNull()
+  })
+
+  it('stops fast submerged crossings through every solid pool wall from both sides', () => {
+    const half = CITY.buf.halfSpan
+    const crossings = [
+      [[18, -1.5, 0], [18, -1.5, -half - 8]],
+      [[-18, -1.5, 0], [-18, -1.5, half + 8]],
+      [[0, -1.5, 18], [-half - 8, -1.5, 18]],
+      [[0, -1.5, -18], [half + 8, -1.5, -18]],
+    ] as const
+
+    for (const [inside, outside] of crossings) {
+      for (const [from, to] of [[inside, outside], [outside, inside]] as const) {
+        const result = createMoveResult()
+        city.collision.move(
+          new THREE.Vector3(...from),
+          new THREE.Vector3(...to),
+          0.35,
+          1.8,
+          result,
+        )
+        expect(result.blocked, `${JSON.stringify(from)} -> ${JSON.stringify(to)}`).toBe(true)
+      }
+    }
+  })
+
+  it('stops swept plate-edge crossings from the city and from beyond the skirt', () => {
+    const ground = city.scene.getObjectByName('world.ground')
+    const slonik = ground?.userData.slonik as {
+      ring: Float64Array
+      contains(x: number, z: number): boolean
+    }
+    const ring = slonik.ring
+    let signedArea = 0
+    for (let i = 0; i < ring.length; i += 2) {
+      const j = (i + 2) % ring.length
+      signedArea += ring[i] * ring[j + 1] - ring[j] * ring[i + 1]
+    }
+    const ccw = signedArea > 0
+    const failures: string[] = []
+    let checked = 0
+
+    for (let i = 0; i < ring.length; i += 2) {
+      const j = (i + 2) % ring.length
+      const ax = ring[i]
+      const az = ring[i + 1]
+      const bx = ring[j]
+      const bz = ring[j + 1]
+      const dx = bx - ax
+      const dz = bz - az
+      const length = Math.hypot(dx, dz)
+      if (length < 0.25) continue
+      const nx = (ccw ? -dz : dz) / length
+      const nz = (ccw ? dx : -dx) / length
+      const mx = (ax + bx) * 0.5
+      const mz = (az + bz) * 0.5
+      // The visible kerb itself is 4.2 m deep. Begin beyond it on either side
+      // so the collision world's intentional "escape an overlapping box" rule
+      // cannot turn this into a spawn-inside-box probe.
+      const inside = new THREE.Vector3(mx + nx * 8, 0.02, mz + nz * 8)
+      const outside = new THREE.Vector3(mx - nx * 8, 0.02, mz - nz * 8)
+      if (!slonik.contains(inside.x, inside.z) || slonik.contains(outside.x, outside.z)) continue
+      // Tight folds can put the normal sample inside a neighbouring kerb box.
+      // The mover deliberately allows escape from a box it starts inside, so
+      // those are not valid entry sweeps and are covered by adjacent segments.
+      if (city.collision.solidNear(inside.x, inside.z, 0.36)) continue
+      if (city.collision.solidNear(outside.x, outside.z, 0.36)) continue
+
+      for (const [side, from, to] of [
+        ['inside', inside, outside],
+        ['outside', outside, inside],
+      ] as const) {
+        const result = createMoveResult()
+        city.collision.move(from, to, 0.35, 1.8, result)
+        checked++
+        if (!result.blocked) failures.push(`${i / 2}:${side}`)
+      }
+    }
+
+    expect(checked).toBeGreaterThan(100)
+    expect(failures).toEqual([])
   })
 
   it('walks the complete plate perimeter at slow-frame cadence', () => {
@@ -294,6 +395,16 @@ describe('real-city first-person traversal', () => {
       `${result.steps.at(-1)?.leg ?? 0}: ${JSON.stringify(result.finalPosition)}, collisions=${result.collisions}`,
     ).toBe(true)
     expect(result.minFeetY).toBeGreaterThan(-61)
+  })
+
+  it.each(ARRIVAL_APERTURES)('$id stays clear in both directions', (route) => {
+    const result = city.run(route)
+    expect(
+      result.reached,
+      `final=${JSON.stringify(result.finalPosition)}, minY=${result.minFeetY}, collisions=${result.collisions}`,
+    ).toBe(true)
+    expect(result.collisions).toBe(0)
+    expect(result.steps.at(-1)?.grounded).toBe(true)
   })
 
   it.each([...CAUSEWAYS, ...PLINTH_RAMPS])('$id remains climbable', (route) => {

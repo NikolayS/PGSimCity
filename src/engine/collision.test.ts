@@ -443,11 +443,108 @@ describe('landing', () => {
   })
 })
 
+describe('vertical solid boundaries', () => {
+  it('stops a jump at a low ceiling instead of passing the body through it', () => {
+    const world = createCollisionWorld()
+    world.addWalkable(plate(0, 30, FAR_X, 0), 'ground')
+    const ceilingY = 2.2
+    world.addBox(new THREE.Box3(
+      new THREE.Vector3(FAR_X - 8, ceilingY, -8),
+      new THREE.Vector3(FAR_X + 8, ceilingY + 1, 8),
+    ))
+    const h = harness(world, new THREE.Vector3(FAR_X, 0, 0))
+    let maxFeetY = h.walk.position.y
+
+    h.walk.setTouchJump(true)
+    h.walk.update(1 / 50)
+    h.walk.setTouchJump(false)
+    for (let i = 0; i < 100; i++) {
+      h.walk.update(1 / 50)
+      maxFeetY = Math.max(maxFeetY, h.walk.position.y)
+    }
+
+    expect(maxFeetY + 1.8).toBeLessThanOrEqual(ceilingY + 1e-4)
+    expect(h.walk.position.y).toBeCloseTo(0, 5)
+    expect(h.walk.grounded).toBe(true)
+    h.dispose()
+  })
+
+  it('keeps a crouched walker crouched until their body clears a low aperture', () => {
+    const world = createCollisionWorld()
+    world.addWalkable(plate(0, 30, FAR_X, 0), 'ground')
+    const ceilingY = 1.45
+    world.addBox(new THREE.Box3(
+      new THREE.Vector3(FAR_X - 3, ceilingY, -6),
+      new THREE.Vector3(FAR_X + 3, ceilingY + 1, 2),
+    ))
+    const h = harness(world, new THREE.Vector3(FAR_X, 0, 4))
+    h.walk.setTouchCrouch(true)
+    h.walk.setTouchMove(0, 1)
+    for (let i = 0; i < 220 && h.walk.position.z > 0; i++) h.walk.update(1 / 50)
+    expect(h.walk.position.z).toBeLessThan(0)
+
+    h.walk.setTouchCrouch(false)
+    h.walk.setTouchMove(0, 0)
+    for (let i = 0; i < 40; i++) h.walk.update(1 / 50)
+
+    expect(h.walk.gait).toBe('crouch')
+    expect(h.walk.position.y + 1.25).toBeLessThanOrEqual(ceilingY + 1e-4)
+
+    h.walk.setTouchMove(0, 1)
+    for (let i = 0; i < 400 && h.walk.position.z > -8; i++) h.walk.update(1 / 50)
+    h.walk.setTouchMove(0, 0)
+    for (let i = 0; i < 40; i++) h.walk.update(1 / 50)
+
+    expect(h.walk.position.z).toBeLessThan(-6.35)
+    expect(h.walk.gait).toBe('walk')
+    h.dispose()
+  })
+})
+
 /* --------------------------------------------------------------------------
  * 5. Swept movement.
  * ------------------------------------------------------------------------*/
 
 describe('swept movement', () => {
+  it('resnapshots moving solids without leaving a ghost at the old position', () => {
+    const world = createCollisionWorld()
+    const moving = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2))
+    moving.position.set(0, 1, 0)
+    moving.updateMatrixWorld(true)
+    world.setDynamicSolids([moving])
+    const result = createMoveResult()
+
+    world.move(new THREE.Vector3(-4, 0, 0), new THREE.Vector3(4, 0, 0), 0.35, 1.8, result)
+    expect(result.blocked).toBe(true)
+
+    moving.position.x = 10
+    world.syncDynamic()
+    world.move(new THREE.Vector3(-4, 0, 0), new THREE.Vector3(4, 0, 0), 0.35, 1.8, result)
+    expect(result.blocked).toBe(false)
+    world.move(new THREE.Vector3(6, 0, 0), new THREE.Vector3(14, 0, 0), 0.35, 1.8, result)
+    expect(result.blocked).toBe(true)
+    world.dispose()
+  })
+
+  it('pushes an idle capsule out when a moving solid arrives around it', () => {
+    const world = createCollisionWorld()
+    const moving = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2))
+    moving.position.set(6, 1, 0)
+    moving.updateMatrixWorld(true)
+    world.setDynamicSolids([moving])
+    const result = createMoveResult()
+    const idle = new THREE.Vector3(0, 0, 0)
+
+    moving.position.x = 0
+    world.syncDynamic()
+    world.move(idle, idle, 0.35, 1.8, result)
+
+    expect(result.blocked).toBe(true)
+    expect(Math.abs(result.position.x)).toBeGreaterThanOrEqual(1.35)
+    expect(result.position.z).toBe(0)
+    world.dispose()
+  })
+
   it('reaches a box from every spatial cell across its footprint', () => {
     const world = createCollisionWorld()
     world.addBox(new THREE.Box3(new THREE.Vector3(-25, 0, -25), new THREE.Vector3(25, 3, 25)))
