@@ -48,6 +48,7 @@ const read = (path: string): string => readFileSync(new URL(`../${path}`, import
 
 const REGISTERED_CLAIM_VALUE_READS = {
   appVersion: { 'src/core/corrections.ts': 1 },
+  moonPhase: { 'src/core/moon-phase.ts': 1 },
   walSegment: {
     'src/sim/model.ts': 1,
     'src/spine/postgresql-oracle.ts': 2,
@@ -582,9 +583,10 @@ describe('claims and conventions spine', () => {
     expect([...classified].sort()).toEqual((Object.keys(CLAIMS) as ClaimId[]).sort())
   })
 
-  it('owns exactly the twenty-seven drift-prone contracts across both passes', () => {
+  it('owns exactly the drift-prone contracts across both passes', () => {
     expect(Object.keys(CLAIMS)).toEqual([
       'appVersion',
+      'moonPhase',
       'walSegment',
       'bufferSample',
       'bulkReadRing',

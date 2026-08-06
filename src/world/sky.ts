@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { moonPhaseCycleAt } from '../core/moon-phase'
 import { COLOR, mixHex } from '../core/theme'
 import type { Atmosphere } from '../core/theme'
 import { makeRng } from '../core/util'
@@ -28,6 +29,20 @@ const SUN_ANGULAR_RADIUS_RAD = THREE.MathUtils.degToRad(SUN_ANGULAR_DIAMETER_DEG
 const SUN_DISC_OUTER_COS = Math.cos(SUN_ANGULAR_RADIUS_RAD)
 const SUN_DISC_INNER_COS = Math.cos(SUN_ANGULAR_RADIUS_RAD * 0.82)
 const SUN_RADIANCE = 8
+
+/** The same 2.8×-real legibility convention as the solar disc. */
+export const MOON_ANGULAR_DIAMETER_DEG = SUN_ANGULAR_DIAMETER_DEG
+const MOON_ANGULAR_RADIUS_RAD = THREE.MathUtils.degToRad(MOON_ANGULAR_DIAMETER_DEG / 2)
+const MOON_DISTANCE = 1680
+const MOON_RADIUS = Math.tan(MOON_ANGULAR_RADIUS_RAD) * MOON_DISTANCE
+/** Informational HDR: restrained bloom marks the date-bearing disc, not decoration. */
+export const MOON_RADIANCE = 1.18
+
+/* The night preset reads as midnight. Full moon is opposite its nadir sun;
+ * waxing phases rise through the establishing camera's south-east sky. */
+const MOON_ORBIT_AZIMUTH_RAD = THREE.MathUtils.degToRad(149)
+const MOON_ORBIT_REFERENCE_X = Math.sin(MOON_ORBIT_AZIMUTH_RAD)
+const MOON_ORBIT_REFERENCE_Z = -Math.cos(MOON_ORBIT_AZIMUTH_RAD)
 
 /*
  * Preetham's analytic daylight model. Rayleigh gives wavelength-dependent sky
@@ -173,6 +188,58 @@ export function daySkyRamp(h: number): number {
 export function dayHazeMix(h: number): number {
   const t = Math.max(0, Math.min(1, (h - DAY.hazeFrom) / (DAY.hazeTo - DAY.hazeFrom)))
   return t * t * (3 - 2 * t)
+}
+
+/** The moon shares the star path: explicit night and clock mode's night half. */
+export function skyMoonVisible(air: Atmosphere): boolean {
+  return air.stars
+}
+
+/**
+ * CPU mirror of the shader's spherical lighting, for the directional claim.
+ * Positive values are lit; x/y are normalized apparent-disc coordinates.
+ */
+export function moonDiscLight(
+  moonDirection: readonly [number, number, number],
+  sunDirection: readonly [number, number, number],
+  x: number,
+  y: number,
+): number {
+  const [mx0, my0, mz0] = moonDirection
+  const moonInv = 1 / Math.hypot(mx0, my0, mz0)
+  const mx = mx0 * moonInv
+  const my = my0 * moonInv
+  const mz = mz0 * moonInv
+  const [sx0, sy0, sz0] = sunDirection
+  const sunInv = 1 / Math.hypot(sx0, sy0, sz0)
+  const sx = sx0 * sunInv
+  const sy = sy0 * sunInv
+  const sz = sz0 * sunInv
+
+  let rx: number
+  let ry: number
+  let rz: number
+  if (Math.abs(my) < 0.95) {
+    rx = mz
+    ry = 0
+    rz = -mx
+  } else {
+    rx = -my
+    ry = mx
+    rz = 0
+  }
+  const rightInv = 1 / Math.hypot(rx, ry, rz)
+  rx *= rightInv
+  ry *= rightInv
+  rz *= rightInv
+  const ux = my * rz - mz * ry
+  const uy = mz * rx - mx * rz
+  const uz = mx * ry - my * rx
+  const z = Math.sqrt(Math.max(0, 1 - x * x - y * y))
+  const nx = rx * x + ux * y - mx * z
+  const ny = ry * x + uy * y - my * z
+  const nz = rz * x + uz * y - mz * z
+  return nx * sx + ny * sy + nz * sz
 }
 
 /* ---------------------------------------------------------------------------
@@ -371,6 +438,29 @@ void main() {
 }
 `
 
+const moonVert = /* glsl */ `
+varying vec3 vWorldNormal;
+
+void main() {
+  vWorldNormal = normalize( mat3( modelMatrix ) * normal );
+  gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+}
+`
+
+const moonFrag = /* glsl */ `
+uniform vec3 uSunDirection;
+varying vec3 vWorldNormal;
+
+void main() {
+  float light = smoothstep( -0.012, 0.035, dot( normalize( vWorldNormal ), uSunDirection ) );
+  if ( light < 0.002 ) discard;
+  vec3 col = vec3( 0.82, 0.88, 1.0 ) * ${g(MOON_RADIANCE)} * light;
+  gl_FragColor = vec4( col, 1.0 );
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
+}
+`
+
 const starVert = /* glsl */ `
 attribute vec3 aColor;
 attribute float aSize;
@@ -544,7 +634,20 @@ export function skyCloudsVisible(air: Atmosphere, quality: QualityLevel): boolea
  * Repaint the procedural atmosphere through the renderer's live theme path.
  * The light-to-target vector is the apparent direction toward the sun.
  */
-export function applySkyAtmosphere(sky: THREE.Object3D, air: Atmosphere, quality: QualityLevel): void {
+export function applySkyAtmosphere(
+  sky: THREE.Object3D,
+  air: Atmosphere,
+  quality: QualityLevel,
+  date: Date,
+): void {
+  const x = air.sunDirection[0]
+  const y = air.sunDirection[1]
+  const z = air.sunDirection[2]
+  const invLength = 1 / Math.hypot(x, y, z)
+  const sx = x * invLength
+  const sy = y * invLength
+  const sz = z * invLength
+  const moonCycle = moonPhaseCycleAt(date)
   const dome = sky.getObjectByName('sky.dome') as THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial> | undefined
   const uniforms = dome?.material.uniforms
   if (uniforms) {
@@ -557,12 +660,8 @@ export function applySkyAtmosphere(sky: THREE.Object3D, air: Atmosphere, quality
     haze?.setHex(air.skyHaze)
     glow?.setHex(air.skyGlow)
     const sun = uniforms.uSunDirection?.value as THREE.Vector3 | undefined
-    const x = air.sunDirection[0]
-    const y = air.sunDirection[1]
-    const z = air.sunDirection[2]
     if (sun) {
-      const invLength = 1 / Math.hypot(x, y, z)
-      sun.set(x * invLength, y * invLength, z * invLength)
+      sun.set(sx, sy, sz)
     }
     const sunFlat = uniforms.uSunFlat?.value as THREE.Vector2 | undefined
     if (sunFlat) {
@@ -576,6 +675,41 @@ export function applySkyAtmosphere(sky: THREE.Object3D, air: Atmosphere, quality
     if (uniforms.uSunVisible) {
       uniforms.uSunVisible.value = sunDiscHorizonFraction(air.sunElevationDeg) > 0 ? 1 : 0
     }
+  }
+
+  const moon = sky.getObjectByName('sky.moon') as
+    | THREE.Mesh<THREE.SphereGeometry, THREE.ShaderMaterial>
+    | undefined
+  if (moon) {
+    let projection = MOON_ORBIT_REFERENCE_X * sx + MOON_ORBIT_REFERENCE_Z * sz
+    let tx = MOON_ORBIT_REFERENCE_X - sx * projection
+    let ty = -sy * projection
+    let tz = MOON_ORBIT_REFERENCE_Z - sz * projection
+    let tangentLength = Math.hypot(tx, ty, tz)
+    if (tangentLength < 1e-6) {
+      const fallbackX = Math.abs(sx) < 0.9 ? 1 : 0
+      const fallbackZ = fallbackX === 0 ? 1 : 0
+      projection = fallbackX * sx + fallbackZ * sz
+      tx = fallbackX - sx * projection
+      ty = -sy * projection
+      tz = fallbackZ - sz * projection
+      tangentLength = Math.hypot(tx, ty, tz)
+    }
+    const tangentInv = 1 / tangentLength
+    const angle = moonCycle * Math.PI * 2
+    const alongSun = Math.cos(angle)
+    const alongOrbit = Math.sin(angle)
+    moon.position.set(
+      sx * alongSun + tx * tangentInv * alongOrbit,
+      sy * alongSun + ty * tangentInv * alongOrbit,
+      sz * alongSun + tz * tangentInv * alongOrbit,
+    ).normalize().multiplyScalar(MOON_DISTANCE)
+    const moonSun = moon.material.uniforms.uSunDirection?.value as THREE.Vector3 | undefined
+    moonSun?.set(sx, sy, sz)
+    if (moon.material.uniforms.uMoonIlluminated) {
+      moon.material.uniforms.uMoonIlluminated.value = (1 - Math.cos(angle)) * 0.5
+    }
+    moon.visible = skyMoonVisible(air)
   }
 
   const clouds = sky.getObjectByName('sky.clouds') as
@@ -641,6 +775,28 @@ export function createSky(theme: ThemeApi): THREE.Object3D {
   dome.renderOrder = -1000
   dome.raycast = () => {}
   group.add(dome)
+
+  /* ---- moon: one procedural sphere draw, no texture ------------------- */
+
+  const moonGeo = new THREE.SphereGeometry(MOON_RADIUS, 32, 16)
+  const moonMat = new THREE.ShaderMaterial({
+    uniforms: {
+      uSunDirection: { value: new THREE.Vector3(0, -1, 0) },
+      uMoonIlluminated: { value: 0 },
+    },
+    vertexShader: moonVert,
+    fragmentShader: moonFrag,
+    depthWrite: false,
+    depthTest: true,
+    fog: false,
+  })
+  const moon = new THREE.Mesh(moonGeo, moonMat)
+  moon.name = 'sky.moon'
+  moon.visible = false
+  moon.frustumCulled = false
+  moon.renderOrder = -996
+  moon.raycast = () => {}
+  group.add(moon)
 
   /* ---- clouds: one instanced draw, no texture -------------------------- */
 
@@ -853,6 +1009,8 @@ export function createSky(theme: ThemeApi): THREE.Object3D {
     starMat.dispose()
     linkGeo.dispose()
     linkMat.dispose()
+    moonGeo.dispose()
+    moonMat.dispose()
   }
 
   // The sky reads the palette but deliberately holds no *cached* theme material:
