@@ -53,6 +53,23 @@ describe('disaster recovery', () => {
     expect(sim.state.replication.standbys[0].applicationName).toBe('standby_a')
   })
 
+  it('keeps the standby_a backup source available after that node is promoted', () => {
+    const sim = createSim(createBus(), { scheduledBackups: false })
+    sim.setKnob('tps', 500)
+    sim.setKnob('writeRatio', 0.8)
+    sim.setKnob('synchronousCommit', 'local')
+    advance(sim, 35)
+    expect(sim.startSwitchover('standbyA')).toBe(true)
+    advanceUntil(sim, () => sim.state.highAvailability.transition.status === 'complete')
+
+    const source = sim.state.cluster.nodes[1]
+    expect(source.role).toBe('primary')
+    expect(source.online).toBe(true)
+    expect(sim.startBaseBackup()).toBe(true)
+    expect(sim.state.disasterRecovery.backup.status).toBe('copying')
+    expect(sim.state.disasterRecovery.backup.startLsn).toBe(source.dataDirectory.appliedLsn)
+  })
+
   it('applies count retention as scheduled daily backups keep arriving', () => {
     const sim = createSim(createBus())
     sim.setKnob('tps', 6_000)

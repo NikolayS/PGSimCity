@@ -119,7 +119,7 @@ const LEGEND: LegendRow[] = [
   { key: 'lock', name: 'Lock', what: 'One scripted holder and its direct waiters; lock modes and queue fairness are absent' },
 ]
 
-const READING: { h: string; p: string }[] = [
+export const HELP_READING: { h: string; p: string }[] = [
   {
     h: 'The plaza',
     p: 'The lit grid in the centre is a representative sample of <code>shared_buffers</code> — one tile per sampled frame, blue when its 8 KiB page matches disk, red when it has been modified in memory and not yet written. Tile height is that frame’s <code>usage_count</code>; the basin waterline is the occupied fraction of the representative sample, not host RAM use. The rotating hand is the clock sweep looking for a frame to reuse.',
@@ -138,7 +138,7 @@ const READING: { h: string; p: string }[] = [
   },
   {
     h: 'The standby',
-    p: 'South of the city, two modeled queues carry WAL positions to two independent replay pipelines. The city tracks sent, written, flushed and applied LSNs, but not TCP sockets, replica pages or query results.',
+    p: 'South of the city, two modeled queues carry WAL positions to two independent replay pipelines. The city tracks sent, written, flushed and applied LSNs, and replay touches a representative buffer-frame sample; it does not model TCP sockets, relation-page contents or query results.',
   },
 ]
 
@@ -292,7 +292,7 @@ export function createHelp(ctx: UiContext): UiModule {
     el(
       'div',
       { class: 'help-reading pg-body' },
-      ...READING.map((r) =>
+      ...HELP_READING.map((r) =>
         el(
           'p',
           { class: 'help-reading__p' },

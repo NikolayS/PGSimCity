@@ -9,11 +9,12 @@ import { lsnRulerReadout, standbyReadout } from '../world/replication'
 import { procArrayReadout, sharedBuffersReadout, shmemDeckReadout } from '../world/shmem'
 import { diskArrayReadout } from '../world/storage'
 import { walsenderReadout } from '../world/wal'
+import { objectStoreReadout, standbyBReadout } from '../world/continuity'
 import { createCollector } from './collector'
-import { ALL_VERDICTS } from './paths'
+import { ALL_STEPS, ALL_VERDICTS } from './paths'
 import { VITALS } from './ui'
 import type { Cell, Projection } from './views'
-import { PROJECTIONS } from './views'
+import { collectorCacheHitPercent, PROJECTIONS } from './views'
 
 class SvgElement {
   readonly nodeType = 1
@@ -80,6 +81,39 @@ function metric(id: string, label: string, state: ReturnType<typeof createSim>['
 function advance(sim: ReturnType<typeof createSim>, seconds: number): void {
   const target = sim.state.t + seconds
   while (sim.state.t < target) sim.update(Math.min(1 / 30, target - sim.state.t))
+}
+
+function advanceUntil(
+  sim: ReturnType<typeof createSim>,
+  done: () => boolean,
+  timeoutSec = 90,
+): void {
+  const deadline = sim.state.t + timeoutSec
+  while (!done() && sim.state.t < deadline) sim.update(1 / 30)
+  if (!done()) throw new Error(`condition was not reached within ${timeoutSec}s`)
+}
+
+function advanceWithCollector(
+  sim: ReturnType<typeof createSim>,
+  collector: ReturnType<typeof createCollector>,
+  seconds: number,
+): void {
+  const target = sim.state.t + seconds
+  while (sim.state.t < target) {
+    sim.update(Math.min(1 / 30, target - sim.state.t))
+    collector.sample()
+  }
+}
+
+function takeBackup(sim: ReturnType<typeof createSim>): void {
+  if (!sim.startBaseBackup()) throw new Error('base backup did not start')
+  const deadline = sim.state.t + 240
+  while (sim.state.disasterRecovery.backup.status !== 'idle' && sim.state.t < deadline) {
+    sim.update(1 / 30)
+  }
+  if (sim.state.disasterRecovery.backup.status !== 'idle') {
+    throw new Error('base backup did not complete')
+  }
 }
 
 describe('cross-surface scale agreement', () => {
@@ -201,6 +235,131 @@ describe('cross-surface scale agreement', () => {
     expect(standbyReadout(sim.state)).toContain(bytes)
     expect(lsnRulerReadout(sim.state)).toContain(bytes)
     expect(text(row(replication, 'standbyA').behind)).toBe(bytes)
+  })
+
+  it('shows absence instead of zero replay lag when no standby is connected', () => {
+    const sim = createSim(createBus())
+    sim.setKnob('standbyAEnabled', false)
+    sim.setKnob('standbyBEnabled', false)
+    advance(sim, 1)
+    const collector = createCollector(sim)
+    const diagnoseLag = VITALS.find((vital) => vital.key === 'lag')
+    const replication = PROJECTIONS.replication(sim.state, collector, 'total')
+
+    expect(replication.rows).toHaveLength(0)
+    expect(replication.empty).toMatch(/gone, not that lag is zero/i)
+    expect(vitalValue('lag', sim.state).text).toBe('—')
+    expect(diagnoseLag?.read(sim, collector)).toEqual({ v: '—', tone: '' })
+    expect(lsnRulerReadout(sim.state)).toMatch(/standby_a offline/i)
+    expect(metric('standby.b', 'Lag', sim.state)).toBe('—')
+  })
+
+  it('reports standby_a as the primary after a successful switchover', () => {
+    const sim = createSim(createBus(), { scheduledBackups: false })
+    sim.setKnob('tps', 2_000)
+    sim.setKnob('writeRatio', 1)
+    sim.setKnob('synchronousCommit', 'local')
+    advance(sim, 35)
+    expect(sim.startSwitchover('standbyA')).toBe(true)
+    advanceUntil(sim, () => sim.state.highAvailability.transition.status === 'complete')
+
+    expect(sim.state.highAvailability.currentLeader).toBe('standbyA')
+    expect(sim.state.cluster.nodes[1].role).toBe('primary')
+    expect(standbyReadout(sim.state)).toContain('promoted primary')
+    expect(standbyReadout(sim.state)).not.toContain('offline')
+    expect(lsnRulerReadout(sim.state)).toContain('standby_a is primary')
+    expect(metric('walreceiver', 'Link', sim.state)).toBe('stopped — standby_a is primary')
+    expect(metric('replica.standby', 'State', sim.state)).toBe('primary — accepting writes')
+    expect(metric('replica.buffers', 'Standby', sim.state)).toBe('promoted primary')
+    advance(sim, 10)
+    expect(metric('replica.storage', 'Applied through', sim.state))
+      .toBe(fmtLsn(sim.state.cluster.nodes[1].dataDirectory.appliedLsn))
+    expect(metric('replica.storage', 'Divergence', sim.state)).toBe('0 B')
+  })
+
+  it('uses standby_b as the primary reference after it is promoted', () => {
+    const sim = createSim(createBus(), { scheduledBackups: false })
+    sim.setKnob('tps', 2_000)
+    sim.setKnob('writeRatio', 1)
+    sim.setKnob('synchronousCommit', 'local')
+    sim.setKnob('standbyBNetworkLag', 900)
+    advance(sim, 35)
+    expect(sim.startFailover('standbyB')).toBe(true)
+    advanceUntil(sim, () => sim.state.highAvailability.transition.status === 'complete')
+
+    expect(sim.state.highAvailability.currentLeader).toBe('standbyB')
+    expect(sim.state.cluster.nodes[2].role).toBe('primary')
+    expect(standbyBReadout(sim.state)).toContain('promoted primary')
+    expect(metric('standby.b', 'Role', sim.state)).toBe('primary — accepting writes')
+    expect(metric('standby.b.storage', 'Primary at', sim.state)).toBe(fmtLsn(sim.state.wal.insertLsn))
+    expect(sim.state.cluster.nodes[0].dataDirectory.appliedLsn).not.toBe(sim.state.wal.insertLsn)
+    expect(walsenderReadout(sim.state)).toContain('current primary standby_b sees standbyB as leader')
+  })
+
+  it('keeps Diagnose cache evidence on the same time scopes as its route and grid', () => {
+    const sim = createSim(createBus(), { scheduledBackups: false })
+    const collector = createCollector(sim)
+    advanceWithCollector(sim, collector, 300)
+    sim.setKnob('sharedBuffers', 128)
+    sim.setKnob('tps', 600)
+    sim.setKnob('writeRatio', 0)
+    sim.setKnob('seqScanRatio', 0.1)
+    advanceWithCollector(sim, collector, 2)
+
+    const cumulative = collectorCacheHitPercent(collector)
+    const rolling = sim.state.stats.cacheHitPct
+    const ioStep = ALL_STEPS.find((step) => step.id === 'io.1')
+    const ioOk = ALL_VERDICTS.find((verdict) => verdict.id === 'v.io_ok')
+    const evidence = ioOk?.evidence(sim.state, collector) ?? []
+    const database = PROJECTIONS.database(sim.state, collector, 'total')
+
+    expect(cumulative).toBeGreaterThan(90)
+    expect(rolling).toBeLessThan(90)
+    expect(ioStep?.branches.find((branch) => branch.next === 'v.io_ok')?.test(sim.state, collector)).toBe(true)
+    expect(text(row(database, 'pgsimcity').hit_ratio)).toBe(`${cumulative.toFixed(1)}%`)
+    expect(evidence.find((item) => item.label === 'hit ratio since stats reset')?.value)
+      .toBe(`${cumulative.toFixed(1)}%`)
+    expect(evidence.find((item) => item.label === 'rolling hit ratio · ~50s')?.value)
+      .toBe(`${rolling.toFixed(1)}%`)
+  })
+
+  it('reports retained WAL objects rather than lifetime archive successes', () => {
+    const sim = createSim(createBus(), { scheduledBackups: false })
+    sim.setKnob('tps', 6_000)
+    sim.setKnob('writeRatio', 1)
+    sim.setKnob('synchronousCommit', 'local')
+    sim.setKnob('backupRetention', 1)
+    takeBackup(sim)
+    advance(sim, 8)
+    takeBackup(sim)
+
+    const oldest = sim.state.disasterRecovery.backups[0]
+    const segmentSize = sim.state.wal.segmentSize
+    const retained = Math.max(
+      0,
+      Math.floor(sim.state.disasterRecovery.archive.archivedThroughLsn / segmentSize)
+        - Math.floor(oldest.startLsn / segmentSize),
+    )
+
+    expect(sim.state.disasterRecovery.expiredBackups).toBe(1)
+    expect(retained).toBeLessThan(sim.state.wal.archived)
+    expect(metric('object.store', 'Segments held', sim.state)).toBe(fmtNum(retained))
+    expect(metric('object.store', 'Archive size', sim.state)).toBe(fmtBytes(retained * segmentSize))
+    expect(objectStoreReadout(sim.state)).toContain(`${retained} WAL objects`)
+    expect(objectStoreReadout(sim.state)).not.toContain(`${sim.state.wal.archived} WAL objects`)
+  })
+
+  it('uses the model data-directory estimate for both standby storage inspectors', () => {
+    const sim = createSim(createBus())
+    advance(sim, 30)
+    const standbyABytes = sim.state.cluster.nodes[1].dataDirectory.bytes
+    const standbyBBytes = sim.state.cluster.nodes[2].dataDirectory.bytes
+
+    expect(standbyABytes).toBe(standbyBBytes)
+    expect(metric('replica.storage', 'Aggregate size projection', sim.state))
+      .toBe(fmtBytes(standbyABytes))
+    expect(metric('standby.b.storage', 'Size', sim.state))
+      .toBe(fmtBytes(standbyBBytes))
   })
 
   it('uses running statements, not occupied slots, for every active-backend label', () => {

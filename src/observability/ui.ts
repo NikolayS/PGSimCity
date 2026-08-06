@@ -253,6 +253,7 @@ export const VITALS: Vital[] = [
     read: (sim) => {
       const a = sim.state.replication.standbys[0]
       const b = sim.state.replication.standbys[1]
+      if (!a.connected && !b.connected) return { v: '—', tone: '' }
       const v = Math.max(a.connected ? a.lagSec : 0, b.connected ? b.lagSec : 0)
       return { v: `${v.toFixed(2)} s`, tone: v > 8 ? 'crit' : v > 2 ? 'warn' : 'ok' }
     },

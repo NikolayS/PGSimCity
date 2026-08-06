@@ -207,6 +207,8 @@ describe('operator scenario: select a failover candidate', () => {
     expect.soft(lagging.state.highAvailability.rejoin.reinitializeNode).toBe('standbyA')
     expect.soft(lagging.state.highAvailability.rejoin.reinitializeBytes)
       .toBeGreaterThan(1024 * 1024 * 1024)
+    const divergentBufferMisses = lagging.state.cluster.nodes[1].buffers.misses
+    expect.soft(divergentBufferMisses).toBeGreaterThan(0)
 
     expect(lagging.recoverScenario()).toBe(true)
     advanceUntil(lagging, () => lagging.state.scenarioDecision?.phase === 'recovered')
@@ -216,5 +218,7 @@ describe('operator scenario: select a failover candidate', () => {
     expect(lagging.state.cluster.nodes[1].role).toBe('standby')
     expect(lagging.state.replication.standbys[0].connected).toBe(true)
     expect(lagging.state.highAvailability.rejoin.required).toBe(false)
+    expect(lagging.state.cluster.nodes[1].buffers.misses).toBeLessThan(divergentBufferMisses)
+    expect(lagging.state.cluster.nodes[1].buffers.usedCount).toBeLessThanOrEqual(12)
   })
 })

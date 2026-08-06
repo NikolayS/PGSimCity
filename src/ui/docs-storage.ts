@@ -1,4 +1,4 @@
-import { poolBytes } from '../core/types'
+import { poolBytes, retainedArchiveSegments } from '../core/types'
 import { operationalReference, renderAction } from '../core/actions'
 import { CLAIM_VALUES } from '../core/claims'
 import type { BookRef, CheckpointPhase, ComponentDoc, DocRef, SimState, TableSim, VacPhase, WalSegment } from '../core/types'
@@ -31,6 +31,7 @@ const ratio = (a: number, b: number): number => (b > 0 ? a / b : 0)
 const WAL_SEGMENT_POSTGRESQL_DISCLOSURE = CLAIM_VALUES.walSegment.postgresqlDisclosure.join('. ')
 
 const standbyA = (s: SimState) => physicalStandby(s.replication, 'standbyA')
+const standbyANodeIsPrimary = (s: SimState): boolean => s.cluster.nodes[1].role === 'primary'
 
 /** Bytes currently sitting in pg_wal. */
 const walDirBytes = (s: SimState): number => s.wal.segmentCount * s.wal.segmentSize
@@ -375,10 +376,10 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     metrics: [
       {
         label: 'Archive size',
-        get: (s) => fmtBytes(s.wal.archived * s.wal.segmentSize),
-        hint: 'WAL safely off the primary in this session',
+        get: (s) => fmtBytes(retainedArchiveSegments(s) * s.wal.segmentSize),
+        hint: 'WAL segment objects retained after the modeled FULL policy',
       },
-      { label: 'Segments held', get: (s) => fmtNum(s.wal.archived) },
+      { label: 'Segments held', get: (s) => fmtNum(retainedArchiveSegments(s)) },
       {
         label: 'Recovery window',
         get: (s) =>
@@ -1277,7 +1278,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'In the real thing',
-        body: 'The city draws each table as a slab whose height is its page count and whose colour shows the dead-tuple ratio, which is honest about proportions and silent about detail. It does not model column order and alignment padding (real tables waste several percent to it), or per-tuple null bitmaps, or the fact that `pg_stat_user_tables.n_dead_tup` is a statistics estimate rather than a count. For the real numbers on a suspect table, use `pgstattuple`, and expect it to read every page.',
+        body: 'The city draws each table as a fixed-height warehouse whose footprint length is its page count; roof colour shows the derived concentration of dead tuples. That is honest about proportions and silent about detail. It does not model column order and alignment padding (real tables waste several percent to it), or per-tuple null bitmaps, or the fact that `pg_stat_user_tables.n_dead_tup` is a statistics estimate rather than a count. For the real numbers on a suspect table, use `pgstattuple`, and expect it to read every page.',
       },
     ],
     metrics: [
@@ -2294,7 +2295,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
     ],
     metrics: [
-      { label: 'Link', get: (s) => (standbyA(s).connected ? 'streaming' : standbyA(s).enabled ? 'reconnecting' : 'no standby') },
+      { label: 'Link', get: (s) => standbyANodeIsPrimary(s) ? 'stopped — standby_a is primary' : standbyA(s).connected ? 'streaming' : standbyA(s).enabled ? 'reconnecting' : 'no standby' },
       { label: 'Received', get: (s) => fmtLsn(s.replication.standbys[0].receivedLsn) },
       { label: 'Written', get: (s) => fmtLsn(standbyA(s).writtenLsn) },
       { label: 'Flushed', get: (s) => fmtLsn(standbyA(s).flushedLsn), hint: 'durable on the standby — what synchronous_commit=on waits for, once this standby is in synchronous_standby_names' },
@@ -2417,8 +2418,8 @@ export const DOCS_STORAGE: ComponentDoc[] = [
 
   {
     id: 'replica.standby',
-    title: 'Physical standby',
-    subtitle: 'a second cluster replaying the first',
+    title: 'standby_a node',
+    subtitle: 'physical-replication site and promotion candidate',
     tldr: 'A block-level replay of the WAL-logged cluster, readable while recovery continues.',
     sections: [
       {
@@ -2443,7 +2444,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
     ],
     metrics: [
-      { label: 'State', get: (s) => (!standbyA(s).enabled ? 'no standby' : standbyA(s).connected ? `streaming (${standbyA(s).mode})` : 'disconnected') },
+      { label: 'State', get: (s) => standbyANodeIsPrimary(s) ? `primary — ${s.highAvailability.acceptingWrites ? 'accepting writes' : 'writes closed'}` : !standbyA(s).enabled ? 'no standby' : standbyA(s).connected ? `streaming (${standbyA(s).mode})` : 'disconnected' },
       { label: 'sent → write', get: (s) => fmtBytes(Math.max(0, standbyA(s).sentLsn - standbyA(s).writtenLsn)), hint: 'network' },
       { label: 'write → flush', get: (s) => fmtBytes(Math.max(0, standbyA(s).writtenLsn - standbyA(s).flushedLsn)), hint: 'standby disk' },
       { label: 'flush → replay', get: (s) => fmtBytes(Math.max(0, standbyA(s).flushedLsn - standbyA(s).appliedLsn)), hint: 'replay speed' },
@@ -2472,8 +2473,8 @@ export const DOCS_STORAGE: ComponentDoc[] = [
 
   {
     id: 'replica.buffers',
-    title: 'Standby buffer cache',
-    subtitle: 'shared memory on the standby',
+    title: 'standby_a buffer cache',
+    subtitle: 'node-local shared memory',
     tldr: 'Warmed by replay instead of by queries, which is why a fresh failover target is slow.',
     sections: [
       {
@@ -2501,7 +2502,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         get: (s) => fmtPct(s.buffers.hitRatio, 1),
         hint: 'shown for contrast — the standby cache holds a different set of pages',
       },
-      { label: 'Standby', get: (s) => (standbyA(s).enabled ? (standbyA(s).connected ? 'online' : 'disconnected') : 'not running') },
+      { label: 'Standby', get: (s) => standbyANodeIsPrimary(s) ? 'promoted primary' : standbyA(s).enabled ? (standbyA(s).connected ? 'online' : 'disconnected') : 'not running' },
     ],
     knobs: ['standbyAEnabled', 'standbyASlowApply', 'sharedBuffers'],
     see: ['replica.standby', 'startup.proc', 'os.cache', 'checkpointer'],
@@ -2522,8 +2523,8 @@ export const DOCS_STORAGE: ComponentDoc[] = [
 
   {
     id: 'replica.storage',
-    title: 'Standby data directory',
-    subtitle: 'a physical copy of the primary data directory',
+    title: 'standby_a data directory',
+    subtitle: 'node-local physical cluster state',
     tldr: 'WAL-replayed relation blocks plus standby-local WAL, control, runtime and configuration state.',
     sections: [
       {
@@ -2548,10 +2549,10 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
     ],
     metrics: [
-      { label: 'Replayed to', get: (s) => fmtLsn(standbyA(s).appliedLsn) },
+      { label: 'Applied through', get: (s) => fmtLsn(s.cluster.nodes[1].dataDirectory.appliedLsn), hint: 'replay frontier while a standby; current WAL frontier after promotion' },
       { label: 'Primary at', get: (s) => fmtLsn(s.wal.insertLsn) },
-      { label: 'Divergence', get: (s) => fmtBytes(Math.max(0, s.wal.insertLsn - standbyA(s).appliedLsn)), hint: 'how stale the copy is right now' },
-      { label: 'Aggregate size projection', get: (s) => fmtBytes(sumTables(s, (t) => t.pages) * PAGE), hint: 'primary relation-size estimate; no replica files are stored' },
+      { label: 'Divergence', get: (s) => fmtBytes(Math.max(0, s.wal.insertLsn - s.cluster.nodes[1].dataDirectory.appliedLsn)), hint: 'replay lag while this node is a standby; zero while it is the current primary' },
+      { label: 'Aggregate size projection', get: (s) => fmtBytes(s.cluster.nodes[1].dataDirectory.bytes), hint: 'heap and index pages plus the model’s fixed metadata allowance; no replica files are stored' },
     ],
     knobs: ['standbyAEnabled', 'standbyASlowApply', 'standbyANetworkLag'],
     see: ['storage.datadir', 'replica.standby', 'walreceiver', 'object.store'],
@@ -2569,7 +2570,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
   {
     id: 'standby.b',
     title: 'standby_b — an independent node',
-    subtitle: 'the second physical standby',
+    subtitle: 'second physical-replication site and promotion candidate',
     tldr: 'Its own server state, not a second drawing of standby_a: its own buffer pool, WAL, data directory, replay position, slot, and leader opinion.',
     sections: [
       {
@@ -2590,12 +2591,15 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
     ],
     metrics: [
+      { label: 'Role', get: (s) => s.cluster.nodes[2].role === 'primary' ? `primary — ${s.highAvailability.acceptingWrites ? 'accepting writes' : 'writes closed'}` : s.cluster.nodes[2].role },
       { label: 'Received', get: (s) => fmtLsn(s.replication.standbys[1].receivedLsn) },
       { label: 'Flushed', get: (s) => fmtLsn(s.replication.standbys[1].flushedLsn) },
       { label: 'Applied', get: (s) => fmtLsn(s.replication.standbys[1].appliedLsn) },
       {
         label: 'Lag',
-        get: (s) => `${fmtBytes(s.replication.standbys[1].lagBytes)} · ${fmtDuration(s.replication.standbys[1].lagSec)}`,
+        get: (s) => s.replication.standbys[1].enabled && s.replication.standbys[1].connected
+          ? `${fmtBytes(s.replication.standbys[1].lagBytes)} · ${fmtDuration(s.replication.standbys[1].lagSec)}`
+          : '—',
       },
       {
         label: 'Physical slot',
@@ -2790,7 +2794,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     metrics: [
       { label: 'Size', get: (s) => fmtBytes(s.cluster.nodes[2].dataDirectory.bytes) },
       { label: 'Applied through', get: (s) => fmtLsn(s.cluster.nodes[2].dataDirectory.appliedLsn) },
-      { label: 'Primary at', get: (s) => fmtLsn(s.cluster.nodes[0].dataDirectory.appliedLsn) },
+      { label: 'Primary at', get: (s) => fmtLsn(s.wal.insertLsn) },
     ],
     knobs: ['standbyBEnabled', 'standbyBSlowApply'],
     see: ['standby.b', 'standby.b.buffers', 'storage.datadir'],

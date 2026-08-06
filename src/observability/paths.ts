@@ -1058,7 +1058,7 @@ SELECT * FROM pg_buffercache_usage_counts();`,
        write_lag, flush_lag, replay_lag
   FROM pg_stat_replication;`,
     look:
-      'In PostgreSQL this is a pipeline: the walsender **sends**, the standby **writes**, **flushes**, then **replays**. The city represents only those ordered LSN frontiers and acknowledgement queues; it has no receiver files, fsync call or page replay. Walk left to right and stop at the first modeled position not tracking the primary.',
+      'In PostgreSQL this is a pipeline: the walsender **sends**, the standby **writes**, **flushes**, then **replays**. The city advances those ordered LSN frontiers and acknowledgement queues, and replay touches a representative buffer-frame sample. It has no receiver files, fsync call, decoded WAL records or copied relation-page contents. Walk left to right and stop at the first modeled position not tracking the primary.',
     note:
       'write_lag, flush_lag and replay_lag arrived in 10. An empty pg_stat_replication on a primary you believe has a standby is not "zero lag" — it means the walsender is gone.',
     branches: [
@@ -1610,9 +1610,10 @@ const VERDICTS: Verdict[] = [
       'Almost every sampled resident buffer sits at usage_count 0. That establishes low reuse in the sample, but a one-pass or bulk-read workload can produce the same histogram even when a larger pool would not help.',
     mechanism:
       'Postgres has no LRU list. The sweep walks the pool decrementing usage counts and takes the first frame at zero. That is cheap and needs no global lock, and it works beautifully — right up until there is nothing in the pool worth keeping, at which point the sweep degenerates into an expensive way of evicting pages you are about to need again.',
-    evidence: (s) => [
+    evidence: (s, c) => [
       { label: 'shared_buffers', value: fmtBytes(poolBytes(s.knobs)), tone: 'warn' },
-      { label: 'cache hit ratio', value: `${s.stats.cacheHitPct.toFixed(1)}%`, tone: s.stats.cacheHitPct < 90 ? 'crit' : 'warn' },
+      { label: 'hit ratio since stats reset', value: `${collectorCacheHitPercent(c).toFixed(1)}%`, tone: collectorCacheHitPercent(c) < 90 ? 'crit' : 'warn' },
+      { label: 'rolling hit ratio · ~50s', value: `${s.stats.cacheHitPct.toFixed(1)}%`, tone: s.stats.cacheHitPct < 90 ? 'crit' : 'warn' },
       { label: 'sampled frames at usage_count 0', value: `${(coldBufferShare(s) * 100).toFixed(0)}%`, tone: 'crit' },
       { label: 'reads/sec', value: s.stats.ioReadPerSec.toFixed(0) },
     ],
@@ -1625,10 +1626,10 @@ const VERDICTS: Verdict[] = [
       instrument: 'pg_buffercache',
       sql: `SELECT * FROM pg_buffercache_usage_counts();`,
     },
-    resolved: (s) => ({
+    resolved: (s, c) => ({
       ok: coldBufferShare(s) <= DIAGNOSTIC_GATES.coldBufferShare.threshold
         && s.stats.cacheHitPct >= DIAGNOSTIC_GATES.cacheHitPercent.threshold,
-      reading: `shared_buffers ${fmtBytes(poolBytes(s.knobs))} · ${(coldBufferShare(s) * 100).toFixed(0)}% of sampled frames still at usage_count 0 · hit ratio ${s.stats.cacheHitPct.toFixed(1)}%`,
+      reading: `shared_buffers ${fmtBytes(poolBytes(s.knobs))} · ${(coldBufferShare(s) * 100).toFixed(0)}% of sampled frames still at usage_count 0 · rolling hit ratio ${s.stats.cacheHitPct.toFixed(1)}% (since reset ${collectorCacheHitPercent(c).toFixed(1)}%)`,
     }),
     city: 'shared.buffers',
     reading: [DOC('runtime-config-resource.html', 'Resource Consumption settings')],
@@ -1640,8 +1641,9 @@ const VERDICTS: Verdict[] = [
     because: 'Reads are mostly hits and the usage-count sample contains reused buffers. The sample does not prove optimal sizing, necessary reads, physical device I/O or correct write attribution.',
     mechanism:
       `A high hit ratio does not mean zero I/O or prove that the remaining reads are necessary. PostgreSQL 18 gives sequential scans of relations larger than a quarter of shared_buffers a bulk-read ring that starts at 256 KiB, grows with io_combine_limit × effective_io_concurrency and is capped. The ring limits cache pollution; it does not guarantee zero displacement or prove physical device reads. The current city model uses a historical ${CLAIM_VALUES.bulkReadRing.diagnoseDisclosure}, so its sampled cache cannot validate PostgreSQL 18’s ring size.`,
-    evidence: (s) => [
-      { label: 'cache hit ratio', value: `${s.stats.cacheHitPct.toFixed(1)}%`, tone: 'ok' },
+    evidence: (s, c) => [
+      { label: 'hit ratio since stats reset', value: `${collectorCacheHitPercent(c).toFixed(1)}%`, tone: collectorCacheHitPercent(c) >= DIAGNOSTIC_GATES.cacheHitPercent.threshold ? 'ok' : 'warn' },
+      { label: 'rolling hit ratio · ~50s', value: `${s.stats.cacheHitPct.toFixed(1)}%`, tone: s.stats.cacheHitPct >= DIAGNOSTIC_GATES.cacheHitPercent.threshold ? 'ok' : 'warn' },
       { label: 'sampled frames at usage_count 0', value: `${(coldBufferShare(s) * 100).toFixed(0)}%`, tone: 'ok' },
       { label: 'reads/sec', value: s.stats.ioReadPerSec.toFixed(0) },
     ],
