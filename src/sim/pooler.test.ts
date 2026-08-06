@@ -75,6 +75,23 @@ describe('connection pooler', () => {
     expect(sim.state.pooler.disconnectedClients).toBeGreaterThan(0)
   })
 
+  it('does not retain an unbounded application backlog behind bound sessions', () => {
+    const sim = createAggregateSim()
+    sim.setKnob('clientConnections', 64)
+    sim.setKnob('poolMode', 'session')
+    sim.setKnob('defaultPoolSize', 8)
+    sim.setKnob('maxClientConn', 100)
+    sim.setKnob('queryWaitTimeout', 5)
+    sim.setKnob('tps', 200)
+    sim.setKnob('writeRatio', 0.4)
+
+    advanceBy(sim, 10 * 60)
+
+    expect(sim.state.pooler.serverOfferedTps).toBe(25)
+    expect(Math.max(...sim.state.pooler.sessionPendingTransactions)).toBeLessThanOrEqual(1)
+    expect(sim.state.stats.poolerQueuedTransactions).toBe(sim.state.pooler.waitingClients)
+  })
+
   it('keeps PgBouncer disabled in the stock city', () => {
     expect(DEFAULT_KNOBS.poolMode).toBe('disabled')
     expect(DEFAULT_KNOBS.queryWaitTimeout).toBe(120)

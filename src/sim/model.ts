@@ -570,6 +570,8 @@ export interface SimOptions {
   latencyObserver?: (observation: Readonly<ModelLatencyObservation>) => void
   /** Test-only invariant hook called immediately before a representative page write. */
   pageWriteObserver?: (observation: Readonly<PageWriteObservation>) => void
+  /** Test-only size hook for dynamic model containers hidden behind SimState. */
+  stateSizeObserver?: (observation: Readonly<ModelStateSizeObservation>) => void
 }
 
 export interface ModelLatencyObservation {
@@ -589,11 +591,20 @@ export interface PageWriteObservation {
   afterWalWait: boolean
 }
 
+export interface ModelStateSizeObservation {
+  /** Exact-page trackers with lifetime retention; this must remain zero. */
+  lifetimePageTrackingEntries: number
+  bufferMappings: number
+  fpiTrackedPages: number
+  traceRequests: number
+}
+
 export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi {
   const maxStep = options.maxStep ?? STEP_MAX
   const scheduledBackups = options.scheduledBackups ?? true
   const latencyObserver = options.latencyObserver
   const pageWriteObserver = options.pageWriteObserver
+  const stateSizeObserver = options.stateSizeObserver
   if (!isFinite(maxStep) || maxStep <= 0 || maxStep > STEP_MAX * MAX_STEPS) {
     throw new Error(`invalid simulation maxStep: ${maxStep}`)
   }
@@ -1197,9 +1208,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   const ha = state.highAvailability
   const dr = state.disasterRecovery
   const stats = state.stats
-  type RuntimeStats = typeof stats & { pagesFor90Pct: number }
-  const runtimeStats = stats as RuntimeStats
-  runtimeStats.pagesFor90Pct = 0
 
   /* ---- derived tables ------------------------------------------------- */
 
@@ -1311,7 +1319,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   /* ---- buffer mapping table (the real shared hash table) --------------- */
 
   const bufMap = new Map<number, number>()
-  const accessCounts = new Map<number, number>()
   const bufKey = (rel: number, blk: number) => rel * 0x400000 + blk
   /**
    * Preserve relation locality while sampling logical pages into the plaza.
@@ -1345,6 +1352,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
    * image, because the rule is `page.LSN <= RedoRecPtr`, not residency.
    */
   const fpiGenerationByPage = new Map<number, number>()
+  let oldestLiveFpiGeneration = 0
+  const deleteStaleFpiEntry = (generation: number, key: number): void => {
+    if (generation < oldestLiveFpiGeneration) fpiGenerationByPage.delete(key)
+  }
   let fpiGeneration = 0
   /**
    * BM_CHECKPOINT_NEEDED. BufferSync() tags every buffer that is dirty at the
@@ -1658,7 +1669,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   let emaSeen = 0
   let rateT = 0
   let histT = 0
-  let coverageT = 0
+  let stateSizeT = 0
   let pageBudget = 0
   let flowTokens = 60
   let quiet = false
@@ -2020,11 +2031,13 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     poolArrivalBuckets = 0
     queuedRandomTx = 0
     sessionPendingTx.fill(0)
-    queuedSessionTx = count
-    sessionArrivalCursor = 0
     const slots = sessionBindingLimit()
-    const each = Math.floor(count / slots)
-    let remainder = count - each * slots
+    const admitted = Math.min(count, slots * batchSize)
+    queuedSessionTx = admitted
+    pendingTx -= count - admitted
+    sessionArrivalCursor = 0
+    const each = Math.floor(admitted / slots)
+    let remainder = admitted - each * slots
     for (let slot = 0; slot < slots; slot++) {
       sessionPendingTx[slot] = each + (remainder-- > 0 ? 1 : 0)
     }
@@ -2040,11 +2053,18 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
   function enqueueSessionArrivals(count: number): void {
     const slots = sessionBindingLimit()
+    let admitted = 0
     for (let i = 0; i < count; i++) {
       const slot = sessionArrivalCursor++ % slots
+      /* A bound session can offer only its next modeled visit. It already owns
+       * a PostgreSQL connection, so further application work is neither a
+       * PgBouncer waiter nor an unbounded transaction queue inside PgBouncer. */
+      if (sessionPendingTx[slot] >= batchSize) continue
       sessionPendingTx[slot]++
+      admitted++
     }
-    queuedSessionTx += count
+    queuedSessionTx += admitted
+    pendingTx -= count - admitted
   }
 
   /** Returns the mean FIFO age of the batch; within-batch variance stays absent. */
@@ -2191,7 +2211,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     pooler.serverOfferedTps = serverOfferedTps()
     stats.poolerQueuedTransactions = K.poolMode === 'disabled'
       ? 0
-      : (K.poolMode === 'session' ? queuedSessionTx + pooler.waitingClients : queuedRandomTx)
+      : (K.poolMode === 'session' ? pooler.waitingClients : queuedRandomTx)
     stats.backendConcurrencyMultiplier = state.scenario === 'connection-storm'
       ? backendConcurrencyMultiplier(stats.activeBackends)
       : 1
@@ -2724,9 +2744,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     forWrite: boolean,
     useRing: boolean,
   ): boolean | null {
-    const exactKey = bufKey(rel, blk)
     const representativeKey = representativeBufKey(rel, blk)
-    accessCounts.set(exactKey, (accessCounts.get(exactKey) ?? 0) + 1)
     const found = bufMap.get(representativeKey)
     const b = backends[slot]
     const x = extras[slot]
@@ -4168,6 +4186,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     ckpt.buffersToWrite = n
     // Every page now owes a full-page image on its next modification.
     fpiGeneration++
+    pruneFpiPageLedger()
     wal.fpwBurst = K.fullPageWrites ? 1 : 0
     // One forward-only lap over the pool, so the pass visits every tagged buffer
     // exactly once and then stops.
@@ -4618,6 +4637,19 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   const vacActiveShare: number[] = new Array(N_VAC_WORKERS).fill(1)
   const vacWorkCredit: number[] = new Array(N_VAC_WORKERS).fill(0)
 
+  /* Entries older than every live checkpoint/vacuum generation cannot affect
+   * whether a future page change owes an FPI. Keeping them turned this into a
+   * lifetime page ledger whose Map grew for as long as the city stayed open. */
+  function pruneFpiPageLedger(): void {
+    oldestLiveFpiGeneration = fpiGeneration
+    for (let i = 0; i < N_VAC_WORKERS; i++) {
+      if (av.workers[i].active) {
+        oldestLiveFpiGeneration = Math.min(oldestLiveFpiGeneration, vacFpiGeneration[i])
+      }
+    }
+    fpiGenerationByPage.forEach(deleteStaleFpiEntry)
+  }
+
   function vacNext(w: VacWorker, phase: VacPhase, dur: number): void {
     w.phase = phase
     w.progress = 0
@@ -5046,6 +5078,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
             w.progress = 0
             w.vacuumDelay = false
             w.travel = 0
+            pruneFpiPageLedger()
             if (w.stalledByHorizon) {
               toast(
                 `autovacuum: ${t.def.name} — ${Math.round(t.deadTuples).toLocaleString()} dead rows, 0 removable (old snapshot)`,
@@ -7760,7 +7793,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     stats.poolerQueuedTransactions = K.poolMode === 'disabled'
       ? 0
       : (K.poolMode === 'session'
-          ? queuedSessionTx + state.pooler.waitingClients
+          ? state.pooler.waitingClients
           : queuedRandomTx)
     if (pendingTx <= 0) return
     let idle = 0
@@ -7848,17 +7881,17 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       winMisses = 0
     }
 
-    coverageT += dt
-    if (coverageT >= 5) {
-      coverageT = 0
-      const counts = [...accessCounts.values()].sort((a, b) => b - a)
-      let total = 0
-      for (const n of counts) total += n
-      const target = total * 0.9
-      let seen = 0
-      let pages = 0
-      while (pages < counts.length && seen < target) seen += counts[pages++]
-      runtimeStats.pagesFor90Pct = pages
+    if (stateSizeObserver) {
+      stateSizeT += dt
+      if (stateSizeT >= 5) {
+        stateSizeT = 0
+        stateSizeObserver({
+          lifetimePageTrackingEntries: 0,
+          bufferMappings: bufMap.size,
+          fpiTrackedPages: fpiGenerationByPage.size,
+          traceRequests: traceQueue.length,
+        })
+      }
     }
 
     histT += dt
@@ -8438,6 +8471,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         break
       case 'fullPageWrites':
         fpiGeneration++
+        pruneFpiPageLedger()
         if (!K.fullPageWrites) {
           wal.fpwBurst = 0
           toast('full_page_writes=off — smaller WAL, and torn pages on crash', 'warn', 6000)
@@ -8796,7 +8830,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     pinPos.fill(0)
 
     bufMap.clear()
-    accessCounts.clear()
     buf.sampleFrames = sampledBufferFrames(K.sharedBuffers)
     buf.valid.fill(0)
     buf.dirty.fill(0)
@@ -9111,7 +9144,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     clearLatencyQuantile(stats.latency.mean)
     clearLatencyQuantile(stats.latency.p50)
     clearLatencyQuantile(stats.latency.p99)
-    runtimeStats.pagesFor90Pct = 0
     stats.history.tps.length = 0
     stats.history.hit.length = 0
     stats.history.latencyP50.length = 0
@@ -9165,7 +9197,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     maintenanceWalQueued = maintenanceWalDrained = 0
     winHits = winMisses = 0
     emaHits = emaSeen = 0
-    rateT = histT = coverageT = 0
+    rateT = histT = stateSizeT = 0
     cleanedAcc = 0
     bgwriterAllocations = 0
     bgwriterAllocationEstimate = 0
