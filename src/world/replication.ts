@@ -2,13 +2,17 @@ import * as THREE from 'three'
 import { COLOR } from '../core/theme'
 import { REPLICA_BUF_GRID } from '../core/types'
 import type { SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
-import { clamp, clamp01, damp, fmtBytes, fmtLsn, lerp, makeRng } from '../core/util'
+import { clamp, clamp01, damp, fmtBytes, fmtLsn, lerp } from '../core/util'
 import { ANCHOR, CITY, TABLES, routeLength, routePoint, routeTangent } from './layout'
 
 export function standbyReadout(s: SimState): string {
   const r = s.replication.standbys[0]
   const slot = s.replication.physicalSlots[0]
-  const opinion = s.cluster.nodes[1].leaderOpinion ?? 'unknown'
+  const node = s.cluster.nodes[1]
+  const opinion = node.leaderOpinion ?? 'unknown'
+  if (node.role === 'primary') {
+    return `promoted primary · timeline ${s.highAvailability.timeline.current} · writes ${s.highAvailability.acceptingWrites ? 'open' : 'closed'}`
+  }
   if (!r.enabled) return 'offline'
   if (!r.connected) {
     return slot.exists
@@ -20,6 +24,13 @@ export function standbyReadout(s: SimState): string {
 
 export function lsnRulerReadout(s: SimState): string {
   const standby = s.replication.standbys[0]
+  if (s.cluster.nodes[1].role === 'primary') {
+    return `standby_a is primary · flush ${fmtLsn(s.wal.flushLsn)} · replay stopped`
+  }
+  if (!standby.enabled) return `primary flush ${fmtLsn(s.wal.flushLsn)} · standby_a offline · no replay lag reading`
+  if (!standby.connected) {
+    return `primary flush ${fmtLsn(s.wal.flushLsn)} · standby_a disconnected at ${fmtLsn(standby.appliedLsn)} · no replay lag reading`
+  }
   return `primary flush ${fmtLsn(s.wal.flushLsn)} · standby_a applied ${fmtLsn(standby.appliedLsn)} · lag ${fmtBytes(
     standby.lagBytes,
   )}`
@@ -67,6 +78,7 @@ const TAU = Math.PI * 2
 const MB = 1024 * 1024
 /** Packet-flight animation only; model readouts convert this stretch back out. */
 const NET_PACKET_STRETCH = 6
+const BUFFER_OFF = 0x0a1120
 
 /** cx, cy, cz, w, h, d — for cylinders w/d are diameters. */
 type BoxSpec = [number, number, number, number, number, number]
@@ -911,6 +923,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
   const R_HALF = ((RG - 1) * RP) / 2
   const TILE = RP * 0.78
   const tiles = new THREE.InstancedMesh(unitBox, neonWhite, N_RTILE)
+  tiles.name = 'replica.buffers.tiles'
   tiles.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
   _c.setRGB(0, 0, 0)
   for (let i = 0; i < N_RTILE; i++) {
@@ -922,12 +935,6 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
   tiles.instanceMatrix.needsUpdate = true
   tiles.instanceColor!.setUsage(THREE.DynamicDrawUsage)
   gBuffers.add(tiles)
-
-  const tileHeat = new Float32Array(N_RTILE)
-  const tileRel = new Uint8Array(N_RTILE)
-  const tileRead = new Float32Array(N_RTILE)
-  const trng = makeRng(0xb0ffe5)
-  for (let i = 0; i < N_RTILE; i++) tileRel[i] = (trng() * TABLES.length) | 0
 
   text.alloc(22, BX, 2.0, BZ - DECK_H - 0.9, 'north', 1.3, COLOR.replication, 'center', 0.9, 'STANDBY')
   text.alloc(34, BX, 0.9, BZ - DECK_H - 0.9, 'north', 0.7, COLOR.inkDim, 'center', 0.65, 'hot standby — read-only')
@@ -1200,6 +1207,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     color: COLOR.replication,
     readout: (s: SimState) => {
       const r = s.replication.standbys[0]
+      if (s.cluster.nodes[1].role === 'primary') return 'standby_a is primary · follower link stopped'
       if (!r.connected) return 'link down — nothing is being streamed'
       return `${r.networkLagMs.toFixed(0)} ms one way · ${r.inFlight} packet${r.inFlight === 1 ? '' : 's'} in flight`
     },
@@ -1218,6 +1226,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     color: COLOR.replication,
     readout: (s: SimState) => {
       const r = s.replication.standbys[0]
+      if (s.cluster.nodes[1].role === 'primary') return 'stopped · standby_a is primary'
       if (!r.connected) return 'disconnected'
       return `receiving ${fmtBytes(recvRate)}/s · write ${fmtLsn(r.writtenLsn)} · flush ${fmtLsn(r.flushedLsn)}`
     },
@@ -1236,6 +1245,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     color: COLOR.replication,
     readout: (s: SimState) => {
       const standbyA = s.replication.standbys[0]
+      if (s.cluster.nodes[1].role === 'primary') return `stopped at promotion · primary timeline ${s.highAvailability.timeline.current}`
       return `replay ${fmtLsn(standbyA.appliedLsn)} · ${fmtBytes(applyRate)}/s · waiting ${fmtBytes(
         Math.max(0, standbyA.flushedLsn - standbyA.appliedLsn),
       )}`
@@ -1281,7 +1291,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     focus: { target: [BX, 5, BZ], distance: 66, dir: [-0.32, 0.66, 0.68] },
     labelAt: [BX, 14, BZ],
     color: COLOR.bufClean,
-    readout: (s: SimState) => `${s.cluster.nodes[1].buffers.usedCount} / ${s.cluster.nodes[1].buffers.sampleFrames} sampled frames used · replay activity ${(s.replication.standbys[0].applyActivity * 100).toFixed(0)}%`,
+    readout: (s: SimState) => `${s.cluster.nodes[1].role === 'primary' ? 'primary role · ' : ''}${s.cluster.nodes[1].buffers.usedCount} / ${s.cluster.nodes[1].buffers.sampleFrames} sampled frames used · replay activity ${(s.replication.standbys[0].applyActivity * 100).toFixed(0)}%`,
   })
 
   ctx.register({
@@ -1295,7 +1305,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     focus: { target: [BX, 5, YARD_Z], distance: 62, dir: [-0.4, 0.48, 0.78] },
     labelAt: [BX, 15, YARD_Z],
     color: COLOR.storage,
-    readout: (s: SimState) => `${fmtBytes(s.cluster.nodes[1].dataDirectory.bytes)} · applied through ${fmtLsn(s.cluster.nodes[1].dataDirectory.appliedLsn)}`,
+    readout: (s: SimState) => `${s.cluster.nodes[1].role === 'primary' ? 'primary role · ' : ''}${fmtBytes(s.cluster.nodes[1].dataDirectory.bytes)} · applied through ${fmtLsn(s.cluster.nodes[1].dataDirectory.appliedLsn)}`,
   })
 
   ctx.register({
@@ -1311,6 +1321,9 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     color: COLOR.client,
     readout: (s: SimState) => {
       const standbyA = s.replication.standbys[0]
+      if (s.cluster.nodes[1].role === 'primary') {
+        return 'standby_a is primary — the read-only standby route is unavailable'
+      }
       if (!standbyA.enabled || !standbyA.connected) {
         return 'no standby — reads unavailable'
       }
@@ -1377,7 +1390,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
     const replication = sim.replication
     const rep = replication.standbys[0]
     const wal = sim.wal
-    const connected = rep.enabled && rep.connected
+    const connected = rep.enabled && rep.connected && sim.cluster.nodes[1].role === 'standby'
     link = damp(link, connected ? 1 : 0, 4, dt)
 
     /* --- 1. the wire ---------------------------------------------------- */
@@ -1574,26 +1587,14 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
 
     // Replay pulls in every page a record touches: the standby's cache is
     // shaped by the primary's *writes*, plus whatever local reads add.
-    const applyPages = (dReplay / 8192) * 0.25
-    if (applyPages > 0) {
-      const n = Math.min(6, Math.max(1, Math.round(applyPages)))
-      for (let k = 0; k < n; k++) {
-        const idx = (trng() * N_RTILE) | 0
-        tileHeat[idx] = 1
-      }
-    }
-    if (connected && trng() < dt * 6) {
-      tileRead[(trng() * N_RTILE) | 0] = 1
-      readGlow = 1
-    }
-    readGlow = Math.max(0, readGlow - dt * 2.4)
+    const standbyPool = sim.cluster.nodes[1].buffers
+    readGlow = connected ? 0.5 + Math.sin(t * 1.7) * 0.5 : 0
 
     for (let i = 0; i < N_RTILE; i++) {
-      const h = tileHeat[i]
-      const r = tileRead[i]
-      if (h > 0) tileHeat[i] = Math.max(0, h - dt * 0.55)
-      if (r > 0) tileRead[i] = Math.max(0, r - dt * 1.3)
-      const rise = 0.4 + h * 2.0 + r * 0.6
+      const valid = i < standbyPool.sampleFrames && standbyPool.valid[i] === 1
+      const age = valid ? Math.max(0, sim.t - standbyPool.lastTouch[i]) : Infinity
+      const heat = valid ? Math.max(0, 1 - age / 8) : 0
+      const rise = valid ? 0.4 + heat * 2 : 0.18
       const col = i % RG
       const row = (i / RG) | 0
       setTRS(
@@ -1601,16 +1602,9 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
         BX - R_HALF + col * RP, 3.2 + rise / 2, BZ - R_HALF + row * RP,
         TILE, rise, TILE,
       )
-      // dirty red as replay writes it, cooling to the relation's own colour
-      _c.setHex(TABLES[tileRel[i]].color).multiplyScalar(0.1 + 0.16 * link)
-      if (h > 0) {
-        _c2.setHex(COLOR.bufDirty).multiplyScalar(h * 1.7)
-        _c.add(_c2)
-      }
-      if (r > 0) {
-        _c2.setHex(COLOR.client).multiplyScalar(r * 1.5)
-        _c.add(_c2)
-      }
+      if (!valid) _c.setHex(BUFFER_OFF)
+      else if (standbyPool.dirty[i]) _c.setHex(COLOR.bufDirty).multiplyScalar(0.7 + heat)
+      else _c.setHex(TABLES[standbyPool.rel[i] % TABLES.length].color).multiplyScalar(0.32 + heat * 0.8)
       tiles.setColorAt(i, _c)
     }
     tiles.instanceMatrix.needsUpdate = true

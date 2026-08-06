@@ -1050,6 +1050,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       backup: {
         status: 'idle',
         trigger: 'manual',
+        sourceRoleAtStart: 'standby',
         progress: 0,
         startedAt: 0,
         startTimeline: 1,
@@ -1441,6 +1442,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     previousLagBytes: number
     previousLagSec: number
     bufferPageCursor: number
+    bufferCleanCursor: number
+    bufferMap: Map<number, number>
     readT: number
     rejoining: boolean
   }
@@ -1471,6 +1474,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     previousLagBytes: 0,
     previousLagSec: 0,
     bufferPageCursor: 0,
+    bufferCleanCursor: 0,
+    bufferMap: new Map<number, number>(),
     readT: 0,
     rejoining: false,
   })
@@ -2918,6 +2923,20 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       }
       standbyPool.sampleFrames = size
       if (standbyPool.clockHand >= size) standbyPool.clockHand = 0
+      const runtime = physicalRuntime[ni - 1]
+      runtime.bufferMap.clear()
+      let used = 0
+      let dirty = 0
+      for (let b = 0; b < size; b++) {
+        if (!standbyPool.valid[b]) continue
+        used++
+        if (standbyPool.dirty[b]) dirty++
+        runtime.bufferMap.set(bufKey(standbyPool.rel[b], standbyPool.blk[b]), b)
+      }
+      standbyPool.usedCount = asSampleFrames(used)
+      standbyPool.dirtyCount = asSampleFrames(dirty)
+      standbyPool.pinnedCount = asSampleFrames(0)
+      if (runtime.bufferCleanCursor >= size) runtime.bufferCleanCursor = 0
     }
   }
 
@@ -3411,9 +3430,14 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   function startBaseBackup(): boolean {
     const op = dr.backup
     const standbyA = rep.standbys[0]
+    const sourceNode = state.cluster.nodes[1]
     if (op.status === 'copying' || op.status === 'waiting_wal') return false
     op.trigger = backupTrigger
-    if (!standbyA.connected || !standbyA.enabled || K.walLevel === 'minimal') {
+    const sourceAvailable = sourceNode.online && (
+      sourceNode.role === 'primary'
+      || (sourceNode.role === 'standby' && standbyA.connected && standbyA.enabled)
+    )
+    if (!sourceAvailable || K.walLevel === 'minimal') {
       failBaseBackup(
         K.walLevel === 'minimal'
           ? 'Full backup refused: wal_level=minimal cannot support the required archive recovery chain'
@@ -3424,11 +3448,12 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
     dr.dataDirectoryBytes = dataDirectoryBytes()
     op.status = 'copying'
+    op.sourceRoleAtStart = sourceNode.role === 'primary' ? 'primary' : 'standby'
     op.progress = 0
     op.startedAt = state.t
     op.startTimeline = state.highAvailability.timeline.current
     op.stopTimeline = 0
-    op.startLsn = standbyA.appliedLsn
+    op.startLsn = sourceNode.dataDirectory.appliedLsn
     op.stopLsn = 0
     op.dataBytes = dr.dataDirectoryBytes
     op.objectStoreBytes = Math.round(op.dataBytes * DR_OBJECT_STORE_RATIO)
@@ -4073,11 +4098,12 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         )
         backup.progress = backup.dataBytes > 0 ? backup.copiedBytes / backup.dataBytes : 1
         if (backup.copiedBytes >= backup.dataBytes) {
-          if (ha.currentLeader === 'standbyA') {
+          if (backup.sourceRoleAtStart === 'standby' && ha.currentLeader === 'standbyA') {
             failBaseBackup('Full backup failed: standby_a was promoted during the online backup, so pg_backup_stop cannot finish it')
           } else {
-            // Backup stop on standby_a cannot switch the current primary's WAL.
-            backup.stopLsn = rep.standbys[0].appliedLsn
+            // A standby source is bounded by replay; once promoted, the same
+            // physical server instead reads the current primary frontier.
+            backup.stopLsn = sourceNode.dataDirectory.appliedLsn
             backup.stopTimeline = ha.timeline.current
             if (backupWalRangesArchived()) {
               completeBaseBackup()
@@ -5208,8 +5234,23 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     runtime.previousLagBytes = 0
     runtime.previousLagSec = 0
     runtime.bufferPageCursor = 0
+    runtime.bufferCleanCursor = 0
     runtime.readT = 0
     runtime.rejoining = false
+  }
+
+  const STANDBY_REPLAY_SAMPLE_PAGES = CLAIM_VALUES.bufferSample.defaultActiveFrames
+
+  function standbyClockVictim(pool: BufferPool): number {
+    for (;;) {
+      const b = pool.clockHand
+      pool.clockHand = pool.clockHand + 1 >= pool.sampleFrames ? 0 : pool.clockHand + 1
+      if (pool.usage[b] > 0) {
+        pool.usage[b]--
+        continue
+      }
+      return b
+    }
   }
 
   function tickStandbyBuffers(index: 0 | 1, fromLsn: number, toLsn: number, dt: number): void {
@@ -5218,20 +5259,44 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     const pageDelta = Math.max(0, Math.floor((toLsn - fromLsn) / PAGE))
     const touches = Math.min(12, pageDelta)
     for (let i = 0; i < touches; i++) {
-      const b = (runtime.bufferPageCursor * 131 + index * 67) % pool.sampleFrames
-      runtime.bufferPageCursor++
-      if (!pool.valid[b]) {
-        pool.valid[b] = 1
-        pool.usedCount = asSampleFrames(pool.usedCount + 1)
-        pool.misses++
-      } else {
+      const page = runtime.bufferPageCursor++ % STANDBY_REPLAY_SAMPLE_PAGES
+      const rel = (page + index) % N_TABLES
+      const blk = Math.floor(page / N_TABLES)
+      const key = bufKey(rel, blk)
+      const mapped = runtime.bufferMap.get(key)
+      let b: number
+      if (
+        mapped !== undefined
+        && mapped < pool.sampleFrames
+        && pool.valid[mapped]
+        && pool.rel[mapped] === rel
+        && pool.blk[mapped] === blk
+      ) {
+        b = mapped
         pool.hits++
+        if (pool.usage[b] < 5) pool.usage[b]++
+      } else {
+        b = standbyClockVictim(pool)
+        if (pool.valid[b]) {
+          runtime.bufferMap.delete(bufKey(pool.rel[b], pool.blk[b]))
+          pool.evictions = asSampleFrames(pool.evictions + 1)
+          if (pool.dirty[b]) {
+            pool.dirty[b] = 0
+            pool.dirtyCount = asSampleFrames(Math.max(0, pool.dirtyCount - 1))
+          }
+        } else {
+          pool.valid[b] = 1
+          pool.usedCount = asSampleFrames(pool.usedCount + 1)
+        }
+        pool.misses++
+        pool.rel[b] = rel
+        pool.blk[b] = blk
+        pool.usage[b] = 1
+        runtime.bufferMap.set(key, b)
       }
       if (!pool.dirty[b]) pool.dirtyCount = asSampleFrames(pool.dirtyCount + 1)
       pool.dirty[b] = 1
-      pool.usage[b] = Math.min(5, pool.usage[b] + 1)
-      pool.rel[b] = (runtime.bufferPageCursor + index) % N_TABLES
-      pool.blk[b] = Math.floor(toLsn / PAGE)
+      pool.pageLsn[b] = toLsn
       pool.lastTouch[b] = state.t
     }
     const seen = pool.hits + pool.misses
@@ -5241,8 +5306,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
      * primary's checkpointer or buffer pool. */
     let cleanBudget = Math.min(3, Math.ceil(dt * 30))
     while (cleanBudget-- > 0 && pool.dirtyCount > 0) {
-      const b = pool.clockHand
-      pool.clockHand = pool.clockHand + 1 >= pool.sampleFrames ? 0 : pool.clockHand + 1
+      const b = runtime.bufferCleanCursor
+      runtime.bufferCleanCursor = b + 1 >= pool.sampleFrames ? 0 : b + 1
       if (!pool.dirty[b]) continue
       pool.dirty[b] = 0
       pool.dirtyCount = asSampleFrames(pool.dirtyCount - 1)
@@ -6484,6 +6549,29 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     standby.walReceiver = standby.enabled ? 'streaming' : 'stopped'
     standby.startupProcess = standby.enabled ? 'streaming' : 'stopped'
     resetPhysicalRuntime(physicalRuntime[index], lsn)
+
+    /* Reinitialisation replaces the PostgreSQL instance and its shared memory.
+     * Keeping buffer tags from the rejected timeline made the rebuilt node's
+     * cache geometry look warm before the new process had replayed a byte. */
+    const standbyPool = node.buffers
+    standbyPool.valid.fill(0)
+    standbyPool.dirty.fill(0)
+    standbyPool.pinned.fill(0)
+    standbyPool.usage.fill(0)
+    standbyPool.rel.fill(255)
+    standbyPool.blk.fill(0)
+    standbyPool.pageLsn.fill(0)
+    standbyPool.lastTouch.fill(-99)
+    standbyPool.clockHand = 0
+    standbyPool.hits = 0
+    standbyPool.misses = 0
+    standbyPool.evictions = asSampleFrames(0)
+    standbyPool.dirtyEvictions = 0
+    standbyPool.hitRatio = 0.96
+    standbyPool.dirtyCount = asSampleFrames(0)
+    standbyPool.pinnedCount = asSampleFrames(0)
+    standbyPool.usedCount = asSampleFrames(0)
+    physicalRuntime[index].bufferMap.clear()
 
     node.role = 'standby'
     node.online = standby.enabled
@@ -8874,6 +8962,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       standbyPool.dirtyCount = asSampleFrames(0)
       standbyPool.pinnedCount = asSampleFrames(0)
       standbyPool.usedCount = asSampleFrames(0)
+      physicalRuntime[ni - 1].bufferMap.clear()
+      physicalRuntime[ni - 1].bufferCleanCursor = 0
     }
 
     const lsn0 = INITIAL_WAL_LSN
@@ -9047,6 +9137,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     backupTrigger = 'manual'
     dr.backup.status = 'idle'
     dr.backup.trigger = 'manual'
+    dr.backup.sourceRoleAtStart = 'standby'
     dr.backup.progress = 0
     dr.backup.startedAt = 0
     dr.backup.startTimeline = 1

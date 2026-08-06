@@ -1173,7 +1173,7 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
     focus: { target: [TX, 6, TZ - 6], distance: 132, dir: [0.12, 0.36, 1] },
     labelAt: [TX, 18, TZ + 6],
     color: COLOR.client,
-    readout: (s) => `${fmtNum(s.stats.tps)} tps · ${s.stats.activeBackends} open sessions`,
+    readout: (s) => `${fmtNum(s.stats.tps)} tps · ${s.pooler.clientConnections} application clients · ${s.pooler.acceptedClients} admitted · ${s.pooler.serverConnections}/${s.pooler.serverCapacity} PostgreSQL backends`,
   })
 
   ctx.register({

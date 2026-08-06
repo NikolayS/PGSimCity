@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { COLOR, mixHex } from '../core/theme'
 import { CLAIM_VALUES } from '../core/claims'
 import { configuredSynchronousStandby } from '../core/replication'
+import { retainedArchiveSegments, retainedArchiveSegmentsOnTimeline } from '../core/types'
 import type { SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, damp, fmtBytes, fmtDuration, fmtLsn } from '../core/util'
 import { ANCHOR, CONTINUITY } from './layout'
@@ -79,6 +80,26 @@ export const WAL_ARCHIVE_SILO_PLATE_LINES = [
   `one silo = one city-model ${CLAIM_VALUES.walSegment.label} segment · one row = one timeline`,
   ...CLAIM_VALUES.walSegment.postgresqlDisclosure,
 ] as const
+
+export function objectStoreReadout(s: SimState): string {
+  return `${retainedArchiveSegments(s)} WAL objects · ${s.disasterRecovery.backups.length} full backup${s.disasterRecovery.backups.length === 1 ? '' : 's'} · ${s.knobs.walGArchiveCredentialsValid ? 'wal-push authenticated' : 'wal-push credentials expired'}`
+}
+
+export function standbyBReadout(s: SimState): string {
+  const standby = s.replication.standbys[1]
+  const slot = s.replication.physicalSlots[1]
+  const node = s.cluster.nodes[2]
+  const opinion = node.leaderOpinion ?? 'unknown'
+  if (node.role === 'primary') {
+    return `promoted primary · timeline ${s.highAvailability.timeline.current} · writes ${s.highAvailability.acceptingWrites ? 'open' : 'closed'}`
+  }
+  if (!standby.connected) {
+    return slot.exists
+      ? `disconnected · sees ${opinion} as leader · slot holds ${fmtBytes(slot.retainedBytes)}`
+      : `disconnected · sees ${opinion} as leader · slot dropped; no retention guarantee`
+  }
+  return `applied ${fmtLsn(standby.appliedLsn)} · ${standby.lagSec.toFixed(1)} s behind · sees ${opinion} as leader`
+}
 
 /* ==========================================================================
  * Factory.
@@ -941,7 +962,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
       if (a.writesBlocked) return `${approach} · ${q} queued · scaled pg_wal safety limit reached · writes rejected`
       if (!s.knobs.walGArchiveCredentialsValid) return `${approach} · ${q} queued · credentials expired · retrying oldest .ready file`
       if (q > 0) return `${approach} · wal-push active · ${q} .ready`
-      return `${approach} · ${s.wal.archived} stored`
+      return `${approach} · ${retainedArchiveSegments(s)} stored`
     },
   })
 
@@ -974,8 +995,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     focus: { target: [OS[0], 6, OS[2]], distance: 98, dir: [0.3, 0.6, 0.74] },
     labelAt: [OS[0], 18, OS[2]],
     color: COLOR.archive,
-    readout: (s: SimState) =>
-      `${s.wal.archived} WAL objects · ${s.disasterRecovery.backups.length} full backup${s.disasterRecovery.backups.length === 1 ? '' : 's'} · ${s.knobs.walGArchiveCredentialsValid ? 'wal-push authenticated' : 'wal-push credentials expired'}`,
+    readout: objectStoreReadout,
   })
 
   ctx.register({
@@ -1169,17 +1189,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     focus: { target: [SB[0], 6, SB[2] + 20], distance: 132, dir: [-0.5, 0.46, 0.73] },
     labelAt: [SB[0], 20, SB[2]],
     color: COLOR.replication,
-    readout: (s: SimState) => {
-      const standby = s.replication.standbys[1]
-      const slot = s.replication.physicalSlots[1]
-      const opinion = s.cluster.nodes[2].leaderOpinion ?? 'unknown'
-      if (!standby.connected) {
-        return slot.exists
-          ? `disconnected · sees ${opinion} as leader · slot holds ${fmtBytes(slot.retainedBytes)}`
-          : `disconnected · sees ${opinion} as leader · slot dropped; no retention guarantee`
-      }
-      return `applied ${fmtLsn(standby.appliedLsn)} · ${standby.lagSec.toFixed(1)} s behind · sees ${opinion} as leader`
-    },
+    readout: standbyBReadout,
   })
 
   ctx.register({
@@ -1195,6 +1205,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     color: COLOR.replication,
     readout: (s: SimState) => {
       const standby = s.replication.standbys[1]
+      if (s.cluster.nodes[2].role === 'primary') return 'stopped · standby_b is primary'
       return standby.connected
         ? `received ${fmtLsn(standby.receivedLsn)} · written ${fmtLsn(standby.writtenLsn)}`
         : 'stopped · physical slot remains on the primary'
@@ -1231,6 +1242,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     color: COLOR.replication,
     readout: (s: SimState) => {
       const standby = s.replication.standbys[1]
+      if (s.cluster.nodes[2].role === 'primary') return `stopped at promotion · primary timeline ${s.highAvailability.timeline.current}`
       return `applied ${fmtLsn(standby.appliedLsn)} · waiting ${fmtBytes(Math.max(0, standby.flushedLsn - standby.appliedLsn))}`
     },
   })
@@ -1248,7 +1260,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     color: COLOR.replication,
     readout: (s: SimState) => {
       const pool = s.cluster.nodes[2].buffers
-      return `${pool.usedCount} / ${pool.sampleFrames} sampled frames used · replay activity ${(s.replication.standbys[1].applyActivity * 100).toFixed(0)}%`
+      return `${s.cluster.nodes[2].role === 'primary' ? 'primary role · ' : ''}${pool.usedCount} / ${pool.sampleFrames} sampled frames used · replay activity ${(s.replication.standbys[1].applyActivity * 100).toFixed(0)}%`
     },
   })
 
@@ -1264,7 +1276,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     labelAt: [SBS[0], SBS[1] + 17, SBS[2]],
     color: COLOR.storage,
     readout: (s: SimState) =>
-      `${fmtBytes(s.cluster.nodes[2].dataDirectory.bytes)} · applied through ${fmtLsn(s.cluster.nodes[2].dataDirectory.appliedLsn)}`,
+      `${s.cluster.nodes[2].role === 'primary' ? 'primary role · ' : ''}${fmtBytes(s.cluster.nodes[2].dataDirectory.bytes)} · applied through ${fmtLsn(s.cluster.nodes[2].dataDirectory.appliedLsn)}`,
   })
 
   /* ---------------------------------------------------------------------
@@ -1339,9 +1351,13 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
           / sim.wal.segmentSize,
       ),
     )
-    const parentFill = S.cols - parentGapSegments
+    const parentFill = Math.min(
+      S.cols - parentGapSegments,
+      retainedArchiveSegmentsOnTimeline(sim, archive.parentTimeline),
+    )
     const liveFill = Math.min(
       S.cols,
+      retainedArchiveSegmentsOnTimeline(sim, archive.timeline),
       forked
         ? Math.ceil(
           Math.max(0, archive.archivedThroughLsn - timeline.forkLsn)
@@ -1437,7 +1453,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     /* --- 4. standby_b: independent receive, flush, apply and storage -------*/
     const standbyB = sim.replication.standbys[1]
     const poolB = sim.cluster.nodes[2].buffers
-    if (standbyB.connected) {
+    if (standbyB.connected && sim.cluster.nodes[2].role === 'standby') {
       emit.bStream = pump(emit.bStream, 5, dt, 'net.streamB')
       emit.bAck = pump(emit.bAck, 2.5, dt, 'net.ackB')
       emit.bApply = pump(emit.bApply, 3.5, dt, 'replicaB.apply')

@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createBus } from '../core/bus'
 import { createTheme } from '../core/theme'
+import { retainedArchiveSegmentsOnTimeline } from '../core/types'
 import type { ComponentDef, FlowRequest, QualitySettings, WorldContext } from '../core/types'
 import { createSim } from '../sim/model'
 import { createContinuity } from './continuity'
@@ -383,7 +384,13 @@ describe('continuity and three-node projection', () => {
       siloCaps.getColorAt(c, color)
       if (color.getHex() !== 0x0a1120) litParentSilos++
     }
-    expect(litParentSilos).toBe(CONTINUITY.silo.cols - parentGapSegments)
+    expect(litParentSilos).toBe(Math.min(
+      CONTINUITY.silo.cols - parentGapSegments,
+      retainedArchiveSegmentsOnTimeline(
+        sim.state,
+        sim.state.disasterRecovery.archive.parentTimeline,
+      ),
+    ))
 
     sim.setKnob('walGArchiveCredentialsValid', true)
     const forkSegmentStart = Math.floor(
@@ -407,9 +414,13 @@ describe('continuity and three-node projection', () => {
       siloCaps.getColorAt(c, color)
       if (color.getHex() !== 0x0a1120) litParentSilos++
     }
-    expect(litParentSilos).toBe(
+    expect(litParentSilos).toBe(Math.min(
       CONTINUITY.silo.cols - missingCompleteParentSegments,
-    )
+      retainedArchiveSegmentsOnTimeline(
+        sim.state,
+        sim.state.disasterRecovery.archive.parentTimeline,
+      ),
+    ))
 
     continuity.dispose?.()
     theme.dispose()

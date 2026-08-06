@@ -79,6 +79,7 @@ function stage(
   target.state.pooler.serverConnections = serverConnections
   target.state.pooler.serverCapacity = serverCapacity
   target.state.pooler.waitingClients = Math.max(0, acceptedClients - serverConnections)
+  target.state.stats.activeBackends = serverConnections
   target.module.update(1 / 60, target.state, 4.25)
 }
 
@@ -162,6 +163,22 @@ describe('PgBouncer geometry', () => {
     expect(Number(servers)).toBe(target.state.pooler.serverConnections)
     expect(Number(capacity)).toBe(target.state.pooler.serverCapacity)
     expect(renderedRatio).toBeCloseTo(Number(servers) / Number(clients), 6)
+  })
+
+  it('does not call PostgreSQL backends application client sessions', () => {
+    const target = fixture()
+    stage(target, 'transaction', 137, 7, 16)
+
+    const readout = target.components.get('client.pool')?.readout?.(target.state) ?? ''
+    const doc = DOCS_MEMORY.find((entry) => entry.id === 'client.pool')
+    const clients = doc?.metrics?.find((entry) => entry.label === 'Application clients')
+    const backends = doc?.metrics?.find((entry) => entry.label === 'PostgreSQL backends')
+
+    expect(readout).toContain('137 application clients')
+    expect(readout).toContain('7/16 PostgreSQL backends')
+    expect(readout).not.toMatch(/7 open sessions/)
+    expect(clients?.get(target.state)).toBe('137 offered · 137 admitted')
+    expect(backends?.get(target.state)).toBe('7 / 16 capacity')
   })
 
   it.each(['low', 'reduced'] as const)('keeps the mechanism visible at %s fidelity', (level) => {

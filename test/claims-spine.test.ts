@@ -57,6 +57,7 @@ const REGISTERED_CLAIM_VALUE_READS = {
   },
   bufferSample: {
     'src/core/types.ts': 2,
+    'src/sim/model.ts': 1,
     'src/ui/content.ts': 2,
     'src/ui/docs-storage.ts': 2,
     'src/world/shmem.ts': 1,

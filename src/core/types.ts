@@ -855,6 +855,8 @@ export interface BaseBackup {
 export interface BaseBackupOperation {
   status: BaseBackupStatus
   trigger: 'manual' | 'schedule'
+  /** Role of the standby_a node when this operation began. */
+  sourceRoleAtStart: 'primary' | 'standby'
   progress: number
   startedAt: number
   startTimeline: number
@@ -1223,6 +1225,67 @@ export interface SimState {
   forkPulse: number
   /** model-owned record of the requested statement trip */
   trace: TraceRecord
+}
+
+function completeArchiveSegments(startLsn: number, archivedThroughLsn: number, segmentSize: number): number {
+  if (archivedThroughLsn <= startLsn || segmentSize <= 0) return 0
+  return Math.max(
+    0,
+    Math.floor(archivedThroughLsn / segmentSize) - Math.floor(startLsn / segmentSize),
+  )
+}
+
+/** WAL segment objects still retained after the modeled WAL-G FULL policy. */
+export function retainedArchiveSegmentsOnTimeline(s: SimState, timeline: number): number {
+  const archive = s.disasterRecovery.archive
+  const oldest = s.disasterRecovery.backups[0]
+  const segmentSize = s.wal.segmentSize
+
+  if (!oldest) {
+    if (timeline === archive.timeline) {
+      const forkStart = Math.floor(s.highAvailability.timeline.forkLsn / segmentSize) * segmentSize
+      const current = completeArchiveSegments(forkStart, archive.archivedThroughLsn, segmentSize)
+      return archive.parentTimeline > 0 ? Math.min(s.wal.archived, current) : s.wal.archived
+    }
+    if (timeline === archive.parentTimeline) {
+      const current = retainedArchiveSegmentsOnTimeline(s, archive.timeline)
+      return Math.max(0, s.wal.archived - current)
+    }
+    return 0
+  }
+
+  let startLsn: number | undefined
+  for (const range of oldest.walRanges) {
+    if (range.timeline !== timeline) continue
+    startLsn = startLsn === undefined ? range.startLsn : Math.min(startLsn, range.startLsn)
+  }
+  if (
+    startLsn === undefined
+    && timeline === archive.timeline
+    && archive.parentTimeline > 0
+    && oldest.startTimeline === archive.parentTimeline
+  ) {
+    startLsn = Math.floor(s.highAvailability.timeline.forkLsn / segmentSize) * segmentSize
+  }
+  if (startLsn === undefined) return 0
+
+  const frontier = timeline === archive.timeline
+    ? archive.archivedThroughLsn
+    : timeline === archive.parentTimeline
+      ? archive.parentArchivedThroughLsn
+      : 0
+  return completeArchiveSegments(startLsn, frontier, segmentSize)
+}
+
+/** Total WAL segment objects held in object storage, excluding history files. */
+export function retainedArchiveSegments(s: SimState): number {
+  if (s.disasterRecovery.backups.length === 0) return s.wal.archived
+  const archive = s.disasterRecovery.archive
+  const current = retainedArchiveSegmentsOnTimeline(s, archive.timeline)
+  const parent = archive.parentTimeline > 0
+    ? retainedArchiveSegmentsOnTimeline(s, archive.parentTimeline)
+    : 0
+  return Math.min(s.wal.archived, current + parent)
 }
 
 export interface SimApi {

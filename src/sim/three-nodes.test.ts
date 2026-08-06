@@ -80,6 +80,20 @@ describe('three-node physical cluster', () => {
     expect(sim.state.replication.physicalSlots[1].active).toBe(true)
   })
 
+  it('uses clock-sweep misses and evictions when standby replay exceeds its pool', () => {
+    const sim = createSim(createBus(), { scheduledBackups: false })
+    sim.setKnob('sharedBuffers', 128)
+    sim.setKnob('tps', 1200)
+    sim.setKnob('writeRatio', 1)
+    sim.setKnob('synchronousCommit', 'local')
+    advanceBy(sim, 60)
+
+    const pool = sim.state.cluster.nodes[1].buffers
+    expect(pool.usedCount).toBeLessThanOrEqual(pool.sampleFrames)
+    expect(pool.misses).toBeGreaterThan(pool.sampleFrames)
+    expect(pool.evictions).toBeGreaterThan(0)
+  })
+
   it('fills the primary WAL volume through a slot for a disconnected standby', { timeout: 20_000 }, () => {
     const sim = createAggregateSim()
     sim.setKnob('walGArchiveCredentialsValid', true)

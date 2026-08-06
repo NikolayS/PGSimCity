@@ -291,6 +291,20 @@ describe('diagnostic path contracts', () => {
     expect(replayState.branches.find((branch) => branch.next === 'v.replay')?.test(sim.state, collector)).toBe(true)
   })
 
+  it('discloses the representative standby page touches that the model performs', () => {
+    const sim = createSim(createBus(), { scheduledBackups: false })
+    sim.setKnob('tps', 1200)
+    sim.setKnob('writeRatio', 1)
+    advance(sim, createCollector(sim), 20)
+    const step = NODES.get('replica.1')
+
+    expect(sim.state.cluster.nodes[1].buffers.misses).toBeGreaterThan(0)
+    expect(step?.kind).toBe('step')
+    if (!step || step.kind !== 'step') return
+    expect(step.look).toMatch(/representative buffer-frame sample/i)
+    expect(step.look).not.toMatch(/no .*page replay/i)
+  })
+
   it('reports baseline health from the worst connected standby beside the two-row grid', () => {
     const sim = createSim(createBus())
     const collector = createCollector(sim)
