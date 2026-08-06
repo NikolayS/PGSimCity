@@ -1025,6 +1025,7 @@ export function createInspector(ctx: UiContext): UiModule {
   window.addEventListener(SHEET_EVENT, onSheet)
 
   applyOpen()
+  if (compact && open) announceSheet('right')
   select(null)
 
   return {
