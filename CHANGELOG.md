@@ -11,6 +11,86 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-08-06
+
+Nik asked how the project could find more bugs on its own, after a session in
+which he found six by walking around a city that 998 tests, an orbit sweep, a
+first-person sweep, a mutation gate and a PostgreSQL oracle had all passed.
+
+Five hunts were aimed at the classes those checks structurally cannot see. They
+found nineteen defects. The lesson is in which hunts paid: the two aimed at
+guesses came back clean, and the ones aimed at shapes he had already surfaced —
+state that accumulates, surfaces that drift from the model, boundaries crossed in
+motion — found everything.
+
+### Fixed — surfaces that disagreed with the simulation
+
+Twelve findings, and the important ones were **model** bugs, not prose:
+
+- A promoted `standby_a` reported `"primary — accepting writes"` with
+  `online=true`, then refused to act as a backup source: `"standby_a … is
+  unavailable"` and `startBaseBackup()` returning `false`. Backup availability now
+  follows the physical node's role and data-directory frontier.
+- Promotion left the old standby's surfaces running. `SimState` said
+  `role=primary` while readouts still said `"offline"` and `"disconnected"`, the
+  walsender could report `"primary sees primary"`, and B referenced the old
+  primary's LSN.
+- Follower reinitialisation kept the state it claimed to discard: the UI said
+  `"Reinitialising follower"` from a fresh base backup while 3,227 old buffer
+  misses and warm geometry survived it.
+- Object storage counted lifetime archive successes as retained objects — `"17
+  WAL objects"` when seven segments remained in the recovery chain.
+- `standby_a`'s cache geometry ignored `SimState` entirely, drawing five relation
+  colours from private randomness while every modelled frame was invalid.
+- The two standby storage inspectors disagreed with each other: 7.0 GiB against
+  8.3 GiB for the same cluster.
+- Help and Diagnose denied replay work the model was doing, and heap prose named
+  the wrong dimension — `"height is its page count"` while height stayed fixed and
+  footprint length grew from 1,024 to 100,000 pages.
+
+### Fixed — bodies crossing boundaries
+
+Six findings from crossing every district edge, ramp, kerb, plate perimeter, pool
+wall and aperture in motion rather than standing near them. Among them: pressing
+Fly while walking silently performed a *focus* transition instead.
+
+### Fixed — two controllers owning one camera
+
+Long random input sequences reached `rig.mode=focus` with `walk.enabled=true`:
+scripted camera motion and the pedestrian both writing the transform, with a tour
+card stacked over Exit Walk, Crouch and Jump. Focus now exits walking first.
+
+### Added — a fuzzer and a soak, and what they did not find
+
+Persisted-state fuzzing over 96 dense knob sets, every UI extreme, 180
+synchronous-commit prerequisite combinations, 24 HA topologies, and corrupt,
+partial, wrong-typed, stale and legacy records found **no** new deadlock beyond
+the one v0.39.5 fixed.
+
+A two-hour-per-workload soak, plus 1,788 model seconds in-browser, found no
+leak: scene objects, geometries, textures and shader programs constant, post-GC
+heap growth 1.17 MiB, no unbounded array.
+
+Both state their limits rather than claiming coverage they do not have — 96
+seeded sets are not the cross-product, and headless SwiftShader is not a phone.
+
+### Added — a moon, with tonight's phase
+
+Its phase is a pure function of the date: mean lunation 29.530588853 days from
+epoch 2000-01-06T18:14:00Z, both from the USNO Astronomical Almanac, validated
+against USNO primary phase data at eight known new and full moons with a worst
+error of 0.331 day.
+
+It is registered as what it is — a mean estimate, ±0.5 day, qualified for
+2000–2030, not a location-aware ephemeris. The same phase angle drives both the
+illumination and the sun–moon separation, so the lit limb cannot drift out of
+agreement with the sun the sky already computes. Its apparent diameter follows
+the established 1.5° convention shared with the sun.
+
+Restrained bloom was allowed because the illuminated shape carries a checkable
+fact, which is the test `CLAUDE.md` sets for glow. Low fidelity drops the bloom
+and keeps the phase: the decoration is optional, the information is not.
+
 ## [0.39.6] - 2026-08-05
 
 ### Fixed — the buffer pool stood two storeys above the plaza
