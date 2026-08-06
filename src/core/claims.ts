@@ -113,6 +113,16 @@ export const CLAIM_VALUES = {
   appVersion: {
     label: BUILD_LABEL,
   },
+  moonPhase: {
+    epochUtc: '2000-01-06T18:14:00Z',
+    synodicMonthDays: 29.530588853,
+    timingToleranceDays: 0.5,
+    modelDisclosure: 'Mean-lunation phase estimate, not a location-aware lunar ephemeris; selected USNO primary phases from 2000–2030 validate within ±0.5 day, with dates outside that range not guaranteed.',
+    source: {
+      label: 'U.S. Naval Observatory — Dates of Primary Phases of the Moon',
+      url: 'https://aa.usno.navy.mil/data/MoonPhases',
+    },
+  },
   walSegment: {
     bytes: registeredClaimValue('walSegment.bytes', 16 * MIB),
     label: '16 MiB',
@@ -426,6 +436,11 @@ export const CLAIMS = {
     owner: 'src/core/build.ts#BUILD_LABEL',
     value: CLAIM_VALUES.appVersion,
     surfaces: ['help:build marker', 'Diagnose:build marker', 'corrections:issue body'],
+  },
+  moonPhase: {
+    owner: 'src/core/claims.ts#CLAIM_VALUES.moonPhase',
+    value: CLAIM_VALUES.moonPhase,
+    surfaces: ['world:date-derived moon geometry', 'renderer:real or explicitly pinned date', 'tests:USNO primary phases'],
   },
   walSegment: {
     owner: 'src/core/claims.ts#CLAIM_VALUES.walSegment',

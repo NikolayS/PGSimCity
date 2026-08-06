@@ -75,6 +75,10 @@ export interface RendererApi {
   render(dt: number, rawDt?: number): void
   resize(): void
   setQuality(level: QualityLevel): void
+  /** Pin deterministic moon staging without changing the local-time theme clock. */
+  setMoonDate(date: Date): void
+  /** Return a staged moon to the real date. */
+  refreshMoonDate(): void
   dispose(): void
 }
 
@@ -286,6 +290,9 @@ class ComposerDepthGTAOPass extends GTAOPass {
 export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   const quality: QualitySettings = { ...QUALITY_PRESETS[DEFAULT_LEVEL] }
   let air: Atmosphere = atmosphere()
+  // Reused by live updates: the render loop never constructs a Date.
+  const moonDate = new Date()
+  let moonDatePinned = false
 
   /* ---- renderer ---------------------------------------------------------*/
 
@@ -375,6 +382,26 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     environmentKey = targetKey
     scene.environment = nextTarget.texture
     previous?.dispose()
+  }
+
+  function repaintMoon(refreshLighting: boolean): void {
+    const sky = scene.getObjectByName('sky')
+    if (sky) applySkyAtmosphere(sky, air, quality.level, moonDate)
+    if (refreshLighting) refreshEnvironment(true)
+  }
+
+  function setMoonDate(date: Date): void {
+    const time = date.getTime()
+    if (!Number.isFinite(time)) throw new RangeError('Moon date must be valid')
+    moonDatePinned = true
+    moonDate.setTime(time)
+    repaintMoon(true)
+  }
+
+  function refreshMoonDate(): void {
+    moonDatePinned = false
+    moonDate.setTime(Date.now())
+    repaintMoon(true)
   }
 
   // Orbit starts far enough from geometry to spend its near plane on depth
@@ -795,7 +822,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     applyPassToggles()
 
     const sky = scene.getObjectByName('sky')
-    if (sky) applySkyAtmosphere(sky, air, quality.level)
+    if (sky) applySkyAtmosphere(sky, air, quality.level, moonDate)
     scene.traverse((obj) => paintObject(obj, target))
     applyShadowRenderer()
     renderer.shadowMap.needsUpdate = true
@@ -804,6 +831,12 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
 
   const offTheme = onThemeMode(applyThemeMode)
   const offClock = startThemeClock()
+  // Phase changes slowly; an hourly non-frame update is ample and allocation-free.
+  const moonTimer = window.setInterval(() => {
+    if (moonDatePinned) return
+    moonDate.setTime(Date.now())
+    repaintMoon(false)
+  }, 60 * 60_000)
 
   /** Bloom runs at half the composer's device resolution; call after setSize. */
   function sizeBloom(): void {
@@ -904,7 +937,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     quality.pixelRatio = Math.min(DPR_CAP[level], deviceDpr())
     scene.userData.boxBevel = applyBoxBevelDetail(scene, level)
     const sky = scene.getObjectByName('sky')
-    if (sky) applySkyAtmosphere(sky, air, level)
+    if (sky) applySkyAtmosphere(sky, air, level, moonDate)
     applyFidelityQuality()
 
     // Shadow maps: toggling shadowMap.enabled changes shader defines, so every
@@ -1063,6 +1096,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     if (!themeRestored) {
       themeRestored = true
       applyStoredThemeMode()
+      repaintMoon(false)
       refreshEnvironment()
     }
     const d = clamp(dt, 1 / 1000, 0.25)
@@ -1149,6 +1183,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   function dispose(): void {
     offTheme()
     offClock()
+    window.clearInterval(moonTimer)
     window.removeEventListener('resize', onWindowResize)
     dom.removeEventListener('webglcontextlost', onContextLost)
     dom.removeEventListener('webglcontextrestored', onContextRestored)
@@ -1209,6 +1244,8 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     render,
     resize,
     setQuality,
+    setMoonDate,
+    refreshMoonDate,
     dispose,
   }
 }
