@@ -71,6 +71,9 @@ const LEGACY_KNOB_KEYS = {
 
 type StoredKnobs = Partial<Record<keyof Knobs, KnobValue>>
 
+/** Playback state belongs to the current visit, never the next bootstrap. */
+const TRANSIENT_KNOB_KEYS = new Set<keyof Knobs>(['paused'])
+
 export interface KnobPreferenceLoadResult {
   synchronousStandby: SynchronousStandbyBlocker | null
   rejectedKeys: (keyof Knobs)[]
@@ -92,7 +95,11 @@ function readStoredKnobs(): Record<string, unknown> {
 function validStoredValue(meta: KnobMeta, value: unknown): value is KnobValue {
   const fallback = DEFAULT_KNOBS[meta.key]
   if (typeof value !== typeof fallback) return false
-  if (typeof value === 'number') return Number.isFinite(value)
+  if (typeof value === 'number') {
+    return Number.isFinite(value)
+      && (meta.min === undefined || value >= meta.min)
+      && (meta.max === undefined || value <= meta.max)
+  }
   if (meta.kind === 'select') {
     return meta.options?.some((option) => option.value === value) ?? false
   }
@@ -115,6 +122,7 @@ function normalizedStoredKnobs(raw: Record<string, unknown>): StoredKnobs {
 
   const stored: StoredKnobs = {}
   for (const meta of KNOB_META) {
+    if (TRANSIENT_KNOB_KEYS.has(meta.key)) continue
     const value = migrated[meta.key]
     if (validStoredValue(meta, value) && value !== DEFAULT_KNOBS[meta.key]) {
       stored[meta.key] = value
@@ -134,6 +142,7 @@ function writeStoredKnobs(stored: StoredKnobs): void {
 function storedKnobsFromState(sim: SimApi): StoredKnobs {
   const stored: StoredKnobs = {}
   for (const meta of KNOB_META) {
+    if (TRANSIENT_KNOB_KEYS.has(meta.key)) continue
     const value = sim.state.knobs[meta.key]
     if (value !== DEFAULT_KNOBS[meta.key]) stored[meta.key] = value
   }
@@ -171,6 +180,11 @@ export function loadKnobPreferences(sim: SimApi): KnobPreferenceLoadResult {
 
 function persistKnobPreference(sim: SimApi, key: keyof Knobs): void {
   const stored = normalizedStoredKnobs(readStoredKnobs())
+  if (TRANSIENT_KNOB_KEYS.has(key)) {
+    delete stored[key]
+    writeStoredKnobs(stored)
+    return
+  }
   const value = sim.state.knobs[key]
   if (value === DEFAULT_KNOBS[key]) delete stored[key]
   else stored[key] = value
@@ -818,6 +832,7 @@ export function createControls(ctx: UiContext): UiModule {
   })
 
   applyOpen()
+  if (compact && open) announceSheet('left')
   refresh()
 
   if (restored.synchronousStandby) {

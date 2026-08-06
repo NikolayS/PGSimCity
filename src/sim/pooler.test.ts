@@ -80,7 +80,7 @@ describe('connection pooler', () => {
     expect(DEFAULT_KNOBS.queryWaitTimeout).toBe(120)
   })
 
-  it('discloses batched single-statement transactions at visit granularity', () => {
+  it('discloses batched transactions and the sequential-scan completion exception', () => {
     function largestCompletedVisit(offeredTps: number): number {
       const visits: number[] = []
       const sim = createAggregateSim(undefined, (observation) => {
@@ -101,7 +101,8 @@ describe('connection pooler', () => {
 
     const disclosure = CLAIM_VALUES.connectionPooler.coverageDisclosure
     expect(disclosure).toMatch(/batch of one or more single-statement transactions/i)
-    expect(disclosure).toMatch(/every constituent transaction boundary and statement boundary together at the end of that visit/i)
+    expect(disclosure).toMatch(/constituent transaction and statement boundaries together at the end of that visit/i)
+    expect(disclosure).toMatch(/read-only sequential-scan batch releases commits as each relation-sized unit of work completes/i)
     expect(disclosure).toMatch(/statement mode still rejects the city['’]s two open-transaction controls/i)
   })
 

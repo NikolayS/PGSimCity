@@ -23,6 +23,9 @@
  *     second, one trip through the backend state machine carries `batch`
  *     transactions, and all work (pages touched, WAL bytes, dead tuples) is
  *     multiplied by that batch, so the pool and the WAL see the real pressure.
+ *     Sequential-scan batches release read-only commits as each relation-sized
+ *     unit of work completes. Keeping all of those completion boundaries at
+ *     the end made legal cold-cache loads report zero commits for minutes.
  *     The latency instrument retains one weighted observation for that whole
  *     trip, so it does not model variance among transactions inside a batch.
  *     At the city's 30 Hz integration step those observations are quantized to
@@ -446,6 +449,7 @@ const VACUUM_PAGES_PER_WORKER_SEC =
 interface Extra {
   txCount: number
   latencyCount: number
+  releasedCommits: number
   rowsPerStmt: number
   pagesLeft: number
   pagesTotal: number
@@ -505,6 +509,7 @@ function makeExtra(): Extra {
   return {
     txCount: 0,
     latencyCount: 0,
+    releasedCommits: 0,
     rowsPerStmt: 1,
     pagesLeft: 0,
     pagesTotal: 0,
@@ -2494,8 +2499,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
    * with usage 0 and no pin. This is BufferAlloc()/StrategyGetBuffer() and it is
    * the reason a too-small shared_buffers makes *backends* do write I/O.
    *
-   * Returns -1 when every frame is pinned. StrategyGetBuffer() raises
-   * `ERROR: no unpinned buffers available` there — it refuses, it never steals.
+   * Returns -1 when every frame is pinned and -2 when an unpinned frame is
+   * still owned by an in-flight aggregate WAL record. StrategyGetBuffer()
+   * raises `ERROR: no unpinned buffers available` only for the first case — it
+   * refuses, it never steals.
    * The old fallback (`return buf.clockHand % size`) handed back a PINNED frame,
    * which touchPage then evicted out from under the backend holding it: measured
    * 66 such thefts at shared_buffers=32 / tps=1600 over two minutes, every one of
@@ -2508,6 +2515,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   function clockVictim(): number {
     const size = buf.sampleFrames
     let trycounter = size
+    let sawUnpinned = false
     for (;;) {
       const b = buf.clockHand
       if (buf.clockHand + 1 >= size) {
@@ -2515,6 +2523,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         clockSweepPasses++
       } else {
         buf.clockHand++
+      }
+      if (!buf.pinned[b]) {
+        sawUnpinned = true
       }
       if (!buf.pinned[b] && pageLsnOwners[b] === 0) {
         if (buf.usage[b] > 0) {
@@ -2525,7 +2536,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         bgwriterAllocations++
         return b
       }
-      if (--trycounter === 0) return -1
+      if (--trycounter === 0) return sawUnpinned ? -2 : -1
     }
   }
 
@@ -2754,12 +2765,12 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     // miss → find a victim, pay for it, then read from storage
     const v = useRing ? ringVictim(slot, x) : clockVictim()
     if (v < 0) {
-      // Every frame is pinned: `ERROR: no unpinned buffers available`. The read
-      // still happened — it just cannot be cached — so it counts as blks_read.
+      // The read still happened but cannot enter the representative sample, so
+      // it counts as blks_read. Aggregate WAL ownership is not a PostgreSQL pin.
       buf.misses++
       winMisses++
       ioReadAcc++
-      if (state.t - noBufWarnT > 20) {
+      if (v === -1 && state.t - noBufWarnT > 20) {
         noBufWarnT = state.t
         toast('ERROR: no unpinned buffers available', 'warn', 4000)
       }
@@ -6215,10 +6226,14 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   }
 
   function promoteAfterPartition(sourceId: ClusterNodeId): void {
-    if (sourceId !== 'primary' || !canCommitFor('standbyA')) return
-    const target = standbyForNode('standbyA')
-    if (!target.enabled || !state.cluster.nodes[1].online) return
-    resetTransition('failover', sourceId, 'standbyA')
+    if (sourceId !== 'primary') return
+    const targetId = canCommitFor('standbyA') && eligiblePromotionTarget('standbyA')
+      ? 'standbyA'
+      : canCommitFor('standbyB') && eligiblePromotionTarget('standbyB')
+        ? 'standbyB'
+        : null
+    if (!targetId) return
+    resetTransition('failover', sourceId, targetId)
     ha.transition.startedAt = state.t - ha.patroni.dcs.leaderKey.ttlSec
     stopPrimaryAndStreams()
     completePromotion(true, K.haPartition === 'isolate_dcs_majority')
@@ -6774,6 +6789,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     x.nextSessionPoolWaitT = 0
     x.txCount = take
     x.latencyCount = take
+    x.releasedCommits = 0
 
     // pick the statement
     let kind: QueryKind
@@ -7148,6 +7164,25 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       if (hit) b.buffersHit++
       else b.buffersRead++
     }
+
+    if (x.seqScan && !x.writes && x.txCount > 1) {
+      const completedScans = Math.min(
+        x.txCount,
+        Math.floor((x.pagesTotal - x.pagesLeft) / gridN),
+      )
+      /* endVisit's existing rollback draw can classify at most this many of
+       * the batch as rollbacks. Hold that small tail until the draw, and release
+       * every earlier completion monotonically as its scan work finishes. */
+      const rollbackReserve = Math.min(
+        x.txCount,
+        Math.round(x.txCount * 0.003 + 1),
+      )
+      const releasable = Math.min(completedScans, x.txCount - rollbackReserve)
+      if (releasable > x.releasedCommits) {
+        stats.commits += releasable - x.releasedCommits
+        x.releasedCommits = releasable
+      }
+    }
   }
 
   /** Commit accounting: tuples, WAL, dead rows, xids. */
@@ -7306,7 +7341,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     }
     const rb = Math.min(x.txCount, Math.round(x.txCount * 0.003 + (rng() < 0.02 ? 1 : 0)))
     stats.rollbacks += rb
-    stats.commits += x.txCount - rb
+    stats.commits += x.txCount - rb - x.releasedCommits
     if (x.writes) rememberCommittedWrites(x.commitLsn, x.txCount - rb)
     const table = tables[b.table]
     if (
