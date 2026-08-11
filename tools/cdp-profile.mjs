@@ -9,6 +9,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { execFileSync } from 'node:child_process'
 
 export const PROFILE_STALE_MS = 10 * 60 * 1000
 export const DEFAULT_PROFILE_ROOT = join(tmpdir(), 'pgsimcity-cdp-profiles')
@@ -37,24 +38,42 @@ export function profileOwnerIsAlive({ pid, processStartTime }) {
   return !processStartTime || !currentStartTime || currentStartTime === processStartTime
 }
 
-export function profileIsInUse(profilePath) {
-  let processes
+/*
+ * Every running process's command line. Linux exposes them under /proc; macOS
+ * and the other BSD-family hosts do not, and reading /proc there silently
+ * reported that no profile was ever in use. Returns null only when neither
+ * source can be read, which callers must treat as "unknown", not "idle".
+ */
+function readCommandLines() {
   try {
-    processes = readdirSync('/proc')
+    const lines = []
+    for (const pid of readdirSync('/proc')) {
+      if (!/^\d+$/.test(pid)) continue
+      try {
+        lines.push(readFileSync(`/proc/${pid}/cmdline`).toString().split('\0').join(' '))
+      } catch {}
+    }
+    return lines
+  } catch {}
+
+  try {
+    // -ww defeats the width truncation that would cut the --user-data-dir flag.
+    return execFileSync('ps', ['-A', '-ww', '-o', 'args='], {
+      encoding: 'utf8',
+      maxBuffer: 16 * 1024 * 1024,
+    }).split('\n')
   } catch {
-    return false
+    return null
   }
+}
+
+export function profileIsInUse(profilePath) {
+  const commandLines = readCommandLines()
+  if (!commandLines) return false
 
   const profileArgument = `--user-data-dir=${profilePath}`
-  for (const pid of processes) {
-    if (!/^\d+$/.test(pid)) continue
-    try {
-      const args = readFileSync(`/proc/${pid}/cmdline`).toString().split('\0')
-      // Chrome flattens its command line into argv[0] on this host.
-      if (args.some((arg) => arg.split(/\s+/).includes(profileArgument))) return true
-    } catch {}
-  }
-  return false
+  // Chrome flattens its command line into argv[0] on some hosts.
+  return commandLines.some((line) => line.split(/\s+/).includes(profileArgument))
 }
 
 function readOwner(profilePath) {

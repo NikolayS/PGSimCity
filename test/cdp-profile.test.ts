@@ -13,6 +13,7 @@ import { once } from 'node:events'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   acquireCdpProfile,
+  profileIsInUse,
   reapStaleProfiles,
 } from '../tools/cdp-profile.mjs'
 
@@ -83,6 +84,36 @@ describe('CDP profile lifecycle', () => {
     await once(child, 'exit')
     expect(profile.cleanup()).toBe(true)
     expect(existsSync(profile.path)).toBe(false)
+  })
+
+  /*
+   * The in-use check is the only thing standing between two concurrent shoots
+   * and a deleted live profile, and it must not depend on /proc, which this
+   * project's primary development platform does not have.
+   */
+  it('sees a live process on every platform, not only where /proc exists', async () => {
+    const root = temporaryRoot()
+    const profile = acquireCdpProfile({ root, port: 9556, reap: false })
+
+    expect(profileIsInUse(profile.path)).toBe(false)
+
+    const child = spawn(
+      'bash',
+      [
+        '-c',
+        'exec -a "$1" sleep 60',
+        'bash',
+        `chrome --user-data-dir=${profile.path} about:blank`,
+      ],
+    )
+    await once(child, 'spawn')
+
+    expect(profileIsInUse(profile.path)).toBe(true)
+    expect(profileIsInUse(`${profile.path}-other`)).toBe(false)
+
+    child.kill('SIGTERM')
+    await once(child, 'exit')
+    expect(profileIsInUse(profile.path)).toBe(false)
   })
 
   it('reaps only old profiles whose owning process is gone', () => {
