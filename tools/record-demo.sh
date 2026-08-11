@@ -185,7 +185,8 @@ ffmpeg \
   -movflags +faststart \
   "${small_output}"
 
-small_bytes="$(stat -c %s "${small_output}")"
+# wc -c, not stat: the -c/-f size flag differs between GNU and BSD.
+small_bytes="$(wc -c < "${small_output}" | tr -d ' ')"
 if ((small_bytes >= 28000000)); then
   echo "Sendable companion is ${small_bytes} bytes; expected strictly under 28,000,000." >&2
   exit 1

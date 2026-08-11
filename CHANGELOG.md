@@ -21,6 +21,13 @@ are all still moving. Expect breaking changes between minor versions.
   Chrome, and `reapStaleProfiles()` lost its active-profile check entirely. The
   process list now comes from `/proc` where it exists and `ps -A -ww -o args=`
   everywhere else. CI runs on Ubuntu, which is why 998 tests never saw it.
+- The two tests covering that guard raced the process table: they read it the
+  instant Node reported `spawn`, which on a loaded Linux host is sometimes before
+  the child is listed. Reproduced at 2 failures in 5 runs in a container, and
+  fixed by waiting for the transition instead of assuming it — 12 of 12 after.
+- `record-demo.sh` sized its output with `stat -c`, which is GNU-only. The script
+  already refuses to run outside Linux because it requires PulseAudio, so this
+  was latent rather than live; it now uses `wc -c`.
 
 ## [0.40.0] - 2026-08-06
 

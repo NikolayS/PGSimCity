@@ -29,6 +29,29 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true })
 })
 
+/*
+ * A child is not necessarily visible to the process table the instant Node
+ * reports 'spawn': the fork can land before /proc is populated and before
+ * bash reaches its exec. Poll for the transition rather than assuming it.
+ */
+async function waitUntil(predicate: () => boolean, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (predicate()) return true
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  return predicate()
+}
+
+function spawnHoldingProfile(profilePath: string) {
+  return spawn('bash', [
+    '-c',
+    'exec -a "$1" sleep 60',
+    'bash',
+    `chrome --user-data-dir=${profilePath} about:blank`,
+  ])
+}
+
 describe('CDP profile lifecycle', () => {
   it('gives concurrent runs on the same port separate owned profiles', () => {
     const root = temporaryRoot()
@@ -66,22 +89,17 @@ describe('CDP profile lifecycle', () => {
   it('does not remove a profile still named by a live process', async () => {
     const root = temporaryRoot()
     const profile = acquireCdpProfile({ root, port: 9555, reap: false })
-    const child = spawn(
-      'bash',
-      [
-        '-c',
-        'exec -a "$1" sleep 60',
-        'bash',
-        `chrome --user-data-dir=${profile.path} about:blank`,
-      ],
-    )
+    const child = spawnHoldingProfile(profile.path)
     await once(child, 'spawn')
+    await waitUntil(() => profileIsInUse(profile.path))
 
     expect(profile.cleanup()).toBe(false)
     expect(existsSync(profile.path)).toBe(true)
 
     child.kill('SIGTERM')
     await once(child, 'exit')
+    await waitUntil(() => !profileIsInUse(profile.path))
+
     expect(profile.cleanup()).toBe(true)
     expect(existsSync(profile.path)).toBe(false)
   })
@@ -97,23 +115,15 @@ describe('CDP profile lifecycle', () => {
 
     expect(profileIsInUse(profile.path)).toBe(false)
 
-    const child = spawn(
-      'bash',
-      [
-        '-c',
-        'exec -a "$1" sleep 60',
-        'bash',
-        `chrome --user-data-dir=${profile.path} about:blank`,
-      ],
-    )
+    const child = spawnHoldingProfile(profile.path)
     await once(child, 'spawn')
 
-    expect(profileIsInUse(profile.path)).toBe(true)
+    expect(await waitUntil(() => profileIsInUse(profile.path))).toBe(true)
     expect(profileIsInUse(`${profile.path}-other`)).toBe(false)
 
     child.kill('SIGTERM')
     await once(child, 'exit')
-    expect(profileIsInUse(profile.path)).toBe(false)
+    expect(await waitUntil(() => !profileIsInUse(profile.path))).toBe(true)
   })
 
   it('reaps only old profiles whose owning process is gone', () => {
