@@ -11,6 +11,17 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+### Fixed
+
+- The CDP profile guard that keeps two concurrent screenshot runs from deleting
+  each other's live Chrome profile only worked on Linux. `profileIsInUse()` read
+  `/proc`, which macOS does not have, so the read threw and the guard reported
+  that no profile was ever in use — on the platform this project is developed on.
+  `cleanup()` could therefore remove a profile directory out from under a running
+  Chrome, and `reapStaleProfiles()` lost its active-profile check entirely. The
+  process list now comes from `/proc` where it exists and `ps -A -ww -o args=`
+  everywhere else. CI runs on Ubuntu, which is why 998 tests never saw it.
+
 ## [0.40.0] - 2026-08-06
 
 Nik asked how the project could find more bugs on its own, after a session in
