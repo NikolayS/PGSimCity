@@ -14,6 +14,12 @@ export const GROUND_SURFACE_MAX_SLOPE = 0.12
 const ROUGHNESS_MIN = 0.72
 const ROUGHNESS_MAX = 0.94
 
+/** Street-scale survey marks retire smoothly as the camera rises above them. */
+export function groundSurveyDetail(cameraHeight: number): number {
+  const t = Math.max(0, Math.min(1, (Math.abs(cameraHeight) - 40) / 280))
+  return 1 - t * t * (3 - 2 * t)
+}
+
 /**
  * Tileable aggregate and curing variation for the civic paving. The original
  * height is retained in B while RG and A derive its normal and roughness.
