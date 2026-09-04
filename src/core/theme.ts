@@ -43,7 +43,7 @@ export { ATMOSPHERE, DAY_PALETTE, NIGHT_PALETTE, PALETTES } from './themes'
  * meaning — data, state, energy — with `neon()`.
  *
  * DAY: the same call sites, a different rendering model. `mat()` becomes light
- * pale stone under a stepped toon ramp lit by a low warm sun; `neon()` becomes a
+ * stone and reflective machinery lit by a low warm sun; `neon()` becomes a
  * flat poster fill that carries meaning without any glow, because bloom is off;
  * `line()` becomes the cartoon's ink. Nothing in src/world has to know.
  *
@@ -273,18 +273,12 @@ applyDocument(readStoredMode())
 /* ============================================================================
  * THE DAY SHADER — two injections, one hook.
  *
- * 1. TOON SHADING.
- *    Day mode needs a cel read, and it needs it on materials that already exist
- *    and are already referenced by a thousand meshes — so swapping the class for
- *    MeshToonMaterial is off the table. Instead the standard material's direct
- *    lighting term is replaced at compile time: RE_Direct is redefined to a
- *    two-value sun/shade split, and GGX is clipped into one hard highlight.
- *
- *    The ramp edge is widened by fwidth(), so the terminator stays a clean curve
- *    at every distance instead of stair-stepping across a roof. Shadows come for
- *    free: lights_fragment_begin has already multiplied directLight.color by the
- *    shadow term before RE_Direct sees it, so a shadowed face simply drops to
- *    the ambient floor — which is exactly what a cartoon shadow is.
+ * 1. STRUCTURAL LIGHTING.
+ *    The standard material's direct lighting term is replaced at compile time,
+ *    retaining the shared materials used throughout the city. A diffuse shoulder
+ *    keeps curved equipment and chamfers readable; an unquantized GGX lobe
+ *    separates metal from rough masonry. Shadow visibility has already been
+ *    applied to directLight.color, so the cool indirect floor survives in shade.
  *
  * 2. PER-INSTANCE COLOUR.
  *    The plaza's 1024 page frames, the WAL insert ring, the lock partitions, the
@@ -306,48 +300,31 @@ applyDocument(readStoredMode())
  * and never confuses the two programs.
  * ==========================================================================*/
 
-const TOON_GLSL = /* glsl */ `
-void RE_Direct_Toon( const in IncidentLight directLight, const in vec3 geometryPosition, const in vec3 geometryNormal, const in vec3 geometryViewDir, const in vec3 geometryClearcoatNormal, const in PhysicalMaterial material, inout ReflectedLight reflectedLight ) {
+const DAYLIGHT_GLSL = /* glsl */ `
+float pgDayDiffuse( float dotNL, float up ) {
+	float sun = dotNL * 0.72 + sqrt( dotNL ) * 0.28;
+	return sun * ( 0.86 + 0.12 * up );
+}
 
+void RE_Direct_Daylight( const in IncidentLight directLight, const in vec3 geometryPosition, const in vec3 geometryNormal, const in vec3 geometryViewDir, const in vec3 geometryClearcoatNormal, const in PhysicalMaterial material, inout ReflectedLight reflectedLight ) {
 	float dotNL = saturate( dot( geometryNormal, directLight.direction ) );
-
-	// The high threshold isolates the one wall aimed at the low sun. Roofs and
-	// crossing walls catch the middle band; the return side stays genuinely cool.
-	//
-	// The edge width follows the screen-space gradient of dotNL so each
-	// terminator stays about one pixel wide instead of aliasing at distance.
-	float w = fwidth( dotNL ) * 0.9 + 0.012;
-	float sun = 0.55 * smoothstep( 0.14 - w, 0.14 + w, dotNL )
-	          + 0.45 * smoothstep( 0.68 - w, 0.68 + w, dotNL );
-
-	// The third tone a drawn city needs is the roof, and no N·L threshold can
-	// find it — a roof and a wall can share a dot product. This lifts faces that
-	// point at the sky, in WORLD space: the fragment prefix declares viewMatrix,
-	// and multiplying a vector from the left by a matrix is multiplying by its
-	// transpose, which for the orthonormal rotation of a view matrix is its
-	// inverse. So this is the world normal for one mat4 multiply.
+	// The inverse view rotation distinguishes sky-facing roofs from walls with
+	// the same sun angle. The lift is bounded and cannot light a back-facing wall.
 	vec3 worldN = normalize( ( vec4( geometryNormal, 0.0 ) * viewMatrix ).xyz );
 	float up = smoothstep( 0.55, 0.85, worldN.y );
-
-	float graze = 0.14 * smoothstep( 0.02, 0.14, dotNL );
-	vec3 irradiance = ( graze + 0.66 * sun + 0.20 * sun * up ) * directLight.color;
-
-	// One clipped highlight instead of a smooth lobe: glass and metal still read
-	// as glass and metal, but as a cartoon would draw them. Gated on roughness,
-	// because without the gate matte stone gets a blown-white rim that reads as
-	// neon — it was the highest-contrast feature on every wall in the city.
-	vec3 spec = irradiance * BRDF_GGX_Multiscatter( directLight.direction, geometryViewDir, geometryNormal, material );
-	float specLum = dot( spec, vec3( 0.2126, 0.7152, 0.0722 ) );
-	float gloss = 1.0 - smoothstep( 0.35, 0.75, material.roughness );
-	reflectedLight.directSpecular += spec * smoothstep( 0.035, 0.09, specLum ) * gloss;
-
+	vec3 irradiance = pgDayDiffuse( dotNL, up ) * directLight.color;
+	// Specular keeps the physical incident angle and a continuous lobe. Rough
+	// stone receives a restrained sheen; polished machinery retains its highlight.
+	vec3 spec = dotNL * directLight.color * BRDF_GGX_Multiscatter( directLight.direction, geometryViewDir, geometryNormal, material );
+	float gloss = 1.0 - smoothstep( 0.35, 0.85, material.roughness );
+	reflectedLight.directSpecular += spec * mix( 0.24, 1.0, gloss );
 	reflectedLight.directDiffuse += irradiance * BRDF_Lambert( material.diffuseContribution );
 }
 #undef RE_Direct
-#define RE_Direct RE_Direct_Toon
+#define RE_Direct RE_Direct_Daylight
 `
 
-const TOON_ANCHOR = '#include <lights_physical_pars_fragment>'
+const DAYLIGHT_ANCHOR = '#include <lights_physical_pars_fragment>'
 const VCOLOR_ANCHOR = '#include <color_fragment>'
 
 /* ============================================================================
@@ -651,7 +628,7 @@ export interface ThemeShaderSource {
 /**
  * Patch one material's source for the current mode.
  *
- * The toon ramp and the per-instance colour remap are daylight devices and are
+ * The diffuse response and per-instance colour remap are daylight devices and are
  * skipped at night. The surface term is not: it is multiplicative, so it is
  * correct in both modes, and night is the only mode that has no other way to
  * tell a wall from a slab once the neon is off.
@@ -659,7 +636,7 @@ export interface ThemeShaderSource {
 function patchThemeShader(shader: ThemeShaderSource, surface: boolean): void {
   let f = shader.fragmentShader
   if (airFor(mode).toon) {
-    if (f.indexOf(TOON_ANCHOR) >= 0) f = f.replace(TOON_ANCHOR, TOON_ANCHOR + '\n' + TOON_GLSL)
+    if (f.indexOf(DAYLIGHT_ANCHOR) >= 0) f = f.replace(DAYLIGHT_ANCHOR, DAYLIGHT_ANCHOR + '\n' + DAYLIGHT_GLSL)
     // The replacement is inert unless the material declares vertex colours: the
     // body it substitutes carries the same #if guards as the chunk it replaces.
     if (f.indexOf(VCOLOR_ANCHOR) >= 0) f = f.replace(VCOLOR_ANCHOR, VCOLOR_BODY)
@@ -815,15 +792,20 @@ interface MatSpec {
   surface: boolean
 }
 
+function daylightRoughness(authored: number, masonry: boolean): number {
+  return masonry ? Math.max(0.66, authored) : Math.max(0.16, authored)
+}
+
+function daylightMetalness(authored: number, masonry: boolean): number {
+  return masonry ? authored * 0.25 : authored
+}
+
 function paintMat(m: THREE.MeshStandardMaterial, s: MatSpec, target: ThemeMode): void {
   const daylight = daylightFor(target)
   if (daylight > 0) {
     m.color.setHex(target === 'day' ? daySurface(s.color, s.key) : clockSurface(s.color, daylight, s.key))
-    // A cel-shaded surface is matte by definition; what little variation is left
-    // drives the size of the single highlight, so roughness is compressed rather
-    // than flattened. Metal has no place in a cartoon and is nearly removed.
-    m.roughness = THREE.MathUtils.lerp(s.roughness, Math.min(1, s.roughness * 0.55 + 0.42), daylight)
-    m.metalness = THREE.MathUtils.lerp(s.metalness, s.metalness * 0.25, daylight)
+    m.roughness = THREE.MathUtils.lerp(s.roughness, daylightRoughness(s.roughness, s.surface), daylight)
+    m.metalness = THREE.MathUtils.lerp(s.metalness, daylightMetalness(s.metalness, s.surface), daylight)
     m.emissive.setHex(target === 'day' ? dayEmissive(s.emissive) : clockEmissive(s.emissive, daylight))
   } else {
     m.color.setHex(s.surface ? nightSurface(s.color) : s.color)
@@ -1065,9 +1047,10 @@ export function paintSceneMaterial(m: THREE.Material, target: ThemeMode): void {
   }
 
   const lit = isStandard(m)
-  // Only lit structure is masonry. An unlit basic material is either meaning or
-  // a decal, and a module can opt out of the term explicitly.
-  const surface = lit && ud.pgNoSurface !== true && basic.vertexColors !== true
+  /* Classify from the authored material, as the theme cache does. Using the
+   * repainted metalness would change the material family on a later toggle. */
+  const authoredMetalness = night.metalness ?? std.metalness
+  const surface = lit && ud.pgNoSurface !== true && basic.vertexColors !== true && authoredMetalness < 0.45
   installThemeShader(m, target, surface)
 
   const hasColor = (basic.color as THREE.Color | undefined) !== undefined
@@ -1121,12 +1104,12 @@ export function paintSceneMaterial(m: THREE.Material, target: ThemeMode): void {
     if (night.roughness !== undefined) {
       std.roughness = THREE.MathUtils.lerp(
         night.roughness,
-        Math.min(1, night.roughness * 0.55 + 0.42),
+        daylightRoughness(night.roughness, surface),
         daylight,
       )
     }
     if (night.metalness !== undefined) {
-      std.metalness = THREE.MathUtils.lerp(night.metalness, night.metalness * 0.25, daylight)
+      std.metalness = THREE.MathUtils.lerp(night.metalness, daylightMetalness(night.metalness, surface), daylight)
     }
   }
 }
