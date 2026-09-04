@@ -44,6 +44,7 @@ function investigate(f: ReturnType<typeof fixture>): void {
   advanceUntil(f, () => f.sim.state.scenarioDecision?.phase === 'ready')
   for (const id of VACUUM_EVIDENCE) {
     button(`[data-vacuum-evidence="${id}"]`).click()
+    advanceUntil(f, () => !button('[data-vacuum-record]').disabled)
     expect(button('[data-vacuum-record]').disabled).toBe(false)
     button('[data-vacuum-record]').click()
   }
@@ -64,6 +65,38 @@ describe('vacuum lesson in the live model', () => {
     expect(document.querySelector('[data-disclosure="vacuum-model"]')).toBeNull()
     f.lesson.open()
     expect(document.querySelector('[data-disclosure="vacuum-model"]')!.textContent).toContain('City model')
+  })
+
+  it('changes mode without losing evidence and cannot hide previously used guidance', () => {
+    const f = fixture()
+    f.lesson.open('guided')
+    investigate(f)
+    const notebook = document.querySelector('[data-vacuum-notebook]')!.textContent
+    f.lesson.open('challenge')
+    expect(document.querySelector('.vacuum-lesson__mode')!.textContent).toContain('Challenge')
+    expect(document.querySelector('[data-vacuum-notebook]')!.textContent).toBe(notebook)
+    expect(document.querySelector('[data-vacuum-progress]')!.textContent).toContain('Guidance used')
+  })
+
+  it('requires preserving the required report as well as actual vacuum recovery', () => {
+    const f = fixture()
+    f.lesson.open('challenge', 'vacuum-report')
+    investigate(f)
+    expect(document.querySelector('[data-vacuum-notebook]')!.textContent).toContain('required read-only report')
+    button('[data-vacuum-action="terminate"]').click()
+    advanceUntil(f, () => f.sim.state.scenarioDecision?.phase === 'recovered')
+    button('[data-vacuum-verify]').click()
+    expect(document.querySelector<HTMLElement>('.vacuum-lesson')!.dataset.phase).toBe('observing')
+    expect(document.querySelector('[data-vacuum-result]')!.textContent).toContain('interrupted')
+    f.lesson.close()
+    f.lesson.open('challenge', 'vacuum-report')
+    investigate(f)
+    button('[data-vacuum-action="wait"]').click()
+    expect(button('[data-vacuum-recover]').hidden).toBe(true)
+    advanceUntil(f, () => f.sim.state.scenarioDecision?.phase === 'recovered')
+    button('[data-vacuum-verify]').click()
+    expect(document.querySelector<HTMLElement>('.vacuum-lesson')!.dataset.phase).toBe('complete')
+    expect(document.querySelector('[data-vacuum-progress]')!.textContent).toContain('1 / 2')
   })
 
   it('rebinds owned model identity and drops future notebook entries after a replay reset', () => {
@@ -213,7 +246,7 @@ describe('vacuum lesson in the live model', () => {
     expect(f.sim.state.knobs.paused).toBe(true)
   })
 
-  it('reports only fixed progress events and mode, with completion gated by actual cleanup', () => {
+  it('reports only allowlisted progress fields, with completion gated by actual cleanup', () => {
     const events: VacuumLessonProgress[] = []
     const f = fixture('high', { onProgress: (progress) => events.push(progress) })
     f.lesson.open('challenge')
@@ -222,14 +255,19 @@ describe('vacuum lesson in the live model', () => {
     button('[data-vacuum-action="terminate"]').click()
     button('[data-vacuum-verify]').click()
     expect(events).toEqual([
-      { event: 'started', mode: 'challenge' },
-      ...VACUUM_EVIDENCE.map(() => ({ event: 'evidence-collected', mode: 'challenge' })),
-      { event: 'hint-used', mode: 'challenge' },
+      { event: 'started', mode: 'challenge', lesson: 'vacuum-blockade', firstEncounter: true, unassisted: true },
+      ...VACUUM_EVIDENCE.map(() => ({ event: 'evidence-collected', mode: 'challenge', lesson: 'vacuum-blockade', firstEncounter: true, unassisted: true })),
+      { event: 'hint-used', mode: 'challenge', lesson: 'vacuum-blockade', firstEncounter: true, unassisted: false },
     ])
     advanceUntil(f, () => f.sim.state.scenarioDecision?.phase === 'recovered')
     button('[data-vacuum-verify]').click()
-    expect(events.at(-1)).toEqual({ event: 'recovery-verified', mode: 'guided' })
-    expect(events.every((event) => Object.keys(event).sort().join(',') === 'event,mode')).toBe(true)
+    expect(events.slice(-2)).toEqual([
+      { event: 'recovery-verified', mode: 'guided', lesson: 'vacuum-blockade', firstEncounter: true, unassisted: false },
+      { event: 'completed', mode: 'guided', lesson: 'vacuum-blockade', firstEncounter: true, unassisted: false },
+    ])
+    button('[data-vacuum-verify]').click()
+    expect(events.filter((event) => event.event === 'completed')).toHaveLength(1)
+    expect(events.every((event) => Object.keys(event).sort().join(',') === 'event,firstEncounter,lesson,mode,unassisted')).toBe(true)
   })
 
   it('keeps the lesson usable when an optional analytics callback fails', () => {

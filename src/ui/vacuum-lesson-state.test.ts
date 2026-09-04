@@ -25,6 +25,11 @@ function investigated() {
 }
 
 describe('vacuum investigation evidence and recovery', () => {
+  it('does not credit a restored action without a complete evidence notebook', () => {
+    const restored = rebindVacuumLesson(createVacuumLessonState('challenge'), reading, 'terminate')
+    expect(verifyVacuumRecovery(restored, { ...reading, pinned: false, reclaimed: 20, recovered: true }).phase).toBe('observing')
+  })
+
   it('requires all four evidence sources and a supported explanation before intervention', () => {
     let state = createVacuumLessonState('guided')
     for (const id of ['table', 'worker', 'snapshot'] as const) {

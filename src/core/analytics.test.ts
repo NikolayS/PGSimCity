@@ -52,6 +52,16 @@ describe('analytics attribution', () => {
 })
 
 describe('analytics event queue', () => {
+  it('allows only known variants and boolean outcome dimensions', () => {
+    const plausible = vi.fn()
+    const tracker = createAnalyticsTracker('city', plausible)
+    trackVacuumLessonProgress(tracker, { event: 'recovery-verified', mode: 'challenge',
+      lesson: 'vacuum-report', firstEncounter: true, unassisted: false, sql: 'private' })
+    trackVacuumLessonProgress(tracker, { event: 'started', mode: 'challenge', lesson: 'private' })
+    expect(plausible.mock.calls).toEqual([
+      ['Lesson Recovery Verified', { props: { entrypoint: 'city', lesson: 'vacuum-report', mode: 'challenge', firstEncounter: true, unassisted: false } }],
+    ])
+  })
   it('allowlists lesson events and exports no notebook, SQL, or arbitrary input', () => {
     const plausible = vi.fn()
     const tracker = createAnalyticsTracker('city', plausible)

@@ -1,32 +1,33 @@
 export type LessonMode = 'guided' | 'challenge'
+export type LessonId = 'vacuum-blockade' | 'vacuum-report'
 
-const PREFIX = '#lesson/vacuum-blockade/'
-
-export function lessonHref(mode: LessonMode): string {
-  return `${PREFIX}${mode}`
+export function lessonHref(mode: LessonMode, lesson: LessonId = 'vacuum-blockade'): string {
+  return `#lesson/${lesson}/${mode}`
 }
 
-export function lessonShareUrl(currentHref: string, mode: LessonMode): string {
+export function lessonShareUrl(currentHref: string, mode: LessonMode, lesson: LessonId = 'vacuum-blockade'): string {
   const url = new URL(currentHref)
   url.search = ''
-  url.hash = lessonHref(mode)
+  url.hash = lessonHref(mode, lesson)
   return url.href
 }
 
 export function lessonMode(hash: string): LessonMode | null {
-  if (hash === lessonHref('guided')) return 'guided'
-  if (hash === lessonHref('challenge')) return 'challenge'
+  for (const lesson of ['vacuum-blockade', 'vacuum-report'] as const) {
+    if (hash === lessonHref('guided', lesson)) return 'guided'
+    if (hash === lessonHref('challenge', lesson)) return 'challenge'
+  }
   return null
 }
 
 export function installLessonRoutes(options: {
   target: Pick<EventTarget, 'addEventListener' | 'removeEventListener'>
   location: { hash: string }
-  open(mode: LessonMode): void
+  open(mode: LessonMode, lesson: LessonId): void
 }): () => void {
   const sync = (): void => {
     const mode = lessonMode(options.location.hash)
-    if (mode) options.open(mode)
+    if (mode) options.open(mode, options.location.hash.startsWith('#lesson/vacuum-report/') ? 'vacuum-report' : 'vacuum-blockade')
   }
   options.target.addEventListener('hashchange', sync)
   sync()
