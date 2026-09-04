@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { Color } from 'three'
 import { heightFogAmount } from '../engine/color-grade'
 import {
   ATMOSPHERE,
@@ -262,6 +263,28 @@ describe('daySurface — per-district stone', () => {
     ] as const
     for (const [key, night] of faces) {
       expect(hslOf(daySurface(night, key))[2], key).toBeGreaterThan(ground + 0.055)
+    }
+  })
+
+  it('gives lit mineral facades albedo headroom above the unlit paving', () => {
+    const luminance = (hex: number): number => {
+      const linear = new Color(hex)
+      return linear.r * 0.2126 + linear.g * 0.7152 + linear.b * 0.0722
+    }
+    const paving = luminance(DAY_PALETTE.ground)
+    const facades = [
+      ['wal.struct', 0x2a3752],
+      ['storage.struct', 0x1a2333],
+      ['maint.struct', 0x2b3550],
+      ['shmem.struct', 0x1b2435],
+      ['rep.struct', 0x27334c],
+      ['backends.struct', 0x2a3852],
+    ] as const
+    for (const [key, night] of facades) {
+      // The paving shader outputs its base directly, while these diffuse faces
+      // pay the incident-light/PI term. Equal input values do not read equally.
+      expect(luminance(daySurface(night, key)) / paving, key).toBeGreaterThan(1.8)
+      expect(hslOf(daySurface(night, key))[2], key).toBeLessThan(0.9)
     }
   })
 
