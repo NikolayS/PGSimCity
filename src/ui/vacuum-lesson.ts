@@ -1,6 +1,7 @@
 import '../styles/vacuum-lesson.css'
 
 import type { SimState } from '../core/types'
+import { lessonShareUrl } from '../core/lesson-route'
 import { fmtBytes, fmtNum, reduceMotion } from '../core/util'
 import {
   canChooseVacuumAction, chooseVacuumAction, collectVacuumEvidence,
@@ -176,6 +177,25 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     type: 'button', class: 'pg-btn', text: 'Start another attempt', data: { vacuumRetry: '' },
     on: { click: () => { const mode = state.mode; close(); open(mode) } },
   })
+  const challengeButton = el('button', {
+    type: 'button', class: 'pg-btn', text: 'Start a challenge attempt',
+    on: { click: () => { close(); open('challenge') } },
+  })
+  const shareButton = el('button', {
+    type: 'button', class: 'pg-btn', text: 'Share this lesson',
+    on: { click: async () => {
+      const url = lessonShareUrl(window.location.href, state.mode)
+      try {
+        await navigator.clipboard.writeText(url)
+        announce('Lesson link copied. It opens a new attempt in this mode; notes and current model state are not included.')
+      } catch {
+        shareLink.href = url
+        shareLink.hidden = false
+        announce('Clipboard unavailable. Copy the lesson link below; it does not include your notes or current model state.')
+      }
+    } },
+  })
+  const shareLink = el('a', { class: 'pg-btn', text: 'Open a new attempt', hidden: true })
   const retry = el('div', { class: 'vacuum-lesson__retry' }, retryButton,
     el('p', { text: 'A new attempt uses the city’s current state and clears this notebook. It does not rewind the previous workload.' }),
   )
@@ -190,7 +210,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     el('div', { class: 'vacuum-lesson__meta' }, modeLabel, clock), closeButton, title, phaseLabel),
   el('div', { class: 'vacuum-lesson__body' },
     evidenceNav, evidenceDetail, causes, decision, observation, announcement,
-    el('div', { class: 'vacuum-lesson__tools' }, pageButton, pauseButton, hintButton),
+    el('div', { class: 'vacuum-lesson__tools' }, pageButton, pauseButton, hintButton, challengeButton, shareButton, shareLink),
     el('details', { class: 'vacuum-lesson__notes' }, notebookSummary, notebook,
       el('label', { htmlFor: 'vacuum-personal-notes', text: 'Your notes' }), notes,
       el('p', { text: 'Evidence and notes stay here until you start another attempt.' })),
@@ -352,6 +372,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     setText(pauseButton, ctx.sim.state.knobs.paused ? 'Run model' : 'Pause model')
     pauseButton.setAttribute('aria-pressed', String(ctx.sim.state.knobs.paused))
     hintButton.hidden = state.mode === 'guided' || state.phase !== 'investigating'
+    challengeButton.hidden = state.mode === 'challenge'
     retry.hidden = state.phase === 'investigating'
   }
 
