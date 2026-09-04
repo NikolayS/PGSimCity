@@ -59,6 +59,43 @@ function incident(seed = 42) {
 }
 
 describe('bounded incident replay', () => {
+  it('does not block model clamping when a live action exceeds share bounds', () => {
+    const { sim, replay } = incident()
+    expect(() => sim.setKnob('workMem', 1000)).not.toThrow()
+    expect(sim.state.knobs.workMem).toBe(256)
+    expect(replay.status.valid).toBe(false)
+    expect(() => replay.exportRecord()).toThrow(/unsupported|bounds/i)
+    replay.dispose()
+  })
+  it('records clearing a trace before opening a lesson without invalidating replay', async () => {
+    const { sim, replay } = incident()
+    sim.setKnob('paused', true)
+    sim.endTrace()
+    sim.runScenario('vacuum-blockade')
+    sim.update(STEP)
+    expect(replay.status.valid).toBe(true)
+    const expected = structuredClone(sim.state)
+    await replay.loadRecord(replay.exportRecord())
+    expect(sim.state).toEqual(expected)
+    replay.dispose()
+  })
+  it('runs an alternative to exactly the saved comparison duration and pauses there', async () => {
+    const { sim, replay } = incident()
+    run(sim, 10)
+    const point = replay.checkpoint()
+    run(sim, 80)
+    await replay.rewind(point)
+    sim.setKnob('workMem', 64)
+    await replay.runToComparison()
+    expect(replay.compare()?.sameDuration).toBe(true)
+    expect(replay.status.tick).toBe(90)
+    expect(sim.state.knobs.paused).toBe(true)
+    expect(sim.state.knobs.workMem).toBe(64)
+    const end = structuredClone(sim.state)
+    await replay.loadRecord(replay.exportRecord())
+    expect(sim.state).toEqual(end)
+    replay.dispose()
+  })
   it('counts overlapping physical slot WAL retention once', async () => {
     const { sim, replay } = incident()
     sim.state.replication.physicalSlots[0].retainedBytes = 100
@@ -251,7 +288,7 @@ describe('bounded incident replay', () => {
     replay.dispose()
   })
 
-  it.each(['startBaseBackup', 'startPgRewind', 'endTrace'] as const)(
+  it.each(['startBaseBackup', 'startPgRewind', 'startFailover'] as const)(
     'invalidates export after unsupported mutation %s until reset', (method) => {
       const { sim, replay } = incident()
       sim[method]()

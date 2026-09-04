@@ -19,6 +19,7 @@ export type ReplayAction = { tick: number } & (
   | { type: 'scenario'; id: string | null }
   | { type: 'decision'; choice: ScenarioChoiceId }
   | { type: 'recover' }
+  | { type: 'end-trace' }
 )
 
 export interface ReplayRecord {
@@ -132,8 +133,9 @@ function action(value: unknown, ticks: number): ReplayAction {
       if (!choices.has(item.choice as ScenarioChoiceId)) throw new Error('Invalid replay decision')
       return { tick, type: 'decision', choice: item.choice as ScenarioChoiceId }
     case 'recover':
+    case 'end-trace':
       fields(item, ['tick', 'type'])
-      return { tick, type: 'recover' }
+      return { tick, type: item.type }
     default:
       throw new Error('Unsupported replay action')
   }
@@ -214,6 +216,7 @@ export function createIncidentReplay(
   let busy = 0
   let disposed = false
   let baseline: ReplayOutcome | null = null
+  let baselineDurations: Float64Array | null = null
   const restoredListeners = new Set<() => void>()
 
   function notify(): void { options.onChange?.() }
@@ -248,9 +251,14 @@ export function createIncidentReplay(
   }
   function invoke<T>(next: ReplayAction, execute: () => T): T {
     requireReady()
-    record(action(next, status.tick))
+    recordLive(next)
     busy++
     try { return execute() } finally { busy-- }
+  }
+  function recordLive(next: unknown): void {
+    if (!status.valid) return
+    try { record(action(next, status.tick)) }
+    catch { invalidate('Unsupported live action outside replay bounds; reset to record another incident') }
   }
   function apply(next: ReplayAction): void {
     switch (next.type) {
@@ -258,6 +266,7 @@ export function createIncidentReplay(
       case 'scenario': original.runScenario(next.id); break
       case 'decision': original.chooseScenario(next.choice); break
       case 'recover': original.recoverScenario(); break
+      case 'end-trace': original.endTrace(); break
     }
   }
   function outcome(): ReplayOutcome {
@@ -278,8 +287,7 @@ export function createIncidentReplay(
     }
   }
 
-  sim.update = (dt: number): void => {
-    if (status.seeking) return
+  function advance(dt: number): void {
     if (Number.isFinite(dt) && dt > 0 && !sim.state.knobs.paused) {
       if (status.valid) {
         branch()
@@ -296,6 +304,7 @@ export function createIncidentReplay(
     busy++
     try { original.update(dt) } finally { busy-- }
   }
+  sim.update = (dt: number): void => { if (!status.seeking) advance(dt) }
   sim.setKnob = (key, value, source) => invoke(
     { tick: status.tick, type: 'knob', key, value, ...(source ? { source } : {}) },
     () => original.setKnob(key, value, source),
@@ -303,6 +312,7 @@ export function createIncidentReplay(
   sim.runScenario = (id) => invoke({ tick: status.tick, type: 'scenario', id }, () => original.runScenario(id))
   sim.chooseScenario = (choice) => invoke({ tick: status.tick, type: 'decision', choice }, () => original.chooseScenario(choice))
   sim.recoverScenario = () => invoke({ tick: status.tick, type: 'recover' }, () => original.recoverScenario())
+  sim.endTrace = () => invoke({ tick: status.tick, type: 'end-trace' }, () => original.endTrace())
 
   bus.emit = <K extends keyof BusEvents>(type: K, payload: BusEvents[K]): void => {
     if (status.seeking && (type === 'flow' || type === 'toast' || type === 'narrate' || type === 'focus')) return
@@ -313,7 +323,7 @@ export function createIncidentReplay(
       requireReady()
       // The bus ignores a repeated scenario; a direct runScenario restarts it.
       if (type !== 'scenario' || (payload as BusEvents['scenario']).id !== sim.state.scenario) {
-        record(action(next, status.tick))
+        recordLive(next)
       }
       busy++
       try { originalEmit(type, payload) } finally { busy-- }
@@ -323,7 +333,7 @@ export function createIncidentReplay(
   }
 
   const unsupported = [
-    'request', 'setTraceMode', 'endTrace', 'startBaseBackup', 'startPointInTimeRestore',
+    'request', 'setTraceMode', 'startBaseBackup', 'startPointInTimeRestore',
     'startRestoreDrill', 'setLeaderOpinion', 'startSwitchover', 'startFailover', 'startPgRewind',
   ] as const
   for (const method of unsupported) {
@@ -345,6 +355,7 @@ export function createIncidentReplay(
     status.seekProgress = 0
     elapsed = 0
     baseline = null
+    baselineDurations = null
     busy++
     try { original.reset() } finally { busy-- }
     originTime = sim.state.t
@@ -408,7 +419,33 @@ export function createIncidentReplay(
       requireValid()
       const target = pointAt(value)
       baseline = outcome()
+      baselineDurations = durations.slice(0, status.tick)
       await seek(target)
+    },
+    async runToComparison(): Promise<void> {
+      requireValid()
+      if (!baseline || !baselineDurations) throw new Error('Rewind a completed branch before comparing')
+      const remaining = baseline.elapsedModelSeconds - (sim.state.t - originTime)
+      if (remaining < -1e-7) throw new Error('Alternative is already beyond the comparison duration; rewind again')
+      sim.setKnob('paused', false)
+      status.seeking = true
+      notify()
+      try {
+        let steps = 0
+        while (baseline.elapsedModelSeconds - (sim.state.t - originTime) > 1e-7) {
+          if (disposed) throw new Error('Replay controller was disposed during comparison')
+          const dt = Math.min(baselineDurations[status.tick] ?? 1 / 30,
+            baseline.elapsedModelSeconds - (sim.state.t - originTime))
+          advance(dt)
+          if (!status.valid) throw new Error(status.reason)
+          status.seekProgress = (sim.state.t - originTime) / Math.max(1e-7, baseline.elapsedModelSeconds)
+          if (++steps % SEEK_BATCH === 0) await new Promise<void>((resolve) => setTimeout(resolve, 0))
+        }
+      } finally {
+        status.seeking = false
+        if (!disposed) sim.setKnob('paused', true)
+        notify()
+      }
     },
     compare(): { baseline: ReplayOutcome; current: ReplayOutcome; sameDuration: boolean } | null {
       if (!baseline) return null
@@ -446,6 +483,7 @@ export function createIncidentReplay(
       status.reason = ''
       status.totalTicks = record.ticks
       baseline = null
+      baselineDurations = null
       await seek({ tick: record.ticks, actionCount: log.length })
     },
     reset,
