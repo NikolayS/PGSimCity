@@ -8063,6 +8063,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         pagesAtDecision: 0,
         vacuumRunsAtDecision: 0,
         landfillAtDecision: 0,
+        landfillAtRelease: null,
         deadTuplesAdded: 0,
         pagesAdded: 0,
         blockedVacuumWorkers: 0,
@@ -8146,6 +8147,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         if (decision.report.remaining <= 1e-9) {
           decision.report.remaining = 0
           decision.report.status = 'completed'
+          decision.landfillAtRelease = av.landfill
           setKnob('longRunningXact', false)
           decision.phase = 'recovering'
         }
@@ -8172,7 +8174,8 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         }
         if (
           (decision.transactionTerminated || decision.report?.status === 'completed')
-          && decision.deadTuplesReclaimed > 0
+          && decision.landfillAtRelease !== null
+          && av.landfill > decision.landfillAtRelease
           && !K.longRunningXact
         ) {
           decision.phase = 'recovered'
@@ -8373,6 +8376,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         decision.choice = choice
         decision.correct = !decision.report
         decision.transactionTerminated = true
+        decision.landfillAtRelease = av.landfill
         if (decision.report) decision.report.status = 'interrupted'
         setKnob('longRunningXact', false)
         decision.phase = 'outcome'
@@ -8421,6 +8425,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       && decision.phase === 'outcome'
     ) {
       decision.transactionTerminated = true
+      decision.landfillAtRelease = av.landfill
       decision.phase = 'recovering'
       setKnob('longRunningXact', false)
       return true

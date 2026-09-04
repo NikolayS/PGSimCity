@@ -1166,6 +1166,7 @@ export interface VacuumBlockadeDecisionState extends ScenarioDecisionBase {
   pagesAtDecision: number
   vacuumRunsAtDecision: number
   landfillAtDecision: number
+  landfillAtRelease: number | null
   deadTuplesAdded: number
   pagesAdded: number
   blockedVacuumWorkers: number

@@ -11,6 +11,20 @@ function staged() {
 }
 
 describe('required read-only report investigation', () => {
+  it('requires collection after snapshot release even when earlier cleanup was observed', () => {
+    const sim = staged()
+    const decision = sim.state.scenarioDecision!
+    if (decision.kind !== 'vacuum-blockade') throw new Error('wrong decision')
+    // A counter baseline before existing eligible-version cleanup must not
+    // certify a later snapshot release as a successful cleanup pass.
+    decision.landfillAtDecision = sim.state.autovac.landfill - 100
+    sim.chooseScenario('terminate-transaction')
+    const releasedAt = sim.state.autovac.landfill
+    sim.update(step)
+    expect(sim.state.autovac.landfill).toBe(releasedAt)
+    expect(decision.phase).not.toBe('recovered')
+  })
+
   it('preserves the snapshot until authored report completion, then observes cleanup', () => {
     const sim = staged()
     expect(sim.chooseScenario('wait-for-transaction')).toBe(true)
