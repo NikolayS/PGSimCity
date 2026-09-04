@@ -4,6 +4,12 @@ import { Vector4, type WebGLRenderer } from 'three'
 export const EXPORT_MAX_PIXELS = 4_000_000
 export const EXPORT_4K_MAX_PIXELS = 3840 * 2160
 
+/** Frame callbacks are constructed once by boot, not allocated per animation frame. */
+export function dispatchPresentationFrame(presenting: boolean, live: () => void, frozen: () => void): void {
+  if (presenting) frozen()
+  else live()
+}
+
 export function exportDimensions(width: number, height: number, scale: 1 | 2 | '4k', maxDimension: number) {
   if (![width, height, maxDimension].every((v) => Number.isFinite(v) && v >= 1) || (scale !== 1 && scale !== 2 && scale !== '4k')) {
     throw new Error('Invalid presentation dimensions')

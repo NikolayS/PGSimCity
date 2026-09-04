@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { Vector4, type WebGLRenderer } from 'three'
-import { captureRasterFrame, exportDimensions, pngBlob, withPresentationPause } from './presentation'
+import { captureRasterFrame, dispatchPresentationFrame, exportDimensions, pngBlob, withPresentationPause } from './presentation'
 
 describe('presentation export bounds', () => {
   it('supersamples without changing the camera aspect', () => {
@@ -95,6 +95,17 @@ describe('raster pipeline restoration', () => {
 })
 
 describe('presentation pause ownership', () => {
+  it('does not tick camera, tour or trace during presentation and resumes on exit', () => {
+    const state = { camera: 0, tour: 0, trace: 0 }
+    const live = () => { state.camera++; state.tour++; state.trace++ }
+    const frozen = vi.fn()
+    dispatchPresentationFrame(false, live, frozen)
+    for (let i = 0; i < 30; i++) dispatchPresentationFrame(true, live, frozen)
+    expect(state).toEqual({ camera: 1, tour: 1, trace: 1 })
+    expect(frozen).toHaveBeenCalledTimes(30)
+    dispatchPresentationFrame(false, live, frozen)
+    expect(state).toEqual({ camera: 2, tour: 2, trace: 2 })
+  })
   it.each([true, false])('restores original pause %s on failure', async (initial) => {
     let paused = initial
     await expect(withPresentationPause(() => paused, (v) => { paused = v }, async () => {
