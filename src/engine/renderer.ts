@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { captureRasterFrame } from './presentation'
 import { applyBoxBevelDetail } from '../core/beveled-box'
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
@@ -74,6 +75,8 @@ export interface RendererApi {
    */
   render(dt: number, rawDt?: number): void
   resize(): void
+  /** Detached, tone-mapped scene snapshot; normal render dimensions restore synchronously. */
+  captureFrame(width: number, height: number): HTMLCanvasElement
   setQuality(level: QualityLevel): void
   /** Pin deterministic moon staging without changing the local-time theme clock. */
   setMoonDate(date: Date): void
@@ -1143,6 +1146,27 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
 
   /* ---- context loss -----------------------------------------------------*/
 
+  function captureFrame(width: number, height: number): HTMLCanvasElement {
+    return captureRasterFrame(renderer, width, height, { width: viewW, height: viewH, ratio: quality.pixelRatio },
+      ({ width: w, height: h, ratio }) => {
+        viewW = w
+        viewH = h
+        quality.pixelRatio = ratio
+        renderer.setPixelRatio(ratio)
+        renderer.setSize(w, h, false)
+        if (composer) {
+          composer.setPixelRatio(ratio)
+          composer.setSize(w, h)
+          sizeBloom()
+          sizeAmbientOcclusion()
+        }
+      }, () => {
+        // Keep the exact camera and quality. Do not advance animation or adaptive quality.
+        if (useComposer() && composer) composer.render(0)
+        else renderer.render(scene, camera)
+      })
+  }
+
   function onContextLost(e: Event): void {
     // preventDefault() is what allows the browser to hand the context back.
     e.preventDefault()
@@ -1268,6 +1292,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     },
     render,
     resize,
+    captureFrame,
     setQuality,
     setMoonDate,
     refreshMoonDate,
