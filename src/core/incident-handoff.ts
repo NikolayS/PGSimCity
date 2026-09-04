@@ -81,6 +81,6 @@ export function readIncidentHandoff(
     storage(source).removeItem(HANDOFF_KEY)
     return { kind: 'ready', value }
   } catch (error) {
-    return { kind: 'error', message: error instanceof Error ? error.message : 'Incident storage is unavailable' }
+    return { kind: 'error', message: error instanceof Error ? error.message.slice(0, 300) : 'Incident storage is unavailable' }
   }
 }
