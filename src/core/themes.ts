@@ -320,7 +320,9 @@ export const ATMOSPHERE: Record<CuratedThemeMode, Atmosphere> = {
      */
     fogNearScale: 1.2,
     fogFarScale: 1.65,
-    heightFogDensity: 0.0014,
+    // This layers over distance fog: at home framing it must not flatten
+    // every facade into the same haze colour before the far districts recede.
+    heightFogDensity: 0.00025,
     heightFogFalloff: 0.018,
     fogColor: DAY_PALETTE.fog,
     plateFogScale: 0.84,

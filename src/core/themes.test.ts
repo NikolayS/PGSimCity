@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { heightFogAmount } from '../engine/color-grade'
 import {
   ATMOSPHERE,
   CLOCK_SUNRISE_MINUTES,
@@ -274,6 +275,17 @@ describe('daySurface — per-district stone', () => {
 })
 
 describe('the day sun', () => {
+  it('preserves local material contrast beneath the distance haze', () => {
+    const air = ATMOSPHERE.day
+    const near = heightFogAmount(550, 285, 0, air.heightFogDensity, air.heightFogFalloff)
+    const far = heightFogAmount(1050, 285, 0, air.heightFogDensity, air.heightFogFalloff)
+    // This is the additional ground-layer haze, on top of scene distance fog.
+    // Capping at 20% across the whole overview erased local material contrast.
+    expect(near).toBeLessThan(0.1)
+    expect(near).toBeGreaterThan(0.03)
+    expect(far).toBeGreaterThan(near * 1.5)
+  })
+
   it('lights roof planes while retaining legible cast shadows', () => {
     const { keyPos, keyTarget } = ATMOSPHERE.day
     const dx = keyPos[0] - keyTarget[0]
