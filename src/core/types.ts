@@ -1171,6 +1171,8 @@ export interface VacuumBlockadeDecisionState extends ScenarioDecisionBase {
   blockedVacuumWorkers: number
   deadTuplesReclaimed: number
   transactionTerminated: boolean
+  /** Authored client work, not a database progress or completion estimate. */
+  report: { status: 'running' | 'completed' | 'interrupted'; remaining: number } | null
 }
 
 export interface FailoverCandidateDecisionState extends ScenarioDecisionBase {
