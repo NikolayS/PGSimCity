@@ -259,7 +259,11 @@ function markSeen(): void {
  * FACTORY
  * ========================================================================*/
 
-export function createTour(ctx: UiContext): UiModule {
+export interface TourOptions {
+  onInvestigate?: () => void
+}
+
+export function createTour(ctx: UiContext, options: TourOptions = {}): UiModule {
   const bus = ctx.bus
   const sim = ctx.sim
   const layer = document.getElementById('tour-layer') ?? el('div')
@@ -811,14 +815,16 @@ export function createTour(ctx: UiContext): UiModule {
 
   const firstRun = el(
     'aside',
-    { class: 'tour-first pg-panel', role: 'note' },
+    { class: `tour-first pg-panel${options.onInvestigate ? ' tour-first--investigation' : ''}`, role: 'note' },
     el(
       'div',
       { class: 'tour-first__text' },
       el('span', { class: 'pg-eyebrow', text: 'First time here?' }),
       el('p', {
         class: 'tour-first__line',
-        text: `Follow a query from connection to commit — ${STEPS.length} chapters, at your pace.`,
+        text: options.onInvestigate
+          ? 'Autovacuum is running. Why is this table still growing? Follow the evidence and test your explanation.'
+          : `Follow a query from connection to commit — ${STEPS.length} chapters, at your pace.`,
       }),
     ),
     el(
@@ -831,21 +837,28 @@ export function createTour(ctx: UiContext): UiModule {
           type: 'button',
           on: {
             click: () => {
+              markSeen()
               hideFirstRun()
-              bus.emit('tour:start', { source: 'button' })
+              if (options.onInvestigate) options.onInvestigate()
+              else bus.emit('tour:start', { source: 'button' })
             },
           },
         },
-        icon('tour', 13),
-        el('span', { text: 'Start the tour' }),
+        icon(options.onInvestigate ? 'diagnose' : 'tour', 13),
+        el('span', { text: options.onInvestigate ? 'Investigate a growing table' : 'Start the tour' }),
       ),
+      options.onInvestigate && el('button', {
+        class: 'pg-btn pg-btn--ghost tour-first__tour',
+        type: 'button', text: 'Take the tour',
+        on: { click: () => { markSeen(); hideFirstRun(); bus.emit('tour:start', { source: 'button' }) } },
+      }),
       el(
         'button',
         {
           class: 'pg-btn pg-btn--ghost tour-first__no',
           type: 'button',
-          text: 'Dismiss',
-          on: { click: () => hideFirstRun() },
+          text: options.onInvestigate ? 'Explore freely' : 'Dismiss',
+          on: { click: () => { markSeen(); hideFirstRun() } },
         },
       ),
     ),
@@ -861,13 +874,13 @@ export function createTour(ctx: UiContext): UiModule {
 
   function showFirstRun(): void {
     if (running || hasSeen()) return
-    markSeen()
+    if (!options.onInvestigate) markSeen()
     firstLive = true
     setClass(firstRun, 'is-live', true)
     // While this is up, nothing else speaks from the deck (see tour.css).
     document.body.classList.add('pg-invite')
-    // An invitation nobody answers is just furniture. It leaves on its own.
-    firstTimer = window.setTimeout(() => hideFirstRun(), FIRST_RUN_LIFE_MS)
+    // The investigation invitation remains available until the reader chooses.
+    if (!options.onInvestigate) firstTimer = window.setTimeout(() => hideFirstRun(), FIRST_RUN_LIFE_MS)
   }
 
   layer.append(firstRun, narrateCard, card)
@@ -1071,7 +1084,7 @@ export function createTour(ctx: UiContext): UiModule {
   const looseBus = bus
   cleanup.push(
     bus.on('tour:start', (p) => start(p && typeof p.chapter === 'number' ? p.chapter : 0)),
-    bus.on('tour:stop', () => stop()),
+    bus.on('tour:stop', () => { stop(); closeTrace() }),
     bus.on('trace:open', () => openTracePicker()),
     bus.on('narrate', (p) => {
       // While the tour is speaking, scenario beats stay quiet.
