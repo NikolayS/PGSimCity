@@ -15,7 +15,7 @@ const KIB = 1024
 const MIB = KIB * KIB
 const MODEL_MILLISECOND_UNIT = 'model ms'
 const POSTGRESQL_MAJOR = 18
-const POSTGRESQL_REFERENCE_MINOR = 4
+const POSTGRESQL_REFERENCE_MINOR = 6
 const MODEL_CONNECTION_RESERVATIONS = {
   superuser: 3,
   reserved: 0,
