@@ -218,6 +218,16 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
   )
   document.body.append(panel)
 
+  function positionPanel(): void {
+    if (!opened) return
+    const bottom = document.getElementById('hud-top')?.getBoundingClientRect().bottom ?? 0
+    panel.style.setProperty('--vacuum-top', `${Math.max(78, Math.ceil(bottom) + 12)}px`)
+  }
+  const toolbar = document.getElementById('hud-top')
+  const toolbarObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(positionPanel)
+  if (toolbar) toolbarObserver?.observe(toolbar)
+  window.addEventListener('resize', positionPanel)
+
   function announce(text: string): void { setText(announcement, text) }
 
   function progress(event: VacuumLessonProgress['event']): void {
@@ -390,6 +400,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     restorePaused = restoreTimeScale = true
     opened = true
     panel.hidden = false
+    positionPanel()
     document.body.classList.add('pg-vacuum-lesson')
     state = createVacuumLessonState(mode)
     selected = 'table'
@@ -463,6 +474,8 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
       refresh()
     },
     dispose() {
+      toolbarObserver?.disconnect()
+      window.removeEventListener('resize', positionPanel)
       for (const unsubscribe of off) unsubscribe()
       close()
       panel.remove()

@@ -1,11 +1,11 @@
 .vacuum-lesson {
   position: fixed;
   z-index: var(--z-floating-overlay);
-  inset: calc(78px + var(--safe-t)) calc(18px + var(--safe-r)) auto auto;
+  inset: var(--vacuum-top, calc(78px + var(--safe-t))) calc(18px + var(--safe-r)) auto auto;
   display: flex;
   flex-direction: column;
   width: min(410px, calc(100vw - 36px - var(--safe-l) - var(--safe-r)));
-  max-height: calc(100dvh - 172px - var(--safe-t) - var(--safe-b));
+  max-height: calc(100dvh - var(--vacuum-top, 78px) - 94px - var(--safe-b));
   color: var(--ink);
   background: var(--bg-panel-solid);
   border: 1px solid var(--line-hard);
