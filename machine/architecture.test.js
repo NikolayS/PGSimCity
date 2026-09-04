@@ -3,10 +3,25 @@ import { describe, expect, it } from 'vitest'
 import {
   ARCHITECTURE_LAYOUT,
   activeStatementStageIndex,
+  bufferAccessSummary,
   contains,
   createStatementReplay,
   nextStatementStageIndex,
 } from './architecture.js'
+
+describe('Machine measured buffer access', () => {
+  it.each([
+    [0, 0, 'none', 'NO SHARED-BUFFER ACCESSES REPORTED'],
+    [1, 0, 'hit', 'ALL HIT IN SHARED_BUFFERS'],
+    [0, 1, 'read', 'READ BELOW SHARED_BUFFERS'],
+    [12, 3, 'read', 'READ BELOW SHARED_BUFFERS'],
+  ])('describes %i hits and %i reads', (sharedHits, sharedReads, reach, description) => {
+    expect(bufferAccessSummary({ sharedHits, sharedReads })).toEqual({
+      reach,
+      text: `P MEASURED · HIT ${sharedHits} · READ ${sharedReads} · ${description}`,
+    })
+  })
+})
 
 const REPORT = Object.freeze({
   source: 'postgres',
