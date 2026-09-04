@@ -43,7 +43,7 @@ export function createPresentationExport(ctx: UiContext, gfx: RendererApi): Pres
   const offSelect = ctx.bus.on('select', ({ id }) => { selected = id })
   const scale = el('select', { 'aria-label': 'Image resolution' },
     el('option', { value: '1', text: '1× viewport' }), el('option', { value: '2', text: '2× viewport (up to 4 megapixels)' }),
-    el('option', { value: '4k', text: '4K frame (up to 8.3 megapixels)' }))
+    el('option', { value: '4k', text: '4K scene (plus model footer)' }))
   scale.value = '2'
   const names = el('input', { type: 'checkbox', checked: true })
   const status = el('p', { class: 'pg-presentation__status', role: 'status', 'aria-live': 'polite' })

@@ -1,3 +1,5 @@
+import { Vector4, type WebGLRenderer } from 'three'
+
 /** Approximate ceiling for the composer targets, excluding existing scene assets. */
 export const EXPORT_MAX_PIXELS = 4_000_000
 export const EXPORT_4K_MAX_PIXELS = 3840 * 2160
@@ -61,7 +63,10 @@ export function captureRasterFrame(
   snapshot.width = width
   snapshot.height = height
   const context = snapshot.getContext('2d')
-  if (!context) throw new Error('Presentation canvas is unavailable')
+  if (!context) {
+    snapshot.width = snapshot.height = 1
+    throw new Error('Presentation canvas is unavailable')
+  }
   try {
     resize({ width, height, ratio: 1 })
     renderer.setRenderTarget(null)
@@ -82,4 +87,3 @@ export function captureRasterFrame(
     }
   }
 }
-import { Vector4, type WebGLRenderer } from 'three'
