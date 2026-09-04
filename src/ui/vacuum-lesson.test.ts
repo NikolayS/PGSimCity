@@ -55,6 +55,27 @@ afterEach(() => {
 })
 
 describe('vacuum lesson in the live model', () => {
+  it('rebinds owned model identity and drops future notebook entries after a replay reset', () => {
+    let seeking = false
+    const f = fixture('high', { isReplaying: () => seeking })
+    f.lesson.open('challenge')
+    investigate(f)
+    expect(document.querySelector('[data-vacuum-notebook]')!.children.length).toBe(4)
+    seeking = true
+    f.sim.reset()
+    f.sim.runScenario('vacuum-blockade')
+    f.lesson.update(1)
+    expect(f.lesson.isOpen()).toBe(true)
+    seeking = false
+    f.lesson.rebind()
+    expect(document.querySelector('[data-vacuum-notebook]')!.children.length).toBe(0)
+    expect(button('[data-vacuum-action="terminate"]').disabled).toBe(true)
+    f.lesson.update(1)
+    expect(f.lesson.isOpen()).toBe(true)
+    f.lesson.close()
+    expect(f.sim.state.scenario).toBeNull()
+  })
+
   it('positions its desktop panel below the measured wrapped toolbar', () => {
     const f = fixture()
     const hud = document.createElement('div')

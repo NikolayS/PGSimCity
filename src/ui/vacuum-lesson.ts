@@ -5,7 +5,7 @@ import { lessonShareUrl } from '../core/lesson-route'
 import { fmtBytes, fmtNum, reduceMotion } from '../core/util'
 import {
   canChooseVacuumAction, chooseVacuumAction, collectVacuumEvidence,
-  createVacuumLessonState, selectVacuumCause, vacuumEvidenceAvailable,
+  createVacuumLessonState, rebindVacuumLesson, selectVacuumCause, vacuumEvidenceAvailable,
   verifyVacuumRecovery, VACUUM_EVIDENCE,
   type VacuumAction, type VacuumCause, type VacuumEvidenceId,
   type VacuumLessonMode, type VacuumReading,
@@ -17,6 +17,7 @@ export interface VacuumLessonModule extends UiModule {
   open(mode?: VacuumLessonMode): void
   close(): void
   isOpen(): boolean
+  rebind(): void
 }
 
 export interface VacuumLessonProgress {
@@ -26,6 +27,7 @@ export interface VacuumLessonProgress {
 
 export interface VacuumLessonOptions {
   onProgress?: (progress: VacuumLessonProgress) => void
+  isReplaying?: () => boolean
 }
 
 const TABLE = 'storage.table.sessions'
@@ -388,6 +390,28 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
 
   function refresh(): void { sample(); render() }
 
+  function rebind(): void {
+    if (!opened) return
+    if (ctx.sim.state.scenario !== 'vacuum-blockade') { close(false, false); return }
+    ownedDecision = ctx.sim.state.scenarioDecision
+    observedWorker = ''
+    observedWorkerSlot = -1
+    reading.scanObserved = false
+    sample()
+    const choice = ownedDecision?.choice
+    state = rebindVacuumLesson(state, reading,
+      choice === 'terminate-transaction' ? 'terminate' : choice === 'wait-for-transaction' ? 'wait' : null)
+    notebook.replaceChildren()
+    for (const id of VACUUM_EVIDENCE) {
+      const item = state.evidence[id]
+      if (item) notebook.append(el('li', {},
+        el('strong', { text: `${EVIDENCE_COPY[id].title} · model ${item.time.toFixed(1)} s` }),
+        el('p', { text: item.text })))
+    }
+    announce('Incident restored. Evidence recorded after this point has been removed; verify recovery again before completing.')
+    render()
+  }
+
   function open(mode: VacuumLessonMode = 'guided'): void {
     if (opened) return
     ctx.bus.emit('tour:stop', {})
@@ -445,10 +469,10 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     close()
   })
   const off = [
-    ctx.bus.on('scenario', () => { if (opened && !changingScenario) close(false) }),
-    ctx.bus.on('sim:reset', () => close(false, false)),
+    ctx.bus.on('scenario', () => { if (opened && !changingScenario && !options.isReplaying?.()) close(false) }),
+    ctx.bus.on('sim:reset', () => { if (!options.isReplaying?.()) close(false, false) }),
     ctx.bus.on('knob', ({ key }) => {
-      if (!opened || changingTiming) return
+      if (!opened || changingTiming || options.isReplaying?.()) return
       if (key === 'paused') restorePaused = false
       if (key === 'timeScale') restoreTimeScale = false
     }),
@@ -464,9 +488,9 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
   ]
 
   return {
-    open, close, isOpen: () => opened,
+    open, close, rebind, isOpen: () => opened,
     update(dt) {
-      if (!opened) return
+      if (!opened || options.isReplaying?.()) return
       if (ctx.sim.state.scenarioDecision !== ownedDecision) { close(false); return }
       refreshIn -= dt
       if (refreshIn > 0) return
