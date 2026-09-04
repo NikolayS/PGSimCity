@@ -75,3 +75,16 @@ export function verifyVacuumRecovery(state: VacuumLessonState, reading: VacuumRe
   if (state.phase !== 'observing' || reading.pinned || !reading.recovered || reading.reclaimed <= 0) return state
   return { ...state, phase: 'complete' }
 }
+
+export function rebindVacuumLesson(
+  state: VacuumLessonState,
+  reading: VacuumReading,
+  action: VacuumAction | null,
+): VacuumLessonState {
+  const evidence: VacuumLessonState['evidence'] = {}
+  for (const id of VACUUM_EVIDENCE) {
+    const item = state.evidence[id]
+    if (item && item.time <= reading.time) evidence[id] = item
+  }
+  return { ...state, evidence, action, phase: action ? 'observing' : 'investigating' }
+}

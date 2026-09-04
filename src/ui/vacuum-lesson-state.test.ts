@@ -5,6 +5,7 @@ import {
   canChooseVacuumAction,
   chooseVacuumAction,
   selectVacuumCause,
+  rebindVacuumLesson,
   verifyVacuumRecovery,
   VACUUM_EVIDENCE,
   type VacuumReading,
@@ -79,5 +80,22 @@ describe('vacuum investigation evidence and recovery', () => {
     expect(verifyVacuumRecovery(state, reading).phase).toBe('observing')
     expect(verifyVacuumRecovery(state, { ...reading, pinned: false, reclaimed: 20, recovered: true }).phase)
       .toBe('complete')
+  })
+
+  it('rebinds a rewind to the decision without letting future observations count as evidence', () => {
+    const beforeDecision = { ...reading, time: 50 }
+    const prior = chooseVacuumAction(investigated(), 'terminate', reading)
+    const next = rebindVacuumLesson(prior, beforeDecision, null)
+    expect(next.phase).toBe('investigating')
+    expect(next.evidence).toEqual({})
+    expect(prior.evidence.table?.time).toBe(60)
+    expect(canChooseVacuumAction(next, beforeDecision)).toBe(false)
+    expect(rebindVacuumLesson(prior, reading, null).evidence).toEqual(prior.evidence)
+  })
+
+  it('requires a fresh explicit verification after replaying a recovered outcome', () => {
+    const recovered = { ...reading, pinned: false, reclaimed: 20, recovered: true }
+    const complete = verifyVacuumRecovery(chooseVacuumAction(investigated(), 'terminate', reading), recovered)
+    expect(rebindVacuumLesson(complete, recovered, 'terminate').phase).toBe('observing')
   })
 })
