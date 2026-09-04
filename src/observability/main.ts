@@ -21,6 +21,10 @@ import { createBus } from '../core/bus'
 import { CLAIM_VALUES } from '../core/claims'
 import { createCorrectionPath, displayedClaim } from '../core/corrections'
 import { createSim } from '../sim/model'
+import { createIncidentReplay } from '../sim/replay'
+import { readIncidentHandoff } from '../core/incident-handoff'
+import type { IncidentContext } from '../core/incident-handoff'
+import { incidentCitySelection, showIncidentError, transferIncident } from '../ui/incident-navigation'
 import { SCENARIOS } from '../sim/scenarios'
 import { DEFAULT_KNOBS } from '../core/types'
 import type { Knobs } from '../core/types'
@@ -54,8 +58,13 @@ const analytics = startAnalytics('observability')
 
 const bus = createBus()
 analytics.listen(bus)
-const sim = createSim(bus)
-if (reduceMotion()) sim.setKnob('paused', true)
+const incoming = readIncidentHandoff(() => sessionStorage, location.hash, 'diagnose')
+const sim = createSim(bus, incoming.kind === 'ready' ? { seed: incoming.value.record.seed } : {})
+const replay = createIncidentReplay(sim, bus)
+const linkedIncident = incoming.kind === 'ready'
+const incidentContext: IncidentContext = linkedIncident ? incoming.value.context : {}
+let navigationReady = false
+if (incoming.kind === 'none' && reduceMotion()) sim.setKnob('paused', true)
 const coll = createCollector(sim)
 
 /**
@@ -236,6 +245,29 @@ const skipLink = el('a', {
   },
 })
 root.replaceChildren(skipLink, top, mainBody)
+const incidentNotice = el('p', { class: 'rail__note', text: linkedIncident
+  ? 'Linked city incident: symptoms inspect this model without staging another workload. Diagnostic counters and rate windows start on arrival; the incident clock and model state continue. These are not PostgreSQL measurements. Query flow and Machine use separate, opt-in PGlite databases.'
+  : 'This is a separate diagnostic model. Query flow and Machine use separate, opt-in PGlite databases.' })
+
+function returnToCity(href = '../'): void {
+  if (!navigationReady) return
+  const context: IncidentContext = { ...incidentContext,
+    selected: incidentCitySelection(href, incidentContext.selected) }
+  if (screen.kind === 'console') context.diagnosis = {
+    symptom: screen.symptom.id, node: screen.nodeId, trail: screen.trail,
+  }
+  else if (screen.kind === 'instrument') context.diagnosis = { instrument: screen.id }
+  else delete context.diagnosis
+  transferIncident({ replay, destination: 'city', context, href })
+}
+root.addEventListener('click', (event) => {
+  const anchor = event.target instanceof Element ? event.target.closest('a') : null
+  if (!anchor || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey
+    || anchor.target === '_blank') return
+  if (anchor !== brand && !anchor.classList.contains('city-exit') && !anchor.classList.contains('citylink')) return
+  event.preventDefault()
+  returnToCity(anchor.href)
+})
 
 /* ---------------------------------------------------------------------------
  * Rail
@@ -311,7 +343,9 @@ function buildRail(): void {
 
   railBody.replaceChildren(
     railHeading('Where does it hurt?'),
-    el('p', { class: 'rail__note', text: 'Pick a complaint. The model is put into a state that produces it, and you are walked to the column that proves it.' }),
+    el('p', { class: 'rail__note', text: linkedIncident
+      ? 'Pick a complaint to inspect the linked city incident. No replacement workload is staged.'
+      : 'Pick a complaint. The model is put into a state that produces it, and you are walked to the column that proves it.' }),
     symptomList,
     railHeading('Instruments', versionRail),
     el('p', { class: 'rail__note', text: 'Every view this model can serve, live. Change the version to see what you would be blind to.' }),
@@ -345,9 +379,11 @@ function openFlow(): void {
 }
 
 function openSymptom(s: Symptom): void {
-  stage(s.scenario, s.stageKnobs)
-  coll.reset()
-  warm(s.warmSeconds ?? 90)
+  if (!linkedIncident) {
+    stage(s.scenario, s.stageKnobs)
+    coll.reset()
+    warm(s.warmSeconds ?? 90)
+  }
   screen = { kind: 'console', symptom: s, nodeId: s.entry, trail: [] }
   analytics.track(ANALYTICS_EVENTS.panelOpened, {
     panel: 'observability',
@@ -373,7 +409,7 @@ function openInstrument(id: string): void {
 function goto(nodeId: string): void {
   if (screen.kind !== 'console') return
   const next = NODES.get(nodeId)
-  if (next && next.kind === 'step' && next.settle) settle(next.settle, 30)
+  if (!linkedIncident && next && next.kind === 'step' && next.settle) settle(next.settle, 30)
   screen = { ...screen, nodeId, trail: [...screen.trail, screen.nodeId] }
   render()
   focusPaneHeading()
@@ -1072,7 +1108,7 @@ function render(): void {
     claim: () => correctionClaim(content),
     context: correctionContext,
   })
-  pane.replaceChildren(...[banner, content, footer()].filter(Boolean).map((x) => x as HTMLElement))
+  pane.replaceChildren(...[incidentNotice, banner, content, footer()].filter(Boolean).map((x) => x as HTMLElement))
 }
 
 /* ---------------------------------------------------------------------------
@@ -1108,7 +1144,7 @@ function frame(now: number): void {
   requestAnimationFrame(frame)
 }
 
-installCityEscape()
+installCityEscape(() => returnToCity())
 
 window.addEventListener('keydown', (e) => {
   if (e.key !== ' ') return
@@ -1124,10 +1160,43 @@ window.addEventListener('keydown', (e) => {
  * server doing essentially nothing. Nobody diagnoses an idle database, and a
  * page about statistics whose first impression is a row of zeros has already
  * lost the argument. Start it under an ordinary OLTP load instead. */
-stage('steady-state')
-coll.reset()
-warm(60)
-
-buildRail()
-render()
-requestAnimationFrame(frame)
+async function boot(): Promise<void> {
+  if (incoming.kind === 'error') {
+    root!.replaceChildren()
+    showIncidentError(incoming.message, root!)
+    return
+  }
+  if (incoming.kind === 'ready') {
+    try {
+      await replay.loadRecord(incoming.value.record)
+      const diagnosis = incidentContext.diagnosis
+      if (diagnosis && 'instrument' in diagnosis) {
+        if (!BY_ID.has(diagnosis.instrument)) throw new Error('The diagnostic instrument is unavailable in this version')
+        screen = { kind: 'instrument', id: diagnosis.instrument }
+      } else if (diagnosis) {
+        const symptom = SYMPTOMS.find((item) => item.id === diagnosis.symptom)
+        if (!symptom || !NODES.has(diagnosis.node) || diagnosis.trail.some((id) => !NODES.has(id))) {
+          throw new Error('The diagnostic path is unavailable in this version')
+        }
+        screen = { kind: 'console', symptom, nodeId: diagnosis.node, trail: diagnosis.trail }
+      }
+      coll.reset()
+      coll.sample()
+      syncPauseButton()
+    } catch (error) {
+      root!.replaceChildren()
+      showIncidentError(error instanceof Error ? error.message : 'Incident reconstruction failed', root!)
+      return
+    }
+  } else {
+    stage('steady-state')
+    coll.reset()
+    warm(60)
+  }
+  buildRail()
+  render()
+  last = performance.now()
+  navigationReady = true
+  requestAnimationFrame(frame)
+}
+void boot()
