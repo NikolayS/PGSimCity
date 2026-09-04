@@ -13,6 +13,14 @@ describe('shareable vacuum investigation', () => {
     expect(lessonHref(mode)).toBe(`#lesson/vacuum-blockade/${mode}`)
   })
 
+  it('opens the required-report variant without serializing any personal state', () => {
+    const url = lessonShareUrl('https://example.org/?notes=private#old', 'challenge', 'vacuum-report')
+    expect(url).toBe('https://example.org/#lesson/vacuum-report/challenge')
+    const open = vi.fn()
+    installLessonRoutes({ target: new EventTarget(), location: { hash: new URL(url).hash }, open })
+    expect(open).toHaveBeenCalledExactlyOnceWith('challenge', 'vacuum-report')
+  })
+
   it.each(['', '#lesson/vacuum-blockade', '#lesson/vacuum-blockade/expert',
     '#lesson/vacuum-blockade/challenge?sql=select', '#lesson/unknown/guided',
     '#lesson/vacuum-blockade/%67uided'])('ignores unsupported input %s', (hash) => {
@@ -24,10 +32,10 @@ describe('shareable vacuum investigation', () => {
     const location = { hash: lessonHref('challenge') }
     const open = vi.fn()
     const dispose = installLessonRoutes({ target, location, open })
-    expect(open).toHaveBeenCalledExactlyOnceWith('challenge')
+    expect(open).toHaveBeenCalledExactlyOnceWith('challenge', 'vacuum-blockade')
     location.hash = lessonHref('guided')
     target.dispatchEvent(new Event('hashchange'))
-    expect(open).toHaveBeenLastCalledWith('guided')
+    expect(open).toHaveBeenLastCalledWith('guided', 'vacuum-blockade')
     location.hash = '#component/storage.table.sessions'
     target.dispatchEvent(new Event('hashchange'))
     expect(open).toHaveBeenCalledTimes(2)

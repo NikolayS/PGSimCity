@@ -17,9 +17,11 @@ export interface VacuumReading {
   decisionReady: boolean
   reclaimed: number
   recovered: boolean
+  reportStatus?: 'running' | 'completed' | 'interrupted' | null
 }
 
 export interface VacuumLessonState {
+  lesson: LessonCase
   mode: VacuumLessonMode
   phase: 'investigating' | 'observing' | 'complete'
   evidence: Partial<Record<VacuumEvidenceId, { time: number; text: string }>>
@@ -27,8 +29,8 @@ export interface VacuumLessonState {
   action: VacuumAction | null
 }
 
-export function createVacuumLessonState(mode: VacuumLessonMode): VacuumLessonState {
-  return { mode, phase: 'investigating', evidence: {}, cause: null, action: null }
+export function createVacuumLessonState(mode: VacuumLessonMode, lesson: LessonCase = 'vacuum-blockade'): VacuumLessonState {
+  return { lesson, mode, phase: 'investigating', evidence: {}, cause: null, action: null }
 }
 
 export function vacuumEvidenceAvailable(id: VacuumEvidenceId, reading: VacuumReading): boolean {
@@ -73,6 +75,8 @@ export function chooseVacuumAction(
 
 export function verifyVacuumRecovery(state: VacuumLessonState, reading: VacuumReading): VacuumLessonState {
   if (state.phase !== 'observing' || reading.pinned || !reading.recovered || reading.reclaimed <= 0) return state
+  if (state.cause !== 'snapshot' || !VACUUM_EVIDENCE.every((id) => state.evidence[id])) return state
+  if (state.lesson === 'vacuum-report' && reading.reportStatus !== 'completed') return state
   return { ...state, phase: 'complete' }
 }
 
@@ -88,3 +92,4 @@ export function rebindVacuumLesson(
   }
   return { ...state, evidence, action, phase: action ? 'observing' : 'investigating' }
 }
+import type { LessonCase } from './lesson-progress'

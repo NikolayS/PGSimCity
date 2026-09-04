@@ -2,6 +2,8 @@ import '../styles/vacuum-lesson.css'
 
 import type { SimState } from '../core/types'
 import { lessonShareUrl } from '../core/lesson-route'
+import { beginAttempt, emptyProgress, LESSON_CASES, parseProgress, recordRecovery,
+  type LessonAttempt, type LessonCase } from './lesson-progress'
 import { fmtBytes, fmtNum, reduceMotion } from '../core/util'
 import {
   canChooseVacuumAction, chooseVacuumAction, collectVacuumEvidence,
@@ -14,15 +16,18 @@ import { el, setText } from './uikit'
 import type { UiContext, UiModule } from './uikit'
 
 export interface VacuumLessonModule extends UiModule {
-  open(mode?: VacuumLessonMode): void
+  open(mode?: VacuumLessonMode, lesson?: LessonCase): void
   close(): void
   isOpen(): boolean
   rebind(): void
 }
 
 export interface VacuumLessonProgress {
-  event: 'started' | 'hint-used' | 'evidence-collected' | 'recovery-verified'
+  event: 'started' | 'hint-used' | 'evidence-collected' | 'recovery-verified' | 'completed'
   mode: VacuumLessonMode
+  lesson: LessonCase
+  firstEncounter: boolean
+  unassisted: boolean
 }
 
 export interface VacuumLessonOptions {
@@ -56,6 +61,10 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
   let changingTiming = false
   let ownedDecision: SimState['scenarioDecision'] = null
   let state = createVacuumLessonState('guided')
+  let localProgress = emptyProgress()
+  try { localProgress = parseProgress(window.localStorage.getItem('pgsimcity.lessons.v1')) } catch { /* Storage is optional. */ }
+  let attempt: LessonAttempt = { lesson: 'vacuum-blockade', initialMode: 'guided', firstEncounter: true, usedHints: true }
+  let recoveryRecorded = false
   let selected: VacuumEvidenceId = 'table'
   let lastFocus: HTMLElement | null = null
   let savedPaused = false
@@ -76,6 +85,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
   const modeLabel = el('span', { class: 'vacuum-lesson__mode' })
   const clock = el('span', { class: 'vacuum-lesson__clock' })
   const phaseLabel = el('p', { class: 'vacuum-lesson__step' })
+  const campaignProgress = el('p', { class: 'vacuum-lesson__source', data: { vacuumProgress: '' } })
   const closeButton = el('button', {
     type: 'button', class: 'pg-btn vacuum-lesson__close', text: 'Exit',
     'aria-label': 'Exit the vacuum investigation', on: { click: () => close() },
@@ -131,15 +141,17 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
   }
   causes.append(causeFeedback)
 
-  const terminateButton = actionButton('terminate', 'End the abandoned session')
+  const terminateButton = actionButton('terminate', 'End this session')
   const waitButton = actionButton('wait', 'Keep the transaction open')
+  const decisionContext = el('p')
   const decisionStatus = el('p', { class: 'vacuum-lesson__source' })
   const decision = el('section', { class: 'vacuum-lesson__decision' },
     el('h3', { text: 'Choose an intervention' }),
-    el('p', { text: 'The owner confirmed this session is abandoned. Ending it aborts its transaction; this scenario has no uncommitted row changes to preserve.' }),
+    decisionContext,
     terminateButton, waitButton, decisionStatus,
   )
   const result = el('p', { class: 'vacuum-lesson__result', data: { vacuumResult: '' } })
+  const resourceOutcome = el('p', { class: 'vacuum-lesson__source', data: { vacuumResources: '' } })
   const recoverButton = el('button', {
     type: 'button', class: 'pg-btn vacuum-lesson__primary', text: 'End the abandoned session now',
     data: { vacuumRecover: '' }, on: { click: () => {
@@ -154,7 +166,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     data: { vacuumVerify: '' }, on: { click: verify },
   })
   const observation = el('section', { class: 'vacuum-lesson__observation' },
-    el('h3', { text: 'Verify the outcome' }), result, recoverButton, verifyButton,
+    el('h3', { text: 'Verify the outcome' }), result, resourceOutcome, recoverButton, verifyButton,
   )
   const pauseButton = el('button', {
     type: 'button', class: 'pg-btn', data: { vacuumPause: '' }, on: { click: () => {
@@ -170,6 +182,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     type: 'button', class: 'pg-btn', text: 'Use guided explanations', data: { vacuumHint: '' },
     on: { click: () => {
       if (state.mode !== 'challenge' || state.phase !== 'investigating') return
+      attempt.usedHints = true
       progress('hint-used')
       state = { ...state, mode: 'guided' }
       render()
@@ -177,16 +190,16 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
   })
   const retryButton = el('button', {
     type: 'button', class: 'pg-btn', text: 'Start another attempt', data: { vacuumRetry: '' },
-    on: { click: () => { const mode = state.mode; close(); open(mode) } },
+    on: { click: () => { const { mode, lesson } = state; close(); open(mode, lesson) } },
   })
   const challengeButton = el('button', {
     type: 'button', class: 'pg-btn', text: 'Start a challenge attempt',
-    on: { click: () => { close(); open('challenge') } },
+    on: { click: () => { const lesson = state.lesson; close(); open('challenge', lesson) } },
   })
   const shareButton = el('button', {
     type: 'button', class: 'pg-btn', text: 'Share this lesson',
     on: { click: async () => {
-      const url = lessonShareUrl(window.location.href, state.mode)
+      const url = lessonShareUrl(window.location.href, state.mode, state.lesson)
       try {
         await navigator.clipboard.writeText(url)
         announce('Lesson link copied. It opens a new attempt in this mode; notes and current model state are not included.')
@@ -198,6 +211,10 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     } },
   })
   const shareLink = el('a', { class: 'pg-btn', text: 'Open a new attempt', hidden: true })
+  const otherCase = el('button', {
+    type: 'button', class: 'pg-btn', data: { vacuumNext: '' },
+    on: { click: () => { const lesson = state.lesson === 'vacuum-blockade' ? 'vacuum-report' : 'vacuum-blockade'; close(); open('challenge', lesson) } },
+  })
   const retry = el('div', { class: 'vacuum-lesson__retry' }, retryButton,
     el('p', { text: 'A new attempt uses the city’s current state and clears this notebook. It does not rewind the previous workload.' }),
   )
@@ -216,10 +233,10 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     el('details', { class: 'vacuum-lesson__notes' }, notebookSummary, notebook,
       el('label', { htmlFor: 'vacuum-personal-notes', text: 'Your notes' }), notes,
       el('p', { text: 'Evidence and notes stay here until you start another attempt.' })),
-    retry, disclosure),
+    retry, el('section', { class: 'vacuum-lesson__campaign' },
+      el('h3', { text: 'Two-case operations practice' }), campaignProgress, otherCase,
+      el('p', { text: 'Objective: establish the cause, respect the owner’s requirement, then verify cleanup. These local completion observations are not proof of learning. A new case clears the notebook and uses the current city state.' })), disclosure),
   )
-  document.body.append(panel)
-
   function positionPanel(): void {
     if (!opened) return
     const bottom = document.getElementById('hud-top')?.getBoundingClientRect().bottom ?? 0
@@ -233,8 +250,15 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
   function announce(text: string): void { setText(announcement, text) }
 
   function progress(event: VacuumLessonProgress['event']): void {
-    try { options.onProgress?.({ event, mode: state.mode }) } catch {
+    try { options.onProgress?.({ event, mode: state.mode, lesson: state.lesson,
+      firstEncounter: attempt.firstEncounter, unassisted: attempt.initialMode === 'challenge' && !attempt.usedHints }) } catch {
       /* Optional aggregate analytics must never interrupt the model path. */
+    }
+  }
+
+  function saveProgress(): void {
+    try { window.localStorage.setItem('pgsimcity.lessons.v1', JSON.stringify({ version: 1, cases: localProgress })) } catch {
+      /* Local progress is optional and contains no notebook, SQL or user identifier. */
     }
   }
 
@@ -265,6 +289,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     reading.decisionReady = current?.kind === 'vacuum-blockade' && current.phase === 'ready'
     reading.reclaimed = current?.kind === 'vacuum-blockade' ? current.deadTuplesReclaimed : 0
     reading.recovered = current?.kind === 'vacuum-blockade' && current.phase === 'recovered'
+    reading.reportStatus = current?.kind === 'vacuum-blockade' ? current.report?.status ?? null : null
     for (let i = 0; i < sim.autovac.workers.length; i++) {
       const worker = sim.autovac.workers[i]
       if (!worker.active || worker.phase === 'travel' || worker.phase === 'return' || worker.phase === 'idle') continue
@@ -281,11 +306,13 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
       case 'worker': return observedWorker || 'Waiting to observe a worker enter a vacuum phase. Let the model run, then record what the worker actually did.'
       case 'snapshot': {
         const backend = ctx.sim.state.backends.find((candidate) => candidate.state === 'idle_in_xact')
-        return backend && reading.pinned
-          ? `Model backend slot ${backend.slot}: idle in transaction. Oldest snapshot age: ${reading.snapshotAge.toFixed(1)} model s. Cleanup horizon: XID ${fmtNum(reading.horizon)}. This case has an old REPEATABLE READ snapshot.`
+        return reading.pinned
+          ? `${backend ? `Model backend slot ${backend.slot}: idle in transaction.` : 'The model’s long-running transaction retains a snapshot; its backend is not represented in the current visual sample.'} Oldest snapshot age: ${reading.snapshotAge.toFixed(1)} model s. Cleanup horizon: XID ${fmtNum(reading.horizon)}. This case has an old REPEATABLE READ snapshot.`
           : 'There is no retained transaction snapshot from this case now. Watch the next vacuum pass to establish whether cleanup resumes.'
       }
-      case 'owner': return 'Authored scenario context: the application owner checked this case’s idle session and confirmed an abandoned, read-only REPEATABLE READ transaction. The client is gone; no uncommitted row changes need preserving. Ending the session aborts that transaction. This owner confirmation is supplied by the lesson, not measured by pg_stat_activity.'
+      case 'owner': return state.lesson === 'vacuum-report'
+        ? 'Authored scenario context: the owner confirmed a required read-only report using a REPEATABLE READ transaction. The client is processing results between statements and still needs the snapshot. The owner accepts temporary relation growth and has headroom for this case. After you choose to wait, the authored client completes in 30 model seconds and ends its transaction. This is neither a pg_stat_activity prediction nor a production deadline guarantee. Termination interrupts report work, not committed database data.'
+        : 'Authored scenario context: the application owner checked this case’s idle session and confirmed an abandoned, read-only REPEATABLE READ transaction. The client is gone; no uncommitted row changes need preserving. Ending the session aborts that transaction. This owner confirmation is supplied by the lesson, not measured by pg_stat_activity.'
     }
   }
 
@@ -332,9 +359,19 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     if (next !== state) {
       state = next
       announce('Verified: the old snapshot is gone and a modeled vacuum pass has reclaimed row versions.')
-      progress('recovery-verified')
+      if (!recoveryRecorded) {
+        recoveryRecorded = true
+        localProgress = recordRecovery(localProgress, attempt, true)
+        saveProgress()
+        progress('recovery-verified')
+        progress('completed')
+      }
     } else {
-      announce(reading.pinned
+      announce(!VACUUM_EVIDENCE.every((id) => state.evidence[id])
+        ? 'This restored decision has no complete evidence notebook. Rewind before the decision or start another attempt and investigate before acting.'
+        : reading.reportStatus === 'interrupted'
+        ? 'Cleanup alone does not meet this case’s objective: the required report was interrupted. Start another attempt to preserve its work.'
+        : reading.pinned
         ? 'Not yet: the transaction still holds its old snapshot.'
         : 'Not yet: the snapshot has ended, but the model has not reported resumed cleanup. Let the worker finish its pass.')
     }
@@ -345,6 +382,11 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     panel.dataset.phase = state.phase
     const count = VACUUM_EVIDENCE.filter((id) => state.evidence[id]).length
     setText(modeLabel, state.mode === 'guided' ? 'Guided investigation' : 'Challenge · evidence first')
+    setText(campaignProgress, `${LESSON_CASES.filter((lesson) => localProgress[lesson].recovered).length} / 2 cases verified locally. ${attempt.usedHints ? 'Guidance used in this attempt.' : attempt.firstEncounter ? 'First recorded attempt · no hints used.' : 'Repeat attempt · no hints used.'}`)
+    setText(otherCase, state.lesson === 'vacuum-blockade' ? 'Start case 2 as a challenge' : 'Start case 1 as a challenge')
+    setText(title, state.lesson === 'vacuum-report'
+      ? 'The same symptom. Should this transaction end?'
+      : 'Autovacuum is running. Why is this table still growing?')
     setText(clock, `${reading.time.toFixed(0)} model s`)
     setText(phaseLabel, state.phase === 'complete' ? '3 / 3 · Cleanup verified'
       : state.phase === 'observing' ? '3 / 3 · Observe and verify'
@@ -371,13 +413,22 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
       : state.cause === 'disabled' ? 'Your worker evidence shows vacuum is running. Recheck the transaction evidence.'
         : state.cause === 'capacity' ? 'More capacity cannot advance a retained snapshot’s cleanup horizon. Recheck the transaction evidence.' : '')
     decision.hidden = causes.hidden || state.cause !== 'snapshot'
+    setText(decisionContext, state.lesson === 'vacuum-report'
+      ? 'Use the owner’s requirement alongside live model evidence. Both actions release the snapshot eventually, but they do not preserve the same work.'
+      : 'The owner confirmed this session is abandoned. Ending it aborts its transaction; this scenario has no uncommitted row changes to preserve.')
     terminateButton.disabled = waitButton.disabled = !canChooseVacuumAction(state, reading)
     setText(decisionStatus, reading.decisionReady ? 'Both choices affect this running city model.' : 'The incident is still being established. Keep the model running; your evidence remains saved.')
     observation.hidden = state.phase === 'investigating'
-    recoverButton.hidden = state.action !== 'wait' || !reading.pinned || state.phase === 'complete'
+    const outcome = ctx.sim.state.scenarioDecision
+    setText(resourceOutcome, outcome?.kind === 'vacuum-blockade'
+      ? `Resource cost since the decision: up to ${fmtBytes(outcome.pagesAdded * 8192)} additional relation pages and ${fmtNum(outcome.deadTuplesAdded)} additional dead versions across modeled tables. Both cases are authored read-only transactions: terminating them does not lose committed data. Required report work is a separate outcome.`
+      : '')
+    recoverButton.hidden = state.lesson === 'vacuum-report' || state.action !== 'wait' || !reading.pinned || state.phase === 'complete'
     verifyButton.hidden = state.phase === 'complete'
-    setText(result, state.phase === 'complete'
-      ? `Cleanup has resumed: ${fmtNum(reading.reclaimed)} row versions reclaimed across modeled tables since the decision. Remaining old versions may need further passes. Watch reusable capacity inside the existing relation, rather than expecting its file to shrink.`
+    setText(result, reading.reportStatus === 'interrupted'
+      ? `The required report was interrupted. Committed data was not lost. ${fmtNum(reading.reclaimed)} row versions reclaimed; cleanup cannot restore that report work. This attempt does not meet the owner’s requirement.`
+      : state.phase === 'complete'
+      ? `${reading.reportStatus === 'completed' ? 'The authored required report completed. ' : ''}Cleanup has resumed: ${fmtNum(reading.reclaimed)} row versions reclaimed across modeled tables since the decision. Remaining old versions may need further passes. Watch reusable capacity inside the existing relation, rather than expecting its file to shrink.`
       : reading.pinned
         ? `The old snapshot remains. sessions now has ${fmtNum(reading.deadRows)} dead versions; its relation occupies ${fmtBytes(reading.pages * 8192)}. The worker can keep scanning while retained versions accumulate.`
         : `The old snapshot has ended. ${fmtNum(reading.reclaimed)} row versions reclaimed across modeled tables since the decision. Cleanup eligibility and actual collection are separate events.`)
@@ -392,7 +443,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
 
   function rebind(): void {
     if (!opened) return
-    if (ctx.sim.state.scenario !== 'vacuum-blockade') { close(false, false); return }
+    if (ctx.sim.state.scenario !== state.lesson) { close(false, false); return }
     ownedDecision = ctx.sim.state.scenarioDecision
     observedWorker = ''
     observedWorkerSlot = -1
@@ -412,8 +463,18 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     render()
   }
 
-  function open(mode: VacuumLessonMode = 'guided'): void {
-    if (opened) return
+  function open(mode: VacuumLessonMode = 'guided', lesson: LessonCase = 'vacuum-blockade'): void {
+    if (opened && state.lesson === lesson) {
+      if (state.mode !== mode) {
+        if (mode === 'guided') { attempt.usedHints = true; progress('hint-used') }
+        state = { ...state, mode }
+        shareLink.hidden = true
+        announce('Mode changed; the notebook and attempt remain. Earlier guidance still counts as guidance used.')
+        render()
+      }
+      return
+    }
+    if (opened) close()
     ctx.bus.emit('tour:stop', {})
     lastFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
     if (lastFocus?.closest('.tour-first')) lastFocus = document.querySelector<HTMLElement>('.hud-investigate')
@@ -423,10 +484,17 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     ctx.bus.emit('narrate', null)
     restorePaused = restoreTimeScale = true
     opened = true
+    document.body.append(panel)
     panel.hidden = false
     positionPanel()
     document.body.classList.add('pg-vacuum-lesson')
-    state = createVacuumLessonState(mode)
+    state = createVacuumLessonState(mode, lesson)
+    const started = beginAttempt(localProgress, lesson, mode)
+    localProgress = started.progress
+    attempt = started.attempt
+    recoveryRecorded = false
+    saveProgress()
+    shareLink.hidden = true
     selected = 'table'
     notebook.replaceChildren()
     notes.value = ''
@@ -434,7 +502,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     observedWorkerSlot = -1
     reading.scanObserved = false
     changingScenario = true
-    ctx.sim.runScenario('vacuum-blockade')
+    ctx.sim.runScenario(lesson)
     ownedDecision = ctx.sim.state.scenarioDecision
     changingScenario = false
     tableIndex = ctx.sim.state.tables.findIndex((table) => table.def.id === 'sessions')
@@ -453,8 +521,9 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     if (!opened) return
     opened = false
     panel.hidden = true
+    panel.remove()
     document.body.classList.remove('pg-vacuum-lesson')
-    if (stopScenario && ctx.sim.state.scenarioDecision === ownedDecision && ctx.sim.state.scenario === 'vacuum-blockade') ctx.sim.runScenario(null)
+    if (stopScenario && ctx.sim.state.scenarioDecision === ownedDecision && ctx.sim.state.scenario === state.lesson) ctx.sim.runScenario(null)
     ownedDecision = null
     if (restoreTiming && restorePaused) setTiming('paused', savedPaused)
     if (restoreTiming && restoreTimeScale) setTiming('timeScale', savedTimeScale)
