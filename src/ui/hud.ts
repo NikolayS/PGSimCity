@@ -340,7 +340,7 @@ function vitalHistory(key: VitalKey, s: SimState): number[] {
  * FACTORY
  * ========================================================================*/
 
-export function createHud(ctx: UiContext, options: { onInvestigate?: () => void; onExport?: () => void } = {}): UiModule {
+export function createHud(ctx: UiContext, options: { onInvestigate?: () => void; onExport?: () => void; onReplay?: () => void } = {}): UiModule {
   const bus = ctx.bus
   const looseBus = bus
   const sim = ctx.sim
@@ -511,6 +511,11 @@ export function createHud(ctx: UiContext, options: { onInvestigate?: () => void;
     title: 'Save a high-resolution image of this view with its model disclosure',
     'aria-label': 'Export this city view as an image', on: { click: options.onExport },
   }) : null
+  const replayBtn = options.onReplay ? el('button', {
+    class: 'pg-btn hud-tool hud-replay', type: 'button', text: 'Replay',
+    title: 'Save a checkpoint, rewind, and compare model decisions',
+    'aria-label': 'Rewind and compare model incidents', on: { click: options.onReplay },
+  }) : null
   const traceBtn = el(
     'button',
     {
@@ -675,6 +680,7 @@ export function createHud(ctx: UiContext, options: { onInvestigate?: () => void;
     tourBtn,
     investigateBtn,
     exportBtn,
+    replayBtn,
     traceBtn,
     diagnoseLink,
     walkBtn,
