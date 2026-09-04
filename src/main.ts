@@ -300,7 +300,7 @@ async function boot(): Promise<void> {
     hands,
   })
   const vacuumLesson = createVacuumLesson(uiCtx, {
-    onProgress: ({ event, mode }) => trackVacuumLessonProgress(analytics, { event, mode }),
+    onProgress: (progress) => trackVacuumLessonProgress(analytics, { ...progress }),
   })
   const ui: UiModule[] = [
     vacuumLesson,
@@ -522,7 +522,7 @@ async function boot(): Promise<void> {
     target: window,
   })
   const stopLessonRoutes = installLessonRoutes({
-    target: window, location: window.location, open: (mode) => vacuumLesson.open(mode),
+    target: window, location: window.location, open: (mode, lesson) => vacuumLesson.open(mode, lesson),
   })
   frame()
 

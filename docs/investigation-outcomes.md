@@ -41,6 +41,16 @@ path. Switching only guided/challenge mode retains the current notebook; prior
 guidance still counts as guidance used. Rewind removes evidence from the future
 and requires another recovery check, without recording duplicate completions.
 
+The replay dependency uses format version 1 and a model identity containing
+`incident-1`, the application version and the build commit SHA. Records from
+another build are rejected before simulation state changes, including records
+made before the report variant or post-release cleanup correction. Case links
+above are stable entry points; replay links are deliberately same-build only.
+The source lesson/progression branch does not install replay by itself: the
+separate replay dependency must be integrated and its mismatch/reset tests must
+pass before replay is advertised as available. Uncommitted development changes
+are not a supported cross-build reproduction contract.
+
 The local-storage key `pgsimcity.lessons.v1` holds only a version and, for each
 allowlisted case, a bounded attempt count, verified-completion flag and
 first-recorded-challenge-recovery flag. Storage denial or malformed data does not
