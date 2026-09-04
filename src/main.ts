@@ -327,7 +327,7 @@ async function boot(): Promise<void> {
     hands,
   })
   const vacuumLesson = createVacuumLesson(uiCtx, {
-    onProgress: ({ event, mode }) => trackVacuumLessonProgress(analytics, { event, mode }),
+    onProgress: (progress) => trackVacuumLessonProgress(analytics, { ...progress }),
     isReplaying: () => replay.status.seeking,
   })
   const stopLessonReplay = replay.onRestored(() => vacuumLesson.rebind())
@@ -570,7 +570,7 @@ async function boot(): Promise<void> {
     target: window,
   })
   const stopLessonRoutes = installLessonRoutes({
-    target: window, location: window.location, open: (mode) => vacuumLesson.open(mode),
+    target: window, location: window.location, open: (mode, lesson) => vacuumLesson.open(mode, lesson),
   })
   const stopIncidentNavigation = installCityIncidentNavigation({
     replay, bus, context: incoming.kind === 'ready' ? incoming.value.context : undefined,
