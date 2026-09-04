@@ -66,6 +66,21 @@ describe('vacuum lesson in the live model', () => {
     expect(document.querySelector('[data-disclosure="vacuum-model"]')!.textContent).toContain('City model')
   })
 
+  it('positions its desktop panel below the measured wrapped toolbar', () => {
+    const f = fixture()
+    const hud = document.createElement('div')
+    hud.id = 'hud-top'
+    hud.getBoundingClientRect = () => ({ bottom: 138 }) as DOMRect
+    document.body.append(hud)
+    f.lesson.open()
+    const panel = document.querySelector<HTMLElement>('.vacuum-lesson')!
+    const style = panel.style as unknown as Record<string, string>
+    expect(style['--vacuum-top']).toBe('150px')
+    hud.getBoundingClientRect = () => ({ bottom: 182 }) as DOMRect
+    window.dispatchEvent(new Event('resize'))
+    expect(style['--vacuum-top']).toBe('194px')
+  })
+
   it('requires evidence, then waits for real cleanup and an explicit recovery check', () => {
     const f = fixture()
     f.lesson.open('challenge')
