@@ -92,6 +92,16 @@ describe('latency HUD', () => {
     hud.dispose()
   })
 
+  it('opens presentation export from its labelled control', () => {
+    const exportView = vi.fn()
+    const hud = createHud(context(), { onExport: exportView })
+    const button = document.querySelector<HTMLButtonElement>('.hud-export')!
+    expect(button.getAttribute('aria-label')).toBe('Export this city view as an image')
+    button.click()
+    expect(exportView).toHaveBeenCalledTimes(1)
+    hud.dispose()
+  })
+
   it('opens the investigation from a persistent, labelled control', () => {
     const investigate = vi.fn()
     const hud = createHud(context(), { onInvestigate: investigate })

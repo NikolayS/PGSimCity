@@ -65,6 +65,7 @@ import { createControls } from './ui/controls'
 import { createInspector } from './ui/panel'
 import { createTour } from './ui/tour'
 import { createVacuumLesson } from './ui/vacuum-lesson'
+import { createPresentationExport } from './ui/presentation'
 import { createSearch } from './ui/search'
 import { createCityWords } from './ui/city-words'
 import { createTouchpad } from './ui/touchpad'
@@ -302,9 +303,14 @@ async function boot(): Promise<void> {
   const vacuumLesson = createVacuumLesson(uiCtx, {
     onProgress: ({ event, mode }) => trackVacuumLessonProgress(analytics, { event, mode }),
   })
+  const presentation = createPresentationExport(uiCtx, gfx)
   const ui: UiModule[] = [
     vacuumLesson,
-    createHud(uiCtx, { onInvestigate: () => vacuumLesson.open() }),
+    presentation,
+    createHud(uiCtx, {
+      onInvestigate: () => vacuumLesson.open(),
+      onExport: () => presentation.open(),
+    }),
     createTouchpad({ bus, walk }),
     controlCenter,
     createWalkUpInteraction({
