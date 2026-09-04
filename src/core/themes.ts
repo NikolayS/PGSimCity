@@ -329,15 +329,13 @@ export const ATMOSPHERE: Record<CuratedThemeMode, Atmosphere> = {
     hemiIntensity: 0.82,
     keyColor: 0xffd6a3,
     keyIntensity: 2.25,
-    /*
-     * North-west at 8.4°. A one-metre object casts 6.81 m across the ground;
-     * the backend row therefore stripes the plaza to the south-east, and the
-     * establishing camera sees building silhouettes against the bright side.
-     */
-    keyPos: [-520, 120, -650],
+    /* A north-west afternoon key lights roofs and facades together. At 27° a
+     * tower's shadow stays within two heights, grounding its own machinery
+     * instead of striping several unrelated districts. */
+    keyPos: [-520, 420, -650],
     keyTarget: [0, 0, -20],
-    sunDirection: [-520, 120, -630],
-    sunElevationDeg: 8.4,
+    sunDirection: [-520, 420, -630],
+    sunElevationDeg: 27.2,
     shadowBias: -0.0004,
     shadowNormalBias: 0.2,
     shadowIntensity: 0.84,

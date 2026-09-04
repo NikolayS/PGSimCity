@@ -274,7 +274,7 @@ describe('daySurface — per-district stone', () => {
 })
 
 describe('the day sun', () => {
-  it('rakes across the city low enough to cast shadows several storeys long', () => {
+  it('lights roof planes while retaining legible cast shadows', () => {
     const { keyPos, keyTarget } = ATMOSPHERE.day
     const dx = keyPos[0] - keyTarget[0]
     const dy = keyPos[1] - keyTarget[1]
@@ -286,9 +286,13 @@ describe('the day sun', () => {
     const elevation = Math.asin(ny) * (180 / Math.PI)
     const shadowRunPerMetre = Math.hypot(nx, nz) / ny
 
-    expect(elevation).toBeGreaterThanOrEqual(7)
-    expect(elevation).toBeLessThanOrEqual(10)
-    expect(shadowRunPerMetre).toBeGreaterThan(5.5)
+    // A near-horizon key left roofs grey and stretched tower shadows across
+    // several unrelated mechanisms. Keep shadows within a few storeys.
+    expect(elevation).toBeGreaterThanOrEqual(24)
+    expect(elevation).toBeLessThanOrEqual(32)
+    expect(shadowRunPerMetre).toBeGreaterThan(1.5)
+    expect(shadowRunPerMetre).toBeLessThan(2.3)
+    expect(ny * ATMOSPHERE.day.keyIntensity).toBeGreaterThan(1)
     // The north-west key throws the backend row across the plaza to the south-east.
     expect(nx).toBeLessThan(-0.5)
     expect(nz).toBeLessThan(-0.65)
