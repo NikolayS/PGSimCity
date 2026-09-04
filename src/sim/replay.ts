@@ -448,7 +448,7 @@ export function createIncidentReplay(
       }
     },
     compare(): { baseline: ReplayOutcome; current: ReplayOutcome; sameDuration: boolean } | null {
-      if (!baseline) return null
+      if (!baseline || !status.valid) return null
       const current = outcome()
       return { baseline: { ...baseline }, current,
         sameDuration: Math.abs(baseline.elapsedModelSeconds - current.elapsedModelSeconds) < 1e-7 }
