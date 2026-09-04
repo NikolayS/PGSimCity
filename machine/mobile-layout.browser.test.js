@@ -290,7 +290,7 @@ describe('machine room portrait layout', () => {
 
     const version = reports[1].versionQualification
     expect(version.collapsed.found).toBe(true)
-    expect(version.collapsed.markerText).toContain('PostgreSQL 18.4')
+    expect(version.collapsed.markerText).toContain('PostgreSQL 18.6')
     expect(version.collapsed.fullVisible).toBe(false)
     expect(version.collapsed.correctionVisible).toBe(false)
     expect(version.collapsed.markerHeight).toBeGreaterThanOrEqual(version.collapsed.tapSize)

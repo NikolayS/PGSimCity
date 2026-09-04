@@ -13,6 +13,13 @@ are all still moving. Expect breaking changes between minor versions.
 
 ### Fixed
 
+- Advance the reviewed PostgreSQL reference from 18.4 to 18.6 after checking
+  the release notes and rerunning all 223 oracle observations: 219 matches,
+  four existing teaching-scale divergences, no unexpected results. The version
+  gate still rejects unreviewed newer releases. Logical-decoding guidance now
+  includes the trusted output-plugin allowlist; PGlite remains separately
+  labeled as PostgreSQL 18.3. See [the reference review](POSTGRESQL-REFERENCE-REVIEW.md)
+  for evidence and coverage limits.
 - The CDP profile guard that keeps two concurrent screenshot runs from deleting
   each other's live Chrome profile only worked on Linux. `profileIsInUse()` read
   `/proc`, which macOS does not have, so the read threw and the guard reported
