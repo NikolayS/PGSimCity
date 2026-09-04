@@ -55,6 +55,17 @@ afterEach(() => {
 })
 
 describe('vacuum lesson in the live model', () => {
+  it('only exposes lesson claims and disclosures while their panel is open', () => {
+    const f = fixture()
+    expect(document.querySelector('[data-disclosure="vacuum-model"]')).toBeNull()
+    f.lesson.open()
+    expect(document.querySelector('[data-disclosure="vacuum-model"]')!.textContent).toContain('City model')
+    f.lesson.close()
+    expect(document.querySelector('[data-disclosure="vacuum-model"]')).toBeNull()
+    f.lesson.open()
+    expect(document.querySelector('[data-disclosure="vacuum-model"]')!.textContent).toContain('City model')
+  })
+
   it('rebinds owned model identity and drops future notebook entries after a replay reset', () => {
     let seeking = false
     const f = fixture('high', { isReplaying: () => seeking })
