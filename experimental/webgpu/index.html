@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Renderer lab · PGSimCity</title></head>
+<body>
+  <main>
+    <a href="../../">← Return to the complete city</a>
+    <h1>Renderer lab</h1>
+    <p>Experimental buffer pool (<code>shared_buffers</code>) material study. Not the complete city or a PostgreSQL measurement.</p>
+    <p>Same frozen, seeded model sample and camera on both backends. Color: clean blue, dirty red, pinned amber (takes precedence), unused dark. Column height represents scaled <code>usage_count</code>, not bytes.</p>
+    <div class="controls"><label>Backend <select id="backend"><option value="auto">WebGPU, with WebGL2 fallback</option><option value="webgl2">Force WebGL2 comparison</option></select></label><button id="start">Start renderer experiment</button></div>
+    <p id="status" role="status">No renderer loaded. Requires WebGPU or WebGL2. Start-up failure leaves the complete city link available.</p>
+    <div id="viewport" aria-label="Representative buffer frame material study"></div>
+    <pre id="report" aria-label="Local performance report">No measurements yet.</pre>
+    <p>Frame intervals are wall-clock presentation intervals, not GPU execution times. Renderer memory is an estimate, not total device memory. No device identifiers or measurements are sent anywhere.</p>
+    <p>Supported: node-based physical material, instanced sample columns, directional shadows, MSAA. Missing: city architecture, animation, interaction, semantic bloom, water, indirect lighting, SSGI and temporal antialiasing. This experiment does not establish quality parity or a speedup.</p>
+  </main>
+  <script type="module" src="../../src/experimental/webgpu/main.ts"></script>
+</body>
+</html>
