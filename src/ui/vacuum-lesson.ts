@@ -216,7 +216,6 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
       el('p', { text: 'Evidence and notes stay here until you start another attempt.' })),
     retry, disclosure),
   )
-  document.body.append(panel)
 
   function announce(text: string): void { setText(announcement, text) }
 
@@ -389,6 +388,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     ctx.bus.emit('narrate', null)
     restorePaused = restoreTimeScale = true
     opened = true
+    document.body.append(panel)
     panel.hidden = false
     document.body.classList.add('pg-vacuum-lesson')
     state = createVacuumLessonState(mode)
@@ -418,6 +418,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     if (!opened) return
     opened = false
     panel.hidden = true
+    panel.remove()
     document.body.classList.remove('pg-vacuum-lesson')
     if (stopScenario && ctx.sim.state.scenarioDecision === ownedDecision && ctx.sim.state.scenario === 'vacuum-blockade') ctx.sim.runScenario(null)
     ownedDecision = null

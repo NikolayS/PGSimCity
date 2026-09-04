@@ -55,6 +55,17 @@ afterEach(() => {
 })
 
 describe('vacuum lesson in the live model', () => {
+  it('only exposes lesson claims and disclosures while their panel is open', () => {
+    const f = fixture()
+    expect(document.querySelector('[data-disclosure="vacuum-model"]')).toBeNull()
+    f.lesson.open()
+    expect(document.querySelector('[data-disclosure="vacuum-model"]')!.textContent).toContain('City model')
+    f.lesson.close()
+    expect(document.querySelector('[data-disclosure="vacuum-model"]')).toBeNull()
+    f.lesson.open()
+    expect(document.querySelector('[data-disclosure="vacuum-model"]')!.textContent).toContain('City model')
+  })
+
   it('requires evidence, then waits for real cleanup and an explicit recovery check', () => {
     const f = fixture()
     f.lesson.open('challenge')
