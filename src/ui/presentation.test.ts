@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createBus } from '../core/bus'
 import { installTestDom } from '../../test/dom'
 import { createPresentationExport, wrapPresentationText } from './presentation'
@@ -24,6 +24,12 @@ describe('presentation dialog lifetime', () => {
     module.open()
     expect(module.isOpen()).toBe(true)
     expect(state.knobs.paused).toBe(true)
+    for (const kind of ['keydown', 'keyup']) {
+      const event = new Event(kind, { bubbles: true })
+      const stop = vi.spyOn(event, 'stopPropagation')
+      document.querySelector('.pg-presentation')!.dispatchEvent(event)
+      expect(stop).toHaveBeenCalledOnce()
+    }
     module.close()
     expect(module.isOpen()).toBe(false)
     expect(state.knobs.paused).toBe(initial)
