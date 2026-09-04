@@ -64,6 +64,7 @@ import { createControls } from './ui/controls'
 import { createInspector } from './ui/panel'
 import { createTour } from './ui/tour'
 import { createPresentationExport } from './ui/presentation'
+import { dispatchPresentationFrame } from './engine/presentation'
 import { createSearch } from './ui/search'
 import { createCityWords } from './ui/city-words'
 import { createTouchpad } from './ui/touchpad'
@@ -473,6 +474,17 @@ async function boot(): Promise<void> {
     requestAnimationFrame(frame)
 
     timer.update()
+    dispatchPresentationFrame(presentation.isOpen(), liveFrame, presentationFrame)
+  }
+
+  function presentationFrame(): void {
+    frameTimebase.advance(0, true, sim.state.knobs.timeScale)
+    gfx.renderStill()
+    labels.update(0, camera, sim.state)
+    labels.render(scene, camera)
+  }
+
+  function liveFrame(): void {
     // rawDt feeds FPS and adaptive quality. The world stays on the animation
     // clamp; the model consumes bounded wall time as fixed steps.
     const rawDt = timer.getDelta()

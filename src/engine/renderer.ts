@@ -74,6 +74,8 @@ export interface RendererApi {
    * time and is what the fps readout and the adaptive-quality timers measure.
    */
   render(dt: number, rawDt?: number): void
+  /** Redraw unchanged scene geometry without advancing FPS or adaptive-quality clocks. */
+  renderStill(): void
   resize(): void
   /** Detached, tone-mapped scene snapshot; normal render dimensions restore synchronously. */
   captureFrame(width: number, height: number): HTMLCanvasElement
@@ -1146,6 +1148,12 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
 
   /* ---- context loss -----------------------------------------------------*/
 
+  function renderStill(): void {
+    renderer.info.reset()
+    if (useComposer() && composer) composer.render(0)
+    else renderer.render(scene, camera)
+  }
+
   function captureFrame(width: number, height: number): HTMLCanvasElement {
     return captureRasterFrame(renderer, width, height, { width: viewW, height: viewH, ratio: quality.pixelRatio },
       ({ width: w, height: h, ratio }) => {
@@ -1160,11 +1168,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
           sizeBloom()
           sizeAmbientOcclusion()
         }
-      }, () => {
-        // Keep the exact camera and quality. Do not advance animation or adaptive quality.
-        if (useComposer() && composer) composer.render(0)
-        else renderer.render(scene, camera)
-      })
+      }, renderStill)
   }
 
   function onContextLost(e: Event): void {
@@ -1291,6 +1295,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
       return fps
     },
     render,
+    renderStill,
     resize,
     captureFrame,
     setQuality,
