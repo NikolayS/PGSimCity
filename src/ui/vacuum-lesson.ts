@@ -218,8 +218,6 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
       el('p', { text: 'Evidence and notes stay here until you start another attempt.' })),
     retry, disclosure),
   )
-  document.body.append(panel)
-
   function positionPanel(): void {
     if (!opened) return
     const bottom = document.getElementById('hud-top')?.getBoundingClientRect().bottom ?? 0
@@ -423,6 +421,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     ctx.bus.emit('narrate', null)
     restorePaused = restoreTimeScale = true
     opened = true
+    document.body.append(panel)
     panel.hidden = false
     positionPanel()
     document.body.classList.add('pg-vacuum-lesson')
@@ -453,6 +452,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     if (!opened) return
     opened = false
     panel.hidden = true
+    panel.remove()
     document.body.classList.remove('pg-vacuum-lesson')
     if (stopScenario && ctx.sim.state.scenarioDecision === ownedDecision && ctx.sim.state.scenario === 'vacuum-blockade') ctx.sim.runScenario(null)
     ownedDecision = null
