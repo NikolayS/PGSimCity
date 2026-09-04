@@ -8036,7 +8036,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         rejectedWrites: 0,
       }
     }
-    if (id === 'vacuum-blockade') {
+    if (id === 'vacuum-blockade' || id === 'vacuum-report') {
       return {
         kind: 'vacuum-blockade',
         phase: 'staging',
@@ -8051,6 +8051,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         blockedVacuumWorkers: 0,
         deadTuplesReclaimed: 0,
         transactionTerminated: false,
+        report: id === 'vacuum-report' ? { status: 'running', remaining: 30 } : null,
       }
     }
     if (id === 'failover-candidate') {
@@ -8117,6 +8118,21 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     }
 
     if (decision.kind === 'vacuum-blockade') {
+      if (decision.report?.status === 'running' && !K.longRunningXact) {
+        decision.report.status = 'interrupted'
+        decision.correct = false
+      }
+      if (decision.report?.status === 'running' && decision.choice === 'wait-for-transaction') {
+        /* The client's completion is authored; snapshot release and subsequent
+         * collection use the same model path as the abandoned-session case. */
+        decision.report.remaining = Math.max(0, decision.report.remaining - dt)
+        if (decision.report.remaining <= 1e-9) {
+          decision.report.remaining = 0
+          decision.report.status = 'completed'
+          setKnob('longRunningXact', false)
+          decision.phase = 'recovering'
+        }
+      }
       if (decision.phase !== 'staging') {
         decision.deadTuplesAdded = Math.max(
           decision.deadTuplesAdded,
@@ -8138,7 +8154,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
           decision.blockedVacuumWorkers = Math.max(decision.blockedVacuumWorkers, active)
         }
         if (
-          decision.transactionTerminated
+          (decision.transactionTerminated || decision.report?.status === 'completed')
           && decision.deadTuplesReclaimed > 0
           && !K.longRunningXact
         ) {
@@ -8338,24 +8354,29 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     if (decision.kind === 'vacuum-blockade') {
       if (choice === 'terminate-transaction') {
         decision.choice = choice
-        decision.correct = true
+        decision.correct = !decision.report
         decision.transactionTerminated = true
+        if (decision.report) decision.report.status = 'interrupted'
         setKnob('longRunningXact', false)
         decision.phase = 'outcome'
         toast(
-          'One idle transaction terminated; its snapshot released and vacuum can remove dead row versions',
-          'good',
+          decision.report
+            ? 'The required report was interrupted. Its snapshot is released, but cleanup cannot recover the lost report work.'
+            : 'One idle transaction terminated; its snapshot released and vacuum can remove dead row versions',
+          decision.report ? 'warn' : 'good',
           7000,
         )
         return true
       }
       if (choice === 'wait-for-transaction') {
         decision.choice = choice
-        decision.correct = false
+        decision.correct = !!decision.report
         decision.phase = 'outcome'
         toast(
-          'The idle transaction remains; every new dead row version stays behind the pinned xmin horizon',
-          'warn',
+          decision.report
+            ? 'The required report keeps its snapshot. This authored client finishes in 30 model seconds; cleanup must wait for release.'
+            : 'The idle transaction remains; every new dead row version stays behind the pinned xmin horizon',
+          decision.report ? 'info' : 'warn',
           7500,
         )
         return true
@@ -8377,6 +8398,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     if (!decision) return false
     if (
       decision.kind === 'vacuum-blockade'
+      && !decision.report
       && decision.choice === 'wait-for-transaction'
       && K.longRunningXact
       && decision.phase === 'outcome'

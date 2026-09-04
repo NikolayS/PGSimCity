@@ -553,6 +553,35 @@ export const SCENARIOS: ScenarioDef[] = [
 
   /* ---------------------------------------------------------------------- */
   {
+    id: 'vacuum-report',
+    name: 'A report still needs its snapshot',
+    blurb: 'The owner needs a read-only report to finish. Preserve its snapshot, then verify cleanup after the authored client finishes.',
+    icon: '⌛',
+    focus: 'proc.array',
+    duration: 0,
+    knobs: {
+      tps: 1600, writeRatio: 0.88, updateRatio: 0.94, seqScanRatio: 0,
+      sharedBuffers: 768, autovacuum: true, autovacuumScaleFactor: 0.01,
+      longRunningXact: true, standbyAEnabled: true,
+      checkpointTimeout: 120, maxWalSize: 768,
+    },
+    decision: {
+      revealAt: 56,
+      choices: [
+        {
+          id: 'terminate-transaction', label: 'Terminate the session',
+          hint: 'Release the snapshot, interrupting the owner’s required report. Committed data is not lost.',
+        },
+        {
+          id: 'wait-for-transaction', label: 'Let the owner finish',
+          hint: 'The authored client completes 30 model seconds after this choice. This is not a PostgreSQL completion-time estimate.',
+        },
+      ],
+    },
+  },
+
+  /* ---------------------------------------------------------------------- */
+  {
     id: 'failover-candidate',
     name: 'Choose the candidate',
     blurb: 'After fencing the old primary, two otherwise eligible same-system, usable-timeline candidates differ only in durable LSN.',

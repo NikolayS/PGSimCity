@@ -2027,10 +2027,19 @@ export function createHud(ctx: UiContext, options: { onInvestigate?: () => void 
       for (let i = 0; i < s.autovac.workers.length; i++) {
         if (s.autovac.workers[i].active) workers++
       }
-      setText(decisionTitle, 'Verified abandoned transaction and cleanup')
+      setText(decisionTitle, decision.report ? 'Required report and cleanup' : 'Verified abandoned transaction and cleanup')
       setDecisionFact(0, 'oldest snapshot', fmtDuration(s.oldestSnapshotAge))
       setDecisionFact(1, 'dead row versions', fmtNum(dead))
       setDecisionFact(2, 'autovacuum', `${workers} workers · ${fmtNum(pages)} pages`)
+      if (decision.report) {
+        decisionRecover.hidden = true
+        setText(decisionResult, decision.report.status === 'interrupted'
+          ? `The required read-only report was interrupted; committed data was not lost. ${fmtNum(decision.deadTuplesReclaimed)} versions reclaimed. Cleanup does not recover the report’s interrupted work.`
+          : decision.report.status === 'completed'
+            ? `The authored client completed its report and released the snapshot. ${fmtNum(decision.deadTuplesReclaimed)} versions reclaimed; cleanup requires a subsequent vacuum pass.`
+            : 'Authored owner context: this read-only report is required. Letting it finish preserves its work; the client completes 30 model seconds after that decision. This timing is not a database measurement.')
+        return
+      }
       if (decision.choice === 'terminate-transaction') {
         setText(
           decisionResult,
