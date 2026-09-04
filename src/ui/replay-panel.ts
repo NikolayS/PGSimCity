@@ -138,7 +138,7 @@ export function createReplayPanel(ctx: UiContext, replay: IncidentReplay): Repla
       body.append(el('tr', {}, el('th', { text: label, scope: 'row' }), el('td', { text: format(result.baseline[key]) }), el('td', { text: format(result.current[key]) })))
     }
     table.append(body)
-    comparison.append(table, el('p', { text: 'Counts are cumulative from the same seeded warm model, not production capacity estimates. Reusable table space is not a promise that ordinary VACUUM shrinks a relation file.' }))
+    comparison.append(table, el('p', { text: 'Counters and current gauges are model outputs, not production capacity estimates. Both branches start from the same seeded warm model. Reusable table space is not a promise that ordinary VACUUM shrinks a relation file.' }))
   }
   function open(): void {
     returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null

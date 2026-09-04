@@ -59,6 +59,15 @@ function incident(seed = 42) {
 }
 
 describe('bounded incident replay', () => {
+  it('withdraws comparisons after an unsupported action invalidates their provenance', async () => {
+    const { sim, replay } = incident()
+    sim.update(STEP)
+    await replay.rewind(0)
+    expect(replay.compare()).not.toBeNull()
+    sim.startBaseBackup()
+    expect(replay.compare()).toBeNull()
+    replay.dispose()
+  })
   it('does not block model clamping when a live action exceeds share bounds', () => {
     const { sim, replay } = incident()
     expect(() => sim.setKnob('workMem', 1000)).not.toThrow()
