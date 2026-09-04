@@ -4,12 +4,22 @@ import type { IncidentContext, IncidentDestination } from '../core/incident-hand
 import type { Bus } from '../core/types'
 import type { IncidentReplay } from '../sim/replay'
 
+export function incidentDiagnosticCaption(linked: boolean, stagedName?: string): string {
+  if (linked) return 'Inspecting the linked city incident. Choosing a complaint has not changed its workload.'
+  return stagedName ? `${stagedName} — the model is running this configuration so you can read it live. Every knob on the page is still yours.` : 'free running'
+}
+
 export function showIncidentError(message: string, parent: HTMLElement = document.body): HTMLElement {
   const panel = document.createElement('section')
   panel.setAttribute('role', 'alert')
   panel.className = 'incident-navigation-message'
   panel.style.cssText = 'padding:16px;background:#182330;color:#fff;border:2px solid #e6af57;position:relative;z-index:10000;font:16px/1.5 system-ui;max-width:760px'
   panel.textContent = `Incident not transferred. ${message}. No replacement incident has been started.`
+  const restart = document.createElement('a')
+  restart.href = /\/observability\/?$/.test(location.pathname) ? '../' : './'
+  restart.textContent = 'Open a new city instead (discard this transfer)'
+  restart.style.cssText = 'display:block;color:#b9e3ff;margin-top:12px'
+  panel.append(restart)
   parent.prepend(panel)
   return panel
 }
