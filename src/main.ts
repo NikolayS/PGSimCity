@@ -63,6 +63,7 @@ import { createHelp } from './ui/help'
 import { createControls } from './ui/controls'
 import { createInspector } from './ui/panel'
 import { createTour } from './ui/tour'
+import { createPresentationExport } from './ui/presentation'
 import { createSearch } from './ui/search'
 import { createCityWords } from './ui/city-words'
 import { createTouchpad } from './ui/touchpad'
@@ -297,8 +298,12 @@ async function boot(): Promise<void> {
     door: controlCenterWorld.door,
     hands,
   })
+  const presentation = createPresentationExport(uiCtx, gfx)
   const ui: UiModule[] = [
-    createHud(uiCtx),
+    presentation,
+    createHud(uiCtx, {
+      onExport: () => presentation.open(),
+    }),
     createTouchpad({ bus, walk }),
     controlCenter,
     createWalkUpInteraction({
