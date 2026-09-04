@@ -4,6 +4,7 @@ import * as THREE from 'three'
 import { createBus } from '../core/bus'
 import { createTheme } from '../core/theme'
 import type { ComponentDef } from '../core/types'
+import { fmtNum } from '../core/util'
 import { createSim } from '../sim/model'
 import { installTestDom } from '../../test/dom'
 import { vacBayPos } from './layout'
@@ -221,7 +222,7 @@ describe('robot vacuum service station', () => {
     const matrix = new THREE.Matrix4()
     lamps.getMatrixAt(0, matrix)
     expect(new THREE.Vector3().setFromMatrixScale(matrix).x).toBeLessThan(0.1)
-    expect(components.get('autovac.worker.0')!.readout!(sim.state)).toContain('0 of')
+    expect(components.get('autovac.worker.0')!.readout!(sim.state)).toContain('0 dead tuples collected')
 
     worker.phase = 'return'
     worker.progress = 1
@@ -234,4 +235,60 @@ describe('robot vacuum service station', () => {
     expect(focus[2]).toBeCloseTo(originalBay[2], 1)
     expect(JSON.stringify(sim.state.tables)).toBe(tablesBefore)
   })
+
+  it('keeps partial cleanup visible when xmin still protects newer row versions', () => {
+    const { module, sim, components } = fixture()
+    const worker = sim.state.autovac.workers[0]
+    worker.active = true
+    worker.table = 0
+    worker.phase = 'vacuum_heap'
+    worker.stalledByHorizon = true
+    worker.deadCollected = 1200
+    sim.state.tables[0].deadTuples = 10000
+    sim.state.oldestSnapshotAge = 90
+    for (let i = 0; i < 120; i++) module.update(1 / 30, sim.state, i / 30)
+    const lamps = module.group.getObjectByName('autovac.workers.indicators') as THREE.InstancedMesh
+    const transform = new THREE.Matrix4()
+    lamps.getMatrixAt(0, transform)
+    expect(new THREE.Vector3().setFromMatrixScale(transform).x).toBeGreaterThan(0.3)
+    const readout = components.get('autovac.worker.0')!.readout!(sim.state)
+    expect(readout).toContain(`${fmtNum(1200)} dead tuples collected`)
+    expect(readout).toContain('xmin limits removal')
+    expect(readout).not.toContain('0 of')
+  })
+
+  it('does not fill the collection indicator merely because heap scanning advanced', () => {
+    const { module, sim } = fixture()
+    const worker = sim.state.autovac.workers[0]
+    worker.active = true
+    worker.table = 0
+    worker.phase = 'scan_heap'
+    worker.progress = 0.9
+    worker.deadCollected = 0
+    worker.stalledByHorizon = false
+    sim.state.oldestSnapshotAge = 0
+    for (let i = 0; i < 120; i++) module.update(1 / 30, sim.state, i / 30)
+    const lamps = module.group.getObjectByName('autovac.workers.indicators') as THREE.InstancedMesh
+    const transform = new THREE.Matrix4()
+    lamps.getMatrixAt(0, transform)
+    expect(new THREE.Vector3().setFromMatrixScale(transform).x).toBeLessThanOrEqual(0.021)
+  })
+
+  it('reports eligible cleanup from the real blockade scenario without claiming everything is removable', () => {
+    const { module, sim, components } = fixture()
+    sim.runScenario('vacuum-blockade')
+    let slot = -1
+    for (let step = 0; step < 30000 && slot < 0; step++) {
+      sim.update(1 / 30)
+      slot = sim.state.autovac.workers.findIndex((worker) => worker.active && worker.stalledByHorizon && worker.deadCollected > 0)
+    }
+    expect(slot).toBeGreaterThanOrEqual(0)
+    const worker = sim.state.autovac.workers[slot]
+    expect(sim.state.tables[worker.table].deadTuples).toBeGreaterThan(worker.deadCollected)
+    module.update(1 / 30, sim.state, 0)
+    const readout = components.get(`autovac.worker.${slot}`)!.readout!(sim.state)
+    expect(readout).toContain(`${fmtNum(worker.deadCollected)} dead tuples collected`)
+    expect(readout).toContain('xmin limits removal')
+    expect(readout).not.toContain('0 of')
+  }, 30000)
 })

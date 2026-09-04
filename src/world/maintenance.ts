@@ -34,9 +34,9 @@ export const VACUUM_RECLAIM_PLATE_LINES = CLAIM_VALUES.vacuumReclaim.plateLines
  *   STATS RELAY    a relay, not a collector — since PG15 the cumulative stats
  *                  live in shared memory, over in the plaza.
  *
- * The lesson the whole yard is built around: a worker blocked by an old xmin
- * horizon still visits the table and scans, but returns with an empty
- * collector. Turn on `longRunningXact` and watch AV-0 do exactly that.
+ * An old xmin horizon protects newer row versions, not necessarily every dead
+ * version. Workers still scan and may remove eligible older versions; the
+ * collector follows actual removal, including an empty pass when none qualify.
  * ==========================================================================*/
 
 /* --- module scratch: update() allocates nothing ---------------------------- */
@@ -507,6 +507,7 @@ interface Truck {
   hopper: number
   scoop: number
   carry: number
+  collected: number
   spin: number
   tilt: number
   homing: number
@@ -1057,6 +1058,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       hopper: 0,
       scoop: 0,
       carry: 0,
+      collected: 0,
       spin: 0,
       tilt: 0,
       homing: 0,
@@ -1073,7 +1075,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
    *
    *    Not disk. The file does not shrink; the space is recorded in the free
    *    space map and the next insert lands in it. The pile fades because that
-   *    space gets used again — and it stays empty when the horizon is frozen.
+   *    space gets used again; a pinned horizon limits which versions can enter it.
    * =====================================================================*/
 
   const gLand = new THREE.Group()
@@ -1470,7 +1472,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
         if (!w.active) return 'idle in bay'
         const t = s.tables[w.table]
         if (w.stalledByHorizon) {
-          return `${t.def.name} · ${w.phase} · BLOCKED by xmin horizon — 0 of ${fmtNum(t.deadTuples)} removable`
+          return `${t.def.name} · ${w.phase} · xmin limits removal · ${fmtNum(w.deadCollected)} dead tuples collected · ${fmtNum(t.deadTuples)} dead remain`
         }
         return `${t.def.name} · ${w.phase} · ${fmtNum(w.deadCollected)} dead tuples collected`
       },
@@ -1947,10 +1949,6 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     _right.setFromMatrixColumn(ctx.camera.matrixWorld, 0)
     _up.setFromMatrixColumn(ctx.camera.matrixWorld, 1)
 
-    // An ancient snapshot means nothing found is removable, whatever the truck
-    // digs up. The sim confirms it at the end of scan_heap; this predicts it.
-    const horizonStale = sim.oldestSnapshotAge > 8
-
     for (let i = 0; i < N_VAC_WORKERS; i++) {
       const tr = trucks[i]
       const w = av.workers[i]
@@ -1971,7 +1969,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       if (!w.active && tr.wasActive) tr.homing = 1 // coast home from the landfill
       tr.wasActive = w.active
 
-      const stalled = w.stalledByHorizon || (w.active && horizonStale && table.deadTuples > 400)
+      const stalled = w.stalledByHorizon
 
       tr.prev.copy(tr.pos)
       if (w.active) {
@@ -2009,18 +2007,12 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       tr.pitch = damp(tr.pitch, clamp(pitchTo, -0.9, 0.9), 6, dt)
       tr.spin += speed * dt * 1.1
 
-      // The hopper fills as scanning finds dead rows and tops up as they are
-      // actually removed — and stays empty when the horizon forbids it.
-      let fillTarget = tr.hopper
+      // Scanning is not removal. Even a constrained worker may collect older,
+      // eligible versions; snapshot age cannot predict its removable fraction.
+      let fillTarget = clamp01(w.deadCollected / tr.expected)
       switch (w.phase) {
         case 'travel':
           fillTarget = 0
-          break
-        case 'scan_heap':
-          fillTarget = stalled ? 0 : w.progress * 0.72
-          break
-        case 'vacuum_heap':
-          fillTarget = stalled ? 0 : 0.72 + 0.28 * clamp01(w.deadCollected / tr.expected)
           break
         case 'return':
           fillTarget = w.progress > 0.9 ? 0 : tr.hopper
@@ -2028,8 +2020,6 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
         case 'idle':
           fillTarget = w.active ? tr.hopper : 0
           break
-        default:
-          fillTarget = stalled ? 0 : tr.hopper
       }
       tr.hopper = damp(tr.hopper, clamp01(fillTarget), w.phase === 'return' ? 6 : 2.4, dt)
 
@@ -2050,7 +2040,8 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       } else {
         tr.scoop = damp(tr.scoop, 0, 5, dt)
       }
-      const carrying = scooping && !stalled && tr.scoop > 0.5 && tr.scoop < 0.94 ? 1 : 0
+      const carrying = w.active && w.deadCollected > tr.collected ? 1 : 0
+      tr.collected = w.deadCollected
       tr.carry = damp(tr.carry, carrying, 12, dt)
 
       /* world matrix, then every part hung off it */
@@ -2143,7 +2134,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
           signs.setLiveText(
             tr.panelBot,
             stalled
-              ? 'BLOCKED BY XMIN HORIZON'
+              ? `xmin limits removal · ${fmtNum(w.deadCollected)} collected`
               : `${fmtNum(Math.round(w.deadCollected / 50) * 50)} dead tuples`,
           )
         }
