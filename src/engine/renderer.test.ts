@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { AO_BLEND_INTENSITY, FIDELITY_PRESETS, QUALITY_PRESETS } from './renderer'
+import { AO_BLEND_INTENSITY, FIDELITY_PRESETS, QUALITY_PRESETS, ShadowRefreshSchedule } from './renderer'
 import { LIGHT_SHAFT_PRESETS } from './light-shafts'
 import type { QualitySettings } from '../core/types'
 
@@ -33,6 +33,31 @@ describe('quality degradation ladder', () => {
     expect(lastBloomOn.pixelRatio).toBeLessThan(presets[0].pixelRatio)
     expect(lastBloomOn.antialias).toBe(false)
     expect(lastBloomOn.shadows).toBe(false)
+  })
+})
+
+describe('animated shadow refresh', () => {
+  it('refreshes on first use and bounds medium redraws independently of frame rate', () => {
+    for (const fps of [30, 60, 120]) {
+      const schedule = new ShadowRefreshSchedule()
+      const interval = FIDELITY_PRESETS.medium.shadowUpdateInterval
+      expect(schedule.advance(0, interval)).toBe(true)
+      let refreshes = 0
+      for (let frame = 0; frame < fps; frame++) {
+        if (schedule.advance(1 / fps, interval)) refreshes++
+      }
+      expect(refreshes).toBeGreaterThanOrEqual(7)
+      expect(refreshes).toBeLessThanOrEqual(8)
+    }
+  })
+
+  it('uses the new tier budget immediately and does not replay missed refreshes', () => {
+    const schedule = new ShadowRefreshSchedule()
+    expect(schedule.advance(0, 1 / 8)).toBe(true)
+    expect(schedule.advance(0.01, 1 / 8)).toBe(false)
+    expect(schedule.advance(0.01, 0)).toBe(true)
+    expect(schedule.advance(4, 1 / 8)).toBe(true)
+    expect(schedule.advance(0.01, 1 / 8)).toBe(false)
   })
 })
 
@@ -85,5 +110,13 @@ describe('rendering fidelity ladder', () => {
     expect(high.shadowMapSize).toBeGreaterThan(medium.shadowMapSize)
     expect(ultra.shadowMapSize).toBeGreaterThanOrEqual(high.shadowMapSize)
     expect(ultra.shadowRadius).toBeGreaterThan(high.shadowRadius)
+  })
+
+  it('retains medium sun shadows with a reduced refresh budget', () => {
+    expect(QUALITY_PRESETS.medium.shadows).toBe(true)
+    expect(FIDELITY_PRESETS.medium.shadowMapSize).toBeLessThan(FIDELITY_PRESETS.high.shadowMapSize)
+    expect(FIDELITY_PRESETS.medium.shadowUpdateInterval).toBeGreaterThanOrEqual(0.1)
+    expect(FIDELITY_PRESETS.high.shadowUpdateInterval).toBeLessThan(FIDELITY_PRESETS.medium.shadowUpdateInterval)
+    expect(FIDELITY_PRESETS.ultra.shadowUpdateInterval).toBe(0)
   })
 })
