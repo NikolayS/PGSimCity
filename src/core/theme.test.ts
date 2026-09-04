@@ -5,6 +5,7 @@ import {
   COLOR,
   atmosphere,
   createTheme,
+  paintSceneMaterial,
   setBloomAvailable,
   setThemeClockMinutes,
   setThemeMode,
@@ -282,8 +283,8 @@ describe('the masonry surface term', () => {
       compile(theme.mat('wal.glass', { color: 0x9fd8ff, surface: false }), true),
     )
     expect(out.fragmentShader).not.toContain('pgWorld')
-    // ...but that material still gets the day toon ramp, which is not optional.
-    expect(out.fragmentShader).toContain('RE_Direct_Toon')
+    // Daylight still shades surfaces that opt out of the masonry detail.
+    expect(out.fragmentShader).toContain('RE_Direct_Daylight')
   })
 
   it('derives roughness and a restrained normal from the same surface height', () => {
@@ -337,7 +338,7 @@ describe('the masonry surface term', () => {
   })
 })
 
-describe('the day toon ramp', () => {
+describe('the daylight material response', () => {
   let theme: ReturnType<typeof createTheme>
 
   beforeEach(() => {
@@ -352,25 +353,76 @@ describe('the day toon ramp', () => {
 
   it('is compiled in for daylight and left out at night', () => {
     const day = inMode('day', () => compile(theme.mat('maint.struct', { color: 0x2b3550 }), true))
-    expect(day.fragmentShader).toContain('#define RE_Direct RE_Direct_Toon')
+    expect(day.fragmentShader).toContain('#define RE_Direct RE_Direct_Daylight')
 
     const night = inMode('night', () => compile(theme.mat('maint.heavy', { color: 0x232d44 }), true))
-    expect(night.fragmentShader).not.toContain('RE_Direct_Toon')
+    expect(night.fragmentShader).not.toContain('RE_Direct_Daylight')
   })
 
-  it('separates a roof from a sunlit wall', () => {
+  it('retains the authored distinction between metal and matte masonry', () => {
+    const stone = theme.mat('storage.stone', { color: 0x27334c, roughness: 0.72, metalness: 0.15 })
+    const metal = theme.mat('storage.steel', { color: 0x27334c, roughness: 0.24, metalness: 0.85 })
+    setThemeMode('day', { persist: false })
+
+    expect(metal.metalness).toBeGreaterThanOrEqual(0.8)
+    expect(metal.roughness).toBeLessThanOrEqual(0.3)
+    expect(stone.roughness - metal.roughness).toBeGreaterThan(0.4)
+    expect(stone.metalness).toBeLessThan(0.1)
+
+    setThemeMode('night', { persist: false })
+    expect(metal.metalness).toBe(0.85)
+    expect(metal.roughness).toBe(0.24)
+    expect(stone.metalness).toBe(0.15)
+    expect(stone.roughness).toBe(0.72)
+  })
+
+  it('paints cached and independently authored metals consistently', () => {
+    const spec = { color: 0x27334c, roughness: 0.24, metalness: 0.85 }
+    const cached = theme.mat('storage.steel', spec)
+    const independent = new THREE.MeshStandardMaterial(spec)
+    independent.name = 'storage.steel'
+    paintSceneMaterial(independent, 'night')
+    setThemeMode('day', { persist: false })
+    paintSceneMaterial(independent, 'day')
+
+    expect(independent.roughness).toBe(cached.roughness)
+    expect(independent.metalness).toBe(cached.metalness)
+    expect(independent.userData.pgSurface).toBe(false)
+
+    paintSceneMaterial(independent, 'night')
+    expect(independent.roughness).toBe(spec.roughness)
+    expect(independent.metalness).toBe(spec.metalness)
+    independent.dispose()
+  })
+
+  it('models continuous daylight and a restrained roof lift', () => {
     const out = inMode('day', () => compile(theme.mat('rep.struct', { color: 0x27334c }), true))
-    /* Three ingredients, all required: two N·L thresholds for the wall tones,
-     * and a world-space up term for the roof, which no dot product against the
-     * sun can find on its own — a roof and a wall can share a dot product. */
-    expect(out.fragmentShader).toContain('0.14 - w')
-    expect(out.fragmentShader).toContain('0.68 - w')
+    /* Execute the shipped scalar GLSL, rather than a separately maintained
+     * CPU approximation. These operations have the same scalar semantics. */
+    const body = /float pgDayDiffuse\( float dotNL, float up \) \{([^}]+)\}/.exec(out.fragmentShader)?.[1]
+    expect(body).toBeDefined()
+    const response = new Function('dotNL', 'up', `const sqrt = Math.sqrt; ${body!.replace(/\bfloat\b/g, 'const')}`) as (facing: number, up: number) => number
+
+    expect(response(0, 0)).toBe(0)
+    expect(response(1, 0)).toBeGreaterThan(0.75)
+    expect(response(1, 1)).toBeLessThanOrEqual(1)
+    for (let i = 1; i <= 100; i++) {
+      const facing = i / 100
+      const wall = response(facing, 0)
+      const roof = response(facing, 1)
+      expect(wall).toBeGreaterThan(response(facing - 0.01, 0))
+      expect(wall - response(facing - 0.01, 0)).toBeLessThan(0.05)
+      expect(roof).toBeGreaterThan(wall)
+      expect(roof - wall).toBeLessThan(0.15)
+    }
     expect(out.fragmentShader).toContain('worldN.y')
   })
 
-  it('gates the cartoon highlight on roughness so matte stone stays matte', () => {
+  it('retains a smooth physical highlight while keeping stone matte', () => {
     const out = inMode('day', () => compile(theme.mat('shmem.struct', { color: 0x1b2435 }), true))
-    expect(out.fragmentShader).toContain('smoothstep( 0.35, 0.75, material.roughness )')
+    expect(out.fragmentShader).toContain('BRDF_GGX_Multiscatter')
+    expect(out.fragmentShader).toContain('smoothstep( 0.35, 0.85, material.roughness )')
+    expect(out.fragmentShader).not.toContain('specLum')
   })
 
   it('leaves the night vertex-colour buffers alone', () => {

@@ -36,9 +36,36 @@ describe('build-time box bevels', () => {
   it('keeps the rescue tiers on twelve-triangle boxes', () => {
     expect(boxBevelDetail('low')).toBe(0)
     expect(boxBevelDetail('reduced')).toBe(0)
-    expect(boxBevelDetail('medium')).toBe(0)
+    expect(boxBevelDetail('medium')).toBe(1)
     expect(boxBevelDetail('high')).toBe(1)
     expect(boxBevelDetail('ultra')).toBe(1)
+  })
+
+  it('keeps medium architectural bevels without multiplying dense field geometry', () => {
+    const pair = pairBoxGeometries(1, 1, 1)
+    const city = new THREE.Group()
+    const buildings = new THREE.InstancedMesh(pair.plain, new THREE.MeshStandardMaterial(), 32)
+    const field = new THREE.InstancedMesh(pair.plain, new THREE.MeshBasicMaterial(), 1024)
+    city.add(buildings, field)
+
+    applyBoxBevelDetail(city, 'high')
+    expect(field.geometry).toBe(pair.beveled)
+    const medium = applyBoxBevelDetail(city, 'medium')
+    expect(buildings.geometry).toBe(pair.beveled)
+    expect(field.geometry).toBe(pair.plain)
+    expect(medium.triangleDelta).toBe(32 * (44 - 12))
+    expect(medium.triangles).toBe(32 * 44 + 1024 * 12)
+
+    applyBoxBevelDetail(city, 'reduced')
+    expect(buildings.geometry).toBe(pair.plain)
+    applyBoxBevelDetail(city, 'medium')
+    expect(buildings.geometry).toBe(pair.beveled)
+    expect(field.geometry).toBe(pair.plain)
+
+    field.count = 8
+    applyBoxBevelDetail(city, 'high')
+    applyBoxBevelDetail(city, 'medium')
+    expect(field.geometry === pair.plain).toBe(true)
   })
 
   it('swaps paired city boxes without touching unpaired semantic tiles', () => {
