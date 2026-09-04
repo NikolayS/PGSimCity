@@ -59,6 +59,9 @@ export function createPresentationExport(ctx: UiContext, gfx: RendererApi): Pres
     el('p', { text: 'The default caps the scene at 4 megapixels. Optional 4K needs roughly 380 MiB of extra render-target memory; actual use varies. Both keep your camera aspect and respect GPU limits. If export fails, try 1×.' }),
     status, retry, el('div', { class: 'pg-presentation__actions' }, save, closeButton))
   dialog.addEventListener('cancel', (event) => { event.preventDefault(); close() })
+  // Native modal focus does not stop the city's window-level shortcuts.
+  dialog.addEventListener('keydown', (event) => event.stopPropagation())
+  dialog.addEventListener('keyup', (event) => event.stopPropagation())
   document.body.append(dialog)
 
   function open(): void {
