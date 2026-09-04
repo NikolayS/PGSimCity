@@ -36,7 +36,7 @@ and what remains irreducibly spatial.
 > [Machine](machine/) can run PGlite, a real in-memory PostgreSQL compiled to
 > WebAssembly.
 >
-> PGSimCity targets the PostgreSQL 18 major line. PostgreSQL 18.4 is the
+> PGSimCity targets the PostgreSQL 18 major line. PostgreSQL 18.6 is the
 > reviewed reference release against which its claims were verified; mechanism
 > claims follow the [`REL_18_STABLE` source](https://github.com/postgres/postgres/tree/REL_18_STABLE).
 > For example, PostgreSQL 18's bulk-read strategy starts at 256 KiB and grows
