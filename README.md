@@ -172,6 +172,19 @@ Press **`?`** in the city for the city control map and colour legend.
 | `Esc` | Close the topmost overlay |
 | `1` – `8` | Jump to a district: clients, backends, buffer pool, WAL, storage, query lab, maintenance, standby |
 
+### Export a presentation image
+
+Choose **Export image** in the city toolbar. The model pauses until you return
+to the city. PNG export keeps the current camera and graphics quality; visible
+object names are optional, but the model disclosure, version, and model clock
+always remain in the image footer.
+
+The default 2× option caps the scene at 4 megapixels. An explicit 4K scene option
+fits the camera aspect within 3840 × 2160 (rotated for a portrait view), subject
+to GPU limits. The disclosure footer adds height. Large captures can exhaust GPU
+memory; try 1× if an export fails. A prepared-image link remains available if
+the browser blocks the automatic download.
+
 ---
 
 ## How it is built
