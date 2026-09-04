@@ -1,9 +1,11 @@
 import {
   ARCHITECTURE_LAYOUT as layout,
+  STATEMENT_EXECUTOR_RETURN_ROUTE,
   activeStatementStageIndex,
   bufferAccessSummary,
   createStatementReplay,
   nextStatementStageIndex,
+  statementReturnRouteId,
 } from './architecture.js'
 import {
   formatDescribeIndex,
@@ -333,6 +335,7 @@ const backendSpecs = Object.freeze([
 ])
 
 const statementRoutes = Object.freeze({
+  returnFromExecutor: STATEMENT_EXECUTOR_RETURN_ROUTE,
   backend: Object.freeze([
     Object.freeze([124, 128]),
     Object.freeze([215, 128]),
@@ -2364,14 +2367,7 @@ function statementRouteForStage(stageId) {
     return statementRoutes.earlyAck
   }
   if (stageId === 'return') {
-    if (statement.replay?.writes) {
-      return statement.replay.synchronousCommit === 'off'
-        ? statementRoutes.returnFromWal
-        : statementRoutes.returnFromCommit
-    }
-    return statement.replay?.receipt?.sharedReads > 0
-      ? statementRoutes.returnFromDisk
-      : statementRoutes.returnFromBuffer
+    return statementRoutes[statementReturnRouteId(statement.replay)]
   }
   return statementRoutes[stageId] ?? null
 }
