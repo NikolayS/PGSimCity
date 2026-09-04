@@ -8,9 +8,26 @@ import {
   GROUND_SURFACE_WORLD_METRES,
   createGroundSurfaceData,
   groundSurfaceDetail,
+  groundSurveyDetail,
 } from './ground-surface'
 
 describe('procedural ground surface', () => {
+  it('reveals survey detail near the street and retires it continuously at city altitude', () => {
+    expect(groundSurveyDetail(0)).toBe(1)
+    expect(groundSurveyDetail(40)).toBe(1)
+    expect(groundSurveyDetail(320)).toBe(0)
+    expect(groundSurveyDetail(1650)).toBe(0)
+    let previous = 1
+    for (let height = 0; height <= 400; height += 5) {
+      const detail = groundSurveyDetail(height)
+      expect(detail).toBeGreaterThanOrEqual(0)
+      expect(detail).toBeLessThanOrEqual(previous)
+      expect(previous - detail).toBeLessThan(0.03)
+      expect(groundSurveyDetail(-height)).toBe(detail)
+      previous = detail
+    }
+  })
+
   it('builds one deterministic, materially varied tile without an image asset', () => {
     const a = createGroundSurfaceData()
     const b = createGroundSurfaceData()

@@ -36,7 +36,7 @@
     'brand controls'
     'vitals vitals';
   align-items: center;
-  gap: 0 12px;
+  gap: 0 10px;
   min-height: 54px;
   padding: 4px 12px;
   border-radius: 0;
@@ -141,7 +141,7 @@
      divided a 176px strip between them on a phone and every readout was
      squeezed to a 16px sliver of itself. */
   flex: 0 0 auto;
-  padding: 7px 14px;
+  padding: 4px 12px;
   display: grid;
   /* Fixed columns: a metric tile must never resize as its number changes, or
      every tile to its right dances. Value column is sized for the longest
@@ -1041,8 +1041,8 @@ body.pg-trace .hud-transport > .hud-sep {
 }
 .hud-compass__canvas {
   display: block;
-  width: 196px;
-  height: 168px;
+  width: 160px;
+  height: 137px;
   cursor: crosshair;
   border-radius: 0;
 }
@@ -1314,11 +1314,36 @@ body.pg-walk.touch-walk-active .hud-walk {
    and 1280x800 is the most common laptop there is. */
 @media (max-width: 1440px) {
   .hud-vital {
-    padding: 7px 11px;
+    padding: 4px 10px;
     grid-template-columns: auto;
   }
   .hud-vital .pg-spark {
     display: none;
+  }
+}
+
+/* At laptop widths the compact vitals fit beside the identity. Controls keep
+   their complete second row, freeing a full row of the opening city view. */
+@media (min-width: 1081px) and (max-width: 1440px) {
+  .hud-bar.is-stacked {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      'brand vitals'
+      'controls controls';
+    row-gap: 0;
+  }
+  .hud-bar.is-stacked .hud-vitals {
+    justify-self: end;
+  }
+  .hud-bar.is-stacked .hud-right {
+    justify-self: stretch;
+    justify-content: space-between;
+    border-top: 1px solid var(--line-hair);
+  }
+  .hud-bar.is-stacked .hud-tools {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 4px;
   }
 }
 

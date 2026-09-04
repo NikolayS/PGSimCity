@@ -9,6 +9,7 @@ import {
   GROUND_SURFACE_SIZE,
   createGroundSurfaceData,
   groundSurfaceDetail,
+  groundSurveyDetail,
 } from './ground-surface'
 import {
   clearance,
@@ -86,6 +87,7 @@ uniform float uSweepR;
 uniform sampler2D uSurface;
 uniform float uSurfaceDetail;
 uniform float uSurfaceResponse;
+uniform float uSurveyDetail;
 uniform vec3 uSunDirection;
 uniform vec3 uSunColor;
 uniform sampler2D uEdge;
@@ -117,17 +119,19 @@ void main() {
   float edge = ( texture2D( uEdge, euv ).r - 0.5 ) * 2.0 * uEdgeMax;
 
   float dMinor, dMajor;
-  float minor = gridMask( p, 10.0, 1.15, dMinor );   // 10 m survey grid
-  float major = gridMask( p, 50.0, 1.70, dMajor );   // 50 m block grid
+  float minor = gridMask( p, 10.0, 0.85, dMinor );   // 10 m survey grid
+  float major = gridMask( p, 50.0, 1.15, dMajor );   // 50 m block grid
 
   minor *= 1.0 - smoothstep( 0.20, 0.80, dMinor );
   major *= 1.0 - smoothstep( 0.28, 1.05, dMajor );
 
-  // Survives the overview shot: the camera sits 1.3 km up there and the survey
-  // grid is most of what makes the plate read as a poured surface at all.
-  float camFade = 1.0 - smoothstep( 950.0, 2700.0, distance( vWorld, cameraPosition ) );
-  minor *= camFade;
-  major *= camFade;
+  // Close paving supplies scale; the distant city keeps only a quiet block
+  // rhythm. Per-fragment distance also retires the horizon in walking views.
+  float viewDistance = distance( vWorld, cameraPosition );
+  minor *= ( 1.0 - smoothstep( 180.0, 720.0, viewDistance ) )
+         * mix( 0.12, 0.60, uSurveyDetail );
+  major *= ( 1.0 - smoothstep( 700.0, 2200.0, viewDistance ) )
+         * mix( 0.40, 0.72, uSurveyDetail );
 
   // The survey grid stops at the plate, not in the fog: it dies in the last
   // 34 m so the kerb is a boundary and not just the place the lines get cut.
@@ -152,7 +156,8 @@ void main() {
     vec2 panelP = vec2( p.x + mod( row, 2.0 ) * 2.1, p.y * ( 4.2 / 3.1 ) );
     float dPanel;
     float panel = gridMask( panelP, 4.2, 1.18, dPanel );
-    panel *= 1.0 - smoothstep( 0.16, 0.58, dPanel );
+    panel *= ( 1.0 - smoothstep( 0.16, 0.58, dPanel ) )
+           * mix( 0.24, 1.0, uSurveyDetail );
     col *= 1.0 - panel * 0.115;
   }
   if ( uSurfaceDetail > 1.5 ) {
@@ -537,6 +542,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
       uSurface: { value: surfaceTex },
       uSurfaceDetail: { value: 0 },
       uSurfaceResponse: { value: 0 },
+      uSurveyDetail: { value: groundSurveyDetail(ctx.camera.position.y) },
       uSunDirection: {
         value: new THREE.Vector3(...ATMOSPHERE.day.keyPos)
           .sub(new THREE.Vector3(...ATMOSPHERE.day.keyTarget))
@@ -559,6 +565,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   const uTime = gridUniforms.uTime as { value: number }
   const uSurfaceDetail = gridUniforms.uSurfaceDetail as { value: number }
   const uSurfaceResponse = gridUniforms.uSurfaceResponse as { value: number }
+  const uSurveyDetail = gridUniforms.uSurveyDetail as { value: number }
 
   const plateMat = new THREE.ShaderMaterial({
     uniforms: gridUniforms,
@@ -1195,6 +1202,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
 
   function update(dt: number, _sim: SimState, _t: number): void {
     syncConeLayer()
+    uSurveyDetail.value = groundSurveyDetail(ctx.camera.position.y)
     const daylight = atmosphere().daylight
     const nextSurfaceDetail = groundSurfaceDetail(daylight ? 'day' : 'night', quality.level)
     if (nextSurfaceDetail !== surfaceDetail) {
