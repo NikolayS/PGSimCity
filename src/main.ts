@@ -5,6 +5,7 @@ import './styles/ui.css'
 
 import { startAnalytics, trackVacuumLessonProgress } from './core/analytics'
 import { installLessonRoutes } from './core/lesson-route'
+import { readIncidentHandoff } from './core/incident-handoff'
 import { createBus } from './core/bus'
 import { CLAIM_VALUES } from './core/claims'
 import { createCorrectionPath, displayedClaim, protectCorrectionLink } from './core/corrections'
@@ -69,6 +70,7 @@ import { createVacuumLesson } from './ui/vacuum-lesson'
 import { createPresentationExport } from './ui/presentation'
 import { createReplayPanel } from './ui/replay-panel'
 import { dispatchPresentationFrame } from './engine/presentation'
+import { installCityIncidentNavigation, showIncidentError } from './ui/incident-navigation'
 import { createSearch } from './ui/search'
 import { createCityWords } from './ui/city-words'
 import { createTouchpad } from './ui/touchpad'
@@ -132,6 +134,12 @@ async function boot(): Promise<void> {
   const canvasRoot = document.getElementById('canvas-root')
   const labelsRoot = document.getElementById('labels-root')
   if (!canvasRoot || !labelsRoot) throw new Error('DOM shell is missing')
+  const incoming = readIncidentHandoff(() => sessionStorage, window.location.hash, 'city')
+  if (incoming.kind === 'error') {
+    finishBoot(bootSurface)
+    showIncidentError(incoming.message)
+    return
+  }
 
   // --- WebGL2 gate -----------------------------------------------------------
   const probe = document.createElement('canvas')
@@ -158,9 +166,23 @@ async function boot(): Promise<void> {
   const rig = createCameraRig(camera, renderer.domElement, bus)
 
   await progress(BOOT_STEPS.simulation)
-  const sim = createSim(bus)
+  const sim = createSim(bus, incoming.kind === 'ready' ? { seed: incoming.value.record.seed } : {})
   const replay = createIncidentReplay(sim, bus)
-  if (reduceMotion()) sim.setKnob('paused', true)
+  if (incoming.kind === 'ready') {
+    try {
+      await replay.loadRecord(incoming.value.record)
+    } catch (error) {
+      replay.dispose()
+      rig.dispose()
+      gfx.dispose()
+      theme.dispose()
+      audio.dispose()
+      stopAnalytics()
+      finishBoot(bootSurface)
+      showIncidentError(error instanceof Error ? error.message : 'Incident restoration failed')
+      return
+    }
+  } else if (reduceMotion()) sim.setKnob('paused', true)
 
   // --- the context every district is built against ---------------------------
   const ctx: WorldContext = {
@@ -550,6 +572,19 @@ async function boot(): Promise<void> {
   const stopLessonRoutes = installLessonRoutes({
     target: window, location: window.location, open: (mode) => vacuumLesson.open(mode),
   })
+  const stopIncidentNavigation = installCityIncidentNavigation({
+    replay, bus, context: incoming.kind === 'ready' ? incoming.value.context : undefined,
+  })
+  const restoredSelection = incoming.kind === 'ready' ? incoming.value.context.selected : undefined
+  if (restoredSelection) {
+    if (registry.get(restoredSelection)) {
+      bus.emit('select', { id: restoredSelection })
+      bus.emit('focus', { id: restoredSelection, instant: true })
+    } else {
+      const warning = showIncidentError('The selected component is unavailable')
+      warning.textContent = 'Incident state restored. The selected component is unavailable; choose an object to inspect. No replacement incident was started.'
+    }
+  }
   frame()
 
   finishBoot(bootSurface)
@@ -570,6 +605,7 @@ async function boot(): Promise<void> {
     offAudioToggle()
     stopCityComponentRoutes()
     stopLessonRoutes()
+    stopIncidentNavigation()
     stopLessonReplay()
     stopAnalytics()
     analytics.dispose()
