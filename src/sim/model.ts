@@ -562,6 +562,8 @@ function makeExtra(): Extra {
  * ------------------------------------------------------------------------*/
 
 export interface SimOptions {
+  /** Workload seed retained across resets and encoded in reproducible lessons. */
+  seed?: number
   /** Aggregate probes may trade frame resolution for fewer deterministic steps. */
   maxStep?: number
   /** Aggregate mechanism probes may isolate themselves from the daily DR job. */
@@ -599,7 +601,22 @@ export interface ModelStateSizeObservation {
   traceRequests: number
 }
 
+interface SimulationReplayConfiguration {
+  seed: number
+  standard: boolean
+}
+const replayConfigurations = new WeakMap<SimApi, Readonly<SimulationReplayConfiguration>>()
+
+/** Replay must identify the exact model instance, including probe-only options. */
+export function simulationReplayConfiguration(sim: SimApi): Readonly<SimulationReplayConfiguration> | undefined {
+  return replayConfigurations.get(sim)
+}
+
 export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi {
+  const seed = options.seed ?? 0xc0ffee
+  if (!Number.isInteger(seed) || seed < 0 || seed > 0xffff_ffff) {
+    throw new Error(`invalid simulation seed: ${seed}`)
+  }
   const maxStep = options.maxStep ?? STEP_MAX
   const scheduledBackups = options.scheduledBackups ?? true
   const latencyObserver = options.latencyObserver
@@ -608,9 +625,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   if (!isFinite(maxStep) || maxStep <= 0 || maxStep > STEP_MAX * MAX_STEPS) {
     throw new Error(`invalid simulation maxStep: ${maxStep}`)
   }
-  const rng = makeRng(0xc0ffee)
+  let rng = makeRng(seed)
   // Particle sampling must not perturb workload selection when I/O rates move.
-  const presentationRng = makeRng(0x10cafe)
+  let presentationRng = makeRng(0x10cafe)
   const rr = (lo: number, hi: number) => lo + (hi - lo) * rng()
 
   /* ---- state skeleton (built once, then reset in place: world modules hold
@@ -8781,6 +8798,19 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
    * ====================================================================*/
 
   function hardReset(): void {
+    rng = makeRng(seed)
+    presentationRng = makeRng(0x10cafe)
+    planSeq = 1
+    bgwT = 0
+    forkCooldown = 0
+    logicalAcc = 0
+    statT = 0
+    pageBudget = 0
+    flowTokens = 60
+    flushDur = 0
+    ckptSyncDur = 1.5
+    oldestLiveFpiGeneration = 0
+    lockTable = 3
     Object.assign(K, DEFAULT_KNOBS)
     liveDeficit = 0
     state.t = 0
@@ -9354,7 +9384,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   // it must not announce a user-requested reset.
   initializeWarmState()
 
-  return {
+  const api: SimApi = {
     state,
     update,
     setKnob,
@@ -9373,4 +9403,6 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     startPgRewind,
     reset,
   }
+  replayConfigurations.set(api, { seed, standard: maxStep === STEP_MAX && scheduledBackups })
+  return api
 }
