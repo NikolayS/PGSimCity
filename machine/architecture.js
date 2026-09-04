@@ -22,6 +22,20 @@ export function contains(container, child) {
   )
 }
 
+export function bufferAccessSummary({ sharedHits, sharedReads }) {
+  const reach = sharedReads > 0 ? 'read' : sharedHits > 0 ? 'hit' : 'none'
+  const description = reach === 'read'
+    ? 'READ BELOW SHARED_BUFFERS'
+    : reach === 'hit'
+      ? 'ALL HIT IN SHARED_BUFFERS'
+      : 'NO SHARED-BUFFER ACCESSES REPORTED'
+  return {
+    reach,
+    text: `P MEASURED · HIT ${sharedHits} · READ ${sharedReads}`
+      + ` · ${description}`,
+  }
+}
+
 const STATEMENT_STAGE_SPECS = Object.freeze([
   Object.freeze({
     id: 'client',

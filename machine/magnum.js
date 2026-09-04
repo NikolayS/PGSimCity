@@ -1,6 +1,7 @@
 import {
   ARCHITECTURE_LAYOUT as layout,
   activeStatementStageIndex,
+  bufferAccessSummary,
   createStatementReplay,
   nextStatementStageIndex,
 } from './architecture.js'
@@ -3007,12 +3008,9 @@ function updatePostgresUi() {
   if (statement.status === 'measuring') {
     measurementLabel.textContent = 'P MEASURING EXPLAIN (ANALYZE, BUFFERS)…'
   } else if (postgres.plan) {
-    const buffers = postgres.plan.buffers
-    const hasRead = buffers.sharedReads > 0
-    postgresMeasurement.dataset.reach = hasRead ? 'read' : 'hit'
-    measurementLabel.textContent =
-      `P MEASURED · HIT ${buffers.sharedHits} · READ ${buffers.sharedReads}`
-      + ` · ${hasRead ? 'READ BELOW SHARED_BUFFERS' : 'ALL HIT IN SHARED_BUFFERS'}`
+    const access = bufferAccessSummary(postgres.plan.buffers)
+    postgresMeasurement.dataset.reach = access.reach
+    measurementLabel.textContent = access.text
   } else if (postgres.report) {
     measurementLabel.textContent = postgres.report.error
       ? 'P ERROR · QUERY ARM IDLE'
@@ -3583,9 +3581,7 @@ window.MAGNUM = Object.freeze({
           ? 'model'
           : postgres.plan === null
             ? 'idle'
-            : postgres.plan.buffers.sharedReads > 0
-              ? 'read'
-              : 'hit',
+            : bufferAccessSummary(postgres.plan.buffers).reach,
       timing: postgres.timing,
       error: postgres.report?.error ?? postgres.initError,
     },
