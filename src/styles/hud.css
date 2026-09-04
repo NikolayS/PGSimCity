@@ -1270,7 +1270,7 @@ body.pg-walk .hud-right > .hud-sep,
 body.pg-walk .hud-view-panel,
 body.pg-walk .hud-transport > :not(.hud-transport__dock),
 body.pg-walk .hud-transport__dock > :not(.hud-tools),
-body.pg-walk .hud-tools > :not(.hud-walk) {
+body.pg-walk .hud-tools > :not(.hud-walk):not(.hud-export) {
   display: none;
 }
 
