@@ -237,6 +237,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
       el('h3', { text: 'Two-case operations practice' }), campaignProgress, otherCase,
       el('p', { text: 'Objective: establish the cause, respect the owner’s requirement, then verify cleanup. These local completion observations are not proof of learning. A new case clears the notebook and uses the current city state.' })), disclosure),
   )
+
   function positionPanel(): void {
     if (!opened) return
     const bottom = document.getElementById('hud-top')?.getBoundingClientRect().bottom ?? 0

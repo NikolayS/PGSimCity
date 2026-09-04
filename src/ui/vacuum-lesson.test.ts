@@ -109,6 +109,17 @@ describe('vacuum lesson in the live model', () => {
     expect(f.sim.state.scenario).toBeNull()
   })
 
+  it('only exposes lesson claims and disclosures while their panel is open', () => {
+    const f = fixture()
+    expect(document.querySelector('[data-disclosure="vacuum-model"]')).toBeNull()
+    f.lesson.open()
+    expect(document.querySelector('[data-disclosure="vacuum-model"]')!.textContent).toContain('City model')
+    f.lesson.close()
+    expect(document.querySelector('[data-disclosure="vacuum-model"]')).toBeNull()
+    f.lesson.open()
+    expect(document.querySelector('[data-disclosure="vacuum-model"]')!.textContent).toContain('City model')
+  })
+
   it('positions its desktop panel below the measured wrapped toolbar', () => {
     const f = fixture()
     const hud = document.createElement('div')
