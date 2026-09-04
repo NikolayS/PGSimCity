@@ -24,14 +24,14 @@ import { createSim } from '../sim/model'
 import { createIncidentReplay } from '../sim/replay'
 import { readIncidentHandoff } from '../core/incident-handoff'
 import type { IncidentContext } from '../core/incident-handoff'
-import { incidentCitySelection, showIncidentError, transferIncident } from '../ui/incident-navigation'
+import { incidentCitySelection, incidentDiagnosticCaption, showIncidentError, transferIncident } from '../ui/incident-navigation'
 import { SCENARIOS } from '../sim/scenarios'
 import { DEFAULT_KNOBS } from '../core/types'
 import type { Knobs } from '../core/types'
 import { NO_EA_CONTENT, TRADEMARK_NOTICE } from '../ui/legal'
 import { el, setText } from '../ui/uikit'
 import { fmtNum, reduceMotion } from '../core/util'
-import { simulationAnimationDelta } from '../core/timebase'
+import { createFrameTimebase } from '../core/timebase'
 import { cityComponentHref } from '../core/city-route'
 
 import { BY_ID, CATALOG, CATALOG_SUBSYSTEMS, VERSIONS } from './catalog'
@@ -949,10 +949,10 @@ function stagedBanner(sc: Extract<Screen, { kind: 'console' }>): HTMLElement {
   return el(
     'div',
     { class: 'staged' },
-    el('span', { class: 'staged__k', text: 'STAGED' }),
-    el('span', { class: 'staged__t', text: def ? `${def.name} — the model is running this configuration so you can read it live. Every knob on the page is still yours.` : 'free running' }),
+    el('span', { class: 'staged__k', text: linkedIncident ? 'LINKED INCIDENT' : 'STAGED' }),
+    el('span', { class: 'staged__t', text: incidentDiagnosticCaption(linkedIncident, def?.name) }),
     sc.trail.length ? backBtn : null,
-    clear,
+    linkedIncident ? null : clear,
     home,
   )
 }
@@ -1118,16 +1118,16 @@ function render(): void {
 let last = performance.now()
 let vitalT = 0
 let dataT = 0
+const frameTimebase = createFrameTimebase(sim.update)
 
 function frame(now: number): void {
   const dt = Math.min(0.1, (now - last) / 1000)
   last = now
-  const modelDt = simulationAnimationDelta(
+  frameTimebase.advance(
     dt,
     sim.state.knobs.paused,
     sim.state.knobs.timeScale,
   )
-  if (modelDt > 0) sim.update(modelDt)
   coll.sample()
   flowView?.update()
 
@@ -1147,6 +1147,7 @@ function frame(now: number): void {
 installCityEscape(() => returnToCity())
 
 window.addEventListener('keydown', (e) => {
+  if (!navigationReady) return
   if (e.key !== ' ') return
   if (
     e.target instanceof HTMLElement
@@ -1161,9 +1162,11 @@ window.addEventListener('keydown', (e) => {
  * page about statistics whose first impression is a row of zeros has already
  * lost the argument. Start it under an ordinary OLTP load instead. */
 async function boot(): Promise<void> {
+  root!.inert = true
   if (incoming.kind === 'error') {
     root!.replaceChildren()
     showIncidentError(incoming.message, root!)
+    root!.inert = false
     return
   }
   if (incoming.kind === 'ready') {
@@ -1186,6 +1189,7 @@ async function boot(): Promise<void> {
     } catch (error) {
       root!.replaceChildren()
       showIncidentError(error instanceof Error ? error.message : 'Incident reconstruction failed', root!)
+      root!.inert = false
       return
     }
   } else {
@@ -1197,6 +1201,7 @@ async function boot(): Promise<void> {
   render()
   last = performance.now()
   navigationReady = true
+  root!.inert = false
   requestAnimationFrame(frame)
 }
 void boot()
