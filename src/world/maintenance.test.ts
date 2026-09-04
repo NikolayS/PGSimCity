@@ -1,6 +1,13 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import * as THREE from 'three'
 
-import { CKPT_MASS } from './maintenance'
+import { createBus } from '../core/bus'
+import { createTheme } from '../core/theme'
+import type { ComponentDef } from '../core/types'
+import { createSim } from '../sim/model'
+import { installTestDom } from '../../test/dom'
+import { vacBayPos } from './layout'
+import { CKPT_MASS, VACUUM_DOCKS, VACUUM_ROBOT_BODY, createMaintenance } from './maintenance'
 
 type Box = readonly [number, number, number, number, number, number]
 
@@ -106,5 +113,125 @@ describe('the checkpointer hall silhouette', () => {
       const proud = Math.max(z1(p as Box) - z1(hall), z0(hall) - z0(p as Box))
       expect(proud).toBeGreaterThan(0.2)
     }
+  })
+})
+
+describe('robot vacuum service station', () => {
+  const dispose: Array<() => void> = []
+  afterEach(() => {
+    while (dispose.length) dispose.pop()!()
+  })
+
+  function fixture() {
+    installTestDom({ canvas2d: true })
+    const bus = createBus()
+    const sim = createSim(bus)
+    const theme = createTheme()
+    const components = new Map<string, ComponentDef>()
+    const module = createMaintenance({
+      scene: new THREE.Scene(),
+      camera: new THREE.PerspectiveCamera(),
+      bus,
+      sim: sim.state,
+      theme,
+      quality: { level: 'high', pixelRatio: 1, bloom: true, shadows: true, maxParticles: 1, maxLabels: 1, antialias: true },
+      register: (component) => components.set(component.id, component),
+      flow: () => {},
+    })
+    dispose.push(() => {
+      module.dispose?.()
+      theme.dispose()
+    })
+    module.update(1 / 60, sim.state, 0)
+    return { module, sim, components }
+  }
+
+  it('fits a low circular chassis on each dock tray with an open east exit', () => {
+    const radius = Math.max(...VACUUM_ROBOT_BODY.map((part) => Math.max(part[3], part[5]) / 2))
+    const height = Math.max(...VACUUM_ROBOT_BODY.map((part) => y1(part)))
+    expect(height / (radius * 2)).toBeLessThan(0.4)
+
+    for (const [slot, dock] of VACUUM_DOCKS.entries()) {
+      const bay = vacBayPos(slot)
+      expect(dock.center).toEqual([bay[0] - 4, bay[2]])
+      const [x, z] = dock.center
+      expect(x0(dock.tray)).toBeLessThan(x - radius)
+      expect(x1(dock.tray)).toBeGreaterThan(x + radius)
+      expect(z0(dock.tray)).toBeLessThan(z - radius)
+      expect(z1(dock.tray)).toBeGreaterThan(z + radius)
+      expect(x1(dock.housing)).toBeLessThan(x - radius - 0.2)
+      expect(y1(dock.housing)).toBeGreaterThan(height * 3)
+      expect(x0(dock.housing)).toBeGreaterThanOrEqual(x0(dock.tray))
+    }
+  })
+
+  it('draws the worker as a disc and keeps dock architecture visible at city distance', () => {
+    const { module, components } = fixture()
+    const worker = components.get('autovac.worker.0')!.object
+    const body = new THREE.Box3().setFromObject(worker)
+    const size = body.getSize(new THREE.Vector3())
+    expect(size.x / size.z).toBeCloseTo(1, 1)
+    expect(size.y / size.x).toBeLessThan(0.4)
+
+    module.setDetail?.(0)
+    const dock = module.group.getObjectByName('autovac.docks.housing')!
+    expect(dock.visible).toBe(true)
+    expect(new THREE.Box3().setFromObject(dock).getSize(new THREE.Vector3()).y).toBeGreaterThan(10)
+  })
+
+  it('uses the measured shells for geometry and collision without closing the exit', () => {
+    const { module } = fixture()
+    const housing = module.group.getObjectByName('autovac.docks.housing') as THREE.InstancedMesh
+    const collisions = module.group.userData.collisionBoxes as THREE.Box3[]
+    housing.geometry.computeBoundingBox()
+    const transform = new THREE.Matrix4()
+    for (const [slot, dock] of VACUUM_DOCKS.entries()) {
+      housing.getMatrixAt(slot, transform)
+      const bounds = housing.geometry.boundingBox!.clone().applyMatrix4(transform)
+      const [x, y, z, width, height, depth] = dock.housing
+      expect(bounds.min.x).toBeCloseTo(x - width / 2, 4)
+      expect(bounds.max.y).toBeCloseTo(y + height / 2, 4)
+      expect(bounds.max.z).toBeCloseTo(z + depth / 2, 4)
+      expect(collisions.some((box) => box.containsPoint(new THREE.Vector3(x, y, z)))).toBe(true)
+      for (let dx = 0; dx <= 8; dx += 2) {
+        const exit = new THREE.Vector3(dock.center[0] + dx, 2, dock.center[1])
+        expect(collisions.some((box) => box.containsPoint(exit))).toBe(false)
+      }
+    }
+  })
+
+  it('visits the heap even when xmin prevents collection and returns to its existing bay', () => {
+    const { module, sim, components } = fixture()
+    const worker = sim.state.autovac.workers[0]
+    const focus = components.get('autovac.worker.0')!.focus!.target
+    const originalBay = [...focus]
+    const tablesBefore = JSON.stringify(sim.state.tables)
+    worker.active = true
+    worker.table = 0
+    worker.phase = 'travel'
+    worker.travel = 0.6
+    worker.stalledByHorizon = true
+    for (let frame = 0; frame < 30; frame++) module.update(1 / 30, sim.state, frame / 30)
+    expect(focus[0]).toBeGreaterThan(originalBay[0] + 20)
+
+    worker.phase = 'scan_heap'
+    worker.progress = 0.5
+    for (let frame = 0; frame < 30; frame++) module.update(1 / 30, sim.state, 1 + frame / 30)
+    const lamps = module.group.getObjectByName('autovac.workers.indicators') as THREE.InstancedMesh
+    const matrix = new THREE.Matrix4()
+    lamps.getMatrixAt(0, matrix)
+    expect(new THREE.Vector3().setFromMatrixScale(matrix).x).toBeLessThan(0.1)
+    expect(components.get('autovac.worker.0')!.readout!(sim.state)).toContain('0 of')
+
+    worker.phase = 'return'
+    worker.progress = 1
+    module.update(0.25, sim.state, 3)
+    worker.active = false
+    worker.phase = 'idle'
+    worker.stalledByHorizon = false
+    for (let frame = 0; frame < 180; frame++) module.update(1 / 30, sim.state, 3 + frame / 30)
+    expect(focus[0]).toBeCloseTo(originalBay[0], 1)
+    expect(focus[2]).toBeCloseTo(originalBay[2], 1)
+    expect(JSON.stringify(sim.state.tables)).toBe(tablesBefore)
   })
 })
