@@ -305,7 +305,9 @@ async function boot(): Promise<void> {
   })
   const vacuumLesson = createVacuumLesson(uiCtx, {
     onProgress: ({ event, mode }) => trackVacuumLessonProgress(analytics, { event, mode }),
+    isReplaying: () => replay.status.seeking,
   })
+  const stopLessonReplay = replay.onRestored(() => vacuumLesson.rebind())
   const presentation = createPresentationExport(uiCtx, gfx)
   const replayPanel = createReplayPanel(uiCtx, replay)
   const ui: UiModule[] = [
@@ -556,6 +558,7 @@ async function boot(): Promise<void> {
     offAudioToggle()
     stopCityComponentRoutes()
     stopLessonRoutes()
+    stopLessonReplay()
     stopAnalytics()
     analytics.dispose()
     timer.disconnect()
