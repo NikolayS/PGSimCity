@@ -340,7 +340,7 @@ function vitalHistory(key: VitalKey, s: SimState): number[] {
  * FACTORY
  * ========================================================================*/
 
-export function createHud(ctx: UiContext): UiModule {
+export function createHud(ctx: UiContext, options: { onReplay?: () => void } = {}): UiModule {
   const bus = ctx.bus
   const looseBus = bus
   const sim = ctx.sim
@@ -494,6 +494,11 @@ export function createHud(ctx: UiContext): UiModule {
     icon('tour', 15),
     el('span', { text: 'Tour' }),
   )
+  const replayBtn = options.onReplay ? el('button', {
+    class: 'pg-btn hud-tool hud-replay', type: 'button', text: 'Replay',
+    title: 'Save a checkpoint, rewind, and compare model decisions',
+    'aria-label': 'Rewind and compare model incidents', on: { click: options.onReplay },
+  }) : null
   const traceBtn = el(
     'button',
     {
@@ -656,6 +661,7 @@ export function createHud(ctx: UiContext): UiModule {
     legalBtn,
     viewBtn,
     tourBtn,
+    replayBtn,
     traceBtn,
     diagnoseLink,
     walkBtn,
