@@ -56,6 +56,22 @@ afterEach(() => {
 })
 
 describe('vacuum lesson in the live model', () => {
+  it('retains ownership of its original pause state across controller timing changes', async () => {
+    const f = fixture('high', { advanceUntil: async () => {
+      f.sim.setKnob('paused', true)
+      f.sim.setKnob('paused', false)
+      return 'condition'
+    } })
+    f.sim.setKnob('paused', true)
+    f.lesson.open()
+    investigate(f)
+    button('[data-vacuum-action="terminate"]').click()
+    button('[data-vacuum-advance]').click()
+    await Promise.resolve()
+    f.lesson.close()
+    expect(f.sim.state.knobs.paused).toBe(true)
+  })
+
   it('requires explicit recovery verification even after an advancement callback reports completion', async () => {
     const advanceUntil = vi.fn(async () => 'condition' as const)
     const f = fixture('high', { advanceUntil })
