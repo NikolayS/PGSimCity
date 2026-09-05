@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createBus } from '../core/bus'
 import { createSim } from '../sim/model'
 import { installTestDom } from '../../test/dom'
@@ -56,6 +56,40 @@ afterEach(() => {
 })
 
 describe('vacuum lesson in the live model', () => {
+  it('requires explicit recovery verification even after an advancement callback reports completion', async () => {
+    const advanceUntil = vi.fn(async () => 'condition' as const)
+    const f = fixture('high', { advanceUntil })
+    f.lesson.open('challenge')
+    investigate(f)
+    button('[data-vacuum-action="terminate"]').click()
+    const advance = button('[data-vacuum-advance]')
+    expect(advance.hidden).toBe(false)
+    advance.click()
+    await Promise.resolve()
+    expect(advanceUntil).toHaveBeenCalledTimes(1)
+    expect(document.querySelector<HTMLElement>('.vacuum-lesson')!.dataset.phase).toBe('observing')
+    expect(button('[data-vacuum-verify]').hidden).toBe(false)
+    expect(document.querySelector('[data-vacuum-advance-disclosure]')!.textContent).toContain('1/30')
+  })
+
+  it('cancels user-started advancement before closing its owned scenario', async () => {
+    let signal: AbortSignal | undefined
+    const f = fixture('high', { advanceUntil: (_condition, options) => {
+      signal = options.signal
+      return new Promise((resolve) => signal!.addEventListener('abort', () => resolve('cancelled')))
+    } })
+    f.lesson.open()
+    investigate(f)
+    button('[data-vacuum-action="terminate"]').click()
+    button('[data-vacuum-advance]').click()
+    expect(signal?.aborted).toBe(false)
+    f.lesson.close()
+    expect(signal?.aborted).toBe(true)
+    expect(f.sim.state.scenario).toBeNull()
+    await Promise.resolve()
+    expect(f.lesson.isOpen()).toBe(false)
+  })
+
   it('changes mode without losing evidence and cannot hide previously used guidance', () => {
     const f = fixture()
     f.lesson.open('guided')

@@ -33,6 +33,11 @@ export interface VacuumLessonProgress {
 export interface VacuumLessonOptions {
   onProgress?: (progress: VacuumLessonProgress) => void
   isReplaying?: () => boolean
+  /** The replay controller records each fixed step and releases ownership synchronously on abort. */
+  advanceUntil?: (
+    condition: () => boolean,
+    options: { maxTicks: number; signal: AbortSignal },
+  ) => Promise<'condition' | 'cancelled' | 'limit'>
 }
 
 const TABLE = 'storage.table.sessions'
@@ -65,6 +70,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
   try { localProgress = parseProgress(window.localStorage.getItem('pgsimcity.lessons.v1')) } catch { /* Storage is optional. */ }
   let attempt: LessonAttempt = { lesson: 'vacuum-blockade', initialMode: 'guided', firstEncounter: true, usedHints: true }
   let recoveryRecorded = false
+  let activeAdvance: AbortController | null = null
   let selected: VacuumEvidenceId = 'table'
   let lastFocus: HTMLElement | null = null
   let savedPaused = false
@@ -165,8 +171,21 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     type: 'button', class: 'pg-btn vacuum-lesson__primary', text: 'Check whether cleanup resumed',
     data: { vacuumVerify: '' }, on: { click: verify },
   })
+  const advanceButton = el('button', {
+    type: 'button', class: 'pg-btn', text: 'Advance model until cleanup', data: { vacuumAdvance: '' },
+    on: { click: () => { void advanceToCleanup() } },
+  })
+  const stopAdvanceButton = el('button', {
+    type: 'button', class: 'pg-btn', text: 'Stop advancing', data: { vacuumAdvanceStop: '' },
+    on: { click: () => activeAdvance?.abort() },
+  })
+  const advanceDisclosure = el('p', {
+    class: 'vacuum-lesson__source', data: { vacuumAdvanceDisclosure: '' },
+    text: 'Advances model time in recorded 1/30-second steps, without changing workload or vacuum speed. You can stop it. Cleanup must occur in the model; this does not verify the lesson for you.',
+  })
   const observation = el('section', { class: 'vacuum-lesson__observation' },
-    el('h3', { text: 'Verify the outcome' }), result, resourceOutcome, recoverButton, verifyButton,
+    el('h3', { text: 'Verify the outcome' }), result, resourceOutcome, recoverButton,
+    advanceButton, stopAdvanceButton, advanceDisclosure, verifyButton,
   )
   const pauseButton = el('button', {
     type: 'button', class: 'pg-btn', data: { vacuumPause: '' }, on: { click: () => {
@@ -379,6 +398,36 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     render()
   }
 
+  async function advanceToCleanup(): Promise<void> {
+    if (!options.advanceUntil || activeAdvance || state.phase !== 'observing' || advanceButton.disabled) return
+    const controller = new AbortController()
+    const decision = ownedDecision
+    const startedAt = ctx.sim.state.t
+    activeAdvance = controller
+    announce('Advancing recorded model time. The workload and vacuum pace are unchanged; use Stop advancing to return to normal playback.')
+    render()
+    try {
+      const outcome = await options.advanceUntil(
+        () => ctx.sim.state.scenarioDecision !== decision || decision?.phase === 'recovered',
+        { maxTicks: 54_000, signal: controller.signal },
+      )
+      if (!opened || ownedDecision !== decision) return
+      if (controller.signal.aborted || outcome === 'cancelled') {
+        announce('Model advancement stopped. Your evidence remains available; no recovery was credited.')
+        return
+      }
+      const elapsed = Math.max(0, ctx.sim.state.t - startedAt).toFixed(1)
+      announce(outcome === 'limit'
+        ? `Advanced ${elapsed} model seconds and reached the recording limit. No recovery has been credited; inspect the current evidence.`
+        : `Advanced ${elapsed} model seconds. Inspect the actual cleanup result, then choose Check whether cleanup resumed to verify it.`)
+    } catch {
+      if (opened && ownedDecision === decision) announce('Model advancement stopped. No recovery was credited; normal playback and the evidence notebook remain available.')
+    } finally {
+      if (activeAdvance === controller) activeAdvance = null
+      if (opened && ownedDecision === decision) refresh()
+    }
+  }
+
   function render(): void {
     panel.dataset.phase = state.phase
     const count = VACUUM_EVIDENCE.filter((id) => state.evidence[id]).length
@@ -426,6 +475,12 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
       : '')
     recoverButton.hidden = state.lesson === 'vacuum-report' || state.action !== 'wait' || !reading.pinned || state.phase === 'complete'
     verifyButton.hidden = state.phase === 'complete'
+    verifyButton.disabled = !!activeAdvance
+    advanceButton.hidden = !options.advanceUntil || state.phase === 'complete'
+    advanceButton.disabled = !!activeAdvance || reading.reportStatus === 'interrupted'
+      || (reading.pinned && state.lesson !== 'vacuum-report')
+    stopAdvanceButton.hidden = !activeAdvance
+    advanceDisclosure.hidden = !options.advanceUntil
     setText(result, reading.reportStatus === 'interrupted'
       ? `The required report was interrupted. Committed data was not lost. ${fmtNum(reading.reclaimed)} row versions reclaimed; cleanup cannot restore that report work. This attempt does not meet the owner’s requirement.`
       : state.phase === 'complete'
@@ -435,6 +490,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
         : `The old snapshot has ended. ${fmtNum(reading.reclaimed)} row versions reclaimed across modeled tables since the decision. Cleanup eligibility and actual collection are separate events.`)
     setText(pauseButton, ctx.sim.state.knobs.paused ? 'Run model' : 'Pause model')
     pauseButton.setAttribute('aria-pressed', String(ctx.sim.state.knobs.paused))
+    pauseButton.disabled = !!activeAdvance
     hintButton.hidden = state.mode === 'guided' || state.phase !== 'investigating'
     challengeButton.hidden = state.mode === 'challenge'
     retry.hidden = state.phase === 'investigating'
@@ -520,6 +576,8 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
 
   function close(stopScenario = true, restoreTiming = true): void {
     if (!opened) return
+    activeAdvance?.abort()
+    activeAdvance = null
     opened = false
     panel.hidden = true
     panel.remove()
@@ -542,7 +600,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     ctx.bus.on('scenario', () => { if (opened && !changingScenario && !options.isReplaying?.()) close(false) }),
     ctx.bus.on('sim:reset', () => { if (!options.isReplaying?.()) close(false, false) }),
     ctx.bus.on('knob', ({ key }) => {
-      if (!opened || changingTiming || options.isReplaying?.()) return
+      if (!opened || changingTiming || activeAdvance || options.isReplaying?.()) return
       if (key === 'paused') restorePaused = false
       if (key === 'timeScale') restoreTimeScale = false
     }),

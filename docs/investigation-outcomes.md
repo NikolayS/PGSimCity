@@ -41,8 +41,8 @@ path. Switching only guided/challenge mode retains the current notebook; prior
 guidance still counts as guidance used. Rewind removes evidence from the future
 and requires another recovery check, without recording duplicate completions.
 
-The replay dependency uses format version 1 and a model identity containing
-`incident-1`, the application version and the build commit SHA. Records from
+The replay dependency uses format version 2 and a model identity containing
+`incident-2`, the application version and the build commit SHA. Records from
 another build are rejected before simulation state changes, including records
 made before the report variant or post-release cleanup correction. Case links
 above are stable entry points; replay links are deliberately same-build only.
@@ -50,6 +50,16 @@ The source lesson/progression branch does not install replay by itself: the
 separate replay dependency must be integrated and its mismatch/reset tests must
 pass before replay is advertised as available. Uncommitted development changes
 are not a supported cross-build reproduction contract.
+
+Vacuum scans and index passes can take hundreds of model seconds before the
+first collection. When the replay dependency supplies advancement, the lesson
+offers **Advance model until cleanup**. This is an explicit, cancellable run of
+recorded 1/30-second updates in yielded batches. It changes neither the workload
+nor vacuum's paced throughput, and never edits relation state directly. The
+model clock advances; a short wall-clock wait is not a claim of fast PostgreSQL
+maintenance. The reader must still inspect the outcome and verify recovery.
+Version 2 records are bounded to 30 model minutes and 54,000 fixed-step ticks;
+reaching a bound reports a limit, not a successful lesson.
 
 The local-storage key `pgsimcity.lessons.v1` holds only a version and, for each
 allowlisted case, a bounded attempt count, verified-completion flag and
