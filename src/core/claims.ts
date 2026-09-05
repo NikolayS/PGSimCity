@@ -435,7 +435,7 @@ export const CLAIMS = {
   appVersion: {
     owner: 'src/core/build.ts#BUILD_LABEL',
     value: CLAIM_VALUES.appVersion,
-    surfaces: ['help:build marker', 'Diagnose:build marker', 'corrections:issue body'],
+    surfaces: ['help:build marker', 'Diagnose:build marker', 'corrections:issue body', 'presentation:exported image footer'],
   },
   moonPhase: {
     owner: 'src/core/claims.ts#CLAIM_VALUES.moonPhase',
@@ -622,7 +622,7 @@ export const CLAIMS = {
   postgresqlVersion: {
     owner: 'src/core/claims.ts#CLAIM_VALUES.postgresqlVersion',
     value: CLAIM_VALUES.postgresqlVersion,
-    surfaces: ['README:target declaration', 'city:visible teaching target', 'Machine:model teaching target', 'Diagnose:visible teaching target and catalog prose', 'tour:version-specific claims', 'docs:manual and source links'],
+    surfaces: ['README:target declaration', 'city:visible teaching target', 'Machine:model teaching target', 'Diagnose:visible teaching target and catalog prose', 'tour:version-specific claims', 'docs:manual and source links', 'presentation:exported model reference'],
     claimSurfaces: POSTGRESQL_VERSION_CLAIM_SURFACES,
   },
   pgliteVersion: {
