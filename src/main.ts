@@ -335,7 +335,7 @@ async function boot(): Promise<void> {
     createHelp(uiCtx),
     createControls(uiCtx),
     createInspector(uiCtx),
-    createTour(uiCtx),
+    createTour(uiCtx, { onInvestigate: () => vacuumLesson.open() }),
     createSearch(uiCtx),
     createCityWords(uiCtx),
     /* Right-click. The camera gave up that button when rotation moved to
