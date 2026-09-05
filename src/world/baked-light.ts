@@ -1,4 +1,6 @@
 import * as THREE from 'three'
+import { boxGeometryPair, cloneBoxGeometryPair } from '../core/beveled-box'
+import type { BoxGeometryPair } from '../core/beveled-box'
 
 import type { ColorKey } from '../core/types'
 import { BOUNCE_PALETTE_KEYS } from '../core/themes'
@@ -68,6 +70,7 @@ export function mixBoundaryColor(receiver: number, neighbour: number, weight: nu
 
 interface BakedMesh {
   mesh: THREE.Mesh<THREE.BufferGeometry, THREE.Material | THREE.Material[]>
+  geometry: THREE.BufferGeometry
   signature: number
   instanced: boolean
   count: number
@@ -106,6 +109,7 @@ export interface BakedLightInstallStats {
 interface BakedObjectData {
   pgBakeOriginalGeometry?: THREE.BufferGeometry
   pgBakeInPlace?: boolean
+  pgBakeGeometryPair?: BoxGeometryPair
 }
 
 function materialsOf(
@@ -140,10 +144,11 @@ function meshSignature(
   mesh: THREE.Mesh<THREE.BufferGeometry, THREE.Material | THREE.Material[]>,
   ordinal: number,
   count: number,
+  geometry: THREE.BufferGeometry,
 ): number {
-  const positions = mesh.geometry.getAttribute('position')?.count ?? 0
+  const positions = geometry.getAttribute('position')?.count ?? 0
   return hashSignature(
-    `${ordinal}:${mesh.name || '_'}:${mesh.geometry.type}:${count}:${positions}`,
+    `${ordinal}:${mesh.name || '_'}:${geometry.type}:${count}:${positions}`,
   )
 }
 
@@ -154,13 +159,15 @@ function bakedMeshes(root: THREE.Object3D): BakedMesh[] {
     const mesh = object as THREE.Mesh<THREE.BufferGeometry, THREE.Material | THREE.Material[]>
     if (mesh.isMesh !== true) return
     if (!materialsOf(mesh).some(surfaced)) return
+    const geometry = boxGeometryPair(mesh.geometry)?.beveled ?? mesh.geometry
     const instanced = (mesh as THREE.InstancedMesh).isInstancedMesh === true
     const count = instanced
       ? (mesh as THREE.InstancedMesh).instanceMatrix.count
-      : mesh.geometry.getAttribute('position')?.count ?? 0
+      : geometry.getAttribute('position')?.count ?? 0
     out.push({
       mesh,
-      signature: meshSignature(mesh, ordinal++, count),
+      geometry,
+      signature: meshSignature(mesh, ordinal++, count, geometry),
       instanced,
       count,
     })
@@ -223,6 +230,14 @@ function geometryByteLength(geometry: THREE.BufferGeometry): number {
 function geometryForBake(mesh: BakedMesh, mustClone: boolean): THREE.BufferGeometry {
   const geometry = mesh.mesh.geometry
   const data = mesh.mesh.userData as BakedObjectData
+  const sourcePair = boxGeometryPair(geometry)
+  if (sourcePair) {
+    data.pgBakeOriginalGeometry = geometry
+    const clone = cloneBoxGeometryPair(sourcePair.beveled)
+    data.pgBakeGeometryPair = boxGeometryPair(clone)
+    mesh.mesh.geometry = geometry === sourcePair.plain ? data.pgBakeGeometryPair!.plain : clone
+    return clone
+  }
   if (!mustClone) {
     data.pgBakeInPlace = true
     return geometry
@@ -231,6 +246,47 @@ function geometryForBake(mesh: BakedMesh, mustClone: boolean): THREE.BufferGeome
   const clone = geometry.clone()
   mesh.mesh.geometry = clone
   return clone
+}
+
+function copyBakeToQualityVariant(geometry: THREE.BufferGeometry, instanced: boolean): void {
+  const pair = boxGeometryPair(geometry)
+  if (!pair) return
+  const target = geometry === pair.plain ? pair.beveled : pair.plain
+  if (instanced) {
+    for (const name of ['pgBakeSkyA', 'pgBakeSkyB', 'pgBakeTransferA', 'pgBakeTransferB']) {
+      target.setAttribute(name, geometry.getAttribute(name))
+    }
+    return
+  }
+  const sourcePositions = geometry.getAttribute('position')
+  const sourceNormals = geometry.getAttribute('normal')
+  const targetPositions = target.getAttribute('position')
+  const targetNormals = target.getAttribute('normal')
+  const nearest = new Uint32Array(targetPositions.count)
+  // Copy the nearest same-facing corner. Packed semantic indices cannot be
+  // interpolated, and a lower-detail box has different vertex ordering/counts.
+  for (let i = 0; i < targetPositions.count; i++) {
+    let bestFacing = -Infinity, bestDistance = Infinity
+    for (let j = 0; j < sourcePositions.count; j++) {
+      const facing = targetNormals.getX(i) * sourceNormals.getX(j)
+        + targetNormals.getY(i) * sourceNormals.getY(j)
+        + targetNormals.getZ(i) * sourceNormals.getZ(j)
+      const distance = (targetPositions.getX(i) - sourcePositions.getX(j)) ** 2
+        + (targetPositions.getY(i) - sourcePositions.getY(j)) ** 2
+        + (targetPositions.getZ(i) - sourcePositions.getZ(j)) ** 2
+      if (facing > bestFacing + 1e-6 || (Math.abs(facing - bestFacing) < 1e-6 && distance < bestDistance)) {
+        bestFacing = facing
+        bestDistance = distance
+        nearest[i] = j
+      }
+    }
+  }
+  for (const name of [SKY_ATTRIBUTE, TRANSFER_ATTRIBUTE]) {
+    const source = geometry.getAttribute(name).array
+    const values = new Uint8Array(targetPositions.count)
+    for (let i = 0; i < values.length; i++) values[i] = source[nearest[i]]
+    target.setAttribute(name, new THREE.BufferAttribute(values, 1, true))
+  }
 }
 
 export function installBakedIndirect(root: THREE.Object3D): BakedLightInstallStats {
@@ -310,7 +366,7 @@ export function installBakedIndirect(root: THREE.Object3D): BakedLightInstallSta
   let geometryBytes = 0
   const geometryUse = new Map<THREE.BufferGeometry, number>()
   for (let i = 0; i < meshes.length; i++) {
-    const geometry = meshes[i].mesh.geometry
+    const geometry = meshes[i].geometry
     geometryUse.set(geometry, (geometryUse.get(geometry) ?? 0) + 1)
   }
   for (let i = 0; i < meshes.length; i++) {
@@ -318,7 +374,9 @@ export function installBakedIndirect(root: THREE.Object3D): BakedLightInstallSta
     const entry = BAKED_LIGHT_ENTRIES[i]
     const mustClone = (geometryUse.get(record.mesh.geometry) ?? 0) > 1
     const geometry = geometryForBake(record, mustClone)
-    if (mustClone) geometryBytes += geometryByteLength(geometry)
+    const qualityPair = boxGeometryPair(geometry)
+    if (qualityPair) geometryBytes += geometryByteLength(qualityPair.plain) + geometryByteLength(qualityPair.beveled)
+    else if (mustClone) geometryBytes += geometryByteLength(geometry)
     if (record.instanced) {
       geometry.setAttribute(
         `${SKY_INSTANCE_ATTRIBUTE}A`,
@@ -345,6 +403,10 @@ export function installBakedIndirect(root: THREE.Object3D): BakedLightInstallSta
       )
       vertices += entry.count
     }
+    copyBakeToQualityVariant(geometry, record.instanced)
+    if (qualityPair && !record.instanced) {
+      geometryBytes += qualityPair.plain.getAttribute('position').count * VERTEX_STRIDE
+    }
   }
 
   return {
@@ -367,7 +429,11 @@ export function disposeBakedIndirect(root: THREE.Object3D): void {
     const data = mesh.userData as BakedObjectData
     const original = data.pgBakeOriginalGeometry
     if (original) {
-      mesh.geometry.dispose()
+      if (data.pgBakeGeometryPair) {
+        data.pgBakeGeometryPair.plain.dispose()
+        data.pgBakeGeometryPair.beveled.dispose()
+        delete data.pgBakeGeometryPair
+      } else mesh.geometry.dispose()
       mesh.geometry = original
       delete data.pgBakeOriginalGeometry
     } else if (data.pgBakeInPlace) {
@@ -645,13 +711,13 @@ export function bakeSceneIndirect(root: THREE.Object3D): BakedLightPayload {
     })
     byteLength += bytes.byteLength
 
-    mesh.geometry.computeBoundingBox()
-    if (record.instanced && mesh.geometry.boundingBox) {
+    record.geometry.computeBoundingBox()
+    if (record.instanced && record.geometry.boundingBox) {
       const instanced = mesh as THREE.InstancedMesh
       for (let instance = 0; instance < record.count; instance++) {
         instanced.getMatrixAt(instance, local)
         world.multiplyMatrices(mesh.matrixWorld, local)
-        box.copy(mesh.geometry.boundingBox).applyMatrix4(world)
+        box.copy(record.geometry.boundingBox).applyMatrix4(world)
         box.getCenter(point)
         const centerX = point.x
         const centerY = point.y
@@ -680,14 +746,14 @@ export function bakeSceneIndirect(root: THREE.Object3D): BakedLightPayload {
       }
       instances += record.count
     } else {
-      const positions = mesh.geometry.getAttribute('position')
-      const normals = mesh.geometry.getAttribute('normal')
+      const positions = record.geometry.getAttribute('position')
+      const normals = record.geometry.getAttribute('normal')
       normalMatrix.getNormalMatrix(mesh.matrixWorld)
       for (let vertex = 0; vertex < record.count; vertex++) {
         point.fromBufferAttribute(positions, vertex).applyMatrix4(mesh.matrixWorld)
         if (normals) normal.fromBufferAttribute(normals, vertex).applyNormalMatrix(normalMatrix).normalize()
         else normal.set(0, 1, 0)
-        let direction = 2
+        let direction = normal.y >= 0 ? 2 : 3
         let magnitude = normal.y
         if (Math.abs(normal.x) > Math.abs(magnitude)) {
           direction = normal.x >= 0 ? 0 : 1

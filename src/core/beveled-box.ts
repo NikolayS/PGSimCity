@@ -9,13 +9,29 @@ export const INSTANCED_BOX_BEVEL_RATIO = 0.003
 export const BOX_TRIANGLES = 12
 export const BEVELED_BOX_TRIANGLES = 44
 
-interface BoxGeometryPair {
+export interface BoxGeometryPair {
   plain: THREE.BoxGeometry
   beveled: THREE.BufferGeometry
 }
 
 interface BoxGeometryData {
   pgBoxPair?: BoxGeometryPair
+}
+
+export function boxGeometryPair(geometry: THREE.BufferGeometry): BoxGeometryPair | undefined {
+  return (geometry.userData as BoxGeometryData).pgBoxPair
+}
+
+/** Per-mesh attributes must not be attached to the theme's shared quality variants. */
+export function cloneBoxGeometryPair(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
+  const source = boxGeometryPair(geometry)
+  if (!source) return geometry.clone()
+  const pair = { plain: source.plain.clone(), beveled: source.beveled.clone() }
+  // BufferGeometry.clone() does not preserve the procedural BoxGeometry brand.
+  Object.defineProperty(pair.beveled, 'type', { value: source.beveled.type })
+  pair.plain.userData = { ...source.plain.userData, pgBoxPair: pair }
+  pair.beveled.userData = { ...source.beveled.userData, pgBoxPair: pair }
+  return geometry === source.plain ? pair.plain : pair.beveled
 }
 
 export interface BoxBevelStats {
