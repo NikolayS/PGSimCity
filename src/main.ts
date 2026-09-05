@@ -3,7 +3,8 @@ import * as THREE from 'three'
 import './styles/tokens.css'
 import './styles/ui.css'
 
-import { startAnalytics } from './core/analytics'
+import { startAnalytics, trackVacuumLessonProgress } from './core/analytics'
+import { installLessonRoutes } from './core/lesson-route'
 import { createBus } from './core/bus'
 import { CLAIM_VALUES } from './core/claims'
 import { createCorrectionPath, displayedClaim, protectCorrectionLink } from './core/corrections'
@@ -63,6 +64,7 @@ import { createHelp } from './ui/help'
 import { createControls } from './ui/controls'
 import { createInspector } from './ui/panel'
 import { createTour } from './ui/tour'
+import { createVacuumLesson } from './ui/vacuum-lesson'
 import { createSearch } from './ui/search'
 import { createCityWords } from './ui/city-words'
 import { createTouchpad } from './ui/touchpad'
@@ -297,8 +299,12 @@ async function boot(): Promise<void> {
     door: controlCenterWorld.door,
     hands,
   })
+  const vacuumLesson = createVacuumLesson(uiCtx, {
+    onProgress: ({ event, mode }) => trackVacuumLessonProgress(analytics, { event, mode }),
+  })
   const ui: UiModule[] = [
-    createHud(uiCtx),
+    vacuumLesson,
+    createHud(uiCtx, { onInvestigate: () => vacuumLesson.open() }),
     createTouchpad({ bus, walk }),
     controlCenter,
     createWalkUpInteraction({
@@ -329,7 +335,7 @@ async function boot(): Promise<void> {
     createHelp(uiCtx),
     createControls(uiCtx),
     createInspector(uiCtx),
-    createTour(uiCtx),
+    createTour(uiCtx, { onInvestigate: () => vacuumLesson.open() }),
     createSearch(uiCtx),
     createCityWords(uiCtx),
     /* Right-click. The camera gave up that button when rotation moved to
@@ -515,6 +521,9 @@ async function boot(): Promise<void> {
     location: window.location,
     target: window,
   })
+  const stopLessonRoutes = installLessonRoutes({
+    target: window, location: window.location, open: (mode) => vacuumLesson.open(mode),
+  })
   frame()
 
   finishBoot(bootSurface)
@@ -534,6 +543,7 @@ async function boot(): Promise<void> {
     window.removeEventListener('keydown', resumePreferredAudio, true)
     offAudioToggle()
     stopCityComponentRoutes()
+    stopLessonRoutes()
     stopAnalytics()
     analytics.dispose()
     timer.disconnect()
