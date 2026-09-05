@@ -18,6 +18,8 @@ it('gives walk export an opaque, readable tap target in both themes', () => {
   expect(rule).toMatch(/background:\s*var\(--bg-panel-solid\)/)
   expect(rule).toMatch(/color:\s*var\(--ink\)/)
   expect(rule).toMatch(/min-height:\s*var\(--tap\)/)
+  const header = css.match(/body\.pg-walk \.hud-bar\s*\{([^}]+)\}/)?.[1] ?? ''
+  expect(header).toMatch(/min-height:\s*var\(--tap\)/)
   const tokens = readFileSync(new URL('../src/styles/tokens.css', import.meta.url), 'utf8')
   const values = (token: string) => Array.from(tokens.matchAll(new RegExp(`--${token}:\\s*(#[\\da-f]{6})`, 'gi')), (match) => match[1])
   function luminance(hex: string): number {
