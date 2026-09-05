@@ -34,9 +34,9 @@ export const VACUUM_RECLAIM_PLATE_LINES = CLAIM_VALUES.vacuumReclaim.plateLines
  *   STATS RELAY    a relay, not a collector — since PG15 the cumulative stats
  *                  live in shared memory, over in the plaza.
  *
- * The lesson the whole yard is built around: a worker blocked by an old xmin
- * horizon drives the entire route, burns the entire I/O, and comes back with an
- * empty hopper. Turn on `longRunningXact` and watch AV-0 do exactly that.
+ * An old xmin horizon protects newer row versions, not necessarily every dead
+ * version. Workers still scan and may remove eligible older versions; the
+ * collector follows actual removal, including an empty pass when none qualify.
  * ==========================================================================*/
 
 /* --- module scratch: update() allocates nothing ---------------------------- */
@@ -91,6 +91,25 @@ const ROAD_Y = YARD + 0.14
 const SODIUM = mixHex(COLOR.vacuum, 0xffc07a, 0.34)
 /** autovacuum_naptime, as compressed by the simulation. */
 const NAPTIME = 12
+
+/** Disc layers, in worker-local coordinates; the collector never enlarges the shell. */
+export const VACUUM_ROBOT_BODY: BoxSpec[] = [
+  [0, 0.65, 0, 6.8, 0.6, 6.8],
+  [0, 1.1, 0, 7.2, 0.5, 7.2],
+  [0, 1.55, 0, 6.9, 0.4, 6.9],
+  [-0.6, 2.0, 0, 2.0, 0.5, 2.0],
+]
+
+/** Shared bay anchors leave the east side clear for the existing haul road. */
+export const VACUUM_DOCKS = Array.from({ length: N_VAC_WORKERS }, (_, i) => {
+  const bay = vacBayPos(i)
+  const x = bay[0] - 4, z = bay[2]
+  return {
+    center: [x, z] as const,
+    tray: [x - 3.8, 0.82, z, 16, 0.24, 11] as BoxSpec,
+    housing: [x - 8, 8.0, z, 7.2, 14, 10] as BoxSpec,
+  }
+})
 
 /**
  * The checkpointer's engine hall, as a massing table.
@@ -488,6 +507,7 @@ interface Truck {
   hopper: number
   scoop: number
   carry: number
+  collected: number
   spin: number
   tilt: number
   homing: number
@@ -528,6 +548,27 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
 
   const unitBox = theme.box(1, 1, 1)
   const unitCyl = theme.cyl(0.5, 0.5, 1, 14)
+  const robotDisc = theme.cyl(0.5, 0.5, 1, 32)
+  // Rounded, upright appliance shells remain recognizable without fine roof detail.
+  const shellShape = new THREE.Shape()
+  shellShape.moveTo(-0.32, -0.5)
+  shellShape.lineTo(0.32, -0.5)
+  shellShape.quadraticCurveTo(0.5, -0.5, 0.5, -0.32)
+  shellShape.lineTo(0.5, 0.32)
+  shellShape.quadraticCurveTo(0.5, 0.5, 0.32, 0.5)
+  shellShape.lineTo(-0.32, 0.5)
+  shellShape.quadraticCurveTo(-0.5, 0.5, -0.5, 0.32)
+  shellShape.lineTo(-0.5, -0.32)
+  shellShape.quadraticCurveTo(-0.5, -0.5, -0.32, -0.5)
+  const shellGeo = own(new THREE.ExtrudeGeometry(shellShape, {
+    depth: 1, bevelEnabled: true, bevelThickness: 0.025, bevelSize: 0.025,
+    bevelSegments: 2, steps: 1, curveSegments: 5,
+  }))
+  shellGeo.rotateX(Math.PI / 2)
+  shellGeo.center()
+  shellGeo.computeBoundingBox()
+  shellGeo.boundingBox!.getSize(_sc)
+  shellGeo.scale(1 / _sc.x, 1 / _sc.y, 1 / _sc.z)
   const domeGeo = own(new THREE.SphereGeometry(0.5, 14, 8))
 
   const edgeVerts: number[] = []
@@ -812,7 +853,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   signs.plate('one lap = one clock sweep', LOOP_X, PAINT_Y + 0.02, LOOP_Z, 'up', 1.4, COLOR.bgwriter, 0.3)
 
   /* =======================================================================
-   * 3. AUTOVACUUM LAUNCHER — the control tower.
+   * 3. AUTOVACUUM LAUNCHER — the worker base station.
    *
    *    Every naptime it wakes, compares each table's dead tuples against
    *    min(max_threshold, threshold + scale_factor * reltuples), and forks a
@@ -827,28 +868,22 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   const AX = AL[0] // -196
   const AZ = AL[2] //    0
 
-  // No apron here: the depot's slab already runs under the tower's footprint.
+  // No apron here: the depot slab already runs under the launcher's footprint.
   const launchStruct = batch(gLaunch, unitBox, matStruct, [
     [AX, 2.6, AZ, 18, 4, 18],
     [AX, 4.9, AZ, 19.4, 0.7, 19.4],
   ], true)
 
-  const launchCyl = batch(gLaunch, unitCyl, matHeavy, [
-    [AX, 18, AZ, 7.4, 26, 7.4], // shaft
-    [AX, 32.6, AZ, 13, 4.6, 13], // cab
-    [AX, 35.4, AZ, 14.4, 1.0, 14.4], // cab roof
-    [AX, 36.6, AZ, 2.0, 1.4, 2.0], // scanner bearing
+  const launchCyl = batch(gLaunch, shellGeo, matHeavy, [
+    [AX, 17, AZ, 16, 25, 17], // rounded upright control cabinet
+    [AX, 29.7, AZ, 13.6, 0.5, 14.6], // recessed top lid
   ])
 
   const launchDetailMesh = batch(gLaunch, unitBox, matDeep, [
-    [AX, 30.0, AZ, 15, 0.5, 15], // gallery
-    [AX, 31.0, AZ - 7.4, 15, 1.0, 0.12],
-    [AX, 31.0, AZ + 7.4, 15, 1.0, 0.12],
-    [AX - 7.4, 31.0, AZ, 0.12, 1.0, 15],
-    [AX + 7.4, 31.0, AZ, 0.12, 1.0, 15],
-    [AX + 4.4, 17, AZ, 1.2, 24, 1.2], // ladder
-    [AX, 12, AZ, 8.4, 0.4, 8.4], // shaft collars
-    [AX, 24, AZ, 8.4, 0.4, 8.4],
+    [AX + 8.05, 12, AZ, 0.2, 11, 12], // east-facing service recess
+    [AX + 8.2, 23, AZ, 0.3, 3.8, 9], // countdown/status display backing
+    [AX, 17, AZ - 8.6, 10, 0.2, 0.2], // lid separation
+    [AX, 17, AZ + 8.6, 10, 0.2, 0.2],
   ])
 
   const GAUGE_R = 11.6
@@ -862,24 +897,24 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     ln([AX + GAUGE_R * Math.cos(a), 6.4, AZ + GAUGE_R * Math.sin(a), 1.6, 3, 1.6])
   }
   const IX_AV_CAB = launchNeon.length
-  ln([AX, 32.6, AZ - 6.5, 9, 2.4, 0.14])
-  ln([AX, 32.6, AZ + 6.5, 9, 2.4, 0.14])
-  ln([AX - 6.5, 32.6, AZ, 0.14, 2.4, 9])
-  ln([AX + 6.5, 32.6, AZ, 0.14, 2.4, 9])
+  ln([AX, 23, AZ - 8.6, 9, 0.8, 0.14])
+  ln([AX, 23, AZ + 8.6, 9, 0.8, 0.14])
+  ln([AX - 8.1, 23, AZ, 0.14, 0.8, 9])
+  ln([AX + 8.4, 23, AZ, 0.14, 0.8, 9])
   const AV_CAB_N = 4
   const IX_AV_BUSY = launchNeon.length
   for (let i = 0; i < N_VAC_WORKERS; i++) ln([AX - 8 + i * 8, 5.6, AZ + 9.4, 2.2, 0.9, 0.4])
   const IX_AV_NAP = ln([AX, 5.6, AZ - 9.4, 12, 0.7, 0.4])
-  const IX_AV_TOP = ln([AX, 38.4, AZ, 1.3, 1.3, 1.3])
+  const IX_AV_TOP = ln([AX, 30.4, AZ, 1.3, 0.4, 1.3])
   // the rotating scanner: bar, leading head, trailing lamp — placed every frame
   const IX_AV_SCAN = launchNeon.length
-  ln([AX, 37.4, AZ, 16, 0.35, 0.6])
-  ln([AX, 37.4, AZ, 1.4, 0.7, 1.0])
-  ln([AX, 37.4, AZ, 1.0, 0.5, 0.7])
+  ln([AX, 30.2, AZ, 12, 0.15, 0.3])
+  ln([AX, 30.2, AZ, 0.7, 0.2, 0.5])
+  ln([AX, 30.2, AZ, 0.5, 0.15, 0.4])
   const launchNeonMesh = neonBatch(gLaunch, launchNeon)
   launchNeonMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
 
-  signs.plate('autovacuum launcher', AX, 41.4, AZ, 'north', 1.6, COLOR.vacuum, 1.0)
+  signs.plate('autovacuum launcher', AX, 32.4, AZ, 'north', 1.6, COLOR.vacuum, 1.0)
   signs.plate('autovacuum_naptime', AX, 7.0, AZ - 9.6, 'north', 0.8, COLOR.inkDim, 0.55)
   signs.plate('workers', AX, 7.0, AZ + 9.6, 'south', 0.8, COLOR.inkDim, 0.55)
   const SGN_TABLE: number[] = []
@@ -907,14 +942,19 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   const depotDetail: BoxSpec[] = []
   for (let i = 0; i < N_VAC_WORKERS; i++) {
     const b = vacBayPos(i)
-    depotMass.push([b[0] - 4, 8.6, b[2], 16, 0.7, 15]) // bay canopy, clear of the masts
-    depotDetail.push([b[0] - 11.4, 4.6, b[2] - 7, 1.0, 8.0, 1.0])
-    depotDetail.push([b[0] - 11.4, 4.6, b[2] + 7, 1.0, 8.0, 1.0])
-    depotDetail.push([b[0] + 3.4, 4.6, b[2] - 7, 1.0, 8.0, 1.0])
-    depotDetail.push([b[0] + 3.4, 4.6, b[2] + 7, 1.0, 8.0, 1.0])
-    depotDetail.push([b[0] - 12.4, 2.2, b[2], 1.6, 3.6, 1.2])
+    depotMass.push(VACUUM_DOCKS[i].tray)
+    depotDetail.push([b[0] - 8.35, 3.0, b[2], 0.2, 3.4, 6.4]) // docking recess
+    depotDetail.push([b[0] - 11.9, 12, b[2], 7.4, 0.2, 8.4]) // bin lid seam
   }
   const depotStruct = batch(gDepot, unitBox, matStruct, depotMass, true)
+  const dockHousing = batch(gDepot, shellGeo, matVehicle, VACUUM_DOCKS.map((dock) => dock.housing))
+  dockHousing.name = 'autovac.docks.housing'
+  for (const { housing: [x, y, z, sx, sy, sz] } of VACUUM_DOCKS) {
+    collisionBoxes.push(new THREE.Box3(
+      new THREE.Vector3(x - sx / 2, y - sy / 2, z - sz / 2),
+      new THREE.Vector3(x + sx / 2, y + sy / 2, z + sz / 2),
+    ))
+  }
   const depotDetailMesh = batch(gDepot, unitBox, matDeep, depotDetail)
   for (const [x, y, z, sx, sy, sz] of depotDetail) {
     collisionBoxes.push(
@@ -931,9 +971,9 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   }
   signs.plate('vacuum depot', DP[0] - 4, 8.0, DP[2] - 46, 'north', 1.5, COLOR.vacuum, 0.75)
 
-  /* --- the trucks -------------------------------------------------------- */
+  /* --- the robot workers ------------------------------------------------- */
 
-  const TRUCK_BODY = 11
+  const TRUCK_BODY = VACUUM_ROBOT_BODY.length
   const TRUCK_NEON = 7
   /* Each worker keeps its own body — that is what the picker resolves against —
    * but the wheels and the lamps of all three share one mesh each. */
@@ -944,7 +984,16 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   group.add(truckWheels)
   meshes.push(truckWheels)
 
+  const sideBrushes = new THREE.InstancedMesh(unitBox, matTyre, N_VAC_WORKERS * 6)
+  sideBrushes.name = 'autovac.workers.brushes'
+  sideBrushes.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  sideBrushes.frustumCulled = false
+  sideBrushes.raycast = () => {}
+  group.add(sideBrushes)
+  meshes.push(sideBrushes)
+
   const truckNeon = new THREE.InstancedMesh(unitBox, neonWhite, N_VAC_WORKERS * TRUCK_NEON)
+  truckNeon.name = 'autovac.workers.indicators'
   truckNeon.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
   truckNeon.frustumCulled = false
   truckNeon.raycast = () => {}
@@ -960,9 +1009,13 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     g.name = `autovac.worker.${i}`
     group.add(g)
 
-    const body = new THREE.InstancedMesh(unitBox, matVehicle, TRUCK_BODY)
+    const body = new THREE.InstancedMesh(robotDisc, matVehicle, TRUCK_BODY)
     body.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
     body.frustumCulled = false
+    for (let part = 0; part < TRUCK_BODY; part++) {
+      _c.setScalar(part === 1 ? 0.32 : part === 3 ? 0.65 : 1)
+      body.setColorAt(part, _c)
+    }
     g.add(body)
     meshes.push(body)
 
@@ -1005,6 +1058,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       hopper: 0,
       scoop: 0,
       carry: 0,
+      collected: 0,
       spin: 0,
       tilt: 0,
       homing: 0,
@@ -1021,7 +1075,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
    *
    *    Not disk. The file does not shrink; the space is recorded in the free
    *    space map and the next insert lands in it. The pile fades because that
-   *    space gets used again — and it stays empty when the horizon is frozen.
+   *    space gets used again; a pinned horizon limits which versions can enter it.
    * =====================================================================*/
 
   const gLand = new THREE.Group()
@@ -1389,7 +1443,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     object: gLaunch,
     tier: 0,
     focus: { target: [AX, 20, AZ], distance: 90, dir: [0.6, 0.44, 0.66] },
-    labelAt: [AX, 44, AZ],
+    labelAt: [AX, 35, AZ],
     color: COLOR.vacuum,
     readout: (s: SimState) => {
       if (!s.autovac.enabled) return 'routine vacuum off · anti-wraparound not modeled'
@@ -1418,7 +1472,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
         if (!w.active) return 'idle in bay'
         const t = s.tables[w.table]
         if (w.stalledByHorizon) {
-          return `${t.def.name} · ${w.phase} · BLOCKED by xmin horizon — 0 of ${fmtNum(t.deadTuples)} removable`
+          return `${t.def.name} · ${w.phase} · xmin limits removal · ${fmtNum(w.deadCollected)} dead tuples collected · ${fmtNum(t.deadTuples)} dead remain`
         }
         return `${t.def.name} · ${w.phase} · ${fmtNum(w.deadCollected)} dead tuples collected`
       },
@@ -1834,11 +1888,11 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     _e.set(0, -scanAngle, 0)
     _q.setFromEuler(_e)
     _sc.set(1, 1, 1)
-    _p.set(AX, 37.4, AZ)
+    _p.set(AX, 30.2, AZ)
     _mw.compose(_p, _q, _sc)
-    setPart(launchNeonMesh, IX_AV_SCAN, _mw, 0, 0, 0, 16, 0.35, 0.6)
-    setPart(launchNeonMesh, IX_AV_SCAN + 1, _mw, 7.4, 0, 0, 1.4, 0.7, 1.0)
-    setPart(launchNeonMesh, IX_AV_SCAN + 2, _mw, -7.4, 0, 0, 1.0, 0.5, 0.7)
+    setPart(launchNeonMesh, IX_AV_SCAN, _mw, 0, 0, 0, 12, 0.15, 0.3)
+    setPart(launchNeonMesh, IX_AV_SCAN + 1, _mw, 5.4, 0, 0, 0.7, 0.2, 0.5)
+    setPart(launchNeonMesh, IX_AV_SCAN + 2, _mw, -5.4, 0, 0, 0.5, 0.15, 0.4)
     launchFlash = Math.max(0, launchFlash - dt * 1.4)
 
     let busy = 0
@@ -1895,10 +1949,6 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     _right.setFromMatrixColumn(ctx.camera.matrixWorld, 0)
     _up.setFromMatrixColumn(ctx.camera.matrixWorld, 1)
 
-    // An ancient snapshot means nothing found is removable, whatever the truck
-    // digs up. The sim confirms it at the end of scan_heap; this predicts it.
-    const horizonStale = sim.oldestSnapshotAge > 8
-
     for (let i = 0; i < N_VAC_WORKERS; i++) {
       const tr = trucks[i]
       const w = av.workers[i]
@@ -1919,7 +1969,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       if (!w.active && tr.wasActive) tr.homing = 1 // coast home from the landfill
       tr.wasActive = w.active
 
-      const stalled = w.stalledByHorizon || (w.active && horizonStale && table.deadTuples > 400)
+      const stalled = w.stalledByHorizon
 
       tr.prev.copy(tr.pos)
       if (w.active) {
@@ -1957,18 +2007,12 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       tr.pitch = damp(tr.pitch, clamp(pitchTo, -0.9, 0.9), 6, dt)
       tr.spin += speed * dt * 1.1
 
-      // The hopper fills as scanning finds dead rows and tops up as they are
-      // actually removed — and stays empty when the horizon forbids it.
-      let fillTarget = tr.hopper
+      // Scanning is not removal. Even a constrained worker may collect older,
+      // eligible versions; snapshot age cannot predict its removable fraction.
+      let fillTarget = clamp01(w.deadCollected / tr.expected)
       switch (w.phase) {
         case 'travel':
           fillTarget = 0
-          break
-        case 'scan_heap':
-          fillTarget = stalled ? 0 : w.progress * 0.72
-          break
-        case 'vacuum_heap':
-          fillTarget = stalled ? 0 : 0.72 + 0.28 * clamp01(w.deadCollected / tr.expected)
           break
         case 'return':
           fillTarget = w.progress > 0.9 ? 0 : tr.hopper
@@ -1976,8 +2020,6 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
         case 'idle':
           fillTarget = w.active ? tr.hopper : 0
           break
-        default:
-          fillTarget = stalled ? 0 : tr.hopper
       }
       tr.hopper = damp(tr.hopper, clamp01(fillTarget), w.phase === 'return' ? 6 : 2.4, dt)
 
@@ -1990,8 +2032,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
         if (n > 0) pushEntry(1.2, COLOR.vacuum, 1.2)
       }
 
-      // The scoop cycles while the worker is at the heap. When the horizon is
-      // frozen it comes up empty. Every time. That is the whole lesson.
+      // The brushes work even when xmin prevents collecting old row versions.
       const scooping = w.active && (w.phase === 'scan_heap' || w.phase === 'vacuum_heap')
       if (scooping) {
         tr.scoop += dt * 0.85
@@ -1999,8 +2040,8 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       } else {
         tr.scoop = damp(tr.scoop, 0, 5, dt)
       }
-      const armA = scooping ? 0.92 * Math.sin(Math.PI * tr.scoop) : 0.1
-      const carrying = scooping && !stalled && tr.scoop > 0.5 && tr.scoop < 0.94 ? 1 : 0
+      const carrying = w.active && w.deadCollected > tr.collected ? 1 : 0
+      tr.collected = w.deadCollected
       tr.carry = damp(tr.carry, carrying, 12, dt)
 
       /* world matrix, then every part hung off it */
@@ -2013,25 +2054,10 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       _sc.set(1, 1, 1)
       _mw.compose(tr.pos, _q, _sc)
 
-      _qa.setFromAxisAngle(_axisZ, -tr.tilt) // hopper tip
-      _e.set(0, 0, -armA)
-      _qb.setFromEuler(_e) // scoop arm
-      const ax = 3.4, ay = 2.4
-      const adx = Math.cos(armA) * 2.6, ady = -Math.sin(armA) * 2.6
-      const hopY = 3.3 + tr.tilt * 0.9
-      const hopX = -1.1 + tr.tilt * 0.5
-
-      setPart(tr.body, 0, _mw, 0, 1.55, 0, 7.2, 0.9, 3.4) // chassis
-      setPart(tr.body, 1, _mw, hopX, hopY, 0, 4.6, 2.8, 3.2, _qa) // hopper
-      setPart(tr.body, 2, _mw, hopX, hopY + 1.5, 0, 4.9, 0.3, 3.5, _qa) // lip
-      setPart(tr.body, 3, _mw, 2.5, 3.2, 0, 2.4, 2.6, 2.9) // cab
-      setPart(tr.body, 4, _mw, 2.5, 4.6, 0, 2.6, 0.35, 3.0) // cab roof
-      setPart(tr.body, 5, _mw, 3.9, 1.5, 0, 0.5, 1.0, 3.2) // bumper
-      setPart(tr.body, 6, _mw, ax + adx * 0.5, ay + ady * 0.5, 0, 2.6, 0.4, 0.4, _qb) // arm
-      setPart(tr.body, 7, _mw, ax + adx, ay + ady - 0.3, 0, 1.5, 1.0, 2.6, _qb) // bucket
-      setPart(tr.body, 8, _mw, -3.3, 2.2, 0, 0.8, 1.6, 3.4) // tailgate
-      setPart(tr.body, 9, _mw, 1.2, 4.5, 1.2, 0.3, 1.9, 0.3) // exhaust
-      setPart(tr.body, 10, _mw, 0.2, 6.2, 0, 0.22, 3.6, 0.22) // panel mast
+      for (let part = 0; part < VACUUM_ROBOT_BODY.length; part++) {
+        const spec = VACUUM_ROBOT_BODY[part]
+        setPart(tr.body, part, _mw, spec[0], spec[1], spec[2], spec[3], spec[4], spec[5])
+      }
       tr.body.instanceMatrix.needsUpdate = true
       // the truck moves, so the picker must re-measure it
       tr.body.boundingBox = null
@@ -2042,22 +2068,36 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
         _qd.setFromAxisAngle(_axisY, tr.spin)
         _qc.multiply(_qd)
         const w0 = tr.wheel0
-        setPart(truckWheels, w0, _mw, 2.3, 0.9, 1.55, 1.8, 0.7, 1.8, _qc)
-        setPart(truckWheels, w0 + 1, _mw, 2.3, 0.9, -1.55, 1.8, 0.7, 1.8, _qc)
-        setPart(truckWheels, w0 + 2, _mw, -2.3, 0.9, 1.55, 1.8, 0.7, 1.8, _qc)
-        setPart(truckWheels, w0 + 3, _mw, -2.3, 0.9, -1.55, 1.8, 0.7, 1.8, _qc)
+        setPart(truckWheels, w0, _mw, -0.6, 0.35, 2.0, 0.65, 0.5, 0.65, _qc)
+        setPart(truckWheels, w0 + 1, _mw, -0.6, 0.35, -2.0, 0.65, 0.5, 0.65, _qc)
+        // Low side brushes follow actual heap work, including an empty pass under xmin.
+        _qd.setFromAxisAngle(_axisY, scooping ? tr.scoop * TAU : 0)
+        setPart(truckWheels, w0 + 2, _mw, 2.3, 0.25, 2.3, 1.5, 0.15, 1.5, _qd)
+        setPart(truckWheels, w0 + 3, _mw, 2.3, 0.25, -2.3, 1.5, 0.15, 1.5, _qd)
         truckWheels.instanceMatrix.needsUpdate = true
       }
 
+      if (sideBrushes.visible) {
+        for (let brush = 0; brush < 6; brush++) {
+          const side = brush < 3 ? 1 : -1
+          const angle = (brush % 3) * TAU / 3 + tr.scoop * TAU * side
+          _qd.setFromAxisAngle(_axisY, -angle)
+          setPart(sideBrushes, i * 6 + brush, _mw,
+            2.3 + Math.cos(angle) * 0.55, 0.24,
+            side * 2.3 + Math.sin(angle) * 0.55, 1.1, 0.12, 0.14, _qd)
+        }
+        sideBrushes.instanceMatrix.needsUpdate = true
+      }
+
       const n0 = tr.neon0
-      const fh = Math.max(0.05, tr.hopper * 2.3)
-      setPart(truckNeon, n0, _mw, hopX, hopY - 1.25 + fh / 2, 0, 4.2, fh, 2.8, _qa)
-      setPart(truckNeon, n0 + 1, _mw, 2.5, 3.6, 0, 2.5, 0.9, 2.95)
-      setPart(truckNeon, n0 + 2, _mw, 2.5, 5.05, 0, 0.9, 0.55, 0.9)
-      setPart(truckNeon, n0 + 3, _mw, 3.95, 2.2, 1.0, 0.3, 0.45, 0.7)
-      setPart(truckNeon, n0 + 4, _mw, 3.95, 2.2, -1.0, 0.3, 0.45, 0.7)
-      setPart(truckNeon, n0 + 5, _mw, ax + adx, ay + ady - 0.3, 0, 1.0, 0.55, 2.2, _qb)
-      setPart(truckNeon, n0 + 6, _mw, -3.55, 3.3, 0, 0.14, 2.0, 3.0, _qa)
+      const fillWidth = Math.max(0.02, tr.hopper * 2.8)
+      setPart(truckNeon, n0, _mw, 1.2, 1.78, 0, fillWidth, 0.08, 1.2)
+      setPart(truckNeon, n0 + 1, _mw, 3.3, 1.15, 0, 0.15, 0.24, 1.8)
+      setPart(truckNeon, n0 + 2, _mw, -0.6, 2.3, 0, 0.6, 0.1, 0.6)
+      setPart(truckNeon, n0 + 3, _mw, 3.0, 0.8, 1.0, 0.2, 0.18, 0.4)
+      setPart(truckNeon, n0 + 4, _mw, 3.0, 0.8, -1.0, 0.2, 0.18, 0.4)
+      setPart(truckNeon, n0 + 5, _mw, 2.7, 0.4, 0, Math.max(0.02, tr.carry), 0.15, 1.5)
+      setPart(truckNeon, n0 + 6, _mw, -3.3, 1.2, 0, 0.14, 0.24, 1.8)
       truckNeon.instanceMatrix.needsUpdate = true
 
       const live = w.active || tr.homing > 0
@@ -2094,7 +2134,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
           signs.setLiveText(
             tr.panelBot,
             stalled
-              ? 'BLOCKED BY XMIN HORIZON'
+              ? `xmin limits removal · ${fmtNum(w.deadCollected)} collected`
               : `${fmtNum(Math.round(w.deadCollected / 50) * 50)} dead tuples`,
           )
         }
@@ -2257,6 +2297,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
 
     depotDetailMesh.visible = near
     truckWheels.visible = near
+    sideBrushes.visible = near
 
     landDetailMesh.visible = near
     logDetailMesh.visible = near
