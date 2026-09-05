@@ -1304,6 +1304,22 @@ body.pg-walk.touch-walk-active .hud-walk {
   display: none;
 }
 
+body.pg-walk .hud-export {
+  position: fixed;
+  top: calc(14px + var(--safe-t));
+  right: calc(14px + var(--safe-r));
+  z-index: var(--z-floating-overlay);
+  min-height: var(--tap);
+  padding-inline: 12px;
+  color: var(--ink);
+  background: var(--bg-panel-solid);
+}
+
+body.pg-walk.touch-walk-active .hud-export {
+  left: calc(14px + var(--safe-l));
+  right: auto;
+}
+
 /* ==========================================================================
    RESPONSIVE
    ========================================================================*/
