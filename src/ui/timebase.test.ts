@@ -125,7 +125,7 @@ describe('user-facing timebase', () => {
     tour.dispose()
   })
 
-  it('holds scenario narration for simulation time, including while paused', () => {
+  it('keeps scenario narration until reader dismissal, including while paused', () => {
     const ctx = context()
     const tour = createTour(ctx)
 
@@ -140,7 +140,10 @@ describe('user-facing timebase', () => {
       ctx.sim.update(1 / 30)
       tour.update(1 / 30)
     }
-    expect(card.classList.contains('is-out')).toBe(true)
+    expect(card.classList.contains('is-live')).toBe(true)
+    expect(card.classList.contains('is-out')).toBe(false)
+    document.querySelector<HTMLButtonElement>('[data-scenario-note="dismiss"]')!.click()
+    expect(card.classList.contains('is-live')).toBe(false)
     tour.dispose()
   })
 
