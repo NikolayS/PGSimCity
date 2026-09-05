@@ -59,6 +59,83 @@ function incident(seed = 42) {
 }
 
 describe('bounded incident replay', () => {
+  it('keeps the default vacuum recovery reproducible past the original ten-minute cap', async () => {
+    const { sim, replay } = incident(0xc0ffee)
+    sim.runScenario('vacuum-blockade')
+    expect(await replay.advanceUntil(() => sim.state.scenarioDecision?.phase === 'ready', { maxTicks: 3000 })).toBe('condition')
+    expect(sim.chooseScenario('terminate-transaction')).toBe(true)
+    expect(await replay.advanceUntil(() => sim.state.scenarioDecision?.phase === 'recovered', { maxTicks: 30_000 })).toBe('condition')
+    expect(replay.status.tick).toBeGreaterThan(18_000)
+    expect(replay.status.valid).toBe(true)
+    const expected = structuredClone(sim.state)
+    await replay.loadRecord(replay.exportRecord())
+    expect(sim.state).toEqual(expected)
+    replay.dispose()
+  })
+  it('advances explicitly beyond ten minutes with exact fixed-step recording', async () => {
+    const { sim, replay } = incident()
+    const result = await replay.advanceUntil(() => replay.status.tick >= 18_100, { maxTicks: 18_100 })
+    expect(result).toBe('condition')
+    expect(replay.status.valid).toBe(true)
+    const record = replay.exportRecord()
+    expect(record.version).toBe(2)
+    expect(record.steps).toEqual([{ count: 18_100, dt: STEP }])
+    const expected = structuredClone(sim.state)
+    await replay.loadRecord(record)
+    expect(sim.state).toEqual(expected)
+    replay.dispose()
+  })
+
+  it('locks wall updates during cancellable advancement and restores prior pause', async () => {
+    const { sim, replay } = incident()
+    sim.setKnob('paused', true)
+    const abort = new AbortController()
+    const advancing = replay.advanceUntil(() => false, { maxTicks: 200, signal: abort.signal })
+    expect(replay.status.advancing).toBe(true)
+    const tick = replay.status.tick
+    sim.update(STEP)
+    expect(replay.status.tick).toBe(tick)
+    expect(() => sim.setKnob('workMem', 16)).toThrow(/advancing/i)
+    abort.abort()
+    expect(replay.status.advancing).toBe(false)
+    expect(() => sim.runScenario('vacuum-blockade')).not.toThrow()
+    expect(await advancing).toBe('cancelled')
+    expect(replay.status.advancing).toBe(false)
+    expect(sim.state.knobs.paused).toBe(true)
+    expect(replay.status.valid).toBe(true)
+    const expected = structuredClone(sim.state)
+    await replay.loadRecord(replay.exportRecord())
+    expect(sim.state).toEqual(expected)
+    replay.dispose()
+  })
+
+  it('cancels advancement synchronously before reset without resuming an old incident', async () => {
+    const { sim, replay } = incident()
+    const initial = structuredClone(sim.state)
+    const pending = replay.advanceUntil(() => false, { maxTicks: 200 })
+    sim.reset()
+    expect(replay.status.advancing).toBe(false)
+    expect(await pending).toBe('cancelled')
+    expect(sim.state).toEqual(initial)
+    expect(replay.status.tick).toBe(0)
+    replay.dispose()
+  })
+
+  it('bounds explicit advancement and rejects older format before mutation', async () => {
+    const { sim, replay } = incident()
+    const initial = structuredClone(sim.state)
+    await expect(replay.advanceUntil(() => false, { maxTicks: REPLAY_MAX_TICKS + 1 })).rejects.toThrow(/limit/i)
+    await expect(replay.loadRecord({ ...replay.exportRecord(), version: 1 })).rejects.toThrow(/version/i)
+    const fullBudget = { ...replay.exportRecord(), ticks: REPLAY_MAX_TICKS,
+      steps: [{ count: REPLAY_MAX_TICKS, dt: STEP }] }
+    expect(decodeReplay(encodeReplay(fullBudget)).ticks).toBe(54_000)
+    expect(() => encodeReplay({ ...fullBudget, steps: [{ count: REPLAY_MAX_TICKS, dt: STEP + 0.001 }] })).toThrow(/duration/i)
+    expect(sim.state).toEqual(initial)
+    expect(await replay.advanceUntil(() => false, { maxTicks: 2 })).toBe('limit')
+    expect(replay.status.tick).toBe(2)
+    expect(replay.status.valid).toBe(true)
+    replay.dispose()
+  })
   it('withdraws comparisons after an unsupported action invalidates their provenance', async () => {
     const { sim, replay } = incident()
     sim.update(STEP)

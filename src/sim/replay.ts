@@ -4,11 +4,12 @@ import type { Bus, BusEvents, Knobs, ScenarioChoiceId, SimApi } from '../core/ty
 import { simulationReplayConfiguration } from './model'
 import { SCENARIOS } from './scenarios'
 
-export const REPLAY_MAX_TICKS = 18_000
+export const REPLAY_MAX_TICKS = 54_000
 export const REPLAY_MAX_ACTIONS = 1024
 export const REPLAY_MAX_BYTES = 96 * 1024
-export const REPLAY_MODEL_VERSION = `incident-1/${BUILD_VERSION}/${BUILD_SHA}`
-const MAX_MODEL_SECONDS = 600
+export const REPLAY_MODEL_VERSION = `incident-2/${BUILD_VERSION}/${BUILD_SHA}`
+const MAX_MODEL_SECONDS = 1800
+const ADVANCE_STEP = 1 / 30
 const MAX_DELTA = 2
 const SEEK_BATCH = 64
 const attached = new WeakSet<SimApi>()
@@ -23,7 +24,7 @@ export type ReplayAction = { tick: number } & (
 )
 
 export interface ReplayRecord {
-  version: 1
+  version: 2
   modelVersion: string
   seed: number
   ticks: number
@@ -42,6 +43,7 @@ export interface ReplayStatus extends ReplayPoint {
   valid: boolean
   reason: string
   seeking: boolean
+  advancing: boolean
   seekProgress: number
 }
 
@@ -144,7 +146,7 @@ function action(value: unknown, ticks: number): ReplayAction {
 function validateRecord(value: unknown): ReplayRecord {
   const item = object(value)
   fields(item, ['version', 'modelVersion', 'seed', 'ticks', 'steps', 'actions'])
-  if (item.version !== 1) throw new Error('Unsupported replay format version')
+  if (item.version !== 2) throw new Error('Unsupported replay format version')
   if (item.modelVersion !== REPLAY_MODEL_VERSION) throw new Error('Replay model-version mismatch')
   const seed = integer(item.seed, 0, 0xffff_ffff, 'seed')
   const ticks = integer(item.ticks, 0, REPLAY_MAX_TICKS, 'tick limit')
@@ -174,7 +176,7 @@ function validateRecord(value: unknown): ReplayRecord {
     previous = parsed.tick
     actions.push(parsed)
   }
-  return { version: 1, modelVersion: REPLAY_MODEL_VERSION, seed, ticks, steps, actions }
+  return { version: 2, modelVersion: REPLAY_MODEL_VERSION, seed, ticks, steps, actions }
 }
 
 export function encodeReplay(value: unknown): string {
@@ -209,7 +211,7 @@ export function createIncidentReplay(
   const durations = new Float64Array(REPLAY_MAX_TICKS)
   const log: ReplayAction[] = []
   const status: ReplayStatus = {
-    tick: 0, actionCount: 0, totalTicks: 0, valid: true, reason: '', seeking: false, seekProgress: 0,
+    tick: 0, actionCount: 0, totalTicks: 0, valid: true, reason: '', seeking: false, advancing: false, seekProgress: 0,
   }
   let elapsed = 0
   let originTime = sim.state.t
@@ -218,6 +220,7 @@ export function createIncidentReplay(
   let baseline: ReplayOutcome | null = null
   let baselineDurations: Float64Array | null = null
   const restoredListeners = new Set<() => void>()
+  let cancelAdvance: (() => void) | null = null
 
   function notify(): void { options.onChange?.() }
   function invalidate(reason: string): void {
@@ -229,6 +232,7 @@ export function createIncidentReplay(
   function requireReady(): void {
     if (disposed) throw new Error('Replay controller is disposed')
     if (status.seeking) throw new Error('Cannot change the model while seeking a replay')
+    if (status.advancing) throw new Error('Cannot change the model while advancing a replay')
   }
   function requireValid(): void {
     requireReady()
@@ -304,12 +308,15 @@ export function createIncidentReplay(
     busy++
     try { original.update(dt) } finally { busy-- }
   }
-  sim.update = (dt: number): void => { if (!status.seeking) advance(dt) }
+  sim.update = (dt: number): void => { if (!status.seeking && !status.advancing) advance(dt) }
   sim.setKnob = (key, value, source) => invoke(
     { tick: status.tick, type: 'knob', key, value, ...(source ? { source } : {}) },
     () => original.setKnob(key, value, source),
   )
-  sim.runScenario = (id) => invoke({ tick: status.tick, type: 'scenario', id }, () => original.runScenario(id))
+  sim.runScenario = (id) => {
+    cancelAdvance?.()
+    return invoke({ tick: status.tick, type: 'scenario', id }, () => original.runScenario(id))
+  }
   sim.chooseScenario = (choice) => invoke({ tick: status.tick, type: 'decision', choice }, () => original.chooseScenario(choice))
   sim.recoverScenario = () => invoke({ tick: status.tick, type: 'recover' }, () => original.recoverScenario())
   sim.endTrace = () => invoke({ tick: status.tick, type: 'end-trace' }, () => original.endTrace())
@@ -317,6 +324,7 @@ export function createIncidentReplay(
   bus.emit = <K extends keyof BusEvents>(type: K, payload: BusEvents[K]): void => {
     if (status.seeking && (type === 'flow' || type === 'toast' || type === 'narrate' || type === 'focus')) return
     if (!busy && (type === 'knob' || type === 'scenario')) {
+      if (type === 'scenario') cancelAdvance?.()
       const next = type === 'knob'
         ? { tick: status.tick, type: 'knob', ...(payload as BusEvents['knob']) }
         : { tick: status.tick, type: 'scenario', ...(payload as BusEvents['scenario']) }
@@ -347,6 +355,7 @@ export function createIncidentReplay(
   }
 
   function reset(): void {
+    cancelAdvance?.()
     requireReady()
     log.length = 0
     status.tick = status.totalTicks = status.actionCount = 0
@@ -410,6 +419,44 @@ export function createIncidentReplay(
 
   return {
     status: status as Readonly<ReplayStatus>,
+    cancelAdvance(): void { cancelAdvance?.() },
+    async advanceUntil(
+      predicate: () => boolean,
+      options: { maxTicks: number; signal?: AbortSignal },
+    ): Promise<'condition' | 'cancelled' | 'limit'> {
+      requireValid()
+      const maxTicks = integer(options.maxTicks, 1, REPLAY_MAX_TICKS, 'advancement tick limit')
+      if (options.signal?.aborted) return 'cancelled'
+      if (predicate()) return 'condition'
+      if (status.actionCount > REPLAY_MAX_ACTIONS - 2) throw new Error('Insufficient replay action capacity for advancement')
+      const paused = sim.state.knobs.paused
+      if (paused) sim.setKnob('paused', false)
+      status.advancing = true
+      let finished = false
+      const finish = (): void => {
+        if (finished) return
+        finished = true
+        options.signal?.removeEventListener('abort', finish)
+        cancelAdvance = null
+        status.advancing = false
+        if (!disposed && sim.state.knobs.paused !== paused) sim.setKnob('paused', paused)
+        notify()
+      }
+      cancelAdvance = finish
+      options.signal?.addEventListener('abort', finish, { once: true })
+      notify()
+      try {
+        for (let count = 0; count < maxTicks; count++) {
+          if (finished || disposed || options.signal?.aborted) return 'cancelled'
+          if (status.tick >= REPLAY_MAX_TICKS || elapsed + ADVANCE_STEP > MAX_MODEL_SECONDS + 1e-7) return 'limit'
+          advance(ADVANCE_STEP)
+          if (!status.valid) throw new Error(status.reason)
+          if (predicate()) return 'condition'
+          if ((count + 1) % SEEK_BATCH === 0) await new Promise<void>((resolve) => setTimeout(resolve, 0))
+        }
+        return 'limit'
+      } finally { finish() }
+    },
     onRestored(listener: () => void): () => void {
       restoredListeners.add(listener)
       return () => { restoredListeners.delete(listener) }
@@ -462,7 +509,7 @@ export function createIncidentReplay(
         else steps.push({ count: 1, dt: durations[tick] })
       }
       const record: ReplayRecord = {
-        version: 1, modelVersion: REPLAY_MODEL_VERSION, seed, ticks: status.tick, steps,
+        version: 2, modelVersion: REPLAY_MODEL_VERSION, seed, ticks: status.tick, steps,
         actions: log.slice(0, status.actionCount).map((entry) => ({ ...entry })),
       }
       encodeReplay(record)
@@ -488,6 +535,7 @@ export function createIncidentReplay(
     },
     reset,
     dispose(): void {
+      cancelAdvance?.()
       disposed = true
       restoredListeners.clear()
       Object.assign(sim, original)

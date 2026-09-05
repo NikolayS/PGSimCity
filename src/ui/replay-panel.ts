@@ -67,7 +67,7 @@ export function createReplayPanel(ctx: UiContext, replay: IncidentReplay): Repla
   el('div', { class: 'pg-replay__actions' }, save, rewind, run),
   comparison, message,
   el('details', {}, el('summary', { text: 'Share or import a local replay' }),
-    el('p', { text: 'Records contain a version, seed, elapsed steps, and allowlisted model actions. Limits: 10 model minutes, 18,000 steps, 1,024 actions, 96 KiB. Only this exact model build and seed can import them. No SQL, lesson answers, or PGlite data are included.' }),
+    el('p', { text: 'Records contain a version, seed, elapsed steps, and allowlisted model actions. Limits: 30 model minutes, 54,000 steps, 1,024 actions, 96 KiB. Only this exact model build and seed can import them. No SQL, lesson answers, or PGlite data are included.' }),
     exportButton, shareText,
     el('label', { class: 'pg-replay__confirm' }, confirm, ' I confirm that import will replace the current model incident.'),
     importButton),
@@ -75,7 +75,7 @@ export function createReplayPanel(ctx: UiContext, replay: IncidentReplay): Repla
   document.body.append(panel)
 
   function captureCheckpoint(): void {
-    if (!replay.status.valid || replay.status.seeking) throw new Error(replay.status.reason || 'Wait for replay to finish')
+    if (!replay.status.valid || replay.status.seeking || replay.status.advancing) throw new Error(replay.status.reason || 'Wait for replay to finish')
     checkpoint = replay.checkpoint()
     render()
   }
@@ -111,11 +111,11 @@ export function createReplayPanel(ctx: UiContext, replay: IncidentReplay): Repla
   let comparisonSignature = ''
   function render(): void {
     const state = replay.status
-    setText(status, state.seeking ? `Reconstructing model: ${Math.round(state.seekProgress * 100)}%`
+    setText(status, state.advancing ? 'Advancing the fixed-step model; recording every step.' : state.seeking ? `Reconstructing model: ${Math.round(state.seekProgress * 100)}%`
       : state.valid ? `Recorded ${state.tick} steps and ${state.actionCount} actions.` : `Recording unavailable: ${state.reason}`)
     setText(checkpointText, checkpoint ? `Checkpoint: step ${checkpoint.tick}, after action ${checkpoint.actionCount}.`
       : 'No checkpoint saved yet. A ready operator decision also saves one automatically.')
-    for (const control of controls) control.disabled = state.seeking
+    for (const control of controls) control.disabled = state.seeking || state.advancing
     save.disabled ||= !state.valid
     rewind.disabled ||= !state.valid || !checkpoint
     exportButton.disabled ||= !state.valid
