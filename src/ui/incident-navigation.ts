@@ -4,6 +4,24 @@ import type { IncidentContext, IncidentDestination } from '../core/incident-hand
 import type { Bus } from '../core/types'
 import type { IncidentReplay } from '../sim/replay'
 
+export const STALE_INCIDENT_MESSAGE = 'Browser Back or Forward restored an older page, not the latest incident. Its model has been stopped. Use the linked navigation buttons from the current incident, or explicitly open a new city'
+
+export function installIncidentCacheGuard(onStale: () => void, target: EventTarget = window): () => void {
+  const restore = (event: Event): void => {
+    if ((event as PageTransitionEvent).persisted) onStale()
+  }
+  target.addEventListener('pageshow', restore)
+  return () => target.removeEventListener('pageshow', restore)
+}
+
+export function isSameTabIncidentClick(
+  event: Pick<MouseEvent, 'button' | 'ctrlKey' | 'metaKey' | 'shiftKey' | 'altKey'>,
+  target: string, download: boolean,
+): boolean {
+  return event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey
+    && (target === '' || target === '_self') && !download
+}
+
 export function incidentDiagnosticCaption(linked: boolean, stagedName?: string): string {
   if (linked) return 'Inspecting the linked city incident. Choosing a complaint has not changed its workload.'
   return stagedName ? `${stagedName} — the model is running this configuration so you can read it live. Every knob on the page is still yours.` : 'free running'
@@ -48,8 +66,7 @@ export function installCityIncidentNavigation(options: {
   const off = options.bus.on('select', ({ id }) => { context.selected = id ?? undefined })
   const click = (event: MouseEvent): void => {
     const anchor = event.target instanceof Element ? event.target.closest('a') : null
-    if (!anchor || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey
-      || anchor.target === '_blank' || anchor.hasAttribute('download')) return
+    if (!anchor || !isSameTabIncidentClick(event, anchor.target, anchor.hasAttribute('download'))) return
     const target = new URL(anchor.href, location.href)
     if (target.origin !== location.origin || !/\/observability\/?$/.test(target.pathname)
       || target.searchParams.get('view') === 'flow') return

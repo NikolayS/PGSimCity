@@ -24,7 +24,7 @@ import { createSim } from '../sim/model'
 import { createIncidentReplay } from '../sim/replay'
 import { readIncidentHandoff } from '../core/incident-handoff'
 import type { IncidentContext } from '../core/incident-handoff'
-import { incidentCitySelection, incidentDiagnosticCaption, showIncidentError, transferIncident } from '../ui/incident-navigation'
+import { incidentCitySelection, incidentDiagnosticCaption, installIncidentCacheGuard, isSameTabIncidentClick, showIncidentError, STALE_INCIDENT_MESSAGE, transferIncident } from '../ui/incident-navigation'
 import { SCENARIOS } from '../sim/scenarios'
 import { DEFAULT_KNOBS } from '../core/types'
 import type { Knobs } from '../core/types'
@@ -262,8 +262,7 @@ function returnToCity(href = '../'): void {
 }
 root.addEventListener('click', (event) => {
   const anchor = event.target instanceof Element ? event.target.closest('a') : null
-  if (!anchor || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey
-    || anchor.target === '_blank') return
+  if (!anchor || !isSameTabIncidentClick(event, anchor.target, anchor.hasAttribute('download'))) return
   if (anchor !== brand && !anchor.classList.contains('city-exit') && !anchor.classList.contains('citylink')) return
   event.preventDefault()
   returnToCity(anchor.href)
@@ -1121,6 +1120,7 @@ let dataT = 0
 const frameTimebase = createFrameTimebase(sim.update)
 
 function frame(now: number): void {
+  if (!navigationReady) return
   const dt = Math.min(0.1, (now - last) / 1000)
   last = now
   frameTimebase.advance(
@@ -1145,6 +1145,12 @@ function frame(now: number): void {
 }
 
 installCityEscape(() => returnToCity())
+installIncidentCacheGuard(() => {
+  navigationReady = false
+  root!.replaceChildren()
+  root!.inert = false
+  showIncidentError(STALE_INCIDENT_MESSAGE, root!)
+})
 
 window.addEventListener('keydown', (e) => {
   if (!navigationReady) return
