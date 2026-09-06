@@ -23,6 +23,8 @@ A maintenance release; the graphics and learning redesign remains in review.
 
 ### Fixed
 
+- Bound the observability README's verification claim: manual name review is
+  distinct from the registered subset checked by the live-server oracle.
 - Correct the logical-decoding explanation: replica identity is required for
   published UPDATE/DELETE, an eligible unique index is an alternative to a
   primary key, and FULL is a fallback rather than the only remedy. Published
@@ -30,10 +32,13 @@ A maintenance release; the graphics and learning redesign remains in review.
 - Preserve screenshot-driver Chrome profiles when neither process-inspection
   source is available. Cleanup resumes once usage can be checked again, instead
   of treating unknown usage as idle and risking deletion of a live profile.
+  If neither source ever becomes readable, profiles remain retained; manual
+  cleanup requires establishing that no browser still uses them.
 - Advance the reviewed PostgreSQL reference from 18.4 to 18.6 after checking
   the release notes and rerunning all 223 oracle observations: 219 matches,
   four existing teaching-scale divergences, no unexpected results. The version
-  gate still rejects unreviewed newer releases. Logical-decoding guidance now
+  gate still rejects unreviewed newer releases. The 219th match is the reviewed
+  version label, not an additional modeled mechanism. Logical-decoding guidance now
   includes the trusted output-plugin allowlist; PGlite remains separately
   labeled as PostgreSQL 18.3. See [the reference review](POSTGRESQL-REFERENCE-REVIEW.md)
   for evidence and coverage limits.
@@ -50,8 +55,9 @@ A maintenance release; the graphics and learning redesign remains in review.
   the child is listed. Reproduced at 2 failures in 5 runs in a container, and
   fixed by waiting for the transition instead of assuming it — 12 of 12 after.
 - `record-demo.sh` sized its output with `stat -c`, which is GNU-only. The script
-  already refuses to run outside Linux because it requires PulseAudio, so this
-  was latent rather than live; it now uses `wc -c`.
+  now uses `wc -c`. Its preflight checks for commands, including PulseAudio
+  tools, not the operating system. Non-Linux execution is not validated by this
+  release; `sha256sum` is still required later without a preflight check.
 
 ## [0.40.0] - 2026-08-06
 
