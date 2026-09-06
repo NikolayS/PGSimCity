@@ -1,0 +1,12 @@
+
+> pgsimcity@0.40.1 test
+> vitest run --exclude **/*.browser.test.ts --maxWorkers=2
+
+
+ RUN  v4.1.10 /home/tars/pgcity-leo-visible
+
+
+ Test Files  126 passed (126)
+      Tests  1050 passed (1050)
+   Start at  23:07:26
+   Duration  265.68s (transform 14.82s, setup 0ms, import 38.90s, tests 466.56s, environment 16ms)

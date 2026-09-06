@@ -1,0 +1,62 @@
+{
+  "status": "Eight images captured and inspected; aggregate probe interrupted by SIGTERM before JSON flush",
+  "sourceCommit": "97fa73eb098adb549a2e0ff44c36074aaa3ea1ec",
+  "report": [
+    {
+      "width": 1440,
+      "height": 900,
+      "theme": "day",
+      "qualityReadFromScreenshot": "medium",
+      "image": "after-1440-day.png"
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "theme": "night",
+      "qualityReadFromScreenshot": "low",
+      "image": "after-1440-night.png"
+    },
+    {
+      "width": 1280,
+      "height": 800,
+      "theme": "day",
+      "qualityReadFromScreenshot": "reduced",
+      "image": "after-1280-day.png"
+    },
+    {
+      "width": 1280,
+      "height": 800,
+      "theme": "night",
+      "qualityReadFromScreenshot": "reduced",
+      "image": "after-1280-night.png"
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "theme": "day",
+      "qualityReadFromScreenshot": "low",
+      "image": "after-390-day.png"
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "theme": "night",
+      "qualityReadFromScreenshot": "low",
+      "image": "after-390-night.png"
+    },
+    {
+      "width": 768,
+      "height": 1024,
+      "theme": "day",
+      "qualityReadFromScreenshot": "reduced",
+      "image": "after-768-day.png"
+    },
+    {
+      "width": 768,
+      "height": 1024,
+      "theme": "night",
+      "qualityReadFromScreenshot": "reduced",
+      "image": "after-768-night.png"
+    }
+  ]
+}

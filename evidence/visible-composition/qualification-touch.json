@@ -1,0 +1,12 @@
+{
+  "result": {
+    "qualificationOpen": true,
+    "warningVisible": true,
+    "quality": "low"
+  },
+  "logs": [
+    "[debug] [vite] connecting...",
+    "[debug] [vite] connected.",
+    "[warning] Ignoring Event: localhost"
+  ]
+}

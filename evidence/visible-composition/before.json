@@ -1,0 +1,121 @@
+{
+  "report": [
+    {
+      "width": 1440,
+      "theme": "day",
+      "quality": "reduced",
+      "fps": 0.3536150270407046,
+      "visibleLabels": [
+        "PGSimCityone PostgreSQL cluster",
+        "Buffer pool (shared_buffers)a representative sample of the page cache every backend reads through+8",
+        "PostmasterPostgreSQL supervisor metaphor · model tracks admission only",
+        "Connection gatefixed slot-capacity gate · authentication is not modeled",
+        "Backendsone modeled slot per connection · process residency is not costed+17",
+        "Storageillustrative device layer · no calibrated latency or queue+29",
+        "checkpointerwrites sampled dirty pages, then fsyncs · correlate with model p99",
+        "Clients+4",
+        "WAL+10",
+        "Maintenance+8",
+        "Standby+17"
+      ],
+      "bodyWidth": 1440
+    },
+    {
+      "width": 1440,
+      "theme": "night",
+      "quality": "low",
+      "fps": 0.3943631594092477,
+      "visibleLabels": [
+        "PGSimCityone PostgreSQL cluster",
+        "Buffer pool (shared_buffers)a representative sample of the page cache every backend reads through+8",
+        "PostmasterPostgreSQL supervisor metaphor · model tracks admission only",
+        "Connection gatefixed slot-capacity gate · authentication is not modeled",
+        "Backendsone modeled slot per connection · process residency is not costed+17",
+        "Storageillustrative device layer · no calibrated latency or queue+29",
+        "checkpointerwrites sampled dirty pages, then fsyncs · correlate with model p99",
+        "Clients+4",
+        "WAL+10",
+        "Maintenance+8",
+        "Standby+17"
+      ],
+      "bodyWidth": 1440
+    },
+    {
+      "width": 1280,
+      "theme": "day",
+      "quality": "reduced",
+      "fps": 0.25165514274641676,
+      "visibleLabels": [
+        "PGSimCityone PostgreSQL cluster",
+        "Buffer pool (shared_buffers)a representative sample of the page cache every backend reads through+8",
+        "PostmasterPostgreSQL supervisor metaphor · model tracks admission only",
+        "Backendsone modeled slot per connection · process residency is not costed+17",
+        "Storageillustrative device layer · no calibrated latency or queue+29",
+        "Clients+5",
+        "WAL+10",
+        "Maintenance+9",
+        "Standby+17"
+      ],
+      "bodyWidth": 1280
+    },
+    {
+      "width": 1280,
+      "theme": "night",
+      "quality": "reduced",
+      "fps": 2.725533642460813,
+      "visibleLabels": [
+        "PGSimCityone PostgreSQL cluster",
+        "Buffer pool (shared_buffers)a representative sample of the page cache every backend reads through+8",
+        "PostmasterPostgreSQL supervisor metaphor · model tracks admission only",
+        "Backendsone modeled slot per connection · process residency is not costed+17",
+        "Storageillustrative device layer · no calibrated latency or queue+29",
+        "Clients+5",
+        "WAL+10",
+        "Maintenance+9",
+        "Standby+17"
+      ],
+      "bodyWidth": 1280
+    },
+    {
+      "width": 390,
+      "theme": "day",
+      "quality": "low",
+      "fps": 0.998672961559458,
+      "visibleLabels": [
+        "Backendsone modeled slot per connection · process residency is not costed+17",
+        "Clients+6",
+        "WAL+9"
+      ],
+      "bodyWidth": 390
+    },
+    {
+      "width": 390,
+      "theme": "night",
+      "quality": "low",
+      "fps": 1.1050783022528983,
+      "visibleLabels": [
+        "Backendsone modeled slot per connection · process residency is not costed+17",
+        "Clients+6",
+        "WAL+9"
+      ],
+      "bodyWidth": 390
+    },
+    {
+      "width": 768,
+      "theme": "day",
+      "quality": "reduced",
+      "fps": 0.42647383623372837,
+      "visibleLabels": [],
+      "bodyWidth": 768
+    },
+    {
+      "width": 768,
+      "theme": "night",
+      "quality": "reduced",
+      "fps": 0.6185026020438578,
+      "visibleLabels": [],
+      "bodyWidth": 768
+    }
+  ],
+  "logs": []
+}
