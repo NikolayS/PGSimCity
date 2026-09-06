@@ -28,6 +28,15 @@ function context(): UiContext {
 }
 
 describe('latency HUD', () => {
+  it('opens the incident replay controls', () => {
+    const replay = vi.fn()
+    const hud = createHud(context(), { onReplay: replay })
+    const button = document.querySelector<HTMLButtonElement>('.hud-replay')!
+    expect(button.getAttribute('aria-label')).toBe('Rewind and compare model incidents')
+    button.click()
+    expect(replay).toHaveBeenCalledTimes(1)
+    hud.dispose()
+  })
   beforeEach(() => {
     vi.useFakeTimers()
     const dom = installTestDom()

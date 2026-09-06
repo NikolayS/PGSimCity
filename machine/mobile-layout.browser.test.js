@@ -241,6 +241,7 @@ describe('machine room portrait layout', () => {
         if (!window.PGSIMCITY) throw new Error('city API did not become ready')
         document.querySelector('.control-center').hidden = false
         document.querySelector('#hud-latency-panel').hidden = false
+        document.querySelector('.pg-replay').hidden = false
         window.PGSIMCITY.bus.emit('select', { id: 'recovery.ground' })
       })()`,
     }, {
@@ -254,6 +255,7 @@ describe('machine room portrait layout', () => {
         if (!window.PGSIMCITY) throw new Error('city API did not become ready')
         document.querySelector('.control-center').hidden = false
         document.querySelector('#hud-latency-panel').hidden = false
+        document.querySelector('.pg-replay').hidden = false
         window.PGSIMCITY.bus.emit('select', { id: 'client.pooler' })
       })()`,
     }])
