@@ -11,6 +11,16 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+## [0.40.1] - 2026-09-06
+
+A maintenance release; the graphics and learning redesign remains in review.
+
+### Security
+
+- Update the development-only `nanoid` dependency from 3.3.16 to 3.3.18.
+  The locked dependency audit reports no known vulnerabilities. This does not
+  add or replace a runtime dependency.
+
 ### Fixed
 
 - Advance the reviewed PostgreSQL reference from 18.4 to 18.6 after checking
