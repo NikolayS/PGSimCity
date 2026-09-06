@@ -142,6 +142,8 @@ varying float vScroll;
 varying float vWipe;
 varying float vHeight;
 void main() {
+  // The middle bay is a recessed service spine, not a floating window surface.
+  if ( abs( vPos.x ) < 0.101 && abs( vPos.z ) > 0.49 ) discard;
   // metres up the shaft, so the floor pitch is constant across tower heights
   float y = ( vPos.y + 0.5 ) * vHeight;
   // whichever horizontal axis varies on this face gives us window columns
@@ -244,7 +246,8 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
   }
 
   /* --- structure (matte, never glows) ----------------------------------- */
-  const structMesh = new THREE.InstancedMesh(unitBox, matStruct, N * 2)
+  const STRUCT_PARTS = 8
+  const structMesh = new THREE.InstancedMesh(unitBox, matStruct, N * STRUCT_PARTS)
   structMesh.frustumCulled = false
   const trimMesh = new THREE.InstancedMesh(unitBox, matTrim, N * 3)
   trimMesh.frustumCulled = false
@@ -256,8 +259,20 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
     const top = PLINTH_H + SH[i]
     const plinth: BoxSpec = [x, PLINTH_H / 2, BZ, BW + 3.2, PLINTH_H, BW + 3.2]
     const collar: BoxSpec = [x, top + COLLAR_H / 2, BZ, BW + 1.3, COLLAR_H, BW + 1.3]
-    setBox(structMesh, i * 2, plinth)
-    setBox(structMesh, i * 2 + 1, collar)
+    const first = i * STRUCT_PARTS
+    setBox(structMesh, first, plinth)
+    setBox(structMesh, first + 1, collar)
+    // A repeated supporting frame identifies the process family without hiding its state skin.
+    for (let corner = 0; corner < 4; corner++) {
+      const side = corner < 2 ? -1 : 1
+      const face = corner % 2 === 0 ? -1 : 1
+      setBox(structMesh, first + 2 + corner, [
+        x + side * (BW / 2 + 0.45), PLINTH_H + (SH[i] - 1.1) / 2,
+        BZ + face * (BW / 2 - 0.4), 0.85, SH[i] - 1.1, 1,
+      ])
+    }
+    setBox(structMesh, first + 6, [x - BW / 2 - 0.2, top - 0.55, BZ, 1.7, 1.1, BW])
+    setBox(structMesh, first + 7, [x + BW / 2 + 0.2, top - 0.55, BZ, 1.7, 1.1, BW])
     pushBoxEdges(edgeVerts, plinth)
     pushBoxEdges(edgeVerts, [x, SY[i], BZ, BW, SH[i], BW])
     pushBoxEdges(edgeVerts, collar)
@@ -284,7 +299,19 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
   group.add(structMesh, trimMesh, ventMesh)
 
   /* --- shafts (one instanced mesh, per-instance colour) ------------------ */
-  const shaftMesh = new THREE.InstancedMesh(unitBox, matShaft, N)
+  // One extruded profile supplies real self-shading recesses for every process.
+  const shaftProfile = new THREE.Shape()
+  shaftProfile.moveTo(-0.5, -0.5)
+  for (const [x, z] of [
+    [-0.1, -0.5], [-0.1, -0.42], [0.1, -0.42], [0.1, -0.5],
+    [0.5, -0.5], [0.5, 0.5], [0.1, 0.5], [0.1, 0.42],
+    [-0.1, 0.42], [-0.1, 0.5], [-0.5, 0.5],
+  ]) shaftProfile.lineTo(x, z)
+  shaftProfile.closePath()
+  const shaftGeo = own(new THREE.ExtrudeGeometry(shaftProfile, { depth: 1, bevelEnabled: false, steps: 1 }))
+  shaftGeo.rotateX(Math.PI / 2)
+  shaftGeo.translate(0, 0.5, 0)
+  const shaftMesh = new THREE.InstancedMesh(shaftGeo, matShaft, N)
   shaftMesh.frustumCulled = false
   for (let i = 0; i < N; i++) setBox(shaftMesh, i, [XS[i], SY[i], BZ, BW, SH[i], BW])
   shaftMesh.instanceMatrix.needsUpdate = true
