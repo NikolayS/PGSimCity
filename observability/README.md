@@ -72,7 +72,7 @@ These are hard constraints in the code, not aspirations.
    the registered `wait_event_type`/`wait_event` pairs, and the `pg_stat_io`
    `object` and `context` values this page emits. The vacuum phase strings
    and the six non-`pg_stat_*` catalog entries are manual-checked only.
-   See [oracle coverage](../ORACLE-AUDIT.md) for the check boundaries. Where a
+   Where a
    name changed between releases the change is recorded and shown. The
    capitalisation counts: PostgreSQL 17 began generating the wait event list
    from a table and normalised it on the way through, so the WAL flush wait is
