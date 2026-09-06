@@ -1109,7 +1109,11 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What it needs from you',
-        body: 'It requires `wal_level = logical`, which is a restart, and which makes WAL bigger because extra information has to be logged for decoding to be possible at all. It also requires a **replica identity** on any table you UPDATE or DELETE: by default that is the primary key, and a table with no primary key will error out unless you set `REPLICA IDENTITY FULL` (which logs the entire old row into WAL — correct, and expensive). Finally, it needs a logical slot, with all the disk-filling risk that carries.',
+        body: 'It requires `wal_level = logical`, which is a restart, and which makes WAL bigger because extra information has to be logged for decoding to be possible at all. Finally, it needs a logical slot, with all the disk-filling risk that carries.',
+      },
+      {
+        heading: 'Replica identity for built-in replication',
+        body: 'For built-in logical replication, a table in a publication that publishes `UPDATE` or `DELETE` needs a **replica identity** so the subscriber can identify the affected row. A primary key is the default; an eligible unique index can instead be selected with `REPLICA IDENTITY USING INDEX`. `REPLICA IDENTITY FULL` is a fallback when no suitable key is available: it records the old row and can make subscriber lookups expensive. Without a usable identity, the published UPDATE or DELETE fails on the publisher. `INSERT` does not require replica identity. This publication rule is not a primary-key requirement for logical decoding itself.',
       },
       {
         heading: 'The reorder buffer',
@@ -1148,7 +1152,11 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       'src/backend/replication/slot.c',
     ],
     refs: {
-      docs: [manual('logicaldecoding.html', 'Chapter 47. Logical Decoding')],
+      docs: [
+        manual('logicaldecoding.html', 'Chapter 47. Logical Decoding'),
+        manual('logical-replication-publication.html#LOGICAL-REPLICATION-REPLICA-IDENTITY', '29.1.1 Replica Identity'),
+        manual('sql-altertable.html#SQL-ALTERTABLE-REPLICA-IDENTITY', 'ALTER TABLE — REPLICA IDENTITY'),
+      ],
       source: [
         srcFile('src/backend/replication/logical/decode.c', 'LogicalDecodingProcessRecord'),
         srcFile('src/backend/replication/logical/reorderbuffer.c', 'ReorderBufferProcessTXN, ReorderBufferCommit'),
