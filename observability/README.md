@@ -66,8 +66,13 @@ These are hard constraints in the code, not aspirations.
 1. **Names are real.** Every view, function, column and enum value — every
    `wait_event_type`/`wait_event` pair, every vacuum `phase` string, every
    `pg_stat_io` `object` and `context` value — was checked against
-    the [PostgreSQL 18 manual](https://www.postgresql.org/docs/18/) and verified
-    against PostgreSQL 18.6. Where a
+   the [PostgreSQL 18 manual](https://www.postgresql.org/docs/18/).
+   A registered subset is additionally machine-checked against a live
+   PostgreSQL 18.6 server by the oracle: the `pg_stat_*` view column shapes,
+   the registered `wait_event_type`/`wait_event` pairs, and the `pg_stat_io`
+   `object` and `context` values this page emits. The vacuum phase strings
+   and the six non-`pg_stat_*` catalog entries are manual-checked only.
+   See [oracle coverage](../ORACLE-AUDIT.md) for the check boundaries. Where a
    name changed between releases the change is recorded and shown. The
    capitalisation counts: PostgreSQL 17 began generating the wait event list
    from a table and normalised it on the way through, so the WAL flush wait is
