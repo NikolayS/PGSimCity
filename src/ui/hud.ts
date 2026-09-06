@@ -340,7 +340,7 @@ function vitalHistory(key: VitalKey, s: SimState): number[] {
  * FACTORY
  * ========================================================================*/
 
-export function createHud(ctx: UiContext): UiModule {
+export function createHud(ctx: UiContext, options: { onExport?: () => void } = {}): UiModule {
   const bus = ctx.bus
   const looseBus = bus
   const sim = ctx.sim
@@ -494,6 +494,11 @@ export function createHud(ctx: UiContext): UiModule {
     icon('tour', 15),
     el('span', { text: 'Tour' }),
   )
+  const exportBtn = options.onExport ? el('button', {
+    class: 'pg-btn hud-tool hud-export', type: 'button', text: 'Export image',
+    title: 'Save a high-resolution image of this view with its model disclosure',
+    'aria-label': 'Export this city view as an image', on: { click: options.onExport },
+  }) : null
   const traceBtn = el(
     'button',
     {
@@ -656,6 +661,7 @@ export function createHud(ctx: UiContext): UiModule {
     legalBtn,
     viewBtn,
     tourBtn,
+    exportBtn,
     traceBtn,
     diagnoseLink,
     walkBtn,

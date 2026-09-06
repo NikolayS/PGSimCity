@@ -1270,7 +1270,7 @@ body.pg-walk .hud-right > .hud-sep,
 body.pg-walk .hud-view-panel,
 body.pg-walk .hud-transport > :not(.hud-transport__dock),
 body.pg-walk .hud-transport__dock > :not(.hud-tools),
-body.pg-walk .hud-tools > :not(.hud-walk) {
+body.pg-walk .hud-tools > :not(.hud-walk):not(.hud-export) {
   display: none;
 }
 
@@ -1302,6 +1302,27 @@ body.pg-walk .hud-walk {
 
 body.pg-walk.touch-walk-active .hud-walk {
   display: none;
+}
+
+body.pg-walk .hud-export {
+  position: fixed;
+  top: calc(14px + var(--safe-t));
+  right: calc(14px + var(--safe-r));
+  z-index: var(--z-floating-overlay);
+  min-height: var(--tap);
+  padding-inline: 12px;
+  color: var(--ink);
+  background: var(--bg-panel-solid);
+}
+
+/* The version disclosure sits below this header, not behind its fixed controls. */
+body.pg-walk .hud-bar {
+  min-height: var(--tap);
+}
+
+body.pg-walk.touch-walk-active .hud-export {
+  left: calc(14px + var(--safe-l));
+  right: auto;
 }
 
 /* ==========================================================================

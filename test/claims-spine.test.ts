@@ -140,6 +140,7 @@ const REGISTERED_CLAIM_VALUE_READS = {
     'src/observability/views.ts': 1,
   },
   postgresqlVersion: {
+    'src/ui/presentation.ts': 1,
     'machine/magnum.js': 2,
     'src/core/corrections.ts': 2,
     'src/main.ts': 1,
@@ -168,6 +169,7 @@ const REGISTERED_OWNER_IMPORT_READS: readonly RegisteredOwnerImportRead[] = [
   { claimId: 'appVersion', source: 'src/core/claims.ts', module: './build', imported: 'BUILD_LABEL', uses: 1 },
   { claimId: 'appVersion', source: 'src/observability/main.ts', module: '../core/build', imported: 'BUILD_LABEL', uses: 2 },
   { claimId: 'appVersion', source: 'src/ui/help.ts', module: '../core/build', imported: 'BUILD_LABEL', uses: 2 },
+  { claimId: 'appVersion', source: 'src/ui/presentation.ts', module: '../core/build', imported: 'BUILD_LABEL', uses: 1 },
   { claimId: 'mvccVocabulary', source: 'src/core/claims.ts', module: '../spine/mvcc-vocabulary', imported: 'MVCC_VOCABULARY', uses: 1 },
   { claimId: 'cityArchitecture', source: 'src/core/claims.ts', module: '../spine/city-architecture', imported: 'CITY_ARCHITECTURE_CLAIMS', uses: 1 },
   { claimId: 'cityArchitecture', source: 'src/ui/city-words-model.ts', module: '../spine/city-architecture', imported: 'CITY_ARCHITECTURE_CLAIMS', uses: 8 },
