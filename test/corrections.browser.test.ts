@@ -222,11 +222,13 @@ describe('PostgreSQL correction reports', () => {
         }
         document.querySelector('.control-center').hidden = false
         document.querySelector('#hud-latency-panel').hidden = false
+        document.querySelector('.pg-replay').hidden = false
       })()`,
       prepare: `(() => {
         const { sim, bus } = window.PGSIMCITY
         document.querySelector('.control-center').hidden = false
         document.querySelector('#hud-latency-panel').hidden = false
+        document.querySelector('.pg-replay').hidden = false
         sim.setKnob('recoveryTargetAge', 40)
         sim.setKnob('walGDownloadConcurrency', 4)
         Object.assign(sim.state.disasterRecovery.drill, {
