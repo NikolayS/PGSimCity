@@ -1116,6 +1116,10 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         body: 'For built-in logical replication, a table in a publication that publishes `UPDATE` or `DELETE` needs a **replica identity** so the subscriber can identify the affected row. A primary key is the default; an eligible unique index can instead be selected with `REPLICA IDENTITY USING INDEX`. `REPLICA IDENTITY FULL` is a fallback when no suitable key is available: it records the old row and can make subscriber lookups expensive. Without a usable identity, the published UPDATE or DELETE fails on the publisher. `INSERT` does not require replica identity. This publication rule is not a primary-key requirement for logical decoding itself.',
       },
       {
+        heading: 'Trusted output plugins',
+        body: 'In PostgreSQL 18.6, `output_plugin_libraries` defaults to `pgoutput, test_decoding`. A third-party plugin such as `wal2json` must be installed and added to this allowlist by an administrator after a safety review. The city does not configure output plugins; this is a real-server requirement.',
+      },
+      {
         heading: 'The reorder buffer',
         body: 'WAL is written in the order changes happened, interleaved across concurrent transactions, and it contains work from transactions that later rolled back. Consumers want committed transactions, whole, in commit order. The **reorder buffer** is what bridges that: it spools each transaction’s changes in memory until it sees the commit record, then emits them as a unit and discards aborted ones. Transactions bigger than `logical_decoding_work_mem` spill to disk, which is why one enormous batch UPDATE can stall an otherwise healthy CDC pipeline. PostgreSQL 14 added streaming of in-progress transactions to soften that.',
       },
@@ -1154,6 +1158,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     refs: {
       docs: [
         manual('logicaldecoding.html', 'Chapter 47. Logical Decoding'),
+        manual('runtime-config-replication.html#GUC-OUTPUT-PLUGIN-LIBRARIES', 'Trusted logical output plugins'),
         manual('logical-replication-publication.html#LOGICAL-REPLICATION-PUBLICATION-REPLICA-IDENTITY', '29.1.1 Replica Identity'),
         manual('sql-altertable.html#SQL-ALTERTABLE-REPLICA-IDENTITY', 'ALTER TABLE — REPLICA IDENTITY'),
       ],

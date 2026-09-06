@@ -24,6 +24,15 @@ const diagnosticCopy = [...ALL_STEPS, ...ALL_VERDICTS]
   .join('\n')
 
 describe('PostgreSQL 18 content corrections', () => {
+  it('qualifies third-party decoding plugins with the server allowlist', () => {
+    const decoder = DOCS_STORAGE.find((doc) => doc.id === 'logical.decoder')!
+    const copy = decoder.sections.map((section) => section.body).join('\n')
+    expect(copy).toContain('output_plugin_libraries')
+    expect(copy).toContain('pgoutput, test_decoding')
+    expect(copy).toMatch(/wal2json.*installed.*allowlist/)
+    expect(copy).toContain('does not configure output plugins')
+  })
+
   it('keeps every documentation surface consistent with the replication link capacity', () => {
     const contradictions = DOCS.flatMap((entry) => {
       const copy = [
