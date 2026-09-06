@@ -64,3 +64,6 @@ src/**/__instr*.test.ts
 .claude/
 
 node_modules
+
+# Generated visual-test artifacts belong outside source control.
+/evidence/visible-composition/
