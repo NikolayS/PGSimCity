@@ -1,0 +1,70 @@
+{
+  ".hud-export": {
+    "x": 68.59375,
+    "y": 36,
+    "width": 109.1875,
+    "height": 44,
+    "visibility": "visible",
+    "color": "rgb(24, 34, 46)",
+    "background": "rgb(250, 248, 243)",
+    "reachable": true,
+    "hit": "pg-btn hud-tool hud-export"
+  },
+  "#hud-top .pg-version-qualification > summary": {
+    "x": 257.984375,
+    "y": 79,
+    "width": 230.03125,
+    "height": 44,
+    "visibility": "visible",
+    "color": "rgb(71, 87, 106)",
+    "background": "rgba(0, 0, 0, 0)",
+    "reachable": true,
+    "hit": ""
+  },
+  ".touchpad__move-zone": {
+    "x": 126.5,
+    "y": 563.234375,
+    "width": 137,
+    "height": 417.53125,
+    "visibility": "visible",
+    "color": "rgb(24, 34, 46)",
+    "background": "rgba(0, 0, 0, 0)",
+    "reachable": true,
+    "hit": "touchpad__move-zone"
+  },
+  ".touchpad__look-zone": {
+    "x": 292.5,
+    "y": 422,
+    "width": 195,
+    "height": 844,
+    "visibility": "visible",
+    "color": "rgb(24, 34, 46)",
+    "background": "rgba(0, 0, 0, 0)",
+    "reachable": true,
+    "hit": "touchpad__look-zone"
+  },
+  "day": {
+    "x": 1211.40625,
+    "y": 36,
+    "width": 109.1875,
+    "height": 44,
+    "visibility": "visible",
+    "color": "rgb(24, 34, 46)",
+    "background": "rgb(250, 248, 243)",
+    "reachable": true,
+    "hit": "pg-btn hud-tool hud-export",
+    "contrast": 15.1373014861467
+  },
+  "night": {
+    "x": 1211.40625,
+    "y": 36,
+    "width": 109.1875,
+    "height": 44,
+    "visibility": "visible",
+    "color": "rgb(232, 241, 255)",
+    "background": "rgb(10, 16, 32)",
+    "reachable": true,
+    "hit": "pg-btn hud-tool hud-export",
+    "contrast": 16.660009706157453
+  }
+}
