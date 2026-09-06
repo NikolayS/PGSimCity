@@ -69,7 +69,7 @@ function readCommandLines() {
 
 export function profileIsInUse(profilePath) {
   const commandLines = readCommandLines()
-  if (!commandLines) return false
+  if (!commandLines) return true
 
   const profileArgument = `--user-data-dir=${profilePath}`
   // Chrome flattens its command line into argv[0] on some hosts.
