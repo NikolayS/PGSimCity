@@ -25,7 +25,7 @@ export interface BoxBevelStats {
 }
 
 export function boxBevelDetail(level: QualityLevel): 0 | 1 {
-  return level === 'high' || level === 'ultra' ? 1 : 0
+  return level === 'medium' || level === 'high' || level === 'ultra' ? 1 : 0
 }
 
 function pushFace(
@@ -193,7 +193,7 @@ export function pairBoxGeometries(
 
 /** Swap geometry only when quality changes; the frame loop never touches it. */
 export function applyBoxBevelDetail(root: THREE.Object3D, level: QualityLevel): BoxBevelStats {
-  const detailed = boxBevelDetail(level) === 1
+  const enabled = boxBevelDetail(level) === 1
   let boxes = 0
   let triangles = 0
   let triangleDelta = 0
@@ -203,10 +203,16 @@ export function applyBoxBevelDetail(root: THREE.Object3D, level: QualityLevel): 
     if (mesh.isMesh !== true) return
     const pair = (mesh.geometry.userData as BoxGeometryData).pgBoxPair
     if (!pair) return
-    mesh.geometry = detailed ? pair.beveled : pair.plain
     const count = (mesh as THREE.InstancedMesh).isInstancedMesh === true
       ? (mesh as THREE.InstancedMesh).count
       : 1
+    const capacity = (mesh as THREE.InstancedMesh).isInstancedMesh === true
+      ? (mesh as THREE.InstancedMesh).instanceMatrix.count
+      : 1
+    /* Medium retains architectural edges but does not multiply geometry in
+     * the page grids and other large state fields. */
+    const detailed = enabled && (level !== 'medium' || capacity <= 128)
+    mesh.geometry = detailed ? pair.beveled : pair.plain
     boxes += count
     triangles += (detailed ? BEVELED_BOX_TRIANGLES : BOX_TRIANGLES) * count
     triangleDelta += (detailed ? BEVELED_BOX_TRIANGLES - BOX_TRIANGLES : 0) * count

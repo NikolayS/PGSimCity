@@ -251,7 +251,7 @@ export interface Atmosphere {
   daylight: boolean
   stars: boolean
   clouds: boolean
-  /** Toon ramp on every MeshStandardMaterial. */
+  /** Stylized daylight response; the legacy name also selects day UI colours. */
   toon: boolean
 }
 
@@ -307,14 +307,10 @@ export const ATMOSPHERE: Record<CuratedThemeMode, Atmosphere> = {
   day: {
     // ACES at a daylight exposure crushes saturation into pastel — exactly the
     // "night theme with the lights turned up" failure. Khronos PBR Neutral
-    // holds hue and saturation and rolls the top end off instead of clipping,
-    // which is what a poster-flat city needs.
+    // holds hue and saturation and rolls the top end off instead of clipping.
     toneMapping: 'neutral',
-    // Under 1. The whole budget here is arithmetic: ambient + the toon ramp's
-    // brightest band must land near 1.0 on a 0.55-albedo stone, or the city
-    // clips to white and the ink lines have nothing to draw against. Measured
-    // on the establishing shot: hemisphere 0.62 + key 1.35 gives 0.90–1.30
-    // irradiance, and 0.92 exposure brings the top of that back under the knee.
+    // Keep material colour below the highlight shoulder; the low sun and cool
+    // indirect floor establish shape without an exposure-dependent palette.
     exposure: 1.0,
     /*
      * Aerial perspective begins at 264 m and finishes at 1,897.5 m. Across the
@@ -328,11 +324,11 @@ export const ATMOSPHERE: Record<CuratedThemeMode, Atmosphere> = {
     heightFogFalloff: 0.018,
     fogColor: DAY_PALETTE.fog,
     plateFogScale: 0.84,
-    hemiSky: 0xa7c6e8,
-    hemiGround: 0x687f9d,
-    hemiIntensity: 0.98,
-    keyColor: 0xffc47d,
-    keyIntensity: 2.4,
+    hemiSky: 0xb0cee9,
+    hemiGround: 0x7d8999,
+    hemiIntensity: 0.82,
+    keyColor: 0xffd6a3,
+    keyIntensity: 2.25,
     /*
      * North-west at 8.4°. A one-metre object casts 6.81 m across the ground;
      * the backend row therefore stripes the plaza to the south-east, and the
@@ -347,12 +343,12 @@ export const ATMOSPHERE: Record<CuratedThemeMode, Atmosphere> = {
     shadowIntensity: 0.84,
     shadows: true,
     fillColor: 0x769bc6,
-    fillIntensity: 0.18,
+    fillIntensity: 0.28,
     fillPos: [420, 220, 360],
     walGlow: 0,
     yardGlow: 0,
-    noBloomHemi: 0.98,
-    noBloomFill: 0.18,
+    noBloomHemi: 0.82,
+    noBloomFill: 0.28,
     noBloomWalGlow: 0,
     noBloomYardGlow: 0,
     // OFF, and it has to be off rather than merely quiet. Several districts
