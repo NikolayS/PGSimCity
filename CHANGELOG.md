@@ -23,6 +23,10 @@ A maintenance release; the graphics and learning redesign remains in review.
 
 ### Fixed
 
+- Correct the logical-decoding explanation: replica identity is required for
+  published UPDATE/DELETE, an eligible unique index is an alternative to a
+  primary key, and FULL is a fallback rather than the only remedy. Published
+  INSERT does not require replica identity.
 - Preserve screenshot-driver Chrome profiles when neither process-inspection
   source is available. Cleanup resumes once usage can be checked again, instead
   of treating unknown usage as idle and risking deletion of a live profile.
