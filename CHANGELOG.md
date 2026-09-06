@@ -11,6 +11,31 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-09-06
+
+A clearer opening view of the PostgreSQL city.
+
+### Changed
+
+- Raise the opening camera, reduce distant survey-grid competition, and compact
+  laptop instruments to give the city more room.
+- Use theme-aware label surfaces and quieter typography for readable names.
+
+### Fixed
+
+- Keep transient quality warnings clear of the model qualification and transport
+  controls on phones, retaining the warning and Restore action.
+
+### Limitations
+
+- This improves orientation and legibility, not simulation dynamics or lessons.
+- Labels can disappear after a phone-to-tablet resize in both the baseline and
+  candidate. The mobile opening remains a small overview; night structures are
+  dark at reduced quality. Software-rendered captures are not device benchmarks.
+- The final eight-image capture completed its images but was interrupted before
+  its aggregate console report. Separate phone interaction checks completed
+  without exceptions; the image matrix is not a completed console audit.
+
 ## [0.40.1] - 2026-09-06
 
 A maintenance release; the graphics and learning redesign remains in review.
