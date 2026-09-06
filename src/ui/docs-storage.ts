@@ -1154,7 +1154,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     refs: {
       docs: [
         manual('logicaldecoding.html', 'Chapter 47. Logical Decoding'),
-        manual('logical-replication-publication.html#LOGICAL-REPLICATION-REPLICA-IDENTITY', '29.1.1 Replica Identity'),
+        manual('logical-replication-publication.html#LOGICAL-REPLICATION-PUBLICATION-REPLICA-IDENTITY', '29.1.1 Replica Identity'),
         manual('sql-altertable.html#SQL-ALTERTABLE-REPLICA-IDENTITY', 'ALTER TABLE — REPLICA IDENTITY'),
       ],
       source: [
