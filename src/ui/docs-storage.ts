@@ -1159,7 +1159,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       docs: [
         manual('logicaldecoding.html', 'Chapter 47. Logical Decoding'),
         manual('runtime-config-replication.html#GUC-OUTPUT-PLUGIN-LIBRARIES', 'Trusted logical output plugins'),
-        manual('logical-replication-publication.html#LOGICAL-REPLICATION-REPLICA-IDENTITY', '29.1.1 Replica Identity'),
+        manual('logical-replication-publication.html#LOGICAL-REPLICATION-PUBLICATION-REPLICA-IDENTITY', '29.1.1 Replica Identity'),
         manual('sql-altertable.html#SQL-ALTERTABLE-REPLICA-IDENTITY', 'ALTER TABLE — REPLICA IDENTITY'),
       ],
       source: [
