@@ -23,6 +23,9 @@ A maintenance release; the graphics and learning redesign remains in review.
 
 ### Fixed
 
+- Preserve screenshot-driver Chrome profiles when neither process-inspection
+  source is available. Cleanup resumes once usage can be checked again, instead
+  of treating unknown usage as idle and risking deletion of a live profile.
 - Advance the reviewed PostgreSQL reference from 18.4 to 18.6 after checking
   the release notes and rerunning all 223 oracle observations: 219 matches,
   four existing teaching-scale divergences, no unexpected results. The version
