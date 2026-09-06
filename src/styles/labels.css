@@ -65,11 +65,11 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  column-gap: 14px;
-  padding: 5px 10px 5px 9px;
-  border: 0;
-  border-radius: 0;
-  background: rgba(8, 13, 24, 0.9);
+  column-gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--line-hair);
+  border-radius: 3px;
+  background: var(--bg-panel);
   white-space: normal;
   pointer-events: auto;
   cursor: pointer;
@@ -91,8 +91,8 @@
   font-size: var(--fs-xs);
   font-style: normal;
   font-weight: 600;
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
+  letter-spacing: 0.025em;
+  text-transform: none;
   color: var(--ink);
   white-space: nowrap;
 }
@@ -202,7 +202,7 @@
 
 .lbl__chip:hover,
 .lbl.is-hovered .lbl__chip {
-  background: rgba(12, 20, 34, 0.96);
+  background: var(--bg-panel-solid);
 }
 
 .lbl.is-hovered .lbl__leader {
@@ -246,8 +246,8 @@
 }
 
 .lbl.is-name-only .lbl__chip {
-  padding: 3px 8px 3px 8px;
-  background: rgba(8, 13, 24, 0.84);
+  padding: 4px 8px;
+  background: var(--bg-panel);
 }
 
 /* collapse to the tracks that still carry something, otherwise the (now empty)
@@ -263,7 +263,7 @@
 }
 
 .lbl.is-name-only .lbl__name {
-  font-size: var(--fs-micro);
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
 }
 
@@ -279,7 +279,7 @@
   grid-template-columns: minmax(0, 1fr);
   column-gap: 0;
   padding: 4px 9px 4px 8px;
-  background: rgba(6, 11, 20, 0.9);
+  background: var(--bg-panel);
 }
 
 .lbl--district.has-more .lbl__chip {
@@ -291,7 +291,7 @@
 .lbl--district .lbl__name {
   font-size: var(--fs-xs);
   font-weight: 600;
-  letter-spacing: 0.22em;
+  letter-spacing: 0.08em;
   color: var(--ink);
 }
 
@@ -312,12 +312,12 @@
   grid-template-columns: minmax(0, 1fr);
   column-gap: 0;
   padding: 5px 13px 5px 12px;
-  background: rgba(6, 11, 20, 0.88);
+  background: var(--bg-panel);
 }
 
 .lbl--city .lbl__name {
   font-size: var(--fs-sm);
-  letter-spacing: 0.3em;
+  letter-spacing: 0.16em;
   color: var(--ink);
 }
 

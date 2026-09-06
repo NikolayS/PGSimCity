@@ -109,16 +109,11 @@ const FOCUS_UP_BIAS = 0.436 // 25°
 /** Fraction of a tour path spent easing in / out. */
 const PATH_EASE = 0.18
 
-/**
- * The establishing shot. From the north-west, high enough that the whole
- * surface reads at once: maintenance yard (west) on the right of frame, WAL
- * district (east) on the left, backend row across the middle, plaza dead
- * centre, and the excavation opening below it. Aim point is pulled slightly
- * west of the origin so the landfill and the archive store sit symmetrically
- * inside the horizontal FOV.
- */
-const HOME_POS = new THREE.Vector3(-218, 216, -342)
-const HOME_PIVOT = new THREE.Vector3(-18, 0, -16)
+/* A raised three-quarter view keeps the client terminal in the foreground,
+ * the backend row clear of the basin, and storage visible below the deck.
+ * The complete Slonik silhouette belongs to the separate plan preset. */
+const HOME_POS = new THREE.Vector3(-250, 285, -365)
+const HOME_PIVOT = new THREE.Vector3(-5, -6, -45)
 
 /**
  * THE OVERVIEW SHOT — straight down on the plate.

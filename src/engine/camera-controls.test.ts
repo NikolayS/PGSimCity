@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createBus } from '../core/bus'
 import type { Bus } from '../core/types'
 import { installTestDom } from '../../test/dom'
-import { CITY } from '../world/layout'
+import { ANCHOR, CITY } from '../world/layout'
 import { createCameraRig, type CameraRig } from './camera'
 
 vi.mock('../world/slonik', () => ({
@@ -354,6 +354,25 @@ describe('map camera mouse controls', () => {
   afterEach(() => {
     fixture.rig.dispose()
   })
+
+  it.each([[1280, 760], [1440, 900], [390, 844]])(
+    'keeps the client-to-memory landmarks inside the opening frame at %s × %s',
+    (width, height) => {
+      fixture.camera.fov = 52
+      fixture.rig.resize(width, height)
+      fixture.rig.home(true)
+      fixture.camera.updateMatrixWorld()
+      for (const anchor of [ANCHOR.clientTerminal, ANCHOR.postmasterTop, ANCHOR.plaza]) {
+        const projected = new THREE.Vector3(...anchor).project(fixture.camera)
+        const x = (projected.x + 1) * 0.5
+        const y = (1 - projected.y) * 0.5
+        expect(x, `landmark ${anchor} must clear the horizontal edge`).toBeGreaterThan(0.08)
+        expect(x).toBeLessThan(0.92)
+        expect(y, `landmark ${anchor} must clear the top instruments`).toBeGreaterThan(0.18)
+        expect(y, `landmark ${anchor} must clear the transport dock`).toBeLessThan(0.87)
+      }
+    },
+  )
 
   it('plain left-drag pans without rotating', () => {
     const pivotBefore = fixture.rig.pivot.clone()
@@ -915,7 +934,10 @@ describe('map camera mouse controls', () => {
     fixture.rig.update(1 / 60)
 
     expect(fixture.rig.pivot.distanceTo(pivotBefore)).toBeGreaterThan(0.1)
-    expect(fixture.camera.quaternion.angleTo(rotationBefore)).toBeLessThan(1e-8)
+    /* acos(dot) amplifies roundoff near an unchanged orientation. */
+    for (const axis of ['x', 'y', 'z', 'w'] as const) {
+      expect(fixture.camera.quaternion[axis]).toBeCloseTo(rotationBefore[axis], 12)
+    }
   })
 
   it('does not coast after a reduced-motion rotate drag is released', () => {
