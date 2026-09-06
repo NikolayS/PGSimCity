@@ -59,6 +59,13 @@ if (
   input.machine = entry('./machine/index.html')
 }
 
+if (
+  process.env.PGSIMCITY_ENTRIES !== 'city' &&
+  allExist('./experimental/webgpu/index.html', './src/experimental/webgpu/main.ts', './src/experimental/webgpu/prototype.ts', './src/experimental/webgpu/session.ts', './src/experimental/webgpu/sample.ts', './src/experimental/webgpu/style.css')
+) {
+  input.webgpuLab = entry('./experimental/webgpu/index.html')
+}
+
 export default defineConfig({
   base: './',
   plugins: [{
