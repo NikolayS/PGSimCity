@@ -1112,6 +1112,10 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         body: 'It requires `wal_level = logical`, which is a restart, and which makes WAL bigger because extra information has to be logged for decoding to be possible at all. It also requires a **replica identity** on any table you UPDATE or DELETE: by default that is the primary key, and a table with no primary key will error out unless you set `REPLICA IDENTITY FULL` (which logs the entire old row into WAL — correct, and expensive). Finally, it needs a logical slot, with all the disk-filling risk that carries.',
       },
       {
+        heading: 'Trusted output plugins',
+        body: 'In PostgreSQL 18.6, `output_plugin_libraries` defaults to `pgoutput, test_decoding`. A third-party plugin such as `wal2json` must be installed and added to this allowlist by an administrator after a safety review. The city does not configure output plugins; this is a real-server requirement.',
+      },
+      {
         heading: 'The reorder buffer',
         body: 'WAL is written in the order changes happened, interleaved across concurrent transactions, and it contains work from transactions that later rolled back. Consumers want committed transactions, whole, in commit order. The **reorder buffer** is what bridges that: it spools each transaction’s changes in memory until it sees the commit record, then emits them as a unit and discards aborted ones. Transactions bigger than `logical_decoding_work_mem` spill to disk, which is why one enormous batch UPDATE can stall an otherwise healthy CDC pipeline. PostgreSQL 14 added streaming of in-progress transactions to soften that.',
       },
@@ -1148,7 +1152,10 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       'src/backend/replication/slot.c',
     ],
     refs: {
-      docs: [manual('logicaldecoding.html', 'Chapter 47. Logical Decoding')],
+      docs: [
+        manual('logicaldecoding.html', 'Chapter 47. Logical Decoding'),
+        manual('runtime-config-replication.html#GUC-OUTPUT-PLUGIN-LIBRARIES', 'Trusted logical output plugins'),
+      ],
       source: [
         srcFile('src/backend/replication/logical/decode.c', 'LogicalDecodingProcessRecord'),
         srcFile('src/backend/replication/logical/reorderbuffer.c', 'ReorderBufferProcessTXN, ReorderBufferCommit'),
