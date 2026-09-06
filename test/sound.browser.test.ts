@@ -73,6 +73,15 @@ describe('movement sound in a rendered city', () => {
       readySelector: '.hud-audio',
     }], async ({ evaluate, keyPress, send }) => {
       await evaluate(INSTALL_AUDIO_PROBE)
+      /* Reproduce a quality notification arriving after the sound notification,
+       * without relying on software-renderer load or disabling quality control. */
+      await evaluate(`window.PGSIMCITY.bus.on('toast', ({ text }) => {
+        if (/sound on/i.test(text)) window.PGSIMCITY.bus.emit('toast', {
+          text: 'Frame rate stayed low — reduced antialiasing; quality is now medium.',
+          kind: 'info',
+          ms: 10000,
+        })
+      })`)
 
       const waitFor = (condition: string) => evaluate(`new Promise((resolve, reject) => {
         const startedAt = performance.now()
@@ -101,13 +110,18 @@ describe('movement sound in a rendered city', () => {
           label: button.querySelector('.hud-audio__label').textContent,
           title: button.title,
           ariaLabel: button.getAttribute('aria-label'),
-          toast: document.querySelector('.hud-toast__txt')?.textContent ?? '',
         }
       })()`)
 
+      const enabledSoundToast = async () => {
+        const expression = `Array.from(document.querySelectorAll('.hud-toast__txt')).map((node) => node.textContent).find((text) => /sound on/i.test(text)) ?? ''`
+        await waitFor(expression)
+        return evaluate(expression)
+      }
+
       await keyPress('M', { code: 'KeyM' })
       await waitFor(`window.PGSIMCITY.audio.enabled`)
-      const orbitToast = await evaluate(`document.querySelector('.hud-toast__txt')?.textContent ?? ''`)
+      const orbitToast = await enabledSoundToast()
       await waitFor(`document.querySelector('.hud-audio').getAttribute('aria-pressed') === 'true'`)
       const orbitCopy = { ...await copy(), toast: orbitToast }
       await setWalkingKey('keyDown')
@@ -129,7 +143,7 @@ describe('movement sound in a rendered city', () => {
       await waitFor(`window.PGSIMCITY.walk.grounded`)
       await keyPress('M', { code: 'KeyM' })
       await waitFor(`window.PGSIMCITY.audio.enabled`)
-      const walkToast = await evaluate(`document.querySelector('.hud-toast__txt')?.textContent ?? ''`)
+      const walkToast = await enabledSoundToast()
       await waitFor(`document.querySelector('.hud-audio').getAttribute('aria-pressed') === 'true'`)
       const beforeWalk = await evaluate(`window.__pgAudioProbe.report()`)
       const beforeMovement = await evaluate(`({
@@ -182,6 +196,7 @@ describe('movement sound in a rendered city', () => {
     expect(report.orbit.sourceStarts).toBe(0)
     expect(report.orbit.bufferSourceStarts).toBe(0)
     expect(report.orbit.peak).toBe(0)
+    expect(report.orbit.copy.toast).toBe('Walk sound on — enter Walk to hear it')
     for (const copy of Object.values(report.orbit.copy)) expect(copy).toMatch(/walk/i)
 
     expect(report.walk.contexts).toBe(1)
@@ -192,6 +207,7 @@ describe('movement sound in a rendered city', () => {
     expect(report.walk.sourceStarts).toBeGreaterThan(0)
     expect(report.walk.bufferSourceStarts).toBe(report.walk.sourceStarts)
     expect(report.walk.peak).toBeGreaterThan(0)
+    expect(report.walk.copy.toast).toBe('Walk sound on')
     for (const copy of Object.values(report.walk.copy)) expect(copy).toMatch(/walk/i)
   }, 180_000)
 })
