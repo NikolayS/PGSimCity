@@ -400,10 +400,11 @@ body {
 #hud-right { grid-area: right; align-self: start; justify-self: end; }
 #hud-bottom { grid-area: bottom; }
 #tour-layer { grid-area: deck; place-self: end center; }
-/* Notices intentionally outrank every HUD child, including blocking dialogs. */
+/* Notices outrank HUD children but sit above the transport, away from the
+   model qualification directly below the top instruments. */
 #toast-stack {
   grid-area: center;
-  place-self: start end;
+  place-self: end end;
   z-index: var(--z-toast-notice);
 }
 #compass { grid-area: center; place-self: end start; }
