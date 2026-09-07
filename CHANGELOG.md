@@ -11,6 +11,34 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-09-07
+
+More continuous daylight materials and selective structural depth.
+
+### Changed
+
+- Use a continuous daylight lighting response and retain the distinction
+  between rough masonry and reflective machinery.
+- Add selective structural bevels and bounded shadow refreshes at medium
+  quality; dense instance fields retain their lower-detail geometry.
+- Count scene, reflection and post-processing draws together per app frame.
+
+### Fixed
+
+- Preserve the geometric normal when subpixel surface derivatives degenerate.
+  This prevents nonfinite HDR pixels from spreading through bloom and blanking
+  the city after switching from daylight to medium-quality night rendering.
+
+### Limitations
+
+- Material changes are incremental, not a complete visual redesign. Reduced
+  quality night structures remain dark; existing tablet-label and laptop
+  disclosure-overlap limitations remain tracked separately.
+- No simulation mechanism or lesson changes. Render counters and staged
+  software-rendered screenshots are not hardware performance benchmarks.
+- Audio output can start late after a long idle even without city rendering;
+  this release does not change the audio engine or claim to fix that behavior.
+
 ## [0.41.0] - 2026-09-06
 
 A clearer opening view of the PostgreSQL city.
