@@ -1604,6 +1604,8 @@ export function createHud(ctx: UiContext, options: { onInvestigate?: () => void 
     if (t) {
       const tag = t.tagName
       if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || t.isContentEditable) return
+      if (e.key === 'Enter'
+        && (t.closest('button') || t.closest('a[href]') || t.closest('summary'))) return
     }
     if (e.altKey) return
 

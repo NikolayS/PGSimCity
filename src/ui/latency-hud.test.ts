@@ -92,6 +92,33 @@ describe('latency HUD', () => {
     hud.dispose()
   })
 
+  it('preserves native Enter activation while retaining the city shortcut', () => {
+    const ctx = context()
+    const traces = vi.fn()
+    ctx.bus.on('trace:open', traces)
+    const hud = createHud(ctx)
+    const enter = (target: HTMLElement) => {
+      const event = new Event('keydown', { cancelable: true })
+      Object.defineProperties(event, { key: { value: 'Enter' }, target: { value: target } })
+      window.dispatchEvent(event)
+      return event
+    }
+    try {
+      for (const tag of ['button', 'a', 'summary']) {
+        const control = document.createElement(tag)
+        if (tag === 'a') control.setAttribute('href', '#lesson/vacuum-blockade/guided')
+        const label = document.createElement('span')
+        control.append(label)
+        document.body.append(control)
+        expect(enter(control).defaultPrevented).toBe(false)
+        expect(enter(label).defaultPrevented).toBe(false)
+      }
+      expect(traces).not.toHaveBeenCalled()
+      expect(enter(document.body).defaultPrevented).toBe(true)
+      expect(traces).toHaveBeenCalledOnce()
+    } finally { hud.dispose() }
+  })
+
   it('opens the investigation from a persistent, labelled control', () => {
     const investigate = vi.fn()
     const hud = createHud(context(), { onInvestigate: investigate })

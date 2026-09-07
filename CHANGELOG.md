@@ -27,6 +27,8 @@ are all still moving. Expect breaking changes between minor versions.
   Worker evidence likewise comes from the investigated table.
 - Describe retained snapshot evidence as aggregate model state, not a measured
   backend slot. The abandoned-session owner note is authored scenario context.
+- Preserve native Enter activation on buttons, links and disclosure summaries
+  instead of intercepting it with the city's trace shortcut.
 - Establish transaction-compatible pooling for the vacuum scenario and restore
   the prior pooling mode on exit, including a statement-pooling starting state.
 
