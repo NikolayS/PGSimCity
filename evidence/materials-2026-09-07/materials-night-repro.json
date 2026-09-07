@@ -1,0 +1,102 @@
+{
+  "build": "PGSimCity build v0.41.0 \u00b7 75fe2f2",
+  "staging": "Test-only render rawDt=1/60 stabilizes quality; FPS, timing and performance INVALID. Product adaptive logic unchanged.",
+  "states": [
+    {
+      "requested": {
+        "theme": "day",
+        "quality": "medium",
+        "focus": "backend.7"
+      },
+      "before": {
+        "theme": "day",
+        "quality": "medium",
+        "camera": [
+          8.116489093423827,
+          24.34368075607499,
+          -91.04211052030091
+        ],
+        "shadowEnabled": true,
+        "frame": 255,
+        "canvas": true
+      },
+      "after": {
+        "theme": "day",
+        "quality": "medium",
+        "camera": [
+          8.116489093423827,
+          24.34368075607499,
+          -91.04211052030091
+        ],
+        "shadowEnabled": true,
+        "frame": 303,
+        "canvas": true
+      },
+      "filename": "materials-night-repro-day-medium-backend.7.png"
+    },
+    {
+      "requested": {
+        "theme": "night",
+        "quality": "medium",
+        "focus": "backend.row"
+      },
+      "before": {
+        "theme": "night",
+        "quality": "medium",
+        "camera": [
+          11.16917629021926,
+          127.69176290219255,
+          93.38352580438513
+        ],
+        "shadowEnabled": false,
+        "frame": 595,
+        "canvas": true
+      },
+      "after": {
+        "theme": "night",
+        "quality": "medium",
+        "camera": [
+          11.16917629021926,
+          127.69176290219255,
+          93.38352580438513
+        ],
+        "shadowEnabled": false,
+        "frame": 728,
+        "canvas": true
+      },
+      "filename": "materials-night-repro-night-medium-backend.row.png"
+    },
+    {
+      "requested": {
+        "theme": "night",
+        "quality": "low",
+        "focus": "home"
+      },
+      "before": {
+        "theme": "night",
+        "quality": "low",
+        "camera": [
+          -250,
+          285,
+          -364.99999999999994
+        ],
+        "shadowEnabled": false,
+        "frame": 1373,
+        "canvas": true
+      },
+      "after": {
+        "theme": "night",
+        "quality": "low",
+        "camera": [
+          -250,
+          285,
+          -364.99999999999994
+        ],
+        "shadowEnabled": false,
+        "frame": 1379,
+        "canvas": true
+      },
+      "filename": "materials-night-repro-night-low-home.png"
+    }
+  ]
+}

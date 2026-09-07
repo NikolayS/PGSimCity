@@ -1,0 +1,198 @@
+{
+  "build": "PGSimCity build v0.41.0 \u00b7 75fe2f2",
+  "staging": "Test-only render rawDt=1/60 stabilizes quality; FPS, timing and performance INVALID. Product adaptive logic unchanged.",
+  "states": [
+    {
+      "requested": {
+        "theme": "day",
+        "quality": "high",
+        "focus": "home"
+      },
+      "before": {
+        "theme": "day",
+        "quality": "high",
+        "camera": [
+          -250,
+          285,
+          -364.99999999999994
+        ],
+        "shadowEnabled": true,
+        "frame": 152,
+        "canvas": true
+      },
+      "after": {
+        "theme": "day",
+        "quality": "high",
+        "camera": [
+          -250,
+          285,
+          -364.99999999999994
+        ],
+        "shadowEnabled": true,
+        "frame": 212,
+        "canvas": true
+      },
+      "filename": "materials-stable-after-day-high-home.png"
+    },
+    {
+      "requested": {
+        "theme": "day",
+        "quality": "medium",
+        "focus": "home"
+      },
+      "before": {
+        "theme": "day",
+        "quality": "medium",
+        "camera": [
+          -250,
+          285,
+          -364.99999999999994
+        ],
+        "shadowEnabled": true,
+        "frame": 240,
+        "canvas": true
+      },
+      "after": {
+        "theme": "day",
+        "quality": "medium",
+        "camera": [
+          -250,
+          285,
+          -364.99999999999994
+        ],
+        "shadowEnabled": true,
+        "frame": 275,
+        "canvas": true
+      },
+      "filename": "materials-stable-after-day-medium-home.png"
+    },
+    {
+      "requested": {
+        "theme": "day",
+        "quality": "medium",
+        "focus": "backend.row"
+      },
+      "before": {
+        "theme": "day",
+        "quality": "medium",
+        "camera": [
+          11.16917629021926,
+          127.69176290219255,
+          93.38352580438513
+        ],
+        "shadowEnabled": true,
+        "frame": 324,
+        "canvas": true
+      },
+      "after": {
+        "theme": "day",
+        "quality": "medium",
+        "camera": [
+          11.16917629021926,
+          127.69176290219255,
+          93.38352580438513
+        ],
+        "shadowEnabled": true,
+        "frame": 366,
+        "canvas": true
+      },
+      "filename": "materials-stable-after-day-medium-backend.row.png"
+    },
+    {
+      "requested": {
+        "theme": "day",
+        "quality": "medium",
+        "focus": "backend.7"
+      },
+      "before": {
+        "theme": "day",
+        "quality": "medium",
+        "camera": [
+          8.116489093423827,
+          24.34368075607499,
+          -91.04211052030091
+        ],
+        "shadowEnabled": true,
+        "frame": 444,
+        "canvas": true
+      },
+      "after": {
+        "theme": "day",
+        "quality": "medium",
+        "camera": [
+          8.116489093423827,
+          24.34368075607499,
+          -91.04211052030091
+        ],
+        "shadowEnabled": true,
+        "frame": 492,
+        "canvas": true
+      },
+      "filename": "materials-stable-after-day-medium-backend.7.png"
+    },
+    {
+      "requested": {
+        "theme": "night",
+        "quality": "medium",
+        "focus": "backend.row"
+      },
+      "before": {
+        "theme": "night",
+        "quality": "medium",
+        "camera": [
+          11.16917629021926,
+          127.69176290219255,
+          93.38352580438513
+        ],
+        "shadowEnabled": false,
+        "frame": 822,
+        "canvas": true
+      },
+      "after": {
+        "theme": "night",
+        "quality": "medium",
+        "camera": [
+          11.16917629021926,
+          127.69176290219255,
+          93.38352580438513
+        ],
+        "shadowEnabled": false,
+        "frame": 974,
+        "canvas": true
+      },
+      "filename": "materials-stable-after-night-medium-backend.row.png"
+    },
+    {
+      "requested": {
+        "theme": "night",
+        "quality": "low",
+        "focus": "home"
+      },
+      "before": {
+        "theme": "night",
+        "quality": "low",
+        "camera": [
+          -250,
+          285,
+          -364.99999999999994
+        ],
+        "shadowEnabled": false,
+        "frame": 981,
+        "canvas": true
+      },
+      "after": {
+        "theme": "night",
+        "quality": "low",
+        "camera": [
+          -250,
+          285,
+          -364.99999999999994
+        ],
+        "shadowEnabled": false,
+        "frame": 987,
+        "canvas": true
+      },
+      "filename": "materials-stable-after-night-low-home.png"
+    }
+  ]
+}
