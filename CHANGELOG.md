@@ -19,6 +19,12 @@ are all still moving. Expect breaking changes between minor versions.
   rendered into static HTML so the identity is available before app JavaScript
   starts. The loading screen and running app share the same build identity.
 
+### Fixed
+
+- Release touch walking controls when the page loses focus or becomes hidden,
+  so a tab switch cannot leave a held stick/button or stale gesture ownership.
+  Returning to the city accepts a fresh gesture.
+
 ### Testing
 
 - Require observed audio-clock progress before the walking-sound test's

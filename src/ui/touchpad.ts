@@ -116,7 +116,7 @@ export function createTouchpad(opts: TouchpadOptions): UiModule {
   let lastSwimming = false
 
   function bind(
-    node: HTMLElement,
+    node: EventTarget,
     type: string,
     fn: EventListener,
     options?: AddEventListenerOptions,
@@ -307,6 +307,10 @@ export function createTouchpad(opts: TouchpadOptions): UiModule {
   bind(crouchBtn, 'pointercancel', onCrouchCancel, { passive: false })
 
   function resetPointers(): void {
+    if (movePointerId !== null) release(moveZone, movePointerId)
+    if (lookPointerId !== null) release(lookZone, lookPointerId)
+    if (jumpPointerId !== null) release(jumpBtn, jumpPointerId)
+    if (crouchPointerId !== null) release(crouchBtn, crouchPointerId)
     movePointerId = null
     lookPointerId = null
     jumpPointerId = null
@@ -323,6 +327,12 @@ export function createTouchpad(opts: TouchpadOptions): UiModule {
     setClass(crouchBtn, 'is-pressed', false)
     crouchBtn.setAttribute('aria-pressed', 'false')
   }
+
+  /* Tab switches can end a gesture without delivering pointerup/cancel. */
+  bind(window, 'blur', resetPointers)
+  bind(document, 'visibilitychange', () => {
+    if (document.hidden) resetPointers()
+  })
 
   function setActive(next: boolean): void {
     if (next === active) return
