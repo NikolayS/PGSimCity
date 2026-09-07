@@ -11,6 +11,35 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-09-07
+
+### Added
+
+- Guided and challenge vacuum investigations: inspect four evidence sources,
+  retain observations and local notes, explain the cause, choose an intervention,
+  and explicitly verify cleanup. Share links open a new attempt in either mode.
+- A persistent first-visit investigation invitation and browsable scenario notes.
+
+### Fixed
+
+- Require actual sessions-table reclamation after snapshot release to verify
+  this table's recovery; collection on another table cannot complete the lesson.
+  Worker evidence likewise comes from the investigated table.
+- Describe retained snapshot evidence as aggregate model state, not a measured
+  backend slot. The abandoned-session owner note is authored scenario context.
+- Establish transaction-compatible pooling for the vacuum scenario and restore
+  the prior pooling mode on exit, including a statement-pooling starting state.
+
+### Limitations
+
+- The city is a scaled model, not PostgreSQL execution. Retry applies a new
+  scenario to current relation history; it is not deterministic rewind. Notes
+  are held in this attempt only, not persisted across reloads or shared.
+- This is one authored case, not an operations campaign or an evaluated learning
+  outcome. Existing reduced-quality scene/label limitations and delayed audio
+  startup remain. Wrong-hypothesis feedback is visible but not live-announced
+  to screen readers.
+
 ## [0.42.1] - 2026-09-07
 
 ### Added
