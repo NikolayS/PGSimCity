@@ -66,6 +66,22 @@ describe('vacuum lesson in the live model', () => {
     expect(document.querySelector('[data-disclosure="vacuum-model"]')!.textContent).toContain('City model')
   })
 
+  it('requires worker evidence from sessions, not an unrelated table', () => {
+    const f = fixture()
+    f.lesson.open()
+    const target = f.sim.state.tables.findIndex((table) => table.def.id === 'sessions')
+    const worker = f.sim.state.autovac.workers[0]
+    worker.active = true
+    worker.phase = 'scan_heap'
+    worker.table = (target + 1) % f.sim.state.tables.length
+    f.lesson.update(1)
+    button('[data-vacuum-evidence="worker"]').click()
+    expect(button('[data-vacuum-record]').disabled).toBe(true)
+    worker.table = target
+    f.lesson.update(1)
+    expect(button('[data-vacuum-record]').disabled).toBe(false)
+  })
+
   it('positions its desktop panel below the measured wrapped toolbar', () => {
     const f = fixture()
     const hud = document.createElement('div')

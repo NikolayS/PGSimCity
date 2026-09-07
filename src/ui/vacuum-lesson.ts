@@ -260,11 +260,11 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     reading.pinned = sim.knobs.longRunningXact
     const current = sim.scenarioDecision
     reading.decisionReady = current?.kind === 'vacuum-blockade' && current.phase === 'ready'
-    reading.reclaimed = current?.kind === 'vacuum-blockade' ? current.deadTuplesReclaimed : 0
+    reading.reclaimed = current?.kind === 'vacuum-blockade' ? current.sessionsReclaimedAfterRelease : 0
     reading.recovered = current?.kind === 'vacuum-blockade' && current.phase === 'recovered'
     for (let i = 0; i < sim.autovac.workers.length; i++) {
       const worker = sim.autovac.workers[i]
-      if (!worker.active || worker.phase === 'travel' || worker.phase === 'return' || worker.phase === 'idle') continue
+      if (worker.table !== tableIndex || !worker.active || worker.phase === 'travel' || worker.phase === 'return' || worker.phase === 'idle') continue
       reading.scanObserved = true
       observedWorkerSlot = i
       observedWorker = `At model ${reading.time.toFixed(1)} s, AV-${i} was in ${worker.phase} on ${sim.tables[worker.table].def.name}; ${fmtNum(worker.deadCollected)} versions collected in that pass.`
@@ -374,10 +374,10 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     recoverButton.hidden = state.action !== 'wait' || !reading.pinned || state.phase === 'complete'
     verifyButton.hidden = state.phase === 'complete'
     setText(result, state.phase === 'complete'
-      ? `Cleanup has resumed: ${fmtNum(reading.reclaimed)} row versions reclaimed across modeled tables since the decision. Remaining old versions may need further passes. Watch reusable capacity inside the existing relation, rather than expecting its file to shrink.`
+      ? `Cleanup has resumed: ${fmtNum(reading.reclaimed)} sessions row versions reclaimed since the snapshot was released. Remaining old versions may need further passes. Watch reusable capacity inside the existing relation, rather than expecting its file to shrink.`
       : reading.pinned
         ? `The old snapshot remains. sessions now has ${fmtNum(reading.deadRows)} dead versions; its relation occupies ${fmtBytes(reading.pages * 8192)}. The worker can keep scanning while retained versions accumulate.`
-        : `The old snapshot has ended. ${fmtNum(reading.reclaimed)} row versions reclaimed across modeled tables since the decision. Cleanup eligibility and actual collection are separate events.`)
+        : `The old snapshot has ended. ${fmtNum(reading.reclaimed)} sessions row versions reclaimed since the snapshot was released. Cleanup eligibility and actual collection are separate events.`)
     setText(pauseButton, ctx.sim.state.knobs.paused ? 'Run model' : 'Pause model')
     pauseButton.setAttribute('aria-pressed', String(ctx.sim.state.knobs.paused))
     hintButton.hidden = state.mode === 'guided' || state.phase !== 'investigating'

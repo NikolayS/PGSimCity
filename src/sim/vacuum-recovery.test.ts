@@ -20,3 +20,18 @@ it('does not count pre-release vacuum collection as post-release recovery', () =
   expect(decision.phase).toBe('recovered')
   expect(sim.state.autovac.landfill).toBeGreaterThan(releasedAt)
 })
+
+
+it('does not verify sessions recovery from collection on other tables', () => {
+  const step = 1 / 3
+  const sim = createAggregateSim(step)
+  sim.runScenario('vacuum-blockade')
+  for (let i = 0; i < 180; i++) sim.update(step)
+  const decision = sim.state.scenarioDecision!
+  expect(decision.phase).toBe('ready')
+  sim.chooseScenario('terminate-transaction')
+  // The global landfill can grow without a sessions pass reclaiming anything.
+  sim.state.autovac.landfill += 100
+  sim.update(step)
+  expect(decision.phase).not.toBe('recovered')
+})

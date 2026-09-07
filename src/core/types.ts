@@ -1167,6 +1167,8 @@ export interface VacuumBlockadeDecisionState extends ScenarioDecisionBase {
   vacuumRunsAtDecision: number
   landfillAtDecision: number
   landfillAtRelease: number | null
+  /** Actual sessions collection after the lesson releases its snapshot. */
+  sessionsReclaimedAfterRelease: number
   deadTuplesAdded: number
   pagesAdded: number
   blockedVacuumWorkers: number

@@ -5031,6 +5031,12 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
           }
           w.deadCollected += take
           av.landfill += take
+          const decision = state.scenarioDecision
+          if (decision?.kind === 'vacuum-blockade'
+            && decision.transactionTerminated && !K.longRunningXact
+            && t.def.id === 'sessions') {
+            decision.sessionsReclaimedAfterRelease += take
+          }
           const allModified = vacHeapModified[i]
           const scanModified = vacScanModified[i]
           const modified = Math.max(0, allModified - scanModified)
@@ -8047,6 +8053,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         vacuumRunsAtDecision: 0,
         landfillAtDecision: 0,
         landfillAtRelease: null,
+        sessionsReclaimedAfterRelease: 0,
         deadTuplesAdded: 0,
         pagesAdded: 0,
         blockedVacuumWorkers: 0,
@@ -8141,7 +8148,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         if (
           decision.transactionTerminated
           && decision.landfillAtRelease !== null
-          && av.landfill > decision.landfillAtRelease
+          && decision.sessionsReclaimedAfterRelease > 0
           && !K.longRunningXact
         ) {
           decision.phase = 'recovered'
