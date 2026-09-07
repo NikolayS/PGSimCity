@@ -1,0 +1,12 @@
+{
+  "theme": "night",
+  "quality": "medium",
+  "camera": [
+    11.16917629021926,
+    127.69176290219255,
+    93.38352580438513
+  ],
+  "shadowEnabled": false,
+  "frame": 1222,
+  "canvas": true
+}

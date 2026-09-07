@@ -18,6 +18,12 @@ export async function runSequence({send,output,logs}) {
   if(after.theme!==theme||after.quality!==quality||JSON.stringify(before.camera)!==JSON.stringify(after.camera))throw Error('Capture state changed: '+JSON.stringify({before,after}))
   const filename=output.replace('.png',`-${theme}-${quality}-${focus}.png`)
   writeFileSync(filename,Buffer.from(shot.data,'base64'))
+  if(theme==='night' && quality==='medium') {
+   await wait(45000)
+   const settled=await ev(probe)
+   writeFileSync(output.replace('.png','-night-medium-extra-settle.png'),Buffer.from((await send('Page.captureScreenshot',{format:'png'})).data,'base64'))
+   writeFileSync(output.replace('.png','-settled.json'),JSON.stringify(settled,null,2))
+  }
   states.push({requested:{theme,quality,focus},before,after,filename})
   writeFileSync(output.replace('.png','.json'),JSON.stringify({build,staging:'Test-only render rawDt=1/60 stabilizes quality; FPS, timing and performance INVALID. Product adaptive logic unchanged.',states,logs},null,2))
  }

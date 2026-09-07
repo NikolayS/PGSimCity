@@ -24,3 +24,5 @@ The rendered audio audit twice measured zero walking signal despite six started 
 ## Narrowed reproduction
 
 A separate three-state candidate run reproduced the blank night/medium canvas: day/medium backend.7 → night/medium backend.row → night/low home. See `materials-night-repro-night-medium-backend.row.png`, its JSON, and `capture-night-repro.mjs`. It completed without application exceptions. This strengthens reproducibility under staged quality but does not establish the source cause or unstaged-device behavior.
+
+The narrowed run also waited an additional45s at night/medium: the canvas remained blank at render frame1222. The extra-settle PNG and JSON preserve that observation; the reproduction sequence includes this wait.
