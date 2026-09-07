@@ -12,7 +12,7 @@ import {
 } from '../src/core/types'
 import { traceStopBit } from '../src/core/model-helpers'
 import { createSim } from '../src/sim/model'
-import { recordRepresentativeUpdate } from '../src/sim/mvcc'
+import { holdRepresentativeSnapshot, recordRepresentativeUpdate } from '../src/sim/mvcc'
 import { createAnatomy } from '../src/ui/anatomy'
 import { knobMeta } from '../src/ui/content'
 import {
@@ -215,6 +215,31 @@ describe('restore drill evidence', () => {
 describe('page anatomy MVCC story', () => {
   beforeEach(() => {
     installTestDom()
+  })
+
+  it.each(['before', 'after'] as const)('describes a retained snapshot taken %s the latest sampled update accurately', (timing) => {
+    const ctx = context()
+    const row = ctx.sim.state.tables.find((table) => table.def.id === 'sessions')!.mvcc
+    const latest = row.versions[row.versions.length - 1]
+    const updateXid = latest.xmin + 1
+    const revision = latest.revision
+    if (timing === 'before') holdRepresentativeSnapshot(row, updateXid, 1)
+    recordRepresentativeUpdate(row, updateXid, 2, false)
+    if (timing === 'after') holdRepresentativeSnapshot(row, updateXid + 20, 3)
+    expect(row.earlierSnapshot.visibleRevision).toBe(revision + (timing === 'after' ? 1 : 0))
+    expect(row.laterSnapshot.visibleRevision).toBe(revision + 1)
+    const anatomy = createAnatomy(ctx)
+    try {
+      ctx.bus.emit('anatomy:open', { view: 'page', id: 'storage.table.sessions' })
+      const a = document.querySelector('.an-mvcc-snapshot--older')!.textContent!
+      const b = document.querySelector('.an-mvcc-snapshot--later')!.textContent!
+      expect(a).toContain(`sees physical v${row.earlierSnapshot.visibleRevision}`)
+      expect(b).toContain(`sees physical v${row.laterSnapshot.visibleRevision}`)
+      expect(a).not.toContain('read began before UPDATE')
+      expect(b).not.toMatch(/LATER SNAPSHOT|concurrent reader/)
+      expect(document.querySelector('.an-mvcc-headline')!.textContent).not.toContain('TX A kept reading')
+      expect(document.querySelector('.an-mvcc-cutoff')!.textContent).not.toContain('TX A holds the cutoff back')
+    } finally { anatomy.dispose() }
   })
 
   it('shows two snapshots selecting different physical versions after UPDATE', () => {

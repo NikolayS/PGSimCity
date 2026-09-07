@@ -889,8 +889,8 @@ function makePageView(): {
     regionCard('lp_dead', 'LP_DEAD', '3 · cleanup', 'is-dead'),
   )
 
-  const olderSnapshot = mvccSnapshot('older', 'TX A · OLDER SNAPSHOT', 'read began before UPDATE')
-  const laterSnapshot = mvccSnapshot('later', 'TX B · LATER SNAPSHOT', 'read began after COMMIT')
+  const olderSnapshot = mvccSnapshot('older', 'TX A · RETAINED SNAPSHOT', 'visibility from its captured snapshot')
+  const laterSnapshot = mvccSnapshot('later', 'TX B · COMMIT SNAPSHOT', 'captured after the sampled COMMIT')
   const mvccHeadline = el('p', { class: 'an-mvcc-headline' })
   const mvccUpdate = el('span', { class: 'an-mvcc-update pg-mono', text: 'UPDATE xid —' })
   const mvccLane = el('div', {
@@ -1606,7 +1606,7 @@ export function createAnatomy(ctx: UiContext): UiModule {
     setText(
       page.mvcc.headline,
       latest && latest.revision > 1
-        ? `UPDATE xid ${latest.xmin.toLocaleString()} did not overwrite the row: it ended v${latest.revision - 1} and wrote v${latest.revision}. TX A kept reading its version without blocking the writer.`
+        ? `UPDATE xid ${latest.xmin.toLocaleString()} did not overwrite the row: it ended v${latest.revision - 1} and wrote v${latest.revision}. Each captured snapshot selects the physical version visible to its reader.`
         : 'Waiting for this relation’s first sampled UPDATE; the current row has one physical version.',
     )
     setText(
@@ -1618,7 +1618,7 @@ export function createAnatomy(ctx: UiContext): UiModule {
 
     setText(
       page.mvcc.older.status,
-      older.active ? 'OPEN · PINS HORIZON' : 'EARLIER · FINISHED',
+      older.active ? 'OPEN · RETAINED' : 'FINISHED',
     )
     setText(
       page.mvcc.older.bounds,
@@ -1630,10 +1630,10 @@ export function createAnatomy(ctx: UiContext): UiModule {
         ? `sees physical v${older.visibleRevision}`
         : 'visible version already collected',
     )
-    setText(page.mvcc.later.status, 'AFTER COMMIT')
+    setText(page.mvcc.later.status, 'AFTER SAMPLED COMMIT')
     setText(
       page.mvcc.later.title,
-      older.active ? 'concurrent reader after COMMIT' : 'read began after COMMIT',
+      'captured after the latest sampled COMMIT',
     )
     setText(
       page.mvcc.later.bounds,
@@ -1662,7 +1662,7 @@ export function createAnatomy(ctx: UiContext): UiModule {
     }
     setText(
       page.mvcc.cutoff,
-      `xmin horizon ${xminHorizon.toLocaleString()} · VACUUM requires t_xmax < horizon · ${collectable} collectable · ${blocked} retained · ${row.collectedVersions} sampled collected${older.active ? ' · TX A holds the cutoff back' : ''}`,
+      `xmin horizon ${xminHorizon.toLocaleString()} · VACUUM requires t_xmax < horizon · ${collectable} collectable · ${blocked} retained · ${row.collectedVersions} sampled collected${older.active ? ' · retained snapshot active; cleanup follows the global horizon' : ''}`,
     )
 
     const nodes: HTMLElement[] = []
