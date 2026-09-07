@@ -11,6 +11,27 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+## [0.42.1] - 2026-09-07
+
+### Added
+
+- Show the application version and short commit SHA on the loading screen,
+  rendered into static HTML so the identity is available before app JavaScript
+  starts. The loading screen and running app share the same build identity.
+
+### Testing
+
+- Require observed audio-clock progress before the walking-sound test's
+  unchanged 800 ms signal measurement. Readiness has a separate five-second
+  deadline and reports its delay; a frozen clock fails instead of passing just
+  because the context state says running. Deterministic tests cover frozen,
+  delayed, missing and partially advancing contexts.
+
+### Limitations
+
+- This does not fix delayed audio output after idle or establish an audio
+  startup-latency guarantee. The audio engine and simulation are unchanged.
+
 ## [0.42.0] - 2026-09-07
 
 More continuous daylight materials and selective structural depth.

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { createServer } from 'vite'
 
 import { BUILD_LABEL, BUILD_SHA, BUILD_VERSION } from '../src/core/build'
 
@@ -14,6 +15,18 @@ const read = (path: string): string =>
   readFileSync(fileURLToPath(new URL(`../${path}`, import.meta.url)), 'utf8')
 
 describe('build marker', () => {
+  it('renders the runtime identity in static loading HTML', async () => {
+    const server = await createServer({ server: { middlewareMode: true } })
+    try {
+      const html = await server.transformIndexHtml('/', read('index.html'))
+      expect(html.match(/<p class="boot-version"[^>]*>([^<]+)<\/p>/)?.[1])
+        .toBe(BUILD_LABEL)
+      expect(html).not.toContain('%PGSIMCITY_BUILD_LABEL%')
+    } finally {
+      await server.close()
+    }
+  })
+
   it('contains the package version and build-time short git SHA', () => {
     expect(BUILD_VERSION).toBe(pkg.version)
     expect(BUILD_SHA).toMatch(/^[0-9a-f]{7}$/)

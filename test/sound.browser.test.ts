@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { inspectRenderedPages } from './disclosure-browser.mjs'
+import { waitForAudioClock } from './audio-clock.mjs'
 
 const INSTALL_AUDIO_PROBE = `(() => {
   const probe = {
@@ -139,6 +140,10 @@ describe('movement sound in a rendered city', () => {
         position: window.PGSIMCITY.walk.position.toArray(),
       })`)
       const walkCopy = { ...await copy(), toast: walkToast }
+      /* A running context can still have a frozen output clock after idle.
+       * Report bounded harness readiness separately; retain the 800 ms signal window. */
+      const readiness = await evaluate(`(${waitForAudioClock.toString()})([...window.__pgAudioProbe.contexts])`)
+      console.info('walking audio clock readiness', JSON.stringify(readiness))
       const walkSignal = await evaluate(`(async () => {
         const measurement = window.__pgAudioProbe.measure(800)
         window.PGSIMCITY.walk.setTouchMove(1, 0)
@@ -157,6 +162,7 @@ describe('movement sound in a rendered city', () => {
       return {
         orbit,
         walk: {
+          readiness,
           contexts: afterWalk.contexts,
           contextStates: afterWalk.contextStates,
           analysers: afterWalk.analysers,
@@ -186,6 +192,7 @@ describe('movement sound in a rendered city', () => {
 
     expect(report.walk.contexts).toBe(1)
     expect(report.walk.contextStates).toEqual(['running'])
+    expect(report.walk.readiness.advances[0]).toBeGreaterThanOrEqual(0.05)
     expect(report.walk.analysers).toBeGreaterThan(0)
     expect(report.walk.samples).toBeGreaterThan(0)
     expect(report.walk.distance).toBeGreaterThan(0.75)
