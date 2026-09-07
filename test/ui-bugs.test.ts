@@ -239,6 +239,15 @@ describe('page anatomy MVCC story', () => {
       expect(b).not.toMatch(/LATER SNAPSHOT|concurrent reader/)
       expect(document.querySelector('.an-mvcc-headline')!.textContent).not.toContain('TX A kept reading')
       expect(document.querySelector('.an-mvcc-cutoff')!.textContent).not.toContain('TX A holds the cutoff back')
+      const snapshotClick = new Event('click')
+      Object.defineProperty(snapshotClick, 'target', {
+        value: document.querySelector('[data-explain="snapshots"]'),
+      })
+      document.querySelector('.an-workspace--page')!.dispatchEvent(snapshotClick)
+      const explanation = document.querySelector('.an-workspace--page .an-detail')!.textContent!
+      expect(explanation).not.toContain('It therefore follows the old row version')
+      expect(explanation).toContain('If the updater is unfinished in a snapshot')
+      expect(explanation).toContain('Both displayed snapshots may see the same replacement')
     } finally { anatomy.dispose() }
   })
 

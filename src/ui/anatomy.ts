@@ -358,7 +358,7 @@ const PAGE_DETAILS: Record<string, Detail> = {
     eyebrow: 'two readers · one row identity',
     title: 'A snapshot chooses a physical version',
     body: [
-      'The older snapshot treats transactions at or above its xmax, plus XIDs in its in-progress set, as unfinished. It therefore follows the old row version even after the updater commits. A snapshot taken after that commit sees the replacement instead.',
+      'A snapshot treats transactions at or above its xmax, plus XIDs in its in-progress set, as unfinished. If the updater is unfinished in a snapshot, that snapshot keeps seeing the prior version even after the updater commits. A snapshot taken after that commit can see the replacement. Both displayed snapshots may see the same replacement when the retained snapshot was also taken after the update.',
       'The representative path models committed creators and updaters. Aborts, subtransactions, command IDs, tuple locks, MultiXacts and 32-bit XID wraparound are outside this teaching sample.',
     ],
     refs: MVCC_REFS,
