@@ -485,6 +485,11 @@ body {
   font-size: var(--fs-sm);
   line-height: 1.5;
 }
+.boot-version {
+  margin: 8px 0 16px;
+  font: 13px ui-monospace, monospace;
+  color: var(--ink-dim);
+}
 .boot-sub {
   margin: 0;
   color: var(--ink-faint);

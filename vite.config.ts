@@ -59,9 +59,16 @@ if (
   input.machine = entry('./machine/index.html')
 }
 
+const buildSha = shortGitSha()
+
 export default defineConfig({
   base: './',
   plugins: [{
+    name: 'pgsimcity-boot-build-label',
+    transformIndexHtml(html) {
+      return html.replace('%PGSIMCITY_BUILD_LABEL%', `v${pkg.version} · ${buildSha}`)
+    },
+  }, {
     name: 'pgsimcity-machine-local-preload',
     enforce: 'pre',
     resolveId(id, importer) {
@@ -86,7 +93,7 @@ export default defineConfig({
   }],
   define: {
     __PGSIMCITY_VERSION__: JSON.stringify(pkg.version),
-    __PGSIMCITY_GIT_SHA__: JSON.stringify(shortGitSha()),
+    __PGSIMCITY_GIT_SHA__: JSON.stringify(buildSha),
   },
   /* PGlite locates its data and WASM with import.meta.url. Vite's dependency
    * pre-bundler rewrites that relationship and serves an HTML fallback where
