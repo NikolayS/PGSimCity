@@ -41,7 +41,7 @@ import { waterReflectionScale } from './water'
  * a glow is invisible against a bright sky), and tone mapping moves from ACES
  * to Khronos PBR Neutral — ACES at a daylight exposure washes saturated colour into
  * pastel, which is precisely the failure this mode exists to avoid. Structure
- * is cel-shaded by core/theme.ts and outlined in ink. See core/themes.ts.
+ * uses continuous stylized PBR and selective ink. See core/themes.ts.
  *
  * COLOUR PIPELINE — the part everybody gets wrong.
  *   Direct path ('low' night): renderer.render() draws to the default framebuffer,
@@ -136,7 +136,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     level: 'medium',
     pixelRatio: DPR_CAP.medium,
     bloom: true,
-    shadows: false,
+    shadows: true,
     maxParticles: SEMANTIC_PARTICLE_BUDGET,
     maxLabels: SEMANTIC_LABEL_BUDGET,
     antialias: false,
@@ -174,6 +174,8 @@ export interface FidelitySettings {
   aoDenoiseSamples: number
   shadowMapSize: number
   shadowRadius: number
+  /** Seconds between animated-caster refreshes; zero refreshes every frame. */
+  shadowUpdateInterval: number
 }
 
 /**
@@ -191,6 +193,7 @@ export const FIDELITY_PRESETS: Record<QualityLevel, FidelitySettings> = {
     aoDenoiseSamples: 0,
     shadowMapSize: 1024,
     shadowRadius: 1,
+    shadowUpdateInterval: 0,
   },
   reduced: {
     environment: false,
@@ -202,6 +205,7 @@ export const FIDELITY_PRESETS: Record<QualityLevel, FidelitySettings> = {
     aoDenoiseSamples: 0,
     shadowMapSize: 1024,
     shadowRadius: 1,
+    shadowUpdateInterval: 0,
   },
   medium: {
     environment: true,
@@ -213,6 +217,7 @@ export const FIDELITY_PRESETS: Record<QualityLevel, FidelitySettings> = {
     aoDenoiseSamples: 4,
     shadowMapSize: 1024,
     shadowRadius: 1,
+    shadowUpdateInterval: 1 / 8,
   },
   high: {
     environment: true,
@@ -224,6 +229,7 @@ export const FIDELITY_PRESETS: Record<QualityLevel, FidelitySettings> = {
     aoDenoiseSamples: 6,
     shadowMapSize: 1536,
     shadowRadius: 1.7,
+    shadowUpdateInterval: 1 / 30,
   },
   ultra: {
     environment: true,
@@ -235,7 +241,20 @@ export const FIDELITY_PRESETS: Record<QualityLevel, FidelitySettings> = {
     aoDenoiseSamples: 8,
     shadowMapSize: 2048,
     shadowRadius: 2.5,
+    shadowUpdateInterval: 0,
   },
+}
+
+/** Refresh animated casters at a bounded cadence without catch-up draws. */
+export class ShadowRefreshSchedule {
+  private elapsed = Infinity
+
+  advance(dt: number, interval: number): boolean {
+    this.elapsed += dt
+    if (this.elapsed < interval) return false
+    this.elapsed = 0
+    return true
+  }
 }
 
 /** Where we start before adaptive quality has an opinion. */
@@ -313,7 +332,8 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   // what we actually get, so the console stays clean and the code stays honest.
   renderer.shadowMap.type = THREE.PCFShadowMap
   renderer.shadowMap.enabled = quality.shadows && air.shadows
-  renderer.info.autoReset = true
+  renderer.shadowMap.autoUpdate = false
+  renderer.info.autoReset = false
 
   const dom = renderer.domElement
   dom.style.display = 'block'
@@ -345,9 +365,8 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   let environmentKey: string | null = null
 
   function applyEnvironmentIntensity(): void {
-    // Day keeps the poster-flat cel bands; night gives glossy machinery enough
-    // sky response to read without making matte structure luminous.
-    scene.environmentIntensity = air.daylight ? 0.18 : 0.55
+    // Sky reflections distinguish machinery from the matte mineral surfaces.
+    scene.environmentIntensity = air.daylight ? 0.32 : 0.55
   }
 
   function refreshEnvironment(force = false): void {
@@ -415,8 +434,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   /* ---- lighting rig -----------------------------------------------------*/
 
   // Sky/ground bounce. Cheap, and it keeps north-facing walls from going black.
-  // In daylight it is doing most of the work: it is the cool ambient floor the toon
-  // ramp's darkest band lands on, which is what stops cel shadows going to mud.
+  // Cool indirect light remains visible inside the warm sun's cast shadows.
   const hemi = new THREE.HemisphereLight(air.hemiSky, air.hemiGround, air.hemiIntensity)
   scene.add(hemi)
 
@@ -455,11 +473,11 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
    * where a beam finally casts a beam-shaped shadow.
    *
    * Three things keep that from costing frames. The whole mechanism is inert
-   * unless key.castShadow is on, which is high and ultra only. The centre is
+   * unless key.castShadow is on and the tier exceeds medium. The centre is
    * snapped to the shadow map's own texel grid, without which the shadows
-   * crawl over every static surface as the camera moves. And the refit — and
-   * with it the extra shadow pass — only happens when that snapped centre
-   * actually changes, so a camera standing still pays nothing.
+   * crawl over every static surface as the camera moves. Refits happen only
+   * when that snapped centre changes; animated casters have a separate bounded
+   * refresh cadence. Medium keeps the city-wide fit when the camera moves.
    * -------------------------------------------------------------------*/
 
   /** Half-width, in metres, of the box the near cascade covers. */
@@ -472,6 +490,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   const shadowFocus = new THREE.Vector3()
   const shadowSnapped = new THREE.Vector3(Infinity, Infinity, Infinity)
   let shadowSpan = 0
+  const shadowSchedule = new ShadowRefreshSchedule()
 
   function fitShadowCamera(cx = 0, cz = 0, span = 0): void {
     // Mirror DirectionalLightShadow.updateMatrices() so the fit is expressed in
@@ -525,7 +544,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     if (!key.castShadow) return
 
     const eye = Math.max(2, camera.position.y)
-    if (eye > NEAR_SPAN_CEILING) {
+    if (quality.level === 'medium' || eye > NEAR_SPAN_CEILING) {
       if (shadowSpan === 0) return
       shadowSpan = 0
       shadowSnapped.set(Infinity, Infinity, Infinity)
@@ -1093,6 +1112,9 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   let themeRestored = false
 
   function render(dt: number, rawDt?: number): void {
+    /* All beauty, reflection, shadow and post-processing draws belong to one
+     * frame. Per-render resets previously exposed only the final screen quad. */
+    renderer.info.reset()
     if (!themeRestored) {
       themeRestored = true
       applyStoredThemeMode()
@@ -1109,6 +1131,9 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     fps = damp(fps, 1 / real, 2.5, Math.min(real, 0.5))
 
     updateShadowFit()
+    if (key.castShadow && shadowSchedule.advance(real, FIDELITY_PRESETS[quality.level].shadowUpdateInterval)) {
+      renderer.shadowMap.needsUpdate = true
+    }
 
     if (useComposer() && composer) composer.render(d)
     else renderer.render(scene, camera)
