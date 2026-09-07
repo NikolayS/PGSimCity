@@ -577,7 +577,12 @@ const SURFACE_NORMAL_FRAG = /* glsl */ `
 	// orange-peel. Distance retirement above handles the orbit case separately.
 	vec2 pgDH = vec2( dFdx( pgSurfaceHeight ), dFdy( pgSurfaceHeight ) ) * 0.65;
 	vec3 pgGrad = sign( pgDet ) * ( pgDH.x * pgR1 + pgDH.y * pgR2 );
-	normal = normalize( abs( pgDet ) * normal - pgGrad );
+	vec3 pgPerturbedNormal = abs( pgDet ) * normal - pgGrad;
+	// Subpixel bevels can collapse the derivative basis. Keep the geometric
+	// normal then: normalizing a zero vector injects NaNs into the bloom chain.
+	if ( dot( pgPerturbedNormal, pgPerturbedNormal ) > 1e-20 ) {
+		normal = normalize( pgPerturbedNormal );
+	}
 }
 `
 
