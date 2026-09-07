@@ -277,9 +277,8 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
       case 'table': return `sessions: ${fmtNum(reading.deadRows)} dead row versions (${fmtNum(reading.deadRows - reading.initialDeadRows)} added since this attempt began). Relation size: ${fmtBytes(reading.pages * 8192)}, from ${fmtBytes(reading.initialPages * 8192)}. These are exact model counts; PostgreSQL’s n_dead_tup is an estimate.`
       case 'worker': return observedWorker || 'Waiting to observe a worker enter a vacuum phase. Let the model run, then record what the worker actually did.'
       case 'snapshot': {
-        const backend = ctx.sim.state.backends.find((candidate) => candidate.state === 'idle_in_xact')
-        return backend && reading.pinned
-          ? `Model backend slot ${backend.slot}: idle in transaction. Oldest snapshot age: ${reading.snapshotAge.toFixed(1)} model s. Cleanup horizon: XID ${fmtNum(reading.horizon)}. This case has an old REPEATABLE READ snapshot.`
+        return reading.pinned
+          ? `The scenario retains an old REPEATABLE READ snapshot. Oldest snapshot age: ${reading.snapshotAge.toFixed(1)} model s. Cleanup horizon: XID ${fmtNum(reading.horizon)}. This is aggregate model snapshot state, not a measured backend or a pg_stat_activity row.`
           : 'There is no retained transaction snapshot from this case now. Watch the next vacuum pass to establish whether cleanup resumes.'
       }
       case 'owner': return 'Authored scenario context: the application owner checked this case’s idle session and confirmed an abandoned, read-only REPEATABLE READ transaction. The client is gone; no uncommitted row changes need preserving. Ending the session aborts that transaction. This owner confirmation is supplied by the lesson, not measured by pg_stat_activity.'

@@ -66,6 +66,34 @@ describe('vacuum lesson in the live model', () => {
     expect(document.querySelector('[data-disclosure="vacuum-model"]')!.textContent).toContain('City model')
   })
 
+  it('reports the retained aggregate snapshot without inventing a backend measurement', () => {
+    const f = fixture()
+    f.lesson.open()
+    advanceUntil(f, () => f.sim.state.oldestSnapshotAge > 1)
+    button('[data-vacuum-evidence="snapshot"]').click()
+    const paragraph = document.querySelector('.vacuum-lesson__reading')!
+    expect(paragraph.textContent).not.toContain('There is no retained')
+    expect(paragraph.textContent).toContain('aggregate')
+    expect(paragraph.textContent).toContain('not a measured backend')
+    f.sim.state.backends[0].state = 'idle_in_xact'
+    f.lesson.update(1)
+    expect(paragraph.textContent).not.toContain('backend slot')
+    f.sim.setKnob('longRunningXact', false)
+    f.lesson.update(1)
+    expect(paragraph.textContent).toContain('There is no retained')
+  })
+
+  it('establishes the snapshot from statement pooling and restores pooling on exit', () => {
+    const f = fixture()
+    f.sim.setKnob('poolMode', 'statement')
+    f.lesson.open()
+    expect(f.sim.state.knobs.longRunningXact).toBe(true)
+    investigate(f)
+    expect(button('[data-vacuum-action="terminate"]').disabled).toBe(false)
+    f.lesson.close()
+    expect(f.sim.state.knobs.poolMode).toBe('statement')
+  })
+
   it('requires worker evidence from sessions, not an unrelated table', () => {
     const f = fixture()
     f.lesson.open()

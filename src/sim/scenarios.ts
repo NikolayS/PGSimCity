@@ -529,6 +529,7 @@ export const SCENARIOS: ScenarioDef[] = [
       sharedBuffers: 768,
       autovacuum: true,
       autovacuumScaleFactor: 0.01,
+      poolMode: 'disabled',
       longRunningXact: true,
       standbyAEnabled: true,
       checkpointTimeout: 120,
