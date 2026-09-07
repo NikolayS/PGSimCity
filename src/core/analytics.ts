@@ -32,6 +32,21 @@ export interface AnalyticsTracker {
   track(name: string, props?: AnalyticsProperties, interactive?: boolean): void
 }
 
+export function trackVacuumLessonProgress(
+  tracker: AnalyticsTracker,
+  progress: { event: string; mode: string; [key: string]: unknown },
+): void {
+  if (progress.mode !== 'guided' && progress.mode !== 'challenge') return
+  const names = new Map([
+    ['started', 'Lesson Started'],
+    ['hint-used', 'Lesson Hint Used'],
+    ['evidence-collected', 'Lesson Evidence Collected'],
+    ['recovery-verified', 'Lesson Recovery Verified'],
+  ])
+  const name = names.get(progress.event)
+  if (name) tracker.track(name, { lesson: 'vacuum-blockade', mode: progress.mode })
+}
+
 export interface Analytics extends AnalyticsTracker {
   listen(bus: Bus): () => void
   dispose(): void

@@ -288,6 +288,30 @@ body.pg-tour #hud-bottom:focus-within {
   max-width: 68ch;
 }
 
+.tour-narrate__notes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.tour-narrate__notes .pg-btn {
+  min-height: var(--tap);
+}
+
+.tour-history-open {
+  pointer-events: auto;
+}
+
+.tour-history-open[hidden],
+.tour-narrate.is-trace .tour-narrate__notes,
+body.pg-tour .tour-history-open,
+body.pg-trace .tour-history-open,
+body.pg-invite .tour-history-open,
+body.pg-vacuum-lesson .tour-history-open {
+  display: none;
+}
+
 .tour-narrate__sql,
 .tour-narrate__hint,
 .tour-narrate__strip,

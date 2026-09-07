@@ -6,7 +6,7 @@ import { createCorrectionPath, displayedClaim } from '../core/corrections'
 import { mdToHtml } from './content'
 import { clamp, reduceMotion } from '../core/util'
 import { MODEL_TIME_STRETCH, sqlFor } from '../sim/model'
-import { SCENARIOS, SCENARIO_NARRATION_SECONDS } from '../sim/scenarios'
+import { SCENARIOS } from '../sim/scenarios'
 import { MODE_IDS } from './mode-exits'
 import { TABLES } from '../world/layout'
 import { TRACE_COPY } from './trace-copy'
@@ -259,7 +259,11 @@ function markSeen(): void {
  * FACTORY
  * ========================================================================*/
 
-export function createTour(ctx: UiContext): UiModule {
+export interface TourOptions {
+  onInvestigate?: () => void
+}
+
+export function createTour(ctx: UiContext, options: TourOptions = {}): UiModule {
   const bus = ctx.bus
   const sim = ctx.sim
   const layer = document.getElementById('tour-layer') ?? el('div')
@@ -427,6 +431,28 @@ export function createTour(ctx: UiContext): UiModule {
   const traceSql = el('code', { class: 'tour-narrate__sql' })
   const traceHint = el('p', { class: 'tour-narrate__hint' })
   const stretchText = el('span', { class: 'tour-narrate__stretch' })
+  const scenarioNotes: { title: string; body: string; scenario: string | null; time: number }[] = []
+  let noteIndex = -1
+  let notesDismissed = false
+  const notePrevious = el('button', {
+    class: 'pg-btn', type: 'button', text: 'Previous note', data: { scenarioNote: 'previous' },
+    on: { click: () => { if (noteIndex > 0) { noteIndex--; paintScenarioNote() } } },
+  })
+  const noteNext = el('button', {
+    class: 'pg-btn', type: 'button', text: 'Next note', data: { scenarioNote: 'next' },
+    on: { click: () => { if (noteIndex + 1 < scenarioNotes.length) { noteIndex++; paintScenarioNote() } } },
+  })
+  const noteDismiss = el('button', {
+    class: 'pg-btn', type: 'button', text: 'Dismiss notes', data: { scenarioNote: 'dismiss' },
+    on: { click: () => { notesDismissed = true; hideNarrate(true); noteHistory.focus() } },
+  })
+  const noteHistory = el('button', {
+    class: 'pg-btn tour-history-open', type: 'button', text: 'Scenario notes', hidden: true,
+    data: { scenarioHistory: '' },
+    on: { click: () => { notesDismissed = false; paintScenarioNote(); noteDismiss.focus() } },
+  })
+  const noteControls = el('div', { class: 'tour-narrate__notes', 'aria-label': 'Scenario notes' },
+    notePrevious, noteNext, noteDismiss)
 
   const traceModeButton = (mode: TracePlayback, label: string): HTMLButtonElement =>
     el('button', {
@@ -482,10 +508,10 @@ export function createTour(ctx: UiContext): UiModule {
     traceHint,
     traceStrip,
     traceAgainBtn,
+    noteControls,
   )
 
   let narrateTimer = 0
-  let narrateUntil = 0
   let traceActive = false
   let traceAwaiting = false
   let traceMode: TracePlayback = 'slow'
@@ -497,8 +523,9 @@ export function createTour(ctx: UiContext): UiModule {
 
   const currentScenarioBeat = () => {
     if (traceActive) return null
-    const scenario = sim.state.scenario
-      ? SCENARIOS.find((candidate) => candidate.id === sim.state.scenario)
+    const scenarioId = scenarioNotes[noteIndex]?.scenario ?? sim.state.scenario
+    const scenario = scenarioId
+      ? SCENARIOS.find((candidate) => candidate.id === scenarioId)
       : undefined
     const beats = scenario?.beats ?? []
     const beatIndex = beats.findIndex(
@@ -507,8 +534,8 @@ export function createTour(ctx: UiContext): UiModule {
     return scenario && beatIndex >= 0 ? { scenario, beats, beatIndex } : null
   }
 
-  const currentScenario = () => !traceActive && sim.state.scenario
-    ? SCENARIOS.find((candidate) => candidate.id === sim.state.scenario)
+  const currentScenario = () => !traceActive && (scenarioNotes[noteIndex]?.scenario ?? sim.state.scenario)
+    ? SCENARIOS.find((candidate) => candidate.id === (scenarioNotes[noteIndex]?.scenario ?? sim.state.scenario))
     : undefined
 
   createCorrectionPath(narrateCard, {
@@ -545,7 +572,7 @@ export function createTour(ctx: UiContext): UiModule {
       if (scenario) {
         return [
           ['Scenario', scenario.id],
-          ['Scenario time', `${sim.state.scenarioT.toFixed(1)} model s`],
+          ['Scenario time', `${(scenarioNotes[noteIndex]?.time ?? sim.state.scenarioT).toFixed(1)} model s`],
         ]
       }
       const table = TABLES[sim.state.trace.table]?.id ?? 'none'
@@ -693,7 +720,6 @@ export function createTour(ctx: UiContext): UiModule {
     traceAwaiting = true
     paintedTraceStop = null
     selectedTraceStop = null
-    narrateUntil = 0
     dismissTracePicker()
     hideNarrate(true)
     setClass(narrateCard, 'is-trace', true)
@@ -754,7 +780,6 @@ export function createTour(ctx: UiContext): UiModule {
   function hideNarrate(instant = false): void {
     window.clearTimeout(narrateTimer)
     narrateTimer = 0
-    narrateUntil = 0
     delete narrateBody.dataset.disclosure
     delete traceHint.dataset.disclosure
     document.body.classList.remove('pg-narrating')
@@ -762,44 +787,59 @@ export function createTour(ctx: UiContext): UiModule {
     if (instant) {
       setClass(narrateCard, 'is-live', false)
       setClass(narrateCard, 'is-out', false)
+      noteHistory.hidden = scenarioNotes.length === 0
       return
     }
     setClass(narrateCard, 'is-out', true)
     narrateTimer = window.setTimeout(() => {
       setClass(narrateCard, 'is-live', false)
       setClass(narrateCard, 'is-out', false)
+      noteHistory.hidden = scenarioNotes.length === 0
     }, 260)
   }
 
-  function showNarrate(title: string, body: string, seconds: number): void {
+  function paintNoteControls(): void {
+    notePrevious.disabled = noteIndex <= 0
+    noteNext.disabled = noteIndex + 1 >= scenarioNotes.length
+    setText(noteNext, noteNext.disabled ? 'Next note' : `Next note · ${scenarioNotes.length - noteIndex - 1} later`)
+    const note = scenarioNotes[noteIndex]
+    if (note) setText(narrateEyebrow, `Scenario notes · ${noteIndex + 1} / ${scenarioNotes.length} · ${note.time.toFixed(0)} model s`)
+    setText(noteHistory, `Scenario notes · ${scenarioNotes.length}`)
+  }
+
+  function paintScenarioNote(): void {
+    const note = scenarioNotes[noteIndex]
+    if (!note || traceActive || running) return
+    window.clearTimeout(narrateTimer)
+    setClass(narrateCard, 'is-trace', false)
+    document.body.classList.add('pg-narrating')
+    setText(narrateTitle, note.title)
+    setText(narrateBody, note.body)
+    narrateBody.scrollTop = 0
+    delete traceHint.dataset.disclosure
+    if (note.scenario === 'work-mem-spill') narrateBody.dataset.disclosure = 'work-mem-scenario-narration'
+    else if (note.scenario === 'connection-storm') narrateBody.dataset.disclosure = 'connection-pooler-scenario-narration'
+    else delete narrateBody.dataset.disclosure
+    setClass(narrateCard, 'is-out', false)
+    setClass(narrateCard, 'is-live', true)
+    noteHistory.hidden = true
+    paintNoteControls()
+  }
+
+  function showNarrate(title: string, body: string): void {
     if (traceActive) return
     // Never two cards in the same corner. A scenario beat only happens because
     // somebody started a scenario, and starting one answers the invitation's
     // question — so the invitation stands down rather than stacking on top of
     // the narration that the viewer actually asked for.
     if (firstLive) hideFirstRun()
-    window.clearTimeout(narrateTimer)
-    setClass(narrateCard, 'is-trace', false)
-    document.body.classList.add('pg-narrating')
-    setText(narrateEyebrow, 'Scenario')
-    setText(narrateTitle, title)
-    setText(narrateBody, body)
-    delete traceHint.dataset.disclosure
-    if (sim.state.scenario === 'work-mem-spill') {
-      narrateBody.dataset.disclosure = 'work-mem-scenario-narration'
-    } else if (sim.state.scenario === 'connection-storm') {
-      narrateBody.dataset.disclosure = 'connection-pooler-scenario-narration'
-    } else {
-      delete narrateBody.dataset.disclosure
-    }
-    setClass(narrateCard, 'is-out', false)
-    if (!narrateCard.classList.contains('is-live')) {
-      narrateCard.classList.remove('is-enter')
-      void narrateCard.offsetWidth
-      narrateCard.classList.add('is-enter')
-    }
-    setClass(narrateCard, 'is-live', true)
-    narrateUntil = sim.state.scenarioT + Math.max(1.2, seconds)
+    // A bounded, attempt-local notebook keeps the full explanation; newer
+    // beats queue rather than replacing the paragraph the reader is reading.
+    if (scenarioNotes.length === 64) return
+    scenarioNotes.push({ title, body, scenario: sim.state.scenario, time: sim.state.scenarioT })
+    if (noteIndex < 0) noteIndex = 0
+    if (!notesDismissed && !narrateCard.classList.contains('is-live')) paintScenarioNote()
+    else paintNoteControls()
   }
 
   /* =======================================================================
@@ -811,14 +851,16 @@ export function createTour(ctx: UiContext): UiModule {
 
   const firstRun = el(
     'aside',
-    { class: 'tour-first pg-panel', role: 'note' },
+    { class: `tour-first pg-panel${options.onInvestigate ? ' tour-first--investigation' : ''}`, role: 'note' },
     el(
       'div',
       { class: 'tour-first__text' },
       el('span', { class: 'pg-eyebrow', text: 'First time here?' }),
       el('p', {
         class: 'tour-first__line',
-        text: `Follow a query from connection to commit — ${STEPS.length} chapters, at your pace.`,
+        text: options.onInvestigate
+          ? 'Autovacuum is running. Why is this table still growing? Follow the evidence and test your explanation.'
+          : `Follow a query from connection to commit — ${STEPS.length} chapters, at your pace.`,
       }),
     ),
     el(
@@ -831,21 +873,28 @@ export function createTour(ctx: UiContext): UiModule {
           type: 'button',
           on: {
             click: () => {
+              markSeen()
               hideFirstRun()
-              bus.emit('tour:start', { source: 'button' })
+              if (options.onInvestigate) options.onInvestigate()
+              else bus.emit('tour:start', { source: 'button' })
             },
           },
         },
-        icon('tour', 13),
-        el('span', { text: 'Start the tour' }),
+        icon(options.onInvestigate ? 'diagnose' : 'tour', 13),
+        el('span', { text: options.onInvestigate ? 'Investigate a growing table' : 'Start the tour' }),
       ),
+      options.onInvestigate && el('button', {
+        class: 'pg-btn pg-btn--ghost tour-first__tour',
+        type: 'button', text: 'Take the tour',
+        on: { click: () => { markSeen(); hideFirstRun(); bus.emit('tour:start', { source: 'button' }) } },
+      }),
       el(
         'button',
         {
           class: 'pg-btn pg-btn--ghost tour-first__no',
           type: 'button',
-          text: 'Dismiss',
-          on: { click: () => hideFirstRun() },
+          text: options.onInvestigate ? 'Explore freely' : 'Dismiss',
+          on: { click: () => { markSeen(); hideFirstRun() } },
         },
       ),
     ),
@@ -861,16 +910,16 @@ export function createTour(ctx: UiContext): UiModule {
 
   function showFirstRun(): void {
     if (running || hasSeen()) return
-    markSeen()
+    if (!options.onInvestigate) markSeen()
     firstLive = true
     setClass(firstRun, 'is-live', true)
     // While this is up, nothing else speaks from the deck (see tour.css).
     document.body.classList.add('pg-invite')
-    // An invitation nobody answers is just furniture. It leaves on its own.
-    firstTimer = window.setTimeout(() => hideFirstRun(), FIRST_RUN_LIFE_MS)
+    // The investigation invitation remains available until the reader chooses.
+    if (!options.onInvestigate) firstTimer = window.setTimeout(() => hideFirstRun(), FIRST_RUN_LIFE_MS)
   }
 
-  layer.append(firstRun, narrateCard, card)
+  layer.append(firstRun, narrateCard, noteHistory, card)
 
   showFirstRun()
 
@@ -1071,7 +1120,7 @@ export function createTour(ctx: UiContext): UiModule {
   const looseBus = bus
   cleanup.push(
     bus.on('tour:start', (p) => start(p && typeof p.chapter === 'number' ? p.chapter : 0)),
-    bus.on('tour:stop', () => stop()),
+    bus.on('tour:stop', () => { stop(); closeTrace() }),
     bus.on('trace:open', () => openTracePicker()),
     bus.on('narrate', (p) => {
       // While the tour is speaking, scenario beats stay quiet.
@@ -1080,7 +1129,22 @@ export function createTour(ctx: UiContext): UiModule {
         hideNarrate()
         return
       }
-      showNarrate(p.title, p.body, p.seconds ?? SCENARIO_NARRATION_SECONDS)
+      showNarrate(p.title, p.body)
+    }),
+    bus.on('scenario', ({ id }) => {
+      if (!id) return
+      scenarioNotes.length = 0
+      noteIndex = -1
+      notesDismissed = false
+      hideNarrate(true)
+      noteHistory.hidden = true
+    }),
+    bus.on('sim:reset', () => {
+      scenarioNotes.length = 0
+      noteIndex = -1
+      notesDismissed = false
+      hideNarrate(true)
+      noteHistory.hidden = true
     }),
     bus.on('camera:mode', () => {
       if (running) userControl = true
@@ -1124,7 +1188,6 @@ export function createTour(ctx: UiContext): UiModule {
 
   function update(dt: number, wallDt = dt): void {
     updateTrace(dt, wallDt)
-    if (narrateUntil > 0 && sim.state.scenarioT >= narrateUntil) hideNarrate()
     if (!running) return
 
     const step = STEPS[index]
@@ -1178,6 +1241,7 @@ export function createTour(ctx: UiContext): UiModule {
     document.body.classList.remove('pg-narrating')
     card.remove()
     narrateCard.remove()
+    noteHistory.remove()
     firstRun.remove()
     tracePicker.remove()
   }

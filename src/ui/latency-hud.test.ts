@@ -91,4 +91,15 @@ describe('latency HUD', () => {
     expect(requests).toEqual([{ open: true, key: 'synchronousStandbyNames' }])
     hud.dispose()
   })
+
+  it('opens the investigation from a persistent, labelled control', () => {
+    const investigate = vi.fn()
+    const hud = createHud(context(), { onInvestigate: investigate })
+    const button = document.querySelector<HTMLButtonElement>('.hud-investigate')!
+    expect(button).not.toBeNull()
+    expect(button.getAttribute('aria-label')).toBe('Investigate a PostgreSQL incident')
+    button.click()
+    expect(investigate).toHaveBeenCalledOnce()
+    hud.dispose()
+  })
 })

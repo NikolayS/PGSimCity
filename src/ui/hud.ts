@@ -340,7 +340,7 @@ function vitalHistory(key: VitalKey, s: SimState): number[] {
  * FACTORY
  * ========================================================================*/
 
-export function createHud(ctx: UiContext): UiModule {
+export function createHud(ctx: UiContext, options: { onInvestigate?: () => void } = {}): UiModule {
   const bus = ctx.bus
   const looseBus = bus
   const sim = ctx.sim
@@ -494,6 +494,18 @@ export function createHud(ctx: UiContext): UiModule {
     icon('tour', 15),
     el('span', { text: 'Tour' }),
   )
+  const investigateBtn = options.onInvestigate ? el(
+    'button',
+    {
+      class: 'pg-btn hud-tool hud-investigate',
+      type: 'button',
+      title: 'Investigate a growing table, collect evidence, and verify recovery',
+      'aria-label': 'Investigate a PostgreSQL incident',
+      on: { click: options.onInvestigate },
+    },
+    icon('diagnose', 15),
+    el('span', { text: 'Investigate' }),
+  ) : null
   const traceBtn = el(
     'button',
     {
@@ -656,6 +668,7 @@ export function createHud(ctx: UiContext): UiModule {
     legalBtn,
     viewBtn,
     tourBtn,
+    investigateBtn,
     traceBtn,
     diagnoseLink,
     walkBtn,

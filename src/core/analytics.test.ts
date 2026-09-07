@@ -9,6 +9,7 @@ import {
   listenForAnalyticsInteractions,
   outboundTrackingAllowed,
   panelSlug,
+  trackVacuumLessonProgress,
 } from './analytics'
 import { createBus } from './bus'
 
@@ -51,6 +52,20 @@ describe('analytics attribution', () => {
 })
 
 describe('analytics event queue', () => {
+  it('allowlists lesson events and exports no notebook, SQL, or arbitrary input', () => {
+    const plausible = vi.fn()
+    const tracker = createAnalyticsTracker('city', plausible)
+    trackVacuumLessonProgress(tracker, {
+      event: 'recovery-verified', mode: 'challenge', notes: 'private note', sql: 'select secret',
+    })
+    trackVacuumLessonProgress(tracker, { event: 'private note', mode: 'guided' })
+    trackVacuumLessonProgress(tracker, { event: 'started', mode: 'private note' })
+    trackVacuumLessonProgress(tracker, { event: '__proto__', mode: 'guided' })
+    expect(plausible.mock.calls).toEqual([
+      ['Lesson Recovery Verified', { props: { entrypoint: 'city', lesson: 'vacuum-blockade', mode: 'challenge' } }],
+    ])
+  })
+
   it('falls back to an inert window queue when the provider is unavailable', () => {
     const target: { plausible?: ReturnType<typeof createPlausibleQueue> } = {}
     const dispatch = createPlausibleDispatcher(target)
