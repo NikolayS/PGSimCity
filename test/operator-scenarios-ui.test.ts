@@ -26,7 +26,7 @@ function context(): UiContext {
 }
 
 function advanceUntilReady(ctx: UiContext): void {
-  const deadline = ctx.sim.state.t + 240
+  const deadline = ctx.sim.state.t + 1800
   while (ctx.sim.state.scenarioDecision?.phase !== 'ready' && ctx.sim.state.t < deadline) {
     ctx.sim.update(1 / 30)
   }
@@ -94,5 +94,23 @@ describe('operator scenario dock', () => {
 
       hud.dispose()
     }
+  })
+
+  it('shows retired ownership and does not promise a standby restart or instant WAL deletion', () => {
+    const ctx = context()
+    const hud = createHud(ctx)
+    ctx.sim.runScenario('retired-slot')
+    advanceUntilReady(ctx)
+    hud.update(0.2, 0.2)
+    const dock = document.querySelector<HTMLElement>('.hud-decision')!
+    expect(dock.textContent).toContain('Retired consumer')
+    expect(dock.textContent).toContain('no resume obligation')
+    document.querySelector<HTMLButtonElement>('[data-scenario-choice="drop-replication-slot"]')!.click()
+    hud.update(0.2, 0.2)
+    expect(dock.textContent).toContain('does not delete WAL')
+    expect(dock.textContent).toContain('remains stopped')
+    expect(dock.textContent).not.toContain('restarted without')
+    expect(dock.textContent).not.toContain('rebuild not approved')
+    hud.dispose()
   })
 })

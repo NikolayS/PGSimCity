@@ -2018,7 +2018,10 @@ export function createHud(ctx: UiContext, options: { onInvestigate?: () => void;
 
     if (decision.kind === 'slot-pressure') {
       const slot = s.replication.physicalSlots[1]
-      setText(decisionTitle, 'Required standby: investigate, then contain')
+      const retired = decision.recoveryIntent === 'retired'
+      setText(decisionTitle, retired
+        ? 'Retired consumer: verify, then release retention'
+        : 'Required standby: investigate, then contain')
       setDecisionFact(
         0,
         'pg_wal',
@@ -2034,21 +2037,27 @@ export function createHud(ctx: UiContext, options: { onInvestigate?: () => void;
       setDecisionFact(
         2,
         'recovery intent',
-        decision.choice === 'drop-replication-slot'
+        retired
+          ? 'owner confirmed retirement · no resume obligation'
+          : decision.choice === 'drop-replication-slot'
           ? 'streaming without slot · guarantee lost'
           : 'resume from this slot · rebuild not approved',
       )
       if (decision.choice === 'add-wal-capacity') {
         setText(
           decisionResult,
-          decision.phase === 'recovered'
+          retired
+            ? `You added ${fmtBytes(decision.addedCapacityBytes)} of temporary headroom. The retired consumer remains stopped and its unused slot continues retaining WAL. Capacity buys time but does not resolve that retention.`
+            : decision.phase === 'recovered'
             ? `After confirming ownership, continuity and sufficient headroom, you added ${fmtBytes(decision.addedCapacityBytes)}. standby_b caught up without a rebuild; ${fmtNum(decision.rejectedWrites)} writes were rejected after the decision.`
             : `The scenario has validated ${fmtBytes(decision.addedCapacityBytes)} against its WAL rate and catch-up plan. The slot remains valid while standby_b catches up; capacity is temporary containment, not the root-cause fix.`,
         )
       } else if (decision.choice === 'drop-replication-slot') {
         setText(
           decisionResult,
-          'You stopped standby_b, removed primary_slot_name, dropped the now-inactive slot, and restarted without it despite the stated continuity requirement. Dropping the slot removes the retention guarantee; it does not delete WAL. standby_b remains streaming from WAL still in pg_wal, and restore_command could supply an archived segment. A new base backup is required only if the necessary WAL becomes unavailable from every source.',
+          retired
+            ? `The verified retired consumer remains stopped. Dropping its inactive slot removes this retention requirement; it does not delete WAL. Checkpoint, archive and other retention still govern reuse. ${decision.phase === 'recovered' ? 'Observed pg_wal usage is below its decision value and writes are available.' : 'Observe actual pg_wal usage and write availability before declaring recovery.'}`
+            : 'You stopped standby_b, removed primary_slot_name, dropped the now-inactive slot, and restarted without it despite the stated continuity requirement. Dropping the slot removes the retention guarantee; it does not delete WAL. standby_b remains streaming from WAL still in pg_wal, and restore_command could supply an archived segment. A new base backup is required only if the necessary WAL becomes unavailable from every source.',
         )
       }
       return

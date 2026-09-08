@@ -8047,9 +8047,11 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   }
 
   function createScenarioDecision(id: string): ScenarioDecisionState | null {
-    if (id === 'slot-pressure') {
+    if (id === 'slot-pressure' || id === 'retired-slot') {
       return {
         kind: 'slot-pressure',
+        recoveryIntent: id === 'retired-slot' ? 'retired' : 'required',
+        walBytesAtDecision: 0,
         phase: 'staging',
         choice: null,
         correct: null,
@@ -8107,9 +8109,18 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     }
     if (decision.phase === 'staging' && revealAt !== undefined && state.scenarioT >= revealAt) {
       if (decision.kind === 'slot-pressure') {
-        /* The link has just been repaired. The remaining question is whether
-         * the retained WAL has enough disk headroom to survive catch-up. */
-        setKnob('standbyBEnabled', true)
+        /* The retired case waits for actual retention pressure, rather than
+         * presenting a file-shrink lesson while recycled files dominate. */
+        if (
+          decision.recoveryIntent === 'retired'
+          && (
+            rep.physicalSlots[1].retainedBytes <= (N_WAL_SEG_SLOTS - 3) * WAL_SEG
+            || dr.archive.pgWalBytes < dr.archive.pgWalCapacityBytes * 0.8
+          )
+        ) return
+        /* Only the required consumer has a repaired link and catch-up plan. */
+        if (decision.recoveryIntent === 'required') setKnob('standbyBEnabled', true)
+        decision.walBytesAtDecision = dr.archive.pgWalBytes
         decision.slotRetainedAtDecision = rep.physicalSlots[1].retainedBytes
         decision.capacityAtDecision = dr.archive.pgWalCapacityBytes
         decision.rejectedWritesAtDecision = dr.archive.rejectedWrites
@@ -8133,9 +8144,20 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       )
       if (
         decision.choice === 'add-wal-capacity'
+        && decision.recoveryIntent === 'required'
         && rep.standbys[1].connected
         && rep.physicalSlots[1].retainedBytes
           <= Math.max(16 * MIB, decision.slotRetainedAtDecision * 0.1)
+      ) {
+        decision.phase = 'recovered'
+      }
+      if (
+        decision.choice === 'drop-replication-slot'
+        && decision.recoveryIntent === 'retired'
+        && !rep.physicalSlots[1].exists
+        && !rep.standbys[1].enabled
+        && dr.archive.pgWalBytes < decision.walBytesAtDecision
+        && !dr.archive.writesBlocked
       ) {
         decision.phase = 'recovered'
       }
@@ -8241,6 +8263,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       console.warn(`[sim] unknown scenario "${id}"`)
       return
     }
+    if (id === 'retired-slot' && !rep.physicalSlots[1].exists) {
+      toast('This case needs an existing slot. Reset the city to start a fresh retired-consumer case.', 'warn', 8000)
+      return
+    }
     if (state.scenario) endScenario(true)
     savedKeys = Object.keys(def.knobs) as (keyof Knobs)[]
     for (const k of savedKeys) saveKnob(k)
@@ -8332,20 +8358,29 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     if (decision.kind === 'slot-pressure') {
       if (choice === 'add-wal-capacity') {
         decision.choice = choice
-        decision.correct = true
+        decision.correct = decision.recoveryIntent === 'required'
         decision.addedCapacityBytes = 512 * MIB
         dr.archive.pgWalCapacityBytes += decision.addedCapacityBytes
         decision.phase = 'outcome'
         toast(
-          '512 MiB of scaled pg_wal capacity added; standby_b keeps its slot and continues catch-up',
-          'good',
+          decision.recoveryIntent === 'required'
+            ? '512 MiB of scaled pg_wal capacity added; standby_b keeps its slot and continues catch-up'
+            : '512 MiB of scaled capacity added; the retired consumer still retains WAL and no catch-up is planned',
+          decision.recoveryIntent === 'required' ? 'good' : 'warn',
           7000,
         )
         return true
       }
       if (choice === 'drop-replication-slot') {
+        if (
+          decision.recoveryIntent === 'retired'
+          && (rep.standbys[1].enabled || rep.physicalSlots[1].active)
+        ) {
+          toast('The consumer is no longer stopped; verify its state before removing the slot', 'warn')
+          return false
+        }
         decision.choice = choice
-        decision.correct = false
+        decision.correct = decision.recoveryIntent === 'retired'
         const slot = rep.physicalSlots[1]
         slot.exists = false
         slot.active = false
@@ -8353,8 +8388,10 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
         slot.retainedBytes = 0
         decision.phase = 'outcome'
         toast(
-          'standby_b restarted without primary_slot_name; it is streaming, but its WAL retention guarantee is gone',
-          'warn',
+          decision.recoveryIntent === 'retired'
+            ? 'Verified retired consumer: inactive slot removed; observe WAL retention and write availability before declaring recovery'
+            : 'standby_b restarted without primary_slot_name; it is streaming, but its WAL retention guarantee is gone',
+          decision.recoveryIntent === 'retired' ? 'good' : 'warn',
           8000,
         )
         return true

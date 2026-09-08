@@ -1153,6 +1153,8 @@ interface ScenarioDecisionBase {
 
 export interface SlotPressureDecisionState extends ScenarioDecisionBase {
   kind: 'slot-pressure'
+  recoveryIntent: 'required' | 'retired'
+  walBytesAtDecision: number
   slotRetainedAtDecision: number
   capacityAtDecision: number
   addedCapacityBytes: number

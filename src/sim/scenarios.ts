@@ -515,6 +515,47 @@ export const SCENARIOS: ScenarioDef[] = [
 
   /* ---------------------------------------------------------------------- */
   {
+    id: 'retired-slot',
+    name: 'Retired consumer',
+    blurb: 'The owner confirms standby_b is retired, its process is stopped, and no resume or recovery obligation remains. Verify the inactive slot and release unused retention; extra disk alone leaves the cause intact.',
+    icon: '⌁',
+    focus: 'wal.vault',
+    duration: 0,
+    knobs: {
+      tps: 750,
+      writeRatio: 1,
+      updateRatio: 1,
+      seqScanRatio: 0,
+      sharedBuffers: 768,
+      synchronousCommit: 'local',
+      fullPageWrites: true,
+      walLevel: 'replica',
+      walGArchiveCredentialsValid: true,
+      standbyAEnabled: true,
+      standbyBEnabled: false,
+      checkpointTimeout: 15,
+      checkpointCompletionTarget: 0.5,
+      maxWalSize: 512,
+    },
+    decision: {
+      revealAt: 179,
+      choices: [
+        {
+          id: 'add-wal-capacity',
+          label: 'Add 512 MiB temporary headroom',
+          hint: 'Buys time but leaves an unused slot retaining WAL indefinitely; no consumer will catch up.',
+        },
+        {
+          id: 'drop-replication-slot',
+          label: 'Drop the verified retired slot',
+          hint: 'Ownership and retirement are confirmed, the consumer is stopped, and no resume obligation remains. Remove the inactive slot, then verify actual WAL pressure and write recovery. This is not permission to drop an unidentified slot.',
+        },
+      ],
+    },
+  },
+
+  /* ---------------------------------------------------------------------- */
+  {
     id: 'vacuum-blockade',
     name: 'Vacuum blockade',
     blurb: 'A verified abandoned, idle transaction with no work worth preserving pins xmin; terminating it aborts the transaction and releases cleanup.',
