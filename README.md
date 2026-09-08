@@ -200,12 +200,35 @@ Press **`?`** in the city for the city control map and colour legend.
 | `Esc` | Close the topmost overlay |
 | `1` – `8` | Jump to a district: clients, backends, buffer pool, WAL, storage, query lab, maintenance, standby |
 
+### Replay and compare an incident
+
+Choose **Replay**, then **Save checkpoint** before an intervention. Observe an
+outcome, **Rewind to checkpoint**, change a model control or operator decision,
+and **Run alternative to same duration**. The comparison preserves the seeded
+prefix and labels counters, current gauges and model-time latency explicitly.
+Rewind reconstructs the model; saved investigation evidence and Diagnose’s
+previous-step button are navigation, not rewind.
+
+The linked **Console** and **Back to city** controls transfer the current model
+incident in the same tab, including selection and diagnostic trail. Diagnostic
+sampling windows restart on arrival; PGlite remains a separate opt-in database.
+Export a comparison before switching views: saved replay checkpoints, comparison
+baselines and investigation notes do not transfer.
+Browser reload/Back is not linked navigation and can reject an expired or
+already-consumed transfer. Use the explicit new-city link to discard it.
+Replay records are local, bounded and exact-build-specific; copying a record
+is not a URL share, and does not include lesson answers or PGlite data.
+
 ### Export a presentation image
 
 Choose **Export image** in the city toolbar. The model pauses until you return
 to the city. PNG export keeps the current camera and graphics quality; visible
 object names are optional, but the model disclosure, version, and model clock
-always remain in the image footer.
+always remain in the image footer. After a replay comparison, include the
+comparison explanation to retain the seed/checkpoint, recorded interventions,
+original and alternative durations, and qualified outcomes. Unequal durations
+are marked as not a controlled comparison. Long action lists are summarized
+with an explicit omitted count.
 
 The default 2× option caps the scene at 4 megapixels. An explicit 4K scene option
 fits the camera aspect within 3840 × 2160 (rotated for a portrait view), subject

@@ -63,6 +63,7 @@ export function createReplayPanel(ctx: UiContext, replay: IncidentReplay): Repla
   el('div', { class: 'pg-replay__heading' }, heading, closeButton),
   el('p', { class: 'pg-replay__disclosure', data: { disclosure: 'model' }, text: 'Scaled model outcomes, not PostgreSQL measurements. PGlite results are separate. Replaying does not operate a real database.' }),
   el('p', { text: 'Save a checkpoint before an intervention. Try one choice and observe its outcome, then rewind, change your choice, and compare after the same model duration.' }),
+  el('p', { text: 'Export your comparison before switching views. Linked City/Console navigation carries the current model, selected object and diagnostic trail, but clears this saved replay checkpoint and comparison. It does not transfer investigation notes.' }),
   status, checkpointText,
   el('div', { class: 'pg-replay__actions' }, save, rewind, run),
   comparison, message,

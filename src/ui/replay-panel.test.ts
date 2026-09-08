@@ -72,6 +72,7 @@ describe('incident replay panel', () => {
     expect(replay.compare()?.sameDuration).toBe(true)
     expect(document.body.textContent).toContain('Same model duration')
     expect(document.body.textContent).toContain('PGlite results are separate')
+    expect(document.body.textContent).toContain('Export your comparison before switching views')
     expect(document.body.textContent).toContain('Counters and current gauges')
   })
 })
