@@ -333,7 +333,8 @@ async function boot(): Promise<void> {
     onProgress: ({ event, mode }) => trackVacuumLessonProgress(analytics, { event, mode }),
   })
   const replayPanel = createReplayPanel(uiCtx, replay)
-  const presentation = createPresentationExport(uiCtx, gfx)
+  const presentation = createPresentationExport(uiCtx, gfx, () => replay.compare(),
+    () => !replay.status.seeking && !replay.status.advancing)
   const ui: UiModule[] = [
     vacuumLesson,
     createVacuumCityIndicator(uiCtx, gfx.camera, () => vacuumLesson.isOpen()),

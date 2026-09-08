@@ -2,6 +2,8 @@ import { BUILD_LABEL } from '../core/build'
 import { CLAIM_VALUES } from '../core/claims'
 import type { RendererApi } from '../engine/renderer'
 import { exportDimensions, pngBlob, withPresentationPause } from '../engine/presentation'
+import type { ReplayComparison } from '../sim/replay'
+import { presentationComparisonLines } from './presentation-report'
 import { el, type UiContext, type UiModule } from './uikit'
 import '../styles/presentation.css'
 
@@ -32,7 +34,10 @@ export function wrapPresentationText(text: string, width: number, measure: (valu
   return lines
 }
 
-export function createPresentationExport(ctx: UiContext, gfx: RendererApi): PresentationModule {
+export function createPresentationExport(
+  ctx: UiContext, gfx: RendererApi, getComparison?: () => ReplayComparison | null,
+  canOpen: () => boolean = () => true,
+): PresentationModule {
   let opened = false
   let busy = false
   let disposed = false
@@ -40,12 +45,15 @@ export function createPresentationExport(ctx: UiContext, gfx: RendererApi): Pres
   let previousFocus: HTMLElement | null = null
   let selected: string | null = null
   let downloadUrl: string | null = null
+  let comparisonLines: string[] | null = null
   const offSelect = ctx.bus.on('select', ({ id }) => { selected = id })
   const scale = el('select', { 'aria-label': 'Image resolution' },
     el('option', { value: '1', text: '1× viewport' }), el('option', { value: '2', text: '2× viewport (up to 4 megapixels)' }),
     el('option', { value: '4k', text: '4K scene (plus model footer)' }))
   scale.value = '2'
   const names = el('input', { type: 'checkbox', checked: true })
+  const includeComparison = el('input', { type: 'checkbox', 'aria-label': 'Include comparison explanation' })
+  const comparisonHint = el('p', { class: 'pg-presentation__comparison-hint' })
   const status = el('p', { class: 'pg-presentation__status', role: 'status', 'aria-live': 'polite' })
   const save = el('button', { type: 'button', text: 'Download PNG', on: { click: () => { void capture() } } })
   const closeButton = el('button', { type: 'button', text: 'Return to city', on: { click: close } })
@@ -55,8 +63,10 @@ export function createPresentationExport(ctx: UiContext, gfx: RendererApi): Pres
     el('p', { text: 'The model is paused. The image keeps this camera and graphics quality; it does not run another experiment.' }),
     el('label', { class: 'pg-presentation__field' }, 'Image resolution', scale),
     el('label', { class: 'pg-presentation__field' }, names, 'Include visible object names'),
+    el('label', { class: 'pg-presentation__field' }, includeComparison, 'Include comparison explanation'),
+    comparisonHint,
     el('p', { class: 'pg-presentation__disclosure', text: 'Every image retains the version, model clock and representative-model disclosure. City graphics are modelled, not PostgreSQL measurements.' }),
-    el('p', { text: 'The default caps the scene at 4 megapixels. Optional 4K needs roughly 380 MiB of extra render-target memory; actual use varies. Both keep your camera aspect and respect GPU limits. If export fails, try 1×.' }),
+    el('p', { text: 'The default caps the scene at 4 megapixels. Optional 4K needs roughly 380 MiB of extra render-target memory; actual use varies. The explanation adds a text footer below the scene. Both keep your camera aspect and respect GPU limits. If export fails, try 1×.' }),
     status, retry, el('div', { class: 'pg-presentation__actions' }, save, closeButton))
   dialog.addEventListener('cancel', (event) => { event.preventDefault(); close() })
   // Native modal focus does not stop the city's window-level shortcuts.
@@ -67,6 +77,18 @@ export function createPresentationExport(ctx: UiContext, gfx: RendererApi): Pres
 
   function open(): void {
     if (disposed || opened) return
+    if (!canOpen()) {
+      ctx.bus.emit('toast', { text: 'Wait for replay or model advancement to finish before exporting.', kind: 'info' })
+      return
+    }
+    // Snapshot before adding the export pause to the recorded model actions.
+    const comparison = getComparison?.() ?? null
+    comparisonLines = comparison ? presentationComparisonLines(comparison) : null
+    includeComparison.disabled = !comparisonLines
+    includeComparison.checked = !!comparisonLines
+    comparisonHint.textContent = comparisonLines
+      ? 'The optional footer keeps the checkpoint, seed, both model outcomes and a bounded recorded-action summary. It describes this paused alternative view; the original branch is saved evidence.'
+      : 'Rewind a recorded branch to make its comparison available. This image will contain the city view and model disclosure.'
     opened = true
     previouslyPaused = ctx.sim.state.knobs.paused
     ctx.sim.setKnob('paused', true)
@@ -115,7 +137,7 @@ export function createPresentationExport(ctx: UiContext, gfx: RendererApi): Pres
           const canvas = document.createElement('canvas')
           const context = canvas.getContext('2d')
           if (!context) throw new Error('Presentation canvas is unavailable')
-          const fontSize = Math.max(14, Math.round(size.width / 110))
+          const fontSize = Math.max(14, Math.round(14 * size.width / viewport.width), Math.round(size.width / 110))
           const padding = fontSize
           const font = `${fontSize}px system-ui, sans-serif`
           context.font = font
@@ -125,6 +147,7 @@ export function createPresentationExport(ctx: UiContext, gfx: RendererApi): Pres
             `Representative educational model, not measured PostgreSQL. Time: ${ctx.sim.state.t.toFixed(2)} model seconds.`,
             ...(selection ? [`Selected: ${selection}`] : []),
             ...(ctx.sim.state.scenario ? [`Scenario: ${ctx.sim.state.scenario}`] : []),
+            ...(includeComparison.checked && comparisonLines ? comparisonLines : []),
           ]
           const lines = footer.flatMap((line) => wrapPresentationText(line, Math.max(1, size.width - padding * 2),
             (value) => context.measureText(value).width))
