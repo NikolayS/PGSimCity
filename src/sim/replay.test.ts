@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createBus } from '../core/bus'
 import { createSim, MODEL_ADVANCE_MAX_SECONDS } from './model'
 import { SCENARIOS } from './scenarios'
+import { createVacuumObservation } from './vacuum-observation'
 import {
   createIncidentReplay,
   decodeReplay,
@@ -17,6 +18,37 @@ function run(sim: ReturnType<typeof createSim>, steps: number): void {
 }
 
 describe('deliberate model stepping during replay recording', () => {
+  it('reconstructs the complete five-checkpoint vacuum investigation', async () => {
+    const { sim, replay } = incident(0xc0ffee)
+    sim.runScenario('vacuum-blockade')
+    sim.setKnob('paused', true)
+    const observation = createVacuumObservation(sim)
+    const next = () => {
+      expect(observation.start()).toBe(true)
+      for (let i = 0; i < 100 && observation.status === 'running'; i++) observation.tick()
+      expect(observation.status).toBe('observed')
+    }
+    next()
+    next()
+    const beforeDecision = replay.checkpoint()
+    const beforeState = structuredClone(sim.state)
+    expect(sim.chooseScenario('terminate-transaction')).toBe(true)
+    next()
+    next()
+    next()
+    expect(observation.checkpoints.map(c => c.kind)).toEqual(['pinned', 'constrained', 'released', 'eligible', 'collected'])
+    expect(sim.state.scenarioDecision?.phase).toBe('recovered')
+    const expected = structuredClone(sim.state)
+    const record = replay.exportRecord()
+    expect(record.actions.length).toBeLessThan(10)
+    expect(encodeReplay(record).length).toBeLessThan(1024)
+    await replay.loadRecord(record)
+    expect(sim.state).toEqual(expected)
+    await replay.rewind(beforeDecision)
+    expect(sim.state).toEqual(beforeState)
+    replay.dispose()
+  })
+
   it('round-trips mixed frame and deliberate ticks without inventing wall time', async () => {
     const { sim, replay } = incident()
     run(sim, 7)
