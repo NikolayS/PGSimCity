@@ -11,6 +11,23 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-09-08
+
+### Changed
+
+- Raise the fixed Day sun to an afternoon angle, lighting roof planes while
+  shortening cast shadows. Reduce additional height haze so nearby facades
+  retain contrast and distant districts still recede; local-time daylight uses
+  the same lighter haze without replacing its clock-driven sun path.
+- Name the fixed preset afternoon daylight in help and theme feedback.
+  Semantic colors, night settings, geometry and simulation rules are unchanged.
+
+### Scope
+
+- This is an incremental daylight improvement, not a complete material redesign
+  or causal-motion release. Distant phone detail and inherited overlay/label
+  limitations remain. Browser-emulated checks are not hardware performance data.
+
 ## [0.45.0] - 2026-09-08
 
 ### Changed

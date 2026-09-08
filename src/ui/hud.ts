@@ -1548,7 +1548,7 @@ export function createHud(ctx: UiContext, options: { onInvestigate?: () => void 
   }
 
   /**
-   * N — night, curated golden hour, or local-clock light for the whole city.
+   * N — night, curated afternoon daylight, or local-clock light for the whole city.
    *
    * core/theme.ts does the work (palette, every cached material, the toon ramp)
    * and remembers the choice; the renderer's theme subscription updates the
@@ -1558,7 +1558,7 @@ export function createHud(ctx: UiContext, options: { onInvestigate?: () => void 
     const next = toggleThemeMode()
     bus.emit('toast', {
       text: next === 'day'
-        ? 'Daylight — golden hour'
+        ? 'Daylight — afternoon daylight'
         : next === 'clock'
           ? 'Local time — approximate sun path, no location used'
           : 'Night — the city lit by its own data',

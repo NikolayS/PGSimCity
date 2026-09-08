@@ -222,7 +222,7 @@ export function startThemeClock(): () => void {
 }
 
 /**
- * Switch the whole city among night, golden hour and local-clock light.
+ * Switch the whole city among night, afternoon daylight and local-clock light.
  *
  * No geometry is rebuilt and nothing is reloaded: the palette object is mutated
  * in place, every cached material is repainted from the value it was authored

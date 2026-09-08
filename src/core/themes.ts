@@ -10,7 +10,7 @@ import type { ColorKey } from './types'
  *           only thing that clears the bloom threshold. Edges are blueprint
  *           hairlines that glow. ACES tone mapping, low key light, no sun.
  *
- *   DAY     Structure is pale stone under a low golden-hour sun; meaning is
+ *   DAY     Structure is pale stone under a warm afternoon sun; meaning is
  *           a flat, deep, poster-print fill that needs no glow at all. Edges
  *           become the cartoon's ink line: dark, opaque, heavier. Bloom is all
  *           but off, the sun is on, and it casts real shadows.
@@ -78,7 +78,7 @@ export const NIGHT_PALETTE: Record<ColorKey, number> = {
 }
 
 /* ---------------------------------------------------------------------------
- * DAY — the same city at golden hour.
+ * DAY — the same city at afternoon daylight.
  *
  * Picked against a #948d7a taupe paving stage and a #bcdcf2 sky. The whole set
  * sits in the 29–62% lightness band with saturation pushed up: value separates
@@ -320,7 +320,9 @@ export const ATMOSPHERE: Record<CuratedThemeMode, Atmosphere> = {
      */
     fogNearScale: 1.2,
     fogFarScale: 1.65,
-    heightFogDensity: 0.0014,
+    // This layers over distance fog: at home framing it must not flatten
+    // every facade into the same haze colour before the far districts recede.
+    heightFogDensity: 0.00025,
     heightFogFalloff: 0.018,
     fogColor: DAY_PALETTE.fog,
     plateFogScale: 0.84,
@@ -329,15 +331,13 @@ export const ATMOSPHERE: Record<CuratedThemeMode, Atmosphere> = {
     hemiIntensity: 0.82,
     keyColor: 0xffd6a3,
     keyIntensity: 2.25,
-    /*
-     * North-west at 8.4°. A one-metre object casts 6.81 m across the ground;
-     * the backend row therefore stripes the plaza to the south-east, and the
-     * establishing camera sees building silhouettes against the bright side.
-     */
-    keyPos: [-520, 120, -650],
+    /* A north-west afternoon key lights roofs and facades together. At 27° a
+     * tower's shadow stays within two heights, grounding its own machinery
+     * instead of striping several unrelated districts. */
+    keyPos: [-520, 420, -650],
     keyTarget: [0, 0, -20],
-    sunDirection: [-520, 120, -630],
-    sunElevationDeg: 8.4,
+    sunDirection: [-520, 420, -630],
+    sunElevationDeg: 27.2,
     shadowBias: -0.0004,
     shadowNormalBias: 0.2,
     shadowIntensity: 0.84,
@@ -800,7 +800,7 @@ export function nightSurface(hex: number): number {
 
 export function clockSurface(hex: number, daylight: number, key?: string): number {
   const day = daySurface(hex, key)
-  /* The curated golden-hour preset draws pale stone against a still brighter
+  /* The curated afternoon preset draws pale stone against a still brighter
    * sky. Clock mode must travel continuously from night, where structure is
    * brighter than the void; a brighter high-noon stone keeps that ordering
    * through twilight instead of crossing through equal luminance. The smooth
