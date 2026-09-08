@@ -47,7 +47,9 @@ jobs:
   browser_test:
     name: Tests (Chrome)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The full browser matrix takes about ten minutes before setup/cleanup.
+    # Keep individual test deadlines; allow the complete job to finish.
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@v4

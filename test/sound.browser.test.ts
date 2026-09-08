@@ -72,7 +72,30 @@ describe('movement sound in a rendered city', () => {
       name: 'City sound',
       path: '/',
       readySelector: '.hud-audio',
+      // The HUD mounts before the debug handle is published. Keep that gap
+      // observable even on fast runners so readiness cannot race initialization.
+      beforeLoad: `(() => {
+        let city, published = false, scheduled = false
+        Object.defineProperty(window, 'PGSIMCITY', {
+          configurable: true,
+          get: () => {
+            if (city && !scheduled) {
+              scheduled = true
+              setTimeout(() => { published = true }, 1000)
+            }
+            return published ? city : undefined
+          },
+          set: (handle) => { city = handle },
+        })
+      })()`,
     }], async ({ evaluate, keyPress, send }) => {
+      await evaluate(`(async () => {
+        for (let attempt = 0; attempt < 200; attempt += 1) {
+          if (window.PGSIMCITY?.bus && window.PGSIMCITY?.audio) return
+          await new Promise((resolve) => setTimeout(resolve, 50))
+        }
+        throw new Error('City audio handle did not initialize')
+      })()`)
       await evaluate(INSTALL_AUDIO_PROBE)
       /* Reproduce a quality notification arriving after the sound notification,
        * without relying on software-renderer load or disabling quality control. */
