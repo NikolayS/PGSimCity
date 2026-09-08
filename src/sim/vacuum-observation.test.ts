@@ -66,7 +66,7 @@ it('reports exhaustion rather than inventing a checkpoint when the snapshot rema
   while (journey.status === 'running') journey.tick()
   expect(sim.chooseScenario('wait-for-transaction')).toBe(true)
   journey.start()
-  for (let i = 0; i < 100 && journey.status === 'running'; i++) journey.tick()
+  for (let i = 0; i < 100; i++) journey.tick()
   expect(journey.status).toBe('exhausted')
   expect(journey.advanced).toBeCloseTo(900, 5)
   expect(journey.checkpoints.map(c => c.kind)).toEqual(['pinned'])
