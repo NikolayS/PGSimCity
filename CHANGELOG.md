@@ -9,6 +9,13 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## 0.53.0 — 2026-09-08
+
+- Read a coherent working-city skyline: taller backend process towers, open-gabled WAL architecture, and a deeper buffer deck that leaves the sampled basin open. Structural silhouettes survive LOW detail; updated indirect-light data follows the geometry.
+- Keep the working city visible in portrait Home and Day/Night, with quieter survey lines and legible matte night structures. Normal phone WAL, buffer-pool and backend destinations fit the visible space between instruments and transport; both phone latency values retain their model qualification.
+- Enlarge model-sampled traffic without increasing its event count. Remove duplicate or timer-invented backend, mapping, connection, logical-decoding and standby-B transport. Reduced motion replaces traversal with coalesced, stationary recent-model-activity marks; live preference changes clear the previous presentation and pause preserves it.
+- Limits: traffic is sampled and illustrative, not a throughput or byte counter. Stationary marks represent recent activity, not occupancy or exact wall-time history. Other illustrative paths remain; software-rendered evidence does not establish named-device performance. This is a city architecture and visibility capability, not completion of the broader graphics evaluation.
+
 ## 0.52.0 — 2026-09-08
 
 - Follow a WAL operations campaign across two ownership contexts: a required standby with validated temporary headroom, and a confirmed retired consumer whose inactive slot no longer serves a recovery requirement. Record live pressure and authored ownership constraints, choose an operation, and verify actual model recovery before completion.

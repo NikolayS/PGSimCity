@@ -958,6 +958,7 @@ export function createHud(ctx: UiContext, options: { onInvestigate?: () => void;
       closeViewBtn,
     ),
     el('div', { class: 'hud-view__actions' }, labelsViewBtn, homeViewBtn, overviewViewBtn, flyViewBtn),
+    el('p', { class: 'hud-view__activity-note', text: 'Traffic is sampled and illustrative, not a throughput counter. With reduced motion, stationary marks show recent model activity; they stay still while paused.' }),
     el(
       'div',
       { class: 'hud-view__district-head' },

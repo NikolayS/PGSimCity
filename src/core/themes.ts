@@ -259,16 +259,16 @@ export const ATMOSPHERE: Record<CuratedThemeMode, Atmosphere> = {
   night: {
     toneMapping: 'aces',
     exposure: 1.06,
-    fogNearScale: 1,
-    fogFarScale: 1,
+    fogNearScale: 2.4,
+    fogFarScale: 2.4,
     heightFogDensity: 0.00032,
     heightFogFalloff: 0.026,
     fogColor: NIGHT_PALETTE.fog,
     // Do not move this. The Slonik plate silhouette in the overview shot rots
     // silently when it changes, and no test caught it across four commits.
     plateFogScale: 0.32,
-    hemiSky: 0x2a4a7a,
-    hemiGround: 0x05070c,
+    hemiSky: 0x7995bb,
+    hemiGround: 0x18202d,
     hemiIntensity: 0.78,
     keyColor: 0xa8c8ff,
     keyIntensity: 1.15,
@@ -280,13 +280,13 @@ export const ATMOSPHERE: Record<CuratedThemeMode, Atmosphere> = {
     shadowNormalBias: 0.6,
     shadowIntensity: 1,
     shadows: false,
-    fillColor: 0x4a6fa5,
-    fillIntensity: 0.48,
+    fillColor: 0x8095b5,
+    fillIntensity: 0.72,
     fillPos: [-320, 168, 296],
     walGlow: 40,
     yardGlow: 26,
     noBloomHemi: 1.02,
-    noBloomFill: 0.62,
+    noBloomFill: 0.82,
     noBloomWalGlow: 66,
     noBloomYardGlow: 44,
     bloomEnabled: true,
@@ -312,17 +312,13 @@ export const ATMOSPHERE: Record<CuratedThemeMode, Atmosphere> = {
     // Keep material colour below the highlight shoulder; the low sun and cool
     // indirect floor establish shape without an exposure-dependent palette.
     exposure: 1.0,
-    /*
-     * Aerial perspective begins at 264 m and finishes at 1,897.5 m. Across the
-     * city's 830 m span that moves the far districts 35% toward the blue-grey
-     * horizon; from the phone framing the centre is 49% into the curve. Semantic
-     * colour still survives, but distance can no longer look equally sharp.
-     */
-    fogNearScale: 1.2,
-    fogFarScale: 1.65,
+    /* Keep the working city legible from portrait overview. Atmosphere belongs
+     * beyond the near districts; the outer plate still recedes into the sky. */
+    fogNearScale: 2.4,
+    fogFarScale: 2.4,
     // This layers over distance fog: at home framing it must not flatten
     // every facade into the same haze colour before the far districts recede.
-    heightFogDensity: 0.00025,
+    heightFogDensity: 0.00012,
     heightFogFalloff: 0.018,
     fogColor: DAY_PALETTE.fog,
     plateFogScale: 0.84,
@@ -797,7 +793,7 @@ export function nightSurface(hex: number): number {
   if (isNeutralExtreme(hex)) return hex
   const [h, s, l] = hslOf(hex)
   if (l >= 0.34) return hex
-  return hexOfHsl(h, s, Math.min(0.4, 0.06 + l * 1.15))
+  return hexOfHsl(h, s * 0.45, Math.min(0.5, 0.18 + l))
 }
 
 export function clockSurface(hex: number, daylight: number, key?: string): number {

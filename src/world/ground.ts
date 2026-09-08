@@ -129,9 +129,9 @@ void main() {
   // rhythm. Per-fragment distance also retires the horizon in walking views.
   float viewDistance = distance( vWorld, cameraPosition );
   minor *= ( 1.0 - smoothstep( 180.0, 720.0, viewDistance ) )
-         * mix( 0.12, 0.60, uSurveyDetail );
+         * mix( 0.02, 0.50, uSurveyDetail );
   major *= ( 1.0 - smoothstep( 700.0, 2200.0, viewDistance ) )
-         * mix( 0.40, 0.72, uSurveyDetail );
+         * mix( 0.08, 0.60, uSurveyDetail );
 
   // The survey grid stops at the plate, not in the fog: it dies in the last
   // 34 m so the kerb is a boundary and not just the place the lines get cut.

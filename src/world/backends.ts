@@ -3,7 +3,7 @@ import { COLOR } from '../core/theme'
 import { N_BACKEND_SLOTS } from '../core/types'
 import type { BackendState, SimState, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, damp, fmtBytes, fmtDuration, makeRng } from '../core/util'
-import { CITY, backendPid, backendX, rid } from './layout'
+import { CITY, backendPid, backendX } from './layout'
 
 /* ============================================================================
  * BACKENDS — sixteen towers, one per connection.
@@ -195,6 +195,7 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
   const { theme } = ctx
   const group = new THREE.Group()
   group.name = 'district:backends'
+  group.userData.collisionCeiling = CITY.backend.maxH + 5
 
   const owned: { dispose(): void }[] = []
   function own<T extends { dispose(): void }>(x: T): T {
@@ -580,8 +581,9 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
     district: 'backends',
     object: group,
     tier: 0,
-    focus: { target: [0, 16, BZ], distance: 250, dir: [0.05, 0.5, 1] },
-    labelAt: [0, 34, BZ],
+    focus: { target: [0, 22, BZ], distance: 250, dir: [0.05, 0.5, 1] },
+    focusBounds: { min: [-CITY.backend.span / 2 - 8, 0, BZ - 8], max: [CITY.backend.span / 2 + 8, CITY.backend.maxH + 5, BZ + 10] },
+    labelAt: [0, CITY.backend.maxH + 8, BZ],
     color: COLOR.backend,
     readout: (s) => `${s.stats.activeBackends} of ${N} slots occupied · ${Math.round(s.stats.tps)} tps`,
   })
@@ -625,8 +627,6 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
    * Runtime state.
    * =====================================================================*/
 
-  const prevState: BackendState[] = new Array(N).fill('free')
-  const bufTimer = new Float32Array(N)
   const crownRgb = new Float32Array(N * 3)
   const shaftRgb = new Float32Array(N * 3)
   const puddle = new Float32Array(N)
@@ -634,7 +634,6 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
   const ringPhase = new Float32Array(N)
   const ringLevel = new Float32Array(N)
   let prevT = -1
-  const bufInterval = ctx.quality.level === 'low' ? 1.1 : 0.55
 
   function short(sql: string): string {
     return sql.length > 30 ? sql.slice(0, 29) + '…' : sql
@@ -975,64 +974,8 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
       }
       puddleMesh.setColorAt(i, _c)
 
-      /* -- flows: only on transitions, never every frame ------------------ */
-      if (b && st !== prevState[i]) {
-        switch (st) {
-          case 'parse':
-            ctx.flow({ route: rid.query(i), count: 1, kind: 'query', color: COLOR.client })
-            break
-          case 'sending':
-            ctx.flow({
-              route: rid.result(i),
-              count: clamp(1 + Math.round(b.rowsSent / 60), 1, 4),
-              kind: 'result',
-              color: COLOR.ok,
-              stagger: 0.2,
-            })
-            break
-          case 'wal_insert':
-            ctx.flow({
-              route: rid.walIns(i),
-              count: clamp(1 + Math.round(b.walBytes / 4096), 1, 3),
-              kind: 'wal',
-              color: COLOR.wal,
-              stagger: 0.08,
-            })
-            break
-          case 'blocked':
-            ctx.flow({ route: rid.lockWait(i), count: 1, kind: 'stat', color: COLOR.lock })
-            break
-          case 'exec_io':
-            ctx.flow({ route: rid.bufReq(i), count: 1, kind: 'page_read' })
-            break
-          default:
-            break
-        }
-        // the page the backend was sleeping on has arrived
-        if (prevState[i] === 'exec_io') {
-          ctx.flow({ route: rid.bufRet(i), count: 1, kind: 'page_read', color: COLOR.bufClean })
-        }
-      }
-      prevState[i] = st
+      // Transport is emitted by the model, not inferred from a display phase.
 
-      // steady buffer traffic while the backend is actually doing work
-      if (b && (st === 'exec_cpu' || st === 'exec_io' || st === 'sort')) {
-        bufTimer[i] -= dts
-        if (bufTimer[i] <= 0) {
-          bufTimer[i] = bufInterval * (0.75 + ((i * 37) % 11) / 22)
-          ctx.flow({ route: rid.bufReq(i), count: 1, kind: 'page_read', size: 0.9 })
-          ctx.flow({ route: rid.bufRet(i), count: 1, kind: 'page_read', color: COLOR.bufClean, size: 0.9 })
-        }
-      } else if (b && st === 'sending') {
-        // rows keep streaming back to the client for as long as the state lasts
-        bufTimer[i] -= dts
-        if (bufTimer[i] <= 0) {
-          bufTimer[i] = bufInterval * 0.7
-          ctx.flow({ route: rid.result(i), count: 1, kind: 'result', color: COLOR.ok })
-        }
-      } else {
-        bufTimer[i] = 0.12
-      }
     }
 
     attrBright.needsUpdate = true

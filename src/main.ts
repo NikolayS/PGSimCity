@@ -443,13 +443,21 @@ async function boot(): Promise<void> {
      * or picked component may request it while the pedestrian still owns the
      * transform, so stand up before the scripted rig starts its move. */
     if (walk.enabled) bus.emit('camera:mode', { mode: 'orbit' })
-    const bounds = viewport ? lessonObjectBounds(def.object, def.focusBounds).expandByScalar(5) : null
+    /* Normal phone destinations need the same visible-space fitting as lessons.
+     * Only authored district bounds enter here; hidden parked instances do not. */
+    let visibleViewport = viewport
+    if (!visibleViewport && innerWidth <= 700 && ['wal.vault', 'shared.buffers', 'backend.row'].includes(id)) {
+      const top = Math.min(innerHeight * 0.45, (document.querySelector('#hud-top')?.getBoundingClientRect().bottom ?? 80) + 56)
+      const bottom = Math.max(top + 80, (document.querySelector('#hud-bottom')?.getBoundingClientRect().top ?? innerHeight - 110) - 18)
+      visibleViewport = { left: -0.92, right: 0.92, top: 1 - top * 2 / innerHeight, bottom: 1 - bottom * 2 / innerHeight }
+    }
+    const bounds = visibleViewport ? lessonObjectBounds(def.object, def.focusBounds).expandByScalar(5) : null
     if (bounds && id.startsWith('autovac.worker.')) {
       const table = registry.get('storage.table.sessions')
       if (table) bounds.union(new THREE.Box3().setFromObject(table.object))
     }
     if (bounds && def.labelAt) bounds.expandByPoint(new THREE.Vector3(...def.labelAt))
-    const focus = viewport && bounds ? frameLessonObject(gfx.camera, bounds, viewport,
+    const focus = visibleViewport && bounds ? frameLessonObject(gfx.camera, bounds, visibleViewport,
       id.startsWith('storage.table.') || id.startsWith('autovac.worker.') ? { ...def.focus, dir: [0.12, 1, 0.18] } : def.focus) : def.focus
     rig.focusOn(focus, { instant })
   })

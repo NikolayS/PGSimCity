@@ -1297,17 +1297,12 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
   }
 
   /** A connection was accepted and a backend forked into `slot` (-1 unknown). */
-  function fireFork(slot: number): void {
+  function fireFork(_slot: number): void {
     accepted++
     beaconFlash = 1
     gateFlash = 1
     spawnRing()
-    // the connection itself, arriving up the avenue from the terminal
-    ctx.flow({ route: 'conn.in', count: 1, kind: 'fork', color: COLOR.client, size: 1.5 })
-    if (slot >= 0) {
-      // postmaster → new backend: the fork() itself
-      ctx.flow({ route: rid.fork(slot), count: 3, kind: 'fork', color: COLOR.postmaster, stagger: 0.06 })
-    }
+
   }
 
   /* =======================================================================

@@ -14,6 +14,7 @@ import {
   dayEmissive,
   dayInkOpacity,
   daySurface,
+  nightSurface,
   exactDay,
   hslOf,
 } from './themes'
@@ -92,36 +93,45 @@ describe('daylight rendering contract', () => {
     expect(zenithSaturation).toBeGreaterThan(horizonSaturation)
   })
 
+  it('keeps night structural paint legible and matte instead of near-black navy', () => {
+    const [, saturation, lightness] = hslOf(nightSurface(0x1b2435))
+    expect(lightness).toBeGreaterThanOrEqual(0.28)
+    expect(saturation).toBeLessThan(0.2)
+  })
+
+  it('preserves most city contrast at portrait overview distance in either theme', () => {
+    for (const air of [ATMOSPHERE.day, ATMOSPHERE.night]) {
+      const near = 220 * air.fogNearScale
+      const far = 1150 * air.fogFarScale
+      const t = Math.max(0, Math.min(1, (900 - near) / (far - near)))
+      const fog = t * t * (3 - 2 * t)
+      expect(fog).toBeLessThan(0.3)
+      expect(far).toBeGreaterThan(near)
+    }
+  })
+
   it('fades distance onto the sky, and lets the plate read the fog in daylight', () => {
     expect(ATMOSPHERE.day.fogColor).toBe(ATMOSPHERE.day.skyHaze)
     expect(ATMOSPHERE.night.fogColor).toBe(ATMOSPHERE.night.skyHaze)
-    // The near half of the city used to receive literally no fog: at 2.0/2.0
-    // over CITY.fog (220/1150) the curve did not start until 440.
-    //
-    // Both bounds are load-bearing. Golden hour needs visible aerial
-    // perspective across the 830 m city, while the phone view still needs hue.
+    // Distant atmosphere must not erase the central city on a portrait display.
     const near = 220 * ATMOSPHERE.day.fogNearScale
     const far = 1150 * ATMOSPHERE.day.fogFarScale
-    const fogAt = (depth: number): number => (depth - near) / (far - near)
-    expect(near).toBeLessThanOrEqual(300)
-    expect(fogAt(840)).toBeGreaterThan(0.35) // desktop: the far side visibly recedes
-    expect(fogAt(1071)).toBeGreaterThan(0.45) // phone: distance cannot stay equally sharp
-    expect(fogAt(1071)).toBeLessThan(0.62) // phone: semantic hue still survives
+    const fogAt = (depth: number): number => Math.max(0, (depth - near) / (far - near))
+    expect(fogAt(840)).toBeLessThan(0.2)
+    expect(fogAt(1071)).toBeLessThan(0.3)
+    expect(fogAt(1700)).toBeGreaterThan(fogAt(1071))
     // The Slonik plate silhouette depends on this number at night. Do not move it.
     expect(ATMOSPHERE.night.plateFogScale).toBe(0.32)
     expect(ATMOSPHERE.day.plateFogScale).toBeGreaterThan(ATMOSPHERE.night.plateFogScale)
   })
 
-  it('leaves night exactly where it was when day gained its own atmosphere', () => {
-    // Night is the older, better-developed theme and the day work must be a
-    // pure addition to it. These are the values the renderer resolved before
-    // fogColor and plateFogScale existed: fog.color came from COLOR.fog, which
-    // in night mode is NIGHT_PALETTE.fog, and ground.ts held FOG_K = 0.32.
+  it('retains the night sky and silhouette while opening distance visibility', () => {
+    // Changing structural visibility does not change the authored night sky.
     const night = ATMOSPHERE.night
     expect(night.fogColor).toBe(NIGHT_PALETTE.fog)
     expect(night.plateFogScale).toBe(0.32)
-    expect(night.fogNearScale).toBe(1)
-    expect(night.fogFarScale).toBe(1)
+    expect(night.fogNearScale).toBeGreaterThan(1)
+    expect(night.fogFarScale).toBeGreaterThan(1)
     expect(night.skyZenith).toBe(0x030408)
     expect(night.skyHorizon).toBe(0x19273f)
     expect(night.skyGlow).toBe(0x573c14)

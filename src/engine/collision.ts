@@ -776,7 +776,12 @@ export function createCollisionWorld(): CollisionWorld {
       if (duplicate) continue
       def.object.updateWorldMatrix(true, false)
       const before = n
-      addObject(def.object, 0, o, def.id === 'shmem.deck' ? 'deck' : 'metal')
+      /* Taller authored structures opt in without making the distant client
+       * sky or query-lab scenery solid for every other district. */
+      const ceiling = def.object.userData.collisionCeiling as unknown
+      const objectOptions = typeof ceiling === 'number' && Number.isFinite(ceiling)
+        ? { ...o, ceiling: Math.max(o.ceiling, ceiling) } : o
+      addObject(def.object, 0, objectOptions, def.id === 'shmem.deck' ? 'deck' : 'metal')
       // Only a component that actually produced colliders may shadow its
       // descendants; one that was dropped entirely must not silently take
       // theirs with it.

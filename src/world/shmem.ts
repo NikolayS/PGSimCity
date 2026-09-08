@@ -400,7 +400,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
   // The slab is a real frame: collision rays and daylight can both see the basin.
   const deckBody = new THREE.InstancedMesh(gRiser, mStructLo, 4)
   deckBody.name = 'shmem.deck.body'
-  setDeckFrame(deckBody.instanceMatrix.array as Float32Array, DECK_W - 5, DECK_D - 5, DECK_BOT, 1.5)
+  setDeckFrame(deckBody.instanceMatrix.array as Float32Array, DECK_W - 5, DECK_D - 5, DECK_BOT - 4, 5.5)
   deckBody.instanceMatrix.needsUpdate = true
   deck.add(deckBody)
 
@@ -1380,7 +1380,6 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
   const lookupAge = new Float32Array(MAX_MAP_BEAMS)
   let lookupNext = 0
   const prevLastBuffer = new Int32Array(N_BACKEND_SLOTS).fill(-1)
-  let flowTimer = 0
   let lookupRate = 0
 
   /* ============================================================= REGISTER */
@@ -1411,6 +1410,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     tier: 0,
     color: COLOR.bufClean,
     focus: { target: [0, BASE_Y + 2, 0], distance: 104, dir: [0.12, 0.66, 0.74] },
+    focusBounds: { min: [-POOL_HALF, BASE_Y, -POOL_HALF], max: [POOL_HALF, COPING_TOP, POOL_HALF] },
     labelAt: [0, 12, 0],
     readout: sharedBuffersReadout,
   })
@@ -2073,12 +2073,7 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     }
     buckets.instanceColor!.needsUpdate = true
 
-    // Occasional traffic on the mapping-table road.
-    flowTimer -= dt
-    if (flowTimer <= 0 && lookupRate > 0.5) {
-      flowTimer = 0.55 + 0.8 / (1 + lookupRate)
-      ctx.flow({ route: 'bufmap.in', count: 1, color: COLOR.shmem, size: 0.8, kind: 'stat' })
-    }
+
   }
 
   function updatePanel(dt: number, sim: SimState): void {

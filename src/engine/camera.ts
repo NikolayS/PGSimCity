@@ -1679,14 +1679,16 @@ export function createCameraRig(
 
   function home(instant = false): void {
     _v1.copy(HOME_POS).sub(HOME_PIVOT)
-    // The shot is framed for a landscape window; the FOV is vertical, so on a
-    // narrow one we have to back off or the WAL district falls off the edge.
-    const d = _v1.length() * clamp(1.6 / Math.max(camera.aspect, 0.4), 1, 2.4)
+    /* Portrait home prioritizes the working city, not the complete outer plate.
+     * The separate plan view fits the whole silhouette at every aspect. */
+    const d = _v1.length() * clamp(1.6 / Math.max(camera.aspect, 0.4), 1, 1.8)
+    // Align the long client-to-replica axis with a portrait screen.
+    if (camera.aspect < 0.8) _v1.x *= 0.1
     _v1.normalize()
     if (mode === 'fly') setMode('orbit')
     focusOn(
       {
-        target: [HOME_PIVOT.x, HOME_PIVOT.y, HOME_PIVOT.z],
+        target: [HOME_PIVOT.x + (camera.aspect < 0.8 ? 12 : 0), HOME_PIVOT.y, HOME_PIVOT.z],
         distance: d,
         dir: [_v1.x, _v1.y, _v1.z],
       },

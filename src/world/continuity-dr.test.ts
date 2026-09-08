@@ -320,10 +320,15 @@ describe('continuity and three-node projection', () => {
       ANCHOR.archiver[2] - 4,
     ])
     expect(flows.some((flow) => flow.route === 'net.streamB')).toBe(true)
+    expect(flows.filter((flow) => flow.route === 'net.streamB').every((flow) => flow.source === 'model')).toBe(true)
     expect(flows.some((flow) => flow.route === 'net.ackB')).toBe(true)
+    expect(flows.filter((flow) => flow.route === 'net.ackB').every((flow) => flow.source === 'model')).toBe(true)
     expect(flows.some((flow) => flow.route === 'replicaB.apply')).toBe(true)
+    expect(flows.filter((flow) => flow.route === 'replicaB.apply').every((flow) => flow.source === 'model')).toBe(true)
     expect(flows.some((flow) => flow.route === 'replicaB.buffer')).toBe(true)
+    expect(flows.filter((flow) => flow.route === 'replicaB.buffer').every((flow) => flow.source === 'model')).toBe(true)
     expect(flows.some((flow) => flow.route === 'replicaB.io')).toBe(true)
+    expect(flows.filter((flow) => flow.route === 'replicaB.io').every((flow) => flow.source === 'model')).toBe(true)
     expect(flows.some((flow) => flow.route.startsWith('ha.lease'))).toBe(true)
 
     const firstBranch = continuity.group.getObjectByName('timeline.branch.0')

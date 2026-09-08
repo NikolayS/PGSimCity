@@ -1346,6 +1346,8 @@ export type FlowKind =
 
 /** A request to send N particles down a named route. */
 export interface FlowRequest {
+  /** Model-sampled event, not a packet/byte count or a display timer. */
+  source?: 'model'
   route: string
   count?: number
   /** hex colour; defaults to the route's colour */

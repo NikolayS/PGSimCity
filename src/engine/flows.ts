@@ -315,6 +315,7 @@ export function createFlows(
   let colorDirty = false
   let dropped = 0
   let clock = 0
+  let staticActivity = reduceMotion()
 
   function buildPool(size: number): void {
     pool = Math.max(64, Math.floor(size))
@@ -474,20 +475,38 @@ export function createFlows(
     colorDirty = true
   }
 
+  function syncMotionPreference(): void {
+    const next = reduceMotion()
+    if (next === staticActivity) return
+    staticActivity = next
+    qHead = qCount = nAct = 0
+    nFree = pool
+    for (let i = 0; i < pool; i++) { free[i] = pool - 1 - i; park(i) }
+    mesh.count = 0
+  }
+
   function emit(req: FlowRequest): void {
+    syncMotionPreference()
+    if (staticActivity && req.source !== 'model') return
     const r = bakeRoute(req.route)
     if (r < 0) {
       dropped++
       return
     }
     const b = bakes[r]
-    const count = Math.min(MAX_BURST, Math.max(1, Math.round(req.count ?? 1)))
+    // A stationary mark reports recent activity on this route, never quantity.
+    if (staticActivity) {
+      for (let a = 0; a < nAct; a++) {
+        if (pRoute[act[a]] === r) { pT[act[a]] = 0; return }
+      }
+    }
+    const count = staticActivity ? 1 : Math.min(MAX_BURST, Math.max(1, Math.round(req.count ?? 1)))
     const color = req.color ?? b.color
     const speed = req.speed ?? b.speed
-    const size = req.size ?? b.size
-    const spread = req.spread ?? 1.0
+    const size = (req.size ?? b.size) * (req.source === 'model' ? 1.65 : 1)
+    const spread = staticActivity ? 0 : req.spread ?? 1.0
     const kind = req.kind !== undefined ? KIND_INDEX.get(req.kind) ?? KIND_DEFAULT : KIND_DEFAULT
-    const stagger = req.stagger ?? 0
+    const stagger = staticActivity ? 0 : req.stagger ?? 0
 
     if (stagger <= 0) {
       for (let i = 0; i < count; i++) spawn(r, color, speed, size, spread, kind)
@@ -505,6 +524,7 @@ export function createFlows(
   /* ---- update -----------------------------------------------------------*/
 
   function update(dt: number): void {
+    syncMotionPreference()
     // A backgrounded tab hands back a huge dt; teleporting every packet to the
     // end of its route looks like a glitch, so clamp it.
     if (dt > 0.25) dt = 0.25
@@ -524,7 +544,7 @@ export function createFlows(
     for (let a = nAct - 1; a >= 0; a--) {
       const i = act[a]
       const b = bakes[pRoute[i]]
-      const t = pT[i] + (pSpeed[i] * dt) / b.length
+      const t = pT[i] + (staticActivity ? dt / 2 : (pSpeed[i] * dt) / b.length)
 
       if (t >= 1) {
         park(i)
@@ -537,7 +557,7 @@ export function createFlows(
       if (i >= hi) hi = i + 1
 
       const cum = b.cum
-      const d = t * b.length
+      const d = (staticActivity ? 0.5 : t) * b.length
       const s = segFor(cum, d)
       const c0 = cum[s]
       const c1 = cum[s + 1]
@@ -583,8 +603,8 @@ export function createFlows(
 
       // Fade by scale, never opacity: the material is shared by every packet.
       let fade = 1
-      if (t < FADE_IN) fade = t / FADE_IN
-      else if (t > 1 - FADE_OUT) fade = (1 - t) / FADE_OUT
+      if (!staticActivity && t < FADE_IN) fade = t / FADE_IN
+      else if (!staticActivity && t > 1 - FADE_OUT) fade = (1 - t) / FADE_OUT
       fade = fade * fade * (3 - 2 * fade)
 
       const k = pKind[i]

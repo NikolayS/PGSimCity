@@ -1549,14 +1549,18 @@ body.pg-walk.touch-walk-active .hud-export {
    ========================================================================*/
 
 @media (max-width: 700px) {
-  /* --- instrument bar --------------------------------------------------- */
-
+  /* Identity and checkpoint keep their own row; both latency readings stay visible. */
   .hud-bar {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    grid-template-areas: 'brand vitals controls';
-    gap: 8px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: 'brand controls' 'vitals vitals';
+    gap: 0 8px;
     min-height: 48px;
     padding: 0 8px;
+  }
+  .hud-vitals {
+    justify-self: stretch;
+    justify-content: space-between;
+    overflow-x: visible;
   }
   .hud-brand {
     gap: 7px;
@@ -1920,4 +1924,12 @@ body.pg-walk.touch-walk-active .hud-export {
   #hud .pg-toggle:checked::after {
     transform: translateX(22px);
   }
+}
+
+.hud-view__activity-note {
+  margin: 8px 0 12px;
+  max-width: 48ch;
+  font-size: var(--fs-sm);
+  color: var(--ink-dim);
+  line-height: 1.5;
 }

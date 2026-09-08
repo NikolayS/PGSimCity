@@ -1286,7 +1286,6 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
   /** Emission accumulators, one per route. Never reallocated. */
   const emit = {
     backupPush: 0, haul: 0, unpack: 0, replay: 0, apply: 0,
-    bStream: 0, bAck: 0, bApply: 0, bBuffer: 0, bIo: 0,
   }
 
   function pump(acc: number, perSec: number, dt: number, route: string): number {
@@ -1453,13 +1452,7 @@ export const createContinuity: WorldFactory = (ctx: WorldContext): WorldModule =
     /* --- 4. standby_b: independent receive, flush, apply and storage -------*/
     const standbyB = sim.replication.standbys[1]
     const poolB = sim.cluster.nodes[2].buffers
-    if (standbyB.connected && sim.cluster.nodes[2].role === 'standby') {
-      emit.bStream = pump(emit.bStream, 5, dt, 'net.streamB')
-      emit.bAck = pump(emit.bAck, 2.5, dt, 'net.ackB')
-      emit.bApply = pump(emit.bApply, 3.5, dt, 'replicaB.apply')
-      emit.bBuffer = pump(emit.bBuffer, 2.5, dt, 'replicaB.buffer')
-      emit.bIo = pump(emit.bIo, 1.4, dt, 'replicaB.io')
-    }
+
     const pendingSegments = Math.min(
       N_WAL_B,
       Math.max(

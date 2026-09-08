@@ -30,6 +30,16 @@ function fixture() {
 }
 
 describe('backend process architecture', () => {
+  it('establishes a tall process skyline with differentiated roof heights', () => {
+    const { byMaterial } = fixture()
+    const shafts = byMaterial('backends.shaft')[0]
+    const m = new THREE.Matrix4(), scale = new THREE.Vector3()
+    const heights: number[] = []
+    for (let i = 0; i < shafts.count; i++) { shafts.getMatrixAt(i, m); heights.push(scale.setFromMatrixScale(m).y) }
+    expect(Math.max(...heights)).toBeGreaterThan(35)
+    expect(Math.max(...heights) - Math.min(...heights)).toBeGreaterThan(12)
+  })
+
   it('recesses the central service spine while retaining the status facade on each side', () => {
     const { byMaterial } = fixture()
     const shaft = byMaterial('backends.shaft')[0]

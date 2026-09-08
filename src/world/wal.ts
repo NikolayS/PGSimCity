@@ -707,10 +707,24 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
   piers.push([VX - 10.5, 8.4, 1, 2.4, 12.6, 2.4])
   const vaultPiers = batch(gVault, unitBox, matStruct, piers)
 
-  const roofBeams: BoxSpec[] = []
-  for (let k = 0; k < 15; k++) roofBeams.push([VX, 16.9, -63 + k * 9, 24, 0.8, 1.2])
-  roofBeams.push([VX, 12.6, 0, 1.6, 0.9, VAULT_Z * 2 - 4]) // charging rail
-  const vaultRoof = batch(gVault, unitBox, matDeep, roofBeams)
+  /* Open gabled ribs establish a warehouse silhouette, never a solid roof
+   * hiding segment occupancy. Ribs sit between the existing segment bays. */
+  const trussProfile = new THREE.Shape()
+  trussProfile.moveTo(-13.5, 19.8)
+  trussProfile.lineTo(0, 28)
+  trussProfile.lineTo(13.5, 19.8)
+  trussProfile.lineTo(11.6, 19.8)
+  trussProfile.lineTo(0, 26.1)
+  trussProfile.lineTo(-11.6, 19.8)
+  trussProfile.closePath()
+  const trussGeo = own(new THREE.ExtrudeGeometry(trussProfile, { depth: 1.5, bevelEnabled: false, steps: 1 }))
+  trussGeo.translate(0, 0, -0.75)
+  const vaultRoof = new THREE.InstancedMesh(trussGeo, matStruct, 8)
+  vaultRoof.name = 'wal.vault.trusses'
+  for (let k = 0; k < 8; k++) setTRS(vaultRoof, k, VX, 0, -63 + k * 18, 1, 1, 1)
+  vaultRoof.instanceMatrix.needsUpdate = true
+  gVault.add(vaultRoof)
+  batch(gVault, unitBox, matDeep, [[VX, 12.6, 0, 1.6, 0.9, VAULT_Z * 2 - 4]]) // charging rail
 
   // The round vault door — pg_wal is a strongroom, not a scratch directory.
   const doorGeo = own(new THREE.TorusGeometry(3.9, 0.55, 8, 28))
@@ -1299,8 +1313,8 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
     object: gVault,
     tier: 0,
     focus: { target: [VX, 8, 0], distance: 132, dir: [-0.82, 0.5, -0.28] },
-    focusBounds: { min: [VX - 16, 0, -VAULT_Z - 4], max: [VX + 16, 24, VAULT_Z + 4] },
-    labelAt: [VX, 22, 0],
+    focusBounds: { min: [VX - 16, 0, -VAULT_Z - 4], max: [VX + 16, 29, VAULT_Z + 4] },
+    labelAt: [VX, 31, 0],
     color: COLOR.wal,
     readout: (s: SimState) => {
       const segs = s.wal.segments
@@ -1390,7 +1404,6 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
   let bypassLevel = 0
   let queueLevel = 0
   let streamPulse = 0
-  let logicalAcc = 0
   let streamAcc = 0
   let logicalBeat = 0
   /** Which tooth of the slot drum is under the pawl, and the trail behind it. */
@@ -1807,7 +1820,6 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
       streamAcc += dts
       if (streamAcc > 0.3) {
         streamAcc = 0
-        ctx.flow({ route: 'wal.stream', count: 1, kind: 'stream', color: COLOR.replication })
         // one chunk pushed = one tooth of the drum
         toothHead = (toothHead + 1) % N_TOOTH
         toothGlow[toothHead] = 1
@@ -1894,14 +1906,6 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
     signs.setColor(SGN_LOGON, COLOR.ok, 0.12 + logicalBeat * 0.95)
     signs.setColor(SGN_LOGOFF, COLOR.crit, 0.12 + (1 - logicalBeat) * 0.7)
 
-    if (logicalOn) {
-      logicalAcc += dts
-      if (logicalAcc > 0.33) {
-        logicalAcc = 0
-        const ti = (t * 3.1) % TABLES.length | 0
-        ctx.flow({ route: 'logical.decode', count: 1, kind: 'stream', color: TABLES[ti].color, size: 1.0 })
-      }
-    }
 
     /* --- 6. Ambient ------------------------------------------------------ */
 
@@ -1924,7 +1928,7 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
     wheelGroup.visible = near
     steam.visible = near
 
-    vaultRoof.visible = near
+    vaultRoof.visible = true // skyline is structural, including rescue quality
     segCradleSides.visible = near
     segOutlines.visible = near
     vaultDoorDetail.visible = close

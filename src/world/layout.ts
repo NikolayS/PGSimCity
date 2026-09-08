@@ -54,7 +54,7 @@ export const CITY = {
     accessRun: 5,
   },
   /** backend row */
-  backend: { z: -130, span: 224, w: 10, minH: 12, maxH: 26 },
+  backend: { z: -130, span: 224, w: 10, minH: 18, maxH: 44 },
   /** underground storage */
   storage: { y: -52, w: 300, d: 220, warehouseTop: -30 },
   /** OS page cache slab */

@@ -1964,7 +1964,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     if (quiet) return
     if (flowTokens < count) return
     flowTokens -= count
-    const req: FlowRequest = { route, count, kind }
+    const req: FlowRequest = { route, count, kind, source: 'model' }
     if (size !== undefined) req.size = size
     if (spread !== undefined) req.spread = spread
     if (stagger !== undefined) req.stagger = stagger

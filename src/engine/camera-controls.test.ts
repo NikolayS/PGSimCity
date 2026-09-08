@@ -355,6 +355,22 @@ describe('map camera mouse controls', () => {
     fixture.rig.dispose()
   })
 
+  it('keeps portrait home close enough to read the central city', () => {
+    fixture.camera.fov = 52
+    fixture.rig.resize(390, 844)
+    fixture.rig.home(true)
+    expect(fixture.camera.position.distanceTo(fixture.rig.pivot)).toBeLessThan(900)
+  })
+
+  it.each([[320, 740], [390, 844]])('keeps the WAL hall visible at phone home %s × %s', (w, h) => {
+    fixture.camera.fov = 52; fixture.rig.resize(w, h); fixture.rig.home(true); fixture.camera.updateMatrixWorld()
+    for (const x of [ANCHOR.walVault[0] - 14, ANCHOR.walVault[0] + 14]) for (const z of [-70, 70]) {
+      const p = new THREE.Vector3(x, 0, z).project(fixture.camera)
+      expect(p.x).toBeGreaterThan(-0.98)
+      expect(p.x).toBeLessThan(0.98)
+    }
+  })
+
   it.each([[1280, 760], [1440, 900], [390, 844]])(
     'keeps the client-to-memory landmarks inside the opening frame at %s × %s',
     (width, height) => {
