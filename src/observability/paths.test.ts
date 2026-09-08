@@ -364,3 +364,16 @@ describe('diagnostic path contracts', () => {
     expect(saturation?.test(sim.state, collector)).toBe(false)
   })
 })
+
+
+describe('linked incident baseline inspection', () => {
+  it('does not mark an unhealthy incident healthy just for completing the introductory path', () => {
+    const bus = createBus(), sim = createSim(bus), collector = createCollector(sim)
+    sim.runScenario('checkpoint-storm')
+    const verdict = ALL_VERDICTS.find(v => v.id === 'v.baseline')!
+    expect(verdict.evidence(sim.state, collector).some(value => value.tone === 'ok')).toBe(false)
+    expect(verdict.title).not.toMatch(/that is the baseline/i)
+    expect(verdict.fix).toContain('linked incident')
+    expect(ALL_STEPS.find(s => s.id === 'normal.2')!.title).not.toContain('healthy')
+  })
+})

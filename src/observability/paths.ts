@@ -1184,8 +1184,8 @@ SELECT status, receive_start_lsn, written_lsn, flushed_lsn,
   {
     id: 'normal.2',
     kind: 'step',
-    title: 'Learn what a healthy pg_stat_activity looks like.',
-    why: 'This is the view you will open first in every incident for the rest of your career. Know its resting state.',
+    title: 'Read the current pg_stat_activity state.',
+    why: 'This is a first stop in an incident. Inspect current sessions and waits; completing this walkthrough does not establish that this workload is healthy.',
     instrument: 'pg_stat_activity',
     projection: 'activity',
     city: 'backend.row',
@@ -1228,7 +1228,7 @@ SELECT status, receive_start_lsn, written_lsn, flushed_lsn,
   FROM pg_stat_replication;`,
     look:
       'Alert on `pg_current_wal_lsn() - replay_lsn` in bytes for current backlog. Graph replay_lag too, but read it as PostgreSQL defines it: an estimate of recent commit-delay impact at replay, not current staleness, byte lag converted to time or a catch-up forecast. It may retain a recent value and then become NULL on an idle system.',
-    branches: [{ label: 'That is the baseline. Now go break something.', source: 'replication.standbys', next: 'v.baseline', test: () => true }],
+    branches: [{ label: 'Summarize the current observations.', source: 'replication.standbys', next: 'v.baseline', test: () => true }],
   },
 ]
 
@@ -2016,23 +2016,23 @@ const VERDICTS: Verdict[] = [
   {
     id: 'v.baseline',
     kind: 'verdict',
-    title: 'That is the baseline. Now go and break something.',
+    title: 'You have inspected four views, not certified a healthy baseline.',
     because:
-      'You have read the four views that between them describe a working PostgreSQL server: the workload, the sessions, the write path, and the copy of your data.',
+      'These four views describe the workload, sessions, write path and replication. Read their evidence together before judging health; a linked incident keeps its existing workload throughout this walkthrough.',
     mechanism:
       'These views mix cumulative counters, current states, gauges and interval estimates. Counters become rates through two samples and a subtraction; current pg_stat_activity state and replication positions are read as snapshots; lag intervals have their own documented semantics. Classify a value before comparing it over time.',
     evidence: (s, c) => {
       const standby = worstConnectedStandbyLag(s)
       return [
-        { label: 'tps', value: s.stats.tps.toFixed(0), tone: 'ok' },
-        { label: 'cache hit', value: `${s.stats.cacheHitPct.toFixed(1)}%`, tone: 'ok' },
-        { label: 'requested checkpoints', value: `${(checkpointRequestedShare(c) * 100).toFixed(0)}%`, tone: 'ok' },
+        { label: 'tps', value: s.stats.tps.toFixed(0) },
+        { label: 'cache hit', value: `${s.stats.cacheHitPct.toFixed(1)}%` },
+        { label: 'requested checkpoints', value: `${(checkpointRequestedShare(c) * 100).toFixed(0)}%` },
         { label: 'worst connected standby', value: standby?.applicationName ?? 'none' },
-        { label: 'model replay delay', value: standby ? `${standby.lagSec.toFixed(2)} s` : '—', tone: 'ok' },
+        { label: 'model replay delay', value: standby ? `${standby.lagSec.toFixed(2)} s` : '—' },
       ]
     },
     fix: diagnosticGuidance(
-      'Pick any other complaint on the left. Each one puts this same server into a state that produces that symptom, and walks you to the column that proves it. The numbers you just learned are the ones that will look wrong.',
+      'Pick another complaint to inspect its evidence. A linked incident keeps the current workload; choosing a complaint does not produce that symptom. In a separate, unlinked diagnostic model, choosing a complaint stages its example workload. In either mode, follow the observed evidence rather than treating the complaint as a diagnosis.',
     ),
     knobs: [KB.tps, KB.sharedBuffers],
     city: 'shared.buffers',
