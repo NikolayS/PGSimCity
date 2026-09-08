@@ -8773,18 +8773,29 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     tickStats(dt)
   }
 
-  function update(dt: number): void {
-    if (!isFinite(dt) || dt <= 0) return
-    if (K.paused) return
-    // The frame timebase normally sends fixed wall-clock steps multiplied by
-    // the speed knob. Re-clamping to 0.1 would make higher speeds a silent
-    // no-op, so subdivide instead; MAX_STEPS still bounds direct API callers.
-    const cap = STEP_MAX * MAX_STEPS
-    const d = dt > cap ? cap : dt
-    state.realT += d / Math.max(0.05, K.timeScale)
+  function advanceModel(dt: number, wallTime: boolean): number {
+    if (!isFinite(dt) || dt <= 0) return 0
+    const d = Math.min(dt, STEP_MAX * MAX_STEPS)
+    if (wallTime) state.realT += d / Math.max(0.05, K.timeScale)
     const steps = d > maxStep ? Math.ceil(d / maxStep) : 1
     const sd = d / steps
+    const before = state.t
     for (let i = 0; i < steps; i++) step(sd)
+    return state.t - before
+  }
+
+  function update(dt: number): void {
+    if (K.paused) return
+    // Frame callers already scale model seconds by the speed knob.
+    advanceModel(dt, true)
+  }
+
+  function advance(modelSeconds: number): number {
+    if (!K.paused) return 0
+    // Deliberate steps consume no wall time and never toggle the pause knob.
+    const seconds = advanceModel(modelSeconds, false)
+    if (seconds > 0) bus.emit('sim:advance', { seconds })
+    return seconds
   }
 
   /* ======================================================================
@@ -9368,6 +9379,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   return {
     state,
     update,
+    advance,
     setKnob,
     runScenario,
     chooseScenario,

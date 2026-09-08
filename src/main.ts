@@ -467,6 +467,16 @@ async function boot(): Promise<void> {
   const timer = new THREE.Timer()
   timer.connect(document)
   const frameTimebase = createFrameTimebase(sim.update)
+  // Deliberate steps also move existing model-event visuals while frame time is paused.
+  bus.on('sim:advance', ({ seconds }) => {
+    const steps = Math.ceil(seconds / MAX_VISUAL_DELTA_SECONDS)
+    const dt = seconds / steps
+    for (let i = 0; i < steps; i++) {
+      for (const module of modules) module.update(dt, sim.state, sim.state.t)
+      water.update(dt, 0)
+      flows.update(dt)
+    }
+  })
   let running = true
 
   function frame(): void {

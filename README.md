@@ -167,6 +167,7 @@ Press **`?`** in the city for the city control map and colour legend.
 | `N` | Cycle night / afternoon daylight / approximate local-time light |
 | `M` | Toggle walk sound |
 | `K` or `P` | Pause / resume |
+| Focus **+0.1 model s**, then `Enter` | Advance the paused workload by 0.1 model seconds; remain paused |
 | `,` `.` | Slower / faster (0.1× – 5×) |
 | `R` | Reset to the default settings |
 | `Esc` | Close the topmost overlay |

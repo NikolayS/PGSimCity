@@ -982,6 +982,16 @@ export function createHud(ctx: UiContext, options: { onInvestigate?: () => void 
   )
   const speedGroup = el('div', { class: 'hud-speed' }, slowerBtn, speedEl, fasterBtn)
 
+  const stepBtn = el('button', {
+    class: 'pg-btn hud-step',
+    type: 'button',
+    text: '+0.1 model s',
+    title: 'Advance the paused workload by 0.1 model seconds; keep it paused',
+    'aria-label': 'Advance 0.1 model seconds and stay paused',
+    on: { click: () => sim.advance(0.1) },
+  })
+  stepBtn.hidden = !sim.state.knobs.paused
+
   const resetBtn = el(
     'button',
     {
@@ -1093,7 +1103,7 @@ export function createHud(ctx: UiContext, options: { onInvestigate?: () => void 
   const transport = el(
     'div',
     { class: 'pg-panel hud-transport' },
-    el('div', { class: 'hud-transport__deck' }, playBtn, speedGroup, resetBtn, scnBtn),
+    el('div', { class: 'hud-transport__deck' }, playBtn, speedGroup, stepBtn, resetBtn, scnBtn),
     el('span', { class: 'hud-sep' }),
     scnWrap,
     dockSlot,
@@ -1854,6 +1864,8 @@ export function createHud(ctx: UiContext, options: { onInvestigate?: () => void 
       playIcon.replaceChildren(icon(paused ? 'play' : 'pause', 14))
     }
     setClass(playBtn, 'is-active', paused)
+    speedGroup.hidden = paused
+    stepBtn.hidden = !paused
     setText(speedEl, fmtSpeed(s.knobs.timeScale))
   }
 

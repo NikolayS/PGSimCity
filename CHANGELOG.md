@@ -11,6 +11,28 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+## [0.48.0] - 2026-09-08
+
+### Added
+
+- While paused, the transport bar offers **+0.1 model s** in place of speed
+  controls. Advance the workload with a click, touch, or focused Enter key,
+  retaining pause, the selected speed and investigation notes. Existing
+  model-event visuals advance with the requested step, including under
+  reduced motion; no continuous playback is required.
+- A bounded model-owned advance API shares normal simulation subdivisions and
+  event paths. Deliberate advancement consumes model seconds, not wall time.
+
+### Scope
+
+- This is fine-grained workload stepping, not replay, rewind, a next-event
+  command or the complete causal-motion lens. Query-flow trace stepping remains
+  separate. Start an investigation in normal playback, then pause near a
+  transition to inspect it. Releasing a snapshot changes eligibility; actual
+  sessions-table collection still requires a later vacuum pass and does not
+  automatically shrink the relation. Existing representative-page, visual
+  scale, phone visibility and overlay limitations remain.
+
 ## [0.47.0] - 2026-09-08
 
 ### Changed

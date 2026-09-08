@@ -772,6 +772,11 @@
   place-items: center;
 }
 
+.hud-speed[hidden],
+.hud-step[hidden] {
+  display: none;
+}
+
 .hud-speed {
   display: flex;
   align-items: center;

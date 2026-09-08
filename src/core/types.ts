@@ -1193,7 +1193,7 @@ export type ScenarioDecisionState =
 export interface SimState {
   /** simulated seconds since boot */
   t: number
-  /** wall seconds since boot */
+  /** Accumulated active frame-clock seconds; excludes pause and deliberate steps. */
   realT: number
   knobs: Knobs
   xid: number
@@ -1295,6 +1295,9 @@ export interface SimApi {
   state: SimState
   /** advance by dt simulated seconds (already scaled by timeScale) */
   update(dt: number): void
+  /** While paused, advance at most 2/3 model seconds; return actual duration.
+   * Invalid/nonpositive or running requests return zero. Does not consume realT. */
+  advance(modelSeconds: number): number
   setKnob<K extends keyof Knobs>(key: K, value: Knobs[K], source?: 'user'): void
   runScenario(id: string | null): void
   /** Apply one of the visible operator choices in an interactive scenario. */
@@ -1388,6 +1391,8 @@ export interface BusEvents {
   'camera:gesture': { kind: 'pan' | 'rotate'; pointer: 'mouse' | 'touch' }
   'quality': { level: QualityLevel }
   'sim:reset': Record<string, never>
+  /** Completed deliberate workload step, in model seconds; not wall time. */
+  'sim:advance': { seconds: number }
   'checkpoint:start': { reason: string }
   'checkpoint:end': { duration: number }
   'audio:toggle': Record<string, never>
