@@ -17,7 +17,7 @@ are all still moving. Expect breaking changes between minor versions.
 
 - Increase daytime mineral reflectance across the ten structural districts so
   building faces separate more clearly from the paving. Retain district hues,
-  semantic paint, ground/foundation values and the authored night materials.
+  semantic paint, ground/excavation values and the authored night materials.
   Local-clock materials retain their continuous day/night transition.
 
 ### Scope
