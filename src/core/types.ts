@@ -1360,8 +1360,10 @@ export interface FlowRequest {
 
 export interface BusEvents {
   flow: FlowRequest
-  /** camera should frame a component */
-  focus: { id: string | null; instant?: boolean }
+  /** Presentation-only storage cutaway; the model continues unchanged. */
+  'storage:cutaway': { active: boolean }
+  /** Frame a component; optional viewport bounds use normalized device coordinates. */
+  focus: { id: string | null; instant?: boolean; viewport?: { left: number; right: number; top: number; bottom: number } }
   /** inspector panel target changed; `part` names a directly-picked substructure */
   select: { id: string | null; part?: 'page'; outlineOnly?: boolean; source?: 'building' }
   hover: { id: string | null }

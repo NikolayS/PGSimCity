@@ -9,6 +9,13 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## 0.50.0 — 2026-09-08
+
+- Investigation camera fits the selected component beside the notebook on desktop and above it on phones. The phone notebook retains a scrollable evidence area while leaving room for the live city.
+- Storage evidence uses a labeled cutaway: shared-memory, OS-cache and durability overlays are hidden for presentation only. Snapshot evidence, ordinary focus, free flight/walking and lesson exit restore those layers; no simulation state is removed.
+- Saved worker evidence no longer focuses a worker slot that has since left the sessions table. Historical observations and notes remain retained; the city is live, not rewound.
+- This improves investigation framing, not the scale or causal animation of collection indicators. Normal-distance worker/collection readability and the broader visual transformation remain follow-up work.
+
 ## 0.49.0 — 2026-09-08
 
 - Vacuum investigation can pause and advance to the next observed causal checkpoint: retained snapshot, release, advanced cleanup horizon, then actual sessions-table collection.

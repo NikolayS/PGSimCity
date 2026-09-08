@@ -1,3 +1,4 @@
+import { isWorldObjectVisible } from './storage-cutaway'
 import * as THREE from 'three'
 import { CSS2DObject, CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
 
@@ -923,7 +924,7 @@ export function createLabels(
         // Query lab deliberately dissolves between statements, for example,
         // but its map identity and navigation target must not disappear too.
         if (e.members.length < DISTRICT_MIN) continue
-      } else if (e.def && !e.def.object.visible) {
+      } else if (e.def && !isWorldObjectVisible(e.def.object)) {
         continue
       }
 

@@ -252,7 +252,7 @@ body.pg-vacuum-lesson .tour-narrate {
   .vacuum-lesson {
     inset: auto calc(8px + var(--safe-r)) var(--vacuum-bottom, calc(122px + var(--safe-b))) calc(8px + var(--safe-l));
     width: auto;
-    max-height: min(calc(72dvh - var(--safe-b)), calc(100dvh - var(--vacuum-top, 78px) - var(--vacuum-bottom, 122px)));
+    max-height: min(calc(48dvh - var(--safe-b)), calc(100dvh - var(--vacuum-top, 78px) - var(--vacuum-bottom, 122px)));
   }
 
   .vacuum-lesson__head,
@@ -296,4 +296,9 @@ body.pg-vacuum-lesson .tour-narrate {
 
 .vacuum-lesson__checkpoints p {
   font-size: 12px;
+}
+
+.vacuum-lesson__scene {
+  color: var(--ink-dim);
+  font-size: 11px;
 }

@@ -60,6 +60,9 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
   let changingTiming = false
   let ownedDecision: SimState['scenarioDecision'] = null
   let state = createVacuumLessonState('guided')
+  let requestingFocus = false
+  let ownsFraming = false
+  let sceneId = TABLE
   let selected: VacuumEvidenceId = 'table'
   let lastFocus: HTMLElement | null = null
   let savedPaused = false
@@ -83,6 +86,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
   const modeLabel = el('span', { class: 'vacuum-lesson__mode' })
   const clock = el('span', { class: 'vacuum-lesson__clock' })
   const phaseLabel = el('p', { class: 'vacuum-lesson__step' })
+  const sceneNote = el('p', { class: 'vacuum-lesson__scene', text: 'Live city · saved observations do not rewind it.' })
   const closeButton = el('button', {
     type: 'button', class: 'pg-btn vacuum-lesson__close', text: 'Exit',
     'aria-label': 'Exit the vacuum investigation', on: { click: () => close() },
@@ -270,7 +274,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     class: 'vacuum-lesson pg-panel', hidden: true, 'aria-labelledby': 'vacuum-lesson-title',
   },
   el('header', { class: 'vacuum-lesson__head' },
-    el('div', { class: 'vacuum-lesson__meta' }, modeLabel, clock), closeButton, title, phaseLabel),
+    el('div', { class: 'vacuum-lesson__meta' }, modeLabel, clock), closeButton, title, phaseLabel, sceneNote),
   el('div', { class: 'vacuum-lesson__body' },
     causal, evidenceNav, evidenceDetail, causes, decision, observation, announcement,
     el('div', { class: 'vacuum-lesson__tools' }, pageButton, pauseButton, hintButton, challengeButton, shareButton, shareLink),
@@ -288,12 +292,16 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     const dockClearance = dock?.height ? window.innerHeight - dock.top + 8 : 122
     panel.style.setProperty('--vacuum-bottom', `${Math.max(82, Math.ceil(dockClearance))}px`)
   }
+  function reposition(): void {
+    positionPanel()
+    if (opened && ownsFraming) focus(sceneId)
+  }
   const toolbar = document.getElementById('hud-top')
-  const toolbarObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(positionPanel)
+  const toolbarObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(reposition)
   if (toolbar) toolbarObserver?.observe(toolbar)
   const dock = document.getElementById('hud-bottom')
   if (dock) toolbarObserver?.observe(dock)
-  window.addEventListener('resize', positionPanel)
+  window.addEventListener('resize', reposition)
 
   function announce(text: string): void { setText(announcement, text) }
 
@@ -304,8 +312,29 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
   }
 
   function focus(id: string): void {
+    if (id.startsWith('autovac.worker.')) {
+      const worker = ctx.sim.state.autovac.workers[Number(id.slice('autovac.worker.'.length))]
+      if (!worker?.active || worker.table !== tableIndex || worker.phase === 'travel'
+        || worker.phase === 'return' || worker.phase === 'idle') id = 'autovac.launcher'
+    }
+    ownsFraming = true
+    sceneId = id
+    ctx.bus.emit('storage:cutaway', { active: id === TABLE || id.startsWith('autovac.worker.') })
     ctx.bus.emit('select', { id, outlineOnly: true })
-    ctx.bus.emit('focus', { id, instant: reduceMotion() || ctx.getQuality().level === 'reduced' })
+    const rect = panel.getBoundingClientRect()
+    const width = window.innerWidth
+    const height = window.innerHeight
+    const toolbarBottom = document.getElementById('hud-top')?.getBoundingClientRect().bottom ?? 70
+    const claimsBottom = width <= 640 ? document.getElementById('city-version-provenance')?.getBoundingClientRect().bottom ?? 0 : 0
+    const top = Math.max(toolbarBottom, claimsBottom) + 32
+    const bottom = document.getElementById('hud-bottom')?.getBoundingClientRect().top ?? height - 100
+    const viewport = width <= 640
+      ? { left: -1 + 32 / width, right: 1 - 32 / width, top: 1 - 2 * top / height, bottom: 1 - 2 * (rect.top - 16) / height }
+      : { left: -1 + 32 / width, right: 2 * (rect.left - 16) / width - 1, top: 1 - 2 * top / height, bottom: 1 - 2 * (bottom - 16) / height }
+    requestingFocus = true
+    try {
+      ctx.bus.emit('focus', { id, ...(rect.width > 0 && rect.height > 0 ? { viewport } : {}), instant: reduceMotion() || ctx.getQuality().level === 'reduced' })
+    } finally { requestingFocus = false }
   }
 
   function setTiming(key: 'paused', value: boolean): void
@@ -491,8 +520,8 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     setTiming('timeScale', 1)
     setTiming('paused', reduceMotion() || ctx.getQuality().level === 'reduced' ? savedPaused : false)
     announce('Inspect four evidence sources at your own pace. Starting this lesson applies a scenario to the current city; Exit restores its previous settings.')
-    focus(TABLE)
     refresh()
+    focus(TABLE)
     title.focus()
     progress('started')
   }
@@ -501,6 +530,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     if (!opened) return
     stopSeeking()
     opened = false
+    ctx.bus.emit('storage:cutaway', { active: false })
     panel.hidden = true
     panel.remove()
     document.body.classList.remove('pg-vacuum-lesson')
@@ -519,6 +549,14 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     close()
   })
   const off = [
+    ctx.bus.on('camera:gesture', () => { ownsFraming = false }),
+    ctx.bus.on('camera:mode', ({ mode }) => {
+      if (mode === 'walk' || mode === 'fly') ownsFraming = false
+    }),
+    ctx.bus.on('focus', ({ viewport }) => { if (!viewport && !requestingFocus) ownsFraming = false }),
+    ctx.bus.on('storage:cutaway', ({ active }) => setText(sceneNote, active
+      ? 'Live storage cutaway · memory layers hidden, not removed from the model.'
+      : 'Live city · saved observations do not rewind it.')),
     ctx.bus.on('scenario', () => { if (opened && !changingScenario) close(false) }),
     ctx.bus.on('sim:reset', () => close(false, false)),
     ctx.bus.on('knob', ({ key }) => {
@@ -549,7 +587,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     },
     dispose() {
       toolbarObserver?.disconnect()
-      window.removeEventListener('resize', positionPanel)
+      window.removeEventListener('resize', reposition)
       for (const unsubscribe of off) unsubscribe()
       close()
       panel.remove()

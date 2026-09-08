@@ -110,6 +110,45 @@ describe('vacuum lesson in the live model', () => {
     expect(button('[data-vacuum-record]').disabled).toBe(false)
   })
 
+  it('does not focus a reused worker slot as retained sessions evidence', () => {
+    const f = fixture()
+    const focuses: { id: string | null }[] = []
+    f.bus.on('focus', event => focuses.push(event))
+    f.lesson.open()
+    f.sim.setKnob('paused', true)
+    const target = f.sim.state.tables.findIndex(table => table.def.id === 'sessions')
+    const worker = f.sim.state.autovac.workers[0]
+    worker.active = true
+    worker.phase = 'scan_heap'
+    worker.table = target
+    f.lesson.update(1)
+    button('[data-vacuum-evidence="worker"]').click()
+    expect(focuses.at(-1)?.id).toBe('autovac.worker.0')
+    const observation = document.querySelector('.vacuum-lesson__reading')!.textContent
+    worker.table = (target + 1) % f.sim.state.tables.length
+    window.dispatchEvent(new Event('resize'))
+    expect(focuses.at(-1)?.id).toBe('autovac.launcher')
+    button('[data-vacuum-evidence="worker"]').click()
+    expect(focuses.at(-1)?.id).toBe('autovac.launcher')
+    expect(document.querySelector('.vacuum-lesson__reading')!.textContent).toBe(observation)
+  })
+
+  it('does not steal the camera on resize after the learner starts moving', () => {
+    const f = fixture()
+    const focuses: { id: string | null }[] = []
+    f.bus.on('focus', event => focuses.push(event))
+    f.lesson.open()
+    const count = focuses.length
+    f.bus.emit('camera:mode', { mode: 'fly' })
+    window.dispatchEvent(new Event('resize'))
+    expect(focuses.length).toBe(count)
+    button('[data-vacuum-evidence="table"]').click()
+    const refocused = focuses.length
+    f.bus.emit('camera:gesture', { kind: 'pan', pointer: 'mouse' })
+    window.dispatchEvent(new Event('resize'))
+    expect(focuses.length).toBe(refocused)
+  })
+
   it('positions its desktop panel below the measured wrapped toolbar', () => {
     const f = fixture()
     const hud = document.createElement('div')

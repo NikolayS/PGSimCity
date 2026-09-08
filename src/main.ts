@@ -28,6 +28,8 @@ import type { ComponentDef, FlowRequest, QualitySettings, WorldContext, WorldMod
 
 import { createRenderer } from './engine/renderer'
 import { createCameraRig } from './engine/camera'
+import { frameLessonObject } from './engine/lesson-framing'
+import { createStorageCutaway } from './engine/storage-cutaway'
 import { createFlows } from './engine/flows'
 import { createRoads } from './engine/roads'
 import { createLabels } from './engine/labels'
@@ -374,7 +376,13 @@ async function boot(): Promise<void> {
     window.addEventListener('keydown', resumePreferredAudio, { capture: true, once: true })
   }
 
-  bus.on('focus', ({ id, instant }) => {
+  const storageCutaway = createStorageCutaway(scene)
+  bus.on('storage:cutaway', ({ active }) => storageCutaway.setActive(active))
+  bus.on('camera:mode', ({ mode }) => {
+    if (mode === 'walk' || mode === 'fly') bus.emit('storage:cutaway', { active: false })
+  })
+  bus.on('focus', ({ id, instant, viewport }) => {
+    if (!viewport) bus.emit('storage:cutaway', { active: false })
     if (!id) {
       rig.release()
       return
@@ -388,7 +396,11 @@ async function boot(): Promise<void> {
      * or picked component may request it while the pedestrian still owns the
      * transform, so stand up before the scripted rig starts its move. */
     if (walk.enabled) bus.emit('camera:mode', { mode: 'orbit' })
-    rig.focusOn(def.focus, { instant })
+    const bounds = viewport ? new THREE.Box3().setFromObject(def.object).expandByScalar(5) : null
+    if (bounds && def.labelAt) bounds.expandByPoint(new THREE.Vector3(...def.labelAt))
+    const focus = viewport && bounds ? frameLessonObject(gfx.camera, bounds, viewport,
+      id.startsWith('storage.table.') ? { ...def.focus, dir: [0.12, 1, 0.18] } : def.focus) : def.focus
+    rig.focusOn(focus, { instant })
   })
 
   // The HUD's F key asks for a mode change; the rig announces the mode it ended
