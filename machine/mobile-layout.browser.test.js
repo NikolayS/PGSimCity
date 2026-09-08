@@ -191,11 +191,19 @@ describe('machine room portrait layout', () => {
       name: 'City',
       path: '/',
       readySelector: '.control-center__sources',
+      // Make the departing boot surface overlap API publication deterministically.
+      beforeLoad: `document.addEventListener('DOMContentLoaded', () => {
+        document.getElementById('boot').style.transition = 'opacity 5s, visibility 0s 5s'
+      })`,
       prepare: `(async () => {
-        for (let attempt = 0; attempt < 120 && !window.PGSIMCITY; attempt += 1) {
+        const ready = () => {
+          const boot = document.getElementById('boot')
+          return window.PGSIMCITY && (!boot || getComputedStyle(boot).visibility === 'hidden')
+        }
+        for (let attempt = 0; attempt < 200 && !ready(); attempt += 1) {
           await new Promise((resolve) => setTimeout(resolve, 100))
         }
-        if (!window.PGSIMCITY) throw new Error('city API did not become ready')
+        if (!ready()) throw new Error('city API and boot retirement did not become ready')
       })()`,
     }, {
       name: 'Diagnose',
