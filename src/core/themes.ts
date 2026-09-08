@@ -703,7 +703,9 @@ interface Stone {
   hi: number
 }
 
-/* Exact material keys win over the district prefix they start with. */
+/* Lit mineral facades need reflectance headroom above the unlit paving shader.
+ * Darker foundations remain grounded; semantic paint bypasses this table.
+ * Exact material keys win over the district prefix they start with. */
 const STONE: Record<string, Stone> = {
   /* --- the excavation is earth, not a building ------------------------- */
   'ground.pitWall': { h: 26, s: 0.16, lo: 0.2, hi: 0.42 },
@@ -715,27 +717,27 @@ const STONE: Record<string, Stone> = {
    * within a few degrees, so a nominally 10-degree gap can measure as three
    * and two quarters collapse into each other again. */
   // outside the server: pale sand, the softest quarter.
-  clients: { h: 20, s: 0.1, lo: 0.52, hi: 0.72 },
+  clients: { h: 20, s: 0.1, lo: 0.67, hi: 0.88 },
   // pg_wal: ochre sandstone. The one properly warm quarter, and the amber
   // district — the only place where stone and meaning share a family.
-  wal: { h: 42, s: 0.2, lo: 0.48, hi: 0.7 },
+  wal: { h: 42, s: 0.2, lo: 0.64, hi: 0.85 },
   // backend towers: pale straw plaster, so the window bands sit on something.
-  backends: { h: 64, s: 0.09, lo: 0.52, hi: 0.74 },
+  backends: { h: 64, s: 0.09, lo: 0.68, hi: 0.9 },
   // the maintenance yard: painted works grey-green, an industrial finish.
-  maint: { h: 106, s: 0.1, lo: 0.45, hi: 0.65 },
+  maint: { h: 106, s: 0.1, lo: 0.63, hi: 0.85 },
   // the data directory: cool poured concrete with the faintest green in it.
-  storage: { h: 150, s: 0.08, lo: 0.46, hi: 0.68 },
+  storage: { h: 150, s: 0.08, lo: 0.65, hi: 0.87 },
   // replication: cool slate — this quarter reads as machinery.
-  rep: { h: 196, s: 0.1, lo: 0.45, hi: 0.67 },
+  rep: { h: 196, s: 0.1, lo: 0.63, hi: 0.85 },
   // shared memory: cool white precast. The brightest structure in the city.
-  shmem: { h: 226, s: 0.06, lo: 0.56, hi: 0.76 },
+  shmem: { h: 226, s: 0.06, lo: 0.7, hi: 0.92 },
   // the planner: the least coloured stone anywhere, a bare trace of lilac.
-  planner: { h: 268, s: 0.07, lo: 0.48, hi: 0.68 },
+  planner: { h: 268, s: 0.07, lo: 0.65, hi: 0.87 },
   // continuity: old limestone gone grey-mauve with iron. The oldest-looking
   // quarter, which suits the district that keeps the archive.
-  continuity: { h: 316, s: 0.09, lo: 0.48, hi: 0.7 },
+  continuity: { h: 316, s: 0.09, lo: 0.65, hi: 0.86 },
   // access paths and index halls: dusty brick.
-  access: { h: 352, s: 0.11, lo: 0.44, hi: 0.66 },
+  access: { h: 352, s: 0.11, lo: 0.62, hi: 0.84 },
   // the plate itself, its kerb and its masts: light structural concrete, and
   // deliberately the pavement's own hue — this is ground, not a quarter.
   ground: { h: 36, s: 0.08, lo: 0.4, hi: 0.66 },

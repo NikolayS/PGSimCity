@@ -11,6 +11,22 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+## [0.47.0] - 2026-09-08
+
+### Changed
+
+- Increase daytime mineral reflectance across the ten structural districts so
+  building faces separate more clearly from the paving. Retain district hues,
+  semantic paint, ground/foundation values and the authored night materials.
+  Local-clock materials retain their continuous day/night transition.
+
+### Scope
+
+- This is a structural-material increment, not a complete visual redesign or
+  causal-motion release. Distant phone detail, night structure visibility and
+  inherited overlay/label limitations remain. Browser-emulated checks are not
+  hardware performance measurements.
+
 ## [0.46.0] - 2026-09-08
 
 ### Changed
