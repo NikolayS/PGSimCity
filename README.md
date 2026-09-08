@@ -15,7 +15,7 @@ No installation. Runs in a browser with WebGL2.
 [![PGSimCity at golden hour: the buffer pool, backend avenue and surrounding PostgreSQL districts. Click to watch the desktop investigation demo.](docs/screenshot.png)](https://github.com/NikolayS/PGSimCity/releases/download/v0.49.0/pgsimcity-smooth-desktop.mp4)
 
 *Demo: scenario selection → investigation → page and tuple layouts.
-Recorded on v0.45.0; pacing edited and waiting accelerated. The app has evolved since.*
+Recorded across v0.45.0–v0.46.0; frame-by-frame capture, pacing edits and accelerated waiting. The app has evolved since.*
 
 [Featured in InfoQ · IBM Think · Gizmodo · GIGAZINE](#press-coverage)
 
@@ -53,6 +53,11 @@ a production monitor.
 The project is an evolving 0.x prototype, with known simplifications and tests
 against PostgreSQL behavior. See [model accuracy and limitations](docs/MODEL-ACCURACY.md)
 for the reviewed reference version, formulas and review history.
+
+PGSimCity targets the PostgreSQL 18 major line, with PostgreSQL 18.6 as its
+reviewed reference and [`REL_18_STABLE`](https://github.com/postgres/postgres/tree/REL_18_STABLE)
+as the source branch. Four review rounds are documented in the accuracy notes;
+they do not establish complete coverage or make this model an emulator.
 [Report a PostgreSQL mismatch](https://github.com/NikolayS/PGSimCity/issues/new?template=postgresql-mismatch.md).
 
 Lessons include keyboard and text-first routes; the 3D scene and first-person
@@ -97,6 +102,11 @@ Articles describe the version available when published.
 | **Standbys** (south) | Two independent walreceivers, startup processes replaying WAL, and the lag on each stream |
 | **Continuity quarter** (outer east and south) | WAL archive, base backups, point-in-time recovery, delayed replay, leader lease and rejoin machinery |
 | **Query lab** (above the backends) | Select a backend and its statement unfolds: parse → rewrite → plan → execute |
+
+> PostgreSQL 18's bulk-read strategy grows with `io_combine_limit × effective_io_concurrency`,
+> subject to caps. This city's animation uses a **fixed 32-frame ring** instead;
+> it is a historical simplification, not PostgreSQL 18's sizing rule.
+> [Model accuracy and source reference](docs/MODEL-ACCURACY.md).
 
 Colour is semantic everywhere and never decorative: **WAL is amber**, **dirty
 pages are red**, **clean pages are blue**, **vacuum is violet**, **checkpoints
