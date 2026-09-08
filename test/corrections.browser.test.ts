@@ -210,6 +210,15 @@ describe('PostgreSQL correction reports', () => {
       name: 'City',
       path: '/',
       readySelector: '.an-overlay',
+      // The overlay can exist before the debugging API is published during boot.
+      beforeLoad: `(() => {
+        let ready
+        Object.defineProperty(window, 'PGSIMCITY', {
+          configurable: true,
+          get: () => ready,
+          set: value => { setTimeout(() => { ready = value }, 1000) },
+        })
+      })()`,
       measureDisclosures: true,
       qualityLevels: QUALITY_LEVELS,
       prepareDisclosures: `(() => {
@@ -223,7 +232,11 @@ describe('PostgreSQL correction reports', () => {
         document.querySelector('.control-center').hidden = false
         document.querySelector('#hud-latency-panel').hidden = false
       })()`,
-      prepare: `(() => {
+      prepare: `(async () => {
+        for (let attempt = 0; attempt < 200 && !window.PGSIMCITY; attempt++) {
+          await new Promise(resolve => setTimeout(resolve, 100))
+        }
+        if (!window.PGSIMCITY) throw Error('City API did not become ready')
         const { sim, bus } = window.PGSIMCITY
         document.querySelector('.control-center').hidden = false
         document.querySelector('#hud-latency-panel').hidden = false
