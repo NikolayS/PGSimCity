@@ -350,16 +350,6 @@ const EDGE_MAX = 96
 /** Edge-field resolution across the plate's width. */
 const EDGE_TEX_W = 128
 
-/** x, z, base radius, height, colour — a light cone standing over each district. */
-const CONES: readonly (readonly [number, number, number, number, number])[] = [
-  [ANCHOR.walVault[0], ANCHOR.walVault[2], 34, 62, COLOR.wal],
-  [ANCHOR.checkpointer[0], ANCHOR.checkpointer[2], 26, 50, COLOR.checkpoint],
-  [ANCHOR.bgWriter[0], ANCHOR.bgWriter[2], 22, 44, COLOR.bgwriter],
-  [ANCHOR.autovacLauncher[0], ANCHOR.autovacLauncher[2], 24, 46, COLOR.vacuum],
-  [ANCHOR.postmaster[0], ANCHOR.postmaster[2], 30, 56, COLOR.postmaster],
-  [ANCHOR.standby[0], ANCHOR.standby[2], 30, 54, COLOR.replication],
-]
-
 const cssHex = (c: number) => '#' + (c >>> 0).toString(16).padStart(6, '0')
 
 /** Cool architectural white for the kerb light. Structure, not a Postgres fact. */
@@ -1092,7 +1082,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   }
 
   /* ---------------------------------------------------------------------
-   * 4. Ambient dressing — masts and light cones. A handful of draw calls.
+   * 4. Ambient dressing — peripheral masts. A handful of draw calls.
    * -------------------------------------------------------------------*/
 
   const masts = siteMasts(ring, ccw, 6)
@@ -1131,38 +1121,6 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   }
   group.userData.collisionSolids = collisionSolids
 
-  const coneLayer = new THREE.Group()
-  coneLayer.name = 'ground.lightCones'
-  for (const [cx, cz, cr, ch, col] of CONES) {
-    const g = new THREE.ConeGeometry(cr, ch, 18, 1, true)
-    geos.push(g)
-    const m = new THREE.MeshBasicMaterial({
-      color: col,
-      transparent: true,
-      opacity: 0.05,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-      forceSinglePass: true,
-    })
-    mats.push(m)
-    const cone = new THREE.Mesh(g, m)
-    cone.position.set(cx, ch / 2, cz)
-    cone.renderOrder = 2
-    cone.raycast = () => {}
-    coneLayer.add(cone)
-  }
-
-  let coneLayerAttached = false
-  function syncConeLayer(): void {
-    const next = quality.level !== 'low' && quality.level !== 'reduced'
-    if (next === coneLayerAttached) return
-    coneLayerAttached = next
-    if (next) group.add(coneLayer)
-    else group.remove(coneLayer)
-  }
-  syncConeLayer()
-
   /* ---------------------------------------------------------------------
    * 5. Registration.
    * -------------------------------------------------------------------*/
@@ -1199,14 +1157,13 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   })
 
   /* ---------------------------------------------------------------------
-   * 6. Per-frame. Two uniform writes and a handful of opacity assignments.
+   * 6. Per-frame. Ground-surface and survey uniforms.
    * -------------------------------------------------------------------*/
 
   let clock = 0
   let surfaceDetail = -1
 
   function update(dt: number, _sim: SimState, _t: number): void {
-    syncConeLayer()
     uSurveyDetail.value = groundSurveyDetail(ctx.camera.position.y)
     const daylight = atmosphere().daylight
     const nextSurfaceDetail = groundSurfaceDetail(daylight ? 'day' : 'night', quality.level)
@@ -1228,7 +1185,6 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     // The edge field is ours alone — the theme cache never saw it.
     edgeTex.dispose()
     surfaceTex.dispose()
-    coneLayer.clear()
     group.clear()
   }
 

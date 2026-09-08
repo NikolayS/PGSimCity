@@ -367,3 +367,10 @@
     transform: translate(var(--lbl-dx), var(--lbl-dy)) scale(var(--lbl-scale));
   }
 }
+
+/* Selected context stays identifiable without claiming its object is visible. */
+.lbl__occlusion:not([hidden]) {
+  display: block;
+  font-size: inherit;
+  font-weight: normal;
+}

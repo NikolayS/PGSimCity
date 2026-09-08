@@ -22,6 +22,8 @@ import {
   requestedLabelDetail,
 } from './label-detail'
 import {
+  LABEL_MIN_LEGIBLE_TYPE_PX,
+  LABEL_TYPE_PX,
   WALK_LABEL_CAP,
   WALK_LABEL_SCALE,
   labelAreaPlacementBudget,
@@ -216,6 +218,7 @@ interface Entry {
   chip: HTMLElement
   read: HTMLElement | null
   more: HTMLElement
+  occlusionNote: HTMLElement
   obj: CSS2DObject
   pos: THREE.Vector3
   /** district chips and proxies only */
@@ -374,6 +377,12 @@ export function createLabels(
       chip.appendChild(read)
     }
 
+    const occlusionNote = document.createElement('span')
+    occlusionNote.className = 'lbl__occlusion'
+    occlusionNote.textContent = 'behind structure'
+    occlusionNote.hidden = true
+    chip.appendChild(occlusionNote)
+
     // Every chip carries the collapse pill. It is display:none until it counts
     // for something, so it costs nothing and saves rebuilding the DOM later.
     const more = document.createElement('span')
@@ -400,6 +409,7 @@ export function createLabels(
       chip,
       read,
       more,
+      occlusionNote,
       obj,
       pos: new THREE.Vector3(),
       members: [],
@@ -910,6 +920,8 @@ export function createLabels(
       e.onScreen = false
       e.nextDetail = LabelDetail.Name
       e.dist = camera.position.distanceTo(e.pos)
+      const forced = e.id === selectedId || e.id === hoveredId
+      const focused = !forced && now < focusUntil && e.id === focusId
       if (walking && (e.rank < 0 || e.rank > 2 || e.proxy)) continue
       e.scale = walking
         ? WALK_LABEL_SCALE
@@ -918,6 +930,8 @@ export function createLabels(
             e.rank < 0 || isDestination(e) ? 'map' : 'component',
             viewW,
           )
+
+      if (forced || focused) e.scale = Math.max(e.scale, LABEL_MIN_LEGIBLE_TYPE_PX / LABEL_TYPE_PX)
 
       if (e.rank === 3) {
         // A destination still exists when its presentation is dormant. The
@@ -955,10 +969,7 @@ export function createLabels(
       // City and district chips are map annotations. Promoted component chips
       // speak for their whole district too, so they follow the same rule:
       // buildings occlude object labels, never the map hierarchy.
-      if (e.occluded && e.rank >= 0 && e.rank <= 2 && !e.proxy) continue
-
-      const forced = e.id === selectedId || e.id === hoveredId
-      const focused = !forced && now < focusUntil && e.id === focusId
+      if (e.occluded && e.rank >= 0 && e.rank <= 2 && !e.proxy && !forced && !focused) continue
       const centreX = sx - hw
       const centreY = sy - hh
       if (walking) {
@@ -1232,7 +1243,13 @@ export function createLabels(
         e.sinceT = now
       }
 
-      const target = e.shown && !e.occluded ? e.alpha : 0
+      const contextual = e.id === selectedId || e.id === hoveredId || (now < focusUntil && e.id === focusId)
+      const obscuredContext = e.occluded && contextual
+      if (e.occlusionNote.hidden === obscuredContext) {
+        e.occlusionNote.hidden = !obscuredContext
+        e.needMeasure = true
+      }
+      const target = e.shown && (!e.occluded || contextual) ? e.alpha : 0
       if (target > 0.01) {
         if (e.phase === 0) {
           // mount this frame, transition next frame — otherwise the element

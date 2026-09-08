@@ -107,8 +107,8 @@ describe('guided tour visibility', () => {
     expect(tokenCss).not.toMatch(/body\.pg-tour::after\s*\{/)
   })
 
-  it.each(['low', 'reduced'] as const)(
-    'detaches light-cone geometry after quality changes to %s',
+  it.each(['low', 'reduced', 'medium', 'high', 'ultra'] as const)(
+    'keeps decorative cones out of district views at %s',
     (level) => {
       installCanvasDom()
       const bus = createBus()
@@ -135,7 +135,7 @@ describe('guided tour visibility', () => {
       }
       const ground = createGround(context)
 
-      expect(coneCount(ground.group)).toBeGreaterThan(0)
+      expect(coneCount(ground.group)).toBe(0)
       quality.level = level
       ground.update(0, sim.state, sim.state.t)
       expect(coneCount(ground.group)).toBe(0)

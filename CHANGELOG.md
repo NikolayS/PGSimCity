@@ -9,6 +9,14 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## 0.55.0
+
+- Explore the buffer pool without diagonal bands painted by nonexistent uprights. Remove the fixed decorative shadow mask while preserving the real mapped shadow receiver and sampled page-state colors. Fine grid aliasing remains at city scale.
+- Keep Night district structures unobscured by decorative translucent cones, and preserve matte hemisphere/fill illumination when switching from LOW to bloom-enabled quality. Semantic lighting and model activity remain separate from structural illumination.
+- Read the backend row along a phone's vertical space instead of shrinking the entire row into a broadside strip. Authored bounds remain between the HUD and controls at narrow phone sizes; this does not guarantee every individual worker is legible from overview.
+- Retain selected, hovered and recently focused component labels behind structures, explicitly qualified as “behind structure”. Contextual labels retain a readable size at distance; ordinary occluded labels remain hidden and normal placement/viewport limits still apply.
+- No simulation mechanism changes. Saved evidence remains historical, quality does not change buffer state, and software-rendered/emulated checks do not establish device performance or universal scene readability.
+
 ## 0.54.0 — 2026-09-08
 
 - Read the city as lit architecture against a quieter stage: cool slate paving, restrained mineral district floors, warmer/cooler structural material families, and a local plate-edge spill instead of a broad luminous perimeter. Semantic state colors and district kerbs remain distinct from structural paint.

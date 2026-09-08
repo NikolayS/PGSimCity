@@ -747,18 +747,12 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     composerDepthEnabled = enabled
   }
 
-  /**
-   * At night the WAL vault and the maintenance yard are lit almost entirely by
-   * emissive neon, and their form is carried by the bloom halo around it. 'low'
-   * drops the whole post chain, which is right for a weak GPU but leaves those
-   * districts as near-black silhouettes. Paying it back with real lights costs
-   * nothing. In daylight there is no halo to lose, so the compensation is only the
-   * half-stop of hemisphere that the (barely-there) bloom would have added.
-   */
+  /* Bloom spreads semantic light in screen space; it cannot illuminate matte
+   * faces. Keep night structure at least as readable as the no-bloom tier. */
   function applyLightCompensation(): void {
     const noBloom = !quality.bloom
-    hemi.intensity = noBloom ? air.noBloomHemi : air.hemiIntensity
-    fill.intensity = noBloom ? air.noBloomFill : air.fillIntensity
+    hemi.intensity = !air.daylight ? Math.max(air.noBloomHemi, air.hemiIntensity) : noBloom ? air.noBloomHemi : air.hemiIntensity
+    fill.intensity = !air.daylight ? Math.max(air.noBloomFill, air.fillIntensity) : noBloom ? air.noBloomFill : air.fillIntensity
     walGlow.intensity = noBloom ? air.noBloomWalGlow : air.walGlow
     yardGlow.intensity = noBloom ? air.noBloomYardGlow : air.yardGlow
   }

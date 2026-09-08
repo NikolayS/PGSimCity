@@ -50,8 +50,8 @@ export function labelAreaPlacementBudget(viewportWidth: number): number {
 }
 
 /** Ordinary label type and its smallest readable rendered size, in CSS pixels. */
-const LABEL_TYPE_PX = 11
-const LABEL_MIN_LEGIBLE_TYPE_PX = 11
+export const LABEL_TYPE_PX = 11
+export const LABEL_MIN_LEGIBLE_TYPE_PX = 11
 export const LABEL_NEAR_SCALE = 1.5
 const LABEL_FAR_NATURAL_SCALE = 0.78
 

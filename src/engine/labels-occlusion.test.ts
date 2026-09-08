@@ -1,7 +1,11 @@
 import * as THREE from 'three'
 import { describe, expect, it } from 'vitest'
 import { createCollisionWorld } from './collision'
-import { LABEL_OCCLUSION_BUDGET, isLabelAnchorOccluded } from './labels'
+import { installTestDom } from '../../test/dom'
+import { Registry } from '../core/registry'
+import { createBus } from '../core/bus'
+import { createSim } from '../sim/model'
+import { createLabels, LABEL_OCCLUSION_BUDGET, isLabelAnchorOccluded } from './labels'
 
 describe('floating label occlusion', () => {
   it('hides an object label only when a solid box lies before its anchor', () => {
@@ -31,4 +35,35 @@ describe('floating label occlusion', () => {
   it('amortises visibility work to three object labels per frame', () => {
     expect(LABEL_OCCLUSION_BUDGET).toBe(3)
   })
+})
+
+
+it.each([60, 900])('retains qualified selected context at distance %s, then hides it on deselect', distance => {
+  const dom = installTestDom()
+  const container = dom.document.createElement('div')
+  dom.document.body.appendChild(container)
+  const registry = new Registry(), bus = createBus(), sim = createSim(bus)
+  const object = new THREE.Group()
+  registry.register({ id: 'test.component', name: 'Selected component', role: 'test', kind: 'process',
+    district: 'backends', object, tier: 1, labelAt: [0, 0, 0], color: 0x00ffff,
+    focus: { target: [0, 0, 0], distance: 40 } })
+  const labels = createLabels(container as unknown as HTMLElement, registry, bus, { occluded: () => true })
+  labels.resize(1280, 900)
+  const camera = new THREE.PerspectiveCamera(50, 1280 / 900, 0.1, 2000)
+  camera.position.set(0, 20, distance); camera.lookAt(0, 0, 0); camera.updateMatrixWorld()
+  const tick = () => { for (let i = 0; i < 12; i++) labels.update(0.2, camera, sim.state) }
+  tick()
+  bus.emit('select', { id: 'test.component' }); tick()
+  const label = (labels.group.children.find(o => (o as THREE.Object3D & { element?: HTMLElement }).element?.dataset.id === 'test.component') as THREE.Object3D & { element: HTMLElement }).element
+  expect(label.classList.contains('is-on')).toBe(true)
+  expect(label.textContent).toContain('behind structure')
+  expect((label.querySelector('.lbl__occlusion') as HTMLElement).hidden).toBe(false)
+  bus.emit('select', { id: null }); tick()
+  expect(label.classList.contains('is-on')).toBe(false)
+  expect((label.querySelector('.lbl__occlusion') as HTMLElement).hidden).toBe(true)
+  for (const child of labels.group.children) {
+    const element = (child as THREE.Object3D & { element: HTMLElement }).element
+    Object.defineProperty(element, 'ownerDocument', { value: { defaultView: { Element: element.constructor } } })
+  }
+  labels.dispose()
 })

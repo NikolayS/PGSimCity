@@ -11,8 +11,8 @@ it('keeps phone metrics and normal district focuses inside the visible city spac
         await new Promise(r=>setTimeout(r,500));const p=PGSIMCITY;
         const vitals=document.querySelector('.hud-vitals');
         const readings={width:innerWidth,vitalsWidth:vitals.clientWidth,vitalsContent:vitals.scrollWidth,focuses:[]};
-        for(const [id,min,max] of [['wal.vault',[152,0,-70],[184,29,70]],['shared.buffers',[-47,-3,-47],[47,12,47]]]) {
-          p.bus.emit('focus',{id,instant:true});await new Promise(r=>setTimeout(r,350));p.gfx.camera.updateMatrixWorld();
+        for(let [id,min,max] of [['wal.vault',[152,0,-70],[184,29,70]],['shared.buffers',[-47,-3,-47],[47,12,47]],['backend.row',[-128,0, -98],[128,69,-80]]]) {
+          if(id==='backend.row'){min=p.registry.get(id).focusBounds.min;max=p.registry.get(id).focusBounds.max;}p.bus.emit('focus',{id,instant:true});await new Promise(r=>setTimeout(r,350));p.gfx.camera.updateMatrixWorld();
           const top=document.querySelector('#hud-top').getBoundingClientRect().bottom,bottom=document.querySelector('#hud-bottom').getBoundingClientRect().top;
           const points=[];for(const x of [min[0],max[0]])for(const y of [min[1],max[1]])for(const z of [min[2],max[2]]) {
             const v=p.gfx.camera.position.clone().set(x,y,z).project(p.gfx.camera);points.push({x:(v.x+1)*innerWidth/2,y:(1-v.y)*innerHeight/2});
@@ -28,9 +28,9 @@ it('keeps phone metrics and normal district focuses inside the visible city spac
   for (const state of reports[0]) {
     expect(state.vitalsContent).toBeLessThanOrEqual(state.vitalsWidth + 1)
     for (const focus of state.focuses) {
-      if (focus.id === 'wal.vault') {
+      if (focus.id === 'wal.vault' || focus.id === 'backend.row') {
         const span = Math.max(...focus.points.map(p => p.y)) - Math.min(...focus.points.map(p => p.y));
-        expect(span / (focus.bottom - focus.top), 'portrait WAL uses vertical reading space').toBeGreaterThan(0.5);
+        expect(span / (focus.bottom - focus.top), focus.id + ' uses vertical reading space').toBeGreaterThan(0.5);
       }
     }
     for (const focus of state.focuses) for (const p of focus.points) {

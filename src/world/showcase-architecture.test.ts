@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createBus } from '../core/bus'
-import { createTheme } from '../core/theme'
+import { createTheme, setThemeMode } from '../core/theme'
 import type { WorldFactory } from '../core/types'
 import { createSim } from '../sim/model'
 import { installTestDom } from '../../test/dom'
@@ -11,11 +11,11 @@ import { ANCHOR, CITY, walSegZ } from './layout'
 
 const dispose: (() => void)[] = []
 afterEach(() => { while (dispose.length) dispose.pop()!() })
-function fixture(factory: WorldFactory) {
+function fixture(factory: WorldFactory, level: 'low' | 'high' = 'low') {
   installTestDom({ canvas2d: true })
   const bus = createBus(), sim = createSim(bus), theme = createTheme()
   const module = factory({ scene: new THREE.Scene(), camera: new THREE.PerspectiveCamera(), bus,
-    sim: sim.state, theme, quality: { level: 'low', pixelRatio: 1, bloom: false, shadows: false,
+    sim: sim.state, theme, quality: { level, pixelRatio: 1, bloom: false, shadows: false,
       maxParticles: 1, maxLabels: 1, antialias: false }, register: () => {}, flow: () => {} })
   dispose.push(() => { module.dispose?.(); theme.dispose() })
   module.setDetail?.(0)
@@ -24,6 +24,23 @@ function fixture(factory: WorldFactory) {
 }
 
 describe('city-scale architectural hierarchy', () => {
+  it('does not paint simulated shadows from nonexistent uprights across buffer state', () => {
+    const module = fixture(createShmem, 'high')
+    expect(module.group.getObjectByName('shmem.rakingShadows')).toBeUndefined()
+    const receiver = module.group.getObjectByName('shmem.tileShadows') as THREE.InstancedMesh
+    expect(receiver.material).toBeInstanceOf(THREE.ShadowMaterial)
+    expect(receiver.receiveShadow).toBe(true)
+    expect(receiver.castShadow).toBe(false)
+    setThemeMode('day', { persist: false })
+    expect(receiver.visible).toBe(true)
+    setThemeMode('night', { persist: false })
+    expect(receiver.visible).toBe(false)
+    const lowReceiver = fixture(createShmem).group.getObjectByName('shmem.tileShadows')!
+    setThemeMode('day', { persist: false })
+    expect(lowReceiver.visible).toBe(false)
+    setThemeMode('night', { persist: false })
+  })
+
   it('gives WAL an open peaked skyline without roofing over the segment bays', () => {
     const module = fixture(createWal)
     const roof = module.group.getObjectByName('wal.vault.trusses')

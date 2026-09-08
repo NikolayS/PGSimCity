@@ -234,33 +234,6 @@ function tileZ(idx: number): number {
   return -HALF_GRID + Math.floor(idx / G) * PITCH
 }
 
-/**
- * Sparse tile mask beneath four virtual north-edge uprights. The direction is
- * the ground projection of the daylight key, so this catch reads as the same
- * long cast shadow as the real shadow map on lit materials.
- */
-export function rakingShadowTileIndices(): Uint16Array {
-  const selected: number[] = []
-  const origins = [-70, -56, -42, -28] as const
-  const dx = 0.633
-  const dz = 0.774
-  for (let i = 0; i < N; i++) {
-    const x = tileX(i)
-    const z = tileZ(i)
-    const fromNorth = z + HALF_GRID
-    for (let origin = 0; origin < origins.length; origin++) {
-      const fromWest = x - origins[origin]
-      const along = fromWest * dx + fromNorth * dz
-      const across = Math.abs(fromWest * dz - fromNorth * dx)
-      if (along >= 0 && across < 2.5) {
-        selected.push(i)
-        break
-      }
-    }
-  }
-  return Uint16Array.from(selected)
-}
-
 function setColor3(arr: Float32Array, i: number, r: number, g: number, b: number): void {
   const o = i * 3
   arr[o] = r
@@ -836,53 +809,19 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
   tileShadows.raycast = () => {}
   tileShadows.userData.pgNoShadow = true
   tileShadows.userData.pgShadowReceiver = true
-  /*
-   * MeshBasic tile colour must remain unlit to preserve its data meaning. The
-   * real ShadowMaterial above catches any mapped occlusion; this second sparse
-   * skin carries the same north-west → south-east shadow rhythm across gaps
-   * where the live page towers have no lit receiver.
-   */
-  const rakeIndices = rakingShadowTileIndices()
-  const rakeSlotByTile = new Int16Array(N).fill(-1)
-  for (let i = 0; i < rakeIndices.length; i++) rakeSlotByTile[rakeIndices[i]] = i
-  const mRakeShadow = keep(
-    new THREE.MeshBasicMaterial({
-      color: 0x2f4b68,
-      transparent: true,
-      opacity: 0.42,
-      depthWrite: false,
-      polygonOffset: true,
-      polygonOffsetFactor: -3,
-      polygonOffsetUnits: -3,
-    }),
-  )
-  mRakeShadow.name = 'shmem.rakingShadow'
-  mRakeShadow.userData.pgTheme = true
-  const rakeShadows = new THREE.InstancedMesh(gTileShadow, mRakeShadow, rakeIndices.length)
-  rakeShadows.name = 'shmem.rakingShadows'
-  rakeShadows.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
-  rakeShadows.frustumCulled = false
-  rakeShadows.castShadow = false
-  rakeShadows.receiveShadow = false
-  rakeShadows.raycast = () => {}
-  rakeShadows.userData.pgNoShadow = true
-  rakeShadows.renderOrder = 3
   const tileShadowLayer = new THREE.Group()
   tileShadowLayer.name = 'shmem.tileShadowLayer'
   tileShadowLayer.userData.pgDayOnly = true
   tileShadowLayer.visible = false
   tileShadowLayer.add(tileShadows)
-  tileShadowLayer.add(rakeShadows)
   bufGroup.add(tileShadowLayer)
   const tileShadowMat = tileShadows.instanceMatrix.array as Float32Array
-  const rakeShadowMat = rakeShadows.instanceMatrix.array as Float32Array
   let shadowTilesActive = false
   let shadowQuality = ctx.quality.level
   const applyTileShadowTier = (): void => {
     shadowTilesActive =
       atmosphere().daylight && (shadowQuality === 'high' || shadowQuality === 'ultra')
     tileShadows.visible = shadowTilesActive
-    rakeShadows.visible = shadowTilesActive
   }
   const offTileShadowTheme = onThemeMode(applyTileShadowTier)
   const offTileShadowQuality = ctx.bus.on('quality', ({ level }) => {
@@ -1619,19 +1558,6 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
           1,
           TILE * 0.98,
         )
-        const rakeSlot = rakeSlotByTile[i]
-        if (rakeSlot >= 0) {
-          setTRS(
-            rakeShadowMat,
-            rakeSlot,
-            tileX(i),
-            y + 0.04,
-            tileZ(i),
-            TILE * 0.98,
-            1,
-            TILE * 0.98,
-          )
-        }
       }
 
       if (isPinned && nPins < MAX_PINS) {
@@ -1659,7 +1585,6 @@ export const createShmem: WorldFactory = (ctx: WorldContext): WorldModule => {
     tiles.instanceColor!.needsUpdate = true
     if (shadowTilesActive) {
       tileShadows.instanceMatrix.needsUpdate = true
-      rakeShadows.instanceMatrix.needsUpdate = true
     }
     pins.count = nPins
     if (nPins > 0) pins.instanceMatrix.needsUpdate = true
