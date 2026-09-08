@@ -11,6 +11,7 @@ import {
   type VacuumAction, type VacuumCause, type VacuumEvidenceId,
   type VacuumLessonMode, type VacuumReading,
 } from './vacuum-lesson-state'
+import { vacuumIndicatorSpace } from './vacuum-city-state'
 import { el, setText } from './uikit'
 import type { UiContext, UiModule } from './uikit'
 
@@ -31,7 +32,7 @@ export interface VacuumLessonOptions {
 
 const TABLE = 'storage.table.sessions'
 const CHECKPOINT_LABELS: Record<VacuumCheckpointKind, string> = {
-      pinned: 'Snapshot retained', released: 'Snapshot released',
+      pinned: 'Snapshot retained', constrained: 'Horizon-limited pass observed', released: 'Snapshot released',
       eligible: 'Cleanup horizon advanced', collected: 'Sessions collection observed',
     }
 
@@ -233,7 +234,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
   })
   const causal = el('section', { class: 'vacuum-lesson__causal' },
     el('h3', { text: 'Causal checkpoints' }),
-    el('p', { text: 'Pause at an observation: retained snapshot → release → eligibility → sessions collection. Each advance searches at most 900 model s in 0.1 s steps. Cancel keeps the reached state. The city displays sampled states, not a replay of every intermediate event.' }),
+    el('p', { text: 'Pause at an observation: retained snapshot → horizon-limited pass → release → eligibility → sessions collection. Each advance searches at most 900 model s in 0.1 s steps. Cancel keeps the reached state. The city displays sampled states, not a replay of every intermediate event.' }),
     seekButton, seekStatus, savedContext, checkpointList,
   )
 
@@ -266,7 +267,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
             refresh()
           } },
         }),
-        el('button', { type: 'button', class: 'pg-btn', text: 'Explain pages and row versions',
+        el('button', { type: 'button', class: 'pg-btn', text: 'Explain current pages and row versions',
           data: { vacuumCheckpointPage: c.kind }, on: { click: () => {
             stopSeeking()
             ctx.bus.emit('anatomy:open', { view: 'page', id: TABLE })
@@ -282,7 +283,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
         : journey.status === 'cancelled' ? `Cancelled after ${journey.advanced.toFixed(1)} model s. The model stays at the reached state.`
           : journey.status === 'unavailable' ? 'Advance stopped: the model resumed or the scenario changed.'
             : journey.status === 'observed' ? 'Observation reached. Inspect the saved checkpoint before advancing or choosing an intervention.'
-              : 'Checkpoints are saved for this attempt, not across reloads. Advancing pauses the model and preserves your notes.')
+              : 'Before intervening, advance again to observe a horizon-limited pass. Checkpoints are saved for this attempt, not across reloads. Advancing pauses the model and preserves your notes.')
   }
 
   const panel = el('section', {
@@ -343,7 +344,8 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     const claimsBottom = width <= 640 ? document.getElementById('city-version-provenance')?.getBoundingClientRect().bottom ?? 0 : 0
     const top = Math.max(toolbarBottom, claimsBottom) + 32
     const bottom = document.getElementById('hud-bottom')?.getBoundingClientRect().top ?? height - 100
-    const indicatorSpace = id === TABLE || id.startsWith('autovac.worker.') ? 90 : 0
+    const indicatorSpace = id === TABLE || id.startsWith('autovac.worker.')
+      ? vacuumIndicatorSpace(top, (width <= 640 ? rect.top : bottom) - 16) : 0
     const viewport = width <= 640
       ? { left: -1 + 32 / width, right: 1 - 32 / width, top: 1 - 2 * top / height, bottom: 1 - 2 * (rect.top - 16 - indicatorSpace) / height }
       : { left: -1 + 32 / width, right: 2 * (rect.left - 16) / width - 1, top: 1 - 2 * top / height, bottom: 1 - 2 * (bottom - 16 - indicatorSpace) / height }

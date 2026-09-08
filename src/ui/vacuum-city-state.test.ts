@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest'
 import { createBus } from '../core/bus'
 import { createSim } from '../sim/model'
-import { vacuumCityReading } from './vacuum-city-state'
+import { vacuumCityReading, vacuumIndicatorSpace } from './vacuum-city-state'
 
 it('distinguishes current sessions work, horizon constraints and actual collection', () => {
   const sim = createSim(createBus(), { scheduledBackups: false })
@@ -30,4 +30,10 @@ it('distinguishes current sessions work, horizon constraints and actual collecti
   expect(vacuumCityReading(sim.state).collected).toBe(true)
   w.table = table; w.phase = 'return'
   expect(vacuumCityReading(sim.state).workerId).toBeNull()
+})
+
+it('reserves an indicator only when the city also retains useful vertical space', () => {
+  expect(vacuumIndicatorSpace(140, 330)).toBe(0)
+  expect(vacuumIndicatorSpace(140, 340)).toBe(90)
+  expect(vacuumIndicatorSpace(140, 844)).toBe(90)
 })

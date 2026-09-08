@@ -16,6 +16,10 @@ it('traverses real checkpoints with keyboard control and retained notes', async 
       const click = selector => { const b=document.querySelector(selector); if(!b || b.disabled)throw Error('Unavailable '+selector); b.click() }
       await wait(()=>document.querySelector('[data-checkpoint="pinned"]'))
       const pinned=document.querySelector('[data-checkpoint="pinned"]').textContent
+      click('[data-vacuum-seek]')
+      await wait(()=>document.querySelector('[data-checkpoint="constrained"]'))
+      const ti=PGSIMCITY.sim.state.tables.findIndex(t=>t.def.id==='sessions');
+      if(!PGSIMCITY.sim.state.autovac.workers.some(w=>w.active&&w.table===ti&&w.stalledByHorizon))throw Error('No actual constrained sessions worker')
       for(const id of ['table','worker','snapshot','owner']){click('[data-vacuum-evidence="'+id+'"]');click('[data-vacuum-record]')}
       click('[data-vacuum-cause="snapshot"]')
       click('[data-vacuum-action="terminate"]')
@@ -30,7 +34,7 @@ it('traverses real checkpoints with keyboard control and retained notes', async 
     })()`)
   })
   expect(reports[0].phase).toBe('complete')
-  expect(reports[0].kinds).toEqual(['pinned','released','eligible','collected'])
+  expect(reports[0].kinds).toEqual(['pinned','constrained','released','eligible','collected'])
   expect(reports[0].pinnedRetained).toBe(true)
   expect(reports[0].eligible).toContain('0 versions reclaimed')
   expect(reports[0].notes).toBe('Keep this evidence')

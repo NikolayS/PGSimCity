@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { UiContext, UiModule } from '../ui/uikit'
 import { el, setText } from '../ui/uikit'
-import { vacuumCityReading } from '../ui/vacuum-city-state'
+import { vacuumCityReading, vacuumIndicatorSpace } from '../ui/vacuum-city-state'
 import '../styles/vacuum-city-indicator.css'
 
 /* A screen-readable annotation with explicit leaders to real scene objects.
@@ -10,8 +10,9 @@ export function createVacuumCityIndicator(ctx: UiContext, camera: THREE.Perspect
   isOpen: () => boolean): UiModule {
   const count = el('strong')
   const work = el('span')
+  const title = el('span', { class: 'vacuum-city-indicator__title' })
   const badge = el('div', { class: 'vacuum-city-indicator__badge' },
-    el('span', { class: 'vacuum-city-indicator__title', text: 'LIVE CITY · sessions' }), count, work)
+    title, count, work)
   const root = el('div', { class: 'vacuum-city-indicator', hidden: true }, badge)
   const tableDot = el('div', { class: 'vacuum-city-indicator__dot', data: { vacuumCityAnchor: 'table' } })
   const workerDot = el('div', { class: 'vacuum-city-indicator__dot vacuum-city-indicator__dot--worker', data: { vacuumCityAnchor: 'worker' } })
@@ -23,7 +24,7 @@ export function createVacuumCityIndicator(ctx: UiContext, camera: THREE.Perspect
   const center = new THREE.Vector3()
   const bounds = new THREE.Box3()
   let cutaway = false
-  const offCutaway = ctx.bus.on('storage:cutaway', ({ active }) => { cutaway = active; refreshIn = 0 })
+  const offCutaway = ctx.bus.on('storage:cutaway', ({ active }) => { cutaway = active; refreshIn = 0; if (!active) root.hidden = true })
   let measured = false
   let refreshIn = 0
 
@@ -41,9 +42,9 @@ export function createVacuumCityIndicator(ctx: UiContext, camera: THREE.Perspect
   }
 
   return {
-    update(dt) {
+    update(dt, elapsed = dt) {
       if (!isOpen()) { root.hidden = true; return }
-      refreshIn -= dt
+      refreshIn -= elapsed
       if (refreshIn > 0) return
       refreshIn = 0.2
       const panel = document.querySelector<HTMLElement>('.vacuum-lesson')
@@ -56,14 +57,17 @@ export function createVacuumCityIndicator(ctx: UiContext, camera: THREE.Perspect
       const phone = innerWidth <= 640
       const left = 16
       const right = phone ? innerWidth - 16 : rect.left - 16
-      const top = (document.getElementById('hud-top')?.getBoundingClientRect().bottom ?? 70) + 12
-      const bottom = phone ? rect.top - 8 : (document.getElementById('hud-bottom')?.getBoundingClientRect().top ?? innerHeight - 100) - 8
+      const hudBottom = document.getElementById('hud-top')?.getBoundingClientRect().bottom ?? 70
+      const claimsBottom = phone ? document.getElementById('city-version-provenance')?.getBoundingClientRect().bottom ?? 0 : 0
+      const top = Math.max(hudBottom, claimsBottom) + 32
+      const bottom = phone ? rect.top - 16 : (document.getElementById('hud-bottom')?.getBoundingClientRect().top ?? innerHeight - 100) - 16
       const width = Math.min(380, right - left)
-      if (width < 180 || bottom - top < 110) { root.hidden = true; return }
+      if (width < 180 || !vacuumIndicatorSpace(top, bottom)) { root.hidden = true; return }
       const live = vacuumCityReading(ctx.sim.state)
       root.hidden = false
       root.dataset.collected = String(live.collected)
       root.dataset.constrained = String(live.constrained)
+      setText(title, `LIVE CITY · sessions · snapshot ${live.pinned ? 'retained' : 'released'}`)
       setText(count, live.collection)
       setText(work, live.work)
       badge.style.width = `${width}px`

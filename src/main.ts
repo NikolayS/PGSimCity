@@ -399,9 +399,13 @@ async function boot(): Promise<void> {
      * transform, so stand up before the scripted rig starts its move. */
     if (walk.enabled) bus.emit('camera:mode', { mode: 'orbit' })
     const bounds = viewport ? new THREE.Box3().setFromObject(def.object).expandByScalar(5) : null
+    if (bounds && id.startsWith('autovac.worker.')) {
+      const table = registry.get('storage.table.sessions')
+      if (table) bounds.union(new THREE.Box3().setFromObject(table.object))
+    }
     if (bounds && def.labelAt) bounds.expandByPoint(new THREE.Vector3(...def.labelAt))
     const focus = viewport && bounds ? frameLessonObject(gfx.camera, bounds, viewport,
-      id.startsWith('storage.table.') ? { ...def.focus, dir: [0.12, 1, 0.18] } : def.focus) : def.focus
+      id.startsWith('storage.table.') || id.startsWith('autovac.worker.') ? { ...def.focus, dir: [0.12, 1, 0.18] } : def.focus) : def.focus
     rig.focusOn(focus, { instant })
   })
 

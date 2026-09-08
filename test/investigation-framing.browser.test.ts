@@ -11,22 +11,28 @@ it('frames live storage outside the notebook and restores the hidden layers', as
         const p=PGSIMCITY,wait=()=>new Promise(r=>setTimeout(r,300));
         document.querySelector('.hud-investigate').click();p.sim.setKnob('paused',true);await wait();
         document.querySelector('[data-vacuum-evidence="table"]').click();await wait();
+        for(let i=0;i<120&&document.querySelector('.vacuum-city-indicator').hidden;i++)await new Promise(r=>setTimeout(r,100));
         const panel=document.querySelector('.vacuum-lesson').getBoundingClientRect();
         const claims=document.querySelector('#city-version-provenance').getBoundingClientRect();
         const def=p.registry.get('storage.table.sessions'),mesh=def.object.children.find(c=>c.geometry);
         mesh.geometry.computeBoundingBox();const box=mesh.geometry.boundingBox.clone().setFromObject(def.object);
-        const points=[];for(const x of [box.min.x,box.max.x])for(const y of [box.min.y,box.max.y])for(const z of [box.min.z,box.max.z]){
+        const project=()=>{const points=[];for(const x of [box.min.x,box.max.x])for(const y of [box.min.y,box.max.y])for(const z of [box.min.z,box.max.z]){
           const v=def.object.position.clone().set(x,y,z).project(p.gfx.camera);points.push({x:(v.x+1)*innerWidth/2,y:(1-v.y)*innerHeight/2,z:v.z});
-        }
+        }return points};const points=project();
         const layers=['shmem','os.cache','storage.durability'].map(n=>p.gfx.scene.getObjectByName(n));
         const indicator=document.querySelector('.vacuum-city-indicator'),badge=indicator.querySelector('.vacuum-city-indicator__badge').getBoundingClientRect();
         const liveVisible=!indicator.hidden&&badge.bottom<=panel.top-4;
         const hidden=layers.every(o=>!o.visible),notice=document.querySelector('.vacuum-lesson__scene').textContent;
+        const ti=p.sim.state.tables.findIndex(t=>t.def.id==='sessions');
+        for(let i=0;i<3000&&!p.sim.state.autovac.workers.some(w=>w.active&&w.table===ti&&w.phase==='scan_heap');i++)p.sim.advance(.1);
+        document.querySelector('[data-vacuum-evidence="worker"]').click();
+        document.querySelector('[data-vacuum-evidence="worker"]').click();await wait();
+        const workerPoints=project();
         const clock=p.sim.state.scenarioT;document.querySelector('#vacuum-personal-notes').value='Retain this note';
         document.querySelector('[data-vacuum-evidence="snapshot"]').click();
         const restored=layers.every(o=>o.visible),notes=document.querySelector('#vacuum-personal-notes').value,sameTime=p.sim.state.scenarioT===clock;
         document.querySelector('[data-vacuum-evidence="table"]').click();document.querySelector('.vacuum-lesson__close').click();
-        return {liveVisible,width:innerWidth,height:innerHeight,panel:{left:panel.left,top:panel.top},claimsBottom:claims.bottom,points,hidden,notice,restored,notes,closedRestored:layers.every(o=>o.visible),sameTime};
+        return {workerPoints,liveVisible,width:innerWidth,height:innerHeight,panel:{left:panel.left,top:panel.top},claimsBottom:claims.bottom,points,hidden,notice,restored,notes,closedRestored:layers.every(o=>o.visible),sameTime};
       })()`))
     }
     return states
@@ -39,7 +45,7 @@ it('frames live storage outside the notebook and restores the hidden layers', as
     expect(report.closedRestored).toBe(true)
     expect(report.notes).toBe('Retain this note')
     expect(report.sameTime).toBe(true)
-    for (const point of report.points) {
+    for (const point of [...report.points, ...report.workerPoints]) {
       expect(point.x).toBeGreaterThan(0)
       expect(point.x).toBeLessThan(report.width)
       expect(point.y).toBeGreaterThan(0)

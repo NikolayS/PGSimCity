@@ -1,6 +1,6 @@
 import type { SimApi } from '../core/types'
 
-export type VacuumCheckpointKind = 'pinned' | 'released' | 'eligible' | 'collected'
+export type VacuumCheckpointKind = 'pinned' | 'constrained' | 'released' | 'eligible' | 'collected'
 export interface VacuumCheckpoint {
   readonly kind: VacuumCheckpointKind
   readonly time: number
@@ -31,7 +31,10 @@ export function createVacuumObservation(sim: SimApi) {
     let kind: VacuumCheckpointKind | undefined
     const previous = checkpoints.at(-1)
     if (!previous && state.knobs.longRunningXact && owner.phase === 'ready') kind = 'pinned'
-    else if (previous?.kind === 'pinned' && !state.knobs.longRunningXact) kind = 'released'
+    else if ((previous?.kind === 'pinned' || previous?.kind === 'constrained') && !state.knobs.longRunningXact) kind = 'released'
+    else if (previous?.kind === 'pinned' && state.knobs.longRunningXact
+      && state.autovac.workers.some(w => w.active && w.table === tableIndex && w.stalledByHorizon
+        && w.phase !== 'travel' && w.phase !== 'return' && w.phase !== 'idle')) kind = 'constrained'
     else if (previous?.kind === 'released' && !state.knobs.longRunningXact
       && state.xminHorizon > checkpoints[0].horizon) kind = 'eligible'
     else if (previous?.kind === 'eligible' && !state.knobs.longRunningXact

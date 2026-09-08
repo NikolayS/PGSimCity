@@ -1,6 +1,10 @@
 import type { SimState } from '../core/types'
 import { fmtNum } from '../core/util'
 
+export function vacuumIndicatorSpace(top: number, bottom: number): number {
+  return bottom - top >= 200 ? 90 : 0
+}
+
 /** Current table-specific facts, never inferred from landfill or saved cards. */
 export function vacuumCityReading(state: SimState) {
   const table = state.tables.findIndex(t => t.def.id === 'sessions')
@@ -11,6 +15,7 @@ export function vacuumCityReading(state: SimState) {
   const reclaimed = decision?.kind === 'vacuum-blockade' ? decision.sessionsReclaimedAfterRelease : 0
   return {
     workerId: worker ? `autovac.worker.${slot}` : null,
+    pinned: state.knobs.longRunningXact,
     constrained: !!worker?.stalledByHorizon,
     collected: reclaimed > 0,
     work: worker
