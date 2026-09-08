@@ -178,6 +178,7 @@ const TRACE_FETCH_DUR = 0.05
 const MVCC_SAMPLE_SECONDS = 3
 /** Most sub-steps one update() call may run, so a huge delta cannot stall the tab. */
 const MAX_STEPS = 20
+export const MODEL_ADVANCE_MAX_SECONDS = STEP_MAX * MAX_STEPS
 const IDLE_REAP = 22
 const MIB = 1024 * 1024
 /** Per-standby physical stream capacity in unstretched model bytes per second. */
@@ -8792,7 +8793,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
   function advanceModel(dt: number, wallTime: boolean): number {
     if (!isFinite(dt) || dt <= 0) return 0
-    const d = Math.min(dt, STEP_MAX * MAX_STEPS)
+    const d = Math.min(dt, MODEL_ADVANCE_MAX_SECONDS)
     if (wallTime) state.realT += d / Math.max(0.05, K.timeScale)
     const steps = d > maxStep ? Math.ceil(d / maxStep) : 1
     const sd = d / steps

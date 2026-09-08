@@ -1,7 +1,7 @@
 import { BUILD_SHA, BUILD_VERSION } from '../core/build'
 import { DEFAULT_KNOBS } from '../core/types'
 import type { Bus, BusEvents, Knobs, ScenarioChoiceId, SimApi } from '../core/types'
-import { simulationReplayConfiguration } from './model'
+import { MODEL_ADVANCE_MAX_SECONDS, simulationReplayConfiguration } from './model'
 import { SCENARIOS } from './scenarios'
 
 export const REPLAY_MAX_TICKS = 54_000
@@ -28,7 +28,7 @@ export interface ReplayRecord {
   modelVersion: string
   seed: number
   ticks: number
-  steps: { count: number; dt: number }[]
+  steps: { count: number; dt: number; kind?: 'advance' }[]
   actions: ReplayAction[]
 }
 
@@ -157,15 +157,17 @@ function validateRecord(value: unknown): ReplayRecord {
   let seconds = 0
   for (const entry of item.steps) {
     const run = object(entry)
-    fields(run, ['count', 'dt'])
+    fields(run, ['count', 'dt', 'kind'])
+    if (run.kind !== undefined && run.kind !== 'advance') throw new Error('Invalid replay step kind')
     const n = integer(run.count, 1, REPLAY_MAX_TICKS, 'step count')
     if (typeof run.dt !== 'number' || !Number.isFinite(run.dt) || run.dt <= 0 || run.dt > MAX_DELTA) {
       throw new Error('Invalid replay step duration')
     }
+    if (run.kind === 'advance' && run.dt > MODEL_ADVANCE_MAX_SECONDS) throw new Error('Invalid deliberate replay duration')
     count += n
     seconds += n * run.dt
     if (count > ticks || seconds > MAX_MODEL_SECONDS + 1e-7) throw new Error('Replay duration limit exceeded')
-    steps.push({ count: n, dt: run.dt })
+    steps.push({ count: n, dt: run.dt, ...(run.kind === 'advance' ? { kind: 'advance' as const } : {}) })
   }
   if (count !== ticks) throw new Error('Replay step count does not match ticks')
   const actions: ReplayAction[] = []
@@ -209,6 +211,7 @@ export function createIncidentReplay(
   const original = { ...sim }
   const originalEmit = bus.emit
   const durations = new Float64Array(REPLAY_MAX_TICKS)
+  const deliberateTicks = new Uint8Array(REPLAY_MAX_TICKS)
   const log: ReplayAction[] = []
   const status: ReplayStatus = {
     tick: 0, actionCount: 0, totalTicks: 0, valid: true, reason: '', seeking: false, advancing: false, seekProgress: 0,
@@ -291,20 +294,23 @@ export function createIncidentReplay(
     }
   }
 
-  function advance(dt: number): void {
-    if (Number.isFinite(dt) && dt > 0 && !sim.state.knobs.paused) {
-      if (status.valid) {
-        branch()
-        if (status.tick >= REPLAY_MAX_TICKS || dt > MAX_DELTA || elapsed + dt > MAX_MODEL_SECONDS + 1e-7) {
-          invalidate('Replay duration limit reached; reset to record another incident')
-        } else {
-          durations[status.tick] = dt
-          elapsed += dt
-          status.totalTicks++
-        }
+  function recordTick(dt: number, deliberate: boolean): void {
+    if (status.valid) {
+      branch()
+      if (status.tick >= REPLAY_MAX_TICKS || dt > MAX_DELTA || elapsed + dt > MAX_MODEL_SECONDS + 1e-7) {
+        invalidate('Replay duration limit reached; reset to record another incident')
+      } else {
+        durations[status.tick] = dt
+        deliberateTicks[status.tick] = deliberate ? 1 : 0
+        elapsed += dt
+        status.totalTicks++
       }
-      status.tick++
     }
+    status.tick++
+  }
+
+  function advance(dt: number): void {
+    if (Number.isFinite(dt) && dt > 0 && !sim.state.knobs.paused) recordTick(dt, false)
     busy++
     try { original.update(dt) } finally { busy-- }
   }
@@ -314,7 +320,7 @@ export function createIncidentReplay(
     busy++
     try {
       const advanced = original.advance(seconds)
-      if (advanced > 0) invalidate('Unsupported replay action: advance; reset to record another incident')
+      if (advanced > 0) recordTick(Math.min(seconds, MODEL_ADVANCE_MAX_SECONDS), true)
       return advanced
     } finally { busy-- }
   }
@@ -406,7 +412,10 @@ export function createIncidentReplay(
         if (disposed) throw new Error('Replay controller was disposed during rewind')
         while (at < target.actionCount && log[at].tick === tick) apply(log[at++])
         if (tick === target.tick) break
-        original.update(durations[tick])
+        if (deliberateTicks[tick]) {
+          const consumed = original.advance(durations[tick])
+          if (Math.abs(consumed - durations[tick]) > 1e-9) throw new Error('Invalid deliberate replay step')
+        } else original.update(durations[tick])
         elapsed += durations[tick]
         status.seekProgress = (tick + 1) / Math.max(1, target.tick)
         if ((tick + 1) % SEEK_BATCH === 0) await new Promise<void>((resolve) => setTimeout(resolve, 0))
@@ -514,8 +523,8 @@ export function createIncidentReplay(
       const steps: ReplayRecord['steps'] = []
       for (let tick = 0; tick < status.tick; tick++) {
         const previous = steps[steps.length - 1]
-        if (previous && previous.dt === durations[tick]) previous.count++
-        else steps.push({ count: 1, dt: durations[tick] })
+        if (previous && previous.dt === durations[tick] && (previous.kind === 'advance') === !!deliberateTicks[tick]) previous.count++
+        else steps.push({ count: 1, dt: durations[tick], ...(deliberateTicks[tick] ? { kind: 'advance' as const } : {}) })
       }
       const record: ReplayRecord = {
         version: 2, modelVersion: REPLAY_MODEL_VERSION, seed, ticks: status.tick, steps,
@@ -531,6 +540,7 @@ export function createIncidentReplay(
       let tick = 0
       for (const run of record.steps) {
         durations.fill(run.dt, tick, tick + run.count)
+        deliberateTicks.fill(run.kind === 'advance' ? 1 : 0, tick, tick + run.count)
         tick += run.count
       }
       log.length = 0

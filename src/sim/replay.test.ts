@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createBus } from '../core/bus'
-import { createSim } from './model'
+import { createSim, MODEL_ADVANCE_MAX_SECONDS } from './model'
 import { SCENARIOS } from './scenarios'
 import {
   createIncidentReplay,
@@ -17,19 +17,42 @@ function run(sim: ReturnType<typeof createSim>, steps: number): void {
 }
 
 describe('deliberate model stepping during replay recording', () => {
-  it('refuses an incomplete recording without blocking the paused learner step', () => {
+  it('round-trips mixed frame and deliberate ticks without inventing wall time', async () => {
     const { sim, replay } = incident()
+    run(sim, 7)
     sim.setKnob('paused', true)
-    const before = sim.state.t
-    const realBefore = sim.state.realT
-    expect(sim.advance(0.1)).toBeCloseTo(0.1)
-    expect(sim.state.t).toBeCloseTo(before + 0.1)
-    expect(sim.state.realT).toBe(realBefore)
+    const prefix = replay.checkpoint()
+    const prefixState = structuredClone(sim.state)
+    for (let i = 0; i < 1100; i++) expect(sim.advance(0.1)).toBeCloseTo(0.1)
+    expect(sim.state.realT).toBe(prefixState.realT)
     expect(sim.state.knobs.paused).toBe(true)
-    expect(replay.status.valid).toBe(false)
-    expect(() => replay.exportRecord()).toThrow('advance')
-    replay.reset()
     expect(replay.status.valid).toBe(true)
+    const expected = structuredClone(sim.state)
+    const record = replay.exportRecord()
+    expect(record.ticks).toBe(1107)
+    expect(record.actions).toHaveLength(1)
+    expect(record.steps).toEqual([{ count: 7, dt: STEP }, { count: 1100, dt: 0.1, kind: 'advance' }])
+    await replay.loadRecord(record)
+    expect(sim.state).toEqual(expected)
+    await replay.rewind(prefix)
+    expect(sim.state).toEqual(prefixState)
+    replay.dispose()
+  })
+
+  it('records the bounded duration actually consumed and ignores no-op steps', async () => {
+    const { sim, replay } = incident()
+    expect(sim.advance(0.1)).toBe(0)
+    expect(replay.status.tick).toBe(0)
+    sim.setKnob('paused', true)
+    expect(sim.advance(NaN)).toBe(0)
+    const actual = sim.advance(100)
+    const record = replay.exportRecord()
+    expect(actual).toBeCloseTo(MODEL_ADVANCE_MAX_SECONDS)
+    expect(record.steps).toEqual([{ count: 1, dt: MODEL_ADVANCE_MAX_SECONDS, kind: 'advance' }])
+    const expected = structuredClone(sim.state)
+    await replay.loadRecord(record)
+    expect(sim.state).toEqual(expected)
+    replay.dispose()
   })
 })
 
