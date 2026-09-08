@@ -2096,3 +2096,15 @@ body {
   .flow-architecture__component-detail { font-size: 9px; }
   .flow-trace-stage__label { font-size: 9px; }
 }
+
+/* Incident continuity and measurement qualifications must survive both themes. */
+.incident-context {
+  color: #152b40;
+  background: #f8fafc;
+  padding: 10px 12px;
+  border: 1px solid #7890a5;
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.incident-context .staged__t { color: inherit; font-size: inherit; }

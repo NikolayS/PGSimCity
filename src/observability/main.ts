@@ -230,7 +230,7 @@ const skipLink = el('a', {
   },
 })
 root.replaceChildren(skipLink, top, mainBody)
-const incidentNotice = el('p', { class: 'rail__note', text: linkedIncident
+const incidentNotice = el('p', { class: 'rail__note incident-context', text: linkedIncident
   ? 'Linked city incident: symptoms inspect this model without staging another workload. Diagnostic counters and rate windows start on arrival; the incident clock and model state continue. These are not PostgreSQL measurements. Query flow and Machine use separate, opt-in PGlite databases.'
   : 'This is a separate diagnostic model. Query flow and Machine use separate, opt-in PGlite databases.' })
 
@@ -327,7 +327,7 @@ function buildRail(): void {
 
   railBody.replaceChildren(
     railHeading('Where does it hurt?'),
-    el('p', { class: 'rail__note', text: linkedIncident
+    el('p', { class: 'rail__note incident-context', text: linkedIncident
       ? 'Pick a complaint to inspect the linked city incident. No replacement workload is staged.'
       : 'Pick a complaint. The model is put into a state that produces it, and you are walked to the column that proves it.' }),
     symptomList,
@@ -932,7 +932,7 @@ function stagedBanner(sc: Extract<Screen, { kind: 'console' }>): HTMLElement {
   })
   return el(
     'div',
-    { class: 'staged' },
+    { class: linkedIncident ? 'staged incident-context' : 'staged' },
     el('span', { class: 'staged__k', text: linkedIncident ? 'LINKED INCIDENT' : 'STAGED' }),
     el('span', { class: 'staged__t', text: incidentDiagnosticCaption(linkedIncident, def?.name) }),
     sc.trail.length ? backBtn : null,
