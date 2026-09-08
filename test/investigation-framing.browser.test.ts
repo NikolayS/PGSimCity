@@ -32,14 +32,14 @@ it('frames live storage outside the notebook and restores the hidden layers', as
         document.querySelector('[data-vacuum-evidence="snapshot"]').click();
         const restored=layers.every(o=>o.visible),notes=document.querySelector('#vacuum-personal-notes').value,sameTime=p.sim.state.scenarioT===clock;
         document.querySelector('[data-vacuum-evidence="table"]').click();document.querySelector('.vacuum-lesson__close').click();
-        return {workerPoints,liveVisible,width:innerWidth,height:innerHeight,panel:{left:panel.left,top:panel.top},claimsBottom:claims.bottom,points,hidden,notice,restored,notes,closedRestored:layers.every(o=>o.visible),sameTime};
+        return {badgeBottom:badge.bottom, indicatorHidden:indicator.hidden, workerPoints,liveVisible,width:innerWidth,height:innerHeight,panel:{left:panel.left,top:panel.top},claimsBottom:claims.bottom,points,hidden,notice,restored,notes,closedRestored:layers.every(o=>o.visible),sameTime};
       })()`))
     }
     return states
   })
   for (const report of reports[0]) {
     expect(report.hidden).toBe(true)
-    if (report.width <= 640) expect(report.liveVisible).toBe(true)
+    if (report.width <= 640) expect(report.liveVisible, JSON.stringify(report)).toBe(true)
     expect(report.notice).toContain('not removed from the model')
     expect(report.restored).toBe(true)
     expect(report.closedRestored).toBe(true)

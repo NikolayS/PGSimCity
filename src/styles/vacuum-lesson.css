@@ -252,8 +252,13 @@ body.pg-vacuum-lesson .tour-narrate {
   .vacuum-lesson {
     inset: auto calc(8px + var(--safe-r)) var(--vacuum-bottom, calc(122px + var(--safe-b))) calc(8px + var(--safe-l));
     width: auto;
-    max-height: min(calc(42dvh - var(--safe-b)), calc(100dvh - var(--vacuum-top, 78px) - var(--vacuum-bottom, 122px)));
+    display: block;
+    overflow: auto;
+    overscroll-behavior: contain;
+    max-height: min(calc(42dvh - var(--safe-b)), calc(100dvh - var(--vacuum-top, 78px) - var(--vacuum-bottom, 122px)), max(180px, calc(100dvh - var(--vacuum-city-top, 330px) - var(--vacuum-bottom, 122px))));
   }
+
+  .vacuum-lesson__body { overflow: visible; }
 
   .vacuum-lesson__head,
   .vacuum-lesson__body {

@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { applyBoxBevelDetail, pairBoxGeometries } from '../core/beveled-box'
-import { installBoxBakeVariants, disposeBakedIndirect } from './baked-light'
+import { bakeSceneIndirect, installBoxBakeVariants, disposeBakedIndirect } from './baked-light'
 import { describe, expect, it } from 'vitest'
 
 import { DAY_PALETTE } from '../core/themes'
@@ -147,5 +147,28 @@ describe('baked box detail ownership', () => {
     }
     disposeBakedIndirect(mesh)
     pair.plain.dispose(); pair.beveled.dispose(); mesh.material.dispose()
+  })
+})
+
+
+describe('offline rebake canonical geometry', () => {
+  it('reproduces fresh geometry signatures and transport after an installed clone or LOW detail', () => {
+    const pair = pairBoxGeometries(8, 6, 4)
+    const scene = new THREE.Scene()
+    const mesh = new THREE.InstancedMesh(pair.beveled, new THREE.MeshStandardMaterial(), 1)
+    mesh.setMatrixAt(0, new THREE.Matrix4())
+    scene.add(mesh)
+    const fresh = bakeSceneIndirect(scene)
+    expect(fresh.entries).toHaveLength(1)
+    mesh.geometry = pair.beveled.clone()
+    mesh.userData.pgBakeOriginalGeometry = pair.beveled
+    const rebaked = bakeSceneIndirect(scene)
+    expect(rebaked.entries).toEqual(fresh.entries)
+    expect(rebaked.base64).toEqual(fresh.base64)
+    applyBoxBevelDetail(scene, 'low')
+    const low = bakeSceneIndirect(scene)
+    expect(low.entries).toEqual(fresh.entries)
+    expect(low.base64).toEqual(fresh.base64)
+    expect(mesh.geometry).toBe(pair.beveled)
   })
 })

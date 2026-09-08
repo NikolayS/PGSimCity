@@ -304,6 +304,10 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     if (!opened) return
     const bottom = document.getElementById('hud-top')?.getBoundingClientRect().bottom ?? 0
     panel.style.setProperty('--vacuum-top', `${Math.max(78, Math.ceil(bottom) + 12)}px`)
+    // Phone city annotations need 200px above the notebook, plus the same
+    // 32px top / 16px bottom margins used by the camera and live indicator.
+    const claimsBottom = document.getElementById('city-version-provenance')?.getBoundingClientRect().bottom ?? 0
+    panel.style.setProperty('--vacuum-city-top', `${Math.ceil(Math.max(bottom, claimsBottom)) + 252}px`)
     const dock = document.getElementById('hud-bottom')?.getBoundingClientRect()
     const dockClearance = dock?.height ? window.innerHeight - dock.top + 8 : 122
     panel.style.setProperty('--vacuum-bottom', `${Math.max(82, Math.ceil(dockClearance))}px`)
@@ -317,6 +321,8 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
   if (toolbar) toolbarObserver?.observe(toolbar)
   const dock = document.getElementById('hud-bottom')
   if (dock) toolbarObserver?.observe(dock)
+  const provenance = document.getElementById('city-version-provenance')
+  if (provenance) toolbarObserver?.observe(provenance)
   window.addEventListener('resize', reposition)
 
   function announce(text: string): void { setText(announcement, text) }

@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { applyBoxBevelDetail } from '../core/beveled-box'
 
 import type { ColorKey } from '../core/types'
 import { BOUNCE_PALETTE_KEYS } from '../core/themes'
@@ -619,6 +620,11 @@ function bytesToBase64(bytes: Uint8Array): string {
 
 export function bakeSceneIndirect(root: THREE.Object3D): BakedLightPayload {
   const started = performance.now()
+  // Offline authoring is destructive: remove installed transport and restore the
+  // canonical authored detail before hashing/sampling. Runtime clones lose the
+  // custom BoxGeometry type, and LOW uses a different vertex layout.
+  disposeBakedIndirect(root)
+  applyBoxBevelDetail(root, 'high')
   const meshes = bakedMeshes(root)
   const occluders = gatherOccluders(root)
   const owners = targetOwnerMap(root)
