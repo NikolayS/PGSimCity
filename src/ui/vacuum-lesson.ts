@@ -17,7 +17,7 @@ import type { UiContext, UiModule } from './uikit'
 
 export interface VacuumLessonModule extends UiModule {
   open(mode?: VacuumLessonMode): void
-  close(): void
+  close(stopScenario?: boolean, restoreTiming?: boolean): void
   isOpen(): boolean
 }
 

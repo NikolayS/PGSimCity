@@ -340,7 +340,7 @@ function vitalHistory(key: VitalKey, s: SimState): number[] {
  * FACTORY
  * ========================================================================*/
 
-export function createHud(ctx: UiContext, options: { onInvestigate?: () => void; onReplay?: () => void; onExport?: () => void } = {}): UiModule {
+export function createHud(ctx: UiContext, options: { onInvestigate?: () => void; onCampaign?: () => void; onReplay?: () => void; onExport?: () => void } = {}): UiModule {
   const bus = ctx.bus
   const looseBus = bus
   const sim = ctx.sim
@@ -506,6 +506,10 @@ export function createHud(ctx: UiContext, options: { onInvestigate?: () => void;
     icon('diagnose', 15),
     el('span', { text: 'Investigate' }),
   ) : null
+  const campaignBtn = options.onCampaign ? el('button', {
+    class: 'pg-btn hud-tool hud-campaign', type: 'button', text: 'Campaign',
+    'aria-label': 'Open the WAL operations campaign', on: { click: options.onCampaign },
+  }) : null
   const replayBtn = options.onReplay ? el('button', {
     class: 'pg-btn hud-tool hud-replay', type: 'button', text: 'Replay',
     title: 'Save a checkpoint, rewind, and compare model decisions',
@@ -679,6 +683,7 @@ export function createHud(ctx: UiContext, options: { onInvestigate?: () => void;
     viewBtn,
     tourBtn,
     investigateBtn,
+    campaignBtn,
     replayBtn,
     exportBtn,
     traceBtn,

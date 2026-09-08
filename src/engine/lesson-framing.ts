@@ -35,3 +35,12 @@ export function frameLessonObject(
   center.addScaledVector(right, -cx * distance * tanX).addScaledVector(up, -cy * distance * tanY)
   return { target: center.toArray(), distance, dir: direction.toArray() }
 }
+
+/** Authored architecture bounds avoid parked/hidden instance transforms. */
+export function lessonObjectBounds(object: THREE.Object3D,
+  authored?: { min: [number, number, number]; max: [number, number, number] },
+): THREE.Box3 {
+  return authored
+    ? new THREE.Box3(new THREE.Vector3(...authored.min), new THREE.Vector3(...authored.max))
+    : new THREE.Box3().setFromObject(object)
+}

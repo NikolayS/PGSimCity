@@ -1299,6 +1299,7 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
     object: gVault,
     tier: 0,
     focus: { target: [VX, 8, 0], distance: 132, dir: [-0.82, 0.5, -0.28] },
+    focusBounds: { min: [VX - 16, 0, -VAULT_Z - 4], max: [VX + 16, 24, VAULT_Z + 4] },
     labelAt: [VX, 22, 0],
     color: COLOR.wal,
     readout: (s: SimState) => {

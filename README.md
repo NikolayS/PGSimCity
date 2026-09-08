@@ -200,6 +200,22 @@ Press **`?`** in the city for the city control map and colour legend.
 | `Esc` | Close the topmost overlay |
 | `1` – `8` | Jump to a district: clients, backends, buffer pool, WAL, storage, query lab, maintenance, standby |
 
+### WAL operations campaign
+
+Choose **Campaign**, or open the [required-standby case](https://nikolays.github.io/PGSimCity/#campaign/slot-pressure/guided) and the [retired-consumer challenge](https://nikolays.github.io/PGSimCity/#campaign/retired-slot/challenge).
+Opening preserves the city; **Reset city and start** explicitly creates a fresh
+case and clears replay history. Record ownership and live pressure, intervene,
+then observe and verify recovery. Explain why the same slot operation has a
+different trade-off when the consumer must return versus when it is retired.
+
+Observation advances at most 300 model seconds per request and can be stopped.
+Slot removal releases one retention requirement; physical WAL reclamation waits
+for checkpoint completion and other retainers. Completion records an observed
+model result, not a graded explanation or measured learning gain. Only bounded
+case-completion identifiers persist locally; notes/evidence stay in this attempt
+and are discarded when switching cases. **Clear local completion history**
+removes that record. Storage failure leaves session-only progress usable.
+
 ### Replay and compare an incident
 
 Choose **Replay**, then **Save checkpoint** before an intervention. Observe an

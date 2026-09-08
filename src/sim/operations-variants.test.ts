@@ -38,6 +38,21 @@ describe('operations variants: ownership changes the WAL decision', () => {
     expect(sim.state.disasterRecovery.archive.writesBlocked).toBe(false)
   })
 
+  it('retains physical WAL files after slot drop until checkpoint completion', () => {
+    const sim = staged('retired-slot')
+    const bytes = sim.state.disasterRecovery.archive.pgWalBytes
+    const checkpoints = sim.state.checkpoint.count
+    expect(sim.chooseScenario('drop-replication-slot')).toBe(true)
+    sim.update(.1)
+    expect(sim.state.checkpoint.count).toBe(checkpoints)
+    expect(sim.state.disasterRecovery.archive.pgWalBytes).toBeGreaterThanOrEqual(bytes)
+    expect(sim.state.scenarioDecision?.phase).not.toBe('recovered')
+    for (let i = 0; i < 2400 && sim.state.scenarioDecision?.phase !== 'recovered'; i++) sim.update(.1)
+    expect(sim.state.checkpoint.count).toBeGreaterThan(checkpoints)
+    expect(sim.state.disasterRecovery.archive.pgWalBytes).toBeLessThan(bytes)
+    expect(sim.state.scenarioDecision?.phase).toBe('recovered')
+  })
+
   it('treats extra capacity as containment, not resolution of retired retention', () => {
     const sim = staged('retired-slot')
     expect(sim.chooseScenario('add-wal-capacity')).toBe(true)

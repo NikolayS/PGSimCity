@@ -1710,6 +1710,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   let flushDur = 0
   let flushBytes = 0
   let archT = 0
+  let walFilesCheckpoint = ckpt.count
   let archiveNextSeg = 0
   let archiveInFlight = -1
   let archiveRetryT = 0
@@ -3257,11 +3258,16 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       slotHold = Math.max(slotHold, wal.insertLsn - rep.logicalSlotLsn)
     }
     const archiveHold = Math.max(0, wal.insertLsn - archiveNextSeg * WAL_SEG)
-    wal.segmentCount = clamp(
+    const requiredSegments = clamp(
       Math.ceil(Math.max(sinceRedo, slotHold, archiveHold) / WAL_SEG) + 3,
       N_WAL_SEG_SLOTS,
       512,
     )
+    // A released slot/archiver requirement makes files eligible, not removed.
+    // Physical occupancy may shrink only after a completed checkpoint.
+    wal.segmentCount = ckpt.count > walFilesCheckpoint
+      ? requiredSegments : Math.max(wal.segmentCount, requiredSegments)
+    walFilesCheckpoint = ckpt.count
     dr.archive.pgWalBytes = wal.segmentCount * WAL_SEG
     if (!dr.archive.writesBlocked && dr.archive.pgWalBytes >= dr.archive.pgWalCapacityBytes) {
       dr.archive.writesBlocked = true
@@ -9100,6 +9106,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
     ckpt.numRequested = 0
     ckpt.numDone = 0
     ckpt.count = 0
+    walFilesCheckpoint = 0
     ckpt.redoLsn = lsn0
     ckpt.completedRedoLsn = lsn0
     // Both pointers, or the first tick reports a 26-billion-byte pg_wal.

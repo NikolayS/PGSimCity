@@ -1461,6 +1461,8 @@ export interface ComponentDef {
   /** Pickable root. Raycasting uses its descendants. */
   object: THREE.Object3D
   focus: FocusSpec
+  /** Stable architectural bounds, excluding hidden animation instances. */
+  focusBounds?: { min: [number, number, number]; max: [number, number, number] }
   /** world position for the floating label; defaults to focus.target */
   labelAt?: [number, number, number]
   /**

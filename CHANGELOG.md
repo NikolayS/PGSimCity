@@ -9,6 +9,15 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## 0.52.0 — 2026-09-08
+
+- Follow a WAL operations campaign across two ownership contexts: a required standby with validated temporary headroom, and a confirmed retired consumer whose inactive slot no longer serves a recovery requirement. Record live pressure and authored ownership constraints, choose an operation, and verify actual model recovery before completion.
+- Observe in cancellable requests of up to 300 model seconds. Fresh starts and retries explicitly reset the city and replay history; closing preserves the reached state, and reopening retains the current attempt. Saved evidence remains historical, not a live reading or rewind.
+- Keep only two allowlisted completion identifiers in versioned local storage, with clear and unavailable-storage behavior. Direct guided/challenge routes contain no incident payloads; aggregate campaign events exclude notes and replay data. Explanations are not graded, and completion is not a measured learning gain.
+- Make released WAL retention distinct from reclaimed files: physical pg_wal occupancy can fall only after checkpoint completion. Slot removal and archive progress alone do not synchronously shrink occupancy.
+- Frame the WAL architecture in the available desktop/phone city space using stable building bounds, excluding hidden animation instances. Scope campaign keyboard input without swallowing releases, and disable model operations during replay reconstruction.
+- Limits: this is a scaled model with authored ownership and capacity assumptions, not a PostgreSQL measurement or universal operational recommendation. Notes and evidence remain in the attempt only; changing cases discards them. Local completion is separate from exact-build replay records. This is a two-case WAL campaign, not coverage of every operational mechanism or a district-wide graphics redesign.
+
 ## 0.51.0 — 2026-09-08
 
 - Record and reconstruct bounded, exact-build incidents from a seeded model, allowlisted actions and frame or deliberately paused model steps. Rewind to a saved checkpoint, change the intervention and compare qualified outcomes at the original model duration.

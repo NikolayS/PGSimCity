@@ -4,6 +4,8 @@ import './styles/tokens.css'
 import './styles/ui.css'
 
 import { startAnalytics, trackVacuumLessonProgress } from './core/analytics'
+import { createOperationsCampaign } from './ui/operations-campaign'
+import { campaignRoute, trackCampaignProgress } from './core/operations-campaign'
 import { installLessonRoutes } from './core/lesson-route'
 import { createBus } from './core/bus'
 import { CLAIM_VALUES } from './core/claims'
@@ -30,7 +32,7 @@ import type { ComponentDef, FlowRequest, QualitySettings, WorldContext, WorldMod
 
 import { createRenderer } from './engine/renderer'
 import { createCameraRig } from './engine/camera'
-import { frameLessonObject } from './engine/lesson-framing'
+import { frameLessonObject, lessonObjectBounds } from './engine/lesson-framing'
 import { createStorageCutaway } from './engine/storage-cutaway'
 import { createFlows } from './engine/flows'
 import { createRoads } from './engine/roads'
@@ -332,18 +334,25 @@ async function boot(): Promise<void> {
   const vacuumLesson = createVacuumLesson(uiCtx, {
     onProgress: ({ event, mode }) => trackVacuumLessonProgress(analytics, { event, mode }),
   })
+  const campaign = createOperationsCampaign(uiCtx, {
+    beforeOpen: () => vacuumLesson.close(false, false),
+    canMutate: () => !replay.status.seeking && !replay.status.advancing,
+    onProgress: value => trackCampaignProgress(analytics, value),
+  })
   const replayPanel = createReplayPanel(uiCtx, replay)
   const presentation = createPresentationExport(uiCtx, gfx, () => replay.compare(),
     () => !replay.status.seeking && !replay.status.advancing)
   const ui: UiModule[] = [
     vacuumLesson,
+    campaign,
     createVacuumCityIndicator(uiCtx, gfx.camera, () => vacuumLesson.isOpen()),
     replayPanel,
     presentation,
     createHud(uiCtx, {
-      onInvestigate: () => vacuumLesson.open(),
-      onReplay: () => replayPanel.open(),
-      onExport: () => presentation.open(),
+      onInvestigate: () => { campaign.close(); vacuumLesson.open() },
+      onCampaign: () => campaign.open(),
+      onReplay: () => { campaign.close(); replayPanel.open() },
+      onExport: () => { campaign.close(); presentation.open() },
     }),
     createTouchpad({ bus, walk }),
     controlCenter,
@@ -375,7 +384,7 @@ async function boot(): Promise<void> {
     createHelp(uiCtx),
     createControls(uiCtx),
     createInspector(uiCtx),
-    createTour(uiCtx, { onInvestigate: () => vacuumLesson.open() }),
+    createTour(uiCtx, { onInvestigate: () => { campaign.close(); vacuumLesson.open() } }),
     createSearch(uiCtx),
     createCityWords(uiCtx),
     /* Right-click. The camera gave up that button when rotation moved to
@@ -434,7 +443,7 @@ async function boot(): Promise<void> {
      * or picked component may request it while the pedestrian still owns the
      * transform, so stand up before the scripted rig starts its move. */
     if (walk.enabled) bus.emit('camera:mode', { mode: 'orbit' })
-    const bounds = viewport ? new THREE.Box3().setFromObject(def.object).expandByScalar(5) : null
+    const bounds = viewport ? lessonObjectBounds(def.object, def.focusBounds).expandByScalar(5) : null
     if (bounds && id.startsWith('autovac.worker.')) {
       const table = registry.get('storage.table.sessions')
       if (table) bounds.union(new THREE.Box3().setFromObject(table.object))
@@ -596,8 +605,14 @@ async function boot(): Promise<void> {
     location: window.location,
     target: window,
   })
+  const syncCampaignRoute = (): void => {
+    const route = campaignRoute(window.location.hash)
+    if (route) campaign.open(route.variant, route.mode)
+  }
+  window.addEventListener('hashchange', syncCampaignRoute)
+  syncCampaignRoute()
   const stopLessonRoutes = installLessonRoutes({
-    target: window, location: window.location, open: (mode) => vacuumLesson.open(mode),
+    target: window, location: window.location, open: (mode) => { campaign.close(); vacuumLesson.open(mode) },
   })
   const stopIncidentNavigation = installCityIncidentNavigation({
     replay, bus, context: incoming.kind === 'ready' ? incoming.value.context : undefined,
@@ -632,6 +647,7 @@ async function boot(): Promise<void> {
     offAudioToggle()
     stopCityComponentRoutes()
     stopLessonRoutes()
+    window.removeEventListener('hashchange', syncCampaignRoute)
     stopIncidentNavigation()
     stopIncidentCacheGuard()
     stopAnalytics()
