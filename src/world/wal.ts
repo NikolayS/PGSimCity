@@ -391,7 +391,7 @@ export const createWal: WorldFactory = (ctx: WorldContext): WorldModule => {
     surface: false,
   })
   const neonWhite = theme.neon(0xffffff, 1)
-  const lineInk = theme.line(COLOR.inkDim, 0.19)
+  const lineInk = theme.line(COLOR.inkDim, 0.19, 'structure')
 
   const unitBox = theme.box(1, 1, 1)
   const unitCyl = theme.cyl(0.5, 0.5, 1, 12)

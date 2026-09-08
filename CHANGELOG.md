@@ -9,6 +9,14 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## 0.54.0 — 2026-09-08
+
+- Read the city as lit architecture against a quieter stage: cool slate paving, restrained mineral district floors, warmer/cooler structural material families, and a local plate-edge spill instead of a broad luminous perimeter. Semantic state colors and district kerbs remain distinct from structural paint.
+- Keep construction outlines subordinate to facades while preserving the stronger lines that explain tablespace and index relationships. Theme switches retain those material roles.
+- Expose the live sampled buffer columns through the district paving instead of covering them with a tinted plane. The surrounding deck keeps its district identity; this is a rendering correction, not a change to buffer state. Portrait WAL focus uses the vertical reading space while retaining its whole authored bounds.
+- Apply the actual requested key-light strength on first daylight entry, Day/Night round trips and local-clock changes. Previously the key moved and changed color but retained its construction-time night intensity. Rebalanced direct/ambient lighting uses the existing light rig and quality costs.
+- Preserve model-sampled activity, reduced-motion markers, investigation evidence, replay/comparison/export and campaign behavior; this release adds no simulation mechanism. Rendered software/emulated checks are not named-device performance measurements or proof that all visual-design work is finished.
+
 ## 0.53.0 — 2026-09-08
 
 - Read a coherent working-city skyline: taller backend process towers, open-gabled WAL architecture, and a deeper buffer deck that leaves the sampled basin open. Structural silhouettes survive LOW detail; updated indirect-light data follows the geometry.

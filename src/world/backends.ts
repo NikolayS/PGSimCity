@@ -224,7 +224,7 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
     emissive: 0x0e1728,
   })
   const neonWhite = theme.neon(0xffffff, 1)
-  const lineInk = theme.line(COLOR.inkDim, 0.2)
+  const lineInk = theme.line(COLOR.inkDim, 0.2, 'structure')
 
   const unitBox = theme.box(1, 1, 1)
   const unitCyl = theme.cyl(0.5, 0.5, 1, 10)

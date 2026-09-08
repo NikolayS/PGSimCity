@@ -27,6 +27,12 @@ it('keeps phone metrics and normal district focuses inside the visible city spac
   console.log(JSON.stringify(reports))
   for (const state of reports[0]) {
     expect(state.vitalsContent).toBeLessThanOrEqual(state.vitalsWidth + 1)
+    for (const focus of state.focuses) {
+      if (focus.id === 'wal.vault') {
+        const span = Math.max(...focus.points.map(p => p.y)) - Math.min(...focus.points.map(p => p.y));
+        expect(span / (focus.bottom - focus.top), 'portrait WAL uses vertical reading space').toBeGreaterThan(0.5);
+      }
+    }
     for (const focus of state.focuses) for (const p of focus.points) {
       expect(p.x, focus.id).toBeGreaterThanOrEqual(8)
       expect(p.x, focus.id).toBeLessThanOrEqual(state.width - 8)

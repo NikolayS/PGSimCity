@@ -461,8 +461,12 @@ async function boot(): Promise<void> {
       if (table) bounds.union(new THREE.Box3().setFromObject(table.object))
     }
     if (bounds && def.labelAt) bounds.expandByPoint(new THREE.Vector3(...def.labelAt))
+    // A broadside vault fits a phone's width but wastes most of its height.
+    const destinationFocus = !viewport && gfx.camera.aspect < 0.8 && id === 'wal.vault'
+      ? { ...def.focus, dir: [-0.28, 0.8, -0.75] as [number, number, number] }
+      : def.focus
     const focus = visibleViewport && bounds ? frameLessonObject(gfx.camera, bounds, visibleViewport,
-      id.startsWith('storage.table.') || id.startsWith('autovac.worker.') ? { ...def.focus, dir: [0.12, 1, 0.18] } : def.focus) : def.focus
+      id.startsWith('storage.table.') || id.startsWith('autovac.worker.') ? { ...def.focus, dir: [0.12, 1, 0.18] } : destinationFocus) : destinationFocus
     rig.focusOn(focus, { instant })
   })
 

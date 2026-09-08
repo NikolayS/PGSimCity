@@ -1536,7 +1536,7 @@ export interface ThemeApi {
   /** cached emissive/neon material (unlit, bloom-friendly) */
   neon(color: number, intensity?: number, opts?: NeonOpts): THREE.MeshBasicMaterial
   /** cached line material for blueprint edges */
-  line(color: number, opacity?: number): THREE.LineBasicMaterial
+  line(color: number, opacity?: number, role?: 'structure' | 'semantic'): THREE.LineBasicMaterial
   /** wireframe edge overlay for a mesh geometry */
   edges(geo: THREE.BufferGeometry, color: number, opacity?: number): THREE.LineSegments
   /** canvas-backed text texture (for decals on floors/walls) */

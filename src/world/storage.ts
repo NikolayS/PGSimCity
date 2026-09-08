@@ -634,7 +634,7 @@ export const createStorage: WorldFactory = (ctx: WorldContext): WorldModule => {
   const edgeAttr = new THREE.BufferAttribute(edgePos, 3)
   edgeAttr.setUsage(THREE.DynamicDrawUsage)
   gEdges.setAttribute('position', edgeAttr)
-  const heapEdges = new THREE.LineSegments(gEdges, theme.line(COLOR.gridBright, 0.34))
+  const heapEdges = new THREE.LineSegments(gEdges, theme.line(COLOR.gridBright, 0.34, 'structure'))
   heapEdges.frustumCulled = false
   heapEdges.raycast = () => {}
   heapGroup.add(heapEdges)

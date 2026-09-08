@@ -426,7 +426,7 @@ export const createReplication: WorldFactory = (ctx: WorldContext): WorldModule 
   /** The standby is the same architecture, one shade colder and quieter. */
   const matCool = theme.mat('rep.cool', { color: 0x1c2740, roughness: 0.78, metalness: 0.26, emissive: 0x050810 })
   const neonWhite = theme.neon(0xffffff, 1)
-  const lineInk = theme.line(COLOR.inkDim, 0.17)
+  const lineInk = theme.line(COLOR.inkDim, 0.17, 'structure')
 
   const unitBox = theme.box(1, 1, 1)
   const unitCyl = theme.cyl(0.5, 0.5, 1, 12)

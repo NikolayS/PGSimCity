@@ -544,7 +544,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   const matVehicle = theme.mat('maint.vehicle', { color: 0x39406b, roughness: 0.56, metalness: 0.36, emissive: 0x090c1a, surface: false })
   const matTyre = theme.mat('maint.tyre', { color: 0x11141f, roughness: 0.98, metalness: 0.02, surface: false })
   const neonWhite = theme.neon(0xffffff, 1)
-  const lineInk = theme.line(COLOR.inkDim, 0.17)
+  const lineInk = theme.line(COLOR.inkDim, 0.17, 'structure')
 
   const unitBox = theme.box(1, 1, 1)
   const unitCyl = theme.cyl(0.5, 0.5, 1, 14)

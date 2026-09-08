@@ -827,6 +827,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     hemi.groundColor.setHex(air.hemiGround)
 
     key.color.setHex(air.keyColor)
+    key.intensity = air.keyIntensity
     key.position.set(air.keyPos[0], air.keyPos[1], air.keyPos[2])
     key.target.position.set(air.keyTarget[0], air.keyTarget[1], air.keyTarget[2])
     key.target.updateMatrixWorld()

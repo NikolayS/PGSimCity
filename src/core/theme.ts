@@ -891,6 +891,7 @@ function paintNeon(m: THREE.MeshBasicMaterial, s: NeonSpec, target: ThemeMode): 
 interface LineSpec {
   color: number
   opacity: number
+  structural?: boolean
 }
 
 function paintLine(m: THREE.LineBasicMaterial, s: LineSpec, target: ThemeMode): void {
@@ -901,9 +902,9 @@ function paintLine(m: THREE.LineBasicMaterial, s: LineSpec, target: ThemeMode): 
       ? clockInk(s.color, daylight)
       : s.color
   const o = target === 'day'
-    ? dayInkOpacity(s.opacity)
+    ? dayInkOpacity(s.opacity, s.structural)
     : target === 'clock'
-      ? clockInkOpacity(s.opacity, daylight)
+      ? clockInkOpacity(s.opacity, daylight, s.structural)
       : s.opacity
   m.color.setHex(hex)
   m.opacity = o
@@ -1208,8 +1209,8 @@ export function createTheme(): ThemeApi {
     return m
   }
 
-  function line(color: number, opacity = 0.5): THREE.LineBasicMaterial {
-    const key = `${color}|${opacity}`
+  function line(color: number, opacity = 0.5, role: 'structure' | 'semantic' = 'semantic'): THREE.LineBasicMaterial {
+    const key = `${color}|${opacity}|${role}`
     let m = lines.get(key)
     if (!m) {
       m = new THREE.LineBasicMaterial({
@@ -1218,7 +1219,7 @@ export function createTheme(): ThemeApi {
       })
       m.name = `line:${key}`
       userData(m).pgTheme = true
-      const spec: LineSpec = { color, opacity }
+      const spec: LineSpec = { color, opacity, structural: role === 'structure' }
       lineSpecs.set(key, spec)
       lines.set(key, m)
       paintLine(m, spec, mode)
@@ -1228,7 +1229,7 @@ export function createTheme(): ThemeApi {
 
   function edges(geo: THREE.BufferGeometry, color: number, opacity = 0.55): THREE.LineSegments {
     const e = new THREE.EdgesGeometry(geo, 25)
-    const ls = new THREE.LineSegments(e, line(color, opacity))
+    const ls = new THREE.LineSegments(e, line(color, opacity, 'structure'))
     ls.renderOrder = 2
     ls.raycast = () => {}
     return ls

@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { rectangularFramePlane } from './frame-plane'
 import { destinationForDistrict } from '../core/destinations'
 import { ATMOSPHERE, COLOR, DAY_PALETTE, atmosphere, mixHex } from '../core/theme'
 import { clamp01, fmtBytes, fmtNum } from '../core/util'
@@ -192,9 +193,9 @@ void main() {
   col = mix( col, uMinor, minor * 0.9 );
   col = mix( col, uMajor, major );
   col += uSweep * sweep * ( 0.35 + 0.65 * max( minor, major ) );
-  // …and then the kerb light spills back in over it. The broad, quiet falloff
-  // survives the plan altitude; the physical cap below supplies the hard edge.
-  col += uRim * exp( - max( edge, 0.0 ) / 52.0 ) * 1.05;
+  // The physical cap carries the plate boundary. Its restrained local spill
+  // must not become a luminous perimeter competing with the working city.
+  col += uRim * exp( - max( edge, 0.0 ) / 22.0 ) * 0.22;
 
   gl_FragColor = vec4( col, 1.0 );
   #include <tonemapping_fragment>
@@ -962,10 +963,9 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
       polygonOffsetUnits: -1,
     })
     m.name = `ground.zone.${spec.district}`
-    // City-planning zone colours are saturated but printed on the same warm
-    // stock. Fourteen percent stone keeps it architectural without
-    // making neighboring quarters collapse into beige.
-    m.userData.pgDayColor = mixHex(spec.dayColor, DAY_PALETTE.ground, 0.14)
+    // Quiet mineral paving identifies the district without competing with live
+    // state. Saturated semantic colour remains on its kerb, machinery and traffic.
+    m.userData.pgDayColor = mixHex(spec.dayColor, 0xc5c8bd, 0.78)
     // Zoning is meaning painted on the ground; masonry joints do not belong on it.
     m.userData.pgNoSurface = true
     mats.push(m)
@@ -973,9 +973,14 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   }
 
   function addDayZone(spec: PlinthSpec, cx: number, cy: number, cz: number, w: number, d: number): void {
-    const zone = new THREE.Mesh(unitPlane, makeZoneMaterial(spec))
+    // A full plane here veils the recessed live page sample with zone paint.
+    const geometry = spec.district === 'shmem'
+      ? rectangularFramePlane(w, d, CITY.buf.halfSpan)
+      : unitPlane
+    if (geometry !== unitPlane) geos.push(geometry)
+    const zone = new THREE.Mesh(geometry, makeZoneMaterial(spec))
     zone.name = `ground.zone.${spec.district}`
-    zone.scale.set(w, d, 1)
+    if (spec.district !== 'shmem') zone.scale.set(w, d, 1)
     zone.rotation.x = -Math.PI / 2
     zone.position.set(cx, cy, cz)
     zone.raycast = () => {}

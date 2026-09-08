@@ -344,7 +344,7 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
   })
   // White neon base — per-instance colour supplies the hue and the brightness.
   const neonWhite = theme.neon(0xffffff, 1)
-  const lineInk = theme.line(COLOR.inkDim, 0.2)
+  const lineInk = theme.line(COLOR.inkDim, 0.2, 'structure')
 
   const unitBox = theme.box(1, 1, 1)
   const unitCyl = theme.cyl(0.5, 0.5, 1, 14)
@@ -447,7 +447,7 @@ export const createClients: WorldFactory = (ctx): WorldModule => {
   bayVerts.push(forecourt.x0, 0.09, forecourt.z0, forecourt.x1, 0.09, forecourt.z0)
   const bayGeo = own(new THREE.BufferGeometry())
   bayGeo.setAttribute('position', new THREE.Float32BufferAttribute(bayVerts, 3))
-  const bayLines = new THREE.LineSegments(bayGeo, theme.line(COLOR.inkDim, 0.1))
+  const bayLines = new THREE.LineSegments(bayGeo, theme.line(COLOR.inkDim, 0.1, 'structure'))
   bayLines.raycast = () => {}
   terminal.add(bayLines)
 

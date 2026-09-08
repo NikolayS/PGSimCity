@@ -12,8 +12,8 @@ import type { ColorKey } from './types'
  *
  *   DAY     Structure is pale stone under a warm afternoon sun; meaning is
  *           a flat, deep, poster-print fill that needs no glow at all. Edges
- *           become the cartoon's ink line: dark, opaque, heavier. Bloom is all
- *           but off, the sun is on, and it casts real shadows.
+ *           stay subordinate to lit facades; stronger boundaries retain weight.
+ *           Bloom is off, the sun is on, and it casts real shadows.
  *
  * That inversion is why the semantic colours are RE-PICKED rather than reused.
  * The MEANINGS are fixed — WAL is amber in both modes, a dirty page is red in
@@ -80,7 +80,7 @@ export const NIGHT_PALETTE: Record<ColorKey, number> = {
 /* ---------------------------------------------------------------------------
  * DAY — the same city at afternoon daylight.
  *
- * Picked against a #948d7a taupe paving stage and a #bcdcf2 sky. The whole set
+ * Picked against a subdued cool-slate paving stage and a blue-grey sky. The set
  * sits in the 29–62% lightness band with saturation pushed up: value separates
  * pale mineral structures from the ground, while hue still separates meaning.
  *
@@ -108,9 +108,9 @@ export const DAY_PALETTE: Record<ColorKey, number> = {
   /* --- surfaces: warm light, cool air, neutral stone --- */
   bg: 0x8fb5d4, // clear colour behind the sky dome
   fog: 0xb7c5d3, // blue-grey distance haze and the below-horizon band
-  grid: 0x777164, // 10 m survey line, drawn ON the stone
-  gridBright: 0x5e5a50, // 50 m block line, one step darker again
-  ground: 0x948d7a, // deep civic paving beneath the pale mineral structures
+  grid: 0x596368, // quiet survey lines on cool slate paving
+  gridBright: 0x45545b, // 50 m block line, one step darker again
+  ground: 0x657477, // quiet cool slate beneath warm/cool mineral structures
 
   /* --- the plaza: page state --- */
   bufClean: 0x1d5fcb, // clean page — deep true blue
@@ -271,7 +271,7 @@ export const ATMOSPHERE: Record<CuratedThemeMode, Atmosphere> = {
     hemiGround: 0x18202d,
     hemiIntensity: 0.78,
     keyColor: 0xa8c8ff,
-    keyIntensity: 1.15,
+    keyIntensity: 1.95,
     keyPos: [322, 374, -196],
     keyTarget: [0, 0, -35],
     sunDirection: [0, -1, 0],
@@ -281,12 +281,12 @@ export const ATMOSPHERE: Record<CuratedThemeMode, Atmosphere> = {
     shadowIntensity: 1,
     shadows: false,
     fillColor: 0x8095b5,
-    fillIntensity: 0.72,
+    fillIntensity: 0.92,
     fillPos: [-320, 168, 296],
     walGlow: 40,
     yardGlow: 26,
     noBloomHemi: 1.02,
-    noBloomFill: 0.82,
+    noBloomFill: 1.05,
     noBloomWalGlow: 66,
     noBloomYardGlow: 44,
     bloomEnabled: true,
@@ -325,8 +325,8 @@ export const ATMOSPHERE: Record<CuratedThemeMode, Atmosphere> = {
     hemiSky: 0xb0cee9,
     hemiGround: 0x7d8999,
     hemiIntensity: 0.82,
-    keyColor: 0xffd6a3,
-    keyIntensity: 2.25,
+    keyColor: 0xffe6c7,
+    keyIntensity: 3.1,
     /* A north-west afternoon key lights roofs and facades together. At 27° a
      * tower's shadow stays within two heights, grounding its own machinery
      * instead of striping several unrelated districts. */
@@ -713,20 +713,20 @@ const STONE: Record<string, Stone> = {
    * within a few degrees, so a nominally 10-degree gap can measure as three
    * and two quarters collapse into each other again. */
   // outside the server: pale sand, the softest quarter.
-  clients: { h: 20, s: 0.1, lo: 0.67, hi: 0.88 },
+  clients: { h: 20, s: 0.19, lo: 0.67, hi: 0.88 },
   // pg_wal: ochre sandstone. The one properly warm quarter, and the amber
   // district — the only place where stone and meaning share a family.
   wal: { h: 42, s: 0.2, lo: 0.64, hi: 0.85 },
   // backend towers: pale straw plaster, so the window bands sit on something.
-  backends: { h: 64, s: 0.09, lo: 0.68, hi: 0.9 },
+  backends: { h: 64, s: 0.18, lo: 0.68, hi: 0.9 },
   // the maintenance yard: painted works grey-green, an industrial finish.
   maint: { h: 106, s: 0.1, lo: 0.63, hi: 0.85 },
   // the data directory: cool poured concrete with the faintest green in it.
-  storage: { h: 150, s: 0.08, lo: 0.65, hi: 0.87 },
+  storage: { h: 150, s: 0.16, lo: 0.65, hi: 0.87 },
   // replication: cool slate — this quarter reads as machinery.
   rep: { h: 196, s: 0.1, lo: 0.63, hi: 0.85 },
   // shared memory: cool white precast. The brightest structure in the city.
-  shmem: { h: 226, s: 0.06, lo: 0.7, hi: 0.92 },
+  shmem: { h: 226, s: 0.15, lo: 0.7, hi: 0.92 },
   // the planner: the least coloured stone anywhere, a bare trace of lilac.
   planner: { h: 268, s: 0.07, lo: 0.65, hi: 0.87 },
   // continuity: old limestone gone grey-mauve with iron. The oldest-looking
@@ -835,11 +835,8 @@ export function clockAccent(hex: number, daylight: number): number {
 /**
  * Ink — every line material.
  *
- * At night the blueprint edges glow, and that glow is what draws the silhouette.
- * In daylight glow is invisible, so the same edges become the cartoon's ink line:
- * the hue survives as a trace, the value does not. `dayInkOpacity` is the other
- * half of "heavier" — WebGL cannot widen a line, so weight has to come from
- * opacity.
+ * Construction lines opt into restrained opacity. Relationship lines keep
+ * their semantic weight; kerbs, state windows and traffic use mesh materials.
  */
 export function dayInk(hex: number): number {
   const [h, s, l] = hslOf(hex)
@@ -850,12 +847,12 @@ export function clockInk(hex: number, daylight: number): number {
   return mix(hex, dayInk(hex), clamp01(daylight))
 }
 
-export function dayInkOpacity(opacity: number): number {
-  return Math.min(1, opacity * 1.8 + 0.28)
+export function dayInkOpacity(opacity: number, structural = false): number {
+  return structural ? clamp01(opacity * 0.88) : Math.min(1, opacity * 1.8 + 0.28)
 }
 
-export function clockInkOpacity(opacity: number, daylight: number): number {
-  return lerp(opacity, dayInkOpacity(opacity), clamp01(daylight))
+export function clockInkOpacity(opacity: number, daylight: number, structural = false): number {
+  return lerp(opacity, dayInkOpacity(opacity, structural), clamp01(daylight))
 }
 
 /**
