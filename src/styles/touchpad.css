@@ -29,6 +29,18 @@
     pointer-events: none;
   }
 
+  /* Only the walk export and model disclosure survive the hidden HUD. Raise
+     their shared stacking context above the full-screen look gesture surface;
+     pointer-events stays none on the surrounding HUD so move/look still work. */
+  body.touch-walk-active #hud {
+    z-index: var(--z-menu-popover);
+  }
+
+  body.touch-walk-active .hud-export,
+  body.touch-walk-active #hud-top .city-version-provenance {
+    visibility: visible;
+    pointer-events: auto;
+  }
 }
 
 .touchpad__move-zone,

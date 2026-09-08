@@ -8,7 +8,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -18,6 +18,7 @@ import {
 } from '../tools/cdp-profile.mjs'
 
 const roots: string[] = []
+const children: ChildProcess[] = []
 
 function temporaryRoot() {
   const root = mkdtempSync(join(tmpdir(), 'pgsimcity-cdp-profile-test-'))
@@ -25,14 +26,19 @@ function temporaryRoot() {
   return root
 }
 
-afterEach(() => {
+afterEach(async () => {
+  for (const child of children.splice(0)) {
+    if (child.exitCode !== null || child.signalCode !== null) continue
+    const exited = once(child, 'exit')
+    child.kill('SIGTERM')
+    await exited
+  }
   for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true })
 })
 
 /*
- * A child is not necessarily visible to the process table the instant Node
- * reports 'spawn': the fork can land before /proc is populated and before
- * bash reaches its exec. Poll for the transition rather than assuming it.
+ * Process-table visibility can lag child startup or exit. Poll for the
+ * observed transition and assert it before testing profile cleanup.
  */
 async function waitUntil(predicate: () => boolean, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs
@@ -43,13 +49,18 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 5000) {
   return predicate()
 }
 
-function spawnHoldingProfile(profilePath: string) {
-  return spawn('bash', [
-    '-c',
-    'exec -a "$1" sleep 60',
-    'bash',
-    `chrome --user-data-dir=${profilePath} about:blank`,
+/* Wait for the final executable, not a shell whose argv matches before exec. */
+async function spawnHoldingProfile(profilePath: string) {
+  const child = spawn(process.execPath, [
+    '-e',
+    'setInterval(() => {}, 1000); process.stdout.write("ready")',
+    '--',
+    `--user-data-dir=${profilePath}`,
   ])
+  children.push(child)
+  const [ready] = await once(child.stdout, 'data')
+  expect(ready.toString()).toBe('ready')
+  return child
 }
 
 describe('CDP profile lifecycle', () => {
@@ -89,16 +100,15 @@ describe('CDP profile lifecycle', () => {
   it('does not remove a profile still named by a live process', async () => {
     const root = temporaryRoot()
     const profile = acquireCdpProfile({ root, port: 9555, reap: false })
-    const child = spawnHoldingProfile(profile.path)
-    await once(child, 'spawn')
-    await waitUntil(() => profileIsInUse(profile.path))
+    const child = await spawnHoldingProfile(profile.path)
+    expect(await waitUntil(() => profileIsInUse(profile.path))).toBe(true)
 
     expect(profile.cleanup()).toBe(false)
     expect(existsSync(profile.path)).toBe(true)
 
     child.kill('SIGTERM')
     await once(child, 'exit')
-    await waitUntil(() => !profileIsInUse(profile.path))
+    expect(await waitUntil(() => !profileIsInUse(profile.path))).toBe(true)
 
     expect(profile.cleanup()).toBe(true)
     expect(existsSync(profile.path)).toBe(false)
@@ -115,8 +125,7 @@ describe('CDP profile lifecycle', () => {
 
     expect(profileIsInUse(profile.path)).toBe(false)
 
-    const child = spawnHoldingProfile(profile.path)
-    await once(child, 'spawn')
+    const child = await spawnHoldingProfile(profile.path)
 
     expect(await waitUntil(() => profileIsInUse(profile.path))).toBe(true)
     expect(profileIsInUse(`${profile.path}-other`)).toBe(false)

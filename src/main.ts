@@ -72,6 +72,8 @@ import { createTour } from './ui/tour'
 import { createVacuumCityIndicator } from './engine/vacuum-city-indicator'
 import { createVacuumLesson } from './ui/vacuum-lesson'
 import { createReplayPanel } from './ui/replay-panel'
+import { createPresentationExport } from './ui/presentation'
+import { dispatchPresentationFrame } from './engine/presentation'
 import { createSearch } from './ui/search'
 import { createCityWords } from './ui/city-words'
 import { createTouchpad } from './ui/touchpad'
@@ -331,11 +333,17 @@ async function boot(): Promise<void> {
     onProgress: ({ event, mode }) => trackVacuumLessonProgress(analytics, { event, mode }),
   })
   const replayPanel = createReplayPanel(uiCtx, replay)
+  const presentation = createPresentationExport(uiCtx, gfx)
   const ui: UiModule[] = [
     vacuumLesson,
     createVacuumCityIndicator(uiCtx, gfx.camera, () => vacuumLesson.isOpen()),
     replayPanel,
-    createHud(uiCtx, { onInvestigate: () => vacuumLesson.open(), onReplay: () => replayPanel.open() }),
+    presentation,
+    createHud(uiCtx, {
+      onInvestigate: () => vacuumLesson.open(),
+      onReplay: () => replayPanel.open(),
+      onExport: () => presentation.open(),
+    }),
     createTouchpad({ bus, walk }),
     controlCenter,
     createWalkUpInteraction({
@@ -529,6 +537,17 @@ async function boot(): Promise<void> {
     requestAnimationFrame(frame)
 
     timer.update()
+    dispatchPresentationFrame(presentation.isOpen(), liveFrame, presentationFrame)
+  }
+
+  function presentationFrame(): void {
+    frameTimebase.advance(0, true, sim.state.knobs.timeScale)
+    gfx.renderStill()
+    labels.update(0, camera, sim.state)
+    labels.render(scene, camera)
+  }
+
+  function liveFrame(): void {
     // rawDt feeds FPS and adaptive quality. The world stays on the animation
     // clamp; the model consumes bounded wall time as fixed steps.
     const rawDt = timer.getDelta()

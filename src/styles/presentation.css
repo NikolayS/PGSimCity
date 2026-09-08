@@ -1,0 +1,31 @@
+.pg-presentation {
+  width: min(34rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 1.5rem;
+  border: 1px solid #7b91b5;
+  border-radius: 12px;
+  background: #111a2b;
+  color: #f3f6fc;
+  font: 15px/1.5 system-ui, sans-serif;
+}
+.pg-presentation::backdrop { background: rgb(3 9 18 / 65%); }
+.pg-presentation h2 { margin-top: 0; font-size: 1.4rem; }
+.pg-presentation__field { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; margin: 1rem 0; }
+.pg-presentation select { max-width: 100%; }
+.pg-presentation button, .pg-presentation select {
+  font: inherit;
+  padding: 0.5rem 0.7rem;
+  color: #f3f6fc;
+  background: #253852;
+  border: 1px solid #8da2bf;
+  border-radius: 5px;
+}
+.pg-presentation :focus-visible { outline: 3px solid #71d8ff; outline-offset: 3px; }
+.pg-presentation button:disabled { opacity: 0.6; }
+.pg-presentation__actions { display: flex; gap: 0.7rem; flex-wrap: wrap; }
+.pg-presentation__disclosure { border-left: 3px solid #71d8ff; padding-left: 0.75rem; }
+.pg-presentation__download { color: #71d8ff; display: block; margin-bottom: 1rem; }
+.pg-presentation__download[hidden] { display: none; }
+.pg-presentation__status { overflow-wrap: anywhere; }
