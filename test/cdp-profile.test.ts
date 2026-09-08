@@ -53,7 +53,7 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 5000) {
 async function spawnHoldingProfile(profilePath: string) {
   const child = spawn(process.execPath, [
     '-e',
-    'setInterval(() => {}, 1000); process.stdout.write("ready")',
+    'setInterval(() => {}, 1000); setTimeout(() => process.exit(0), 60_000); process.stdout.write("ready")',
     '--',
     `--user-data-dir=${profilePath}`,
   ])
