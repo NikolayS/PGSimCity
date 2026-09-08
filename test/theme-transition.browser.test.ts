@@ -9,7 +9,10 @@ it('keeps medium night HDR pixels finite after daylight', async () => {
     await send('Emulation.setDeviceMetricsOverride', {
       width: 1280, height: 760, deviceScaleFactor: 1, mobile: false,
     })
-    await evaluate(`(() => {
+    await evaluate(`(async () => {
+      // The HUD can mount before the city debugging surface is published.
+      for (let i = 0; i < 200 && !window.PGSIMCITY; i++) await new Promise(resolve => setTimeout(resolve, 50))
+      if (!window.PGSIMCITY) throw new Error('City debugging surface not ready')
       const p = window.PGSIMCITY
       const render = p.gfx.render.bind(p.gfx)
       // Pin the requested tier for this correctness check, not a performance test.
