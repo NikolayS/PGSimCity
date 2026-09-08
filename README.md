@@ -1,71 +1,63 @@
 # PGSimCity
 
-**An explorable 3D city that shows how PostgreSQL actually works.**
+**Walk through PostgreSQL. Break things. Understand why.**
 
-PGSimCity turns a PostgreSQL cluster into a city you can inspect, walk through,
-and break. It is for engineers who are good at their job and have never had to
-operate a database — the people who need to understand why a checkpoint spikes
-latency, why one forgotten transaction bloats a table forever, and what
-`synchronous_commit` is really charging them.
+An explorable 3D city where buildings represent PostgreSQL internals and motion
+shows their interaction. Follow a query, investigate a growing table, or see
+what changes when memory, checkpoints and replication become bottlenecks.
 
-**[Explore the live city](https://nikolays.github.io/PGSimCity/)** — no install
-required.
+**[Explore the city](https://nikolays.github.io/PGSimCity/)** ·
+**[Watch the 34-second demo](https://github.com/NikolayS/PGSimCity/releases/download/v0.49.0/pgsimcity-smooth-desktop.mp4)** ·
+[Start an investigation](#start-here-investigate-a-vacuum-blockade)
 
-[In the press: InfoQ · IBM Think · Gizmodo · GIGAZINE](#press-coverage)
+No installation. Runs in a browser with WebGL2.
 
-PGSimCity is an independent, non-commercial educational visualization of
-PostgreSQL internals. It is not affiliated with, sponsored, endorsed, or
-approved by Electronic Arts Inc. SimCity is a trademark of Electronic Arts Inc.
+[![PGSimCity at golden hour: the buffer pool, backend avenue and surrounding PostgreSQL districts. Click to watch the desktop investigation demo.](docs/screenshot.png)](https://github.com/NikolayS/PGSimCity/releases/download/v0.49.0/pgsimcity-smooth-desktop.mp4)
 
-This project contains no SimCity code, assets, artwork, logos, characters,
-audio, or game content.
+*Demo: scenario selection → investigation → page and tuple layouts.
+Recorded on v0.45.0; pacing edited and waiting accelerated. The app has evolved since.*
 
-The PostgreSQL lessons have keyboard and text-first routes, including a city
-architecture description generated from the layout, but the 3D scene and
-first-person walk do not have a nonvisual equivalent. See the
-[accessibility boundary and alternatives](ACCESSIBILITY.md) for what is covered
-and what remains irreducibly spatial.
+[Featured in InfoQ · IBM Think · Gizmodo · GIGAZINE](#press-coverage)
 
-![PGSimCity at golden hour: the reflective shared-buffers pool and backend avenue sit at the centre of the Slonik-shaped plate, surrounded by the WAL, maintenance, standby, recovery, and continuity districts under a scattering sky.](docs/screenshot.png)
+## Start here: investigate a vacuum blockade
 
----
+**A table keeps growing even though autovacuum is running. Why?**
 
-> ### How much to trust this
->
-> PGSimCity is still **0.x**: early and moving. The 3D city is a *model* of
-> PostgreSQL, not an emulator: no PostgreSQL source code runs in that city, and
-> the numbers are scaled so a human can watch them. The opt-in Query flow and
-> [Machine](machine/) can run PGlite, a real in-memory PostgreSQL compiled to
-> WebAssembly.
->
-> PGSimCity targets the PostgreSQL 18 major line. PostgreSQL 18.6 is the
-> reviewed reference release against which its claims were verified; mechanism
-> claims follow the [`REL_18_STABLE` source](https://github.com/postgres/postgres/tree/REL_18_STABLE).
-> For example, PostgreSQL 18's bulk-read strategy starts at 256 KiB and grows
-> with `io_combine_limit × effective_io_concurrency`, subject to its caps
-> ([`GetAccessStrategy`](https://github.com/postgres/postgres/blob/REL_18_STABLE/src/backend/storage/buffer/freelist.c#L505-L611)).
-> The current TypeScript buffer sample still uses a fixed 32-frame ring: that is
-> a disclosed historical simplification for the animation, not PostgreSQL 18's
-> ring-sizing rule. The animation must not be used as numeric version evidence
-> until that model is aligned.
->
-> Four review rounds have checked the project: three specialist reviews compared PostgreSQL
-> correctness with `postgresql.org/docs` and the source rather than memory, and a separate audit
-> treated buildings, adjacencies, and animations as claims. Every finding was independently checked
-> by a reviewer tasked with refuting it.
->
-> The deterministic suite fails CI on a red test. Its checks pin the model's scaled WAL
-> trigger approximation as `max_wal_size / (1 + checkpoint_completion_target)` at every
-> call site. PostgreSQL 18 calculates the moving threshold in whole WAL segments through
-> `ConvertToXSegs(max_wal_size_mb) / (1 + checkpoint_completion_target)` and therefore
-> rounds it ([`CalculateCheckpointSegments`](https://github.com/postgres/postgres/blob/REL_18_STABLE/src/backend/access/transam/xlog.c#L2166-L2197)).
-> The suite also pins cache hit ratio as `blks_hit / (blks_hit + blks_read)` and the
-> clock-sweep `usage_count` cap at 5.
->
-> Mistakes have been found and fixed throughout; the commit history records them. Known limitation:
-> touch controls have been verified only in Chrome's mobile emulation. Corrections from people who
-> know the engine are exactly what this needs: [open the correction template](https://github.com/NikolayS/PGSimCity/issues/new?template=postgresql-mismatch.md)
-> or send a [pull request](https://github.com/NikolayS/PGSimCity/pulls).
+1. [Open the city](https://nikolays.github.io/PGSimCity/) and choose **Investigate**.
+   This starts the guided vacuum-blockade case.
+2. Inspect and record the table, worker, snapshot and application-owner evidence.
+   Explain what prevents cleanup before choosing an intervention.
+3. End the transaction that the case establishes as abandoned, then check whether
+   vacuum actually reclaims row versions. Releasing a snapshot is not itself cleanup.
+4. Choose **Inspect a page and its row versions** to connect the investigation
+   to the page layout, tuple header and snapshot diagrams.
+
+Pause when you need time to read. Try challenge mode afterward for less guidance.
+Evidence and notes belong to the current attempt; they do not survive a reload.
+
+## Choose your view
+
+| Experience | What you can do |
+|---|---|
+| **[City](https://nikolays.github.io/PGSimCity/)** | Explore the engine spatially, follow the guided tour and investigate a vacuum incident. |
+| **[Diagnose](https://nikolays.github.io/PGSimCity/observability/)** | Follow a query’s path and inspect the simulation through a 2D diagnostic interface. |
+| **[Machine](https://nikolays.github.io/PGSimCity/machine/)** | Run real SQL with opt-in PGlite beside a 2D architecture board; measured and modeled values are labeled separately. |
+
+## How much to trust this
+
+**The city is a model, not a running PostgreSQL server.** Its numbers and timing
+are scaled to make internals observable. The separate Machine and opt-in Query
+flow can execute real PostgreSQL through PGlite; they do not turn the city into
+a production monitor.
+
+The project is an evolving 0.x prototype, with known simplifications and tests
+against PostgreSQL behavior. See [model accuracy and limitations](docs/MODEL-ACCURACY.md)
+for the reviewed reference version, formulas and review history.
+[Report a PostgreSQL mismatch](https://github.com/NikolayS/PGSimCity/issues/new?template=postgresql-mismatch.md).
+
+Lessons include keyboard and text-first routes; the 3D scene and first-person
+walk do not have a nonvisual equivalent. Touch verification has used browser
+emulation, not physical devices. [Accessibility and alternatives](ACCESSIBILITY.md).
 
 ---
 
@@ -86,8 +78,7 @@ Selected reporting and hands-on reviews of PGSimCity:
 
 - **Clement Mondary · Français:** [PGSIMCITY : comprendre PostgreSQL en visitant une ville en 3D](https://mondary.design/2026/08/pgsimcity-comprendre-postgresql-en-visitant-une-ville-en-3d/) — an introduction to the city’s visual language, interactive scenarios and distinction between the simulation and PGlite.
 
-Language editions are grouped with their original articles, rather than counted
-as additional coverage. Articles describe the version available when published.
+Articles describe the version available when published.
 
 ---
 
@@ -114,7 +105,7 @@ are pink**, **the background writer is teal**, **replication is orange**,
 
 ---
 
-## Things worth trying
+## More things to try
 
 - Press **`T`** for the 14-chapter guided tour. It follows one connection from
   the client through planning, caching, WAL, checkpoints, vacuum and replication.
@@ -148,6 +139,12 @@ are pink**, **the background writer is teal**, **replication is orange**,
 ---
 
 ## Controls
+
+Start with **drag** to pan, **wheel/pinch** to zoom, **T** for the tour,
+**K** to pause and **H** to return to the overview.
+
+<details>
+<summary>All camera controls and keyboard shortcuts</summary>
 
 Press **`?`** in the city for the city control map and colour legend.
 
@@ -199,6 +196,8 @@ Press **`?`** in the city for the city control map and colour legend.
 
 ---
 
+</details>
+
 ## How it is built
 
 ```text
@@ -232,15 +231,15 @@ and Plausible analytics is the sole external service.
 
 `window.PGSIMCITY` in the browser console includes `sim`, `registry`, `bus`,
 `rig`, `gfx` and `flows` if you would rather drive the city from the outside.
-For the accuracy boundary and review status, see
-[How much to trust this](#how-much-to-trust-this) above. Each inspector names
+For formulas, review history and known simplifications, see
+[Model accuracy and limitations](docs/MODEL-ACCURACY.md). Each inspector names
 material simplifications at the point where they matter.
 
 ### Real PostgreSQL beside the model
 
-The [accuracy boundary described above](#how-much-to-trust-this) makes internals
+The [accuracy boundary](docs/MODEL-ACCURACY.md) makes internals
 such as the clock sweep's frame-by-frame victim choice observable. The separate
-Query flow and the [Machine](machine/) offer opt-in PGlite modes: real PostgreSQL
+Query flow and the [Machine](https://nikolays.github.io/PGSimCity/machine/) offer opt-in PGlite modes: real PostgreSQL
 supplies parsing, plans, catalogs, buffer counters, errors and results, while the
 visual model supplies the otherwise hidden interior. Each surface labels those
 sources separately because PostgreSQL exposes the former and not the latter.
@@ -285,10 +284,18 @@ affecting the application.
 
 ## Roadmap
 
-What is being worked on, what is known to be wrong, and what is deliberately not
-being done: [ROADMAP.md](ROADMAP.md).
+Follow the [living delivery roadmap](https://github.com/NikolayS/PGSimCity/issues/10)
+for current milestones and the [technical roadmap](ROADMAP.md) for longer-term
+direction. See [releases](https://github.com/NikolayS/PGSimCity/releases) for what
+is actually shipped.
 
 ## Licence
+
+PGSimCity is an independent, non-commercial educational visualization of
+PostgreSQL internals. It is not affiliated with, sponsored, endorsed, or
+approved by Electronic Arts Inc. SimCity is a trademark of Electronic Arts Inc.
+This project contains no SimCity code, assets, artwork, logos, characters,
+audio, or game content.
 
 [Apache-2.0](LICENSE). Copyright 2026 Nikolay Samokhvalov. See [NOTICE](NOTICE).
 
