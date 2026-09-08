@@ -116,6 +116,19 @@ describe('operations campaign learner flow', () => {
     } finally { f.replay!.dispose() }
   })
 
+  it('keeps legacy decision overlays suppressed on a live-city round trip', () => {
+    const f = fixture(); f.campaign.open(); click('start')
+    const decision = f.sim.state.scenarioDecision
+    f.campaign.close()
+    expect(document.body.classList.contains('pg-operations-attempt')).toBe(true)
+    expect(f.sim.state.scenarioDecision).toBe(decision)
+    f.sim.reset()
+    expect(document.body.classList.contains('pg-operations-attempt')).toBe(false)
+    f.campaign.open(); click('start'); f.campaign.close()
+    f.sim.runScenario('vacuum-blockade')
+    expect(document.body.classList.contains('pg-operations-attempt')).toBe(false)
+  })
+
   it('invalidates evidence after an external reset and never awards a different incident', () => {
     const f = fixture()
     f.campaign.open(); click('start')

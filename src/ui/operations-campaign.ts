@@ -150,7 +150,7 @@ export function createOperationsCampaign(ctx: UiContext, options: {
     owned = ctx.sim.state.scenarioDecision
     evidence = false; complete = false; snapshot = ''; note.value = ''; hint.hidden = true
     focusCity()
-    report('started'); render()
+    syncAttemptOverlay(); report('started'); render()
   }
   function render(): void {
     const valid = current()
@@ -200,11 +200,17 @@ export function createOperationsCampaign(ctx: UiContext, options: {
     document.body.append(panel)
     position(); render(); title.focus()
   }
+  function syncAttemptOverlay(): void {
+    const owns = !!owned && ctx.sim.state.scenarioDecision === owned && ctx.sim.state.scenario === variant
+    document.body.classList.toggle('pg-operations-attempt', owns)
+  }
   function close(): void {
     stop(); opened = false; panel.remove(); document.body.classList.remove('pg-operations-campaign')
+    syncAttemptOverlay()
     returnFocus?.focus()
   }
   panel.addEventListener('keydown', event => { event.stopPropagation(); if (event.key === 'Escape') { event.preventDefault(); close() } })
-  const offReset = ctx.bus.on('sim:reset', () => { stop() })
-  return { open, close, update(dt) { if (!opened) return; refreshIn -= dt; if (refreshIn <= 0) { refreshIn = .2; position(); render() } }, dispose() { close(); offReset() } }
+  const offReset = ctx.bus.on('sim:reset', () => { stop(); syncAttemptOverlay() })
+  const offScenario = ctx.bus.on('scenario', () => { stop(); syncAttemptOverlay() })
+  return { open, close, update(dt) { if (!opened) return; refreshIn -= dt; if (refreshIn <= 0) { refreshIn = .2; position(); render() } }, dispose() { close(); offReset(); offScenario(); document.body.classList.remove('pg-operations-attempt') } }
 }

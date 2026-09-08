@@ -32,3 +32,7 @@
   .operations-campaign__body { padding: 0 12px 12px; }
   .operations-campaign h2 { font-size: 16px; }
 }
+
+/* A collapsed campaign still owns its live attempt; legacy decisions duplicate it. */
+body.pg-operations-attempt .hud-decision,
+body.pg-operations-attempt .tour-first { display: none; }
