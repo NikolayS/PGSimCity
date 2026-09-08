@@ -22,6 +22,7 @@ import { CLAIM_VALUES } from '../core/claims'
 import { createCorrectionPath, displayedClaim } from '../core/corrections'
 import { createSim } from '../sim/model'
 import { createIncidentReplay } from '../sim/replay'
+import { createModelSpeedControls } from './speed-controls'
 import { readIncidentHandoff } from '../core/incident-handoff'
 import type { IncidentContext } from '../core/incident-handoff'
 import { incidentCitySelection, incidentDiagnosticCaption, installIncidentCacheGuard, isSameTabIncidentClick, showIncidentError, STALE_INCIDENT_MESSAGE, transferIncident } from '../ui/incident-navigation'
@@ -155,24 +156,8 @@ pauseBtn.addEventListener('click', () => {
 })
 syncPauseButton()
 
-const speedBtns = [1, 2, 4].map((x) => {
-  const b = el('button', {
-    class: `chip${x === 1 ? ' on' : ''}`,
-    type: 'button',
-    text: `${x}×`,
-    'aria-label': `${x} times model speed`,
-    'aria-pressed': String(x === 1),
-  })
-  b.addEventListener('click', () => {
-    sim.setKnob('timeScale', x, 'user')
-    speedBtns.forEach((o) => {
-      const selected = o === b
-      o.classList.toggle('on', selected)
-      o.setAttribute('aria-pressed', String(selected))
-    })
-  })
-  return b
-})
+const speedControls = createModelSpeedControls(sim)
+const speedBtns = speedControls.buttons
 const clockControls = el('div', { class: 'clock', role: 'group', 'aria-label': 'Model animation controls' }, pauseBtn, ...speedBtns)
 
 const modeName = el('strong', { text: 'DIAGNOSE' })
@@ -1192,6 +1177,7 @@ async function boot(): Promise<void> {
       coll.reset()
       coll.sample()
       syncPauseButton()
+      speedControls.sync()
     } catch (error) {
       root!.replaceChildren()
       showIncidentError(error instanceof Error ? error.message : 'Incident reconstruction failed', root!)
