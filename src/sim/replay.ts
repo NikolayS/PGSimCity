@@ -309,6 +309,15 @@ export function createIncidentReplay(
     try { original.update(dt) } finally { busy-- }
   }
   sim.update = (dt: number): void => { if (!status.seeking && !status.advancing) advance(dt) }
+  sim.advance = (seconds: number): number => {
+    requireReady()
+    busy++
+    try {
+      const advanced = original.advance(seconds)
+      if (advanced > 0) invalidate('Unsupported replay action: advance; reset to record another incident')
+      return advanced
+    } finally { busy-- }
+  }
   sim.setKnob = (key, value, source) => invoke(
     { tick: status.tick, type: 'knob', key, value, ...(source ? { source } : {}) },
     () => original.setKnob(key, value, source),

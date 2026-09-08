@@ -16,6 +16,23 @@ function run(sim: ReturnType<typeof createSim>, steps: number): void {
   for (let i = 0; i < steps; i++) sim.update(STEP)
 }
 
+describe('deliberate model stepping during replay recording', () => {
+  it('refuses an incomplete recording without blocking the paused learner step', () => {
+    const { sim, replay } = incident()
+    sim.setKnob('paused', true)
+    const before = sim.state.t
+    const realBefore = sim.state.realT
+    expect(sim.advance(0.1)).toBeCloseTo(0.1)
+    expect(sim.state.t).toBeCloseTo(before + 0.1)
+    expect(sim.state.realT).toBe(realBefore)
+    expect(sim.state.knobs.paused).toBe(true)
+    expect(replay.status.valid).toBe(false)
+    expect(() => replay.exportRecord()).toThrow('advance')
+    replay.reset()
+    expect(replay.status.valid).toBe(true)
+  })
+})
+
 describe('reproducible incident initialization', () => {
   it('restores the same complete warm state after prior work', () => {
     const sim = createSim(createBus())
