@@ -1,7 +1,8 @@
+import { createBus } from '../core/bus'
 import { BUILD_SHA, BUILD_VERSION } from '../core/build'
 import { DEFAULT_KNOBS } from '../core/types'
 import type { Bus, BusEvents, Knobs, ScenarioChoiceId, SimApi } from '../core/types'
-import { MODEL_ADVANCE_MAX_SECONDS, simulationReplayConfiguration } from './model'
+import { createSim, MODEL_ADVANCE_MAX_SECONDS, simulationReplayConfiguration } from './model'
 import { SCENARIOS } from './scenarios'
 
 export const REPLAY_MAX_TICKS = 54_000
@@ -222,6 +223,7 @@ export function createIncidentReplay(
   let disposed = false
   let baseline: ReplayOutcome | null = null
   let baselineDurations: Float64Array | null = null
+  let baselineDeliberateTicks: Uint8Array | null = null
   const restoredListeners = new Set<() => void>()
   let cancelAdvance: (() => void) | null = null
 
@@ -267,13 +269,13 @@ export function createIncidentReplay(
     try { record(action(next, status.tick)) }
     catch { invalidate('Unsupported live action outside replay bounds; reset to record another incident') }
   }
-  function apply(next: ReplayAction): void {
+  function apply(next: ReplayAction, target: SimApi = original): void {
     switch (next.type) {
-      case 'knob': original.setKnob(next.key, next.value, next.source); break
-      case 'scenario': original.runScenario(next.id); break
-      case 'decision': original.chooseScenario(next.choice); break
-      case 'recover': original.recoverScenario(); break
-      case 'end-trace': original.endTrace(); break
+      case 'knob': target.setKnob(next.key, next.value, next.source); break
+      case 'scenario': target.runScenario(next.id); break
+      case 'decision': target.chooseScenario(next.choice); break
+      case 'recover': target.recoverScenario(); break
+      case 'end-trace': target.endTrace(); break
     }
   }
   function outcome(): ReplayOutcome {
@@ -310,19 +312,24 @@ export function createIncidentReplay(
   }
 
   function advance(dt: number): void {
-    if (Number.isFinite(dt) && dt > 0 && !sim.state.knobs.paused) recordTick(dt, false)
+    if (!Number.isFinite(dt) || dt <= 0) return
+    if (!sim.state.knobs.paused) recordTick(dt, false)
     busy++
     try { original.update(dt) } finally { busy-- }
   }
   sim.update = (dt: number): void => { if (!status.seeking && !status.advancing) advance(dt) }
-  sim.advance = (seconds: number): number => {
-    requireReady()
+  function advanceDeliberately(seconds: number): number {
+    if (!Number.isFinite(seconds) || seconds <= 0) return 0
     busy++
     try {
       const advanced = original.advance(seconds)
       if (advanced > 0) recordTick(Math.min(seconds, MODEL_ADVANCE_MAX_SECONDS), true)
       return advanced
     } finally { busy-- }
+  }
+  sim.advance = (seconds: number): number => {
+    requireReady()
+    return advanceDeliberately(seconds)
   }
   sim.setKnob = (key, value, source) => invoke(
     { tick: status.tick, type: 'knob', key, value, ...(source ? { source } : {}) },
@@ -380,6 +387,7 @@ export function createIncidentReplay(
     elapsed = 0
     baseline = null
     baselineDurations = null
+    baselineDeliberateTicks = null
     busy++
     try { original.reset() } finally { busy-- }
     originTime = sim.state.t
@@ -485,30 +493,39 @@ export function createIncidentReplay(
       const target = pointAt(value)
       baseline = outcome()
       baselineDurations = durations.slice(0, status.tick)
+      baselineDeliberateTicks = deliberateTicks.slice(0, status.tick)
       await seek(target)
     },
     async runToComparison(): Promise<void> {
       requireValid()
-      if (!baseline || !baselineDurations) throw new Error('Rewind a completed branch before comparing')
+      if (!baseline || !baselineDurations || !baselineDeliberateTicks) throw new Error('Rewind a completed branch before comparing')
       const remaining = baseline.elapsedModelSeconds - (sim.state.t - originTime)
       if (remaining < -1e-7) throw new Error('Alternative is already beyond the comparison duration; rewind again')
-      sim.setKnob('paused', false)
       status.seeking = true
       notify()
       try {
         let steps = 0
         while (baseline.elapsedModelSeconds - (sim.state.t - originTime) > 1e-7) {
           if (disposed) throw new Error('Replay controller was disposed during comparison')
-          const dt = Math.min(baselineDurations[status.tick] ?? 1 / 30,
-            baseline.elapsedModelSeconds - (sim.state.t - originTime))
-          advance(dt)
+          const deliberate = !!baselineDeliberateTicks[status.tick]
+          if (sim.state.knobs.paused !== deliberate) {
+            const pause: ReplayAction = { tick: status.tick, type: 'knob', key: 'paused', value: deliberate }
+            record(pause)
+            busy++
+            try { apply(pause) } finally { busy-- }
+          }
+          const planned = baselineDurations[status.tick] ?? ADVANCE_STEP
+          const left = baseline.elapsedModelSeconds - (sim.state.t - originTime)
+          const dt = planned <= left + 1e-7 ? planned : left
+          if (deliberate) advanceDeliberately(dt)
+          else advance(dt)
           if (!status.valid) throw new Error(status.reason)
           status.seekProgress = (sim.state.t - originTime) / Math.max(1e-7, baseline.elapsedModelSeconds)
           if (++steps % SEEK_BATCH === 0) await new Promise<void>((resolve) => setTimeout(resolve, 0))
         }
       } finally {
         status.seeking = false
-        if (!disposed) sim.setKnob('paused', true)
+        if (!disposed && !sim.state.knobs.paused) sim.setKnob('paused', true)
         notify()
       }
     },
@@ -537,6 +554,32 @@ export function createIncidentReplay(
       requireReady()
       const record = decodeReplay(encodeReplay(value))
       if (record.seed !== seed) throw new Error('Replay seed does not match this model instance')
+      // Preflight on an isolated model: rejected imports must preserve the live incident.
+      status.seeking = true
+      notify()
+      try {
+        const probe = createSim(createBus(), { seed })
+        let at = 0
+        let tick = 0
+        for (const run of record.steps) {
+          for (let count = 0; count < run.count; count++, tick++) {
+            if (disposed) throw new Error('Replay controller was disposed during import')
+            while (at < record.actions.length && record.actions[at].tick === tick) apply(record.actions[at++], probe)
+            if (run.kind === 'advance') {
+              if (Math.abs(probe.advance(run.dt) - run.dt) > 1e-9) throw new Error('Invalid deliberate replay step')
+            } else {
+              if (probe.state.knobs.paused) throw new Error('Invalid paused replay frame')
+              probe.update(run.dt)
+            }
+            if ((tick + 1) % SEEK_BATCH === 0) await new Promise<void>((resolve) => setTimeout(resolve, 0))
+          }
+        }
+        while (at < record.actions.length) apply(record.actions[at++], probe)
+      } finally {
+        status.seeking = false
+        notify()
+      }
+      requireReady()
       let tick = 0
       for (const run of record.steps) {
         durations.fill(run.dt, tick, tick + run.count)
@@ -550,6 +593,7 @@ export function createIncidentReplay(
       status.totalTicks = record.ticks
       baseline = null
       baselineDurations = null
+      baselineDeliberateTicks = null
       await seek({ tick: record.ticks, actionCount: log.length })
     },
     reset,

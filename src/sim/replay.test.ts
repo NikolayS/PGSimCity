@@ -17,6 +17,82 @@ function run(sim: ReturnType<typeof createSim>, steps: number): void {
   for (let i = 0; i < steps; i++) sim.update(STEP)
 }
 
+describe('replay runtime input provenance', () => {
+  it('rejects coerced frame input without mutating or losing export provenance', () => {
+    const { sim, replay } = incident()
+    const before = structuredClone(sim.state)
+    const record = replay.exportRecord()
+    ;(sim.update as (dt: unknown) => void)('0.1')
+    expect(sim.state).toEqual(before)
+    expect(replay.exportRecord()).toEqual(record)
+    replay.dispose()
+  })
+})
+
+describe('mixed-clock comparison and rejected imports', () => {
+  it('preserves deliberate clocks and step kinds in an unchanged comparison', async () => {
+    const { sim, replay } = incident()
+    sim.runScenario('vacuum-blockade')
+    sim.setKnob('timeScale', 3)
+    sim.update(1 / 30)
+    sim.setKnob('paused', true)
+    const point = replay.checkpoint()
+    for (let i = 0; i < 3; i++) sim.advance(0.1)
+    sim.setKnob('paused', false)
+    sim.update(1 / 30)
+    sim.setKnob('paused', true)
+    sim.advance(0.1)
+    const expected = structuredClone(sim.state)
+    const record = replay.exportRecord()
+    await replay.rewind(point)
+    await replay.runToComparison()
+    expect(sim.state.realT).toBe(expected.realT)
+    expect(sim.state).toEqual(expected)
+    expect(replay.exportRecord().steps).toEqual(record.steps)
+    const alternative = replay.exportRecord()
+    await replay.loadRecord(alternative)
+    expect(sim.state).toEqual(expected)
+    replay.dispose()
+  })
+
+  it('does not commit an import disposed at the final preflight yield', async () => {
+    const { sim, replay } = incident()
+    run(sim, 64)
+    const record = replay.exportRecord()
+    await replay.rewind(1)
+    const previous = structuredClone(sim.state)
+    const point = replay.checkpoint()
+    const loading = replay.loadRecord(record)
+    replay.dispose()
+    await expect(loading).rejects.toThrow(/disposed/)
+    expect(sim.state).toEqual(previous)
+    expect(replay.checkpoint()).toEqual(point)
+  })
+
+  it.each([false, true])('retains incident and baseline on impossible imported pause history (%s)', async (mixed) => {
+    const { sim, replay } = incident()
+    sim.update(0.1)
+    await replay.rewind(replay.checkpoint())
+    const previous = structuredClone(sim.state)
+    const record = replay.exportRecord()
+    const point = replay.checkpoint()
+    const comparison = replay.compare()
+    const bad = { ...record, ticks: mixed ? 2 : 1,
+      steps: [{ count: mixed ? 2 : 1, dt: 0.1, kind: 'advance' }],
+      actions: mixed ? [
+        { tick: 0, type: 'knob', key: 'paused', value: true },
+        { tick: 1, type: 'end-trace' },
+      ] : [],
+    }
+    await expect(replay.loadRecord(bad)).rejects.toThrow()
+    expect(sim.state).toEqual(previous)
+    expect(replay.exportRecord()).toEqual(record)
+    expect(replay.checkpoint()).toEqual(point)
+    expect(replay.compare()).toEqual(comparison)
+    replay.dispose()
+  })
+})
+
 describe('deliberate model stepping during replay recording', () => {
   it('reconstructs the complete five-checkpoint vacuum investigation', async () => {
     const { sim, replay } = incident(0xc0ffee)
