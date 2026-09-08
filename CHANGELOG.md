@@ -297,7 +297,7 @@ A maintenance release; the graphics and learning redesign remains in review.
   gate still rejects unreviewed newer releases. The 219th match is the reviewed
   version label, not an additional modeled mechanism. Logical-decoding guidance now
   includes the trusted output-plugin allowlist; PGlite remains separately
-  labeled as PostgreSQL 18.3. See [the reference review](POSTGRESQL-REFERENCE-REVIEW.md)
+  labeled as PostgreSQL 18.3. See [the reference review](blueprints/POSTGRESQL-REFERENCE-REVIEW.md)
   for evidence and coverage limits.
 - The CDP profile guard that keeps two concurrent screenshot runs from deleting
   each other's live Chrome profile only worked on Linux. `profileIsInUse()` read
@@ -619,7 +619,7 @@ automatically.
 
 Staging the city's operational advice on real PostgreSQL 13, 17 and 18 — not
 reading it, but following it literally as a tired operator would — produced five
-findings, recorded in `ADVICE-AUDIT.md`.
+findings, recorded in `blueprints/ADVICE-AUDIT.md`.
 
 Read together they were not five content errors but one structural one: **the
 correct qualification already existed in the city, just not where the operator
@@ -670,7 +670,7 @@ the fix and were killed with exact-boundary assertions.
 
 The harness mutates 228 of 95,553 production lines — **0.239%**, across 30 of
 144 eligible files. A mutation tool that silently sampled would be worse than
-none, because a green run reads as proof; `MUTATION-AUDIT.md` states exactly
+none, because a green run reads as proof; `blueprints/MUTATION-AUDIT.md` states exactly
 what it reaches and what it cannot.
 
 ### Fixed — seventy-six things you could only see by walking
@@ -781,7 +781,7 @@ guidance in the prefilled body.
 
 ### Added — the oracle checks what the audit claimed it checked
 
-`ORACLE-AUDIT.md` stated the oracle implemented all ten server-checkable areas.
+`blueprints/ORACLE-AUDIT.md` stated the oracle implemented all ten server-checkable areas.
 Four were only partial. `machineIndexWalk` was the worst: it ran look-alike SQL
 and accepted any single row, so it was barely checking anything.
 
@@ -957,7 +957,7 @@ at initdb and cannot change afterwards. Found by the oracle, not by reading.
 - **The city's layout in words** — districts, containment, adjacency and the
   reason each adjacency is meaningful, generated from `layout.ts` so it cannot
   drift, with a test that fails if a district exists in one and not the other.
-  It closes the layout gap `ACCESSIBILITY.md` named; it does not pretend to
+  It closes the layout gap `blueprints/ACCESSIBILITY.md` named; it does not pretend to
   replace the walk.
 - The oracle reached **211 checks**, now covering WAL segment size, wait-event
   mappings, connection-local session behaviour and the remaining page-layout
@@ -981,7 +981,7 @@ measured receipt: … 1 row. **Modelled architecture replay complete.**"*, and a
 replay stage as *"Modelled architecture replay, stage 1 of N … PostgreSQL
 measurements are reported separately in the receipt."*
 
-`ACCESSIBILITY.md` records the structural limits honestly rather than covering
+`blueprints/ACCESSIBILITY.md` records the structural limits honestly rather than covering
 them with labels. A first-person walk through a 3D city will not work without
 sight; what matters is that the lessons are reachable another way, and where a
 mechanism is taught only through geometry that is named as a gap.
@@ -1002,7 +1002,7 @@ hues all survive. Key Design Rule 4 says meaning must survive degradation while
 decoration need not; that is now measured rather than assumed, and the colour,
 disclosure and touch tests sweep the tier axis.
 
-City chunk: **+6 bytes**. `TIER-AUDIT.md` records what each tier removes.
+City chunk: **+6 bytes**. `blueprints/TIER-AUDIT.md` records what each tier removes.
 
 ### Fixed — vacuum can succeed and still not return space
 
@@ -1075,7 +1075,7 @@ serve the standby audit, which needs real 18 binaries; a PGDG install costs
 audit** rather than a push gate, because it legitimately reports four deliberate
 model divergences and a gate that cries wolf gets ignored.
 
-`ORACLE-AUDIT.md` records the boundary explicitly: which registered claims are
+`blueprints/ORACLE-AUDIT.md` records the boundary explicitly: which registered claims are
 mechanically checkable against a server, and which — model calibration,
 PgBouncer/WAL-G/PGlite behaviour, product thresholds, UI routing — are not.
 
@@ -1693,7 +1693,7 @@ about different versions.
 
 ### Deliberately left
 
-Four structural findings are deferred rather than fixed, and `KNOB-AUDIT.md` is
+Four structural findings are deferred rather than fixed, and `blueprints/KNOB-AUDIT.md` is
 marked re-verified with its stale line references labelled historical rather than
 silently rewritten.
 
@@ -1842,7 +1842,7 @@ leader, and promotion without the DCS is forbidden — which is what prevents
 split-brain. Quorum membership, asymmetric partitions, watchdog failure and DCS
 failsafe mode are **explicitly excluded and disclosed** rather than implied.
 
-Knob verdicts 30–33 added to `KNOB-AUDIT.md`. Chunk +12.79 kB.
+Knob verdicts 30–33 added to `blueprints/KNOB-AUDIT.md`. Chunk +12.79 kB.
 
 ---
 
@@ -1866,7 +1866,7 @@ stayed healthy, then recovered to 221 KiB. A slot held for a node that is not
 there is one of the most valuable operational lessons available, and it is now
 demonstrable rather than described.
 
-Three knob verdicts added to `KNOB-AUDIT.md`: `standbyBEnabled`,
+Three knob verdicts added to `blueprints/KNOB-AUDIT.md`: `standbyBEnabled`,
 `standbyBNetworkLag` and `standbyBSlowApply`, all correct with recovery.
 
 No failover, promotion, election, Patroni or rewind. Leader opinions are
@@ -2174,7 +2174,7 @@ because vacuum does not return space to the filesystem.
 
 ### The simulation stops lying about the last of its knobs
 
-`KNOB-AUDIT.md` graded ten of twenty-three knobs WRONG. The two worst were fixed
+`blueprints/KNOB-AUDIT.md` graded ten of twenty-three knobs WRONG. The two worst were fixed
 in 0.13.0; these are the remaining four root causes, and they close the audit.
 
 - **A backend paid nothing for evicting a dirty buffer**, so the background
@@ -2303,7 +2303,7 @@ identity in a browser tab.
 
 ### The simulation stops teaching two falsehoods
 
-A measured audit of all 23 knobs (`KNOB-AUDIT.md`) graded 13 correct and 10
+A measured audit of all 23 knobs (`blueprints/KNOB-AUDIT.md`) graded 13 correct and 10
 wrong. Two shared root causes behind most of them are fixed.
 
 - **Turning autovacuum off was rewarded with roughly 2x throughput.** Vacuum

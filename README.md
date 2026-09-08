@@ -58,7 +58,7 @@ they do not establish complete coverage or make this model an emulator.
 
 Lessons include keyboard and text-first routes; the 3D scene and first-person
 walk do not have a nonvisual equivalent. Touch verification has used browser
-emulation, not physical devices. [Accessibility and alternatives](ACCESSIBILITY.md).
+emulation, not physical devices. [Accessibility and alternatives](blueprints/ACCESSIBILITY.md).
 
 ---
 
@@ -343,7 +343,7 @@ affecting the application.
 ## Roadmap
 
 Follow the [living delivery roadmap](https://github.com/NikolayS/PGSimCity/issues/10)
-for current milestones and the [technical roadmap](ROADMAP.md) for longer-term
+for current milestones and the [technical roadmap](blueprints/ROADMAP.md) for longer-term
 direction. See [releases](https://github.com/NikolayS/PGSimCity/releases) for what
 is actually shipped.
 

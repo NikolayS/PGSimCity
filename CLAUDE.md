@@ -247,7 +247,7 @@ proves the code does what it was told, never that what it was told is true.
   interesting finding available and must be resolved, not averaged.
 - **Adversarial framing.** Reviewers are asked what is *wrong*, ranked by how
   badly it would mislead a reader — not asked whether the work is good.
-- **Prior audits are claims, not ground truth.** `KNOB-AUDIT.md` and every
+- **Prior audits are claims, not ground truth.** `blueprints/KNOB-AUDIT.md` and every
   earlier review were produced by a single agent and must be re-verifiable.
 
 **Reviewers do not fix.** They report with file, line, the claim, and what is

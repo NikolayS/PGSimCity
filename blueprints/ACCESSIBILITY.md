@@ -17,11 +17,11 @@ is not. This document records the boundary honestly; it is not a claim that the
 - Press `T` for the guided tour. Its fourteen chapter titles and explanations
   are live text, and its Previous, Play/Pause, Next, chapter, and Exit controls
   are ordinary buttons.
-- [Diagnose](observability/) is a text decision tree over the model. Each step
+- [Diagnose](../observability/) is a text decision tree over the model. Each step
   states why to read a view, provides the query, renders a table, and offers
   keyboard-operable branches. Each verdict binds its diagnosis to the
   qualification that explains it.
-- [The Machine](machine/) provides a labelled SQL prompt, a live psql transcript,
+- [The Machine](../machine/) provides a labelled SQL prompt, a live psql transcript,
   textual PostgreSQL receipts, and keyboard-contained comparison and index-walk
   dialogs. Its `P` and `M` medallions are exposed as “PostgreSQL source” and
   “Modelled source”; the distinction is not left to colour or the glyph.

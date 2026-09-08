@@ -1274,7 +1274,7 @@ describe('claims and conventions spine', () => {
     )
     expect(read('machine/comparison.js'), 'Machine:comparison does not consume the owned claim')
       .toContain('MACHINE_SYNCHRONOUS_COMMIT_COMPARISON as claim')
-    const roadmap = read('ROADMAP.md')
+    const roadmap = read('blueprints/ROADMAP.md')
     expect(roadmap, 'Machine:comparison remains described as future work')
       .toContain('**Shipped — controlled comparison.**')
     expect(roadmap, 'Machine:comparison roadmap still claims two PostgreSQL executions')

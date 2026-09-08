@@ -44,7 +44,7 @@ describe('build marker', () => {
     expect(contributing).toContain('CHROME_BIN')
     expect(contributing).toContain("npm test -- --exclude '**/*.browser.test.*'")
 
-    const roadmap = read('ROADMAP.md')
+    const roadmap = read('blueprints/ROADMAP.md')
     expect(roadmap).toMatch(/starts at the `high` quality tier[^.]+`medium`[^.]+`reduced`[^.]+`low`/i)
     expect(roadmap).not.toContain('Modest hardware falls to the `reduced` quality tier')
   })
