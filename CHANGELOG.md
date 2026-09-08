@@ -20,6 +20,8 @@ are all still moving. Expect breaking changes between minor versions.
   retaining pause, the selected speed and investigation notes. Existing
   model-event visuals advance with the requested step, including under
   reduced motion; no continuous playback is required.
+- Keep the phone investigation panel above the actual bottom dock, so paused
+  stepping remains touchable while viewing evidence or editing notes.
 - A bounded model-owned advance API shares normal simulation subdivisions and
   event paths. Deliberate advancement consumes model seconds, not wall time.
 

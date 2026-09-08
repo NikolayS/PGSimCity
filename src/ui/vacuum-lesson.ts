@@ -221,10 +221,15 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     if (!opened) return
     const bottom = document.getElementById('hud-top')?.getBoundingClientRect().bottom ?? 0
     panel.style.setProperty('--vacuum-top', `${Math.max(78, Math.ceil(bottom) + 12)}px`)
+    const dock = document.getElementById('hud-bottom')?.getBoundingClientRect()
+    const dockClearance = dock?.height ? window.innerHeight - dock.top + 8 : 122
+    panel.style.setProperty('--vacuum-bottom', `${Math.max(82, Math.ceil(dockClearance))}px`)
   }
   const toolbar = document.getElementById('hud-top')
   const toolbarObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(positionPanel)
   if (toolbar) toolbarObserver?.observe(toolbar)
+  const dock = document.getElementById('hud-bottom')
+  if (dock) toolbarObserver?.observe(dock)
   window.addEventListener('resize', positionPanel)
 
   function announce(text: string): void { setText(announcement, text) }

@@ -24,7 +24,17 @@ describe('paused workload stepping', () => {
       await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: phone.x, y: phone.y }] })
       await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
       const touch = await evaluate(`({ t: window.PGSIMCITY.sim.state.t, paused: window.PGSIMCITY.sim.state.knobs.paused })`)
-      return { initial, after, phone, touch }
+      const lessonClear = await evaluate(`new Promise(resolve => {
+        document.querySelector('.hud-investigate').click()
+        document.querySelector('.vacuum-lesson__notes').open = true
+        requestAnimationFrame(() => {
+          const b = document.querySelector('.hud-step'), r = b.getBoundingClientRect()
+          const hit = document.elementFromPoint(r.x + r.width/2, r.y + r.height/2)
+          const panel = document.querySelector('.vacuum-lesson').getBoundingClientRect()
+          resolve((hit === b || b.contains(hit)) && panel.bottom <= r.top)
+        })
+      })`)
+      return { initial, after, phone, touch, lessonClear }
     })
     const r = reports[0]
     expect(r.after.t - r.initial.t).toBeCloseTo(0.1, 10)
@@ -34,5 +44,6 @@ describe('paused workload stepping', () => {
     expect(r.phone.text).toContain('0.1 model s')
     expect(r.touch.t - r.after.t).toBeCloseTo(0.1, 10)
     expect(r.touch.paused).toBe(true)
+    expect(r.lessonClear).toBe(true)
   }, 180_000)
 })
