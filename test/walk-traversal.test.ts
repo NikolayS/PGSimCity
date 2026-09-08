@@ -126,7 +126,7 @@ const STRUCTURES: TraversalRoute[] = [
     ...solidRoute('storage.index-mast', [-96, -52, 30], [-104, -52, 30]),
     jumpEveryFrames: 12,
   },
-  solidRoute('maintenance.depot-post', [-216, 0.62, -33], [-223.4, 0.62, -33]),
+  solidRoute('maintenance.dock-housing', [-216, 0.62, -26], [-224, 0.62, -26]),
   solidRoute('maintenance.yard-rail', [-180, 0.62, -55], [-180, 0.62, -64]),
   solidRoute('excavation.wall', [108, -60, 80], [118, -60, 80]),
   ...structureProbes({ id: 'standby.b', at: [-112, 0.02, 262], halfX: 5, halfZ: 4 }),
