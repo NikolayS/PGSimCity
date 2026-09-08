@@ -5647,6 +5647,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
 
     rep.logicalEnabled = K.walLevel === 'logical'
     if (rep.logicalEnabled) {
+      const beforeDecodeLsn = rep.logicalSlotLsn
       rep.logicalSlotLsn = Math.floor(
         Math.min(
           wal.flushLsn,
@@ -5656,7 +5657,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       const changes = stats.tps * K.writeRatio * 1.4
       rep.logicalChangesPerSec = damp(rep.logicalChangesPerSec, changes, 2, dt)
       logicalAcc += dt
-      if (logicalAcc > 0.12) {
+      if (logicalAcc > 0.12 && rep.logicalSlotLsn > beforeDecodeLsn) {
         logicalAcc = 0
         flow('logical.decode', 1, 'stream', 1.1)
       }
