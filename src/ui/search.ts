@@ -652,7 +652,7 @@ export function createSearch(ctx: UiContext): UiModule {
     // Never open or operate an unseen palette behind another dialog's controls.
     const target = e.target instanceof Element ? e.target : null
     const owner = target?.closest('dialog[open]') ?? target?.closest('[aria-modal="true"]') ?? target?.closest('[role="dialog"]')
-    if (owner && owner !== overlay) return
+    if (owner && owner !== dialog) return
     const mod = e.ctrlKey || e.metaKey
 
     if (!open) {

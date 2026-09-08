@@ -12,6 +12,19 @@ function key(target: HTMLElement, value: string, ctrlKey = false): Event {
 }
 
 describe('search keyboard modal ownership', () => {
+  it.each(['Escape', 'k'])('handles %s from its own focused input', (value) => {
+    installTestDom()
+    const search = createSearch({ bus: createBus(), registry: { get: () => undefined } } as unknown as UiContext)
+    try {
+      key(document.body, '/')
+      const input = document.querySelector<HTMLInputElement>('#pal-input')!
+      input.focus()
+      expect(document.body.classList.contains('pg-palette-open')).toBe(true)
+      expect(key(input, value, value === 'k').defaultPrevented).toBe(true)
+      expect(document.body.classList.contains('pg-palette-open')).toBe(false)
+    } finally { search.dispose() }
+  })
+
   it.each(['native', 'aria', 'replay'])('does not open behind an active %s dialog', (kind) => {
     installTestDom()
     const search = createSearch({ bus: createBus(), registry: { get: () => undefined } } as unknown as UiContext)

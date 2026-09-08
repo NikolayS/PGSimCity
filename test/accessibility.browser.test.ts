@@ -27,6 +27,10 @@ describe('keyboard and screen-reader lesson routes', () => {
       readySelector: '.city-words',
     }], async ({ accessibilityTree, evaluate, keyPress, page, viewport }) => {
       await keyPress('/', { code: 'Slash' })
+      // Palette focus is scheduled after it is unhidden. Exercise the focused
+      // input route, not a race where Enter still targets the city canvas.
+      await evaluate(`new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+      expect(await evaluate(`document.activeElement?.id`)).toBe('pal-input')
       await evaluate(`(() => {
         const input = document.querySelector('#pal-input')
         input.value = 'city in words'

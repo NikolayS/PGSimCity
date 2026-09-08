@@ -15,6 +15,7 @@ are all still moving. Expect breaking changes between minor versions.
 - Keep the working city visible in portrait Home and Day/Night, with quieter survey lines and legible matte night structures. Normal phone WAL, buffer-pool and backend destinations fit the visible space between instruments and transport; both phone latency values retain their model qualification.
 - Enlarge model-sampled traffic without increasing its event count. Remove duplicate or timer-invented backend, mapping, connection, logical-decoding and standby-B transport. Reduced motion replaces traversal with coalesced, stationary recent-model-activity marks; live preference changes clear the previous presentation and pause preserves it.
 - Returning Home closes the focus-only Query lab immediately, including while paused; a later deliberate workload step cannot reopen a previously focused lab.
+- Restore command-palette keyboard activation and dismissal after its input receives focus, while preserving isolation from other dialogs.
 - Limits: traffic is sampled and illustrative, not a throughput or byte counter. Stationary marks represent recent activity, not occupancy or exact wall-time history. Other illustrative paths remain; software-rendered evidence does not establish named-device performance. This is a city architecture and visibility capability, not completion of the broader graphics evaluation.
 
 ## 0.52.0 — 2026-09-08
