@@ -11,6 +11,16 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+## [0.44.1] - 2026-09-08
+
+### Fixed
+
+- Stack the heap-anatomy snapshot comparison on phones so writer text no longer
+  collides with snapshot cards. Wrap row-version cards into two columns and use
+  an opaque phone panel to keep the city from bleeding through the explanation.
+- Desktop layout and PostgreSQL simulation behavior are unchanged. Long chains
+  use vertical scrolling; this repair does not add new anatomy interactions.
+
 ## [0.44.0] - 2026-09-08
 
 ### Added
