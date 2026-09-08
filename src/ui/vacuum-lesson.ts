@@ -1,4 +1,5 @@
 import '../styles/vacuum-lesson.css'
+import { createVacuumObservation, type VacuumCheckpointKind } from '../sim/vacuum-observation'
 
 import type { SimState } from '../core/types'
 import { lessonShareUrl } from '../core/lesson-route'
@@ -29,6 +30,11 @@ export interface VacuumLessonOptions {
 }
 
 const TABLE = 'storage.table.sessions'
+const CHECKPOINT_LABELS: Record<VacuumCheckpointKind, string> = {
+      pinned: 'Snapshot retained', released: 'Snapshot released',
+      eligible: 'Cleanup horizon advanced', collected: 'Sessions collection observed',
+    }
+
 const EVIDENCE_COPY: Record<VacuumEvidenceId, { title: string; source: string; guidance: string; focus: string }> = {
   table: {
     title: 'Table health', source: 'Live model · pg_stat_user_tables vocabulary', focus: TABLE,
@@ -64,6 +70,9 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
   let observedWorker = ''
   let observedWorkerSlot = -1
   let tableIndex = 0
+  let journey: ReturnType<typeof createVacuumObservation> | null = null
+  let seekTimer: ReturnType<typeof setTimeout> | undefined
+  let checkpointCount = 0
   const reading: VacuumReading = {
     time: 0, deadRows: 0, initialDeadRows: 0, pages: 0, initialPages: 0,
     scanObserved: false, snapshotAge: 0, horizon: 0, pinned: false,
@@ -142,6 +151,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     type: 'button', class: 'pg-btn vacuum-lesson__primary', text: 'End the abandoned session now',
     data: { vacuumRecover: '' }, on: { click: () => {
       if (state.phase !== 'observing' || !state.evidence.owner || !ctx.sim.recoverScenario()) return
+      stopSeeking()
       announce('The abandoned transaction has ended. Now verify that cleanup actually resumes.')
       focus(TABLE)
       refresh()
@@ -203,13 +213,66 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     class: 'vacuum-lesson__disclosure', data: { disclosure: 'vacuum-model' },
     text: 'City model, not PostgreSQL execution. Pages and row versions are representative samples; relation counts are aggregate model state. VACUUM normally makes space reusable inside the file. A smaller file is not required to verify cleanup.',
   })
+  const checkpointList = el('ol', { class: 'vacuum-lesson__checkpoints', data: { vacuumCheckpoints: '' } })
+  const seekStatus = el('p', { role: 'status', 'aria-live': 'polite', data: { vacuumSeekStatus: '' } })
+  const seekButton = el('button', {
+    type: 'button', class: 'pg-btn', text: 'Advance to next observation', data: { vacuumSeek: '' },
+    on: { click: () => {
+      if (!journey) return
+      if (journey.status === 'running') { stopSeeking(); refresh(); return }
+      setTiming('paused', true)
+      if (!journey.start()) return
+      refresh()
+      seekTimer = setTimeout(seekBatch, 0)
+    } },
+  })
+  const causal = el('section', { class: 'vacuum-lesson__causal' },
+    el('h3', { text: 'Causal checkpoints' }),
+    el('p', { text: 'Pause at an observation: retained snapshot → release → eligibility → sessions collection. Each advance searches at most 900 model s in 0.1 s steps. Cancel keeps the reached state. The city displays sampled states, not a replay of every intermediate event.' }),
+    seekButton, seekStatus, checkpointList,
+  )
+
+  function stopSeeking(): void {
+    clearTimeout(seekTimer)
+    seekTimer = undefined
+    journey?.cancel()
+  }
+
+  function seekBatch(): void {
+    seekTimer = undefined
+    if (!opened || !journey) return
+    journey.tick()
+    refresh()
+    if (journey.status === 'running') seekTimer = setTimeout(seekBatch, 0)
+  }
+
+  function renderCheckpoints(): void {
+    if (!journey) return
+    while (checkpointCount < journey.checkpoints.length) {
+      const c = journey.checkpoints[checkpointCount++]
+      checkpointList.append(el('li', { data: { checkpoint: c.kind } },
+        el('strong', { text: `${CHECKPOINT_LABELS[c.kind]} · model ${c.time.toFixed(1)} s` }),
+        el('p', { text: `Observed XID horizon ${fmtNum(c.horizon)}; sessions: ${fmtNum(c.deadRows)} dead versions, ${fmtBytes(c.pages * 8192)} relation; ${fmtNum(c.reclaimed)} versions reclaimed after release.` }),
+      ))
+    }
+    const running = journey.status === 'running'
+    setText(seekButton, running ? 'Cancel advance' : 'Advance to next observation')
+    seekButton.disabled = journey.checkpoints.at(-1)?.kind === 'collected'
+    setText(seekStatus, running ? `Searching · ${journey.advanced.toFixed(1)} / 900 model s advanced`
+      : journey.status === 'exhausted' ? 'Budget reached: no new checkpoint within 900 model s. Evidence remains saved; inspect the retained snapshot and settings before continuing.'
+        : journey.status === 'cancelled' ? `Cancelled after ${journey.advanced.toFixed(1)} model s. The model stays at the reached state.`
+          : journey.status === 'unavailable' ? 'Advance stopped: the model resumed or the scenario changed.'
+            : journey.status === 'observed' ? 'Observation reached. Inspect the saved checkpoint before advancing or choosing an intervention.'
+              : 'Checkpoints are saved for this attempt, not across reloads. Advancing pauses the model and preserves your notes.')
+  }
+
   const panel = el('section', {
     class: 'vacuum-lesson pg-panel', hidden: true, 'aria-labelledby': 'vacuum-lesson-title',
   },
   el('header', { class: 'vacuum-lesson__head' },
     el('div', { class: 'vacuum-lesson__meta' }, modeLabel, clock), closeButton, title, phaseLabel),
   el('div', { class: 'vacuum-lesson__body' },
-    evidenceNav, evidenceDetail, causes, decision, observation, announcement,
+    causal, evidenceNav, evidenceDetail, causes, decision, observation, announcement,
     el('div', { class: 'vacuum-lesson__tools' }, pageButton, pauseButton, hintButton, challengeButton, shareButton, shareLink),
     el('details', { class: 'vacuum-lesson__notes' }, notebookSummary, notebook,
       el('label', { htmlFor: 'vacuum-personal-notes', text: 'Your notes' }), notes,
@@ -317,6 +380,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
         sample()
         const next = chooseVacuumAction(state, action, reading)
         if (next === state || !ctx.sim.chooseScenario(action === 'terminate' ? 'terminate-transaction' : 'wait-for-transaction')) return
+        stopSeeking()
         state = next
         announce(action === 'terminate'
           ? 'The transaction ended. Releasing a snapshot makes cleanup possible; it does not itself reclaim the bytes.'
@@ -343,6 +407,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
   }
 
   function render(): void {
+    renderCheckpoints()
     panel.dataset.phase = state.phase
     const count = VACUUM_EVIDENCE.filter((id) => state.evidence[id]).length
     setText(modeLabel, state.mode === 'guided' ? 'Guided investigation' : 'Challenge · evidence first')
@@ -389,7 +454,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     retry.hidden = state.phase === 'investigating'
   }
 
-  function refresh(): void { sample(); render() }
+  function refresh(): void { sample(); journey?.observe(); render() }
 
   function open(mode: VacuumLessonMode = 'guided'): void {
     if (opened) return
@@ -416,6 +481,9 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     changingScenario = true
     ctx.sim.runScenario('vacuum-blockade')
     ownedDecision = ctx.sim.state.scenarioDecision
+    journey = createVacuumObservation(ctx.sim)
+    checkpointCount = 0
+    checkpointList.replaceChildren()
     changingScenario = false
     tableIndex = ctx.sim.state.tables.findIndex((table) => table.def.id === 'sessions')
     reading.initialDeadRows = ctx.sim.state.tables[tableIndex].deadTuples
@@ -431,6 +499,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
 
   function close(stopScenario = true, restoreTiming = true): void {
     if (!opened) return
+    stopSeeking()
     opened = false
     panel.hidden = true
     panel.remove()
@@ -454,7 +523,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     ctx.bus.on('sim:reset', () => close(false, false)),
     ctx.bus.on('knob', ({ key }) => {
       if (!opened || changingTiming) return
-      if (key === 'paused') restorePaused = false
+      if (key === 'paused') { stopSeeking(); restorePaused = false }
       if (key === 'timeScale') restoreTimeScale = false
     }),
     ctx.bus.on('tour:start', () => close()),

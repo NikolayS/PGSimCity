@@ -278,3 +278,22 @@ body.pg-vacuum-lesson .tour-narrate {
     scroll-behavior: auto;
   }
 }
+
+.vacuum-lesson__causal {
+  padding-bottom: 12px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--line-hard);
+}
+
+.vacuum-lesson__checkpoints {
+  padding-left: 22px;
+}
+
+.vacuum-lesson__checkpoints li {
+  padding: 4px 0 4px 8px;
+  border-left: 3px solid var(--c-vacuum);
+}
+
+.vacuum-lesson__checkpoints p {
+  font-size: 12px;
+}

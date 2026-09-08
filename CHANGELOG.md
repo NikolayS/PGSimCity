@@ -9,6 +9,13 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## 0.49.0 — 2026-09-08
+
+- Vacuum investigation can pause and advance to the next observed causal checkpoint: retained snapshot, release, advanced cleanup horizon, then actual sessions-table collection.
+- Each request searches at most 900 model seconds in normal 0.1-second model steps, yields for cancellation and reports budget exhaustion without inventing recovery. Pause and learner notes are retained.
+- Checkpoints retain observed model time, cleanup horizon, sessions dead versions, relation bytes and post-release collection throughout the attempt. Ending a transaction is not collection; reusable space is not automatic file shrinkage.
+- This is observation navigation, not rewind or intermediate-event animation replay. Evidence is retained for the current attempt, not across reloads. Normal-distance physical indicators and broader phone scene visibility remain follow-up work.
+
 ## [Unreleased]
 
 ## [0.48.0] - 2026-09-08

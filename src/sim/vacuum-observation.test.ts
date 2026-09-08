@@ -1,0 +1,73 @@
+import { expect, it } from 'vitest'
+import { createBus } from '../core/bus'
+import { createSim } from './model'
+import { createVacuumObservation } from './vacuum-observation'
+
+it('stops at real ordered observations with retained table evidence at default cadence', () => {
+  const sim = createSim(createBus())
+  sim.runScenario('vacuum-blockade')
+  sim.setKnob('paused', true)
+  const journey = createVacuumObservation(sim)
+  const seek = () => {
+    expect(journey.start()).toBe(true)
+    for (let i = 0; i < 1000 && journey.status === 'running'; i++) journey.tick()
+    expect(journey.status).toBe('observed')
+  }
+  seek()
+  expect(journey.checkpoints.map(c => c.kind)).toEqual(['pinned'])
+  const pinned = structuredClone(journey.checkpoints[0])
+  expect(pinned.pinned).toBe(true)
+  expect(sim.chooseScenario('terminate-transaction')).toBe(true)
+  journey.observe()
+  expect(journey.checkpoints.map(c => c.kind)).toEqual(['pinned', 'released'])
+  expect(journey.checkpoints[1].reclaimed).toBe(0)
+  seek()
+  expect(journey.checkpoints.map(c => c.kind)).toEqual(['pinned', 'released', 'eligible'])
+  expect(journey.checkpoints[2].horizon).toBeGreaterThan(pinned.horizon)
+  expect(journey.checkpoints[2].reclaimed).toBe(0)
+  seek()
+  expect(journey.checkpoints.map(c => c.kind)).toEqual(['pinned', 'released', 'eligible', 'collected'])
+  expect(journey.checkpoints[3].reclaimed).toBeGreaterThan(0)
+  expect(journey.checkpoints[3].time).toBeGreaterThan(journey.checkpoints[2].time)
+  expect(journey.checkpoints[3].pages).toBeGreaterThanOrEqual(pinned.pages)
+  expect(journey.checkpoints[0]).toEqual(pinned)
+  expect(sim.state.realT).toBe(0)
+  expect(sim.state.knobs.paused).toBe(true)
+  expect(journey.start()).toBe(false)
+})
+
+it('bounds work, cancels without extra advancement and rejects running or replaced scenarios', () => {
+  const sim = createSim(createBus())
+  sim.runScenario('vacuum-blockade')
+  const journey = createVacuumObservation(sim)
+  expect(journey.start()).toBe(false)
+  sim.setKnob('paused', true)
+  expect(journey.start()).toBe(true)
+  journey.tick()
+  expect(journey.advanced).toBeCloseTo(10)
+  journey.cancel()
+  const t = sim.state.t
+  journey.tick()
+  expect(sim.state.t).toBe(t)
+  expect(journey.status).toBe('cancelled')
+  journey.start()
+  sim.runScenario('vacuum-blockade')
+  journey.tick()
+  expect(journey.status).toBe('unavailable')
+  expect(sim.state.t).toBe(t)
+})
+
+it('reports exhaustion rather than inventing a checkpoint when the snapshot remains held', () => {
+  const sim = createSim(createBus())
+  sim.runScenario('vacuum-blockade')
+  sim.setKnob('paused', true)
+  const journey = createVacuumObservation(sim)
+  journey.start()
+  while (journey.status === 'running') journey.tick()
+  expect(sim.chooseScenario('wait-for-transaction')).toBe(true)
+  journey.start()
+  for (let i = 0; i < 100 && journey.status === 'running'; i++) journey.tick()
+  expect(journey.status).toBe('exhausted')
+  expect(journey.advanced).toBeCloseTo(900, 5)
+  expect(journey.checkpoints.map(c => c.kind)).toEqual(['pinned'])
+})
