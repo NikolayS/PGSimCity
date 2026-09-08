@@ -577,3 +577,58 @@ describe('bounded incident replay', () => {
     replay.dispose()
   })
 })
+
+describe('comparison evidence provenance', () => {
+  it('preserves original and alternative interventions with owned checkpoint metadata', async () => {
+    const { sim, replay } = incident(42)
+    sim.setKnob('tps', 700)
+    sim.update(1 / 30)
+    const checkpoint = replay.checkpoint()
+    sim.setKnob('workMem', 4)
+    sim.update(1 / 30)
+    await replay.rewind(checkpoint)
+    sim.setKnob('workMem', 64)
+    await replay.runToComparison()
+    const result = replay.compare()!
+    expect(result.seed).toBe(42)
+    expect(result.checkpoint).toEqual(checkpoint)
+    expect(result.baselineActions).toEqual([{ tick: 1, type: 'knob', key: 'workMem', value: 4 }])
+    expect(result.currentActions).toEqual([
+      { tick: 1, type: 'knob', key: 'workMem', value: 64 },
+      { tick: 2, type: 'knob', key: 'paused', value: true },
+    ])
+    result.checkpoint.tick = 999
+    result.baselineActions[0].tick = 999
+    result.currentActions.length = 0
+    expect(replay.compare()!.checkpoint).toEqual(checkpoint)
+    expect(replay.compare()!.baselineActions[0].tick).toBe(1)
+    expect(replay.compare()!.currentActions).toHaveLength(2)
+    await replay.rewind(checkpoint)
+    expect(replay.compare()!.baselineActions[0]).toEqual({ tick: 1, type: 'knob', key: 'workMem', value: 64 })
+    const exported = replay.exportRecord()
+    await replay.loadRecord(exported)
+    expect(replay.compare()).toBeNull()
+    sim.update(1 / 30)
+    await replay.rewind(0)
+    replay.reset()
+    expect(replay.compare()).toBeNull()
+    replay.dispose()
+  })
+})
+
+it('withholds comparison evidence during asynchronous reconstruction and advancement', async () => {
+  const { sim, replay } = incident()
+  run(sim, 128)
+  const rewinding = replay.rewind(64)
+  expect(replay.status.seeking).toBe(true)
+  expect(replay.compare()).toBeNull()
+  await rewinding
+  expect(replay.compare()).not.toBeNull()
+  const advancing = replay.advanceUntil(() => false, { maxTicks: 128 })
+  expect(replay.status.advancing).toBe(true)
+  expect(replay.compare()).toBeNull()
+  replay.cancelAdvance()
+  await advancing
+  expect(replay.compare()).not.toBeNull()
+  replay.dispose()
+})

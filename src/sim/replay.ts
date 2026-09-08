@@ -64,6 +64,16 @@ export interface ReplayOutcome {
   lostTransactions: number
 }
 
+export interface ReplayComparison {
+  baseline: ReplayOutcome
+  current: ReplayOutcome
+  sameDuration: boolean
+  seed: number
+  checkpoint: ReplayPoint
+  baselineActions: ReplayAction[]
+  currentActions: ReplayAction[]
+}
+
 const numericBounds: Partial<Record<keyof Knobs, readonly [number, number]>> = {
   tps: [0, 10_000], clientConnections: [1, 2000], defaultPoolSize: [1, 100],
   maxClientConn: [1, 2000], queryWaitTimeout: [0, 600], writeRatio: [0, 1],
@@ -222,6 +232,8 @@ export function createIncidentReplay(
   let busy = 0
   let disposed = false
   let baseline: ReplayOutcome | null = null
+  let comparisonCheckpoint: ReplayPoint | null = null
+  let baselineActions: ReplayAction[] = []
   let baselineDurations: Float64Array | null = null
   let baselineDeliberateTicks: Uint8Array | null = null
   const restoredListeners = new Set<() => void>()
@@ -386,6 +398,8 @@ export function createIncidentReplay(
     status.seekProgress = 0
     elapsed = 0
     baseline = null
+    comparisonCheckpoint = null
+    baselineActions = []
     baselineDurations = null
     baselineDeliberateTicks = null
     busy++
@@ -492,6 +506,8 @@ export function createIncidentReplay(
       requireValid()
       const target = pointAt(value)
       baseline = outcome()
+      comparisonCheckpoint = { ...target }
+      baselineActions = log.slice(target.actionCount, status.actionCount).map((entry) => ({ ...entry }))
       baselineDurations = durations.slice(0, status.tick)
       baselineDeliberateTicks = deliberateTicks.slice(0, status.tick)
       await seek(target)
@@ -529,10 +545,12 @@ export function createIncidentReplay(
         notify()
       }
     },
-    compare(): { baseline: ReplayOutcome; current: ReplayOutcome; sameDuration: boolean } | null {
-      if (!baseline || !status.valid) return null
+    compare(): ReplayComparison | null {
+      if (!baseline || !comparisonCheckpoint || !status.valid || status.seeking || status.advancing) return null
       const current = outcome()
-      return { baseline: { ...baseline }, current,
+      return { baseline: { ...baseline }, current, seed, checkpoint: { ...comparisonCheckpoint },
+        baselineActions: baselineActions.map((entry) => ({ ...entry })),
+        currentActions: log.slice(comparisonCheckpoint.actionCount, status.actionCount).map((entry) => ({ ...entry })),
         sameDuration: Math.abs(baseline.elapsedModelSeconds - current.elapsedModelSeconds) < 1e-7 }
     },
     exportRecord(): ReplayRecord {
@@ -592,6 +610,8 @@ export function createIncidentReplay(
       status.reason = ''
       status.totalTicks = record.ticks
       baseline = null
+      comparisonCheckpoint = null
+      baselineActions = []
       baselineDurations = null
       baselineDeliberateTicks = null
       await seek({ tick: record.ticks, actionCount: log.length })
