@@ -7,15 +7,11 @@ shows their interaction. Follow a query, investigate a growing table, or see
 what changes when memory, checkpoints and replication become bottlenecks.
 
 **[Explore the city](https://nikolays.github.io/PGSimCity/)** ·
-**[Watch the 34-second demo](https://github.com/NikolayS/PGSimCity/releases/download/v0.49.0/pgsimcity-smooth-desktop.mp4)** ·
 [Start an investigation](#start-here-investigate-a-vacuum-blockade)
 
 No installation. Runs in a browser with WebGL2.
 
-[![PGSimCity at golden hour: the buffer pool, backend avenue and surrounding PostgreSQL districts. Click to watch the desktop investigation demo.](docs/screenshot.png)](https://github.com/NikolayS/PGSimCity/releases/download/v0.49.0/pgsimcity-smooth-desktop.mp4)
-
-*Demo: scenario selection → investigation → page and tuple layouts.
-Recorded on v0.45.0; pacing edited and waiting accelerated. The app has evolved since.*
+[![PGSimCity at golden hour: the buffer pool, backend avenue and surrounding PostgreSQL districts. Click to explore the city.](docs/screenshot.png)](https://nikolays.github.io/PGSimCity/)
 
 [Featured in InfoQ · IBM Think · Gizmodo · GIGAZINE](#press-coverage)
 
