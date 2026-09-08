@@ -648,6 +648,11 @@ export function createSearch(ctx: UiContext): UiModule {
   }
 
   function onKeyDown(e: KeyboardEvent): void {
+    // This listener runs in capture phase, before any dialog can stop bubbling.
+    // Never open or operate an unseen palette behind another dialog's controls.
+    const target = e.target instanceof Element ? e.target : null
+    const owner = target?.closest('dialog[open]') ?? target?.closest('[aria-modal="true"]')
+    if (owner && owner !== overlay) return
     const mod = e.ctrlKey || e.metaKey
 
     if (!open) {

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { installTestDom } from '../../test/dom'
 import { createBus } from '../core/bus'
 import { createSim } from '../sim/model'
@@ -20,6 +20,23 @@ function setup() {
 }
 
 describe('incident replay panel', () => {
+  it('owns navigation keydown without consuming native defaults or input releases', () => {
+    setup()
+    const panel = document.querySelector('.pg-replay')!
+    for (const key of ['ArrowDown', 'PageDown', 'Home', 'o', 'p', 'Enter', ' ']) {
+      const event = new Event('keydown', { bubbles: true, cancelable: true })
+      Object.defineProperty(event, 'key', { value: key })
+      const stop = vi.spyOn(event, 'stopPropagation')
+      panel.dispatchEvent(event)
+      expect(stop, key).toHaveBeenCalledOnce()
+      expect(event.defaultPrevented, key).toBe(false)
+    }
+    const release = new Event('keyup', { bubbles: true })
+    const stopRelease = vi.spyOn(release, 'stopPropagation')
+    panel.dispatchEvent(release)
+    expect(stopRelease).not.toHaveBeenCalled()
+  })
+
   it('saves a genuine checkpoint and reconstructs that state after later work', async () => {
     const { sim, panel } = setup()
     sim.setKnob('workMem', 64)

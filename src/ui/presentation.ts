@@ -61,7 +61,8 @@ export function createPresentationExport(ctx: UiContext, gfx: RendererApi): Pres
   dialog.addEventListener('cancel', (event) => { event.preventDefault(); close() })
   // Native modal focus does not stop the city's window-level shortcuts.
   dialog.addEventListener('keydown', (event) => event.stopPropagation())
-  dialog.addEventListener('keyup', (event) => event.stopPropagation())
+  // Key releases must reach camera/walk controllers: a movement key may have
+  // been held before this dialog opened. Blocking its release latches movement.
   document.body.append(dialog)
 
   function open(): void {

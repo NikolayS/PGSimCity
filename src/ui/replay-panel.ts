@@ -153,7 +153,11 @@ export function createReplayPanel(ctx: UiContext, replay: IncidentReplay): Repla
     returnFocus?.focus()
   }
   const onKey = (event: KeyboardEvent): void => {
-    if (visible && event.key === 'Escape') { event.stopPropagation(); close() }
+    if (!visible) return
+    // Keep native scroll, button activation and editing inside the panel, but
+    // do not let those keydowns also steer the city. Keyup still clears input.
+    event.stopPropagation()
+    if (event.key === 'Escape') close()
   }
   panel.addEventListener('keydown', onKey)
   const offReset = ctx.bus.on('sim:reset', () => {
