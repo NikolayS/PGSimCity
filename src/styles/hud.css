@@ -191,11 +191,16 @@
 
 .hud-latency {
   pointer-events: auto;
-  position: relative;
-  z-index: var(--z-floating-overlay);
+  position: fixed;
+  z-index: var(--z-menu-popover);
+  top: var(--latency-top, 80px);
+  left: calc(var(--hud-gap) + var(--safe-l));
+  max-height: calc(100dvh - var(--latency-top, 80px) - 12px - var(--safe-b));
+  overflow-y: auto;
+  overscroll-behavior: contain;
   overflow-anchor: none;
-  width: min(820px, 100%);
-  margin-top: 6px;
+  width: min(820px, calc(100vw - 2 * var(--hud-gap) - var(--safe-l) - var(--safe-r)));
+  margin-top: 0;
   padding: 14px 16px;
   display: grid;
   grid-template-columns: 170px minmax(280px, 1fr);
@@ -206,6 +211,11 @@
   display: none;
 }
 .hud-latency__head {
+  position: sticky;
+  top: -14px;
+  z-index: var(--z-local-raised);
+  padding: 8px 0;
+  background: var(--bg-panel-solid);
   grid-column: 1 / -1;
   display: flex;
   align-items: start;
@@ -1557,9 +1567,6 @@ body.pg-walk.touch-walk-active .hud-walk {
     font-size: 9px;
   }
   .hud-latency {
-    width: 100%;
-    max-height: calc(100vh - 120px - var(--safe-t) - var(--safe-b));
-    overflow-y: auto;
     grid-template-columns: minmax(0, 1fr);
     gap: 12px;
     padding: 12px;

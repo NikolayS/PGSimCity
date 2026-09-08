@@ -19,18 +19,21 @@ it('frames live storage outside the notebook and restores the hidden layers', as
           const v=def.object.position.clone().set(x,y,z).project(p.gfx.camera);points.push({x:(v.x+1)*innerWidth/2,y:(1-v.y)*innerHeight/2,z:v.z});
         }
         const layers=['shmem','os.cache','storage.durability'].map(n=>p.gfx.scene.getObjectByName(n));
+        const indicator=document.querySelector('.vacuum-city-indicator'),badge=indicator.querySelector('.vacuum-city-indicator__badge').getBoundingClientRect();
+        const liveVisible=!indicator.hidden&&badge.bottom<=panel.top-4;
         const hidden=layers.every(o=>!o.visible),notice=document.querySelector('.vacuum-lesson__scene').textContent;
         const clock=p.sim.state.scenarioT;document.querySelector('#vacuum-personal-notes').value='Retain this note';
         document.querySelector('[data-vacuum-evidence="snapshot"]').click();
         const restored=layers.every(o=>o.visible),notes=document.querySelector('#vacuum-personal-notes').value,sameTime=p.sim.state.scenarioT===clock;
         document.querySelector('[data-vacuum-evidence="table"]').click();document.querySelector('.vacuum-lesson__close').click();
-        return {width:innerWidth,height:innerHeight,panel:{left:panel.left,top:panel.top},claimsBottom:claims.bottom,points,hidden,notice,restored,notes,closedRestored:layers.every(o=>o.visible),sameTime};
+        return {liveVisible,width:innerWidth,height:innerHeight,panel:{left:panel.left,top:panel.top},claimsBottom:claims.bottom,points,hidden,notice,restored,notes,closedRestored:layers.every(o=>o.visible),sameTime};
       })()`))
     }
     return states
   })
   for (const report of reports[0]) {
     expect(report.hidden).toBe(true)
+    if (report.width <= 640) expect(report.liveVisible).toBe(true)
     expect(report.notice).toContain('not removed from the model')
     expect(report.restored).toBe(true)
     expect(report.closedRestored).toBe(true)

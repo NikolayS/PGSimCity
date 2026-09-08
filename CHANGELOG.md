@@ -14,7 +14,10 @@ are all still moving. Expect breaking changes between minor versions.
 - Investigation camera fits the selected component beside the notebook on desktop and above it on phones. The phone notebook retains a scrollable evidence area while leaving room for the live city.
 - Storage evidence uses a labeled cutaway: shared-memory, OS-cache and durability overlays are hidden for presentation only. Snapshot evidence, ordinary focus, free flight/walking and lesson exit restore those layers; no simulation state is removed.
 - Saved worker evidence no longer focuses a worker slot that has since left the sessions table. Historical observations and notes remain retained; the city is live, not rewound.
-- This improves investigation framing, not the scale or causal animation of collection indicators. Normal-distance worker/collection readability and the broader visual transformation remain follow-up work.
+- Screen-readable live sessions annotations connect to the relation and current worker with distinct anchored markers. They distinguish current phase, horizon-constrained removal and actual per-pass collection from the retained sessions-only post-release count. The same non-animated values work with reduced motion; skipped intermediate states are not a replay.
+- Saved causal checkpoints locate their subject in the current city without changing model time or overwriting saved evidence. Each checkpoint links to the current representative page and row-version explanation, not a historical page reconstruction.
+- The latency explanation now has an opaque surface above close-view captions, bounded independent scrolling and a sticky reachable Close control. Dismissing it preserves the current city view.
+- This completes the visible investigation lens, not a district-wide visual redesign, deterministic replay, reload-persistent evidence or measured hardware performance.
 
 ## 0.49.0 — 2026-09-08
 

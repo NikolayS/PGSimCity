@@ -784,15 +784,27 @@ export function createHud(ctx: UiContext, options: { onInvestigate?: () => void 
     ],
     disclosure: true,
   })
-  topEl.append(topBar, latencyPanel)
+  topEl.append(topBar)
+  document.body.append(latencyPanel)
 
   const latencyVital = vitals.find((vital) => vital.def.key === 'latency')
+
+  function positionLatency(): void {
+    if (!latencyOpen) return
+    const bottom = topBar.getBoundingClientRect().bottom
+    latencyPanel.style.setProperty('--latency-top', `${Math.ceil(bottom) + 6}px`)
+  }
+  const latencyResize = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(positionLatency)
+  latencyResize?.observe(topBar)
+  window.addEventListener('resize', positionLatency)
+  cleanup.push(() => { latencyResize?.disconnect(); window.removeEventListener('resize', positionLatency) })
 
   function setLatencyOpen(open: boolean): void {
     const focusWasInside = latencyPanel.contains(document.activeElement)
     latencyOpen = open
     latencyPanel.hidden = !open
     if (open) {
+      positionLatency()
       latencyPanel.scrollTop = 0
       latencyClose.focus()
     } else if (focusWasInside) latencyVital?.root.focus()

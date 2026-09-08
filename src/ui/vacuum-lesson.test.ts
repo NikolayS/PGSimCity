@@ -83,6 +83,34 @@ describe('vacuum lesson in the live model', () => {
     expect(paragraph.textContent).toContain('There is no retained')
   })
 
+  it('focuses saved checkpoints without rewinding and links their storage explanation', () => {
+    const f = fixture()
+    const focuses: { id: string | null }[] = []
+    const anatomy: unknown[] = []
+    f.bus.on('focus', e => focuses.push(e))
+    f.bus.on('anatomy:open', e => anatomy.push(e))
+    f.lesson.open()
+    investigate(f)
+    const saved = document.querySelector('[data-checkpoint="pinned"]')!.textContent
+    button('[data-vacuum-action="terminate"]').click()
+    f.sim.setKnob('paused', true)
+    const time = f.sim.state.scenarioT
+    const notes = document.querySelector<HTMLTextAreaElement>('[data-vacuum-notes]')!
+    notes.value = 'Keep my evidence'
+    const checkpoint = button('[data-vacuum-checkpoint-focus="pinned"]')
+    expect(checkpoint).not.toBeNull()
+    checkpoint.click()
+    expect(focuses.at(-1)?.id).toBe('proc.array')
+    expect(f.sim.state.scenarioT).toBe(time)
+    expect(f.sim.state.knobs.longRunningXact).toBe(false)
+    expect(notes.value).toBe('Keep my evidence')
+    expect(document.querySelector('[data-checkpoint="pinned"]')!.textContent).toContain(saved!)
+    expect(document.querySelector('[data-vacuum-saved-context]')!.textContent).toContain('Saved snapshot')
+    expect(document.querySelector('[data-vacuum-saved-context]')!.textContent).toContain('not rewound')
+    button('[data-vacuum-checkpoint-page="released"]').click()
+    expect(anatomy.at(-1)).toEqual({ view: 'page', id: 'storage.table.sessions' })
+  })
+
   it('establishes the snapshot from statement pooling and restores pooling on exit', () => {
     const f = fixture()
     f.sim.setKnob('poolMode', 'statement')

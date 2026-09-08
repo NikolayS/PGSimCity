@@ -66,6 +66,7 @@ import { createHelp } from './ui/help'
 import { createControls } from './ui/controls'
 import { createInspector } from './ui/panel'
 import { createTour } from './ui/tour'
+import { createVacuumCityIndicator } from './engine/vacuum-city-indicator'
 import { createVacuumLesson } from './ui/vacuum-lesson'
 import { createSearch } from './ui/search'
 import { createCityWords } from './ui/city-words'
@@ -306,6 +307,7 @@ async function boot(): Promise<void> {
   })
   const ui: UiModule[] = [
     vacuumLesson,
+    createVacuumCityIndicator(uiCtx, gfx.camera, () => vacuumLesson.isOpen()),
     createHud(uiCtx, { onInvestigate: () => vacuumLesson.open() }),
     createTouchpad({ bus, walk }),
     controlCenter,

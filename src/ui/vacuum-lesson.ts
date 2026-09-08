@@ -217,6 +217,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     class: 'vacuum-lesson__disclosure', data: { disclosure: 'vacuum-model' },
     text: 'City model, not PostgreSQL execution. Pages and row versions are representative samples; relation counts are aggregate model state. VACUUM normally makes space reusable inside the file. A smaller file is not required to verify cleanup.',
   })
+  const savedContext = el('p', { class: 'vacuum-lesson__saved', data: { vacuumSavedContext: '' }, text: 'Select a saved checkpoint to locate its subject in the current city.' })
   const checkpointList = el('ol', { class: 'vacuum-lesson__checkpoints', data: { vacuumCheckpoints: '' } })
   const seekStatus = el('p', { role: 'status', 'aria-live': 'polite', data: { vacuumSeekStatus: '' } })
   const seekButton = el('button', {
@@ -233,7 +234,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
   const causal = el('section', { class: 'vacuum-lesson__causal' },
     el('h3', { text: 'Causal checkpoints' }),
     el('p', { text: 'Pause at an observation: retained snapshot → release → eligibility → sessions collection. Each advance searches at most 900 model s in 0.1 s steps. Cancel keeps the reached state. The city displays sampled states, not a replay of every intermediate event.' }),
-    seekButton, seekStatus, checkpointList,
+    seekButton, seekStatus, savedContext, checkpointList,
   )
 
   function stopSeeking(): void {
@@ -255,8 +256,22 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     while (checkpointCount < journey.checkpoints.length) {
       const c = journey.checkpoints[checkpointCount++]
       checkpointList.append(el('li', { data: { checkpoint: c.kind } },
-        el('strong', { text: `${CHECKPOINT_LABELS[c.kind]} · model ${c.time.toFixed(1)} s` }),
+        el('strong', { text: `Saved snapshot: ${CHECKPOINT_LABELS[c.kind]} · model ${c.time.toFixed(1)} s` }),
         el('p', { text: `Observed XID horizon ${fmtNum(c.horizon)}; sessions: ${fmtNum(c.deadRows)} dead versions, ${fmtBytes(c.pages * 8192)} relation; ${fmtNum(c.reclaimed)} versions reclaimed after release.` }),
+        el('button', { type: 'button', class: 'pg-btn', text: 'Locate in current city',
+          data: { vacuumCheckpointFocus: c.kind }, on: { click: () => {
+            stopSeeking()
+            focus(c.kind === 'pinned' || c.kind === 'released' ? 'proc.array' : TABLE)
+            setText(savedContext, `Saved snapshot: ${CHECKPOINT_LABELS[c.kind]} at model ${c.time.toFixed(1)} s. City is current, not rewound; live counts may differ.`)
+            refresh()
+          } },
+        }),
+        el('button', { type: 'button', class: 'pg-btn', text: 'Explain pages and row versions',
+          data: { vacuumCheckpointPage: c.kind }, on: { click: () => {
+            stopSeeking()
+            ctx.bus.emit('anatomy:open', { view: 'page', id: TABLE })
+          } },
+        }),
       ))
     }
     const running = journey.status === 'running'
@@ -328,9 +343,10 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     const claimsBottom = width <= 640 ? document.getElementById('city-version-provenance')?.getBoundingClientRect().bottom ?? 0 : 0
     const top = Math.max(toolbarBottom, claimsBottom) + 32
     const bottom = document.getElementById('hud-bottom')?.getBoundingClientRect().top ?? height - 100
+    const indicatorSpace = id === TABLE || id.startsWith('autovac.worker.') ? 90 : 0
     const viewport = width <= 640
-      ? { left: -1 + 32 / width, right: 1 - 32 / width, top: 1 - 2 * top / height, bottom: 1 - 2 * (rect.top - 16) / height }
-      : { left: -1 + 32 / width, right: 2 * (rect.left - 16) / width - 1, top: 1 - 2 * top / height, bottom: 1 - 2 * (bottom - 16) / height }
+      ? { left: -1 + 32 / width, right: 1 - 32 / width, top: 1 - 2 * top / height, bottom: 1 - 2 * (rect.top - 16 - indicatorSpace) / height }
+      : { left: -1 + 32 / width, right: 2 * (rect.left - 16) / width - 1, top: 1 - 2 * top / height, bottom: 1 - 2 * (bottom - 16 - indicatorSpace) / height }
     requestingFocus = true
     try {
       ctx.bus.emit('focus', { id, ...(rect.width > 0 && rect.height > 0 ? { viewport } : {}), instant: reduceMotion() || ctx.getQuality().level === 'reduced' })
@@ -513,6 +529,7 @@ export function createVacuumLesson(ctx: UiContext, options: VacuumLessonOptions 
     journey = createVacuumObservation(ctx.sim)
     checkpointCount = 0
     checkpointList.replaceChildren()
+    setText(savedContext, 'Select a saved checkpoint to locate its subject in the current city.')
     changingScenario = false
     tableIndex = ctx.sim.state.tables.findIndex((table) => table.def.id === 'sessions')
     reading.initialDeadRows = ctx.sim.state.tables[tableIndex].deadTuples
