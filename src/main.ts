@@ -41,6 +41,7 @@ import { createWalkController } from './engine/walk'
 import { createViewmodelHands } from './engine/hands'
 
 import { createSim } from './sim/model'
+import { createIncidentReplay } from './sim/replay'
 
 import { createGround } from './world/ground'
 import { createSky } from './world/sky'
@@ -68,6 +69,7 @@ import { createInspector } from './ui/panel'
 import { createTour } from './ui/tour'
 import { createVacuumCityIndicator } from './engine/vacuum-city-indicator'
 import { createVacuumLesson } from './ui/vacuum-lesson'
+import { createReplayPanel } from './ui/replay-panel'
 import { createSearch } from './ui/search'
 import { createCityWords } from './ui/city-words'
 import { createTouchpad } from './ui/touchpad'
@@ -158,6 +160,7 @@ async function boot(): Promise<void> {
 
   await progress(BOOT_STEPS.simulation)
   const sim = createSim(bus)
+  const replay = createIncidentReplay(sim, bus)
   if (reduceMotion()) sim.setKnob('paused', true)
 
   // --- the context every district is built against ---------------------------
@@ -305,10 +308,12 @@ async function boot(): Promise<void> {
   const vacuumLesson = createVacuumLesson(uiCtx, {
     onProgress: ({ event, mode }) => trackVacuumLessonProgress(analytics, { event, mode }),
   })
+  const replayPanel = createReplayPanel(uiCtx, replay)
   const ui: UiModule[] = [
     vacuumLesson,
     createVacuumCityIndicator(uiCtx, gfx.camera, () => vacuumLesson.isOpen()),
-    createHud(uiCtx, { onInvestigate: () => vacuumLesson.open() }),
+    replayPanel,
+    createHud(uiCtx, { onInvestigate: () => vacuumLesson.open(), onReplay: () => replayPanel.open() }),
     createTouchpad({ bus, walk }),
     controlCenter,
     createWalkUpInteraction({
@@ -577,6 +582,7 @@ async function boot(): Promise<void> {
     timer.disconnect()
     for (const m of modules) m.dispose?.()
     for (const u of ui) u.dispose()
+    replay.dispose()
     flows.dispose()
     labels.dispose()
     picker.dispose()
@@ -610,6 +616,8 @@ async function boot(): Promise<void> {
   // notes and tooling still reach for it; both names are the same object.
   const handle = {
     sim,
+    replay,
+    replayPanel,
     registry,
     bus,
     rig,
