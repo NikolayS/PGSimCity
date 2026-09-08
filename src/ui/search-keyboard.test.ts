@@ -12,12 +12,13 @@ function key(target: HTMLElement, value: string, ctrlKey = false): Event {
 }
 
 describe('search keyboard modal ownership', () => {
-  it.each(['native', 'aria'])('does not open behind an active %s dialog', (kind) => {
+  it.each(['native', 'aria', 'replay'])('does not open behind an active %s dialog', (kind) => {
     installTestDom()
     const search = createSearch({ bus: createBus(), registry: { get: () => undefined } } as unknown as UiContext)
     const dialog = document.createElement(kind === 'native' ? 'dialog' : 'section')
     if (kind === 'native') dialog.setAttribute('open', '')
-    else dialog.setAttribute('aria-modal', 'true')
+    else if (kind === 'aria') dialog.setAttribute('aria-modal', 'true')
+    else dialog.setAttribute('role', 'dialog')
     const button = document.createElement('button')
     dialog.append(button)
     document.body.append(dialog)
