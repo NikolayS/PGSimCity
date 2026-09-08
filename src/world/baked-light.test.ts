@@ -1,3 +1,6 @@
+import * as THREE from 'three'
+import { applyBoxBevelDetail, pairBoxGeometries } from '../core/beveled-box'
+import { installBoxBakeVariants, disposeBakedIndirect } from './baked-light'
 import { describe, expect, it } from 'vitest'
 
 import { DAY_PALETTE } from '../core/themes'
@@ -77,5 +80,72 @@ describe('baked indirect-light transport', () => {
         perceptualColorDistance(mixed, DAY_PALETTE[neighbour]),
       )
     }
+  })
+})
+
+
+describe('baked box detail ownership', () => {
+  it('retains distinct instance transport across quality changes and disposes only owned variants', () => {
+    const pair = pairBoxGeometries(1, 1, 1)
+    const scene = new THREE.Scene()
+    const copies: THREE.BufferGeometry[] = []
+    const meshes = [17, 203].map(value => {
+      const geometry = pair.beveled.clone()
+      copies.push(geometry)
+      for (const name of ['pgBakeSkyA', 'pgBakeSkyB', 'pgBakeTransferA', 'pgBakeTransferB']) {
+        geometry.setAttribute(name, new THREE.InstancedBufferAttribute(new Uint8Array([value, value, value]), 3, true))
+      }
+      const mesh = new THREE.InstancedMesh(geometry, new THREE.MeshStandardMaterial(), 1)
+      mesh.userData.pgBakeOriginalGeometry = pair.beveled
+      scene.add(mesh)
+      installBoxBakeVariants(mesh)
+      return mesh
+    })
+    const variants = new Set<THREE.BufferGeometry>()
+    for (const level of ['high', 'low', 'medium', 'high'] as const) {
+      applyBoxBevelDetail(scene, level)
+      meshes.forEach((mesh, i) => {
+        expect(mesh.geometry.getAttribute('pgBakeSkyA')?.array[0]).toBe([17, 203][i])
+        expect(mesh.geometry.getAttribute('pgBakeTransferB')?.array[2]).toBe([17, 203][i])
+        variants.add(mesh.geometry)
+      })
+      expect(meshes[0].geometry).not.toBe(meshes[1].geometry)
+    }
+    expect(variants.size).toBe(4)
+    let ownedDisposals = 0, sharedDisposals = 0
+    for (const geometry of variants) geometry.addEventListener('dispose', () => ownedDisposals++)
+    pair.plain.addEventListener('dispose', () => sharedDisposals++)
+    pair.beveled.addEventListener('dispose', () => sharedDisposals++)
+    disposeBakedIndirect(scene)
+    expect(ownedDisposals).toBe(4)
+    expect(sharedDisposals).toBe(0)
+    for (const mesh of meshes) expect(mesh.geometry).toBe(pair.beveled)
+    disposeBakedIndirect(scene)
+    expect(ownedDisposals).toBe(4)
+    pair.plain.dispose(); pair.beveled.dispose()
+    for (const mesh of meshes) (mesh.material as THREE.Material).dispose()
+  })
+
+  it('maps vertex transport by face normal without blending packed source bytes', () => {
+    const pair = pairBoxGeometries(8, 6, 4)
+    const geometry = pair.beveled.clone()
+    const normals = geometry.getAttribute('normal')
+    const packed = new Uint8Array(normals.count)
+    for (let i = 0; i < normals.count; i++) packed[i] = normals.getX(i) > 0.99 ? 0x1f : 0x82
+    geometry.setAttribute('pgBakeSky', new THREE.BufferAttribute(new Uint8Array(normals.count).fill(91), 1, true))
+    geometry.setAttribute('pgBakeTransfer', new THREE.BufferAttribute(packed, 1, true))
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial())
+    mesh.userData.pgBakeOriginalGeometry = pair.beveled
+    installBoxBakeVariants(mesh)
+    applyBoxBevelDetail(mesh, 'low')
+    const transfer = mesh.geometry.getAttribute('pgBakeTransfer')
+    expect(transfer).toBeDefined()
+    expect(transfer.count).toBe(mesh.geometry.getAttribute('position').count)
+    const targetNormals = mesh.geometry.getAttribute('normal')
+    for (let i = 0; i < transfer.count; i++) {
+      expect(transfer.array[i]).toBe(targetNormals.getX(i) > 0.99 ? 0x1f : 0x82)
+    }
+    disposeBakedIndirect(mesh)
+    pair.plain.dispose(); pair.beveled.dispose(); mesh.material.dispose()
   })
 })

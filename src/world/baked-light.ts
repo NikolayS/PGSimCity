@@ -106,6 +106,7 @@ export interface BakedLightInstallStats {
 interface BakedObjectData {
   pgBakeOriginalGeometry?: THREE.BufferGeometry
   pgBakeInPlace?: boolean
+  pgBakeOwnedPair?: THREE.BufferGeometry[]
 }
 
 function materialsOf(
@@ -223,7 +224,7 @@ function geometryByteLength(geometry: THREE.BufferGeometry): number {
 function geometryForBake(mesh: BakedMesh, mustClone: boolean): THREE.BufferGeometry {
   const geometry = mesh.mesh.geometry
   const data = mesh.mesh.userData as BakedObjectData
-  if (!mustClone) {
+  if (!mustClone && !geometry.userData.pgBoxPair) {
     data.pgBakeInPlace = true
     return geometry
   }
@@ -317,6 +318,7 @@ export function installBakedIndirect(root: THREE.Object3D): BakedLightInstallSta
     const record = meshes[i]
     const entry = BAKED_LIGHT_ENTRIES[i]
     const mustClone = (geometryUse.get(record.mesh.geometry) ?? 0) > 1
+      || Boolean(record.mesh.geometry.userData.pgBoxPair)
     const geometry = geometryForBake(record, mustClone)
     if (mustClone) geometryBytes += geometryByteLength(geometry)
     if (record.instanced) {
@@ -345,6 +347,7 @@ export function installBakedIndirect(root: THREE.Object3D): BakedLightInstallSta
       )
       vertices += entry.count
     }
+    geometryBytes += installBoxBakeVariants(record.mesh)
   }
 
   return {
@@ -367,7 +370,11 @@ export function disposeBakedIndirect(root: THREE.Object3D): void {
     const data = mesh.userData as BakedObjectData
     const original = data.pgBakeOriginalGeometry
     if (original) {
-      mesh.geometry.dispose()
+      const ownedPair = data.pgBakeOwnedPair
+      if (ownedPair) {
+        for (const geometry of ownedPair) geometry.dispose()
+      } else mesh.geometry.dispose()
+      delete data.pgBakeOwnedPair
       mesh.geometry = original
       delete data.pgBakeOriginalGeometry
     } else if (data.pgBakeInPlace) {
@@ -722,4 +729,61 @@ export function bakeSceneIndirect(root: THREE.Object3D): BakedLightPayload {
     vertices,
     occluders: occluders.length,
   }
+}
+
+/* A baked receiver owns both detail variants. Shared theme pairs must never
+ * receive mesh-specific transport or be disposed by the receiver. */
+export function installBoxBakeVariants(mesh: THREE.Mesh): number {
+  const source = mesh.geometry
+  const pair = source.userData.pgBoxPair as {
+    plain: THREE.BufferGeometry; beveled: THREE.BufferGeometry
+  } | undefined
+  if (!pair) return 0
+  const data = mesh.userData as BakedObjectData
+  const original = data.pgBakeOriginalGeometry
+  if (!original || data.pgBakeOwnedPair) return 0
+  const sourceIsPlain = original === pair.plain
+  const alternate = (sourceIsPlain ? pair.beveled : pair.plain).clone()
+  const extraBytes = geometryByteLength(alternate)
+  const localPair = sourceIsPlain
+    ? { plain: source, beveled: alternate }
+    : { plain: alternate, beveled: source }
+  source.userData = { ...source.userData, pgBoxPair: localPair }
+  alternate.userData = { ...alternate.userData, pgBoxPair: localPair }
+
+  if ((mesh as THREE.InstancedMesh).isInstancedMesh) {
+    for (const name of ['pgBakeSkyA', 'pgBakeSkyB', 'pgBakeTransferA', 'pgBakeTransferB']) {
+      alternate.setAttribute(name, source.getAttribute(name))
+    }
+  } else {
+    const fromPosition = source.getAttribute('position'), fromNormal = source.getAttribute('normal')
+    const toPosition = alternate.getAttribute('position'), toNormal = alternate.getAttribute('normal')
+    const nearest = new Uint32Array(toPosition.count)
+    for (let target = 0; target < toPosition.count; target++) {
+      let bestDot = -Infinity, bestDistance = Infinity
+      for (let candidate = 0; candidate < fromPosition.count; candidate++) {
+        const dot = toNormal.getX(target) * fromNormal.getX(candidate)
+          + toNormal.getY(target) * fromNormal.getY(candidate)
+          + toNormal.getZ(target) * fromNormal.getZ(candidate)
+        const distance = (toPosition.getX(target) - fromPosition.getX(candidate)) ** 2
+          + (toPosition.getY(target) - fromPosition.getY(candidate)) ** 2
+          + (toPosition.getZ(target) - fromPosition.getZ(candidate)) ** 2
+        if (dot > bestDot + 1e-6 || (Math.abs(dot - bestDot) <= 1e-6 && distance < bestDistance)) {
+          bestDot = dot
+          bestDistance = distance
+          nearest[target] = candidate
+        }
+      }
+    }
+    // Prefer the same face, then nearest vertex. Copy packed semantic bytes
+    // whole; interpolating their source nibble would invent a different material.
+    for (const name of [SKY_ATTRIBUTE, TRANSFER_ATTRIBUTE]) {
+      const attribute = source.getAttribute(name)
+      const values = new Uint8Array(toPosition.count)
+      for (let i = 0; i < values.length; i++) values[i] = attribute.array[nearest[i]]
+      alternate.setAttribute(name, new THREE.BufferAttribute(values, 1, true))
+    }
+  }
+  data.pgBakeOwnedPair = [source, alternate]
+  return extraBytes
 }

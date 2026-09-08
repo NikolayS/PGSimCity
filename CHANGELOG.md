@@ -11,6 +11,32 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-09-08
+
+### Added
+
+- Upright vacuum service docks and circular worker robots replace the truck
+  silhouettes while retaining the model's travel, scan, cleanup and return phases.
+- Collection indicators follow actual removal, including partial cleanup when
+  xmin still protects newer versions; scanning alone does not fill the indicator.
+
+### Fixed
+
+- Regenerate indirect lighting for the new district geometry. Keep mesh-specific
+  baked transport on both box detail variants across quality changes, and dispose
+  owned variants without disposing shared theme geometry.
+- Match walking collision checks to the new dock shells rather than removed posts.
+
+### Limitations
+
+- This is one district improvement, not a complete city redesign or a new vacuum
+  algorithm. Workers, travel routes and collection are scaled visual metaphors;
+  ordinary cleanup makes space reusable and does not imply physical file shrinkage.
+- Non-instanced box detail variants use the nearest same-facing baked vertex;
+  packed semantic transport is copied, not blended into new material identities.
+- First-visit invitation/focus overlap, reduced-quality label limits and delayed
+  audio startup remain. Browser-emulated views are not hardware performance tests.
+
 ## [0.43.0] - 2026-09-07
 
 ### Added
