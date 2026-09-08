@@ -11,6 +11,22 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-09-08
+
+### Changed
+
+- Give backend towers recessed central service faces, supporting corner frames
+  and stepped shoulders. Preserve the existing activity-slot model, private-memory
+  reservoirs, status panels and collision envelope; no simulation rule changes.
+- Regenerate indirect lighting for the changed district. Existing quality-tier
+  transport and material batches are retained.
+
+### Scope
+
+- This is a backend-form increment, not a completed city redesign or new causal
+  animation. Existing normal-distance label and low-quality readability limits
+  remain; no physical-device performance improvement is claimed.
+
 ## [0.44.1] - 2026-09-08
 
 ### Fixed
