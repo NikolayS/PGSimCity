@@ -443,6 +443,10 @@ async function boot(): Promise<void> {
      * or picked component may request it while the pedestrian still owns the
      * transform, so stand up before the scripted rig starts its move. */
     if (walk.enabled) bus.emit('camera:mode', { mode: 'orbit' })
+    if (id === 'world.ground') {
+      rig.home(instant)
+      return
+    }
     /* Normal phone destinations need the same visible-space fitting as lessons.
      * Only authored district bounds enter here; hidden parked instances do not. */
     let visibleViewport = viewport
