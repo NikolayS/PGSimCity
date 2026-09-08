@@ -9,6 +9,14 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## 0.51.0 — 2026-09-08
+
+- Record and reconstruct bounded, exact-build incidents from a seeded model, allowlisted actions and frame or deliberately paused model steps. Rewind to a saved checkpoint, change the intervention and compare qualified outcomes at the original model duration.
+- Carry the current model, selection and diagnostic trail through linked City/Console navigation. Diagnostic sampling windows restart on arrival; invalid, consumed or expired transfers fail visibly instead of silently staging another incident. Linked introductory diagnosis no longer labels arbitrary workloads healthy, and restored speed controls reflect the actual model speed.
+- Export a paused city PNG with camera/quality, build/model-clock qualifications and an optional comparison explanation: seed/checkpoint, original and alternative outcomes, model units, durations, and bounded recorded-action summaries. The image distinguishes the current alternative scene from saved original evidence and discloses unequal durations and omitted actions.
+- Preserve keyboard releases across presentation mode and keep replay/search shortcuts scoped to the focused panel. Export waits for active replay/advancement; errors leave a usable return path and restore the previous pause state.
+- Limits: replay records are local and exact-build-specific, not URL sharing. Linked navigation does not transfer saved replay checkpoints, comparison baselines or investigation notes; export comparisons before switching views. PGlite is separate opt-in evidence. High-resolution export is a bounded raster capture, not path tracing or a new experiment; emulated rendering does not establish device performance.
+
 ## 0.50.0 — 2026-09-08
 
 - Investigation camera fits the selected component beside the notebook on desktop and above it on phones. The phone notebook retains a scrollable evidence area while leaving room for the live city.
