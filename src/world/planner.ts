@@ -792,10 +792,16 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
   let mode: Mode = 'none'
   let autoT = 0
 
+  function closeLab(): void {
+    mode = 'none'
+    sel = -1
+    vis = 0
+    applyVis(0)
+  }
+
   function onTarget(id: string | null): void {
     if (!id) {
-      mode = 'none'
-      sel = -1
+      closeLab()
       return
     }
     if (id.indexOf('backend.') === 0) {
@@ -818,10 +824,10 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
       }
       return
     }
-    mode = 'none'
-    sel = -1
+    closeLab()
   }
 
+  const offHome = bus.on('camera:home', closeLab)
   const offSelect = bus.on('select', (e) => onTarget(e.id))
   const offFocus = bus.on('focus', (e) => {
     if (e.id) onTarget(e.id)
@@ -1249,6 +1255,7 @@ export const createPlanner: WorldFactory = (ctx: WorldContext): WorldModule => {
   }
 
   function dispose(): void {
+    offHome()
     offSelect()
     offFocus()
     for (const o of owned) o.dispose()

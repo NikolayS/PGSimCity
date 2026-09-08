@@ -1391,6 +1391,8 @@ export interface BusEvents {
   /** open one of the physical anatomy instruments, optionally for a component */
   'anatomy:open': { view: 'page' | 'directory'; id?: string }
   'camera:mode': { mode: CameraMode }
+  /** Return to the city overview; release focus-only world overlays. */
+  'camera:home': Record<string, never>
   /** named framing preset currently controlling the composition */
   'camera:preset': { preset: 'plan' | null }
   /** first meaningful map gesture in the current pointer interaction */

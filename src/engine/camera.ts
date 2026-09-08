@@ -1678,6 +1678,7 @@ export function createCameraRig(
   }
 
   function home(instant = false): void {
+    bus.emit('camera:home', {})
     _v1.copy(HOME_POS).sub(HOME_PIVOT)
     /* Portrait home prioritizes the working city, not the complete outer plate.
      * The separate plan view fits the whole silhouette at every aspect. */
