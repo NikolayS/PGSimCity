@@ -97,7 +97,7 @@ export const VACUUM_ROBOT_BODY: BoxSpec[] = [
   [0, 0.65, 0, 6.8, 0.6, 6.8],
   [0, 1.1, 0, 7.2, 0.5, 7.2],
   [0, 1.5, 0, 6.85, 0.3, 6.85],
-  [-0.6, 1.91, 0, 2.05, 0.5, 2.05],
+  [-0.6, 1.82, 0, 2.05, 0.34, 2.05],
   [-0.6, 2.08, 0, 2.12, 0.16, 2.12],
   [-0.6, 2.23, 0, 1.95, 0.14, 1.95],
   [1.1, 1.7, -0.7, 0.62, 0.1, 0.62],
@@ -546,14 +546,21 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   const matDeep = theme.mat('maint.deep', { color: 0x18202f, roughness: 0.9, metalness: 0.12, emissive: 0x04070e })
   const matHeavy = theme.mat('maint.heavy', { color: 0x232d44, roughness: 0.5, metalness: 0.52, emissive: 0x080c16 })
   const matVehicle = theme.mat('maint.vehicle', { color: 0x39406b, roughness: 0.56, metalness: 0.36, emissive: 0x090c1a, surface: false })
-  const matRobot = theme.mat('maint.robot-appliance', { color: 0xb8bec8, roughness: 0.44, metalness: 0.14, surface: false })
+  const matRobot = theme.mat('maint.robot-appliance', { color: 0xffffff, roughness: 0.48, metalness: 0.06, surface: false })
+  const matRobotRubber = theme.mat('maint.robot-rubber', { color: 0x000000, roughness: 0.86, metalness: 0.0, surface: false })
   const matTyre = theme.mat('maint.tyre', { color: 0x11141f, roughness: 0.98, metalness: 0.02, surface: false })
   const neonWhite = theme.neon(0xffffff, 1)
   const lineInk = theme.line(COLOR.inkDim, 0.17, 'structure')
 
   const unitBox = theme.box(1, 1, 1)
   const unitCyl = theme.cyl(0.5, 0.5, 1, 14)
-  const robotDisc = theme.cyl(0.5, 0.5, 1, 32)
+  const robotDisc = own(new THREE.LatheGeometry([
+    new THREE.Vector2(0, -0.5), new THREE.Vector2(0.46, -0.5),
+    new THREE.Vector2(0.485, -0.46), new THREE.Vector2(0.5, -0.34),
+    new THREE.Vector2(0.5, 0.28), new THREE.Vector2(0.492, 0.39),
+    new THREE.Vector2(0.475, 0.47), new THREE.Vector2(0.45, 0.5),
+    new THREE.Vector2(0, 0.5),
+  ], 48))
   // Rounded, upright appliance shells remain recognizable without fine roof detail.
   const shellShape = new THREE.Shape()
   shellShape.moveTo(-0.32, -0.5)
@@ -574,10 +581,20 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   shellGeo.computeBoundingBox()
   shellGeo.boundingBox!.getSize(_sc)
   shellGeo.scale(1 / _sc.x, 1 / _sc.y, 1 / _sc.z)
+  const dockGeo = own(new THREE.ExtrudeGeometry(shellShape, {
+    depth: 1, bevelEnabled: true, bevelThickness: 0.045, bevelSize: 0.045,
+    bevelSegments: 4, steps: 1, curveSegments: 8,
+  }))
+  dockGeo.rotateY(Math.PI / 2)
+  dockGeo.center()
+  dockGeo.computeBoundingBox()
+  dockGeo.boundingBox!.getSize(_sc)
+  dockGeo.scale(1 / _sc.x, 1 / _sc.y, 1 / _sc.z)
   const domeGeo = own(new THREE.SphereGeometry(0.5, 14, 8))
 
   const edgeVerts: number[] = []
   const signs = new Signage()
+  const dockSigns = new Signage()
   const rng = makeRng(0x7ac1d5)
 
   /** InstancedMesh from a spec table, optionally feeding the blueprint pass. */
@@ -948,12 +965,41 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   for (let i = 0; i < N_VAC_WORKERS; i++) {
     const b = vacBayPos(i)
     depotMass.push(VACUUM_DOCKS[i].tray)
-    depotDetail.push([b[0] - 8.35, 3.0, b[2], 0.2, 3.4, 6.4]) // docking recess
-    depotDetail.push([b[0] - 11.9, 12, b[2], 7.4, 0.2, 8.4]) // bin lid seam
+    // Appliance seams and recesses are part of the dock front below.
   }
   const depotStruct = batch(gDepot, unitBox, matStruct, depotMass, true)
-  const dockHousing = batch(gDepot, shellGeo, matVehicle, VACUUM_DOCKS.map((dock) => dock.housing))
+  const dockHousing = batch(gDepot, dockGeo, matRobot, VACUUM_DOCKS.map((dock) => dock.housing))
   dockHousing.name = 'autovac.docks.housing'
+  dockHousing.castShadow = true
+  dockHousing.receiveShadow = true
+  const dockFascia: BoxSpec[] = []
+  const dockTrim: BoxSpec[] = []
+  const dockContacts: BoxSpec[] = []
+  const dockIndicators: BoxSpec[] = []
+  for (let i = 0; i < N_VAC_WORKERS; i++) {
+    const [x, z] = VACUUM_DOCKS[i].center
+    // The dock is a worker bay, not a PostgreSQL data-storage device.
+    dockFascia.push([x - 4.36, 7.8, z, 0.26, 11.3, 7.5])
+    dockTrim.push([x - 4.16, 3.05, z, 0.18, 2.0, 4.6])
+    dockContacts.push([x - 4.05, 1.5, z - 1.35, 0.12, 0.3, 0.7])
+    dockContacts.push([x - 4.05, 1.5, z + 1.35, 0.12, 0.3, 0.7])
+    dockIndicators.push([x - 4.08, 5.4, z, 0.12, 0.16, 2.0])
+    for (let vent = 0; vent < 5; vent++) {
+      dockTrim.push([x - 4.15, 4.2 + vent * 0.2, z, 0.16, 0.07, 3.6])
+    }
+    dockSigns.plate('AUTOVACUUM', x - 4.1, 11.9, z, 'east', 0.8, 0xdfe5ea, 0.9)
+    dockSigns.plate(`WORKER ${i}`, x - 4.1, 10.5, z, 'east', 0.7, COLOR.vacuum, 0.9)
+    dockSigns.plate('PostgreSQL', x - 4.1, 8.9, z, 'east', 0.62, 0xdfe5ea, 0.8)
+  }
+  gDepot.add(dockSigns.build())
+  const dockFront = batch(gDepot, dockGeo, matRobotRubber, dockFascia)
+  dockFront.name = 'autovac.docks.front'
+  dockFront.castShadow = true
+  batch(gDepot, unitBox, matDeep, dockTrim)
+  batch(gDepot, unitBox, matHeavy, dockContacts)
+  const dockLamps = neonBatch(gDepot, dockIndicators)
+  dockLamps.name = 'autovac.docks.state'
+
   for (const { housing: [x, y, z, sx, sy, sz] } of VACUUM_DOCKS) {
     collisionBoxes.push(new THREE.Box3(
       new THREE.Vector3(x - sx / 2, y - sy / 2, z - sz / 2),
@@ -1035,11 +1081,13 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     body.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
     body.frustumCulled = false
     for (let part = 0; part < TRUCK_BODY; part++) {
-      _c.setScalar(part === 0 || part === 1 || part === 4 || part >= 6 ? 0.09 : 1)
+      _c.setScalar(part === 0 || part === 1 || part === 4 || part >= 6 ? 0.025 : 0.82)
       body.setColorAt(part, _c)
     }
     g.add(body)
     meshes.push(body)
+    body.castShadow = true
+    body.receiveShadow = true
 
     const b = vacBayPos(i)
     const bayX = b[0] - 4
@@ -2128,6 +2176,10 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       truckNeon.instanceMatrix.needsUpdate = true
 
       const live = w.active || tr.homing > 0
+      _c.setHex(w.active ? (stalled ? COLOR.crit : COLOR.vacuum) : COLOR.inkDim)
+      _c.multiplyScalar(w.active ? 0.85 : 0.18)
+      dockLamps.setColorAt(i, _c)
+      dockLamps.instanceColor!.needsUpdate = true
       _c.setHex(COLOR.vacuum).multiplyScalar(tr.hopper * 2.2 + 0.05)
       truckNeon.setColorAt(n0, _c) // what is in the hopper
       _c.setHex(COLOR.vacuum).multiplyScalar(live ? 0.55 : 0.12)
@@ -2346,6 +2398,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     for (const o of owned) o.dispose()
     owned.length = 0
     signs.dispose()
+    dockSigns.dispose()
     for (const m of meshes) m.dispose()
     meshes.length = 0
     group.clear()

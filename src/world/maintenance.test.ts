@@ -147,6 +147,50 @@ describe('robot vacuum service station', () => {
     return { module, sim, components }
   }
 
+  it('keeps overlapping disc tops at distinct heights to avoid flicker', () => {
+    for (let a = 0; a < VACUUM_ROBOT_BODY.length; a++) {
+      for (let b = a + 1; b < VACUUM_ROBOT_BODY.length; b++) {
+        const x = VACUUM_ROBOT_BODY[a], y = VACUUM_ROBOT_BODY[b]
+        if (Math.hypot(x[0] - y[0], x[2] - y[2]) >= (x[3] + y[3]) / 2) continue
+        expect(Math.abs(y1(x) - y1(y))).toBeGreaterThan(0.001)
+      }
+    }
+  })
+
+  it('keeps every physical caption within the signage atlas', () => {
+    const { module } = fixture()
+    let atlases = 0
+    module.group.traverse((object) => {
+      if (object.name !== 'maintenance.signage.walk') return
+      const uv = (object as THREE.Mesh).geometry.getAttribute('uv')
+      atlases++
+      for (let i = 0; i < uv.count; i++) {
+        expect(uv.getY(i)).toBeGreaterThanOrEqual(0)
+        expect(uv.getY(i)).toBeLessThanOrEqual(1)
+      }
+    })
+    expect(atlases).toBe(2)
+  })
+
+  it('ties dock indication to its worker rather than decorative charging', () => {
+    const { module, sim } = fixture()
+    const lamps = module.group.getObjectByName('autovac.docks.state') as THREE.InstancedMesh
+    const idle = new THREE.Color(), active = new THREE.Color(), held = new THREE.Color()
+    lamps.getColorAt(0, idle)
+    const worker = sim.state.autovac.workers[0]
+    worker.active = true
+    worker.phase = 'scan_heap'
+    worker.table = 0
+    module.update(1 / 30, sim.state, 1)
+    lamps.getColorAt(0, active)
+    expect(active.equals(idle)).toBe(false)
+    worker.stalledByHorizon = true
+    module.update(1 / 30, sim.state, 2)
+    lamps.getColorAt(0, held)
+    expect(held.equals(active)).toBe(false)
+    expect(worker.deadCollected).toBe(0)
+  })
+
   it('fits a low circular chassis on each dock tray with an open east exit', () => {
     const radius = Math.max(...VACUUM_ROBOT_BODY.map((part) => Math.max(part[3], part[5]) / 2))
     const height = Math.max(...VACUUM_ROBOT_BODY.map((part) => y1(part)))
