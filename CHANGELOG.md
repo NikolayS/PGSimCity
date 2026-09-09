@@ -18,6 +18,7 @@ are all still moving. Expect breaking changes between minor versions.
 - Refresh baked indirect light for the changed service architecture.
 - Retain allocated index-file capacity after vacuum and reuse it before extension, rather than reporting proportional file shrinkage. This remains an aggregate occupancy model, not key-range-aware B-tree reuse.
 - Stage one illustrative robot trip at a time while retaining concurrent heap/index work; separate the through route from parked workers and mark the city-road queue explicitly. This changes modeled dispatch/return timing and worker/table occupancy, not PostgreSQL locking or cost-delay semantics.
+- Keep floating worker labels attached to their current robot, including during lift travel and return, rather than leaving live readouts anchored at the depot. Explicit building label anchors retain precedence.
 - Correct visibility-map prose: tuple locking can clear all-frozen while retaining all-visible.
 
 This is a visual model: service roads and lifts are explanatory infrastructure, not PostgreSQL machinery. Worker counters still report actual model collection; retaining index allocation can change modeled scan work and timing. Transit staging is a city-only teaching device, not a PostgreSQL resource constraint; lifts are not rideable. Visibility-map bits, tuple freezing and full ANALYZE statistics are not newly implemented. Device performance and universal route readability remain unmeasured.

@@ -931,6 +931,13 @@ export function createLabels(
 
     for (let i = 0; i < entries.length; i++) {
       const e = entries[i]
+      // World modules may move their focus/label anchor in place (workers).
+      // Resample at the layout cadence so projection, occlusion and CSS agree.
+      if (e.def) {
+        const at = e.def.labelAt ?? e.def.focus.target
+        e.pos.set(at[0], at[1], at[2])
+        e.obj.position.copy(e.pos)
+      }
       e.place = false
       e.onScreen = false
       e.nextDetail = LabelDetail.Name
