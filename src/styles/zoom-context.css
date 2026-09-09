@@ -23,9 +23,10 @@
   display: none;
 }
 
-/* Scenario narration already names and explains the focused component. On a
- * phone the second caption would sit directly over that teaching card. */
-body.pg-narrating .zoom-context {
+/* Narration and the guided tour already explain the focused component.
+ * Keep the redundant caption out of their text and transport controls. */
+body.pg-narrating .zoom-context,
+body.pg-tour .zoom-context {
   display: none;
 }
 

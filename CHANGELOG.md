@@ -11,6 +11,7 @@ are all still moving. Expect breaking changes between minor versions.
 
 ## v0.57.1 — Retained snapshot explanation
 
+- Keep close-view captions clear of guided-tour reading and transport controls; restore orientation on tour exit.
 - Establish the xmin lesson with REPEATABLE READ followed by a table SELECT and an idle open transaction. Plain BEGIN at READ COMMITTED does not establish that retained snapshot.
 - Distinguish snapshot-delayed reclamation from all vacuum work, HOT version creation from pruning, and cleanup eligibility from a later collecting pass. Keep the removal horizon distinct from the oldest tuple a reader can see.
 - Direct diagnosis toward actual backend and replication horizons; qualify the model’s scaled scan rather than implying PostgreSQL always scans every heap page.
