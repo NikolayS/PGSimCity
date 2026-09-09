@@ -78,14 +78,36 @@ const VAC_PHASE: Record<VacPhase, string> = {
   return: 'finishing',
 }
 
-/** Human label for the current vacuum fleet, e.g. "2 workers — scanning heap". */
+/** Fleet count with an explicitly sampled first active phase. */
 function vacSummary(s: SimState): string {
   const live = s.autovac.workers.filter((w) => w.active)
   if (!s.autovac.enabled) return 'disabled'
   if (live.length === 0) return 'idle'
   const w = live[0]
   const phase = w ? VAC_PHASE[w.phase] : 'working'
-  return `${live.length} × ${phase}`
+  return `${live.length} active · first: ${phase}`
+}
+
+/** Instance metrics read the current slot on every update, including after reset. */
+export function vacuumWorkerMetrics(slot: number): NonNullable<ComponentDoc['metrics']> {
+  return [
+    { label: 'Worker state', get: (s) => {
+      const w = s.autovac.workers[slot]
+      return w?.active ? (w.vacuumDelay ? 'cost-delay sleep' : VAC_PHASE[w.phase]) : 'idle'
+    } },
+    { label: 'Current table', get: (s) => {
+      const w = s.autovac.workers[slot]
+      const t = w?.active ? s.tables[w.table] : undefined
+      return t ? `${t.def.name} · ${fmtPct(w.progress, 0)}` : '—'
+    } },
+    { label: 'Blocked by horizon', get: (s) => {
+      const w = s.autovac.workers[slot]
+      return w?.active && w.stalledByHorizon ? 'YES — an old snapshot pins xmin' : 'no'
+    }, hint: 'this worker reports a horizon constraint; partial removal may still be possible' },
+    { label: 'City oldest snapshot', get: (s) => `${fmtDuration(s.oldestSnapshotAge)} · ${fmtNum(Math.max(0, s.xid - s.xminHorizon))} xids` },
+    { label: 'Collected: current/last pass', get: (s) => fmtNum(s.autovac.workers[slot]?.deadCollected ?? 0),
+      hint: 'this worker’s current pass, or its latest completed pass while idle; not a lifetime or fleet total' },
+  ]
 }
 
 /* ---------------------------- reference helpers ---------------------------
@@ -1976,7 +1998,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     metrics: [
       { label: 'Fleet', get: (s) => vacSummary(s) },
       {
-        label: 'Current table',
+        label: 'First active table',
         get: (s) => {
           const w = s.autovac.workers.find((x) => x.active)
           if (!w) return '—'
@@ -1985,7 +2007,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         },
       },
       {
-        label: 'Blocked by horizon',
+        label: 'Any worker blocked',
         get: (s) => (s.autovac.workers.some((w) => w.active && w.stalledByHorizon) ? 'YES — an old snapshot pins xmin' : 'no'),
         hint: 'dead row versions exist but cannot be removed yet',
       },
@@ -1993,7 +2015,8 @@ export const DOCS_STORAGE: ComponentDoc[] = [
         label: 'Oldest snapshot',
         get: (s) => `${fmtDuration(s.oldestSnapshotAge)} · ${fmtNum(Math.max(0, s.xid - s.xminHorizon))} xids`,
       },
-      { label: 'Dead rows removed', get: (s) => fmtNum(s.autovac.workers.reduce((n, w) => n + w.deadCollected, 0)) },
+      { label: 'Slot counters total', get: (s) => fmtNum(s.autovac.workers.reduce((n, w) => n + w.deadCollected, 0)),
+        hint: 'sum of each slot’s current or latest pass; not a cumulative lifetime total' },
     ],
     knobs: ['autovacuum', 'autovacuumScaleFactor', 'longRunningXact', 'updateRatio'],
     see: ['autovac.launcher', 'storage.table', 'landfill', 'storage.vm'],

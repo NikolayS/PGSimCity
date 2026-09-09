@@ -5,7 +5,7 @@ import {
 import type { ComponentDoc, Knobs, PgBouncerPoolMode } from '../core/types'
 import { CLAIM_VALUES } from '../core/claims'
 import { DOCS_MEMORY } from './docs-memory'
-import { DOCS_STORAGE } from './docs-storage'
+import { DOCS_STORAGE, vacuumWorkerMetrics } from './docs-storage'
 
 /* ============================================================================
  * The knowledge layer.
@@ -29,6 +29,7 @@ const PGBOUNCER_POOL_MODE_OPTIONS = POOL_MODE_CLAIM.modes.map((value) => ({
 }))
 
 const _byId = new Map<string, ComponentDoc>(DOCS.map((d) => [d.id, d]))
+const _workerDocs = new Map<string, ComponentDoc>()
 
 export function doc(id: string | null | undefined): ComponentDoc | undefined {
   if (!id) return undefined
@@ -36,7 +37,15 @@ export function doc(id: string | null | undefined): ComponentDoc | undefined {
   if (hit) return hit
   // per-instance ids fall back to their family doc: backend.7 -> backend.slot
   if (/^backend\.\d+$/.test(id)) return _byId.get('backend.slot')
-  if (/^autovac\.worker\.\d+$/.test(id)) return _byId.get('autovac.worker')
+  if (/^autovac\.worker\.\d+$/.test(id)) {
+    let entry = _workerDocs.get(id)
+    if (!entry) {
+      const family = _byId.get('autovac.worker')!
+      entry = { ...family, metrics: vacuumWorkerMetrics(Number(id.slice('autovac.worker.'.length))) }
+      _workerDocs.set(id, entry)
+    }
+    return entry
+  }
   if (id.startsWith('storage.table.')) return _byId.get('storage.table')
   if (id.startsWith('storage.index.')) return _byId.get('storage.index')
   if (id.startsWith('storage.fsm.')) return _byId.get('storage.fsm')
