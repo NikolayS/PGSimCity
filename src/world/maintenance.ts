@@ -96,8 +96,12 @@ const NAPTIME = 12
 export const VACUUM_ROBOT_BODY: BoxSpec[] = [
   [0, 0.65, 0, 6.8, 0.6, 6.8],
   [0, 1.1, 0, 7.2, 0.5, 7.2],
-  [0, 1.55, 0, 6.9, 0.4, 6.9],
-  [-0.6, 2.0, 0, 2.0, 0.5, 2.0],
+  [0, 1.5, 0, 6.85, 0.3, 6.85],
+  [-0.6, 1.91, 0, 2.05, 0.5, 2.05],
+  [-0.6, 2.08, 0, 2.12, 0.16, 2.12],
+  [-0.6, 2.23, 0, 1.95, 0.14, 1.95],
+  [1.1, 1.7, -0.7, 0.62, 0.1, 0.62],
+  [1.85, 1.7, -0.7, 0.32, 0.1, 0.32],
 ]
 
 /** Shared bay anchors leave the east side clear for the existing haul road. */
@@ -542,6 +546,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   const matDeep = theme.mat('maint.deep', { color: 0x18202f, roughness: 0.9, metalness: 0.12, emissive: 0x04070e })
   const matHeavy = theme.mat('maint.heavy', { color: 0x232d44, roughness: 0.5, metalness: 0.52, emissive: 0x080c16 })
   const matVehicle = theme.mat('maint.vehicle', { color: 0x39406b, roughness: 0.56, metalness: 0.36, emissive: 0x090c1a, surface: false })
+  const matRobot = theme.mat('maint.robot-appliance', { color: 0xb8bec8, roughness: 0.44, metalness: 0.14, surface: false })
   const matTyre = theme.mat('maint.tyre', { color: 0x11141f, roughness: 0.98, metalness: 0.02, surface: false })
   const neonWhite = theme.neon(0xffffff, 1)
   const lineInk = theme.line(COLOR.inkDim, 0.17, 'structure')
@@ -1003,17 +1008,34 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   group.add(truckNeon)
   meshes.push(truckNeon)
 
+  const robotTrimSpecs: BoxSpec[] = [
+    [3.57, 1.1, 0, 0.18, 0.28, 1.45], // front obstacle-sensor window
+    [-2.3, 1.67, 0, 0.07, 0.06, 3.4], // dust-bin lid seam
+    [-2.8, 1.68, -0.8, 0.42, 0.05, 0.13],
+    [-2.8, 1.68, -0.4, 0.42, 0.05, 0.13],
+    [-2.8, 1.68, 0, 0.42, 0.05, 0.13],
+    [-2.8, 1.68, 0.4, 0.42, 0.05, 0.13],
+    [-2.8, 1.68, 0.8, 0.42, 0.05, 0.13],
+  ]
+  const robotTrim = new THREE.InstancedMesh(unitBox, matTyre, N_VAC_WORKERS * robotTrimSpecs.length)
+  robotTrim.name = 'autovac.workers.appliance-trim'
+  robotTrim.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  robotTrim.frustumCulled = false
+  robotTrim.raycast = () => {}
+  group.add(robotTrim)
+  meshes.push(robotTrim)
+
   const trucks: Truck[] = []
   for (let i = 0; i < N_VAC_WORKERS; i++) {
     const g = new THREE.Group()
     g.name = `autovac.worker.${i}`
     group.add(g)
 
-    const body = new THREE.InstancedMesh(robotDisc, matVehicle, TRUCK_BODY)
+    const body = new THREE.InstancedMesh(robotDisc, matRobot, TRUCK_BODY)
     body.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
     body.frustumCulled = false
     for (let part = 0; part < TRUCK_BODY; part++) {
-      _c.setScalar(part === 1 ? 0.32 : part === 3 ? 0.65 : 1)
+      _c.setScalar(part === 0 || part === 1 || part === 4 || part >= 6 ? 0.09 : 1)
       body.setColorAt(part, _c)
     }
     g.add(body)
@@ -2058,6 +2080,11 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
         const spec = VACUUM_ROBOT_BODY[part]
         setPart(tr.body, part, _mw, spec[0], spec[1], spec[2], spec[3], spec[4], spec[5])
       }
+      for (let part = 0; part < robotTrimSpecs.length; part++) {
+        const spec = robotTrimSpecs[part]
+        setPart(robotTrim, i * robotTrimSpecs.length + part, _mw, spec[0], spec[1], spec[2], spec[3], spec[4], spec[5])
+      }
+      robotTrim.instanceMatrix.needsUpdate = true
       tr.body.instanceMatrix.needsUpdate = true
       // the truck moves, so the picker must re-measure it
       tr.body.boundingBox = null
@@ -2083,8 +2110,8 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
           const angle = (brush % 3) * TAU / 3 + tr.scoop * TAU * side
           _qd.setFromAxisAngle(_axisY, -angle)
           setPart(sideBrushes, i * 6 + brush, _mw,
-            2.3 + Math.cos(angle) * 0.55, 0.24,
-            side * 2.3 + Math.sin(angle) * 0.55, 1.1, 0.12, 0.14, _qd)
+            2.3 + Math.cos(angle) * 0.75, 0.24,
+            side * 2.3 + Math.sin(angle) * 0.75, 1.5, 0.12, 0.22, _qd)
         }
         sideBrushes.instanceMatrix.needsUpdate = true
       }
@@ -2093,7 +2120,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       const fillWidth = Math.max(0.02, tr.hopper * 2.8)
       setPart(truckNeon, n0, _mw, 1.2, 1.78, 0, fillWidth, 0.08, 1.2)
       setPart(truckNeon, n0 + 1, _mw, 3.3, 1.15, 0, 0.15, 0.24, 1.8)
-      setPart(truckNeon, n0 + 2, _mw, -0.6, 2.3, 0, 0.6, 0.1, 0.6)
+      setPart(truckNeon, n0 + 2, _mw, 1.1, 1.77, -0.7, 0.22, 0.04, 0.22)
       setPart(truckNeon, n0 + 3, _mw, 3.0, 0.8, 1.0, 0.2, 0.18, 0.4)
       setPart(truckNeon, n0 + 4, _mw, 3.0, 0.8, -1.0, 0.2, 0.18, 0.4)
       setPart(truckNeon, n0 + 5, _mw, 2.7, 0.4, 0, Math.max(0.02, tr.carry), 0.15, 1.5)
@@ -2298,6 +2325,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     depotDetailMesh.visible = near
     truckWheels.visible = near
     sideBrushes.visible = near
+    robotTrim.visible = near
 
     landDetailMesh.visible = near
     logDetailMesh.visible = near
