@@ -335,6 +335,34 @@ describe('robot vacuum service station', () => {
     expect(live()).toBe(collected)
   })
 
+  it('keeps native simultaneous dispatch and return clear across the fleet', () => {
+    const { module, sim } = fixture()
+    sim.runScenario('bloat-and-vacuum')
+    const matrix = new THREE.Matrix4()
+    const centers = Array.from({ length: 3 }, () => new THREE.Vector3())
+    const seen = new Set<number>()
+    let concurrentWork = false
+    for (let frame = 0; frame < 90000; frame++) {
+      sim.update(1 / 30)
+      module.update(1 / 30, sim.state, sim.state.t)
+      const workers = sim.state.autovac.workers
+      if (workers.filter(w => w.active && w.phase !== 'travel' && w.phase !== 'return').length > 1) concurrentWork = true
+      for (let slot = 0; slot < 3; slot++) {
+        const body = module.group.getObjectByName(`autovac.worker.${slot}`)!.children[0] as THREE.InstancedMesh
+        body.getMatrixAt(1, matrix)
+        centers[slot].setFromMatrixPosition(matrix)
+        if (workers[slot].phase === 'return') seen.add(slot)
+      }
+      for (let a = 0; a < 3; a++) for (let b = a + 1; b < 3; b++) {
+        expect(centers[a].distanceTo(centers[b]),
+          `t=${sim.state.t} slots=${a}/${b} phases=${workers[a].phase}/${workers[b].phase}`,
+        ).toBeGreaterThan(9.52)
+      }
+    }
+    expect(concurrentWork).toBe(true)
+    expect([...seen].sort(), JSON.stringify(sim.state.autovac.workers)).toEqual([0, 1, 2])
+  })
+
   it('keeps concurrently working relations on separate lanes', () => {
     const { module, sim } = fixture()
     const matrix = new THREE.Matrix4()
@@ -353,7 +381,7 @@ describe('robot vacuum service station', () => {
         body.getMatrixAt(1, matrix)
         centers[slot].setFromMatrixPosition(matrix)
       }
-      expect(centers[0].distanceTo(centers[1]), `${first}/${second}: overlapping work lanes`).toBeGreaterThan(7.2)
+      expect(centers[0].distanceTo(centers[1]), `${first}/${second}: overlapping work lanes`).toBeGreaterThan(9.52)
     }
   })
 

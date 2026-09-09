@@ -1,3 +1,4 @@
+import { vacuumTransitQueued } from '../core/vacuum-transit'
 import { poolBytes, retainedArchiveSegments } from '../core/types'
 import { operationalReference, renderAction } from '../core/actions'
 import { CLAIM_VALUES } from '../core/claims'
@@ -93,7 +94,7 @@ export function vacuumWorkerMetrics(slot: number): NonNullable<ComponentDoc['met
   return [
     { label: 'Worker state', get: (s) => {
       const w = s.autovac.workers[slot]
-      return w?.active ? (w.vacuumDelay ? 'cost-delay sleep' : VAC_PHASE[w.phase]) : 'idle'
+      return w?.active ? (vacuumTransitQueued(s.autovac.workers, slot) ? 'city-road queue (illustrative)' : w.vacuumDelay ? 'cost-delay sleep' : VAC_PHASE[w.phase]) : 'idle'
     } },
     { label: 'Current table', get: (s) => {
       const w = s.autovac.workers[slot]
@@ -1992,7 +1993,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What the city models',
-        body: 'The worker follows one fixed pass through heap scan, one pass per declared index, heap cleanup, truncation, a folded-in analyze stage and return, with representative page I/O and WAL. Its scaled per-worker I/O ceiling alternates active work with explicit cost-delay sleeps, shown in `pg_stat_activity` as `Timeout / VacuumDelay`; it does not reproduce individual page cost values or PostgreSQL’s real 2 ms delay. It also does not model `maintenance_work_mem`, repeated index passes, per-page visibility bits, freeze age, anti-wraparound launches, lock acquisition for truncation or FSM updates. File truncation is a tail-density heuristic, not a lock outcome.',
+        body: 'The worker follows one fixed pass through heap scan, one pass per declared index, heap cleanup, truncation, a folded-in analyze stage and return, with representative page I/O and WAL. Its scaled per-worker I/O ceiling alternates active work with explicit cost-delay sleeps, shown in `pg_stat_activity` as `Timeout / VacuumDelay`; it does not reproduce individual page cost values or PostgreSQL’s real 2 ms delay. It also does not model `maintenance_work_mem`, repeated index passes, per-page visibility bits, freeze age, anti-wraparound launches, lock acquisition for truncation or FSM updates. File truncation is a tail-density heuristic, not a lock outcome. The city admits one robot trip at a time on shared roads; heap/index work remains concurrent. This illustrative staging delays dispatch and return, lengthens modeled worker/table occupancy and changes modeled completion times. It is not a PostgreSQL lock, wait event or cost-delay sleep.',
       },
     ],
     metrics: [

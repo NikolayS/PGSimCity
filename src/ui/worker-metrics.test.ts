@@ -32,3 +32,16 @@ it('inspects the selected worker, not the first active worker or fleet totals', 
   expect(doc('autovac.worker.0')!.metrics!.find(m => m.label === 'Collected: current/last pass')!.get(s)).toBe('900')
   expect(doc('autovac.worker')!.metrics!.find(m => m.label === 'Fleet')!.get(s)).toContain('first:')
 })
+
+it('distinguishes city-road staging from PostgreSQL cost-delay sleep', () => {
+  const sim = createSim(createBus(), { scheduledBackups: false })
+  const s = sim.state
+  Object.assign(s.autovac.workers[0], { active: true, table: 0, phase: 'travel', progress: .5 })
+  Object.assign(s.autovac.workers[1], { active: true, table: 3, phase: 'return', progress: 0, deadCollected: 17 })
+  const entry = doc('autovac.worker.1')!
+  const value = (label: string) => entry.metrics!.find(m => m.label === label)!.get(s)
+  expect(value('Worker state')).toBe('city-road queue (illustrative)')
+  expect(value('Current table')).toBe(`${s.tables[3].def.name} · 0%`)
+  expect(value('Collected: current/last pass')).toBe('17')
+  expect(s.autovac.workers[1].vacuumDelay).toBe(false)
+})

@@ -185,7 +185,7 @@ export const ANCHOR = {
   checkpointer: [-140, 0, -40],
   bgWriter: [-140, 0, 34],
   autovacLauncher: [-196, 0, 0],
-  vacDepot: [-212, 0, 0],
+  vacDepot: [-218, 0, 0],
   landfill: [-234, 0, 76],
   logger: [-140, 0, 100],
   statsCollector: [-196, 0, 76],
@@ -427,6 +427,8 @@ export const VACUUM_SERVICE = {
   crossingZ: -118.5,
   liftWidth: 8,
   laneWidth: 9,
+  transferZ: -34,
+  workEntryZ: -24,
 } as const
 
 const VACUUM_LIFT_X = [-72, -24, 24] as const
@@ -464,8 +466,10 @@ export function vacuumServicePoint(slot: number, table: number, progress: number
   // The east staircase crosses the northern roof bank; transfer east only beyond its foot.
   const transit = Math.min(tx, 34)
   if (u < 0.82) return out.set(x + (transit - x) * (u - 0.72) / 0.1, low, n)
-  if (u < 0.95) return out.set(transit, low, n + (-32 - n) * (u - 0.82) / 0.13)
-  return out.set(transit + (tx - transit) * (u - 0.95) / 0.05, low, -32)
+  const { transferZ: transfer, workEntryZ: work } = VACUUM_SERVICE
+  if (u < 0.95) return out.set(transit, low, n + (transfer - n) * (u - 0.82) / 0.13)
+  if (u < 0.98) return out.set(transit + (tx - transit) * (u - 0.95) / 0.03, low, transfer)
+  return out.set(tx, low, transfer + (work - transfer) * (u - 0.98) / 0.02)
 }
 
 /** World position of shared-buffer tile index (0 … N_BUFFERS-1). */

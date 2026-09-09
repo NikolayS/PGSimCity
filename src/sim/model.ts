@@ -1,3 +1,4 @@
+import { vacuumTransitOwner } from '../core/vacuum-transit'
 /* ============================================================================
  * PGSimCity — THE SIMULATION
  *
@@ -4929,9 +4930,16 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
       }
     }
 
+    // Serialize only the city's illustrative trips. Scanning and cleanup
+    // remain concurrent; road staging is never a PostgreSQL wait event.
+    const transitOwner = vacuumTransitOwner(av.workers)
     for (let i = 0; i < N_VAC_WORKERS; i++) {
       const w = av.workers[i]
       if (!w.active) continue
+      if ((w.phase === 'travel' || w.phase === 'return') && i !== transitOwner) {
+        w.vacuumDelay = false
+        continue
+      }
       // A maintenance worker that cannot reserve WAL space waits on
       // WALWriteLock just like a backend. Do not let the phase clock keep
       // running while its page records pile up in an unbounded side queue.

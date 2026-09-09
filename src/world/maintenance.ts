@@ -1,3 +1,4 @@
+import { vacuumTransitQueued } from '../core/vacuum-transit'
 import * as THREE from 'three'
 import { COLOR, mixHex } from '../core/theme'
 import { CLAIM_VALUES } from '../core/claims'
@@ -1070,7 +1071,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   service.name = 'autovac.service-lanes'
   group.add(service)
   const roadSpecs: BoxSpec[] = [], supportSpecs: BoxSpec[] = []
-  const { surfaceY, workY, junctionX, northZ, yardTurnZ, pitEntryX, crossingX, crossingZ, laneWidth, liftWidth } = VACUUM_SERVICE
+  const { surfaceY, workY, junctionX, northZ, yardTurnZ, pitEntryX, crossingX, crossingZ, laneWidth, liftWidth, transferZ, workEntryZ } = VACUUM_SERVICE
   const road = (x1: number, z1: number, x2: number, z2: number, y: number): void => {
     roadSpecs.push([(x1 + x2) / 2, y + 0.025 - 0.2, (z1 + z2) / 2,
       Math.abs(x2 - x1) + laneWidth, 0.4, Math.abs(z2 - z1) + laneWidth])
@@ -1082,7 +1083,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   road(crossingX, northZ, crossingX, crossingZ, surfaceY)
   road(crossingX, crossingZ, vacuumLiftX(2), crossingZ, surfaceY)
   road(vacuumTableLaneX(0), northZ, 34, northZ, workY)
-  road(34, -32, vacuumTableLaneX(N_TABLES - 1), -32, workY)
+  road(34, transferZ, vacuumTableLaneX(N_TABLES - 1), transferZ, workY)
   for (let i = 0; i < N_VAC_WORKERS; i++) {
     const bay = vacBayPos(i), x = vacuumLiftX(i), z = vacuumLiftZ(i)
     road(bay[0] - 4, bay[2], junctionX, bay[2], surfaceY)
@@ -1092,7 +1093,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       supportSpecs.push([x + dx, (surfaceY + workY) / 2, z + dz, 0.45, surfaceY - workY + 2, 0.45])
     }
   }
-  for (let t = 0; t < N_TABLES; t++) road(vacuumTableLaneX(t), t < 3 ? northZ : -32, vacuumTableLaneX(t), 24, workY)
+  for (let t = 0; t < N_TABLES; t++) road(vacuumTableLaneX(t), t < 3 ? northZ : transferZ, vacuumTableLaneX(t), 24, workY)
   // Two shallow steps let pedestrians cross the raised robot road. Keep
   // their outer edge outside the moving lift car's shaft.
   const curbLevel = (surfaceY + 0.025) / 2 - 0.025
@@ -1606,6 +1607,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
         const w = s.autovac.workers[i]
         if (!w.active) return 'idle in bay'
         const t = s.tables[w.table]
+        if (vacuumTransitQueued(s.autovac.workers, i)) return `${t.def.name} · ${w.phase} · city-road queue (illustrative) · ${fmtNum(w.deadCollected)} dead tuples collected`
         if (w.stalledByHorizon) {
           return `${t.def.name} · ${w.phase} · xmin limits removal · ${fmtNum(w.deadCollected)} dead tuples collected · ${fmtNum(t.deadTuples)} dead remain`
         }
@@ -1745,10 +1747,10 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     if (phase === 'travel') vacuumServicePoint(tr.slot, table, travel, _p)
     else if (phase === 'return') vacuumServicePoint(tr.slot, table, 1 - progress, _p)
     else if (phase === 'vacuum_index') {
-      _p.set(vacuumTableLaneX(table), VACUUM_SERVICE.workY, -32 + 56 * Math.sin(Math.PI * clamp01(progress)))
+      _p.set(vacuumTableLaneX(table), VACUUM_SERVICE.workY, workEntryZ + (24 - workEntryZ) * Math.sin(Math.PI * clamp01(progress)))
     } else {
       const sweep = phase === 'scan_heap' || phase === 'vacuum_heap' ? 8 * Math.sin(Math.PI * clamp01(progress)) : 0
-      _p.set(vacuumTableLaneX(table), VACUUM_SERVICE.workY, -32 + sweep)
+      _p.set(vacuumTableLaneX(table), VACUUM_SERVICE.workY, workEntryZ + sweep)
     }
   }
 
@@ -2192,7 +2194,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
           signs.setLiveText(tr.panelTop, `AV-${i} idle`)
           signs.setLiveText(tr.panelBot, 'in bay')
         } else {
-          signs.setLiveText(tr.panelTop, `${table.def.name} · ${PHASE_LABEL[w.phase]}`)
+          signs.setLiveText(tr.panelTop, `${table.def.name} · ${vacuumTransitQueued(av.workers, i) ? 'city-road queue' : PHASE_LABEL[w.phase]}`)
           signs.setLiveText(
             tr.panelBot,
             stalled
