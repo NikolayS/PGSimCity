@@ -16,7 +16,7 @@ are all still moving. Expect breaking changes between minor versions.
 - Keep the aggregate removal display tied to actual collection; robots return to their docks without an imaginary remote dumping stop.
 - Refresh baked indirect light for the changed service architecture.
 
-This is a visual model: service roads and lifts are explanatory infrastructure, not PostgreSQL machinery. Vacuum timing and collected-tuple counters are unchanged. Visibility-map bits, tuple freezing and full ANALYZE statistics are not newly implemented. Device performance and universal route readability remain unmeasured.
+This is a visual model: service roads and lifts are explanatory infrastructure, not PostgreSQL machinery. Vacuum timing and collected-tuple counters are unchanged. Robots can overlap on shared routes: traffic collision avoidance is not modeled, and lifts are not rideable. Visibility-map bits, tuple freezing and full ANALYZE statistics are not newly implemented. Device performance and universal route readability remain unmeasured.
 
 ## 0.56.0
 

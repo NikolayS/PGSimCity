@@ -1070,31 +1070,42 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   service.name = 'autovac.service-lanes'
   group.add(service)
   const roadSpecs: BoxSpec[] = [], supportSpecs: BoxSpec[] = []
-  const { surfaceY, workY, junctionX, northZ, laneWidth, liftWidth } = VACUUM_SERVICE
+  const { surfaceY, workY, junctionX, northZ, yardTurnZ, pitEntryX, crossingX, crossingZ, laneWidth, liftWidth } = VACUUM_SERVICE
   const road = (x1: number, z1: number, x2: number, z2: number, y: number): void => {
     roadSpecs.push([(x1 + x2) / 2, y + 0.025 - 0.2, (z1 + z2) / 2,
       Math.abs(x2 - x1) + laneWidth, 0.4, Math.abs(z2 - z1) + laneWidth])
   }
-  road(junctionX, northZ, junctionX, 26, surfaceY)
-  road(junctionX, northZ, vacuumLiftX(N_VAC_WORKERS - 1), northZ, surfaceY)
-  road(vacuumTableLaneX(0), northZ, vacuumTableLaneX(N_TABLES - 1), northZ, workY)
+  road(junctionX, yardTurnZ, junctionX, 26, surfaceY)
+  road(junctionX, yardTurnZ, pitEntryX, yardTurnZ, surfaceY)
+  road(pitEntryX, yardTurnZ, pitEntryX, northZ, surfaceY)
+  road(pitEntryX, northZ, crossingX, northZ, surfaceY)
+  road(crossingX, northZ, crossingX, crossingZ, surfaceY)
+  road(crossingX, crossingZ, vacuumLiftX(2), crossingZ, surfaceY)
+  road(vacuumTableLaneX(0), northZ, 34, northZ, workY)
+  road(34, -32, vacuumTableLaneX(N_TABLES - 1), -32, workY)
   for (let i = 0; i < N_VAC_WORKERS; i++) {
     const bay = vacBayPos(i), x = vacuumLiftX(i), z = vacuumLiftZ(i)
     road(bay[0] - 4, bay[2], junctionX, bay[2], surfaceY)
     // Both landings approach the north edge, leaving the moving shaft open.
-    for (const y of [surfaceY, workY]) road(x, northZ, x, z - (laneWidth + liftWidth) / 2, y)
-    for (const dx of [-4.4, 4.4]) for (const dz of [-4.4, 4.4]) {
+    for (const y of [surfaceY, workY]) road(x, y === surfaceY && i === 2 ? crossingZ : northZ, x, z - (laneWidth + liftWidth) / 2, y)
+    for (const dx of [-5.5, 5.5]) for (const dz of [-4.4, 4.4]) {
       supportSpecs.push([x + dx, (surfaceY + workY) / 2, z + dz, 0.45, surfaceY - workY + 2, 0.45])
     }
   }
-  for (let t = 0; t < N_TABLES; t++) road(vacuumTableLaneX(t), northZ, vacuumTableLaneX(t), 24, workY)
+  for (let t = 0; t < N_TABLES; t++) road(vacuumTableLaneX(t), t < 3 ? northZ : -32, vacuumTableLaneX(t), 24, workY)
   // Two shallow steps let pedestrians cross the raised robot road. Keep
   // their outer edge outside the moving lift car's shaft.
   const curbLevel = (surfaceY + 0.025) / 2 - 0.025
-  const curbs: BoxSpec[] = roadSpecs.filter(r => r[1] > 0 && r[0] < junctionX + 1).map(r => {
-    const left = r[0] - r[3] / 2 - 1.2
-    const right = Math.min(r[0] + r[3] / 2 + 1.2, junctionX + laneWidth / 2)
-    return [(left + right) / 2, curbLevel + 0.025 - 0.2, r[2], right - left, 0.4, r[5] + 2.4]
+  const curbs: BoxSpec[] = roadSpecs.filter(r => r[1] > 0).map(r => {
+    const left = r[0] - r[3] / 2 - 1.2, right = r[0] + r[3] / 2 + 1.2
+    const north = r[2] - r[5] / 2 - 1.2
+    let south = r[2] + r[5] / 2 + 1.2
+    for (let slot = 0; slot < N_VAC_WORKERS; slot++) {
+      if (r[0] === vacuumLiftX(slot) && r[3] === laneWidth) {
+        south = Math.min(south, vacuumLiftZ(slot) - liftWidth / 2)
+      }
+    }
+    return [(left + right) / 2, curbLevel + 0.025 - 0.2, (north + south) / 2, right - left, 0.4, south - north]
   })
   roadSpecs.push(...curbs)
   // Union the rectangular lanes before meshing: overlapping plates at road
@@ -2356,7 +2367,8 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     logReels.visible = near
     dish.visible = near
 
-    yardDeep.visible = near
+    // A solid fence cannot disappear while its pedestrian collision remains.
+    yardDeep.visible = true
     edgeLines.visible = near
     signMesh.visible = close
     // Paint and solid lamp heads stay on so the yard remains legible from the

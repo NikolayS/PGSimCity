@@ -421,32 +421,51 @@ export const VACUUM_SERVICE = {
   workY: CITY.storage.warehouseTop + 0.03,
   junctionX: -210,
   northZ: -99,
+  yardTurnZ: -84,
+  pitEntryX: -106,
+  crossingX: -12,
+  crossingZ: -118.5,
   liftWidth: 8,
   laneWidth: 9,
 } as const
 
-export function vacuumLiftX(slot: number): number { return [-72, -24, 24][slot % 3] }
+const VACUUM_LIFT_X = [-72, -24, 24] as const
+const VACUUM_TABLE_LANE_X = [-82, -36, 34, 72, 82] as const
+
+export function vacuumLiftX(slot: number): number { return VACUUM_LIFT_X[slot % 3] }
 export function vacuumLiftZ(_slot: number): number { return -85.5 }
 
 /** Offset from the loading head house and the shared-memory pylons. */
 export function vacuumTableLaneX(table: number): number {
-  return [-82, -36, 34, 72, 82][table % N_TABLES]
+  return VACUUM_TABLE_LANE_X[table % N_TABLES]
 }
 
 /** Piecewise level roads joined by a supported vertical service lift. */
 export function vacuumServicePoint(slot: number, table: number, progress: number, out: THREE.Vector3): THREE.Vector3 {
   const u = Math.max(0, Math.min(1, progress))
   const bayX = ANCHOR.vacDepot[0] - 4, bayZ = -26 + slot * 26
-  const { surfaceY: top, workY: low, junctionX: j, northZ: n } = VACUUM_SERVICE
+  const { surfaceY: top, workY: low, junctionX: j, northZ: n, yardTurnZ: turn, pitEntryX: entry } = VACUUM_SERVICE
   const x = vacuumLiftX(slot), z = vacuumLiftZ(slot), tx = vacuumTableLaneX(table)
   if (u < 0.2) return out.set(bayX + (j - bayX) * u / 0.2, top, bayZ)
-  if (u < 0.3) return out.set(j, top, bayZ + (n - bayZ) * (u - 0.2) / 0.1)
-  if (u < 0.4) return out.set(j + (x - j) * (u - 0.3) / 0.1, top, n)
+  if (u < 0.28) return out.set(j, top, bayZ + (turn - bayZ) * (u - 0.2) / 0.08)
+  if (u < 0.34) return out.set(j + (entry - j) * (u - 0.28) / 0.06, top, turn)
+  if (u < 0.37) return out.set(entry, top, turn + (n - turn) * (u - 0.34) / 0.03)
+  if (slot % 3 === 2 && u < 0.45) {
+    const { crossingX: cx, crossingZ: cz } = VACUUM_SERVICE
+    if (u < 0.39) return out.set(entry + (cx - entry) * (u - 0.37) / 0.02, top, n)
+    if (u < 0.405) return out.set(cx, top, n + (cz - n) * (u - 0.39) / 0.015)
+    if (u < 0.42) return out.set(cx + (x - cx) * (u - 0.405) / 0.015, top, cz)
+    return out.set(x, top, cz + (z - cz) * (u - 0.42) / 0.03)
+  }
+  if (u < 0.4) return out.set(entry + (x - entry) * (u - 0.37) / 0.03, top, n)
   if (u < 0.45) return out.set(x, top, n + (z - n) * (u - 0.4) / 0.05)
   if (u < 0.65) return out.set(x, top + (low - top) * (u - 0.45) / 0.2, z)
   if (u < 0.72) return out.set(x, low, z + (n - z) * (u - 0.65) / 0.07)
-  if (u < 0.82) return out.set(x + (tx - x) * (u - 0.72) / 0.1, low, n)
-  return out.set(tx, low, n + (-32 - n) * (u - 0.82) / 0.18)
+  // The east staircase crosses the northern roof bank; transfer east only beyond its foot.
+  const transit = Math.min(tx, 34)
+  if (u < 0.82) return out.set(x + (transit - x) * (u - 0.72) / 0.1, low, n)
+  if (u < 0.95) return out.set(transit, low, n + (-32 - n) * (u - 0.82) / 0.13)
+  return out.set(transit + (tx - transit) * (u - 0.95) / 0.05, low, -32)
 }
 
 /** World position of shared-buffer tile index (0 … N_BUFFERS-1). */

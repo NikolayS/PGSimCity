@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { COLOR } from '../core/theme'
 import type { SimState, WorldContext, WorldFactory, WorldModule } from '../core/types'
-import { BUFFER_POOL_GATES, CITY, ROUTES, routeCurve } from './layout'
+import { BUFFER_POOL_GATES, CITY, ROUTES, VACUUM_SERVICE, vacuumLiftX, routeCurve } from './layout'
 import type { BufferPoolGate } from './layout'
 import { markTextPlane, markTextTexture } from './text-plane'
 
@@ -1059,7 +1059,12 @@ export const createAccess: AccessFactory = (ctx: WorldContext): AccessModule => 
         if (c.side !== side) continue
         out.push({ lo: c.centre - WAY_W / 2 - 0.15, hi: c.centre + WAY_W / 2 + 0.15 })
       }
+      if (side === 'west') {
+        out.push({ lo: VACUUM_SERVICE.yardTurnZ - 6.25, hi: VACUUM_SERVICE.yardTurnZ + 6.25 })
+      }
       if (side === 'north') {
+        out.push({ lo: VACUUM_SERVICE.crossingX - 6.25, hi: VACUUM_SERVICE.crossingX + 6.25 })
+        out.push({ lo: vacuumLiftX(2) - 6.25, hi: vacuumLiftX(2) + 6.25 })
         out.push({ lo: STAIR.gangX - STAIR.gangW / 2 - 0.3, hi: STAIR.gangX + STAIR.gangW / 2 + 0.3 })
       }
       return out.sort((a, b) => a.lo - b.lo)
@@ -1177,8 +1182,10 @@ export const createAccess: AccessFactory = (ctx: WorldContext): AccessModule => 
       kerbRun('z', r.from, r.to, PAVE_Y, PLINTH_Y, r.centre + s * (w / 2 - KERB_W / 2), bRimP)
     }
     const mid = (r.from + r.to) / 2
-    signs.plate2(r.name, r.centre + w / 2 + 1.1, PLINTH_Y + 2.1, mid, '+x', '-x', 0.36, r.color, 1.2)
-    bSteel.box(r.centre + w / 2 + 1.1, PLINTH_Y + 1.05, mid, 0.12, 2.1, 0.12)
+    // Keep the backend approach sign beside its footway, clear of the service crossing.
+    const signX = r.centre + (r.id === 'backends' ? -1 : 1) * (w / 2 + 1.1)
+    signs.plate2(r.name, signX, PLINTH_Y + 2.1, mid, '+x', '-x', 0.36, r.color, 1.2)
+    bSteel.box(signX, PLINTH_Y + 1.05, mid, 0.12, 2.1, 0.12)
   }
 
   /* =====================================================================

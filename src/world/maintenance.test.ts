@@ -9,6 +9,7 @@ import { createSim } from '../sim/model'
 import { installTestDom } from '../../test/dom'
 import { vacBayPos, vacuumServicePoint, vacuumLiftX, vacuumLiftZ, tableX, VACUUM_SERVICE, CITY } from './layout'
 import { createStorage } from './storage'
+import { createWalkCityHarness } from '../../test/walk-harness'
 import { CKPT_MASS, VACUUM_DOCKS, VACUUM_ROBOT_BODY, createMaintenance } from './maintenance'
 
 type Box = readonly [number, number, number, number, number, number]
@@ -231,6 +232,79 @@ describe('robot vacuum service station', () => {
     expect(failures).toEqual([])
   })
 
+  it('clears the actual island rim and access stairs across every service route', async () => {
+    const city = await createWalkCityHarness()
+    try {
+      city.scene.updateMatrixWorld(true)
+      const solids: THREE.Triangle[] = []
+      city.scene.traverse(object => {
+        if (!(object instanceof THREE.Mesh) || !object.name.match(/^(ground\.rim|access\.(steel|struct|surfaces|treads))$/)) return
+        const geometry = object.geometry, positions = geometry.getAttribute('position'), indices = geometry.index
+        for (let i = 0; i < (indices?.count ?? positions.count); i += 3) {
+          const vertex = (n: number): THREE.Vector3 => new THREE.Vector3()
+            .fromBufferAttribute(positions, indices ? indices.getX(n) : n).applyMatrix4(object.matrixWorld)
+          solids.push(new THREE.Triangle(vertex(i), vertex(i + 1), vertex(i + 2)))
+        }
+      })
+      expect(solids.length).toBeGreaterThan(100)
+      const p = new THREE.Vector3(), box = new THREE.Box3(), failures: string[] = []
+      for (let slot = 0; slot < 3; slot++) for (let table = 0; table < 5; table++) {
+        for (let step = 0; step <= 300; step++) {
+          vacuumServicePoint(slot, table, step / 300, p)
+          // Inscribed chassis box: an intersection is inside the round bumper, not its bounding-box corners.
+          box.min.set(p.x - 2.4, p.y + 0.36, p.z - 2.4)
+          box.max.set(p.x + 2.4, p.y + 0.94, p.z + 2.4)
+          if (solids.some(triangle => box.intersectsTriangle(triangle))) {
+            failures.push(`${slot}/${table}/${step}: ${p.toArray()}`)
+            break
+          }
+        }
+      }
+      expect(failures).toEqual([])
+    } finally { city.dispose() }
+  })
+
+  it('keeps rotating side brushes clear of the actual lift guides', () => {
+    const { module, sim } = fixture()
+    module.setDetail?.(2)
+    module.group.updateMatrixWorld(true)
+    const service = module.group.getObjectByName('autovac.service-lanes')!
+    const guides = service.children.find(object => object instanceof THREE.InstancedMesh &&
+      object.name !== 'autovac.worker-lifts') as THREE.InstancedMesh
+    const brushes = module.group.getObjectByName('autovac.workers.brushes') as THREE.InstancedMesh
+    const transform = new THREE.Matrix4(), triangle = new THREE.Triangle()
+    guides.geometry.computeBoundingBox()
+    const boxes = Array.from({ length: guides.count }, (_, i) => {
+      guides.getMatrixAt(i, transform)
+      return guides.geometry.boundingBox!.clone().applyMatrix4(transform)
+    })
+    expect(boxes.length).toBe(12)
+    const positions = brushes.geometry.getAttribute('position'), indices = brushes.geometry.index
+    const failures: string[] = []
+    for (let slot = 0; slot < 3; slot++) {
+      const worker = sim.state.autovac.workers[slot]
+      worker.active = true
+      worker.table = 0
+      for (const phase of ['travel', 'scan_heap', 'vacuum_index', 'vacuum_heap', 'return'] as const) {
+        worker.phase = phase
+        for (let n = 0; n <= 100; n++) {
+          worker.progress = worker.travel = n / 100
+          module.update(1 / 30, sim.state, n / 30)
+          for (let brush = slot * 6; brush < slot * 6 + 6; brush++) {
+            brushes.getMatrixAt(brush, transform)
+            for (let i = 0; i < (indices?.count ?? positions.count); i += 3) {
+              triangle.a.fromBufferAttribute(positions, indices ? indices.getX(i) : i).applyMatrix4(transform)
+              triangle.b.fromBufferAttribute(positions, indices ? indices.getX(i + 1) : i + 1).applyMatrix4(transform)
+              triangle.c.fromBufferAttribute(positions, indices ? indices.getX(i + 2) : i + 2).applyMatrix4(transform)
+              if (boxes.some(box => box.intersectsTriangle(triangle))) failures.push(`${slot}/${phase}/${n}/${brush}`)
+            }
+          }
+        }
+      }
+    }
+    expect(failures).toEqual([])
+  })
+
   it('updates aggregate removal only when collection occurs, not during the depot return', () => {
     const { module, sim } = fixture()
     const worker = sim.state.autovac.workers[0]
@@ -281,6 +355,26 @@ describe('robot vacuum service station', () => {
       }
       expect(centers[0].distanceTo(centers[1]), `${first}/${second}: overlapping work lanes`).toBeGreaterThan(7.2)
     }
+  })
+
+  it('keeps fixed road and curb faces outside each full moving lift footprint', () => {
+    const { module } = fixture()
+    const deck = module.group.getObjectByName('autovac.service-decks') as THREE.Mesh
+    const positions = deck.geometry.getAttribute('position'), triangle = new THREE.Triangle()
+    const failures: string[] = []
+    for (let slot = 0; slot < 3; slot++) {
+      const x = vacuumLiftX(slot), z = vacuumLiftZ(slot), half = VACUUM_SERVICE.liftWidth / 2 - 0.01
+      const shaft = new THREE.Box3(
+        new THREE.Vector3(x - half, VACUUM_SERVICE.workY - 0.4, z - half),
+        new THREE.Vector3(x + half, VACUUM_SERVICE.surfaceY + 0.025, z + half))
+      for (let i = 0; i < positions.count; i += 3) {
+        triangle.a.fromBufferAttribute(positions, i)
+        triangle.b.fromBufferAttribute(positions, i + 1)
+        triangle.c.fromBufferAttribute(positions, i + 2)
+        if (shaft.intersectsTriangle(triangle)) failures.push(`${slot}/${i}`)
+      }
+    }
+    expect(failures).toEqual([])
   })
 
   it('lands each lift when frame progress skips its endpoint', () => {

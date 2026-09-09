@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createMoveResult } from '../src/engine/collision'
 import { WALK_UP_RADIUS } from '../src/ui/walk-up'
-import { CITY, routePoint } from '../src/world/layout'
+import { CITY, VACUUM_SERVICE, routePoint } from '../src/world/layout'
 import type { TraversalRoute, WalkCityHarness, WalkPoint } from './walk-harness'
 import { createWalkCityHarness } from './walk-harness'
 
@@ -533,17 +533,20 @@ describe('real-city first-person traversal', () => {
     expect(result.steps.at(-1)?.grounded).toBe(true)
   })
 
-  it('jumps the excavation parapet, lands on the floor, and does not fall through the world', () => {
+  it.each([
+    { x: 30, landing: VACUUM_SERVICE.workY + 0.025, surface: 'service deck' },
+    { x: 12, landing: CITY.storage.y, surface: 'excavation floor' },
+  ])('jumps the parapet and lands on the $surface without falling through it', ({ x, landing }) => {
     const result = city.run({
       id: 'jump:excavation-edge',
-      points: [[30, 0.02, -108], [30, -52, -90]],
+      points: [[x, 0.02, -108], [x, landing, -90]],
       gait: 'run',
       jumpEveryFrames: 12,
       settleFrames: 180,
     })
     expect(result.reached).toBe(true)
     expect(result.minFeetY).toBeGreaterThanOrEqual(-60)
-    expect(result.finalPosition[1]).toBeCloseTo(-52, 1)
+    expect(result.finalPosition[1]).toBeCloseTo(landing, 1)
     expect(result.steps.at(-1)?.grounded).toBe(true)
   })
 
