@@ -703,6 +703,8 @@ export function createLabels(
   /** Constructed after labels.ts; resolved once when the tour module mounts. */
   let hudFirstRun: HTMLElement | null = null
   let inspectorPanel: HTMLElement | null = null
+  const overlays = ['#city-version-provenance', '.vacuum-lesson', '.operations-campaign',
+    '#pgc-inspector-panel', '#pgc-console-panel'].map(selector => ({ selector, node: null as HTMLElement | null }))
   let boxL = 0
   let boxT = 0
   let boxR = 0
@@ -752,6 +754,7 @@ export function createLabels(
   const rW = new Float32Array(MAX_RECTS)
   const rH = new Float32Array(MAX_RECTS)
   let rectN = 0
+  let hudRectN = 0
   let gCols = 0
   let gRows = 0
   let gCells = new Int32Array(0)
@@ -848,12 +851,12 @@ export function createLabels(
   function fits(e: Entry, v: number, w: number, h: number, pad: number): boolean {
     variantAt(e, v, w, h)
     if (vx - Math.max(0, pad) < boxL || vx + w + Math.max(0, pad) > boxR || vy - Math.max(0, pad) < boxT || vy + h + Math.max(0, pad) > boxB) return false
-    return !hits(vx - pad, vy - pad, w + pad * 2, h + pad * 2)
+    return !hitsHud(vx, vy, w, h) && !hits(vx - pad, vy - pad, w + pad * 2, h + pad * 2)
   }
 
   /* Clamp pinned chips to usable city space. Only destinations and attention
    * targets search the grid; ordinary dwell pins use the constant-time clamp. */
-  function placeBoundedFallback(e: Entry, w: number, h: number): void {
+  function placeBoundedFallback(e: Entry, w: number, h: number): boolean {
     let bestX = Math.max(boxL, Math.min(boxR - w, vx))
     let bestY = Math.max(boxT, Math.min(boxB - h, vy))
     let bestD = Infinity
@@ -876,10 +879,17 @@ export function createLabels(
     }
     vx = bestX
     vy = bestY
+    // Dwell and attention priority never override an explanation's pixels.
+    return !hitsHud(vx, vy, w, h)
+  }
+
+  function hitsHud(x: number, y: number, w: number, h: number): boolean {
+    for (let i = 0; i < hudRectN; i++) if (hitsRect(i, x, y, w, h)) return true
+    return false
   }
 
   function reserveHudRect(node: HTMLElement | null): void {
-    if (!node) return
+    if (!node || node.hidden || node.getAttribute('aria-hidden') === 'true') return
     const r = node.getBoundingClientRect()
     if (r.width <= 0 || r.height <= 0) return
     addRect(r.left - 6, r.top - 6, r.width + 12, r.height + 12)
@@ -1071,10 +1081,19 @@ export function createLabels(
     /* ---- place ---------------------------------------------------------- */
     ensureGrid()
     gridReset()
+    reserveHudRect(hudTop)
+    reserveHudRect(hudBottom)
+    reserveHudRect(hudLeft)
+    reserveHudRect(hudRight)
+    for (const overlay of overlays) {
+      if (!overlay.node) overlay.node = document.querySelector(overlay.selector)
+      reserveHudRect(overlay.node)
+    }
     reserveHudRect(hudCompass)
     reserveHudRect(hudToasts)
     if (!hudFirstRun) hudFirstRun = document.querySelector('.tour-first')
     reserveHudRect(hudFirstRun)
+    hudRectN = rectN
     let budget = walking ? Math.min(maxLabels, WALK_LABEL_CAP) : maxLabels
     let areaLeft = viewW * viewH * labelAreaPlacementBudget(viewW)
 
@@ -1139,7 +1158,7 @@ export function createLabels(
 
       if (v < 0) continue
       variantAt(e, v, w, h)
-      if (forcedPlacement) placeBoundedFallback(e, w, h)
+      if (forcedPlacement && !placeBoundedFallback(e, w, h)) continue
       e.variant = v
       e.dx = vx - e.sx
       e.dy = vy - e.sy

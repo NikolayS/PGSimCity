@@ -1275,6 +1275,7 @@ body.pg-labels-off #labels-root {
    mode exit and notices; remove map instruments, panels, scenarios and chrome.
    ========================================================================*/
 
+body.pg-walk .tour-first,
 body.pg-walk #hud-left,
 body.pg-walk #hud-right,
 body.pg-walk #compass,

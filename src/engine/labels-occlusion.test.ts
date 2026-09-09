@@ -101,3 +101,32 @@ it('continues refreshing ordinary anchors while three distinct context targets r
   }
   labels.dispose()
 })
+
+it('never forces a selected annotation through a full-screen explanation', () => {
+  const dom = installTestDom(), registry = new Registry(), bus = createBus(), sim = createSim(bus)
+  const container = dom.document.createElement('div')
+  dom.document.body.appendChild(container)
+  const disclosure = dom.document.createElement('div')
+  disclosure.id = 'city-version-provenance'
+  disclosure.getBoundingClientRect = () => ({ x: 0, y: 0, toJSON: () => ({}), left: 0, top: 0, right: 1280, bottom: 900, width: 1280, height: 900 })
+  dom.document.body.appendChild(disclosure)
+  registry.register({ id: 'item', name: 'Selected item', role: 'test', kind: 'process',
+    district: 'backends', object: new THREE.Group(), tier: 1, labelAt: [0, 0, 0],
+    color: 0xffff00, focus: { target: [0, 0, 0], distance: 40 } })
+  const labels = createLabels(container as unknown as HTMLElement, registry, bus, { occluded: () => false })
+  labels.resize(1280, 900)
+  const camera = new THREE.PerspectiveCamera(50, 1280 / 900, 0.1, 2000)
+  camera.position.set(0, 20, 60); camera.lookAt(0, 0, 0); camera.updateMatrixWorld()
+  bus.emit('select', { id: 'item' })
+  for (let i = 0; i < 12; i++) labels.update(0.2, camera, sim.state)
+  const label = (labels.group.children.find(o => (o as THREE.Object3D & { element?: HTMLElement }).element?.dataset.id === 'item') as THREE.Object3D & { element: HTMLElement }).element
+  expect(label.classList.contains('is-on')).toBe(false)
+  disclosure.getBoundingClientRect = () => ({ x: 0, y: 0, toJSON: () => ({}), left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 })
+  for (let i = 0; i < 12; i++) labels.update(0.2, camera, sim.state)
+  expect(label.classList.contains('is-on')).toBe(true)
+  for (const child of labels.group.children) {
+    const element = (child as THREE.Object3D & { element: HTMLElement }).element
+    Object.defineProperty(element, 'ownerDocument', { value: { defaultView: { Element: element.constructor } } })
+  }
+  labels.dispose()
+})
