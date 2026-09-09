@@ -425,7 +425,7 @@ export const VACUUM_SERVICE = {
   laneWidth: 9,
 } as const
 
-export function vacuumLiftZ(slot: number): number { return -105 + slot * 15 }
+export function vacuumLiftZ(slot: number): number { return -95 + slot * 10 }
 
 /** Offset from the loading head house and the shared-memory pylons. */
 export function vacuumTableLaneX(table: number): number {

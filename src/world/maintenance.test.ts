@@ -7,7 +7,7 @@ import type { ComponentDef } from '../core/types'
 import { fmtNum } from '../core/util'
 import { createSim } from '../sim/model'
 import { installTestDom } from '../../test/dom'
-import { vacBayPos, vacuumServicePoint, tableX, VACUUM_SERVICE, CITY } from './layout'
+import { vacBayPos, vacuumServicePoint, vacuumLiftZ, tableX, VACUUM_SERVICE, CITY } from './layout'
 import { CKPT_MASS, VACUUM_DOCKS, VACUUM_ROBOT_BODY, createMaintenance } from './maintenance'
 
 type Box = readonly [number, number, number, number, number, number]
@@ -148,6 +148,10 @@ describe('robot vacuum service station', () => {
   }
 
   it('fits the lift cars in the open corridor outside the OS cache slab', () => {
+    for (let slot = 0; slot < 3; slot++) {
+      expect(vacuumLiftZ(slot) - 4.7).toBeGreaterThan(-CITY.pit.z)
+      expect(vacuumLiftZ(slot) + 4.7).toBeLessThan(CITY.pit.z)
+    }
     expect(VACUUM_SERVICE.liftX - VACUUM_SERVICE.liftWidth / 2).toBeGreaterThanOrEqual(-CITY.pit.x)
     expect(VACUUM_SERVICE.liftX + VACUUM_SERVICE.liftWidth / 2).toBeLessThanOrEqual(-CITY.osCache.w / 2)
   })
