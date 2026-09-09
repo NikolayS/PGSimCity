@@ -9,6 +9,13 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## v0.57.1 — Retained snapshot explanation
+
+- Establish the xmin lesson with REPEATABLE READ followed by a table SELECT and an idle open transaction. Plain BEGIN at READ COMMITTED does not establish that retained snapshot.
+- Distinguish snapshot-delayed reclamation from all vacuum work, HOT version creation from pruning, and cleanup eligibility from a later collecting pass. Keep the removal horizon distinct from the oldest tuple a reader can see.
+- Direct diagnosis toward actual backend and replication horizons; qualify the model’s scaled scan rather than implying PostgreSQL always scans every heap page.
+- Simulation behavior is unchanged; the lesson starts with an already-retained snapshot.
+
 ## v0.57.0 — Grounded maintenance crews
 
 - Household-style autovacuum robots and marked service docks expose actual worker state without equating activity with collected tuples.

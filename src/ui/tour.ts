@@ -185,7 +185,7 @@ const STEPS: TourStep[] = [
     id: 'horizon',
     title: 'When vacuum cannot: the horizon',
     body:
-      'This session ran BEGIN ISOLATION LEVEL REPEATABLE READ, then a SELECT from a table, and went idle without ending the transaction. The SELECT established a snapshot retained until transaction end; plain BEGIN at READ COMMITTED does not do that. Vacuum cannot reclaim row versions that the retained snapshot may still need. Workers can still run and remove other eligible versions. In this modeled incident, continued updates build a protected backlog. After a short look we end the transaction: if no other older horizon remains, cleanup becomes eligible, and a later vacuum pass can reclaim those versions.',
+      'This session ran BEGIN ISOLATION LEVEL REPEATABLE READ, then a SELECT from a table, and went idle without ending the transaction. The SELECT established a snapshot retained until transaction end; plain BEGIN at READ COMMITTED does not do that. The retained snapshot holds back the removal horizon: vacuum cannot reclaim row versions it may still need. Older committed and frozen tuples can still be visible; the horizon governs cleanup, not the oldest creator a reader may see. Workers can still run and remove other eligible versions. In this modeled incident, continued updates build a protected backlog. After a short look we end the transaction: if no other older horizon remains, cleanup becomes eligible, and a later vacuum pass can reclaim those versions.',
     focus: 'xmin.horizon',
     duration: 22,
     knobs: { longRunningXact: true },
