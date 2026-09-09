@@ -513,7 +513,6 @@ interface Truck {
   wasActive: boolean
   prevPhase: VacPhase
   expected: number
-  panelT: number
 }
 
 /* ============================================================================
@@ -1199,7 +1198,6 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       wasActive: false,
       prevPhase: 'idle',
       expected: 1,
-      panelT: 0,
     })
   }
 
@@ -2187,21 +2185,19 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       tr.focus[1] = tr.pos.y + 3
       tr.focus[2] = tr.pos.z
 
-      tr.panelT += dt
-      if (tr.panelT > 0.2) {
-        tr.panelT = 0
-        if (!w.active) {
-          signs.setLiveText(tr.panelTop, `AV-${i} idle`)
-          signs.setLiveText(tr.panelBot, 'in bay')
-        } else {
-          signs.setLiveText(tr.panelTop, `${table.def.name} · ${vacuumTransitQueued(av.workers, i) ? 'city-road queue' : PHASE_LABEL[w.phase]}`)
-          signs.setLiveText(
-            tr.panelBot,
-            stalled
-              ? `xmin limits removal · ${fmtNum(w.deadCollected)} collected`
-              : `${fmtNum(Math.round(w.deadCollected / 50) * 50)} dead tuples`,
-          )
-        }
+      // Captions describe the current observation, even with zero elapsed model
+      // time after a paused step/reset. setLiveText skips unchanged atlas rows.
+      if (!w.active) {
+        signs.setLiveText(tr.panelTop, `AV-${i} idle`)
+        signs.setLiveText(tr.panelBot, 'in bay')
+      } else {
+        signs.setLiveText(tr.panelTop, `${table.def.name} · ${vacuumTransitQueued(av.workers, i) ? 'city-road queue' : PHASE_LABEL[w.phase]}`)
+        signs.setLiveText(
+          tr.panelBot,
+          stalled
+            ? `xmin limits removal · ${fmtNum(w.deadCollected)} collected`
+            : `${fmtNum(w.deadCollected)} dead tuples`,
+        )
       }
       const panelY = tr.pos.y + 8.6
       signs.place(tr.panelTop, tr.pos.x, panelY + 1.6, tr.pos.z, _right, _up)

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 
 import { createBus } from '../core/bus'
@@ -125,8 +125,21 @@ describe('robot vacuum service station', () => {
     while (dispose.length) dispose.pop()!()
   })
 
-  function fixture() {
+  function fixture(drawText?: (text: string) => void) {
     installTestDom({ canvas2d: true })
+    if (drawText) {
+      const create = document.createElement.bind(document)
+      vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+        const element = create(tag)
+        if (tag === 'canvas') {
+          const canvas = element as HTMLCanvasElement
+          const context = canvas.getContext('2d')!
+          context.fillText = (text: string) => drawText(text)
+          canvas.getContext = (() => context) as unknown as typeof canvas.getContext
+        }
+        return element
+      })
+    }
     const bus = createBus()
     const sim = createSim(bus)
     const theme = createTheme()
@@ -148,6 +161,31 @@ describe('robot vacuum service station', () => {
     module.update(1 / 60, sim.state, 0)
     return { module, sim, components }
   }
+
+  it('refreshes physical worker counters at a paused first-removal checkpoint', () => {
+    const drawn: string[] = []
+    const { module, sim } = fixture(text => drawn.push(text))
+    const worker = sim.state.autovac.workers[0]
+    Object.assign(worker, { active: true, table: 3, phase: 'scan_heap', deadCollected: 0 })
+    module.update(0.21, sim.state, 1)
+    drawn.length = 0
+    Object.assign(worker, { phase: 'vacuum_heap', deadCollected: 67.89263992786228 })
+    // A final render after a native step may receive no elapsed model time.
+    module.update(0, sim.state, 1)
+    expect(drawn).toContain('68 dead tuples')
+    expect(drawn.some(text => text.includes('vacuum_heap'))).toBe(true)
+    drawn.length = 0
+    module.update(0, sim.state, 1)
+    expect(drawn).toEqual([]) // unchanged captions must not repaint the atlas
+    worker.deadCollected = 1
+    module.update(0, sim.state, 1)
+    expect(drawn).toContain('1 dead tuples')
+    drawn.length = 0
+    worker.active = false
+    module.update(0, sim.state, 1)
+    expect(drawn).toContain('AV-0 idle')
+    expect(drawn).toContain('in bay')
+  })
 
   it('fits the lift cars in the open corridor outside the OS cache slab', () => {
     for (let slot = 0; slot < 3; slot++) {
