@@ -1086,7 +1086,9 @@ export function createLabels(
         h = e.nameH * e.scale
         area = w * h
       }
-      const withinArea = area <= areaLeft
+      // Preserve one complete attention chip before spending space on map labels.
+      // Its qualification is load-bearing; ordinary labels pay the area cost.
+      const withinArea = area <= areaLeft || (e.band <= B_FOCUS && w <= boxR - boxL && h <= boxB - boxT)
       // Selected and hovered are placed first and are never collided away;
       // anything inside its dwell is held down so nothing can blink.
       const age = now - e.sinceT
@@ -1212,6 +1214,13 @@ export function createLabels(
 
   /* --------------------------------- frame -------------------------------- */
 
+  function refreshContextOcclusion(id: string | null, camera: THREE.PerspectiveCamera): boolean {
+    const e = id ? byId.get(id) : undefined
+    if (!e || !e.onScreen || e.rank < 0 || e.rank > 2 || e.proxy) return false
+    e.occluded = isLabelAnchorOccluded(collision, camera.position, e.pos)
+    return true
+  }
+
   function update(dt: number, camera: THREE.PerspectiveCamera, sim: SimState): void {
     now = performance.now() / 1000
     if (componentCount !== registry.all().length) {
@@ -1224,7 +1233,9 @@ export function createLabels(
       pass(camera)
     }
 
-    let checked = 0
+    let checked = refreshContextOcclusion(selectedId, camera) ? 1 : 0
+    if (hoveredId !== selectedId && refreshContextOcclusion(hoveredId, camera)) checked++
+    if (now < focusUntil && focusId !== selectedId && focusId !== hoveredId && refreshContextOcclusion(focusId, camera)) checked++
     let scanned = 0
     while (checked < LABEL_OCCLUSION_BUDGET && scanned < entries.length) {
       if (occlusionCursor >= entries.length) occlusionCursor = 0

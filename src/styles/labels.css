@@ -371,6 +371,6 @@
 /* Selected context stays identifiable without claiming its object is visible. */
 .lbl__occlusion:not([hidden]) {
   display: block;
-  font-size: inherit;
+  font-size: var(--fs-xs);
   font-weight: normal;
 }
