@@ -415,6 +415,32 @@ export function vacBayPos(i: number): [number, number, number] {
   return [ANCHOR.vacDepot[0], 0, -26 + i * 26]
 }
 
+/** Physical robot access, distinct from the abstract data-flow splines. */
+export const VACUUM_SERVICE = {
+  surfaceY: 0.74,
+  workY: CITY.storage.warehouseTop + 0.03,
+  junctionX: -144,
+  liftX: -114,
+  liftWidth: 8,
+  laneWidth: 9,
+} as const
+
+export function vacuumLiftZ(slot: number): number { return -95 + slot * 15 }
+
+/** Piecewise level roads joined by a supported vertical service lift. */
+export function vacuumServicePoint(slot: number, table: number, progress: number, out: THREE.Vector3): THREE.Vector3 {
+  const u = Math.max(0, Math.min(1, progress))
+  const bayX = ANCHOR.vacDepot[0] - 4, bayZ = -26 + slot * 26
+  const { surfaceY: top, workY: low, junctionX: j, liftX: x } = VACUUM_SERVICE
+  const z = vacuumLiftZ(slot), tx = tableX(table)
+  if (u < 0.2) return out.set(bayX + (j - bayX) * u / 0.2, top, bayZ)
+  if (u < 0.35) return out.set(j, top, bayZ + (z - bayZ) * (u - 0.2) / 0.15)
+  if (u < 0.45) return out.set(j + (x - j) * (u - 0.35) / 0.1, top, z)
+  if (u < 0.65) return out.set(x, top + (low - top) * (u - 0.45) / 0.2, z)
+  if (u < 0.82) return out.set(x + (tx - x) * (u - 0.65) / 0.17, low, z)
+  return out.set(tx, low, z + (-60 - z) * (u - 0.82) / 0.18)
+}
+
 /** World position of shared-buffer tile index (0 … N_BUFFERS-1). */
 export function bufferTilePos(idx: number): [number, number, number] {
   const g = CITY.buf.grid

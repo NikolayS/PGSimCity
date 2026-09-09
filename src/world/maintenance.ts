@@ -7,7 +7,7 @@ import { clamp, clamp01, damp, fmtDuration, fmtNum, fmtPct, lerp, makeRng, smoot
 import { walTriggerBytes } from '../core/model-helpers'
 import {
   ANCHOR, CITY, N_TABLES, TABLES,
-  rid, routePoint, routeTangent, vacBayPos,
+  rid, routePoint, routeTangent, vacBayPos, tableX, VACUUM_SERVICE, vacuumLiftZ, vacuumServicePoint,
 } from './layout'
 import { markTextPlane, markTextTexture } from './text-plane'
 
@@ -501,10 +501,6 @@ interface Truck {
   pos: THREE.Vector3
   prev: THREE.Vector3
   bay: THREE.Vector3
-  /** where the worker was standing when this run was assigned to it */
-  launchFrom: THREE.Vector3
-  /** the haul road from the landfill tipping deck back to the bay */
-  home: THREE.CatmullRomCurve3
   yaw: number
   bank: number
   pitch: number
@@ -513,8 +509,6 @@ interface Truck {
   carry: number
   collected: number
   spin: number
-  tilt: number
-  homing: number
   wasActive: boolean
   prevPhase: VacPhase
   dumped: boolean
@@ -1071,6 +1065,76 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   group.add(robotTrim)
   meshes.push(robotTrim)
 
+  // Solid service lanes, with a separate lift car per worker slot. The data
+  // flow splines remain conceptual; robots never use them as flying paths.
+  const service = new THREE.Group()
+  service.name = 'autovac.service-lanes'
+  group.add(service)
+  const roadSpecs: BoxSpec[] = [], supportSpecs: BoxSpec[] = []
+  const { surfaceY, workY, junctionX, liftX, laneWidth, liftWidth } = VACUUM_SERVICE
+  const road = (x1: number, z1: number, x2: number, z2: number, y: number): void => {
+    roadSpecs.push([(x1 + x2) / 2, y + 0.025 - 0.2, (z1 + z2) / 2,
+      Math.abs(x2 - x1) + laneWidth, 0.4, Math.abs(z2 - z1) + laneWidth])
+  }
+  road(junctionX, vacuumLiftZ(0), junctionX, 26, surfaceY)
+  for (let i = 0; i < N_VAC_WORKERS; i++) {
+    const bay = vacBayPos(i), z = vacuumLiftZ(i)
+    road(bay[0] - 4, bay[2], junctionX, bay[2], surfaceY)
+    // Stop at the lift edge: no stationary top deck over the moving car.
+    road(junctionX, z, liftX - (laneWidth + liftWidth) / 2, z, surfaceY)
+    road(liftX + (laneWidth + liftWidth) / 2, z, tableX(N_TABLES - 1), z, workY)
+    for (const dx of [-4.4, 4.4]) for (const dz of [-4.4, 4.4]) {
+      supportSpecs.push([liftX + dx, (surfaceY + workY) / 2, z + dz, 0.45, surfaceY - workY + 2, 0.45])
+    }
+  }
+  for (let t = 0; t < N_TABLES; t++) road(tableX(t), vacuumLiftZ(0), tableX(t), 24, workY)
+  // Union the rectangular lanes before meshing: overlapping plates at road
+  // junctions otherwise put two opaque surfaces at exactly the same height.
+  const positions: number[] = [], uvs: number[] = []
+  const quad = (a: number[], b: number[], c: number[], d: number[]): void => {
+    for (const v of [a, b, c, a, c, d]) { positions.push(...v); uvs.push(v[0] / 8, v[2] / 8) }
+  }
+  for (const level of [surfaceY, workY]) {
+    const specs = roadSpecs.filter(r => Math.abs(r[1] - (level + 0.025 - 0.2)) < 0.001)
+    const xs = [...new Set(specs.flatMap(r => [r[0] - r[3] / 2, r[0] + r[3] / 2]))].sort((a, b) => a - b)
+    const zs = [...new Set(specs.flatMap(r => [r[2] - r[5] / 2, r[2] + r[5] / 2]))].sort((a, b) => a - b)
+    const cells = new Set<string>()
+    for (let x = 0; x < xs.length - 1; x++) for (let z = 0; z < zs.length - 1; z++) {
+      const cx = (xs[x] + xs[x + 1]) / 2, cz = (zs[z] + zs[z + 1]) / 2
+      if (specs.some(r => Math.abs(cx - r[0]) < r[3] / 2 && Math.abs(cz - r[2]) < r[5] / 2)) cells.add(`${x}:${z}`)
+    }
+    const hi = level + 0.025, lo = hi - 0.4
+    for (const key of cells) {
+      const [x, z] = key.split(':').map(Number), a = xs[x], b = xs[x + 1], c = zs[z], d = zs[z + 1]
+      quad([a, hi, c], [a, hi, d], [b, hi, d], [b, hi, c])
+      quad([a, lo, c], [b, lo, c], [b, lo, d], [a, lo, d])
+      if (!cells.has(`${x - 1}:${z}`)) quad([a, lo, c], [a, lo, d], [a, hi, d], [a, hi, c])
+      if (!cells.has(`${x + 1}:${z}`)) quad([b, lo, d], [b, lo, c], [b, hi, c], [b, hi, d])
+      if (!cells.has(`${x}:${z - 1}`)) quad([b, lo, c], [a, lo, c], [a, hi, c], [b, hi, c])
+      if (!cells.has(`${x}:${z + 1}`)) quad([a, lo, d], [b, lo, d], [b, hi, d], [a, hi, d])
+    }
+  }
+  const roadGeometry = own(new THREE.BufferGeometry())
+  roadGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  roadGeometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
+  roadGeometry.computeVertexNormals()
+  const roadDecks = new THREE.Mesh(roadGeometry, matHeavy)
+  roadDecks.castShadow = roadDecks.receiveShadow = true
+  service.add(roadDecks)
+  roadDecks.name = 'autovac.service-decks'
+  // Static guide towers make the vertical transfer legible as an elevator.
+  batch(service, unitBox, matStruct, supportSpecs, true)
+  const liftCars = batch(service, unitBox, matHeavy, Array.from({ length: N_VAC_WORKERS }, (_, i) =>
+    [liftX, surfaceY + 0.025 - 0.2, vacuumLiftZ(i), liftWidth, 0.4, liftWidth] as BoxSpec), true)
+  liftCars.name = 'autovac.worker-lifts'
+  liftCars.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  liftCars.frustumCulled = false
+  const liftYs = new Float64Array(N_VAC_WORKERS).fill(surfaceY)
+  for (const [x, y, z, sx, sy, sz] of roadSpecs) collisionBoxes.push(new THREE.Box3(
+    new THREE.Vector3(x - sx / 2, y - sy / 2, z - sz / 2),
+    new THREE.Vector3(x + sx / 2, y + sy / 2, z + sz / 2),
+  ))
+
   const trucks: Truck[] = []
   for (let i = 0; i < N_VAC_WORKERS; i++) {
     const g = new THREE.Group()
@@ -1092,22 +1156,6 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     const b = vacBayPos(i)
     const bayX = b[0] - 4
     const bayZ = b[2]
-    // The way home from the landfill tipping deck, down the ramp and past the pile.
-    const home = new THREE.CatmullRomCurve3(
-      [
-        new THREE.Vector3(LF[0], 8.8, LF[2]),
-        new THREE.Vector3(LF[0] - 13, 8.6, LF[2]),
-        new THREE.Vector3(LF[0] - 18, 4.0, LF[2] - 6),
-        new THREE.Vector3(LF[0] - 12, ROAD_Y, LF[2] - 24),
-        new THREE.Vector3(bayX - 8, ROAD_Y, bayZ + 26),
-        new THREE.Vector3(bayX, ROAD_Y, bayZ),
-      ],
-      false,
-      'catmullrom',
-      0.5,
-    )
-    home.getPointAt(0, _p) // warm the arc-length cache off the hot path
-
     trucks.push({
       slot: i,
       group: g,
@@ -1120,8 +1168,6 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       pos: new THREE.Vector3(bayX, ROAD_Y, bayZ),
       prev: new THREE.Vector3(bayX, ROAD_Y, bayZ),
       bay: new THREE.Vector3(bayX, ROAD_Y, bayZ),
-      launchFrom: new THREE.Vector3(bayX, ROAD_Y, bayZ),
-      home,
       yaw: 0, // parked nose-east, pointing at the depot exit
       bank: 0,
       pitch: 0,
@@ -1130,8 +1176,6 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       carry: 0,
       collected: 0,
       spin: 0,
-      tilt: 0,
-      homing: 0,
       wasActive: false,
       prevPhase: 'idle',
       dumped: false,
@@ -1675,80 +1719,16 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
 
   /* --- worker routing ----------------------------------------------------- */
 
-  /**
-   * Keep a vehicle on the surface until it is well inside the excavation, then
-   * let it follow the road down. The routes dive below y=0 while still over
-   * solid ground; a truck may not. It descends the pit face instead.
-   */
-  function haulY(x: number, z: number, routeY: number): number {
-    const d = Math.max(Math.abs(x) - CITY.pit.x, Math.abs(z) - CITY.pit.z)
-    const k = 1 - smoothstep((d + 38) / 24) // surface until 14m inside the rim
-    return lerp(ROAD_Y, routeY, k)
-  }
-
-  /** Sample the road a worker is on for its phase, into _p. */
+  /** Wheels stay on level lanes or on their lift car; no aircraft banking. */
   function truckRoute(tr: Truck, phase: VacPhase, table: number, progress: number, travel: number): void {
-    const go = rid.vacGo(table)
-    switch (phase) {
-      case 'travel': {
-        if (travel < 0.12) {
-          // Pull out onto the haul road from wherever the worker was standing:
-          // a free worker can be re-tasked before it has finished coming home.
-          const k = smoothstep(travel / 0.12)
-          routePoint(go, 0, _p2)
-          _p.set(
-            lerp(tr.launchFrom.x, _p2.x, k),
-            lerp(tr.launchFrom.y, ROAD_Y, k),
-            lerp(tr.launchFrom.z, _p2.z, k),
-          )
-          return
-        }
-        routePoint(go, (travel - 0.12) / 0.88, _p)
-        break
-      }
-      case 'scan_heap':
-        // Working the heap: crawl out over it and back, the pass that finds
-        // the dead rows. Out-and-back so the worker starts and ends where the
-        // travel road left it, with no jump at the phase change.
-        routePoint(go, 1 - 0.1 * Math.sin(Math.PI * clamp01(progress)), _p)
-        break
-      case 'vacuum_index':
-        // Out to the index structure and back, once per index — a round trip,
-        // so the worker is always at the heap end when the phase changes.
-        routePoint(rid.vacIdx(table), Math.sin(Math.PI * clamp01(progress)), _p)
-        break
-      case 'vacuum_heap':
-        // the second pass, where the line pointers actually come back
-        routePoint(go, 1 - 0.07 * Math.sin(Math.PI * clamp01(progress)), _p)
-        break
-      case 'return':
-        routePoint(rid.vacBack(table), clamp01(progress), _p)
-        break
-      default:
-        routePoint(go, 1, _p)
+    if (phase === 'travel') vacuumServicePoint(tr.slot, table, travel, _p)
+    else if (phase === 'return') vacuumServicePoint(tr.slot, table, 1 - progress, _p)
+    else if (phase === 'vacuum_index') {
+      _p.set(tableX(table), VACUUM_SERVICE.workY, -60 + 84 * Math.sin(Math.PI * clamp01(progress)))
+    } else {
+      const sweep = phase === 'scan_heap' || phase === 'vacuum_heap' ? 8 * Math.sin(Math.PI * clamp01(progress)) : 0
+      _p.set(tableX(table), VACUUM_SERVICE.workY, -60 + sweep)
     }
-    _p.y = haulY(_p.x, _p.z, _p.y)
-  }
-
-  /** Orientation for a stationary worker: face along the road it is parked on. */
-  function truckTangent(phase: VacPhase, table: number, progress: number, travel: number): void {
-    switch (phase) {
-      case 'travel':
-        routeTangent(rid.vacGo(table), clamp01((travel - 0.12) / 0.88), _dir)
-        break
-      case 'vacuum_index':
-        routeTangent(rid.vacIdx(table), Math.sin(Math.PI * clamp01(progress)), _dir)
-        if (progress > 0.5) _dir.negate() // heading home along the same road
-        break
-      case 'return':
-        routeTangent(rid.vacBack(table), clamp01(progress), _dir)
-        break
-      default:
-        routeTangent(rid.vacGo(table), 0.98, _dir)
-    }
-    _dir.y *= 0.4
-    if (_dir.lengthSq() < 1e-8) _dir.set(1, 0, 0)
-    else _dir.normalize()
   }
 
   const PHASE_LABEL: Record<VacPhase, string> = {
@@ -2031,50 +2011,37 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       }
       if (w.active && !tr.wasActive) {
         launchFlash = 1
-        tr.homing = 0
         tr.dumped = false
         tr.hopper = 0
-        tr.launchFrom.copy(tr.pos)
       }
-      if (!w.active && tr.wasActive) tr.homing = 1 // coast home from the landfill
       tr.wasActive = w.active
-
       const stalled = w.stalledByHorizon
-
       tr.prev.copy(tr.pos)
       if (w.active) {
         truckRoute(tr, w.phase, w.table, w.progress, w.travel)
-        tr.pos.lerp(_p, 1 - Math.exp(-18 * dt))
-      } else if (tr.homing > 0) {
-        tr.homing = Math.max(0, tr.homing - dt / 2.6)
-        tr.home.getPointAt(clamp01(1 - tr.homing), _p)
-        tr.pos.lerp(_p, 1 - Math.exp(-14 * dt))
-      } else {
-        tr.pos.lerp(tr.bay, 1 - Math.exp(-4 * dt))
-      }
-
-      /* Heading comes from the road, not from the frame-to-frame delta: a
-       * worker settling onto its parking spot must not spin to face the drift.
-       * The climb angle, though, is real motion — the road dives underground
-       * where the truck does not. */
+        // Exact route contact prevents smoothing from cutting a diagonal
+        // through the unsupported corner between a lane and a vertical lift.
+        tr.pos.copy(_p)
+      } else tr.pos.copy(tr.bay)
+      const onLift = Math.abs(tr.pos.x - VACUUM_SERVICE.liftX) < 0.01 &&
+        Math.abs(tr.pos.z - vacuumLiftZ(i)) < 0.01
+      if (onLift) liftYs[i] = tr.pos.y
+      const liftY = liftYs[i]
+      setTRS(liftCars, i, VACUUM_SERVICE.liftX, liftY + 0.025 - 0.2, vacuumLiftZ(i), liftWidth, 0.4, liftWidth)
+      liftCars.instanceMatrix.needsUpdate = true
+      liftCars.boundingBox = null
+      liftCars.boundingSphere = null
       _dir.subVectors(tr.pos, tr.prev)
-      const moved = _dir.length()
+      const moved = Math.hypot(_dir.x, _dir.z)
       const speed = moved / Math.max(1e-4, dt)
-      const climb = moved > 1e-5 ? _dir.y / moved : 0
-      if (w.active) truckTangent(w.phase, w.table, w.progress, w.travel)
-      else if (speed > 1.2) _dir.normalize()
-      else _dir.set(1, 0, 0)
-
-      // The chassis is modelled nose-along +X, and Ry maps +X to (cos y, 0, -sin y).
-      let dy = Math.atan2(-_dir.z, _dir.x) - tr.yaw
-      while (dy > Math.PI) dy -= TAU
-      while (dy < -Math.PI) dy += TAU
-      const yawRate = dy / Math.max(1e-3, dt)
-      tr.yaw += dy * (1 - Math.exp(-7 * dt))
-      // roll out of the corner, pitch down the ramp
-      tr.bank = damp(tr.bank, clamp(yawRate * 0.05, -0.4, 0.4), 5, dt)
-      const pitchTo = speed > 1.2 ? Math.asin(clamp(climb, -1, 1)) * 0.8 : 0
-      tr.pitch = damp(tr.pitch, clamp(pitchTo, -0.9, 0.9), 6, dt)
+      if (moved > 1e-5) {
+        let dy = Math.atan2(-_dir.z, _dir.x) - tr.yaw
+        while (dy > Math.PI) dy -= TAU
+        while (dy < -Math.PI) dy += TAU
+        tr.yaw += dy * (1 - Math.exp(-7 * dt))
+      }
+      tr.bank = 0
+      tr.pitch = 0
       tr.spin += speed * dt * 1.1
 
       // Scanning is not removal. Even a constrained worker may collect older,
@@ -2094,7 +2061,6 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       tr.hopper = damp(tr.hopper, clamp01(fillTarget), w.phase === 'return' ? 6 : 2.4, dt)
 
       const tipping = w.active && w.phase === 'return' && w.progress > 0.86
-      tr.tilt = damp(tr.tilt, tipping ? 0.6 : 0, 5, dt)
       if (tipping && !tr.dumped) {
         tr.dumped = true
         const n = Math.round(clamp01(tr.hopper) * (low ? 10 : 22))
@@ -2175,7 +2141,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       setPart(truckNeon, n0 + 6, _mw, -3.3, 1.2, 0, 0.14, 0.24, 1.8)
       truckNeon.instanceMatrix.needsUpdate = true
 
-      const live = w.active || tr.homing > 0
+      const live = w.active
       _c.setHex(w.active ? (stalled ? COLOR.crit : COLOR.vacuum) : COLOR.inkDim)
       _c.multiplyScalar(w.active ? 0.85 : 0.18)
       dockLamps.setColorAt(i, _c)
@@ -2207,7 +2173,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
         tr.panelT = 0
         if (!w.active) {
           signs.setLiveText(tr.panelTop, `AV-${i} idle`)
-          signs.setLiveText(tr.panelBot, tr.homing > 0 ? 'returning to depot' : 'in bay')
+          signs.setLiveText(tr.panelBot, 'in bay')
         } else {
           signs.setLiveText(tr.panelTop, `${table.def.name} · ${PHASE_LABEL[w.phase]}`)
           signs.setLiveText(

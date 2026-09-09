@@ -7,7 +7,7 @@ import type { ComponentDef } from '../core/types'
 import { fmtNum } from '../core/util'
 import { createSim } from '../sim/model'
 import { installTestDom } from '../../test/dom'
-import { vacBayPos } from './layout'
+import { vacBayPos, VACUUM_SERVICE, CITY } from './layout'
 import { CKPT_MASS, VACUUM_DOCKS, VACUUM_ROBOT_BODY, createMaintenance } from './maintenance'
 
 type Box = readonly [number, number, number, number, number, number]
@@ -146,6 +146,39 @@ describe('robot vacuum service station', () => {
     module.update(1 / 60, sim.state, 0)
     return { module, sim, components }
   }
+
+  it('fits the lift cars in the open corridor outside the OS cache slab', () => {
+    expect(VACUUM_SERVICE.liftX - VACUUM_SERVICE.liftWidth / 2).toBeGreaterThanOrEqual(-CITY.pit.x)
+    expect(VACUUM_SERVICE.liftX + VACUUM_SERVICE.liftWidth / 2).toBeLessThanOrEqual(-CITY.osCache.w / 2)
+  })
+
+  it('keeps robots upright with wheel contact on service lanes and lifts', () => {
+    const { module, sim } = fixture()
+    const worker = sim.state.autovac.workers[0]
+    worker.active = true
+    const ray = new THREE.Raycaster()
+    const matrix = new THREE.Matrix4()
+    for (const table of [0, 3, 4]) for (const phase of ['travel', 'scan_heap', 'vacuum_index', 'vacuum_heap', 'return'] as const) {
+      worker.table = table
+      worker.phase = phase
+      for (let n = 0; n <= 20; n++) {
+        worker.travel = worker.progress = n / 20
+        module.update(1 / 30, sim.state, n / 30)
+        module.group.updateMatrixWorld(true)
+        const body = module.group.getObjectByName('autovac.worker.0')!.children[0] as THREE.InstancedMesh
+        body.getMatrixAt(0, matrix)
+        const base = new THREE.Vector3().setFromMatrixPosition(matrix)
+        base.y -= VACUUM_ROBOT_BODY[0][1]
+        expect(new THREE.Vector3().setFromMatrixColumn(matrix, 1).normalize().y).toBeCloseTo(1, 5)
+        const road = module.group.getObjectByName('autovac.service-lanes')
+        expect(road, 'the robot needs a physical supporting surface').toBeDefined()
+        ray.set(new THREE.Vector3(base.x, base.y + 1, base.z), new THREE.Vector3(0, -1, 0))
+        const hits = ray.intersectObject(road!, true)
+        expect(hits.length, `${table}/${phase}/${n}: unsupported robot`).toBeGreaterThan(0)
+        expect(hits[0].point.y, `${table}/${phase}/${n}: wheel contact`).toBeCloseTo(base.y + 0.025, 2)
+      }
+    }
+  })
 
   it('keeps overlapping disc tops at distinct heights to avoid flicker', () => {
     for (let a = 0; a < VACUUM_ROBOT_BODY.length; a++) {
