@@ -702,6 +702,7 @@ export function createLabels(
   const hudToasts = document.getElementById('toast-stack')
   /** Constructed after labels.ts; resolved once when the tour module mounts. */
   let hudFirstRun: HTMLElement | null = null
+  let inspectorPanel: HTMLElement | null = null
   let boxL = 0
   let boxT = 0
   let boxR = 0
@@ -727,6 +728,12 @@ export function createLabels(
     }
     if (hudRight) {
       const r = hudRight.getBoundingClientRect()
+      if (r.width > 0) boxR = Math.min(boxR, r.left - 6)
+    }
+    // Wide panels overlay the city; their mount remains only a slim tab.
+    if (!inspectorPanel) inspectorPanel = document.getElementById('pgc-inspector-panel')
+    if (viewW > 1100 && inspectorPanel?.getAttribute('aria-hidden') === 'false') {
+      const r = inspectorPanel.getBoundingClientRect()
       if (r.width > 0) boxR = Math.min(boxR, r.left - 6)
     }
     // A layout we did not anticipate must never squeeze the labels out entirely.
@@ -840,17 +847,13 @@ export function createLabels(
 
   function fits(e: Entry, v: number, w: number, h: number, pad: number): boolean {
     variantAt(e, v, w, h)
-    if (vx - pad < boxL || vx + w + pad > boxR || vy - pad < boxT || vy + h + pad > boxB) return false
+    if (vx - Math.max(0, pad) < boxL || vx + w + Math.max(0, pad) > boxR || vy - Math.max(0, pad) < boxT || vy + h + Math.max(0, pad) > boxB) return false
     return !hits(vx - pad, vy - pad, w + pad * 2, h + pad * 2)
   }
 
-  /**
-   * Destination chips must remain readable even when their anchor is under a
-   * side panel or the minimap. Search the usable screen on a coarse grid and
-   * take the nearest clear slot. This is a last resort for at most eight map
-   * labels, not the object-label hot path.
-   */
-  function placeDestinationFallback(e: Entry, w: number, h: number): void {
+  /* Clamp pinned chips to usable city space. Only destinations and attention
+   * targets search the grid; ordinary dwell pins use the constant-time clamp. */
+  function placeBoundedFallback(e: Entry, w: number, h: number): void {
     let bestX = Math.max(boxL, Math.min(boxR - w, vx))
     let bestY = Math.max(boxT, Math.min(boxB - h, vy))
     let bestD = Infinity
@@ -858,7 +861,8 @@ export function createLabels(
     const maxX = Math.max(boxL, boxR - w)
     const maxY = Math.max(boxT, boxB - h)
 
-    for (let y = boxT; y <= maxY; y += step) {
+    const search = isDestination(e) || e.band <= B_FOCUS
+    for (let y = boxT; search && y <= maxY; y += step) {
       for (let x = boxL; x <= maxX; x += step) {
         if (hits(x - 3, y - 3, w + 6, h + 6)) continue
         const dx = x + w * 0.5 - e.sx
@@ -1081,7 +1085,7 @@ export function createLabels(
       let area = w * h
       // Attention requests the complete role, but the frame guarantee wins. A
       // name can still identify the selected object when its prose will not fit.
-      if (area > areaLeft && e.nextDetail !== LabelDetail.Name) {
+      if ((area > areaLeft || w > boxR - boxL || h > boxB - boxT) && e.nextDetail !== LabelDetail.Name) {
         e.nextDetail = LabelDetail.Name
         w = e.nameW * e.scale
         h = e.nameH * e.scale
@@ -1089,7 +1093,7 @@ export function createLabels(
       }
       // Preserve one complete attention chip before spending space on map labels.
       // Its qualification is load-bearing; ordinary labels pay the area cost.
-      const withinArea = area <= areaLeft || (e.band <= B_FOCUS && w <= boxR - boxL && h <= boxB - boxT)
+      const withinArea = w <= boxR - boxL && h <= boxB - boxT && (area <= areaLeft || e.band <= B_FOCUS)
       // Selected and hovered are placed first and are never collided away;
       // anything inside its dwell is held down so nothing can blink.
       const age = now - e.sinceT
@@ -1099,7 +1103,7 @@ export function createLabels(
       const cooling = !e.shown && age < HIDE_COOLDOWN && e.band > B_FOCUS
       const pad = e.shown ? PAD_KEEP : PAD_NEW
       let v = -1
-      let forcedDestination = false
+      let forcedPlacement = false
 
       if (withinArea && (budget > 0 || pinned) && (!cooling || pinned)) {
         // Preserve the last successful slot whenever it remains valid.
@@ -1119,7 +1123,7 @@ export function createLabels(
       }
       // A pinned label that fits the area budget has to go down somewhere — it
       // is the selection, or too young to drop without strobing. Take the
-      // least-bad slot, then fall back to wherever it was.
+      // least-bad slot, then search within the usable city bounds.
       if (v < 0 && pinned && withinArea) {
         for (let k = 0; k < N_VAR; k++) {
           if (fits(e, k, w, h, PAD_CRAMP)) {
@@ -1129,13 +1133,13 @@ export function createLabels(
         }
         if (v < 0) {
           v = e.variant
-          forcedDestination = isDestination(e)
+          forcedPlacement = true
         }
       }
 
       if (v < 0) continue
       variantAt(e, v, w, h)
-      if (forcedDestination) placeDestinationFallback(e, w, h)
+      if (forcedPlacement) placeBoundedFallback(e, w, h)
       e.variant = v
       e.dx = vx - e.sx
       e.dy = vy - e.sy
