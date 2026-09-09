@@ -420,31 +420,33 @@ export const VACUUM_SERVICE = {
   surfaceY: 0.74,
   workY: CITY.storage.warehouseTop + 0.03,
   junctionX: -144,
-  liftX: -114,
+  northZ: -99,
   liftWidth: 8,
   laneWidth: 9,
 } as const
 
-export function vacuumLiftZ(slot: number): number { return -95 + slot * 10 }
+export function vacuumLiftX(slot: number): number { return [-72, -24, 24][slot % 3] }
+export function vacuumLiftZ(_slot: number): number { return -85.5 }
 
 /** Offset from the loading head house and the shared-memory pylons. */
 export function vacuumTableLaneX(table: number): number {
-  const x = tableX(table)
-  return x + (x <= 0 ? 10 : -10)
+  return [-82, -36, 34, 36, 82][table % N_TABLES]
 }
 
 /** Piecewise level roads joined by a supported vertical service lift. */
 export function vacuumServicePoint(slot: number, table: number, progress: number, out: THREE.Vector3): THREE.Vector3 {
   const u = Math.max(0, Math.min(1, progress))
   const bayX = ANCHOR.vacDepot[0] - 4, bayZ = -26 + slot * 26
-  const { surfaceY: top, workY: low, junctionX: j, liftX: x } = VACUUM_SERVICE
-  const z = vacuumLiftZ(slot), tx = vacuumTableLaneX(table)
+  const { surfaceY: top, workY: low, junctionX: j, northZ: n } = VACUUM_SERVICE
+  const x = vacuumLiftX(slot), z = vacuumLiftZ(slot), tx = vacuumTableLaneX(table)
   if (u < 0.2) return out.set(bayX + (j - bayX) * u / 0.2, top, bayZ)
-  if (u < 0.35) return out.set(j, top, bayZ + (z - bayZ) * (u - 0.2) / 0.15)
-  if (u < 0.45) return out.set(j + (x - j) * (u - 0.35) / 0.1, top, z)
+  if (u < 0.3) return out.set(j, top, bayZ + (n - bayZ) * (u - 0.2) / 0.1)
+  if (u < 0.4) return out.set(j + (x - j) * (u - 0.3) / 0.1, top, n)
+  if (u < 0.45) return out.set(x, top, n + (z - n) * (u - 0.4) / 0.05)
   if (u < 0.65) return out.set(x, top + (low - top) * (u - 0.45) / 0.2, z)
-  if (u < 0.82) return out.set(x + (tx - x) * (u - 0.65) / 0.17, low, z)
-  return out.set(tx, low, z + (-32 - z) * (u - 0.82) / 0.18)
+  if (u < 0.72) return out.set(x, low, z + (n - z) * (u - 0.65) / 0.07)
+  if (u < 0.82) return out.set(x + (tx - x) * (u - 0.72) / 0.1, low, n)
+  return out.set(tx, low, n + (-32 - n) * (u - 0.82) / 0.18)
 }
 
 /** World position of shared-buffer tile index (0 … N_BUFFERS-1). */

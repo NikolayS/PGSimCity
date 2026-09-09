@@ -7,7 +7,8 @@ import type { ComponentDef } from '../core/types'
 import { fmtNum } from '../core/util'
 import { createSim } from '../sim/model'
 import { installTestDom } from '../../test/dom'
-import { vacBayPos, vacuumServicePoint, vacuumLiftZ, tableX, VACUUM_SERVICE, CITY } from './layout'
+import { vacBayPos, vacuumServicePoint, vacuumLiftX, vacuumLiftZ, tableX, VACUUM_SERVICE, CITY } from './layout'
+import { createStorage } from './storage'
 import { CKPT_MASS, VACUUM_DOCKS, VACUUM_ROBOT_BODY, createMaintenance } from './maintenance'
 
 type Box = readonly [number, number, number, number, number, number]
@@ -152,8 +153,10 @@ describe('robot vacuum service station', () => {
       expect(vacuumLiftZ(slot) - 4.7).toBeGreaterThan(-CITY.pit.z)
       expect(vacuumLiftZ(slot) + 4.7).toBeLessThan(CITY.pit.z)
     }
-    expect(VACUUM_SERVICE.liftX - VACUUM_SERVICE.liftWidth / 2).toBeGreaterThanOrEqual(-CITY.pit.x)
-    expect(VACUUM_SERVICE.liftX + VACUUM_SERVICE.liftWidth / 2).toBeLessThanOrEqual(-CITY.osCache.w / 2)
+    for (let slot = 0; slot < 3; slot++) {
+      expect(Math.abs(vacuumLiftX(slot)) + 4.7).toBeLessThan(CITY.pit.x)
+      expect(vacuumLiftZ(slot) + 4.7).toBeLessThan(-CITY.osCache.d / 2)
+    }
   })
 
   it('keeps the service route clear of gantry head houses and plaza pylons', () => {
@@ -171,6 +174,87 @@ describe('robot vacuum service station', () => {
         }
       }
     }
+  })
+
+  it('clears instantiated storage solids along every worker route', () => {
+    const { module, sim } = fixture()
+    const theme = createTheme()
+    const storage = createStorage({ scene: new THREE.Scene(), camera: new THREE.PerspectiveCamera(),
+      bus: createBus(), sim: sim.state, theme,
+      quality: { level: 'high', pixelRatio: 1, bloom: true, shadows: true, maxParticles: 1, maxLabels: 1, antialias: true },
+      register: () => {}, flow: () => {} })
+    dispose.push(() => { storage.dispose?.(); theme.dispose() })
+    for (let frame = 0; frame < 120; frame++) storage.update(1 / 30, sim.state, frame / 30)
+    storage.group.updateMatrixWorld(true)
+    const solids: THREE.Box3[] = []
+    const matrix = new THREE.Matrix4()
+    const gather = (object: THREE.Object3D): void => {
+      if (!(object instanceof THREE.Mesh) || !(object.geometry instanceof THREE.BoxGeometry) || object.name === 'autovac.worker-lifts') return
+      const materials = Array.isArray(object.material) ? object.material : [object.material]
+      if (materials.every(material => !material.visible)) return
+      object.geometry.computeBoundingBox()
+      if (object instanceof THREE.InstancedMesh) {
+        for (let i = 0; i < object.count; i++) {
+          object.getMatrixAt(i, matrix)
+          matrix.premultiply(object.matrixWorld)
+          solids.push(object.geometry.boundingBox!.clone().applyMatrix4(matrix))
+        }
+      } else solids.push(object.geometry.boundingBox!.clone().applyMatrix4(object.matrixWorld))
+    }
+    storage.group.traverse(gather)
+    module.group.updateMatrixWorld(true)
+    module.group.getObjectByName('autovac.service-lanes')!.traverse(gather)
+    expect(solids.length).toBeGreaterThan(100)
+    const p = new THREE.Vector3()
+    const failures: string[] = []
+    for (let slot = 0; slot < 3; slot++) for (let table = 0; table < 5; table++) {
+      for (let sample = 0; sample <= 400; sample++) {
+        vacuumServicePoint(slot, table, sample / 400, p)
+        for (const box of solids) {
+          // Circular bumper footprint, including the full height of its chassis.
+          if (box.max.y <= p.y + 0.35 || box.min.y >= p.y + 2.31) continue
+          const dx = Math.max(box.min.x - p.x, 0, p.x - box.max.x)
+          const dz = Math.max(box.min.z - p.z, 0, p.z - box.max.z)
+          if (dx * dx + dz * dz < 3.6 ** 2 - 0.001) {
+            failures.push(`${slot}/${table}/${sample}: robot ${p.toArray()} solid ${box.min.toArray()}..${box.max.toArray()}`)
+            break
+          }
+        }
+        if (failures.length >= 12) break
+      }
+      if (failures.length >= 12) break
+    }
+    expect(failures).toEqual([])
+  })
+
+  it('updates aggregate removal only when collection occurs, not during the depot return', () => {
+    const { module, sim } = fixture()
+    const worker = sim.state.autovac.workers[0]
+    worker.active = true
+    worker.table = 0
+    const pile = module.group.getObjectByName('landfill')!.children.find(
+      object => object instanceof THREE.InstancedMesh && object.count === 303) as THREE.InstancedMesh
+    const matrix = new THREE.Matrix4()
+    const live = (): number => {
+      let count = 0
+      for (let i = 3; i < pile.count; i++) {
+        pile.getMatrixAt(i, matrix)
+        if (new THREE.Vector3().setFromMatrixScale(matrix).length() > 0.01) count++
+      }
+      return count
+    }
+    worker.phase = 'vacuum_heap'
+    worker.deadCollected = 0
+    module.update(1 / 30, sim.state, 1)
+    expect(live()).toBe(0)
+    worker.deadCollected = 100
+    module.update(1 / 30, sim.state, 2)
+    const collected = live()
+    expect(collected).toBeGreaterThan(0)
+    worker.phase = 'return'
+    worker.progress = 0.9
+    module.update(1 / 30, sim.state, 3)
+    expect(live()).toBe(collected)
   })
 
   it('lands each lift when frame progress skips its endpoint', () => {
@@ -197,18 +281,18 @@ describe('robot vacuum service station', () => {
 
   it('keeps robots upright with wheel contact on service lanes and lifts', () => {
     const { module, sim } = fixture()
-    const worker = sim.state.autovac.workers[0]
-    worker.active = true
     const ray = new THREE.Raycaster()
     const matrix = new THREE.Matrix4()
-    for (const table of [0, 3, 4]) for (const phase of ['travel', 'scan_heap', 'vacuum_index', 'vacuum_heap', 'return'] as const) {
+    for (let slot = 0; slot < 3; slot++) for (let table = 0; table < 5; table++) for (const phase of ['travel', 'scan_heap', 'vacuum_index', 'vacuum_heap', 'return'] as const) {
+      const worker = sim.state.autovac.workers[slot]
+      worker.active = true
       worker.table = table
       worker.phase = phase
       for (let n = 0; n <= 20; n++) {
         worker.travel = worker.progress = n / 20
         module.update(1 / 30, sim.state, n / 30)
         module.group.updateMatrixWorld(true)
-        const body = module.group.getObjectByName('autovac.worker.0')!.children[0] as THREE.InstancedMesh
+        const body = module.group.getObjectByName(`autovac.worker.${slot}`)!.children[0] as THREE.InstancedMesh
         body.getMatrixAt(0, matrix)
         const base = new THREE.Vector3().setFromMatrixPosition(matrix)
         base.y -= VACUUM_ROBOT_BODY[0][1]

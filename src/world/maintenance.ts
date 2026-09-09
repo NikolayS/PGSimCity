@@ -7,7 +7,7 @@ import { clamp, clamp01, damp, fmtDuration, fmtNum, fmtPct, lerp, makeRng, smoot
 import { walTriggerBytes } from '../core/model-helpers'
 import {
   ANCHOR, CITY, N_TABLES, TABLES,
-  rid, routePoint, routeTangent, vacBayPos, tableX, VACUUM_SERVICE, vacuumLiftZ, vacuumServicePoint, vacuumTableLaneX,
+  rid, routePoint, routeTangent, vacBayPos, tableX, VACUUM_SERVICE, vacuumLiftX, vacuumLiftZ, vacuumServicePoint, vacuumTableLaneX,
 } from './layout'
 import { markTextPlane, markTextTexture } from './text-plane'
 
@@ -511,7 +511,6 @@ interface Truck {
   spin: number
   wasActive: boolean
   prevPhase: VacPhase
-  dumped: boolean
   expected: number
   panelT: number
 }
@@ -1071,29 +1070,30 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   service.name = 'autovac.service-lanes'
   group.add(service)
   const roadSpecs: BoxSpec[] = [], supportSpecs: BoxSpec[] = []
-  const { surfaceY, workY, junctionX, liftX, laneWidth, liftWidth } = VACUUM_SERVICE
+  const { surfaceY, workY, junctionX, northZ, laneWidth, liftWidth } = VACUUM_SERVICE
   const road = (x1: number, z1: number, x2: number, z2: number, y: number): void => {
     roadSpecs.push([(x1 + x2) / 2, y + 0.025 - 0.2, (z1 + z2) / 2,
       Math.abs(x2 - x1) + laneWidth, 0.4, Math.abs(z2 - z1) + laneWidth])
   }
-  road(junctionX, vacuumLiftZ(0), junctionX, 26, surfaceY)
+  road(junctionX, northZ, junctionX, 26, surfaceY)
+  road(junctionX, northZ, vacuumLiftX(N_VAC_WORKERS - 1), northZ, surfaceY)
+  road(vacuumTableLaneX(0), northZ, vacuumTableLaneX(N_TABLES - 1), northZ, workY)
   for (let i = 0; i < N_VAC_WORKERS; i++) {
-    const bay = vacBayPos(i), z = vacuumLiftZ(i)
+    const bay = vacBayPos(i), x = vacuumLiftX(i), z = vacuumLiftZ(i)
     road(bay[0] - 4, bay[2], junctionX, bay[2], surfaceY)
-    // Stop at the lift edge: no stationary top deck over the moving car.
-    road(junctionX, z, liftX - (laneWidth + liftWidth) / 2, z, surfaceY)
-    road(liftX + (laneWidth + liftWidth) / 2, z, vacuumTableLaneX(N_TABLES - 1), z, workY)
+    // Both landings approach the north edge, leaving the moving shaft open.
+    for (const y of [surfaceY, workY]) road(x, northZ, x, z - (laneWidth + liftWidth) / 2, y)
     for (const dx of [-4.4, 4.4]) for (const dz of [-4.4, 4.4]) {
-      supportSpecs.push([liftX + dx, (surfaceY + workY) / 2, z + dz, 0.45, surfaceY - workY + 2, 0.45])
+      supportSpecs.push([x + dx, (surfaceY + workY) / 2, z + dz, 0.45, surfaceY - workY + 2, 0.45])
     }
   }
-  for (let t = 0; t < N_TABLES; t++) road(vacuumTableLaneX(t), vacuumLiftZ(0), vacuumTableLaneX(t), 24, workY)
+  for (let t = 0; t < N_TABLES; t++) road(vacuumTableLaneX(t), northZ, vacuumTableLaneX(t), 24, workY)
   // Two shallow steps let pedestrians cross the raised robot road. Keep
   // their outer edge outside the moving lift car's shaft.
   const curbLevel = (surfaceY + 0.025) / 2 - 0.025
-  const curbs: BoxSpec[] = roadSpecs.filter(r => r[1] > 0).map(r => {
+  const curbs: BoxSpec[] = roadSpecs.filter(r => r[1] > 0 && r[0] < junctionX + 1).map(r => {
     const left = r[0] - r[3] / 2 - 1.2
-    const right = Math.min(r[0] + r[3] / 2 + 1.2, liftX - liftWidth / 2)
+    const right = Math.min(r[0] + r[3] / 2 + 1.2, junctionX + laneWidth / 2)
     return [(left + right) / 2, curbLevel + 0.025 - 0.2, r[2], right - left, 0.4, r[5] + 2.4]
   })
   roadSpecs.push(...curbs)
@@ -1134,7 +1134,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   // Static guide towers make the vertical transfer legible as an elevator.
   batch(service, unitBox, matStruct, supportSpecs, true)
   const liftCars = batch(service, unitBox, matHeavy, Array.from({ length: N_VAC_WORKERS }, (_, i) =>
-    [liftX, surfaceY + 0.025 - 0.2, vacuumLiftZ(i), liftWidth, 0.4, liftWidth] as BoxSpec), true)
+    [vacuumLiftX(i), surfaceY + 0.025 - 0.2, vacuumLiftZ(i), liftWidth, 0.4, liftWidth] as BoxSpec), true)
   liftCars.name = 'autovac.worker-lifts'
   liftCars.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
   liftCars.frustumCulled = false
@@ -1186,7 +1186,6 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       spin: 0,
       wasActive: false,
       prevPhase: 'idle',
-      dumped: false,
       expected: 1,
       panelT: 0,
     })
@@ -1696,7 +1695,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     }
   }
 
-  function spawnDebris(fromX: number, fromY: number, fromZ: number, table: number): void {
+  function spawnDebris(table: number): void {
     let i = -1
     for (let k = 0; k < N_DEBRIS; k++) {
       const j = (dbNext + k) % N_DEBRIS
@@ -1715,9 +1714,9 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     const a = rng() * TAU
     const r = Math.sqrt(rng()) * 8.4
     const h = Math.max(0, 1 - r / 8.4) * 5.0 * (0.4 + rng() * 0.6)
-    dbX[i] = lerp(fromX, PILE_X + Math.cos(a) * r, 0.92)
-    dbZ[i] = lerp(fromZ, PILE_Z + Math.sin(a) * r, 0.92)
-    dbYs[i] = fromY
+    dbX[i] = PILE_X + Math.cos(a) * r
+    dbZ[i] = PILE_Z + Math.sin(a) * r
+    dbYs[i] = YARD + 7
     dbYr[i] = YARD + 0.4 + h
     dbFall[i] = 0
     dbAge[i] = 0
@@ -2013,13 +2012,11 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       const table = sim.tables[w.table]
 
       if (w.phase !== tr.prevPhase) {
-        if (w.phase === 'scan_heap') tr.dumped = false
         if (w.phase === 'vacuum_heap') tr.expected = Math.max(1, table.deadTuples)
         tr.prevPhase = w.phase
       }
       if (w.active && !tr.wasActive) {
         launchFlash = 1
-        tr.dumped = false
         tr.hopper = 0
       }
       tr.wasActive = w.active
@@ -2034,7 +2031,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       // Derive the landing from the current route, even when a frame skips
       // its exact endpoint. Idle/reset also brings the car back to the bay.
       const liftY = tr.pos.y
-      setTRS(liftCars, i, VACUUM_SERVICE.liftX, liftY + 0.025 - 0.2, vacuumLiftZ(i), liftWidth, 0.4, liftWidth)
+      setTRS(liftCars, i, vacuumLiftX(i), liftY + 0.025 - 0.2, vacuumLiftZ(i), liftWidth, 0.4, liftWidth)
       liftCars.instanceMatrix.needsUpdate = true
       liftCars.boundingBox = null
       liftCars.boundingSphere = null
@@ -2067,12 +2064,11 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       }
       tr.hopper = damp(tr.hopper, clamp01(fillTarget), w.phase === 'return' ? 6 : 2.4, dt)
 
-      const tipping = w.active && w.phase === 'return' && w.progress > 0.86
-      if (tipping && !tr.dumped) {
-        tr.dumped = true
-        const n = Math.round(clamp01(tr.hopper) * (low ? 10 : 22))
-        for (let k = 0; k < n; k++) spawnDebris(tr.pos.x, tr.pos.y + 3.6, tr.pos.z, w.table)
-        if (n > 0) pushEntry(1.2, COLOR.vacuum, 1.2)
+      // This remote display accounts for actual removal in place; robots do
+      // not transport tuples to it or dump anything on their route home.
+      if (w.active && w.deadCollected > tr.collected) {
+        const n = Math.min(low ? 2 : 4, Math.ceil((w.deadCollected - tr.collected) / 100))
+        for (let k = 0; k < n; k++) spawnDebris(w.table)
       }
 
       // The brushes work even when xmin prevents collecting old row versions.
