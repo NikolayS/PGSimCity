@@ -19,6 +19,12 @@ const section = (id: string, heading: string) => {
 }
 
 describe('storage and MVCC pageinspect corrections', () => {
+  it('distinguishes visibility-map clearing for tuple locks and row changes', () => {
+    const copy = section('storage.vm', 'How the bits move')
+    expect(copy).not.toContain('Any modification to a page clears both bits')
+    expect(copy).toMatch(/tuple lock[^.]*all-frozen[^.]*all-visible/i)
+  })
+
   it('distinguishes a lock-only xmax from an effective deleter', () => {
     const heapMvcc = section('storage.table', 'MVCC: row versions, not rows')
     const visibility = section('proc.array', 'How a row version is judged')

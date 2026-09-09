@@ -1390,7 +1390,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'What the city models',
-        body: 'The engine keeps aggregate index pages and scan counts per table, charges representative pages to fixed index-plan templates, and distinguishes HOT from non-HOT update counts. Individual index kinds are cosmetic: there are no B-tree keys, GIN entries or pending list, index-only scans, bottom-up deletion, page splits, per-index bloat, selectivity or cost-driven plan choice.',
+        body: 'The engine keeps aggregate index pages and scan counts per table, charges representative pages to fixed index-plan templates, and distinguishes HOT from non-HOT update counts. Vacuum reduces dead-entry occupancy but retains allocated index pages; later churn reuses that aggregate capacity before extending the files. This is a pooled capacity approximation, not key-range-aware reuse. Individual index kinds are cosmetic: there are no B-tree keys, GIN entries or pending list, index-only scans, bottom-up deletion, page splits, per-index bloat, selectivity or cost-driven plan choice.',
       },
     ],
     metrics: [
@@ -1582,7 +1582,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
       },
       {
         heading: 'How the bits move',
-        body: 'Vacuum sets them, with one exception: since PostgreSQL 14, `COPY … WITH (FREEZE)` into a table created or truncated in the same transaction marks each page all-visible and all-frozen as it fills it, so a freshly bulk-loaded table is ready for index-only scans without a vacuum. Any modification to a page clears both bits immediately, and the clearing is WAL-logged so a standby stays correct. A page can therefore lose all-visible status because of one UPDATE and stay that way until the next vacuum pass. Use the `pg_visibility` extension to see the real distribution: `pg_visibility_map_summary(\'orders\')` returns how many pages are all-visible and how many are all-frozen, which tells you honestly how much of your table index-only scans can actually skip.',
+        body: 'Vacuum sets them, with one exception: since PostgreSQL 14, `COPY … WITH (FREEZE)` into a table created or truncated in the same transaction marks each page all-visible and all-frozen as it fills it, so a freshly bulk-loaded table is ready for index-only scans without a vacuum. Ordinary INSERT, UPDATE and DELETE clear visibility-map bits as required, with WAL records keeping standbys consistent. Not every page change clears both bits: a tuple lock can clear all-frozen while retaining all-visible. A page can therefore lose all-visible status because of one UPDATE and stay that way until the next vacuum pass. Use the `pg_visibility` extension to see the real distribution: `pg_visibility_map_summary(\'orders\')` returns how many pages are all-visible and how many are all-frozen, which tells you honestly how much of your table index-only scans can actually skip.',
       },
       {
         heading: 'What the city models',

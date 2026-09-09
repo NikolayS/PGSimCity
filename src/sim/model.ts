@@ -1258,7 +1258,7 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   const warmIdxPages: number[] = baseIdxPages.map((pages) =>
     clamp(Math.round(pages * 0.002), 32, 256),
   )
-  /** Effective index pages, including leaf pages occupied by dead entries. */
+  /** Allocated index pages; vacuum makes capacity reusable, not smaller files. */
   const idxPages = baseIdxPages.slice()
   /** Index entries left behind by DELETE and non-HOT UPDATE until vacuum. */
   const deadIndexTuples: number[] = TABLES.map(() => 0)
@@ -1274,7 +1274,9 @@ export function createSim(bus: Bus, options: Readonly<SimOptions> = {}): SimApi 
   const runtimeTable = (ti: number): RuntimeTable => tables[ti] as RuntimeTable
   const INDEX_ENTRIES_PER_PAGE = 180
   const refreshIndexPages = (ti: number): void => {
-    idxPages[ti] = baseIdxPages[ti] + Math.ceil(deadIndexTuples[ti] / INDEX_ENTRIES_PER_PAGE)
+    // Aggregate occupancy proxy: churn reuses retained capacity before extension.
+    const required = baseIdxPages[ti] + Math.ceil(deadIndexTuples[ti] / INDEX_ENTRIES_PER_PAGE)
+    idxPages[ti] = Math.max(idxPages[ti], required)
     runtimeTable(ti).indexPages = idxPages[ti]
     runtimeTable(ti).deadIndexTuples = deadIndexTuples[ti]
   }

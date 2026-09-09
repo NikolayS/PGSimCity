@@ -16,8 +16,10 @@ are all still moving. Expect breaking changes between minor versions.
 - Keep the aggregate removal display tied to actual collection; robots return to their docks without an imaginary remote dumping stop.
 - Inspect the selected worker’s table, phase, horizon constraint and pass collection count, without substituting another worker or a fleet total. Idle slots retain explicitly qualified latest-pass counts.
 - Refresh baked indirect light for the changed service architecture.
+- Retain allocated index-file capacity after vacuum and reuse it before extension, rather than reporting proportional file shrinkage. This remains an aggregate occupancy model, not key-range-aware B-tree reuse.
+- Correct visibility-map prose: tuple locking can clear all-frozen while retaining all-visible.
 
-This is a visual model: service roads and lifts are explanatory infrastructure, not PostgreSQL machinery. Vacuum timing and collected-tuple counters are unchanged. Robots can overlap on shared routes: traffic collision avoidance is not modeled, and lifts are not rideable. Visibility-map bits, tuple freezing and full ANALYZE statistics are not newly implemented. Device performance and universal route readability remain unmeasured.
+This is a visual model: service roads and lifts are explanatory infrastructure, not PostgreSQL machinery. Worker counters still report actual model collection; retaining index allocation can change modeled scan work and timing. Robots can overlap on shared routes: traffic collision avoidance is not modeled, and lifts are not rideable. Visibility-map bits, tuple freezing and full ANALYZE statistics are not newly implemented. Device performance and universal route readability remain unmeasured.
 
 ## 0.56.0
 
