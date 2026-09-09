@@ -1138,7 +1138,6 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   liftCars.name = 'autovac.worker-lifts'
   liftCars.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
   liftCars.frustumCulled = false
-  const liftYs = new Float64Array(N_VAC_WORKERS).fill(surfaceY)
   for (const [x, y, z, sx, sy, sz] of roadSpecs) collisionBoxes.push(new THREE.Box3(
     new THREE.Vector3(x - sx / 2, y - sy / 2, z - sz / 2),
     new THREE.Vector3(x + sx / 2, y + sy / 2, z + sz / 2),
@@ -2032,10 +2031,9 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
         // through the unsupported corner between a lane and a vertical lift.
         tr.pos.copy(_p)
       } else tr.pos.copy(tr.bay)
-      const onLift = Math.abs(tr.pos.x - VACUUM_SERVICE.liftX) < 0.01 &&
-        Math.abs(tr.pos.z - vacuumLiftZ(i)) < 0.01
-      if (onLift) liftYs[i] = tr.pos.y
-      const liftY = liftYs[i]
+      // Derive the landing from the current route, even when a frame skips
+      // its exact endpoint. Idle/reset also brings the car back to the bay.
+      const liftY = tr.pos.y
       setTRS(liftCars, i, VACUUM_SERVICE.liftX, liftY + 0.025 - 0.2, vacuumLiftZ(i), liftWidth, 0.4, liftWidth)
       liftCars.instanceMatrix.needsUpdate = true
       liftCars.boundingBox = null

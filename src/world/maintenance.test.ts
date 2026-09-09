@@ -173,6 +173,28 @@ describe('robot vacuum service station', () => {
     }
   })
 
+  it('lands each lift when frame progress skips its endpoint', () => {
+    const { module, sim } = fixture()
+    const lifts = module.group.getObjectByName('autovac.worker-lifts') as THREE.InstancedMesh
+    const transform = new THREE.Matrix4()
+    for (let slot = 0; slot < sim.state.autovac.workers.length; slot++) {
+      const worker = sim.state.autovac.workers[slot]
+      worker.active = true
+      worker.table = 0
+      for (const phase of ['travel', 'return'] as const) {
+        worker.phase = phase
+        for (const progress of phase === 'travel' ? [0.64, 0.655] : [0.54, 0.555]) {
+          worker.travel = worker.progress = progress
+          module.update(1 / 30, sim.state, progress)
+        }
+        lifts.getMatrixAt(slot, transform)
+        const carTop = new THREE.Vector3().setFromMatrixPosition(transform).y + 0.2
+        expect(carTop, `${slot}/${phase}: lift must reach destination before departure`).toBeCloseTo(
+          (phase === 'travel' ? VACUUM_SERVICE.workY : VACUUM_SERVICE.surfaceY) + 0.025, 4)
+      }
+    }
+  })
+
   it('keeps robots upright with wheel contact on service lanes and lifts', () => {
     const { module, sim } = fixture()
     const worker = sim.state.autovac.workers[0]

@@ -9,6 +9,14 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## v0.57.0 — Grounded maintenance crews
+
+- Household-style autovacuum robots and marked service docks expose actual worker state without equating activity with collected tuples.
+- Level service roads and supported lifts replace airborne routes. Robots remain upright, avoid storage gantries, and return along supported lanes; shallow road edges preserve pedestrian traversal.
+- Refresh baked indirect light for the changed service architecture.
+
+This is a visual model: service roads and lifts are explanatory infrastructure, not PostgreSQL machinery. Vacuum timing and collected-tuple counters are unchanged. Visibility-map bits, tuple freezing and full ANALYZE statistics are not newly implemented. Device performance and universal route readability remain unmeasured.
+
 ## 0.56.0
 
 - Walk with a light-cast body shadow that follows the sun, ground and crouch pose. Shadow-enabled quality tiers use a local receiver fit while walking and restore the normal city-view shadow fit on exit; LOW does not invent a shadow.
