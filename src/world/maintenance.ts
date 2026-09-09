@@ -1389,10 +1389,12 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   const YARD_GATE_W = 7.2
   const yardGateLo = YARD_GATE_Z - YARD_GATE_W / 2
   const yardGateHi = YARD_GATE_Z + YARD_GATE_W / 2
+  const serviceGateLo = VACUUM_SERVICE.junctionX - 6.25
+  const serviceGateHi = VACUUM_SERVICE.junctionX + 6.25
   const yardPosts: BoxSpec[] = []
   const POST_STEP = 13
   for (let x = FX0; x <= FX1 + 0.01; x += POST_STEP) {
-    yardPosts.push([x, 2.0, FZ0, 0.24, 3.2, 0.24])
+    if (x < serviceGateLo || x > serviceGateHi) yardPosts.push([x, 2.0, FZ0, 0.24, 3.2, 0.24])
     yardPosts.push([x, 2.0, FZ1, 0.24, 3.2, 0.24])
   }
   for (let z = FZ0 + POST_STEP; z < FZ1 - 0.01; z += POST_STEP) {
@@ -1404,7 +1406,8 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   // two rails per run: the chain link between them is implied, not drawn
   for (const y of [3.4, 1.6]) {
     const th = y > 3 ? 0.1 : 0.08
-    yardPosts.push([(FX0 + FX1) / 2, y, FZ0, FX1 - FX0, th, th])
+    yardPosts.push([(FX0 + serviceGateLo) / 2, y, FZ0, serviceGateLo - FX0, th, th])
+    yardPosts.push([(serviceGateHi + FX1) / 2, y, FZ0, FX1 - serviceGateHi, th, th])
     yardPosts.push([(FX0 + FX1) / 2, y, FZ1, FX1 - FX0, th, th])
     yardPosts.push([FX0, y, (FZ0 + FZ1) / 2, th, th, FZ1 - FZ0])
     yardPosts.push([FX1, y, (FZ0 + yardGateLo) / 2, th, th, yardGateLo - FZ0])

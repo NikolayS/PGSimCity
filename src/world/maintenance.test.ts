@@ -188,8 +188,9 @@ describe('robot vacuum service station', () => {
     storage.group.updateMatrixWorld(true)
     const solids: THREE.Box3[] = []
     const matrix = new THREE.Matrix4()
-    const gather = (object: THREE.Object3D): void => {
-      if (!(object instanceof THREE.Mesh) || !(object.geometry instanceof THREE.BoxGeometry) || object.name === 'autovac.worker-lifts') return
+    const gather = (object: THREE.Object3D, maintenance = false): void => {
+      if (maintenance && object instanceof THREE.InstancedMesh && object.instanceMatrix.usage === THREE.DynamicDrawUsage) return
+      if (!(object instanceof THREE.Mesh) || !(object.geometry instanceof THREE.BoxGeometry) && !(maintenance && object instanceof THREE.InstancedMesh) || object.name === 'autovac.worker-lifts') return
       const materials = Array.isArray(object.material) ? object.material : [object.material]
       if (materials.every(material => !material.visible)) return
       object.geometry.computeBoundingBox()
@@ -203,7 +204,10 @@ describe('robot vacuum service station', () => {
     }
     storage.group.traverse(gather)
     module.group.updateMatrixWorld(true)
-    module.group.getObjectByName('autovac.service-lanes')!.traverse(gather)
+    module.group.traverse(object => {
+      if (object.parent?.name.startsWith('autovac.worker.')) return
+      gather(object, true)
+    })
     expect(solids.length).toBeGreaterThan(100)
     const p = new THREE.Vector3()
     const failures: string[] = []
@@ -255,6 +259,28 @@ describe('robot vacuum service station', () => {
     worker.progress = 0.9
     module.update(1 / 30, sim.state, 3)
     expect(live()).toBe(collected)
+  })
+
+  it('keeps concurrently working relations on separate lanes', () => {
+    const { module, sim } = fixture()
+    const matrix = new THREE.Matrix4()
+    const centers = [new THREE.Vector3(), new THREE.Vector3()]
+    for (let first = 0; first < 5; first++) for (let second = first + 1; second < 5; second++) {
+      for (const [slot, table] of [first, second].entries()) {
+        const worker = sim.state.autovac.workers[slot]
+        worker.active = true
+        worker.table = table
+        worker.phase = 'scan_heap'
+        worker.progress = 0.5
+      }
+      module.update(1 / 30, sim.state, 1)
+      for (let slot = 0; slot < 2; slot++) {
+        const body = module.group.getObjectByName(`autovac.worker.${slot}`)!.children[0] as THREE.InstancedMesh
+        body.getMatrixAt(1, matrix)
+        centers[slot].setFromMatrixPosition(matrix)
+      }
+      expect(centers[0].distanceTo(centers[1]), `${first}/${second}: overlapping work lanes`).toBeGreaterThan(7.2)
+    }
   })
 
   it('lands each lift when frame progress skips its endpoint', () => {

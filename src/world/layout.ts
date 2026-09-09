@@ -419,7 +419,7 @@ export function vacBayPos(i: number): [number, number, number] {
 export const VACUUM_SERVICE = {
   surfaceY: 0.74,
   workY: CITY.storage.warehouseTop + 0.03,
-  junctionX: -144,
+  junctionX: -210,
   northZ: -99,
   liftWidth: 8,
   laneWidth: 9,
@@ -430,7 +430,7 @@ export function vacuumLiftZ(_slot: number): number { return -85.5 }
 
 /** Offset from the loading head house and the shared-memory pylons. */
 export function vacuumTableLaneX(table: number): number {
-  return [-82, -36, 34, 36, 82][table % N_TABLES]
+  return [-82, -36, 34, 72, 82][table % N_TABLES]
 }
 
 /** Piecewise level roads joined by a supported vertical service lift. */
