@@ -1088,13 +1088,22 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     }
   }
   for (let t = 0; t < N_TABLES; t++) road(vacuumTableLaneX(t), vacuumLiftZ(0), vacuumTableLaneX(t), 24, workY)
+  // Two shallow steps let pedestrians cross the raised robot road. Keep
+  // their outer edge outside the moving lift car's shaft.
+  const curbLevel = (surfaceY + 0.025) / 2 - 0.025
+  const curbs: BoxSpec[] = roadSpecs.filter(r => r[1] > 0).map(r => {
+    const left = r[0] - r[3] / 2 - 1.2
+    const right = Math.min(r[0] + r[3] / 2 + 1.2, liftX - liftWidth / 2)
+    return [(left + right) / 2, curbLevel + 0.025 - 0.2, r[2], right - left, 0.4, r[5] + 2.4]
+  })
+  roadSpecs.push(...curbs)
   // Union the rectangular lanes before meshing: overlapping plates at road
   // junctions otherwise put two opaque surfaces at exactly the same height.
   const positions: number[] = [], uvs: number[] = []
   const quad = (a: number[], b: number[], c: number[], d: number[]): void => {
     for (const v of [a, b, c, a, c, d]) { positions.push(...v); uvs.push(v[0] / 8, v[2] / 8) }
   }
-  for (const level of [surfaceY, workY]) {
+  for (const level of [surfaceY, workY, curbLevel]) {
     const specs = roadSpecs.filter(r => Math.abs(r[1] - (level + 0.025 - 0.2)) < 0.001)
     const xs = [...new Set(specs.flatMap(r => [r[0] - r[3] / 2, r[0] + r[3] / 2]))].sort((a, b) => a - b)
     const zs = [...new Set(specs.flatMap(r => [r[2] - r[5] / 2, r[2] + r[5] / 2]))].sort((a, b) => a - b)
