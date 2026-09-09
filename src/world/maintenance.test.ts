@@ -7,7 +7,7 @@ import type { ComponentDef } from '../core/types'
 import { fmtNum } from '../core/util'
 import { createSim } from '../sim/model'
 import { installTestDom } from '../../test/dom'
-import { vacBayPos, VACUUM_SERVICE, CITY } from './layout'
+import { vacBayPos, vacuumServicePoint, tableX, VACUUM_SERVICE, CITY } from './layout'
 import { CKPT_MASS, VACUUM_DOCKS, VACUUM_ROBOT_BODY, createMaintenance } from './maintenance'
 
 type Box = readonly [number, number, number, number, number, number]
@@ -150,6 +150,23 @@ describe('robot vacuum service station', () => {
   it('fits the lift cars in the open corridor outside the OS cache slab', () => {
     expect(VACUUM_SERVICE.liftX - VACUUM_SERVICE.liftWidth / 2).toBeGreaterThanOrEqual(-CITY.pit.x)
     expect(VACUUM_SERVICE.liftX + VACUUM_SERVICE.liftWidth / 2).toBeLessThanOrEqual(-CITY.osCache.w / 2)
+  })
+
+  it('keeps the service route clear of gantry head houses and plaza pylons', () => {
+    const p = new THREE.Vector3()
+    for (let slot = 0; slot < 3; slot++) for (let table = 0; table < 5; table++) {
+      for (let n = 0; n <= 200; n++) {
+        vacuumServicePoint(slot, table, n / 200, p)
+        if (p.y > VACUUM_SERVICE.workY + 0.1) continue
+        for (let t = 0; t < 5; t++) {
+          expect(Math.abs(p.x - tableX(t)) > 6.3 || Math.abs(p.z + 60) > 6,
+            `slot ${slot}, table ${table}, sample ${n}: gantry`).toBe(true)
+        }
+        for (const x of [-58, -20, 20, 58]) for (const z of [-44, 44]) {
+          expect(Math.abs(p.x - x) > 8.6 || Math.abs(p.z - z) > 8.6).toBe(true)
+        }
+      }
+    }
   })
 
   it('keeps robots upright with wheel contact on service lanes and lifts', () => {

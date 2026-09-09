@@ -7,7 +7,7 @@ import { clamp, clamp01, damp, fmtDuration, fmtNum, fmtPct, lerp, makeRng, smoot
 import { walTriggerBytes } from '../core/model-helpers'
 import {
   ANCHOR, CITY, N_TABLES, TABLES,
-  rid, routePoint, routeTangent, vacBayPos, tableX, VACUUM_SERVICE, vacuumLiftZ, vacuumServicePoint,
+  rid, routePoint, routeTangent, vacBayPos, tableX, VACUUM_SERVICE, vacuumLiftZ, vacuumServicePoint, vacuumTableLaneX,
 } from './layout'
 import { markTextPlane, markTextTexture } from './text-plane'
 
@@ -1082,12 +1082,12 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     road(bay[0] - 4, bay[2], junctionX, bay[2], surfaceY)
     // Stop at the lift edge: no stationary top deck over the moving car.
     road(junctionX, z, liftX - (laneWidth + liftWidth) / 2, z, surfaceY)
-    road(liftX + (laneWidth + liftWidth) / 2, z, tableX(N_TABLES - 1), z, workY)
+    road(liftX + (laneWidth + liftWidth) / 2, z, vacuumTableLaneX(N_TABLES - 1), z, workY)
     for (const dx of [-4.4, 4.4]) for (const dz of [-4.4, 4.4]) {
       supportSpecs.push([liftX + dx, (surfaceY + workY) / 2, z + dz, 0.45, surfaceY - workY + 2, 0.45])
     }
   }
-  for (let t = 0; t < N_TABLES; t++) road(tableX(t), vacuumLiftZ(0), tableX(t), 24, workY)
+  for (let t = 0; t < N_TABLES; t++) road(vacuumTableLaneX(t), vacuumLiftZ(0), vacuumTableLaneX(t), 24, workY)
   // Union the rectangular lanes before meshing: overlapping plates at road
   // junctions otherwise put two opaque surfaces at exactly the same height.
   const positions: number[] = [], uvs: number[] = []
@@ -1724,10 +1724,10 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     if (phase === 'travel') vacuumServicePoint(tr.slot, table, travel, _p)
     else if (phase === 'return') vacuumServicePoint(tr.slot, table, 1 - progress, _p)
     else if (phase === 'vacuum_index') {
-      _p.set(tableX(table), VACUUM_SERVICE.workY, -60 + 84 * Math.sin(Math.PI * clamp01(progress)))
+      _p.set(vacuumTableLaneX(table), VACUUM_SERVICE.workY, -32 + 56 * Math.sin(Math.PI * clamp01(progress)))
     } else {
       const sweep = phase === 'scan_heap' || phase === 'vacuum_heap' ? 8 * Math.sin(Math.PI * clamp01(progress)) : 0
-      _p.set(tableX(table), VACUUM_SERVICE.workY, -60 + sweep)
+      _p.set(vacuumTableLaneX(table), VACUUM_SERVICE.workY, -32 + sweep)
     }
   }
 
