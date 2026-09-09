@@ -87,7 +87,7 @@ describe('first-person embodiment', () => {
     ground.geometry.dispose()
   })
 
-  it('grounds one directional body shadow at the walker feet and removes it on dispose', () => {
+  it('anchors a shadow-only body at the feet and removes it on dispose', () => {
     const bus = createBus()
     const collision = createCollisionWorld()
     const ground = floor()
@@ -110,20 +110,35 @@ describe('first-person embodiment', () => {
     })
     const shadow = scene.getObjectByName('walk:body-shadow')!
 
-    expect(shadow).toBeInstanceOf(THREE.Mesh)
+    expect(shadow).toBeInstanceOf(THREE.Group)
     expect(shadow.visible).toBe(false)
-    const geometry = (shadow as THREE.Mesh).geometry
-    geometry.computeBoundingBox()
-    const bounds = geometry.boundingBox!
-    expect((bounds.max.x - bounds.min.x) * shadow.scale.x).toBeLessThan(0.75)
-    expect((bounds.max.z - bounds.min.z) * shadow.scale.z).toBeLessThan(1.6)
+    const casters: THREE.Mesh[] = []
+    shadow.traverse(obj => {
+      if (obj instanceof THREE.Mesh) casters.push(obj)
+    })
+    expect(casters.length).toBeGreaterThanOrEqual(6)
+    for (const caster of casters) {
+      expect(caster.castShadow).toBe(true)
+      const material = caster.material as THREE.MeshStandardMaterial
+      expect(material.colorWrite).toBe(false)
+      expect(material.depthWrite).toBe(false)
+      expect(material.depthTest).toBe(true)
+      expect(material.transparent).toBe(false)
+    }
+    const bounds = new THREE.Box3().setFromObject(shadow)
+    expect(bounds.min.y).toBeGreaterThanOrEqual(-0.001)
+    expect(bounds.max.y).toBeGreaterThan(1.5)
+    expect(bounds.max.y).toBeLessThan(1.8)
+    expect(bounds.max.x - bounds.min.x).toBeLessThan(0.8)
 
     void walk.enter(new THREE.Vector3(300, 3.2, 8))
     for (let i = 0; i < 24; i++) walk.update(0.1)
     expect(walk.grounded).toBe(true)
+    expect(camera.userData.pgWalkShadow).toBe(true)
+    expect(camera.userData.pgWalkFeetY).toBeCloseTo(walk.position.y, 5)
     expect(shadow.visible).toBe(true)
     expect(shadow.position.x).toBeCloseTo(walk.position.x, 5)
-    expect(shadow.position.y).toBeCloseTo(walk.position.y + 0.018, 5)
+    expect(shadow.position.y).toBeCloseTo(walk.position.y, 5)
     expect(shadow.position.z).toBeCloseTo(walk.position.z, 5)
 
     walk.setTouchMove(0, 0.25)
@@ -148,6 +163,7 @@ describe('first-person embodiment', () => {
     expect(shadow.position.z).toBeCloseTo(walk.position.z, 5)
 
     walk.exit()
+    expect(camera.userData.pgWalkShadow).toBe(false)
     expect(shadow.visible).toBe(false)
     walk.dispose()
     expect(scene.getObjectByName('walk:body-shadow')).toBeUndefined()

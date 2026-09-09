@@ -482,7 +482,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
    * snapped to the shadow map's own texel grid, without which the shadows
    * crawl over every static surface as the camera moves. Refits happen only
    * when that snapped centre changes; animated casters have a separate bounded
-   * refresh cadence. Medium keeps the city-wide fit when the camera moves.
+   * refresh cadence. Medium keeps the city-wide fit except for a walking view.
    * -------------------------------------------------------------------*/
 
   /** Half-width, in metres, of the box the near cascade covers. */
@@ -495,6 +495,8 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   const shadowFocus = new THREE.Vector3()
   const shadowSnapped = new THREE.Vector3(Infinity, Infinity, Infinity)
   let shadowSpan = 0
+  let walkFitElapsed = Infinity
+  let wasWalking = false
   const shadowSchedule = new ShadowRefreshSchedule()
 
   function fitShadowCamera(cx = 0, cz = 0, span = 0): void {
@@ -511,6 +513,14 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     const loz = span > 0 ? cz - span : shadowLo.z
     const hiz = span > 0 ? cz + span : shadowHi.z
 
+    // Fit the nearby receiving surfaces, not the city's full vertical range.
+    // The depth extrusion below still admits taller offscreen occluders.
+    const closeWalk = span > 0 && span <= 30 && camera.userData.pgWalkShadow === true
+    const feet = camera.userData.pgWalkFeetY as number
+    const loY = closeWalk ? feet - 2 : shadowLo.y
+    const hiY = closeWalk ? feet + 6 : shadowHi.y
+    const padX = closeWalk ? 2 : 18
+    const padY = closeWalk ? 2 : 24
     let minX = Infinity
     let maxX = -Infinity
     let minY = Infinity
@@ -521,7 +531,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
       for (let iy = 0; iy < 2; iy++) {
         for (let iz = 0; iz < 2; iz++) {
           shadowPoint
-            .set(ix ? hix : lox, iy ? shadowHi.y : shadowLo.y, iz ? hiz : loz)
+            .set(ix ? hix : lox, iy ? hiY : loY, iz ? hiz : loz)
             .applyMatrix4(sc.matrixWorldInverse)
           minX = Math.min(minX, shadowPoint.x)
           maxX = Math.max(maxX, shadowPoint.x)
@@ -533,10 +543,10 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
         }
       }
     }
-    sc.left = minX - 18
-    sc.right = maxX + 18
-    sc.bottom = minY - 24
-    sc.top = maxY + 24
+    sc.left = minX - padX
+    sc.right = maxX + padX
+    sc.bottom = minY - padY
+    sc.top = maxY + padY
     // The near plane still has to start behind the tallest caster outside the
     // box, or a tower just off screen stops shadowing the street inside it.
     sc.near = Math.max(1, minD - 260)
@@ -545,11 +555,17 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   }
 
   /** Re-aim the cascade at what the camera is looking at. Cheap when still. */
-  function updateShadowFit(): void {
+  function updateShadowFit(real: number): void {
     if (!key.castShadow) return
 
-    const eye = Math.max(2, camera.position.y)
-    if (quality.level === 'medium' || eye > NEAR_SPAN_CEILING) {
+    const walking = camera.userData.pgWalkShadow === true
+    walkFitElapsed += real
+    if (walking && wasWalking && walkFitElapsed < FIDELITY_PRESETS[quality.level].shadowUpdateInterval) return
+    wasWalking = walking
+    walkFitElapsed = 0
+    key.shadow.radius = walking ? 1.5 : FIDELITY_PRESETS[quality.level].shadowRadius
+    const eye = Math.max(2, camera.position.y - (walking ? camera.userData.pgWalkFeetY : 0))
+    if ((quality.level === 'medium' && !walking) || eye > NEAR_SPAN_CEILING) {
       if (shadowSpan === 0) return
       shadowSpan = 0
       shadowSnapped.set(Infinity, Infinity, Infinity)
@@ -567,22 +583,24 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
 
     /* Quantised. An un-stepped span changes on every frame the camera moves at
      * all, and each change is a full extra shadow pass. */
-    const wanted = clamp(Math.max(eye * 1.6, reach * 0.75), NEAR_SPAN_MIN, NEAR_SPAN_MAX)
-    const span = Math.min(NEAR_SPAN_MAX, Math.ceil(wanted / 30) * 30)
+    const wanted = clamp(Math.max(eye * 1.6, reach * 0.75), walking ? 12 : NEAR_SPAN_MIN, NEAR_SPAN_MAX)
+    const quantum = walking ? 6 : 30
+    const span = Math.min(NEAR_SPAN_MAX, Math.ceil(wanted / quantum) * quantum)
     // Snap to the texel the map will actually sample, or every static shadow
     // in the scene crawls as the camera walks.
     const texel = (span * 2) / key.shadow.mapSize.x
     const sx = Math.round(shadowFocus.x / texel) * texel
     const sz = Math.round(shadowFocus.z / texel) * texel
 
-    if (sx === shadowSnapped.x && sz === shadowSnapped.z && span === shadowSpan) return
-    shadowSnapped.set(sx, 0, sz)
+    const sy = walking ? Math.round(camera.userData.pgWalkFeetY * 10) / 10 : 0
+    if (sx === shadowSnapped.x && sy === shadowSnapped.y && sz === shadowSnapped.z && span === shadowSpan) return
+    shadowSnapped.set(sx, sy, sz)
     shadowSpan = span
     /* Normal bias is measured in world units and is only ever there to push a
      * sample off its own surface by about a texel. The authored 0.45 is right
      * for the whole-city fit; leave it there under a cascade eight times
      * denser and every shadow detaches from the object casting it. */
-    key.shadow.normalBias = Math.max(0.06, Math.min(air.shadowNormalBias, texel * 0.6))
+    key.shadow.normalBias = Math.max(walking ? 0.015 : 0.06, Math.min(air.shadowNormalBias, texel * 0.6))
     fitShadowCamera(sx, sz, span)
     renderer.shadowMap.needsUpdate = true
   }
@@ -1130,7 +1148,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     const real = clamp(rawDt ?? dt, 1 / 1000, 4)
     fps = damp(fps, 1 / real, 2.5, Math.min(real, 0.5))
 
-    updateShadowFit()
+    updateShadowFit(real)
     if (key.castShadow && shadowSchedule.advance(real, FIDELITY_PRESETS[quality.level].shadowUpdateInterval)) {
       renderer.shadowMap.needsUpdate = true
     }

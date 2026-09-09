@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { createWalkShadow } from './walk-shadow'
 import type { Bus, SimState } from '../core/types'
 import { clamp, clamp01, damp, easeInOutCubic } from '../core/util'
 import {
@@ -33,7 +34,7 @@ import type { CollisionWorld, MoveResult } from './collision'
 
 export interface WalkOptions {
   camera: THREE.PerspectiveCamera
-  /** Scene that receives the optional grounded first-person body shadow. */
+  /** Scene that receives the optional first-person shadow-only body. */
   scene?: THREE.Scene
   /** Element that owns pointer lock — the renderer's canvas. */
   dom: HTMLElement
@@ -204,7 +205,6 @@ const SWAY_RATIO = 0.6
 /** Bob amplitude chases the walk speed at this rate — fast enough to read as instant. */
 const BOB_SETTLE = 11
 /** Compact enough to leave mobile thumb zones legible at a downward glance. */
-const BODY_SHADOW_SCALE = 0.74
 /** Crouch/stand eye transition. */
 const EYE_RATE = 13
 /** Fade-to-black, hold, fade-back. */
@@ -318,69 +318,6 @@ function prefersReducedMotion(): boolean {
   }
 }
 
-/**
- * One low-poly projected silhouette, deliberately not hands: it locates the
- * camera when looking down without occupying any screen or touch-control zone.
- */
-function createBodyShadow(): THREE.Mesh<THREE.ShapeGeometry, THREE.MeshBasicMaterial> {
-  const shape = new THREE.Shape()
-  shape.moveTo(-0.06, 0.02)
-  shape.lineTo(-0.05, 0.55)
-  shape.lineTo(0, 0.71)
-  shape.lineTo(0.05, 0.55)
-  shape.lineTo(0.06, 0.02)
-  shape.lineTo(0.25, 0.02)
-  shape.lineTo(0.27, 0.58)
-  shape.lineTo(0.32, 0.78)
-  shape.lineTo(0.48, 1.02)
-  shape.lineTo(0.43, 1.34)
-  shape.lineTo(0.34, 1.3)
-  shape.lineTo(0.29, 1.08)
-  shape.lineTo(0.31, 1.47)
-  shape.lineTo(0.16, 1.58)
-  shape.lineTo(0.22, 1.73)
-  shape.lineTo(0.2, 1.91)
-  shape.lineTo(0.11, 2.04)
-  shape.lineTo(0, 2.08)
-  shape.lineTo(-0.11, 2.04)
-  shape.lineTo(-0.2, 1.91)
-  shape.lineTo(-0.22, 1.73)
-  shape.lineTo(-0.16, 1.58)
-  shape.lineTo(-0.31, 1.47)
-  shape.lineTo(-0.29, 1.08)
-  shape.lineTo(-0.34, 1.3)
-  shape.lineTo(-0.43, 1.34)
-  shape.lineTo(-0.48, 1.02)
-  shape.lineTo(-0.32, 0.78)
-  shape.lineTo(-0.27, 0.58)
-  shape.lineTo(-0.25, 0.02)
-  shape.closePath()
-  const geometry = new THREE.ShapeGeometry(shape)
-  geometry.rotateX(-Math.PI / 2)
-  const material = new THREE.MeshBasicMaterial({
-    color: 0x010309,
-    transparent: true,
-    opacity: 0.28,
-    // District zoning is a non-colliding top coat up to 0.6 m above the feet.
-    // A contact projection must sit over it or the visible pavement buries it.
-    depthTest: false,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-    polygonOffset: true,
-    polygonOffsetFactor: -2,
-    polygonOffsetUnits: -2,
-    toneMapped: false,
-  })
-  const shadow = new THREE.Mesh(geometry, material)
-  shadow.name = 'walk:body-shadow'
-  shadow.visible = false
-  shadow.frustumCulled = false
-  shadow.renderOrder = 2
-  shadow.scale.set(BODY_SHADOW_SCALE, 1, BODY_SHADOW_SCALE)
-  shadow.raycast = () => {}
-  return shadow
-}
-
 /* ==========================================================================*/
 
 export function createWalkController(opts: WalkOptions): WalkController {
@@ -388,7 +325,8 @@ export function createWalkController(opts: WalkOptions): WalkController {
   const T: WalkTuning = { ...DEFAULT_TUNING, ...(opts.tuning ?? {}) }
   const jumpSpeed = Math.sqrt(2 * T.gravity * T.jumpHeight)
   const noBob = opts.reducedMotion ?? prefersReducedMotion()
-  const bodyShadow = scene ? createBodyShadow() : null
+  const shadowBody = scene ? createWalkShadow() : null
+  const bodyShadow = shadowBody?.group ?? null
   if (bodyShadow) scene?.add(bodyShadow)
 
   /* ---- state -------------------------------------------------------------*/
@@ -478,13 +416,14 @@ export function createWalkController(opts: WalkOptions): WalkController {
   }
 
   function updateBodyShadow(): void {
+    camera.userData.pgWalkShadow = enabled
+    camera.userData.pgWalkFeetY = pos.y
     if (!bodyShadow) return
-    const visible = enabled && !descending && grounded && !swimming
+    const visible = enabled && !descending && !swimming
     bodyShadow.visible = visible
     if (!visible) return
-    bodyShadow.position.set(pos.x, pos.y + 0.018, pos.z)
-    bodyShadow.rotation.y = yaw
-    bodyShadow.scale.z = BODY_SHADOW_SCALE * (crouching ? 0.68 : 1)
+    shadowBody!.update(pos, yaw, crouching, noBob || !grounded ? 0 : bobPhase,
+      noBob || !grounded ? 0 : Math.min(1, Math.hypot(vel.x, vel.z) / T.speedWalk))
   }
 
   /* ---- fade overlay ------------------------------------------------------*/
@@ -1450,10 +1389,10 @@ export function createWalkController(opts: WalkOptions): WalkController {
     fade = null
     if (poolReadout && poolReadout.parentNode) poolReadout.parentNode.removeChild(poolReadout)
     if (swimVeil && swimVeil.parentNode) swimVeil.parentNode.removeChild(swimVeil)
+    camera.userData.pgWalkShadow = false
     if (bodyShadow) {
       bodyShadow.removeFromParent()
-      bodyShadow.geometry.dispose()
-      bodyShadow.material.dispose()
+      shadowBody!.dispose()
     }
     poolReadout = null
     poolTitle = null
