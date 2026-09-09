@@ -541,6 +541,16 @@ body {
   padding-block: 5px 8px;
 }
 
+/* Wide inspector panels start below the header. Keep the whole disclosure in
+   that flow so expanding a qualification cannot put it behind the panel/tab. */
+@media (min-width: 1101px) {
+  body:not(.pg-walk) #hud-top .hud-bar > .city-version-provenance {
+    position: static;
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
+}
+
 @media (max-width: 700px), (pointer: coarse) {
   .pg-version-qualification > summary {
     min-height: var(--tap);

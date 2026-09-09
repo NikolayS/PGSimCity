@@ -13,6 +13,7 @@ are all still moving. Expect breaking changes between minor versions.
 
 - Walk with a light-cast body shadow that follows the sun, ground and crouch pose. Shadow-enabled quality tiers use a local receiver fit while walking and restore the normal city-view shadow fit on exit; LOW does not invent a shadow.
 - Keep floating annotations outside open investigation notebooks, city-claims disclosures and inspector panels. Explanations remain hard boundaries even for selected or recently shown labels; when no complete chip fits, omit the chip rather than cover its qualification.
+- Keep desktop city-claims text in the header flow, above both the Inspector tab and its open panel. Expanded qualifications retain their space instead of being covered.
 - Clear the first-run map invitation during walking and restore it on return, leaving the walking controls and disclosures available.
 - Simulation and evidence semantics are unchanged. Shadow softness, fine-grid aliasing, physical sign/HUD intersections and peripheral composition remain; software-rendered and emulated checks are not device-performance measurements.
 
