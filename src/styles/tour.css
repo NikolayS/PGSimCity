@@ -518,6 +518,10 @@ body.pg-vacuum-lesson .tour-history-open {
   display: flex;
   animation: tour-rise var(--dur-slow) var(--ease-out-expo) both;
 }
+/* Suspend the invitation while reading, without persisting a dismissal. */
+body:has(.pgc-host--right.is-open:not(.is-plan-hidden)) .tour-first.is-live {
+  display: none;
+}
 .tour-first__text {
   display: grid;
   gap: 2px;
