@@ -338,6 +338,7 @@ export function createLabels(
   let passT = PASS_SEC
   let readT = 0
   let occlusionCursor = 0
+  let contextOcclusionCursor = 0
   let cameraMode: CameraMode = 'orbit'
 
   /* --------------------------------- DOM --------------------------------- */
@@ -1233,15 +1234,28 @@ export function createLabels(
       pass(camera)
     }
 
-    let checked = refreshContextOcclusion(selectedId, camera) ? 1 : 0
-    if (hoveredId !== selectedId && refreshContextOcclusion(hoveredId, camera)) checked++
-    if (now < focusUntil && focusId !== selectedId && focusId !== hoveredId && refreshContextOcclusion(focusId, camera)) checked++
+    // Two rotating attention slots leave at least one ordinary check per frame.
+    // Three distinct attention targets still refresh within two frames.
+    let checked = 0
+    let contextScanned = 0
+    let firstContext: string | null = null
+    let secondContext: string | null = null
+    while (checked < LABEL_OCCLUSION_BUDGET - 1 && contextScanned < 3) {
+      const slot = contextOcclusionCursor
+      contextOcclusionCursor = (contextOcclusionCursor + 1) % 3
+      contextScanned++
+      const id = slot === 0 ? selectedId : slot === 1 ? hoveredId : now < focusUntil ? focusId : null
+      if (id === firstContext || id === secondContext || !refreshContextOcclusion(id, camera)) continue
+      if (checked === 0) firstContext = id
+      else secondContext = id
+      checked++
+    }
     let scanned = 0
     while (checked < LABEL_OCCLUSION_BUDGET && scanned < entries.length) {
       if (occlusionCursor >= entries.length) occlusionCursor = 0
       const e = entries[occlusionCursor++]
       scanned++
-      if (!e.onScreen || e.rank < 0 || e.rank > 2 || e.proxy) continue
+      if (!e.onScreen || e.rank < 0 || e.rank > 2 || e.proxy || e.id === firstContext || e.id === secondContext) continue
       e.occluded = isLabelAnchorOccluded(collision, camera.position, e.pos)
       checked++
     }

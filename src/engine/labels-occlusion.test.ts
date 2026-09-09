@@ -67,3 +67,37 @@ it.each([60, 900])('retains qualified selected context at distance %s, then hide
   }
   labels.dispose()
 })
+
+it('continues refreshing ordinary anchors while three distinct context targets remain', () => {
+  const dom = installTestDom(), registry = new Registry(), bus = createBus(), sim = createSim(bus)
+  const container = dom.document.createElement('div')
+  dom.document.body.appendChild(container)
+  for (let i = 0; i < 4; i++) {
+    registry.register({ id: 'item' + i, name: 'Item ' + i, role: 'test', kind: 'process',
+      district: 'backends', object: new THREE.Group(), tier: 1, labelAt: [i * 2, 0, 0],
+      color: 0xffff00, focus: { target: [i * 2, 0, 0], distance: 40 } })
+  }
+  const checked: number[] = []
+  const labels = createLabels(container as unknown as HTMLElement, registry, bus, {
+    occluded: (_camera, anchor) => { checked.push(anchor.x); return false },
+  })
+  labels.resize(1280, 900)
+  const camera = new THREE.PerspectiveCamera(50, 1280 / 900, 0.1, 2000)
+  camera.position.set(0, 20, 60); camera.lookAt(0, 0, 0); camera.updateMatrixWorld()
+  for (let i = 0; i < 12; i++) labels.update(0.2, camera, sim.state)
+  bus.emit('select', { id: 'item0' })
+  bus.emit('hover', { id: 'item1' })
+  bus.emit('focus', { id: 'item2' })
+  checked.length = 0
+  for (let i = 0; i < 12; i++) {
+    const before = checked.length
+    labels.update(0.2, camera, sim.state)
+    expect(checked.length - before).toBeLessThanOrEqual(LABEL_OCCLUSION_BUDGET)
+  }
+  expect(checked).toContain(6)
+  for (const child of labels.group.children) {
+    const element = (child as THREE.Object3D & { element: HTMLElement }).element
+    Object.defineProperty(element, 'ownerDocument', { value: { defaultView: { Element: element.constructor } } })
+  }
+  labels.dispose()
+})
