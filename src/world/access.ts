@@ -898,10 +898,12 @@ export const createAccess: AccessFactory = (ctx: WorldContext): AccessModule => 
     const span = Math.round(Math.abs(c.inner - c.outer))
     const postU = hOuter - dir * 2.4
     const postW = c.centre + half + 3.0
+    // Keep the north arm's close reading strip clear of the service-road curb.
+    const fingerU = postU + (c.id === 'north' ? 1 : 0)
     const toDeck: Facing = ax === 'z' ? (dir > 0 ? '+z' : '-z') : dir > 0 ? '+x' : '-x'
     const away: Facing = ax === 'z' ? (dir > 0 ? '-z' : '+z') : dir > 0 ? '-x' : '+x'
     if (ax === 'z') {
-      fingerpost(postW, headY, postU, [[`SHARED MEMORY  ${span} m`, COLOR.shmem, toDeck], [c.name, c.color, away]])
+      fingerpost(postW, headY, fingerU, [[`SHARED MEMORY  ${span} m`, COLOR.shmem, toDeck], [c.name, c.color, away]])
       signBoard(`${c.id.toUpperCase()} CAUSEWAY`, c.centre, headY, postU, 'x', 5.2, c.color)
     } else {
       fingerpost(postU, headY, postW, [[`SHARED MEMORY  ${span} m`, COLOR.shmem, toDeck], [c.name, c.color, away]])
