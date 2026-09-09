@@ -811,11 +811,10 @@ function textFindings(
     const reviewStations = [...stations]
     const horizontalNormal = Math.hypot(normal.x, normal.z)
     if (horizontalNormal > 0.8) {
-      /* Every fixed sign gets the same front-normal review distances. Each
-       * probe must still pass the production ground, capsule, stability, and
-       * rendered-surface tests, so these are pedestrian poses rather than
-       * hand-picked camera coordinates. */
-      for (const distance of [4, 8, 12, 16, 20, TEXT_REVIEW_DISTANCE]) {
+      /* Sample short approaches beneath overhead routes and on narrow pads
+       * that the topmost lattice misses. Every sign uses the same distances
+       * and production ground, capsule, stability, and rendered-surface gates. */
+      for (const distance of [1, 2, 3, 4, 8, 12, 16, 20, TEXT_REVIEW_DISTANCE]) {
         const x = center.x + (normal.x / horizontalNormal) * distance
         const z = center.z + (normal.z / horizontalNormal) * distance
         const surface = surfacesAt(city, colliders, x, z, center.y + EYE_HEIGHT + 2, -CITY.pit.wallDepth - 2)[0]
