@@ -880,3 +880,12 @@
     transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
   }
 }
+
+.pgc-find-worker {
+  display: block;
+  width: 100%;
+  white-space: normal;
+  text-align: left;
+  margin-top: 8px;
+  min-height: 44px;
+}

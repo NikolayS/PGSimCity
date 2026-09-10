@@ -1569,6 +1569,16 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   })
 
   ctx.register({
+    id: 'autovac.depot',
+    name: 'Autovacuum worker bays',
+    role: 'select a bay to find its worker',
+    kind: 'process', district: 'maintenance', object: gDepot, tier: 1,
+    focus: { target: [VACUUM_DOCKS[1].housing[0], 5, VACUUM_DOCKS[1].housing[2]], distance: 48, dir: [0.7, 0.5, 0.5] },
+    color: COLOR.vacuum,
+    readout: () => 'Click to find a worker',
+  })
+
+  ctx.register({
     id: 'autovac.launcher',
     name: 'autovacuum launcher',
     role: 'wakes every naptime and forks a worker for the neediest table',

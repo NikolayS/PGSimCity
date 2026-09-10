@@ -240,7 +240,7 @@ export const SCENARIOS: ScenarioDef[] = [
       checkpointTimeout: 120,
     },
     beats: [
-      [0, 'A lock taken, and a transaction left open', 'One session ran LOCK TABLE sessions IN ACCESS EXCLUSIVE MODE — the same lock every ALTER TABLE takes — and its transaction never committed. The statement itself took a millisecond; the lock outlives it.'],
+      [0, 'A lock taken, and a transaction left open', 'One session ran LOCK TABLE sessions IN ACCESS EXCLUSIVE MODE — a lock also required by many ALTER TABLE operations — and its transaction never committed. The statement itself took a millisecond; the lock outlives it.'],
       [12, 'Direct waiters form', 'Red lines in the lock manager mark modeled backends blocked directly by the one scripted ACCESS EXCLUSIVE holder. The city counts waiters and occupied backend slots; the Lock wait readout is that component’s own rolling p99.'],
       [26, 'Queue fairness is absent', 'PostgreSQL lock queues can let an earlier incompatible waiter hold up later requests. This city does not model lock-queue fairness, lock modes, or a waiter blocking another waiter; every red waiter is attached directly to the scripted holder.'],
       [42, 'It spreads beyond the table', 'Queries on other tables are still running fine — but every blocked session is still holding a connection. Watch the backend row fill up with waiters. Once they exhaust the pool, traffic that never touches this table starts failing too. One lock becomes a total outage.'],

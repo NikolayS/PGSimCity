@@ -799,6 +799,32 @@ export function createInspector(ctx: UiContext): UiModule {
       )
     }
 
+    if (id === 'autovac.depot' || id === 'autovac.launcher') {
+      const block = el('div', { class: 'pgc-block pgc-block--actions' },
+        el('span', { class: 'pg-eyebrow', text: 'Find a worker' }))
+      for (let slot = 0; slot < ctx.sim.state.autovac.workers.length; slot++) {
+        const workerId = `autovac.worker.${slot}`
+        const button = el('button', {
+          class: 'pg-btn pgc-find-worker', type: 'button', data: { findWorker: String(slot) },
+          on: { click: () => {
+            ctx.bus.emit('select', { id: workerId })
+            ctx.bus.emit('focus', { id: workerId })
+          } },
+        })
+        const sync = (): void => {
+          const worker = ctx.sim.state.autovac.workers[slot]
+          const status = worker.active
+            ? `${ctx.sim.state.tables[worker.table]?.def.name ?? 'table'} · ${worker.phase.replaceAll('_', ' ')}`
+            : 'idle in bay'
+          setText(button, `Find worker ${slot} — ${status}`)
+        }
+        sync()
+        actions.push({ root: button, sync })
+        block.append(button)
+      }
+      wrap.append(block)
+    }
+
     /* metrics first — the numbers are the reason this feels alive */
     const metrics = info?.metrics ?? []
     if (metrics.length) {

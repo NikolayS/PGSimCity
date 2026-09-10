@@ -33,6 +33,12 @@ const _workerDocs = new Map<string, ComponentDoc>()
 
 export function doc(id: string | null | undefined): ComponentDoc | undefined {
   if (!id) return undefined
+  if (id === 'autovac.depot') return {
+    id, title: 'Autovacuum worker bays', subtitle: 'Illustrative worker home base',
+    tldr: 'Locate each worker, including those currently away from their bay.',
+    sections: [{ heading: 'Where did the worker go?', body: 'Choose Find worker to inspect and fly to that worker’s current position. The bays and service roads are a city metaphor, not PostgreSQL storage devices.' }],
+    see: ['autovac.launcher'],
+  }
   const hit = _byId.get(id)
   if (hit) return hit
   // per-instance ids fall back to their family doc: backend.7 -> backend.slot

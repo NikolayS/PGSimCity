@@ -318,6 +318,9 @@
 
 .hud-right {
   grid-area: controls;
+  max-width: 100%;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -427,6 +430,9 @@
 /* One cluster, because it moves as one: on a phone the whole thing is re-parented
    into the transport dock (see applyPhoneLayout in hud.ts). */
 .hud-tools {
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1657,6 +1663,8 @@ body.pg-walk.touch-walk-active .hud-export {
     letter-spacing: 0;
   }
   .hud-tools {
+    flex-wrap: nowrap;
+    justify-content: flex-start;
     gap: 6px;
   }
   .hud-tools > button,

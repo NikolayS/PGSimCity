@@ -1564,7 +1564,10 @@ export function createHud(ctx: UiContext, options: { onInvestigate?: () => void;
   }
 
   function toggleScenario(id: string): void {
-    sim.runScenario(sim.state.scenario === id ? null : id)
+    const stopping = sim.state.scenario === id
+    sim.runScenario(stopping ? null : id)
+    // Choosing a case is an explicit play action; replay/tour staging remains paused.
+    if (!stopping) sim.setKnob('paused', false, 'user')
     setScenariosOpen(false)
   }
 

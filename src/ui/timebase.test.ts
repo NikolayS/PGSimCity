@@ -5,6 +5,7 @@ import { createSim } from '../sim/model'
 import { installTestDom } from '../../test/dom'
 import { createFrameTimebase, wallDelta } from '../core/timebase'
 import { createHud } from './hud'
+import { createInspector } from './panel'
 import { createTour } from './tour'
 import type { UiContext } from './uikit'
 
@@ -34,7 +35,7 @@ describe('user-facing timebase', () => {
     const dom = installTestDom()
     dom.mount('tour-layer')
     dom.mount('canvas-root')
-    for (const id of ['hud-top', 'hud-bottom', 'toast-stack', 'compass']) dom.mount(id)
+    for (const id of ['hud-top', 'hud-bottom', 'toast-stack', 'compass', 'hud-right']) dom.mount(id)
   })
 
   afterEach(() => {
@@ -166,4 +167,36 @@ describe('user-facing timebase', () => {
     expect(document.querySelector('.hud-bar')?.classList.contains('is-stacked')).toBe(true)
     hud.dispose()
   })
+  it('runs a deliberately selected scenario from a paused city', () => {
+    const ctx = context()
+    ctx.sim.setKnob('paused', true)
+    const hud = createHud(ctx)
+    document.querySelector<HTMLButtonElement>('[data-scenario="lock-pileup"]')!.click()
+    for (let i = 0; i < 600; i++) ctx.sim.update(1 / 30)
+    expect(ctx.sim.state.scenarioT).toBeGreaterThan(12)
+    expect(ctx.sim.state.locks.length).toBeGreaterThan(0)
+    hud.dispose()
+  })
+
+  it('locates a departed worker from the bays and keeps its status current', () => {
+    const ctx = context()
+    const inspector = createInspector(ctx)
+    const focused: string[] = []
+    ctx.bus.on('focus', ({ id }) => id && focused.push(id))
+    ctx.bus.emit('select', { id: 'autovac.depot' })
+    const button = document.querySelector<HTMLButtonElement>('[data-find-worker="0"]')
+    expect(button).not.toBeNull()
+    expect(button!.textContent).toContain('idle in bay')
+    const worker = ctx.sim.state.autovac.workers[0]
+    worker.active = true
+    worker.table = 1
+    worker.phase = 'scan_heap'
+    inspector.update(1)
+    expect(button!.textContent).toContain(ctx.sim.state.tables[1].def.name)
+    expect(button!.textContent).toContain('scan')
+    button!.click()
+    expect(focused).toEqual(['autovac.worker.0'])
+    inspector.dispose()
+  })
+
 })

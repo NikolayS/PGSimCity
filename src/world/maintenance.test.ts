@@ -162,6 +162,23 @@ describe('robot vacuum service station', () => {
     return { module, sim, components }
   }
 
+  it('keeps bays selectable and worker focus attached to the departed robot', () => {
+    const { module, sim, components } = fixture()
+    const depot = components.get('autovac.depot')!
+    expect(depot.object.name).toBe('vac.depot')
+    const worker = components.get('autovac.worker.0')!
+    const parked = [...worker.focus.target]
+    Object.assign(sim.state.autovac.workers[0], { active: true, table: 3, phase: 'scan_heap', deadCollected: 0 })
+    module.update(0.21, sim.state, 1)
+    expect(worker.focus.target).not.toEqual(parked)
+    const body = worker.object.children[0] as THREE.InstancedMesh
+    const matrix = new THREE.Matrix4()
+    body.getMatrixAt(0, matrix)
+    const bodyCenter = new THREE.Vector3().setFromMatrixPosition(matrix)
+    expect(worker.focus.target[0]).toBeCloseTo(bodyCenter.x)
+    expect(worker.focus.target[2]).toBeCloseTo(bodyCenter.z)
+  })
+
   it('refreshes physical worker counters at a paused first-removal checkpoint', () => {
     const drawn: string[] = []
     const { module, sim } = fixture(text => drawn.push(text))
