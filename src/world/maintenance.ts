@@ -3,7 +3,7 @@ import * as THREE from 'three'
 import { COLOR, mixHex } from '../core/theme'
 import { CLAIM_VALUES } from '../core/claims'
 import { N_BACKEND_SLOTS, N_BUFFERS, N_VAC_WORKERS } from '../core/types'
-import type { SimState, VacPhase, WorldContext, WorldFactory, WorldModule } from '../core/types'
+import type { FocusSpec, SimState, VacPhase, WorldContext, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, damp, fmtDuration, fmtNum, fmtPct, lerp, makeRng, smoothstep } from '../core/util'
 import { walTriggerBytes } from '../core/model-helpers'
 import {
@@ -422,6 +422,15 @@ class Signage {
     a.needsUpdate = true
   }
 
+  /** Collapse a live plate without changing its atlas row or current text. */
+  hide(p: LivePlate): void {
+    const a = this.posAttr
+    if (!a) return
+    const o = p.quad * 4
+    for (let i = 0; i < 4; i++) a.setXYZ(o + i, 0, -9000, 0)
+    a.needsUpdate = true
+  }
+
   setColor(quad: number, color: number, bright: number): void {
     const a = this.colorAttr
     if (!a) return
@@ -500,6 +509,7 @@ interface Truck {
   panelTop: LivePlate
   panelBot: LivePlate
   focus: [number, number, number]
+  focusSpec: FocusSpec
   pos: THREE.Vector3
   prev: THREE.Vector3
   bay: THREE.Vector3
@@ -1178,6 +1188,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     const b = vacBayPos(i)
     const bayX = b[0] - 4
     const bayZ = b[2]
+    const focus: [number, number, number] = [bayX, 3, bayZ]
     trucks.push({
       slot: i,
       group: g,
@@ -1186,7 +1197,8 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       neon0: i * TRUCK_NEON,
       panelTop: signs.live('AV-0 idle', 1.6, COLOR.vacuum, 1.0),
       panelBot: signs.live('in bay', 1.15, COLOR.inkDim, 0.7),
-      focus: [bayX, 3, bayZ],
+      focus,
+      focusSpec: { target: focus, distance: 38, dir: [0.7, 0.5, 0.5] },
       pos: new THREE.Vector3(bayX, ROAD_Y, bayZ),
       prev: new THREE.Vector3(bayX, ROAD_Y, bayZ),
       bay: new THREE.Vector3(bayX, ROAD_Y, bayZ),
@@ -1610,7 +1622,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       district: 'maintenance',
       object: tr.group,
       tier: 1,
-      focus: { target: tr.focus, distance: 38, dir: [0.7, 0.5, 0.5] },
+      focus: tr.focusSpec,
       color: COLOR.vacuum,
       readout: (s: SimState) => {
         const w = s.autovac.workers[i]
@@ -1861,6 +1873,19 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     cleanupDisplay.reset(ctx.sim.tables, ctx.sim.autovac.workers)
     cleanupShown.fill(-1)
     cleanupSlotShown.fill(-1)
+  })
+  let selectedWorker = -1
+  const offSelect = ctx.bus.on('select', ({ id, outlineOnly }) => {
+    if (outlineOnly) return
+    selectedWorker = id?.startsWith('autovac.worker.')
+      ? Number.parseInt(id.slice('autovac.worker.'.length), 10)
+      : -1
+    if (selectedWorker >= 0 && selectedWorker < trucks.length) {
+      for (let i = 0; i < trucks.length; i++) {
+        signs.hide(trucks[i].panelTop)
+        signs.hide(trucks[i].panelBot)
+      }
+    }
   })
 
   /* =======================================================================
@@ -2262,6 +2287,12 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       tr.focus[0] = tr.pos.x
       tr.focus[1] = tr.pos.y + 3
       tr.focus[2] = tr.pos.z
+      const underground = tr.pos.y < 0 && (w.phase === 'scan_heap' || w.phase === 'vacuum_heap')
+      tr.focusSpec.distance = underground ? 28 : 38
+      const focusDir = tr.focusSpec.dir!
+      focusDir[0] = underground ? cleanupSide[w.table] * 0.45 : 0.7
+      focusDir[1] = underground ? 0.65 : 0.5
+      focusDir[2] = underground ? 1 : 0.5
 
       // Captions describe the current observation, even with zero elapsed model
       // time after a paused step/reset. setLiveText skips unchanged atlas rows.
@@ -2280,6 +2311,10 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       const panelY = tr.pos.y + 8.6
       signs.place(tr.panelTop, tr.pos.x, panelY + 1.6, tr.pos.z, _right, _up)
       signs.place(tr.panelBot, tr.pos.x, panelY, tr.pos.z, _right, _up)
+      if (selectedWorker >= 0 && selectedWorker < trucks.length) {
+        signs.hide(tr.panelTop)
+        signs.hide(tr.panelBot)
+      }
       signs.setColor(tr.panelTop.quad, live ? COLOR.vacuum : COLOR.inkDim, live ? 1.3 : 0.35)
       signs.setColor(
         tr.panelBot.quad,
@@ -2448,6 +2483,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     offCkEnd()
     offCkStart()
     offReset()
+    offSelect()
     for (const o of owned) o.dispose()
     owned.length = 0
     signs.dispose()

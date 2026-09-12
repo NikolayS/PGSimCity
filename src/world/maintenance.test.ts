@@ -159,7 +159,7 @@ describe('robot vacuum service station', () => {
       theme.dispose()
     })
     module.update(1 / 60, sim.state, 0)
-    return { module, sim, components }
+    return { module, sim, components, bus }
   }
 
   it('keeps bays selectable and worker focus attached to the departed robot', () => {
@@ -177,6 +177,47 @@ describe('robot vacuum service station', () => {
     const bodyCenter = new THREE.Vector3().setFromMatrixPosition(matrix)
     expect(worker.focus.target[0]).toBeCloseTo(bodyCenter.x)
     expect(worker.focus.target[2]).toBeCloseTo(bodyCenter.z)
+    expect(worker.focus.distance).toBe(28)
+    expect(worker.focus.dir).toEqual([-0.45, 0.65, 1])
+
+    sim.state.autovac.workers[0].phase = 'return'
+    module.update(0.21, sim.state, 2)
+    expect(worker.focus.distance).toBe(38)
+    expect(worker.focus.dir).toEqual([0.7, 0.5, 0.5])
+    body.getMatrixAt(0, matrix)
+    bodyCenter.setFromMatrixPosition(matrix)
+    expect(worker.focus.target[0]).toBeCloseTo(bodyCenter.x)
+    expect(worker.focus.target[2]).toBeCloseTo(bodyCenter.z)
+  })
+
+  it('hides all live worker billboards for a worker inspector and restores them on unselect', () => {
+    const { module, sim, bus } = fixture()
+    const signage = module.group.children.find(child => child.name === 'maintenance.signage')!
+    const walkSigns = signage.getObjectByName('maintenance.signage.walk') as THREE.Mesh
+    const positions = walkSigns.geometry.getAttribute('position')
+    const collapsedVertices = () => {
+      let count = 0
+      for (let i = 0; i < positions.count; i++) if (positions.getY(i) < -8000) count++
+      return count
+    }
+    expect(collapsedVertices()).toBe(0)
+
+    bus.emit('select', { id: 'autovac.worker.0' })
+    expect(collapsedVertices()).toBe(24)
+    module.update(0, sim.state, 0)
+    expect(collapsedVertices()).toBe(24)
+
+    bus.emit('select', { id: 'autovac.worker.1', outlineOnly: true })
+    module.update(0, sim.state, 0)
+    expect(collapsedVertices()).toBe(24)
+
+    bus.emit('select', { id: null })
+    module.update(0, sim.state, 0)
+    expect(collapsedVertices()).toBe(0)
+
+    bus.emit('select', { id: 'checkpointer' })
+    module.update(0, sim.state, 0)
+    expect(collapsedVertices()).toBe(0)
   })
 
   it('refreshes physical worker counters at a paused first-removal checkpoint', () => {
