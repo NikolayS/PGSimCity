@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest'
 
 import { VacuumCleanupDisplay } from './vacuum-cleanup-display'
 
-const tables = (dead = 1_200) => [{ deadTuples: dead }]
+const tables = (dead = 1_200) => [{
+  deadTuples: dead,
+  liveTuples: 0,
+  pages: 12,
+  def: { tuplesPerPage: 100 },
+}]
 const workers = () => [{ active: false, table: 0, phase: 'idle', deadCollected: 0 }]
 
 describe('VacuumCleanupDisplay', () => {
@@ -132,5 +137,88 @@ describe('VacuumCleanupDisplay', () => {
     display.sync(relation, fleet)
     expect(display.tuplesPerMarker(0)).toBe(2_000)
     expect(display.markerCount(0)).toBe(12)
+  })
+
+  it('keeps current dead versions represented during concurrent collection and churn', () => {
+    const display = new VacuumCleanupDisplay(1, 1, 12)
+    const relation = tables(1_200)
+    const fleet = workers()
+    display.reset(relation, fleet)
+    Object.assign(fleet[0], { active: true, phase: 'vacuum_heap' })
+    display.sync(relation, fleet)
+
+    fleet[0].deadCollected = 600
+    display.sync(relation, fleet)
+
+    expect(display.markerCount(0)).toBe(12)
+    expect(display.displayedSlots(0)).toBe(12)
+  })
+
+  it('shows sub-marker dead-version regrowth after a complete cleanup', () => {
+    const display = new VacuumCleanupDisplay(1, 1, 12)
+    const relation = tables(1_200)
+    const fleet = workers()
+    display.reset(relation, fleet)
+    Object.assign(fleet[0], { active: true, phase: 'vacuum_heap' })
+    display.sync(relation, fleet)
+    relation[0].deadTuples = 0
+    fleet[0].deadCollected = 1_200
+    display.sync(relation, fleet)
+
+    Object.assign(fleet[0], { active: false, phase: 'idle', deadCollected: 0 })
+    display.sync(relation, fleet)
+    relation[0].deadTuples = 99
+    relation[0].liveTuples = 1_101
+    display.sync(relation, fleet)
+
+    expect(display.markerCount(0)).toBe(1)
+  })
+
+  it('removes reusable cells when live rows consume aggregate free capacity', () => {
+    const display = new VacuumCleanupDisplay(1, 1, 12)
+    const relation = tables(1_200)
+    const fleet = workers()
+    display.reset(relation, fleet)
+    Object.assign(fleet[0], { active: true, phase: 'vacuum_heap' })
+    display.sync(relation, fleet)
+    relation[0].deadTuples = 0
+    fleet[0].deadCollected = 1_200
+    display.sync(relation, fleet)
+    expect(display.displayedSlots(0)).toBe(12)
+
+    relation[0].liveTuples = 1_200
+    display.sync(relation, fleet)
+    expect(display.displayedSlots(0)).toBe(0)
+  })
+
+  it('preserves fractional cleanup across churn and bounds reuse after live refill', () => {
+    const display = new VacuumCleanupDisplay(1, 1, 12)
+    const relation = tables(1_200)
+    const fleet = workers()
+    display.reset(relation, fleet)
+    Object.assign(fleet[0], { active: true, phase: 'vacuum_heap' })
+    display.sync(relation, fleet)
+
+    relation[0].deadTuples = 1_140
+    fleet[0].deadCollected = 60
+    display.sync(relation, fleet)
+    expect(display.markerCount(0)).toBe(12)
+    expect(display.displayedSlots(0)).toBe(12)
+
+    relation[0].deadTuples = 1_080
+    fleet[0].deadCollected = 120
+    display.sync(relation, fleet)
+    expect(display.markerCount(0)).toBe(11)
+    expect(display.displayedSlots(0)).toBe(12)
+
+    relation[0].liveTuples = 120
+    display.sync(relation, fleet)
+    expect(display.displayedSlots(0)).toBe(11)
+
+    relation[0].deadTuples = 1_120
+    relation[0].liveTuples = 80
+    display.sync(relation, fleet)
+    expect(display.markerCount(0)).toBe(12)
+    expect(display.displayedSlots(0)).toBe(12)
   })
 })

@@ -1,5 +1,8 @@
 interface CleanupTable {
   readonly deadTuples: number
+  readonly liveTuples: number
+  readonly pages: number
+  readonly def: { readonly tuplesPerPage: number }
 }
 
 interface CleanupWorker {
@@ -15,8 +18,8 @@ export class VacuumCleanupDisplay {
   private readonly cleared: Uint8Array
   private readonly scale: Float64Array
   private readonly observedDead: Float64Array
-  private readonly growthRemainder: Float64Array
-  private readonly removalRemainder: Float64Array
+  private readonly reclaimedTuples: Float64Array
+  private readonly collectionDelta: Float64Array
   private readonly workerActive: Uint8Array
   private readonly workerTable: Int16Array
   private readonly workerCollected: Float64Array
@@ -31,8 +34,8 @@ export class VacuumCleanupDisplay {
     this.cleared = new Uint8Array(tableCount)
     this.scale = new Float64Array(tableCount)
     this.observedDead = new Float64Array(tableCount)
-    this.growthRemainder = new Float64Array(tableCount)
-    this.removalRemainder = new Float64Array(tableCount)
+    this.reclaimedTuples = new Float64Array(tableCount)
+    this.collectionDelta = new Float64Array(tableCount)
     this.workerActive = new Uint8Array(workerCount)
     this.workerTable = new Int16Array(workerCount)
     this.workerCollected = new Float64Array(workerCount)
@@ -60,8 +63,8 @@ export class VacuumCleanupDisplay {
       this.markers[table] = Math.min(this.capacity, Math.ceil(dead / scale))
       this.cleared[table] = 0
       this.observedDead[table] = dead
-      this.growthRemainder[table] = 0
-      this.removalRemainder[table] = 0
+      this.reclaimedTuples[table] = 0
+      this.collectionDelta[table] = 0
     }
     for (let slot = 0; slot < this.workerActive.length; slot++) this.recordWorker(slot, workers[slot])
   }
@@ -69,18 +72,11 @@ export class VacuumCleanupDisplay {
   sync(tables: readonly CleanupTable[], workers: readonly CleanupWorker[]): void {
     for (let table = 0; table < this.markers.length; table++) {
       const dead = Math.max(0, tables[table]?.deadTuples ?? 0)
-      const growth = dead - this.observedDead[table]
-      if (growth > 0) {
-        this.growthRemainder[table] += growth
-        const added = Math.floor(this.growthRemainder[table] / this.scale[table])
-        if (added > 0) {
-          const before = this.markers[table]
-          this.markers[table] = Math.min(this.capacity, this.markers[table] + added)
-          this.cleared[table] = Math.max(0, this.cleared[table] - (this.markers[table] - before))
-          this.growthRemainder[table] -= added * this.scale[table]
-        }
-      }
-      this.observedDead[table] = dead
+      const represented = dead > 0
+        ? Math.max(1, Math.min(this.capacity, Math.ceil(dead / this.scale[table])))
+        : 0
+      if (represented > this.markers[table]) this.markers[table] = represented
+      this.collectionDelta[table] = 0
     }
 
     for (let slot = 0; slot < this.workerActive.length; slot++) {
@@ -97,19 +93,30 @@ export class VacuumCleanupDisplay {
       const delta = worker.deadCollected - this.workerCollected[slot]
       const collectionPhase = worker.phase === 'vacuum_heap' || this.workerPhase[slot] === 'vacuum_heap'
       if (sameTask && !counterReset && collectionPhase && delta > 0 && worker.table >= 0 && worker.table < this.markers.length) {
-        const table = worker.table
-        this.removalRemainder[table] += delta
-        const removed = Math.floor(this.removalRemainder[table] / this.scale[table])
-        if (removed > 0 || (tables[table]?.deadTuples ?? 0) <= 0) {
-          const before = this.markers[table]
-          const floor = (tables[table]?.deadTuples ?? 0) > 0 ? 1 : 0
-          this.markers[table] = Math.max(floor, this.markers[table] - removed)
-          if (floor === 0) this.markers[table] = 0
-          this.cleared[table] += before - this.markers[table]
-          this.removalRemainder[table] -= removed * this.scale[table]
-        }
+        this.collectionDelta[worker.table] += delta
       }
       this.recordWorker(slot, worker)
+    }
+
+    for (let table = 0; table < this.markers.length; table++) {
+      const relation = tables[table]
+      const dead = Math.max(0, relation?.deadTuples ?? 0)
+      const decrease = Math.max(0, this.observedDead[table] - dead)
+      if (decrease > 0 && this.collectionDelta[table] > 0) {
+        this.reclaimedTuples[table] += Math.min(decrease, this.collectionDelta[table])
+        this.markers[table] = dead > 0
+          ? Math.max(1, Math.min(this.capacity, Math.ceil(dead / this.scale[table])))
+          : 0
+      }
+      const aggregateFree = Math.max(0,
+        (relation?.pages ?? 0) * (relation?.def.tuplesPerPage ?? 0)
+          - (relation?.liveTuples ?? 0) - dead)
+      const reusable = Math.min(
+        Math.floor(this.reclaimedTuples[table] / this.scale[table]),
+        Math.floor(aggregateFree / this.scale[table]),
+      )
+      this.cleared[table] = Math.max(0, Math.min(this.capacity - this.markers[table], reusable))
+      this.observedDead[table] = dead
     }
   }
 
@@ -126,7 +133,7 @@ export class VacuumCleanupDisplay {
     this.markers[table] = Math.min(this.capacity, Math.ceil(dead / scale))
     this.cleared[table] = 0
     this.observedDead[table] = Math.max(0, dead)
-    this.growthRemainder[table] = 0
-    this.removalRemainder[table] = 0
+    this.reclaimedTuples[table] = 0
+    this.collectionDelta[table] = 0
   }
 }
