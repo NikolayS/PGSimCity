@@ -122,29 +122,37 @@ describe('persisted knob-set safety', () => {
       .not.toMatchObject({ longRunningXact: true, lockContention: true })
   })
 
-  it('announces a changed saved setting and opens the exact recovery control', () => {
+  it.each([
+    { lockContention: true, tps: 1200, writeRatio: 1 },
+    { tps: 0, autovacuum: false, longRunningXact: true },
+    { standbyAEnabled: false, synchronousCommit: 'remote_apply' },
+  ])('starts healthy instead of silently restoring an incident: %j', (saved) => {
     const dom = installTestDom()
     dom.mount('hud-left')
-    storeKnobs({ standbyAEnabled: false })
+    storeKnobs(saved)
     const bus = createBus()
-    const messages: { text: string; action?: { label: string; consoleKey?: string } }[] = []
-    bus.on('toast', ({ text, action }) => messages.push({ text, action }))
     const sim = createSim(bus, { scheduledBackups: false })
-
+    const initial = { ...sim.state.knobs }
     const controls = createControls(controlsContext(sim, bus))
 
-    expect(sim.state.knobs.synchronousStandbyNames).toBe('none')
-    expect(messages.map(({ text }) => text).join('\n')).toMatch(
-      /saved settings.*standby_a.*loaded with synchronous_standby_names empty.*local durability/is,
-    )
-    const action = messages.find(({ action }) => action?.consoleKey)?.action
-    expect(action).toMatchObject({ label: 'Open sync controls', consoleKey: 'synchronousStandbyNames' })
+    expect(sim.state.knobs).toEqual(initial)
+    expect(sim.state.scenario).toBeNull()
+    expectSustainedCommits(sim)
+    expect(sim.state.backends.filter((backend) => backend.state === 'blocked'))
+      .not.toHaveLength(N_BACKEND_SLOTS)
+    controls.dispose()
+  })
 
-    bus.emit('ui:console', { open: true, key: 'synchronousStandbyNames' })
-    const target = document.querySelector<HTMLElement>('[data-knob="synchronousStandbyNames"]')
-    expect(document.querySelector('.pgc-host')?.classList.contains('is-open')).toBe(true)
-    expect(target?.closest('.pg-collapse')?.classList.contains('is-open')).toBe(true)
-    expect(document.activeElement).toBe(target?.querySelector('select'))
+  it('does not overwrite an explicitly restored incident when constructing controls', () => {
+    const dom = installTestDom()
+    dom.mount('hud-left')
+    storeKnobs({ tps: 0, lockContention: false })
+    const bus = createBus()
+    const sim = createSim(bus)
+    sim.runScenario('lock-pileup')
+    const before = JSON.stringify(sim.state)
+    const controls = createControls(controlsContext(sim, bus))
+    expect(JSON.stringify(sim.state)).toBe(before)
     controls.dispose()
   })
 

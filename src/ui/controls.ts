@@ -561,7 +561,9 @@ export function createControls(ctx: UiContext): UiModule {
     return { update() {}, dispose() {} }
   }
 
-  const restored = loadKnobPreferences(ctx.sim)
+  /* Model settings describe an experiment, not a display preference. A normal
+   * visit starts healthy; an explicit incident handoff owns its restored state.
+   * Never overwrite either with fault knobs left by an earlier visit. */
 
   const host = el('div', { class: 'pgc-host pgc-host--left' })
   const looseBus = ctx.bus
@@ -834,28 +836,6 @@ export function createControls(ctx: UiContext): UiModule {
   applyOpen()
   if (compact && open) announceSheet('left')
   refresh()
-
-  if (restored.synchronousStandby) {
-    const standby = restored.synchronousStandby.standbyId === 'standbyA'
-      ? 'standby_a'
-      : 'standby_b'
-    const unavailable = restored.synchronousStandby.reason === 'physical-replication-disabled'
-      ? 'wal_level=minimal made it unavailable'
-      : 'it was disabled'
-    ctx.bus.emit('toast', {
-      text: `Saved settings named ${standby} for synchronous commits, but ${unavailable}. Loaded with synchronous_standby_names empty, using local durability so commits keep moving.`,
-      kind: 'warn',
-      ms: 12_000,
-      action: { label: 'Open sync controls', consoleKey: 'synchronousStandbyNames' },
-    })
-  }
-  if (restored.rejectedKeys.length > 0) {
-    ctx.bus.emit('toast', {
-      text: `Saved settings ${restored.rejectedKeys.join(', ')} contradicted the restored set and were not retained.`,
-      kind: 'warn',
-      ms: 7000,
-    })
-  }
 
   let acc = 0
   return {
