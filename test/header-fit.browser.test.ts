@@ -11,7 +11,8 @@ it('keeps header identity and every tool in separate visible space', async () =>
       states.push(await evaluate(`(async()=>{
         for(let i=0;i<200;i++) {
           const inDock=document.querySelector('.hud-tools').parentElement.classList.contains('hud-transport__dock');
-          if(inDock===(${width}<=700)) break;
+          const stacked=document.querySelector('.hud-bar').classList.contains('is-stacked');
+          if(inDock===(${width}<=700)&&stacked===(${width}>=701&&${width}<=1440)) break;
           await new Promise(r=>setTimeout(r,50));
         }
         await new Promise(r=>setTimeout(r,100));
@@ -22,7 +23,8 @@ it('keeps header identity and every tool in separate visible space', async () =>
         const overlaps=rects.filter(x=>x.r.left<brand.right&&x.r.right>brand.left&&x.r.top<brand.bottom&&x.r.bottom>brand.top).map(x=>x.name);
         const outside=rects.filter(x=>x.r.left<0||x.r.right>innerWidth).map(x=>x.name);
         const checkpointSharesControlLine=tools.some(x=>x.r.top<checkpoint.bottom&&x.r.bottom>checkpoint.top);
-        return {requestedWidth:${width},width:innerWidth,overlaps,outside,count:rects.length,checkpointSharesControlLine,parent:document.querySelector('.hud-tools').parentElement.className};
+        const toolCluster=document.querySelector('.hud-tools');
+        return {requestedWidth:${width},width:innerWidth,overlaps,outside,count:rects.length,checkpointSharesControlLine,parent:toolCluster.parentElement.className,stacked:document.querySelector('.hud-bar').classList.contains('is-stacked'),flex:getComputedStyle(toolCluster).flex,checkpoint:checkpoint.toJSON(),tools:toolCluster.getBoundingClientRect().toJSON()};
       })()`))
     }
     return states

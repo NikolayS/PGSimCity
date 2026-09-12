@@ -9,6 +9,16 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## v0.59.0 — Explore connected mechanisms
+
+- Navigate related inspector entries with separate Inspect and Locate controls. Locate selects and frames the same component; Back restores prior notes, and City returns to the overview and closes the inspector. Concept-only entries remain readable without pretending they have a physical location.
+- Frame broad portrait views at a shallower angle to expose structural fronts; preserve authored desktop, close-worker and underground directions.
+- Apply the daytime structural palette to animated backend facades, including a theme change while paused. Activity windows remain driven by existing backend state.
+- Retain strong structural boundaries while quieting fine construction ink and distant survey lines. Rebalance daylight fill and material contrast without adding lamps or changing simulation behavior.
+- Let desktop tools share the checkpoint row before individual controls wrap. Pack phone inspector navigation into touch-sized controls, retaining wrapping for narrow or enlarged text.
+
+This release changes presentation and navigation, not PostgreSQL mechanisms. It does not implement visibility-map maintenance, tuple freezing or independent ANALYZE. Rendered software/emulated checks do not establish physical-device frame rates or complete the broader art-direction roadmap.
+
 ## v0.58.0 — Find the maintenance crew
 
 - Select an autovacuum bay or launcher to see each worker’s current table and phase, then use Find worker to inspect and move to its current position.
