@@ -1384,6 +1384,10 @@ body.pg-walk.touch-walk-active .hud-export {
     border-top: 1px solid var(--line-hair);
   }
   .hud-bar.is-stacked .hud-tools {
+    /* A content-sized flex basis makes the complete tool cluster wrap below
+       the checkpoint before its own children get a chance to wrap. Consume
+       the remaining control row first, then wrap individual tools as needed. */
+    flex: 1 1 0;
     flex-wrap: wrap;
     justify-content: flex-end;
     gap: 4px;

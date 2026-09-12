@@ -826,6 +826,21 @@
     height: var(--tap);
   }
 
+  .pgc-insp__top {
+    gap: 5px;
+  }
+  .pgc-insp__back,
+  .pgc-insp__city {
+    padding-inline: 6px;
+  }
+  .pgc-fly {
+    width: var(--tap);
+    padding-inline: 0;
+  }
+  .pgc-fly > span {
+    display: none;
+  }
+
   /* thumb-sized controls inside the sheets */
   .pgc-rail__collapse,
   .pgc-insp__close,
