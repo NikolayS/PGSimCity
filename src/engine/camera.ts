@@ -112,6 +112,10 @@ const PORTRAIT_FOCUS_MIN_TARGET_Y = -10
 const PORTRAIT_FOCUS_ASPECT = 0.8
 const PORTRAIT_ELEVATION_MIN = 30 * Math.PI / 180
 const PORTRAIT_ELEVATION_MAX = 34 * Math.PI / 180
+/** Recover facade scale lost when a fitted steep direction is flattened. */
+const PORTRAIT_CAPPED_DISTANCE_SCALE = 0.96
+/** The establishing shot must retain its full-city horizontal fit. */
+const PORTRAIT_CAPPED_FILL_MAX_DISTANCE = 400
 /** Fraction of a tour path spent easing in / out. */
 const PATH_EASE = 0.18
 
@@ -1516,7 +1520,7 @@ export function createCameraRig(
     keyboardOrbit = false
 
     tweenTarget.set(spec.target[0], spec.target[1], spec.target[2])
-    const d = clamp(spec.distance, MIN_DIST, MAX_DIST)
+    let d = clamp(spec.distance, MIN_DIST, MAX_DIST)
 
     // Direction FROM target TO camera.
     if (spec.dir) {
@@ -1556,6 +1560,9 @@ export function createCameraRig(
       if (horizontal > 1e-8 && Math.atan2(_v1.y, horizontal) > maxElevation) {
         _v1.y = horizontal * Math.tan(maxElevation)
         _v1.normalize()
+        if (d <= PORTRAIT_CAPPED_FILL_MAX_DISTANCE) {
+          d = clamp(d * PORTRAIT_CAPPED_DISTANCE_SCALE, MIN_DIST, MAX_DIST)
+        }
       }
     }
 

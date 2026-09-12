@@ -6,6 +6,7 @@ import type { Bus } from '../core/types'
 import { installTestDom } from '../../test/dom'
 import { ANCHOR, CITY } from '../world/layout'
 import { createCameraRig, type CameraRig } from './camera'
+import { frameLessonObject } from './lesson-framing'
 
 vi.mock('../world/slonik', () => ({
   PLAN_UP: [0, 1],
@@ -389,6 +390,41 @@ describe('map camera mouse controls', () => {
     const desktopOffset = fixture.camera.position.clone().sub(fixture.rig.pivot).normalize()
     expect(desktopOffset.x).toBeCloseTo(0.742, 2)
     expect(desktopOffset.y).toBeCloseTo(0.66, 2)
+  })
+
+  it('fills phone reading space after capping the tall WAL framing direction', () => {
+    const width = 390, height = 844, top = 96, bottom = 730
+    fixture.camera.fov = 52
+    fixture.rig.resize(width, height)
+    const bounds = new THREE.Box3(
+      new THREE.Vector3(152, 0, -70),
+      new THREE.Vector3(184, 29, 70),
+    )
+    const padded = bounds.clone().expandByScalar(5)
+    const viewport = {
+      left: -0.92,
+      right: 0.92,
+      top: 1 - ((top + 56) * 2) / height,
+      bottom: 1 - ((bottom - 18) * 2) / height,
+    }
+    const focus = frameLessonObject(fixture.camera, padded, viewport, {
+      target: [168, 8, 0], distance: 132, dir: [-0.28, 0.8, -0.75],
+    })
+    fixture.rig.focusOn(focus, { instant: true })
+
+    let minY = Infinity, maxY = -Infinity
+    for (const x of [bounds.min.x, bounds.max.x]) for (const y of [bounds.min.y, bounds.max.y]) for (const z of [bounds.min.z, bounds.max.z]) {
+      const projected = new THREE.Vector3(x, y, z).project(fixture.camera)
+      const px = (projected.x + 1) * width / 2
+      const py = (1 - projected.y) * height / 2
+      expect(px).toBeGreaterThanOrEqual(8)
+      expect(px).toBeLessThanOrEqual(width - 8)
+      expect(py).toBeGreaterThanOrEqual(top + 8)
+      expect(py).toBeLessThanOrEqual(bottom - 8)
+      minY = Math.min(minY, py)
+      maxY = Math.max(maxY, py)
+    }
+    expect((maxY - minY) / (bottom - top)).toBeGreaterThan(0.51)
   })
 
   it('does not flatten close worker or underground focus directions on portrait', () => {
