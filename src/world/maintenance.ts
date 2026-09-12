@@ -543,8 +543,8 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   const matRobot = theme.mat('maint.robot-appliance', { color: 0xffffff, roughness: 0.48, metalness: 0.06, surface: false })
   const matRobotRubber = theme.mat('maint.robot-rubber', { color: 0x000000, roughness: 0.86, metalness: 0.0, surface: false })
   const matTyre = theme.mat('maint.tyre', { color: 0x11141f, roughness: 0.98, metalness: 0.02, surface: false })
-  const matCleanupSlot = theme.mat('maint.cleanup-slot', { color: mixHex(COLOR.ok, 0x18202f, 0.28), roughness: 0.88, metalness: 0.08 })
-  const matDeadVersion = theme.mat('maint.dead-version', { color: 0x8f2f3d, roughness: 0.82, metalness: 0.04 })
+  const matCleanupSlot = theme.mat('maint.cleanup-slot', { color: mixHex(COLOR.ok, 0x18202f, 0.28), roughness: 0.88, metalness: 0.08, surface: false })
+  const matDeadVersion = theme.mat('maint.dead-version', { color: 0x8f2f3d, roughness: 0.82, metalness: 0.04, surface: false })
   const neonWhite = theme.neon(0xffffff, 1)
   const lineInk = theme.line(COLOR.inkDim, 0.17, 'structure')
 
