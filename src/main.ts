@@ -450,13 +450,21 @@ async function boot(): Promise<void> {
     /* Normal phone destinations need the same visible-space fitting as lessons.
      * Only authored district bounds enter here; hidden parked instances do not. */
     let visibleViewport = viewport
-    if (!visibleViewport && innerWidth <= 700 && ['wal.vault', 'shared.buffers', 'backend.row'].includes(id)) {
-      const top = Math.min(innerHeight * 0.45, (document.querySelector('#hud-top')?.getBoundingClientRect().bottom ?? 80) + 56)
-      const bottom = Math.max(top + 80, (document.querySelector('#hud-bottom')?.getBoundingClientRect().top ?? innerHeight - 110) - 18)
+    const normalPhoneWorker = !viewport && innerWidth <= 700 && id.startsWith('autovac.worker.')
+    if (!visibleViewport && innerWidth <= 700 && (normalPhoneWorker || ['wal.vault', 'shared.buffers', 'backend.row'].includes(id))) {
+      const hudBottom = document.querySelector('#hud-top')?.getBoundingClientRect().bottom ?? 80
+      const top = normalPhoneWorker ? hudBottom + 18 : Math.min(innerHeight * 0.45, hudBottom + 56)
+      const inspector = document.querySelector('#pgc-inspector-panel') as HTMLElement | null
+      const panelTop = normalPhoneWorker && inspector ? innerHeight - inspector.offsetHeight : innerHeight
+      const bottom = normalPhoneWorker
+        ? Math.max(top + 80, panelTop - 18)
+        : Math.max(top + 80, (document.querySelector('#hud-bottom')?.getBoundingClientRect().top ?? innerHeight - 110) - 18)
       visibleViewport = { left: -0.92, right: 0.92, top: 1 - top * 2 / innerHeight, bottom: 1 - bottom * 2 / innerHeight }
     }
-    const bounds = visibleViewport ? lessonObjectBounds(def.object, def.focusBounds).expandByScalar(5) : null
-    if (bounds && id.startsWith('autovac.worker.')) {
+    const bounds = visibleViewport
+      ? lessonObjectBounds(def.object, def.focusBounds).expandByScalar(normalPhoneWorker ? 1 : 5)
+      : null
+    if (bounds && viewport && id.startsWith('autovac.worker.')) {
       const table = registry.get('storage.table.sessions')
       if (table) bounds.union(new THREE.Box3().setFromObject(table.object))
     }
@@ -465,8 +473,12 @@ async function boot(): Promise<void> {
     const destinationFocus = !viewport && gfx.camera.aspect < 0.8 && ['wal.vault', 'backend.row'].includes(id)
       ? { ...def.focus, dir: (id === 'backend.row' ? [0.9, 0.8, 0.15] : [-0.28, 0.8, -0.75]) as [number, number, number] }
       : def.focus
-    const focus = visibleViewport && bounds ? frameLessonObject(gfx.camera, bounds, visibleViewport,
-      id.startsWith('storage.table.') || id.startsWith('autovac.worker.') ? { ...def.focus, dir: [0.12, 1, 0.18] } : destinationFocus) : destinationFocus
+    const fittedFallback = id.startsWith('storage.table.') || (viewport && id.startsWith('autovac.worker.'))
+      ? { ...def.focus, dir: [0.12, 1, 0.18] as [number, number, number] }
+      : destinationFocus
+    const focus = visibleViewport && bounds
+      ? frameLessonObject(gfx.camera, bounds, visibleViewport, fittedFallback)
+      : destinationFocus
     rig.focusOn(focus, { instant })
   })
 

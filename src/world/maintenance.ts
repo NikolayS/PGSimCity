@@ -510,6 +510,7 @@ interface Truck {
   panelBot: LivePlate
   focus: [number, number, number]
   focusSpec: FocusSpec
+  focusBounds: { min: [number, number, number]; max: [number, number, number] }
   pos: THREE.Vector3
   prev: THREE.Vector3
   bay: THREE.Vector3
@@ -1199,6 +1200,10 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       panelBot: signs.live('in bay', 1.15, COLOR.inkDim, 0.7),
       focus,
       focusSpec: { target: focus, distance: 38, dir: [0.7, 0.5, 0.5] },
+      focusBounds: {
+        min: [bayX - 4, ROAD_Y, bayZ - 4],
+        max: [bayX + 4, ROAD_Y + 2.5, bayZ + 4],
+      },
       pos: new THREE.Vector3(bayX, ROAD_Y, bayZ),
       prev: new THREE.Vector3(bayX, ROAD_Y, bayZ),
       bay: new THREE.Vector3(bayX, ROAD_Y, bayZ),
@@ -1623,6 +1628,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       object: tr.group,
       tier: 1,
       focus: tr.focusSpec,
+      focusBounds: tr.focusBounds,
       color: COLOR.vacuum,
       readout: (s: SimState) => {
         const w = s.autovac.workers[i]
@@ -2293,6 +2299,24 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       focusDir[0] = underground ? cleanupSide[w.table] * 0.45 : 0.7
       focusDir[1] = underground ? 0.65 : 0.5
       focusDir[2] = underground ? 1 : 0.5
+      const focusMin = tr.focusBounds.min
+      const focusMax = tr.focusBounds.max
+      focusMin[0] = tr.pos.x - 4
+      focusMin[1] = tr.pos.y
+      focusMin[2] = tr.pos.z - 4
+      focusMax[0] = tr.pos.x + 4
+      focusMax[1] = tr.pos.y + 2.5
+      focusMax[2] = tr.pos.z + 4
+      if (underground) {
+        const lane = vacuumTableLaneX(w.table)
+        const side = cleanupSide[w.table]
+        focusMin[0] = Math.min(focusMin[0], lane + Math.min(side * 6, side * 7.35) - 0.6)
+        focusMax[0] = Math.max(focusMax[0], lane + Math.max(side * 6, side * 7.35) + 0.6)
+        focusMin[1] = Math.min(focusMin[1], VACUUM_SERVICE.workY - 0.1)
+        focusMax[1] = Math.max(focusMax[1], VACUUM_SERVICE.workY + 1)
+        focusMin[2] = Math.min(focusMin[2], -24.1)
+        focusMax[2] = Math.max(focusMax[2], -15.9)
+      }
 
       // Captions describe the current observation, even with zero elapsed model
       // time after a paused step/reset. setLiveText skips unchanged atlas rows.

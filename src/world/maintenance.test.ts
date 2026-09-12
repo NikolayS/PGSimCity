@@ -10,6 +10,7 @@ import { installTestDom } from '../../test/dom'
 import { vacBayPos, vacuumServicePoint, vacuumLiftX, vacuumLiftZ, vacuumTableLaneX, tableX, VACUUM_SERVICE, CITY } from './layout'
 import { createStorage } from './storage'
 import { createWalkCityHarness } from '../../test/walk-harness'
+import { frameLessonObject, lessonObjectBounds } from '../engine/lesson-framing'
 import { CKPT_MASS, VACUUM_DOCKS, VACUUM_ROBOT_BODY, createMaintenance } from './maintenance'
 
 type Box = readonly [number, number, number, number, number, number]
@@ -218,6 +219,49 @@ describe('robot vacuum service station', () => {
     bus.emit('select', { id: 'checkpointer' })
     module.update(0, sim.state, 0)
     expect(collapsedVertices()).toBe(0)
+  })
+
+  it('authors phone-fittable worker and cleanup-strip bounds for every heap phase and table', () => {
+    const { module, sim, components } = fixture()
+    const def = components.get('autovac.worker.0')!
+    const worker = sim.state.autovac.workers[0]
+    const camera = new THREE.PerspectiveCamera(52, 390 / 844, 0.1, 3000)
+    const viewport = { left: -0.92, right: 0.92, top: 1 - 178 * 2 / 844, bottom: 1 - 502 * 2 / 844 }
+    const sides = [1, 1, 1, -1, 1]
+    let time = 1
+
+    for (let table = 0; table < sim.state.tables.length; table++) for (const phase of ['scan_heap', 'vacuum_heap'] as const) {
+      Object.assign(worker, { active: true, table, phase, progress: 0.5 })
+      module.update(0.21, sim.state, time++)
+      const authored = lessonObjectBounds(def.object, def.focusBounds)
+      const stripA = vacuumTableLaneX(table) + sides[table] * 6
+      const stripB = vacuumTableLaneX(table) + sides[table] * 7.35
+      expect(authored.min.x).toBeLessThanOrEqual(Math.min(stripA, stripB) - 0.59)
+      expect(authored.max.x).toBeGreaterThanOrEqual(Math.max(stripA, stripB) + 0.59)
+      expect(authored.min.z).toBeLessThanOrEqual(-24.09)
+      expect(authored.max.z).toBeGreaterThanOrEqual(-15.91)
+      expect(authored.containsPoint(new THREE.Vector3(def.focus.target[0], def.focus.target[1] - 1, def.focus.target[2]))).toBe(true)
+
+      const padded = authored.clone().expandByScalar(1)
+      const fitted = frameLessonObject(camera, padded, viewport, def.focus)
+      const target = new THREE.Vector3(...fitted.target)
+      camera.position.copy(target).addScaledVector(new THREE.Vector3(...fitted.dir!).normalize(), fitted.distance)
+      camera.lookAt(target)
+      camera.updateMatrixWorld()
+      for (const x of [padded.min.x, padded.max.x]) for (const y of [padded.min.y, padded.max.y]) for (const z of [padded.min.z, padded.max.z]) {
+        const projected = new THREE.Vector3(x, y, z).project(camera)
+        expect(projected.x).toBeGreaterThanOrEqual(viewport.left - 1e-6)
+        expect(projected.x).toBeLessThanOrEqual(viewport.right + 1e-6)
+        expect(projected.y).toBeGreaterThanOrEqual(viewport.bottom - 1e-6)
+        expect(projected.y).toBeLessThanOrEqual(viewport.top + 1e-6)
+      }
+    }
+
+    Object.assign(worker, { active: false, phase: 'idle' })
+    module.update(0.21, sim.state, time)
+    const idle = lessonObjectBounds(def.object, def.focusBounds)
+    expect(idle.max.x - idle.min.x).toBe(8)
+    expect(idle.max.z - idle.min.z).toBe(8)
   })
 
   it('refreshes physical worker counters at a paused first-removal checkpoint', () => {
