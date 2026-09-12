@@ -12,6 +12,7 @@ interface CleanupWorker {
 /** Allocation-free, presentation-only accounting for the aggregate cleanup strips. */
 export class VacuumCleanupDisplay {
   private readonly markers: Uint8Array
+  private readonly cleared: Uint8Array
   private readonly scale: Float64Array
   private readonly observedDead: Float64Array
   private readonly growthRemainder: Float64Array
@@ -27,6 +28,7 @@ export class VacuumCleanupDisplay {
     readonly capacity: number,
   ) {
     this.markers = new Uint8Array(tableCount)
+    this.cleared = new Uint8Array(tableCount)
     this.scale = new Float64Array(tableCount)
     this.observedDead = new Float64Array(tableCount)
     this.growthRemainder = new Float64Array(tableCount)
@@ -42,6 +44,10 @@ export class VacuumCleanupDisplay {
     return this.markers[table] ?? 0
   }
 
+  displayedSlots(table: number): number {
+    return this.markerCount(table) + (this.cleared[table] ?? 0)
+  }
+
   tuplesPerMarker(table: number): number {
     return this.scale[table] ?? 1
   }
@@ -52,6 +58,7 @@ export class VacuumCleanupDisplay {
       const scale = Math.max(1, Math.ceil(dead / this.capacity))
       this.scale[table] = scale
       this.markers[table] = Math.min(this.capacity, Math.ceil(dead / scale))
+      this.cleared[table] = 0
       this.observedDead[table] = dead
       this.growthRemainder[table] = 0
       this.removalRemainder[table] = 0
@@ -67,7 +74,9 @@ export class VacuumCleanupDisplay {
         this.growthRemainder[table] += growth
         const added = Math.floor(this.growthRemainder[table] / this.scale[table])
         if (added > 0) {
+          const before = this.markers[table]
           this.markers[table] = Math.min(this.capacity, this.markers[table] + added)
+          this.cleared[table] = Math.max(0, this.cleared[table] - (this.markers[table] - before))
           this.growthRemainder[table] -= added * this.scale[table]
         }
       }
@@ -92,9 +101,11 @@ export class VacuumCleanupDisplay {
         this.removalRemainder[table] += delta
         const removed = Math.floor(this.removalRemainder[table] / this.scale[table])
         if (removed > 0 || (tables[table]?.deadTuples ?? 0) <= 0) {
+          const before = this.markers[table]
           const floor = (tables[table]?.deadTuples ?? 0) > 0 ? 1 : 0
           this.markers[table] = Math.max(floor, this.markers[table] - removed)
           if (floor === 0) this.markers[table] = 0
+          this.cleared[table] += before - this.markers[table]
           this.removalRemainder[table] -= removed * this.scale[table]
         }
       }
@@ -113,6 +124,7 @@ export class VacuumCleanupDisplay {
     const scale = Math.max(1, Math.ceil(dead / this.capacity))
     this.scale[table] = scale
     this.markers[table] = Math.min(this.capacity, Math.ceil(dead / scale))
+    this.cleared[table] = 0
     this.observedDead[table] = Math.max(0, dead)
     this.growthRemainder[table] = 0
     this.removalRemainder[table] = 0

@@ -1771,7 +1771,9 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   cleanupDead.frustumCulled = false
   const cleanupDisplay = new VacuumCleanupDisplay(N_TABLES, N_VAC_WORKERS, CLEANUP_SLOTS)
   const cleanupShown = new Int8Array(N_TABLES)
+  const cleanupSlotShown = new Int8Array(N_TABLES)
   cleanupShown.fill(-1)
+  cleanupSlotShown.fill(-1)
   cleanupDisplay.reset(ctx.sim.tables, ctx.sim.autovac.workers)
   for (let table = 0; table < N_TABLES; table++) {
     signs.plate('dead versions → reusable space', vacuumTableLaneX(table) + cleanupSide[table] * 6.7, VACUUM_SERVICE.workY + 0.05, -14.7, 'up', 0.56, COLOR.ink, 0.7)
@@ -1781,11 +1783,16 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     cleanupDisplay.sync(sim.tables, sim.autovac.workers)
     for (let table = 0; table < N_TABLES; table++) {
       const count = cleanupDisplay.markerCount(table)
-      if (count === cleanupShown[table]) continue
+      const slots = cleanupDisplay.displayedSlots(table)
+      if (count === cleanupShown[table] && slots === cleanupSlotShown[table]) continue
       cleanupShown[table] = count
+      cleanupSlotShown[table] = slots
       const x0 = vacuumTableLaneX(table)
       for (let cell = 0; cell < CLEANUP_SLOTS; cell++) {
         const i = table * CLEANUP_SLOTS + cell
+        const spec = cleanupSpecs[i]
+        if (cell < slots) setTRS(cleanupSlots, i, spec[0], spec[1], spec[2], spec[3], spec[4], spec[5])
+        else zeroInst(cleanupSlots, i, x0, VACUUM_SERVICE.workY, -10)
         if (cell < count) {
           setTRS(cleanupDead, i,
             x0 + cleanupSide[table] * (6 + (cell % 2) * 1.35),
@@ -1796,6 +1803,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       }
     }
     cleanupDead.instanceMatrix.needsUpdate = true
+    cleanupSlots.instanceMatrix.needsUpdate = true
   }
 
   /* --- worker routing ----------------------------------------------------- */
@@ -1846,6 +1854,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     prevEvict = -1
     cleanupDisplay.reset(ctx.sim.tables, ctx.sim.autovac.workers)
     cleanupShown.fill(-1)
+    cleanupSlotShown.fill(-1)
   })
 
   /* =======================================================================

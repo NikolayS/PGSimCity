@@ -393,6 +393,8 @@ describe('robot vacuum service station', () => {
   it('shows persistent aggregate slots and removes dead markers only after heap collection', () => {
     const { module, sim } = fixture()
     module.setDetail?.(2)
+    for (const table of sim.state.tables) table.deadTuples = 1_000_000
+    module.update(0, sim.state, 0)
     const slots = module.group.getObjectByName('autovac.cleanup.slots') as THREE.InstancedMesh
     const dead = module.group.getObjectByName('autovac.cleanup.dead') as THREE.InstancedMesh
     const matrix = new THREE.Matrix4()

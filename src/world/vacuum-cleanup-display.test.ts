@@ -6,6 +6,26 @@ const tables = (dead = 1_200) => [{ deadTuples: dead }]
 const workers = () => [{ active: false, table: 0, phase: 'idle', deadCollected: 0 }]
 
 describe('VacuumCleanupDisplay', () => {
+  it('exposes empty slots only after observed reclamation, not from unused display capacity', () => {
+    const display = new VacuumCleanupDisplay(1, 1, 12)
+    const relation = tables(0)
+    const fleet = workers()
+    display.reset(relation, fleet)
+    expect(display.displayedSlots(0)).toBe(0)
+    relation[0].deadTuples = 5
+    Object.assign(fleet[0], { active: true, phase: 'vacuum_heap' })
+    display.sync(relation, fleet)
+    expect(display.displayedSlots(0)).toBe(5)
+    expect(display.markerCount(0)).toBe(5)
+    relation[0].deadTuples = 2
+    fleet[0].deadCollected = 3
+    display.sync(relation, fleet)
+    expect(display.displayedSlots(0)).toBe(5)
+    expect(display.markerCount(0)).toBe(2)
+    display.reset(relation, fleet)
+    expect(display.displayedSlots(0)).toBe(display.markerCount(0))
+  })
+
   it('removes markers only for a same-task collection delta during vacuum_heap', () => {
     const display = new VacuumCleanupDisplay(1, 1, 12)
     const relation = tables()
