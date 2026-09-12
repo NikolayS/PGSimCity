@@ -12,10 +12,12 @@ are all still moving. Expect breaking changes between minor versions.
 ## v0.59.0 — Explore connected mechanisms
 
 - Navigate related inspector entries with separate Inspect and Locate controls. Locate selects and frames the same component; Back restores prior notes, and City returns to the overview and closes the inspector. Concept-only entries remain readable without pretending they have a physical location.
-- Frame broad portrait views at a shallower angle to expose structural fronts; preserve authored desktop, close-worker and underground directions.
+- Frame broad portrait views at a shallower angle to expose structural fronts; preserve analytically fitted inspection viewports and authored desktop, close-worker and underground directions.
 - Apply the daytime structural palette to animated backend facades, including a theme change while paused. Activity windows remain driven by existing backend state.
 - Retain strong structural boundaries while quieting fine construction ink and distant survey lines. Rebalance daylight fill and material contrast without adding lamps or changing simulation behavior.
 - Let desktop tools share the checkpoint row before individual controls wrap. Pack phone inspector navigation into touch-sized controls, retaining wrapping for narrow or enlarged text.
+- Make existing vacuum reclamation visible beside each table: scaled red dead-version markers disappear only with observed collection, exposing reusable slots. Scanning without removal leaves them in place; remaining dead versions stay represented.
+- Remove obsolete purple worker-dispatch and return packets and their abstract road line. Robots no longer appear to emit or transport dead tuples; reclamation remains inside the relation.
 
 This release changes presentation and navigation, not PostgreSQL mechanisms. It does not implement visibility-map maintenance, tuple freezing or independent ANALYZE. Rendered software/emulated checks do not establish physical-device frame rates or complete the broader art-direction roadmap.
 
