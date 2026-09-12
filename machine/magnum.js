@@ -1,8 +1,11 @@
 import {
   ARCHITECTURE_LAYOUT as layout,
+  STATEMENT_EXECUTOR_RETURN_ROUTE,
   activeStatementStageIndex,
+  bufferAccessSummary,
   createStatementReplay,
   nextStatementStageIndex,
+  statementReturnRouteId,
 } from './architecture.js'
 import {
   formatDescribeIndex,
@@ -332,6 +335,7 @@ const backendSpecs = Object.freeze([
 ])
 
 const statementRoutes = Object.freeze({
+  returnFromExecutor: STATEMENT_EXECUTOR_RETURN_ROUTE,
   backend: Object.freeze([
     Object.freeze([124, 128]),
     Object.freeze([215, 128]),
@@ -2363,14 +2367,7 @@ function statementRouteForStage(stageId) {
     return statementRoutes.earlyAck
   }
   if (stageId === 'return') {
-    if (statement.replay?.writes) {
-      return statement.replay.synchronousCommit === 'off'
-        ? statementRoutes.returnFromWal
-        : statementRoutes.returnFromCommit
-    }
-    return statement.replay?.receipt?.sharedReads > 0
-      ? statementRoutes.returnFromDisk
-      : statementRoutes.returnFromBuffer
+    return statementRoutes[statementReturnRouteId(statement.replay)]
   }
   return statementRoutes[stageId] ?? null
 }
@@ -3007,12 +3004,9 @@ function updatePostgresUi() {
   if (statement.status === 'measuring') {
     measurementLabel.textContent = 'P MEASURING EXPLAIN (ANALYZE, BUFFERS)…'
   } else if (postgres.plan) {
-    const buffers = postgres.plan.buffers
-    const hasRead = buffers.sharedReads > 0
-    postgresMeasurement.dataset.reach = hasRead ? 'read' : 'hit'
-    measurementLabel.textContent =
-      `P MEASURED · HIT ${buffers.sharedHits} · READ ${buffers.sharedReads}`
-      + ` · ${hasRead ? 'READ BELOW SHARED_BUFFERS' : 'ALL HIT IN SHARED_BUFFERS'}`
+    const access = bufferAccessSummary(postgres.plan.buffers)
+    postgresMeasurement.dataset.reach = access.reach
+    measurementLabel.textContent = access.text
   } else if (postgres.report) {
     measurementLabel.textContent = postgres.report.error
       ? 'P ERROR · QUERY ARM IDLE'
@@ -3583,9 +3577,7 @@ window.MAGNUM = Object.freeze({
           ? 'model'
           : postgres.plan === null
             ? 'idle'
-            : postgres.plan.buffers.sharedReads > 0
-              ? 'read'
-              : 'hit',
+            : bufferAccessSummary(postgres.plan.buffers).reach,
       timing: postgres.timing,
       error: postgres.report?.error ?? postgres.initError,
     },
