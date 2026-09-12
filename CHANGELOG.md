@@ -9,6 +9,13 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## v0.58.0 — Find the maintenance crew
+
+- Select an autovacuum bay or launcher to see each worker’s current table and phase, then use Find worker to inspect and move to its current position.
+- Wrap desktop header controls when space is tight or text is enlarged; retain the phone’s scrolling control dock.
+- Start the simulation when a scenario is explicitly selected while paused, so the lock-pileup queue can form. Replay and tour scenario staging retain their pause semantics.
+- Correct the lock-case note: many, not all, ALTER TABLE operations require Access Exclusive.
+
 ## v0.57.1 — Retained snapshot explanation
 
 - Keep close-view captions clear of guided-tour reading and transport controls; restore orientation on tour exit.
