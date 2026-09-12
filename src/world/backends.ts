@@ -1,5 +1,6 @@
 import * as THREE from 'three'
-import { COLOR } from '../core/theme'
+import { COLOR, themeDaylight } from '../core/theme'
+import { daySurface } from '../core/themes'
 import { N_BACKEND_SLOTS } from '../core/types'
 import type { BackendState, SimState, WorldFactory, WorldModule } from '../core/types'
 import { clamp, clamp01, damp, fmtBytes, fmtDuration, makeRng } from '../core/util'
@@ -20,8 +21,8 @@ import { CITY, backendPid, backendX } from './layout'
  *   blocked      red + chain to holder    sending       green out of the roof
  *
  * idle_in_xact is deliberately the one that looks faintly wrong: a session
- * holding an open transaction while doing nothing pins the xmin horizon and
- * quietly stops vacuum from cleaning anything newer.
+ * retaining a snapshot or an assigned transaction ID can hold back cleanup.
+ * Plain BEGIN at READ COMMITTED does not itself retain such a snapshot.
  * ==========================================================================*/
 
 const N = N_BACKEND_SLOTS
@@ -55,6 +56,7 @@ const _cT = new THREE.Color()
 
 /** Matte base colour of an unlit shaft. State colour is washed into it. */
 const SHAFT_BASE = 0x18222f
+const DAY_SHAFT_BASE = daySurface(SHAFT_BASE, 'backends.shaft')
 
 /** cx, cy, cz, w, h, d */
 type BoxSpec = [number, number, number, number, number, number]
@@ -634,6 +636,7 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
   const ringPhase = new Float32Array(N)
   const ringLevel = new Float32Array(N)
   let prevT = -1
+  let shaftDaylight = -1
 
   function short(sql: string): string {
     return sql.length > 30 ? sql.slice(0, 29) + '…' : sql
@@ -648,6 +651,9 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
     const dts = clamp(t - prevT, 0, 0.25) // simulated seconds: freezes on pause
     prevT = t
 
+    const daylight = themeDaylight()
+    const repaintShafts = daylight !== shaftDaylight
+    shaftDaylight = daylight
     const nb = Math.min(N, sim.backends.length)
 
     for (let i = 0; i < N; i++) {
@@ -809,14 +815,16 @@ export const createBackends: WorldFactory = (ctx): WorldModule => {
 
       // shaft stays matte: only a faint wash of the state colour, never a glow
       _c.setHex(SHAFT_BASE)
+      _cT.setHex(DAY_SHAFT_BASE)
+      _c.lerp(_cT, daylight)
       if (tintMix > 0) {
         _cT.setHex(tintHex)
         _c.lerp(_cT, tintMix)
       }
       if (tintDim !== 1) _c.multiplyScalar(tintDim)
-      shaftRgb[i * 3] = damp(shaftRgb[i * 3], _c.r, 7, dt)
-      shaftRgb[i * 3 + 1] = damp(shaftRgb[i * 3 + 1], _c.g, 7, dt)
-      shaftRgb[i * 3 + 2] = damp(shaftRgb[i * 3 + 2], _c.b, 7, dt)
+      shaftRgb[i * 3] = repaintShafts ? _c.r : damp(shaftRgb[i * 3], _c.r, 7, dt)
+      shaftRgb[i * 3 + 1] = repaintShafts ? _c.g : damp(shaftRgb[i * 3 + 1], _c.g, 7, dt)
+      shaftRgb[i * 3 + 2] = repaintShafts ? _c.b : damp(shaftRgb[i * 3 + 2], _c.b, 7, dt)
       _c.setRGB(shaftRgb[i * 3], shaftRgb[i * 3 + 1], shaftRgb[i * 3 + 2])
       shaftMesh.setColorAt(i, _c)
 

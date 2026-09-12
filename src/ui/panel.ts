@@ -18,6 +18,7 @@ import {
 } from './controls'
 import type { KnobControl } from './controls'
 import { MODE_SURFACES, setModeSurface } from './mode-exits'
+import { InspectionHistory } from './inspection-history'
 import { clear, el, icon, metricTile, setClass, setText } from './uikit'
 import type { UiContext, UiModule } from './uikit'
 
@@ -218,12 +219,50 @@ export function createInspector(ctx: UiContext): UiModule {
   const subtitle = el('p', { class: 'pg-sub pgc-insp__sub', text: 'Click a building to open it up' })
   const readout = el('p', { class: 'pgc-readout' })
 
+  const history = new InspectionHistory()
+  const backBtn = el(
+    'button',
+    {
+      class: 'pg-btn pgc-insp__back',
+      type: 'button',
+      disabled: true,
+      title: 'Inspect the previous component',
+      on: {
+        click: () => {
+          const previous = history.back()
+          if (previous) ctx.bus.emit('select', { id: previous })
+        },
+      },
+    },
+    icon('prev', 13),
+    el('span', { text: 'Back' }),
+  )
+
+  const cityBtn = el(
+    'button',
+    {
+      class: 'pg-btn pgc-insp__city',
+      type: 'button',
+      disabled: true,
+      title: 'Return to the city overview',
+      on: {
+        click: () => {
+          ctx.bus.emit('focus', { id: 'world.ground' })
+          ctx.bus.emit('select', { id: null })
+        },
+      },
+    },
+    icon('home', 13),
+    el('span', { text: 'City' }),
+  )
+
   const flyBtn = el(
     'button',
     {
       class: 'pg-btn pgc-fly',
       type: 'button',
       title: 'Fly the camera to this component',
+      'aria-label': 'Fly the camera to this component',
       on: { click: () => currentId && ctx.bus.emit('focus', { id: currentId }) },
     },
     icon('camera', 13),
@@ -271,6 +310,8 @@ export function createInspector(ctx: UiContext): UiModule {
       { class: 'pgc-insp__top' },
       kindBadge,
       el('span', { class: 'pgc-spacer' }),
+      backBtn,
+      cityBtn,
       sizeBtn,
       flyBtn,
       closeBtn,
@@ -918,16 +959,38 @@ export function createInspector(ctx: UiContext): UiModule {
         const info2 = doc(other)
         const label = d?.name ?? info2?.title ?? other
         row.append(
-          el('button', {
-            class: 'pg-btn pgc-see__btn',
-            type: 'button',
-            text: label,
-            title: `${other} — click to inspect, double-click to fly there`,
-            on: {
-              click: () => ctx.bus.emit('select', { id: other }),
-              dblclick: () => ctx.bus.emit('focus', { id: other }),
-            },
-          }),
+          el(
+            'div',
+            { class: 'pgc-see__item' },
+            el('button', {
+              class: 'pg-btn pgc-see__inspect',
+              type: 'button',
+              text: label,
+              title: `Inspect ${label}`,
+              data: { relatedInspect: other },
+              on: { click: () => ctx.bus.emit('select', { id: other }) },
+            }),
+            el(
+              'button',
+              {
+                class: 'pg-btn pgc-see__locate',
+                type: 'button',
+                disabled: !d,
+                title: d ? `Locate ${label} in the city` : `${label} has no city location`,
+                'aria-label': d ? `Locate ${label} in the city` : `${label} has no city location`,
+                data: { relatedLocate: other },
+                on: {
+                  click: () => {
+                    if (!d) return
+                    ctx.bus.emit('select', { id: other })
+                    ctx.bus.emit('focus', { id: other })
+                  },
+                },
+              },
+              icon('camera', 13),
+              el('span', { text: 'Locate' }),
+            ),
+          ),
         )
       }
       wrap.append(
@@ -989,6 +1052,7 @@ export function createInspector(ctx: UiContext): UiModule {
     currentDef = def
 
     if (!id) {
+      history.reset()
       body.dataset.analyticsPanel = 'inspector'
       kindBadge.hidden = true
       setText(title, 'Nothing selected')
@@ -997,6 +1061,8 @@ export function createInspector(ctx: UiContext): UiModule {
       setText(readout, '')
       readout.hidden = true
       flyBtn.disabled = true
+      backBtn.disabled = true
+      cityBtn.disabled = true
       closeBtn.disabled = false
       body.append(renderEmpty())
       body.scrollTop = 0
@@ -1005,6 +1071,9 @@ export function createInspector(ctx: UiContext): UiModule {
     }
 
     body.dataset.analyticsPanel = id
+    history.visit(id)
+    backBtn.disabled = !history.canGoBack
+    cityBtn.disabled = false
     const kind = def?.kind ?? inferKind(id)
     kindBadge.hidden = false
     kindBadge.dataset.kind = kind

@@ -106,6 +106,12 @@ const TOUCH_DECISIVE_TWIST_ANGLE = TOUCH_TWIST_ANGLE * 3
 const FOCUS_DUR = 1.05
 /** Upward framing bias for auto-derived focus directions. */
 const FOCUS_UP_BIAS = 0.436 // 25°
+/** A district-scale portrait shot needs facade area; steeper views mostly show roofs. */
+const PORTRAIT_FOCUS_MIN_DISTANCE = 120
+const PORTRAIT_FOCUS_MIN_TARGET_Y = -10
+const PORTRAIT_FOCUS_ASPECT = 0.8
+const PORTRAIT_ELEVATION_MIN = 30 * Math.PI / 180
+const PORTRAIT_ELEVATION_MAX = 34 * Math.PI / 180
 /** Fraction of a tour path spent easing in / out. */
 const PATH_EASE = 0.18
 
@@ -1534,6 +1540,23 @@ export function createCameraRig(
       _v1.copy(_v2).multiplyScalar(Math.cos(elev))
       _v1.y = Math.sin(elev)
       _v1.normalize()
+    }
+
+    /* Authored close-ups retain their mechanism-specific angle, as do targets
+     * below the plate. Broad portrait shots cap elevation so their distance is
+     * spent on facades and mechanisms instead of roofs and empty sky. */
+    if (
+      camera.aspect < PORTRAIT_FOCUS_ASPECT
+      && d >= PORTRAIT_FOCUS_MIN_DISTANCE
+      && tweenTarget.y >= PORTRAIT_FOCUS_MIN_TARGET_Y
+    ) {
+      const horizontal = Math.hypot(_v1.x, _v1.z)
+      const portraitT = clamp((camera.aspect - 0.4) / (PORTRAIT_FOCUS_ASPECT - 0.4), 0, 1)
+      const maxElevation = lerp(PORTRAIT_ELEVATION_MIN, PORTRAIT_ELEVATION_MAX, portraitT)
+      if (horizontal > 1e-8 && Math.atan2(_v1.y, horizontal) > maxElevation) {
+        _v1.y = horizontal * Math.tan(maxElevation)
+        _v1.normalize()
+      }
     }
 
     tweenP1.copy(tweenTarget).addScaledVector(_v1, d)

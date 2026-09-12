@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createBus } from '../core/bus'
-import { createTheme } from '../core/theme'
+import { createTheme, setThemeMode } from '../core/theme'
 import { N_BACKEND_SLOTS } from '../core/types'
 import { createSim } from '../sim/model'
 import { installTestDom } from '../../test/dom'
@@ -26,7 +26,7 @@ function fixture() {
     if (object instanceof THREE.InstancedMesh) meshes.push(object)
   })
   const byMaterial = (name: string) => meshes.filter((mesh) => !Array.isArray(mesh.material) && mesh.material.name === name)
-  return { module, byMaterial }
+  return { module, byMaterial, sim }
 }
 
 describe('backend process architecture', () => {
@@ -96,4 +96,25 @@ describe('backend process architecture', () => {
       }
     }
   })
+})
+
+
+it('repaints instanced process facades for daylight even while simulation is paused', () => {
+  setThemeMode('night', { persist: false })
+  const { module, byMaterial, sim } = fixture()
+  const shaft = byMaterial('backends.shaft')[0]
+  const colour = new THREE.Color()
+  const read = () => { shaft.getColorAt(0, colour); return .2126 * colour.r + .7152 * colour.g + .0722 * colour.b }
+  const before = JSON.stringify(sim.state)
+  try {
+    module.update(0, sim.state, sim.state.t)
+    const night = read()
+    setThemeMode('day', { persist: false })
+    module.update(0, sim.state, sim.state.t)
+    expect(read()).toBeGreaterThan(night + .15)
+    setThemeMode('night', { persist: false })
+    module.update(0, sim.state, sim.state.t)
+    expect(read()).toBeCloseTo(night, 5)
+    expect(JSON.stringify(sim.state)).toBe(before)
+  } finally { setThemeMode('night', { persist: false }) }
 })

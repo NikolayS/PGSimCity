@@ -362,6 +362,48 @@ describe('map camera mouse controls', () => {
     expect(fixture.camera.position.distanceTo(fixture.rig.pivot)).toBeLessThan(900)
   })
 
+  it('shows portrait home from the building fronts instead of above their roofs', () => {
+    fixture.camera.fov = 52
+    fixture.rig.resize(390, 844)
+    fixture.rig.home(true)
+    const offset = fixture.camera.position.clone().sub(fixture.rig.pivot)
+    const elevation = Math.atan2(offset.y, Math.hypot(offset.x, offset.z))
+    expect(elevation).toBeGreaterThan(THREE.MathUtils.degToRad(22))
+    expect(elevation).toBeLessThanOrEqual(THREE.MathUtils.degToRad(32))
+  })
+
+  it('caps roof-heavy portrait district focus while preserving desktop composition', () => {
+    const focus = {
+      target: [0, 22, -120] as [number, number, number],
+      distance: 250,
+      dir: [0.9, 0.8, 0.15] as [number, number, number],
+    }
+    fixture.rig.resize(390, 844)
+    fixture.rig.focusOn(focus, { instant: true })
+    const portraitOffset = fixture.camera.position.clone().sub(fixture.rig.pivot)
+    const portraitElevation = Math.atan2(portraitOffset.y, Math.hypot(portraitOffset.x, portraitOffset.z))
+    expect(portraitElevation).toBeLessThanOrEqual(THREE.MathUtils.degToRad(32))
+
+    fixture.rig.resize(1280, 760)
+    fixture.rig.focusOn(focus, { instant: true })
+    const desktopOffset = fixture.camera.position.clone().sub(fixture.rig.pivot).normalize()
+    expect(desktopOffset.x).toBeCloseTo(0.742, 2)
+    expect(desktopOffset.y).toBeCloseTo(0.66, 2)
+  })
+
+  it('does not flatten close worker or underground focus directions on portrait', () => {
+    fixture.rig.resize(390, 844)
+    for (const focus of [
+      { target: [120, 5, 20] as [number, number, number], distance: 48, dir: [0.7, 0.5, 0.5] as [number, number, number] },
+      { target: [0, -40, -10] as [number, number, number], distance: 200, dir: [0.26, 0.2, 0.94] as [number, number, number] },
+    ]) {
+      fixture.rig.focusOn(focus, { instant: true })
+      const actual = fixture.camera.position.clone().sub(fixture.rig.pivot).normalize()
+      const authored = new THREE.Vector3(...focus.dir).normalize()
+      expect(actual.distanceTo(authored)).toBeLessThan(1e-10)
+    }
+  })
+
   it.each([[320, 740], [390, 844]])('keeps the WAL hall visible at phone home %s × %s', (w, h) => {
     fixture.camera.fov = 52; fixture.rig.resize(w, h); fixture.rig.home(true); fixture.camera.updateMatrixWorld()
     for (const x of [ANCHOR.walVault[0] - 14, ANCHOR.walVault[0] + 14]) for (const z of [-70, 70]) {

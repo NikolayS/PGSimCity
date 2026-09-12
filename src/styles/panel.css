@@ -367,6 +367,7 @@
 
 .pgc-insp__top {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
@@ -434,6 +435,11 @@
 
 .pgc-fly {
   flex: 0 0 auto;
+}
+.pgc-insp__back,
+.pgc-insp__city {
+  flex: 0 0 auto;
+  padding-inline: 8px;
 }
 
 /* --- metrics --- */
@@ -570,14 +576,27 @@
 
 /* --- related --- */
 .pgc-see {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: 6px;
   margin-top: 8px;
 }
-.pgc-see__btn {
+.pgc-see__item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+.pgc-see__inspect {
+  min-width: 0;
+  justify-content: flex-start;
+  overflow-wrap: anywhere;
+  text-align: left;
   font-size: var(--fs-micro);
   padding: 5px 9px;
+}
+.pgc-see__locate {
+  flex: 0 0 auto;
+  padding-inline: 8px;
+  font-size: var(--fs-micro);
 }
 
 /* --- source --- */
@@ -810,6 +829,8 @@
   /* thumb-sized controls inside the sheets */
   .pgc-rail__collapse,
   .pgc-insp__close,
+  .pgc-insp__back,
+  .pgc-insp__city,
   .pgc-fly {
     min-height: var(--tap);
   }
