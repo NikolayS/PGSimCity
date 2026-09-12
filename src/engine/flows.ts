@@ -1,13 +1,13 @@
 import * as THREE from 'three'
 import type { Bus, FlowKind, FlowRequest, QualitySettings, ThemeApi } from '../core/types'
-import { ROUTES, routeCurve } from '../world/layout'
+import { N_TABLES, rid, ROUTES, routeCurve } from '../world/layout'
 import { makeRng, reduceMotion } from '../core/util'
 
 /* ============================================================================
  * FLOWS — every moving packet in the city.
  *
  * A query arriving at a backend, an 8 KiB page climbing out of storage, a WAL
- * record heading east to the vault, a dead tuple riding to the landfill: all of
+ * record heading east to the vault: all of
  * them are one instance of one InstancedMesh travelling along one route.
  *
  * Hard rules that shape this file:
@@ -35,6 +35,16 @@ const FADE_IN = 0.05
 const FADE_OUT = 0.12
 /** Sanity clamp: nobody gets to ask for ten thousand packets in one call. */
 const MAX_BURST = 256
+
+/* Robots represent worker travel; cleanup stays in the relation. Legacy
+ * vacuum route events are retained by the model, but are not tuple cargo. */
+const VACUUM_NON_TRANSPORT = new Set<string>()
+for (let table = 0; table < N_TABLES; table++) {
+  VACUUM_NON_TRANSPORT.add(rid.vacGo(table))
+  VACUUM_NON_TRANSPORT.add(rid.vacIdx(table))
+  VACUUM_NON_TRANSPORT.add(rid.vacBack(table))
+  VACUUM_NON_TRANSPORT.add(rid.fsmReturn(table))
+}
 
 /* Packet silhouette per FlowKind. Meaning is carried by *bulk*, never by
  * elongation: a page is a wide pallet, a stat ping is a small crate. No kind is
@@ -486,6 +496,7 @@ export function createFlows(
   }
 
   function emit(req: FlowRequest): void {
+    if (VACUUM_NON_TRANSPORT.has(req.route)) return
     syncMotionPreference()
     if (staticActivity && req.source !== 'model') return
     const r = bakeRoute(req.route)

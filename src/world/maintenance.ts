@@ -11,6 +11,7 @@ import {
   rid, routePoint, routeTangent, vacBayPos, tableX, VACUUM_SERVICE, vacuumLiftX, vacuumLiftZ, vacuumServicePoint, vacuumTableLaneX,
 } from './layout'
 import { markTextPlane, markTextTexture } from './text-plane'
+import { VacuumCleanupDisplay } from './vacuum-cleanup-display'
 
 export const VACUUM_RECLAIM_PLATE_LINES = CLAIM_VALUES.vacuumReclaim.plateLines
 
@@ -542,6 +543,8 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   const matRobot = theme.mat('maint.robot-appliance', { color: 0xffffff, roughness: 0.48, metalness: 0.06, surface: false })
   const matRobotRubber = theme.mat('maint.robot-rubber', { color: 0x000000, roughness: 0.86, metalness: 0.0, surface: false })
   const matTyre = theme.mat('maint.tyre', { color: 0x11141f, roughness: 0.98, metalness: 0.02, surface: false })
+  const matCleanupSlot = theme.mat('maint.cleanup-slot', { color: mixHex(COLOR.ok, 0x18202f, 0.28), roughness: 0.88, metalness: 0.08 })
+  const matDeadVersion = theme.mat('maint.dead-version', { color: 0x8f2f3d, roughness: 0.82, metalness: 0.04 })
   const neonWhite = theme.neon(0xffffff, 1)
   const lineInk = theme.line(COLOR.inkDim, 0.17, 'structure')
 
@@ -1262,8 +1265,6 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   const dbS = new Float32Array(N_DEBRIS)
   const dbRot = new Float32Array(N_DEBRIS)
   const dbLive = new Uint8Array(N_DEBRIS)
-  const dbReturned = new Uint8Array(N_DEBRIS)
-  const dbTable = new Uint8Array(N_DEBRIS)
   let dbNext = 0
   let dbCount = 0
 
@@ -1719,7 +1720,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     }
   }
 
-  function spawnDebris(table: number): void {
+  function spawnDebris(): void {
     let i = -1
     for (let k = 0; k < N_DEBRIS; k++) {
       const j = (dbNext + k) % N_DEBRIS
@@ -1732,8 +1733,6 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     else dbCount++
     dbNext = (i + 1) % N_DEBRIS
     dbLive[i] = 1
-    dbReturned[i] = 0
-    dbTable[i] = table
     // A cone: the closer to the middle, the higher it can rest.
     const a = rng() * TAU
     const r = Math.sqrt(rng()) * 8.4
@@ -1746,6 +1745,57 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     dbAge[i] = 0
     dbS[i] = 0.7 + rng() * 1.1
     dbRot[i] = rng() * TAU
+  }
+
+  /* Representative dead-version strips beside the heap service heads. The
+     fixed cells are aggregate teaching marks, not literal pages or VM bits. */
+  const CLEANUP_SLOTS = 12
+  const cleanupSide = [1, 1, 1, -1, 1] as const
+  const cleanupSpecs: BoxSpec[] = []
+  for (let table = 0; table < N_TABLES; table++) {
+    const x0 = vacuumTableLaneX(table)
+    for (let cell = 0; cell < CLEANUP_SLOTS; cell++) {
+      cleanupSpecs.push([
+        x0 + cleanupSide[table] * (6 + (cell % 2) * 1.35),
+        VACUUM_SERVICE.workY + 0.12,
+        -23.5 + Math.floor(cell / 2) * 1.4,
+        1.02, 0.16, 1.02,
+      ])
+    }
+  }
+  const cleanupSlots = batch(group, unitBox, matCleanupSlot, cleanupSpecs)
+  cleanupSlots.name = 'autovac.cleanup.slots'
+  const cleanupDead = batch(group, unitBox, matDeadVersion, cleanupSpecs)
+  cleanupDead.name = 'autovac.cleanup.dead'
+  cleanupDead.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  cleanupDead.frustumCulled = false
+  const cleanupDisplay = new VacuumCleanupDisplay(N_TABLES, N_VAC_WORKERS, CLEANUP_SLOTS)
+  const cleanupShown = new Int8Array(N_TABLES)
+  cleanupShown.fill(-1)
+  cleanupDisplay.reset(ctx.sim.tables, ctx.sim.autovac.workers)
+  for (let table = 0; table < N_TABLES; table++) {
+    signs.plate('dead versions → reusable space', vacuumTableLaneX(table) + cleanupSide[table] * 6.7, VACUUM_SERVICE.workY + 0.05, -14.7, 'up', 0.56, COLOR.ink, 0.7)
+  }
+
+  function syncCleanupStrips(sim: SimState): void {
+    cleanupDisplay.sync(sim.tables, sim.autovac.workers)
+    for (let table = 0; table < N_TABLES; table++) {
+      const count = cleanupDisplay.markerCount(table)
+      if (count === cleanupShown[table]) continue
+      cleanupShown[table] = count
+      const x0 = vacuumTableLaneX(table)
+      for (let cell = 0; cell < CLEANUP_SLOTS; cell++) {
+        const i = table * CLEANUP_SLOTS + cell
+        if (cell < count) {
+          setTRS(cleanupDead, i,
+            x0 + cleanupSide[table] * (6 + (cell % 2) * 1.35),
+            VACUUM_SERVICE.workY + 0.42,
+            -23.5 + Math.floor(cell / 2) * 1.4,
+            0.72, 0.5, 0.72)
+        } else zeroInst(cleanupDead, i, x0, VACUUM_SERVICE.workY, -10)
+      }
+    }
+    cleanupDead.instanceMatrix.needsUpdate = true
   }
 
   /* --- worker routing ----------------------------------------------------- */
@@ -1794,6 +1844,8 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     logNeonMesh.instanceMatrix.needsUpdate = true
     prevWritten = -1
     prevEvict = -1
+    cleanupDisplay.reset(ctx.sim.tables, ctx.sim.autovac.workers)
+    cleanupShown.fill(-1)
   })
 
   /* =======================================================================
@@ -1803,6 +1855,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   function update(dt: number, sim: SimState, t: number): void {
     if (prevT < 0) prevT = t
     const dts = clamp(t - prevT, 0, 0.25) // simulated dt — freezes when paused
+    syncCleanupStrips(sim)
     prevT = t
 
     const ck = sim.checkpoint
@@ -2092,7 +2145,7 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       // not transport tuples to it or dump anything on their route home.
       if (w.active && w.deadCollected > tr.collected) {
         const n = Math.min(low ? 2 : 4, Math.ceil((w.deadCollected - tr.collected) / 100))
-        for (let k = 0; k < n; k++) spawnDebris(w.table)
+        for (let k = 0; k < n; k++) spawnDebris()
       }
 
       // The brushes work even when xmin prevents collecting old row versions.
@@ -2227,15 +2280,6 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
       if (dbFall[i] < 1) dbFall[i] = Math.min(1, dbFall[i] + dt * 1.5)
       dbAge[i] += dts
       const age = dbAge[i]
-      // It fades because the space is handed back to the table and reused.
-      if (!dbReturned[i] && age > 26) {
-        dbReturned[i] = 1
-        // Sample the return traffic so a large dump does not become a visual
-        // firehose; every packet still lands on the correct relation fork.
-        if ((i & 3) === 0) {
-          ctx.flow({ route: rid.fsmReturn(dbTable[i]), count: 1, kind: 'stat', color: COLOR.vacuum, size: 0.8 })
-        }
-      }
       const fade = age > 26 ? Math.max(0, 1 - (age - 26) / 40) : 1
       if (fade <= 0.002) {
         dbLive[i] = 0
@@ -2364,6 +2408,8 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
     gSweep.visible = near
 
     launchDetailMesh.visible = near
+    cleanupSlots.visible = near
+    cleanupDead.visible = near
 
     depotDetailMesh.visible = near
     truckWheels.visible = near

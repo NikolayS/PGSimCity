@@ -635,14 +635,14 @@ for (let t = 0; t < N_TABLES; t++) {
     [tx, CITY.storage.warehouseTop + 2, -56],
   ], { color: COLOR.index, speed: 70, size: 0.9 })
 
-  // autovacuum worker's road out to the table and back to the landfill
+  // Legacy phase-event anchors, not physical roads or tuple transport.
   route(rid.vacGo(t), [
     [ANCHOR.vacDepot[0], 4, ANCHOR.vacDepot[2]],
     [-176, -8, -30],
     [-150, CITY.osCache.y, -50],
     [tx - 26, CITY.storage.warehouseTop + 3, -62],
     [tx, CITY.storage.warehouseTop + 3, -60],
-  ], { color: COLOR.vacuum, speed: 60, size: 1.3, visible: true, roadOpacity: 0.1 })
+  ], { color: COLOR.vacuum, speed: 60, size: 1.3 })
 
   route(rid.vacIdx(t), [
     [tx, CITY.storage.warehouseTop + 3, -58],
@@ -657,8 +657,7 @@ for (let t = 0; t < N_TABLES; t++) {
     [ANCHOR.landfill[0], 8, ANCHOR.landfill[2]],
   ], { color: COLOR.vacuum, speed: 62, size: 1.25 })
 
-  // Removed tuple bodies are only a temporary teaching pile. Their space is
-  // returned to the originating relation's _fsm fork for reuse.
+  // Compatibility anchor only: reusable space remains in the relation.
   route(rid.fsmReturn(t), [
     [ANCHOR.landfill[0] + 7, 5, ANCHOR.landfill[2]],
     [-196, -10, 30],

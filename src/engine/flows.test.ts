@@ -5,6 +5,7 @@ import { createTheme } from '../core/theme'
 import { createSim } from '../sim/model'
 import type { FlowRequest, QualitySettings } from '../core/types'
 import { createFlows } from './flows'
+import { N_TABLES, rid, ROUTES } from '../world/layout'
 
 const preference = vi.hoisted(() => ({ reduced: false }))
 vi.mock('../core/util', async (original) => ({ ...await original<typeof import('../core/util')>(), reduceMotion: () => preference.reduced }))
@@ -25,6 +26,20 @@ function fixture() {
 const event = { route: 'wal.write', kind: 'wal', count: 1, spread: 0, source: 'model' } as FlowRequest
 
 describe('sampled model transport', () => {
+  it('does not draw tuple cargo from worker dispatch or return, while retaining WAL transport', () => {
+    const { flows } = fixture()
+    for (let table = 0; table < N_TABLES; table++) {
+      for (const route of [rid.vacGo(table), rid.vacIdx(table), rid.vacBack(table), rid.fsmReturn(table)]) {
+        flows.emit({ route, kind: 'dead', source: 'model', count: 4, stagger: 0.2 })
+      }
+      expect(ROUTES[rid.vacGo(table)]?.visible).not.toBe(true)
+    }
+    flows.update(0.3)
+    expect(flows.active).toBe(0)
+    flows.emit(event)
+    expect(flows.active).toBe(1)
+  })
+
   it('marks model emissions so display animation cannot masquerade as observed transport', () => {
     const bus = createBus(), sim = createSim(bus), requests: FlowRequest[] = []
     bus.on('flow', (request) => requests.push(request))

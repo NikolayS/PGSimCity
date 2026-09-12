@@ -3,11 +3,11 @@ import * as THREE from 'three'
 
 import { createBus } from '../core/bus'
 import { createTheme } from '../core/theme'
-import type { ComponentDef } from '../core/types'
+import type { ComponentDef, WorldContext } from '../core/types'
 import { fmtNum } from '../core/util'
 import { createSim } from '../sim/model'
 import { installTestDom } from '../../test/dom'
-import { vacBayPos, vacuumServicePoint, vacuumLiftX, vacuumLiftZ, tableX, VACUUM_SERVICE, CITY } from './layout'
+import { vacBayPos, vacuumServicePoint, vacuumLiftX, vacuumLiftZ, vacuumTableLaneX, tableX, VACUUM_SERVICE, CITY } from './layout'
 import { createStorage } from './storage'
 import { createWalkCityHarness } from '../../test/walk-harness'
 import { CKPT_MASS, VACUUM_DOCKS, VACUUM_ROBOT_BODY, createMaintenance } from './maintenance'
@@ -125,7 +125,7 @@ describe('robot vacuum service station', () => {
     while (dispose.length) dispose.pop()!()
   })
 
-  function fixture(drawText?: (text: string) => void) {
+  function fixture(drawText?: (text: string) => void, flow?: WorldContext['flow']) {
     installTestDom({ canvas2d: true })
     if (drawText) {
       const create = document.createElement.bind(document)
@@ -152,7 +152,7 @@ describe('robot vacuum service station', () => {
       theme,
       quality: { level: 'high', pixelRatio: 1, bloom: true, shadows: true, maxParticles: 1, maxLabels: 1, antialias: true },
       register: (component) => components.set(component.id, component),
-      flow: () => {},
+      flow: flow ?? (() => {}),
     })
     dispose.push(() => {
       module.dispose?.()
@@ -388,6 +388,65 @@ describe('robot vacuum service station', () => {
     worker.progress = 0.9
     module.update(1 / 30, sim.state, 3)
     expect(live()).toBe(collected)
+  })
+
+  it('shows persistent aggregate slots and removes dead markers only after heap collection', () => {
+    const { module, sim } = fixture()
+    module.setDetail?.(2)
+    const slots = module.group.getObjectByName('autovac.cleanup.slots') as THREE.InstancedMesh
+    const dead = module.group.getObjectByName('autovac.cleanup.dead') as THREE.InstancedMesh
+    const matrix = new THREE.Matrix4()
+    const live = (table: number): number => {
+      let count = 0
+      for (let cell = 0; cell < 12; cell++) {
+        dead.getMatrixAt(table * 12 + cell, matrix)
+        if (new THREE.Vector3().setFromMatrixScale(matrix).length() > 0.01) count++
+      }
+      return count
+    }
+    expect(slots.count).toBe(60)
+    const position = new THREE.Vector3()
+    for (let table = 0; table < 5; table++) {
+      for (let cell = 0; cell < 12; cell++) {
+        slots.getMatrixAt(table * 12 + cell, matrix)
+        position.setFromMatrixPosition(matrix)
+        expect(Math.abs(position.x - vacuumTableLaneX(table))).toBeGreaterThanOrEqual(6)
+        expect(Math.abs(position.x - vacuumTableLaneX(table))).toBeLessThan(8)
+        expect(position.y).toBeCloseTo(VACUUM_SERVICE.workY + 0.12, 4)
+        expect(position.z).toBeGreaterThanOrEqual(-23.5)
+        expect(position.z).toBeLessThanOrEqual(-16.5)
+      }
+    }
+
+    const worker = sim.state.autovac.workers[0]
+    Object.assign(worker, { active: true, table: 0, phase: 'scan_heap', deadCollected: 0 })
+    sim.state.tables[0].deadTuples = 12_000
+    module.update(1 / 30, sim.state, 1)
+    const initial = live(0)
+    worker.deadCollected = 2_000
+    for (let frame = 0; frame < 30; frame++) module.update(1 / 30, sim.state, 2 + frame / 30)
+    expect(live(0)).toBe(initial)
+
+    worker.phase = 'vacuum_heap'
+    module.update(1 / 30, sim.state, 3)
+    worker.deadCollected = 4_000
+    sim.state.tables[0].deadTuples = 10_000
+    const beforeRender = JSON.stringify(sim.state)
+    module.update(1 / 30, sim.state, 4)
+    expect(live(0)).toBeLessThan(initial)
+    expect(JSON.stringify(sim.state)).toBe(beforeRender)
+  })
+
+  it('does not emit decorative FSM-return packets as removed debris ages', () => {
+    const flows: Parameters<WorldContext['flow']>[0][] = []
+    const { module, sim } = fixture(undefined, (request) => flows.push(request))
+    const worker = sim.state.autovac.workers[0]
+    Object.assign(worker, { active: true, table: 0, phase: 'vacuum_heap', deadCollected: 0 })
+    module.update(1 / 30, sim.state, 0)
+    worker.deadCollected = 1_000
+    sim.state.tables[0].deadTuples = Math.max(0, sim.state.tables[0].deadTuples - 1_000)
+    for (let frame = 1; frame <= 160; frame++) module.update(1 / 30, sim.state, frame * 0.25)
+    expect(flows).toEqual([])
   })
 
   it('keeps native simultaneous dispatch and return clear across the fleet', () => {
