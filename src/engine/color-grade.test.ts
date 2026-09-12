@@ -42,12 +42,10 @@ const SEMANTIC = [
 const QUALITY_LEVELS = ['low', 'reduced', 'medium', 'high', 'ultra'] as const
 
 describe('golden-hour colour grade', () => {
-  it('contains lift, gamma, gain, a midtone saturation curve and a restrained vignette', () => {
-    expect(GOLDEN_HOUR_GRADE.lift).toBeGreaterThan(0)
-    expect(GOLDEN_HOUR_GRADE.gamma).not.toBe(1)
-    expect(GOLDEN_HOUR_GRADE.gain).not.toBe(1)
-    expect(GOLDEN_HOUR_GRADE.midtoneSaturation).toBeGreaterThan(1)
-    expect(GOLDEN_HOUR_GRADE.vignette).toBeGreaterThan(0)
+  it('preserves black and resolves shadow detail without a grey pedestal', () => {
+    expect(gradeDaylightHex(0x000000)).toBe(0x000000)
+    const ramp = [0x202020, 0x404040, 0x606060, 0x808080].map(hex => gradeDaylightHex(hex))
+    for (let i = 1; i < ramp.length; i++) expect(ramp[i]).toBeGreaterThan(ramp[i - 1])
     expect(GOLDEN_HOUR_GRADE.vignette).toBeLessThanOrEqual(0.1)
   })
 

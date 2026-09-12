@@ -178,7 +178,7 @@ export const BAKED_SKY_COLOR: Record<CuratedThemeMode, readonly [number, number,
 
 export const BAKED_BOUNCE_GAIN: Record<CuratedThemeMode, number> = {
   night: 0.18,
-  day: 3,
+  day: 2.1,
 }
 
 /* ---------------------------------------------------------------------------
@@ -324,7 +324,7 @@ export const ATMOSPHERE: Record<CuratedThemeMode, Atmosphere> = {
     plateFogScale: 0.84,
     hemiSky: 0xb0cee9,
     hemiGround: 0x7d8999,
-    hemiIntensity: 0.82,
+    hemiIntensity: 0.64,
     keyColor: 0xffe6c7,
     keyIntensity: 3.1,
     /* A north-west afternoon key lights roofs and facades together. At 27° a
@@ -699,7 +699,8 @@ interface Stone {
   hi: number
 }
 
-/* Lit mineral facades need reflectance headroom above the unlit paving shader.
+/* Recesses retain material contrast before broad sky/baked fill reaches them.
+ * Lit mineral rims need reflectance headroom above the unlit paving shader.
  * Darker foundations remain grounded; semantic paint bypasses this table.
  * Exact material keys win over the district prefix they start with. */
 const STONE: Record<string, Stone> = {
@@ -713,27 +714,27 @@ const STONE: Record<string, Stone> = {
    * within a few degrees, so a nominally 10-degree gap can measure as three
    * and two quarters collapse into each other again. */
   // outside the server: pale sand, the softest quarter.
-  clients: { h: 20, s: 0.19, lo: 0.67, hi: 0.88 },
+  clients: { h: 20, s: 0.19, lo: 0.56, hi: 0.86 },
   // pg_wal: ochre sandstone. The one properly warm quarter, and the amber
   // district — the only place where stone and meaning share a family.
-  wal: { h: 42, s: 0.2, lo: 0.64, hi: 0.85 },
+  wal: { h: 42, s: 0.2, lo: 0.55, hi: 0.85 },
   // backend towers: pale straw plaster, so the window bands sit on something.
-  backends: { h: 64, s: 0.18, lo: 0.68, hi: 0.9 },
+  backends: { h: 64, s: 0.18, lo: 0.54, hi: 0.89 },
   // the maintenance yard: painted works grey-green, an industrial finish.
-  maint: { h: 106, s: 0.1, lo: 0.63, hi: 0.85 },
+  maint: { h: 106, s: 0.1, lo: 0.54, hi: 0.85 },
   // the data directory: cool poured concrete with the faintest green in it.
-  storage: { h: 150, s: 0.16, lo: 0.65, hi: 0.87 },
+  storage: { h: 150, s: 0.16, lo: 0.57, hi: 0.94 },
   // replication: cool slate — this quarter reads as machinery.
-  rep: { h: 196, s: 0.1, lo: 0.63, hi: 0.85 },
+  rep: { h: 196, s: 0.1, lo: 0.54, hi: 0.85 },
   // shared memory: cool white precast. The brightest structure in the city.
-  shmem: { h: 226, s: 0.15, lo: 0.7, hi: 0.92 },
+  shmem: { h: 226, s: 0.15, lo: 0.60, hi: 0.94 },
   // the planner: the least coloured stone anywhere, a bare trace of lilac.
-  planner: { h: 268, s: 0.07, lo: 0.65, hi: 0.87 },
+  planner: { h: 268, s: 0.07, lo: 0.56, hi: 0.87 },
   // continuity: old limestone gone grey-mauve with iron. The oldest-looking
   // quarter, which suits the district that keeps the archive.
-  continuity: { h: 316, s: 0.09, lo: 0.65, hi: 0.86 },
+  continuity: { h: 316, s: 0.09, lo: 0.56, hi: 0.86 },
   // access paths and index halls: dusty brick.
-  access: { h: 352, s: 0.11, lo: 0.62, hi: 0.84 },
+  access: { h: 352, s: 0.11, lo: 0.54, hi: 0.84 },
   // the plate itself, its kerb and its masts: light structural concrete, and
   // deliberately the pavement's own hue — this is ground, not a quarter.
   ground: { h: 36, s: 0.08, lo: 0.4, hi: 0.66 },
@@ -848,7 +849,10 @@ export function clockInk(hex: number, daylight: number): number {
 }
 
 export function dayInkOpacity(opacity: number, structural = false): number {
-  return structural ? clamp01(opacity * 0.88) : Math.min(1, opacity * 1.8 + 0.28)
+  // Retain authored strong boundaries while suppressing fine construction ink.
+  return structural
+    ? clamp01(opacity * lerp(0.55, 0.88, smoothstep(0.55, 0.8, opacity)))
+    : Math.min(1, opacity * 1.8 + 0.28)
 }
 
 export function clockInkOpacity(opacity: number, daylight: number, structural = false): number {

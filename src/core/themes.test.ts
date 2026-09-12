@@ -376,3 +376,19 @@ describe('the day sun', () => {
     expect(air.shadowIntensity).toBeGreaterThanOrEqual(0.78)
   })
 })
+
+
+describe('architectural palette contrast', () => {
+  it('keeps a visible value step between recessed structure and its rim', () => {
+    for (const prefix of ['clients', 'backends', 'shmem', 'wal', 'storage', 'maint']) {
+      const low = new Color(daySurface(0x101827, prefix + '.deep'))
+      const high = new Color(daySurface(0x39445c, prefix + '.rim'))
+      const lum = (c: Color) => .2126 * c.r + .7152 * c.g + .0722 * c.b
+      expect(lum(high) / lum(low), prefix).toBeGreaterThan(1.55)
+    }
+  })
+
+  it('keeps construction edges quieter than equal-opacity semantic connections', () => {
+    expect(dayInkOpacity(.5, true)).toBeLessThan(dayInkOpacity(.5, false) * .4)
+  })
+})

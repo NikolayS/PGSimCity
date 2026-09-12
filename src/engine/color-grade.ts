@@ -2,9 +2,9 @@ import * as THREE from 'three'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 
 export const GOLDEN_HOUR_GRADE = {
-  lift: 0.008,
-  gamma: 0.96,
-  gain: 1.035,
+  lift: 0,
+  gamma: 1,
+  gain: 1,
   midtoneSaturation: 1.07,
   vignette: 0.075,
 } as const

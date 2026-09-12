@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { rectangularFramePlane } from './frame-plane'
 import { destinationForDistrict } from '../core/destinations'
-import { ATMOSPHERE, COLOR, DAY_PALETTE, atmosphere, mixHex } from '../core/theme'
+import { ATMOSPHERE, COLOR, DAY_PALETTE, atmosphere, mixHex, themeDaylight } from '../core/theme'
 import { clamp01, fmtBytes, fmtNum } from '../core/util'
 import { ANCHOR, CITY, DISTRICT_BOUNDS } from './layout'
 import { plateFogK } from './plate-fog'
@@ -89,6 +89,7 @@ uniform sampler2D uSurface;
 uniform float uSurfaceDetail;
 uniform float uSurfaceResponse;
 uniform float uSurveyDetail;
+uniform float uDaylight;
 uniform vec3 uSunDirection;
 uniform vec3 uSunColor;
 uniform sampler2D uEdge;
@@ -123,16 +124,18 @@ void main() {
   float minor = gridMask( p, 10.0, 0.85, dMinor );   // 10 m survey grid
   float major = gridMask( p, 50.0, 1.15, dMajor );   // 50 m block grid
 
-  minor *= 1.0 - smoothstep( 0.20, 0.80, dMinor );
-  major *= 1.0 - smoothstep( 0.28, 1.05, dMajor );
+  // Day paving must retire before a cell is only a few pixels wide. Night
+  // retains the authored survey signal; these marks are not live state.
+  minor *= 1.0 - smoothstep( mix( 0.20, 0.05, uDaylight ), mix( 0.80, 0.22, uDaylight ), dMinor );
+  major *= 1.0 - smoothstep( mix( 0.28, 0.10, uDaylight ), mix( 1.05, 0.45, uDaylight ), dMajor );
 
   // Close paving supplies scale; the distant city keeps only a quiet block
   // rhythm. Per-fragment distance also retires the horizon in walking views.
   float viewDistance = distance( vWorld, cameraPosition );
   minor *= ( 1.0 - smoothstep( 180.0, 720.0, viewDistance ) )
-         * mix( 0.02, 0.50, uSurveyDetail );
+         * mix( 0.02, 0.50, uSurveyDetail ) * mix( 1.0, 0.50, uDaylight );
   major *= ( 1.0 - smoothstep( 700.0, 2200.0, viewDistance ) )
-         * mix( 0.08, 0.60, uSurveyDetail );
+         * mix( 0.08, 0.60, uSurveyDetail ) * mix( 1.0, 0.75, uDaylight );
 
   // The survey grid stops at the plate, not in the fog: it dies in the last
   // 34 m so the kerb is a boundary and not just the place the lines get cut.
@@ -532,6 +535,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
       uSweepR: { value: 900 },
       uSurface: { value: surfaceTex },
       uSurfaceDetail: { value: 0 },
+      uDaylight: { value: 0 },
       uSurfaceResponse: { value: 0 },
       uSurveyDetail: { value: groundSurveyDetail(ctx.camera.position.y) },
       uSunDirection: {
@@ -555,6 +559,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   gridUniforms.uFogK = plateFogK
   const uTime = gridUniforms.uTime as { value: number }
   const uSurfaceDetail = gridUniforms.uSurfaceDetail as { value: number }
+  const uDaylight = gridUniforms.uDaylight as { value: number }
   const uSurfaceResponse = gridUniforms.uSurfaceResponse as { value: number }
   const uSurveyDetail = gridUniforms.uSurveyDetail as { value: number }
 
@@ -1166,6 +1171,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   function update(dt: number, _sim: SimState, _t: number): void {
     uSurveyDetail.value = groundSurveyDetail(ctx.camera.position.y)
     const daylight = atmosphere().daylight
+    uDaylight.value = themeDaylight()
     const nextSurfaceDetail = groundSurfaceDetail(daylight ? 'day' : 'night', quality.level)
     if (nextSurfaceDetail !== surfaceDetail) {
       surfaceDetail = nextSurfaceDetail
