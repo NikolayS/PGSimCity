@@ -390,6 +390,19 @@ describe('robot vacuum service station', () => {
     expect(live()).toBe(collected)
   })
 
+  it('keeps dynamic cleanup strips visible without uploading unchanged matrices', () => {
+    const { module, sim } = fixture()
+    module.update(0, sim.state, 0)
+    const slots = module.group.getObjectByName('autovac.cleanup.slots') as THREE.InstancedMesh
+    const dead = module.group.getObjectByName('autovac.cleanup.dead') as THREE.InstancedMesh
+    // Hidden cells can reappear outside a previously cached instance bound.
+    expect(slots.frustumCulled).toBe(false)
+    expect(dead.frustumCulled).toBe(false)
+    const versions = [slots.instanceMatrix.version, dead.instanceMatrix.version]
+    module.update(0, sim.state, 0)
+    expect([slots.instanceMatrix.version, dead.instanceMatrix.version]).toEqual(versions)
+  })
+
   it('shows persistent aggregate slots and removes dead markers only after heap collection', () => {
     const { module, sim } = fixture()
     module.setDetail?.(2)

@@ -1765,6 +1765,8 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
   }
   const cleanupSlots = batch(group, unitBox, matCleanupSlot, cleanupSpecs)
   cleanupSlots.name = 'autovac.cleanup.slots'
+  cleanupSlots.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  cleanupSlots.frustumCulled = false
   const cleanupDead = batch(group, unitBox, matDeadVersion, cleanupSpecs)
   cleanupDead.name = 'autovac.cleanup.dead'
   cleanupDead.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
@@ -1781,10 +1783,12 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
 
   function syncCleanupStrips(sim: SimState): void {
     cleanupDisplay.sync(sim.tables, sim.autovac.workers)
+    let changed = false
     for (let table = 0; table < N_TABLES; table++) {
       const count = cleanupDisplay.markerCount(table)
       const slots = cleanupDisplay.displayedSlots(table)
       if (count === cleanupShown[table] && slots === cleanupSlotShown[table]) continue
+      changed = true
       cleanupShown[table] = count
       cleanupSlotShown[table] = slots
       const x0 = vacuumTableLaneX(table)
@@ -1802,8 +1806,10 @@ export const createMaintenance: WorldFactory = (ctx: WorldContext): WorldModule 
         } else zeroInst(cleanupDead, i, x0, VACUUM_SERVICE.workY, -10)
       }
     }
-    cleanupDead.instanceMatrix.needsUpdate = true
-    cleanupSlots.instanceMatrix.needsUpdate = true
+    if (changed) {
+      cleanupDead.instanceMatrix.needsUpdate = true
+      cleanupSlots.instanceMatrix.needsUpdate = true
+    }
   }
 
   /* --- worker routing ----------------------------------------------------- */

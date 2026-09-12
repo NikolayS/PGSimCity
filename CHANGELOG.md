@@ -16,7 +16,7 @@ are all still moving. Expect breaking changes between minor versions.
 - Apply the daytime structural palette to animated backend facades, including a theme change while paused. Activity windows remain driven by existing backend state.
 - Retain strong structural boundaries while quieting fine construction ink and distant survey lines. Rebalance daylight fill and material contrast without adding lamps or changing simulation behavior.
 - Let desktop tools share the checkpoint row before individual controls wrap. Pack phone inspector navigation into touch-sized controls, retaining wrapping for narrow or enlarged text.
-- Make existing vacuum reclamation visible beside each table: scaled red dead-version markers disappear only with observed collection, exposing reusable slots. Scanning without removal leaves them in place; remaining dead versions stay represented.
+- Make existing vacuum reclamation visible beside each table: scaled red dead-version markers disappear only with observed collection, exposing reusable slots. Scanning without removal leaves them in place; concurrent writes keep new dead versions represented and withdraw slots when freed capacity is reused.
 - Remove obsolete purple worker-dispatch and return packets and their abstract road line. Robots no longer appear to emit or transport dead tuples; reclamation remains inside the relation.
 
 This release changes presentation and navigation, not PostgreSQL mechanisms. It does not implement visibility-map maintenance, tuple freezing or independent ANALYZE. Rendered software/emulated checks do not establish physical-device frame rates or complete the broader art-direction roadmap.

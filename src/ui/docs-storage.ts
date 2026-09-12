@@ -1973,7 +1973,7 @@ export const DOCS_STORAGE: ComponentDoc[] = [
     sections: [
       {
         heading: 'Watch cleanup at the table',
-        body: 'The red blocks beside the worker’s table represent groups of dead row versions. As the model records reclamation, blocks disappear and expose reusable slots. Scanning without reclamation leaves the blocks in place; remaining dead versions are not shown as cleaned. This is a scaled illustration, not a layout of individual PostgreSQL pages or visibility-map bits. Empty slots represent reusable capacity inside the relation, not a smaller file or row versions carried away by the robot. Read the worker’s counters for exact model totals.',
+        body: 'The red blocks beside the worker’s table represent groups of dead row versions. As the model records reclamation, blocks disappear and expose reusable slots. Scanning without reclamation leaves the blocks in place; concurrent writes can add dead versions or consume the freed capacity. Remaining dead versions stay represented, and empty slots are withdrawn when that capacity is reused. This is a scaled illustration using aggregate table occupancy, not a layout of individual PostgreSQL pages or visibility-map bits. Empty slots represent reusable capacity inside the relation, not a smaller file or row versions carried away by the robot. Read the worker’s counters for exact model totals.',
       },
       {
         heading: 'The phases, in order',
