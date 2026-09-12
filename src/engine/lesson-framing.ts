@@ -33,7 +33,7 @@ export function frameLessonObject(
       (-py - viewport.bottom * depth) / (cy - viewport.bottom))
   }
   center.addScaledVector(right, -cx * distance * tanX).addScaledVector(up, -cy * distance * tanY)
-  return { target: center.toArray(), distance, dir: direction.toArray() }
+  return { target: center.toArray(), distance, dir: direction.toArray(), viewportFitted: true }
 }
 
 /** Authored architecture bounds avoid parked/hidden instance transforms. */

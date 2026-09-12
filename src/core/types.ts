@@ -1453,6 +1453,8 @@ export interface FocusSpec {
   distance: number
   /** preferred direction FROM target TO camera (does not need to be normalised) */
   dir?: [number, number, number]
+  /** Direction, distance and target already solve a restricted viewport. */
+  viewportFitted?: boolean
 }
 
 export interface ComponentDef {
