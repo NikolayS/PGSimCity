@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
+import { DEFAULT_KNOBS, type Knobs } from '../src/core/types'
+
 import { inspectRenderedPages } from './disclosure-browser.mjs'
 
 interface BrowserProbe {
@@ -11,6 +13,8 @@ interface BrowserProbe {
   paused: boolean
   restoredTps: number
   leader: string | null
+  knobs: Knobs
+  blocked: number
   sheets: number
   storedKnobs: Record<string, unknown>
   terminalToasts: string[]
@@ -70,7 +74,7 @@ function storedPage(
 }
 
 describe('persisted state in a production phone bootstrap', () => {
-  it('loads the minimized accumulated-state recipes into a live city', async () => {
+  it('starts healthy despite saved incidents and retains display preferences', async () => {
     const pages = [
       storedPage('sanitised auxiliary state', { paused: true, tps: 0 }, 0, 10, {
         'pgsimcity.theme': 'retired-neon-theme',
@@ -80,6 +84,7 @@ describe('persisted state in a production phone bootstrap', () => {
         'pgsimcity.console.open': '1',
         'pgsimcity.inspector.open': '1',
       }),
+      storedPage('old lock pileup', { lockContention: true, tps: 1200 }, 16, 10),
       storedPage('remaining failover candidate', {
         tps: 120,
         writeRatio: 1,
@@ -129,6 +134,8 @@ describe('persisted state in a production phone bootstrap', () => {
           paused: sim.state.knobs.paused,
           restoredTps: sim.state.knobs.tps,
           leader: sim.state.highAvailability.currentLeader,
+          knobs: { ...sim.state.knobs },
+          blocked: sim.state.backends.filter((backend) => backend.state === 'blocked').length,
           sheets: document.querySelectorAll('.pgc-host.is-compact.is-open').length,
           storedKnobs: JSON.parse(localStorage.getItem('pgsimcity.knobs') || '{}'),
           terminalToasts: toasts.filter((text) => /${TERMINAL_TOAST}/i.test(text)),
@@ -138,6 +145,9 @@ describe('persisted state in a production phone bootstrap', () => {
     })
 
     for (const report of reports) {
+      expect(report.knobs, `${report.kind}: healthy boot knobs`).toEqual(DEFAULT_KNOBS)
+      expect(report.leader, `${report.kind}: no restored failover`).toBe('primary')
+      expect(report.blocked, `${report.kind}: no restored lock pileup`).toBe(0)
       expect(report.errors, `${report.kind}: browser exception`).toEqual([])
       expect(report.modelSeconds, `${report.kind}: model clock`).toBeGreaterThan(0)
       expect(report.tailCommits, `${report.kind}: late commits`).toBeGreaterThan(0)
@@ -153,6 +163,5 @@ describe('persisted state in a production phone bootstrap', () => {
     expect(sanitised.storedKnobs).not.toHaveProperty('paused')
     expect(sanitised.storedKnobs).not.toHaveProperty('tps')
 
-    expect(reports[1].leader).toBe('standbyB')
   }, 16 * 60_000)
 })
