@@ -9,6 +9,12 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## v0.58.1 — Healthy startup
+
+- Start ordinary visits with healthy simulation defaults instead of silently restoring saved lock, overload or failover experiments.
+- Preserve display preferences and explicitly selected scenarios and incident replays.
+- Continue sanitizing obsolete saved simulation settings without applying them at startup.
+
 ## v0.58.0 — Find the maintenance crew
 
 - Select an autovacuum bay or launcher to see each worker’s current table and phase, then use Find worker to inspect and move to its current position.
