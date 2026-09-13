@@ -564,6 +564,7 @@ export function createControls(ctx: UiContext): UiModule {
   /* Model settings describe an experiment, not a display preference. A normal
    * visit starts healthy; an explicit incident handoff owns its restored state.
    * Never overwrite either with fault knobs left by an earlier visit. */
+  writeStoredKnobs(normalizedStoredKnobs(readStoredKnobs()))
 
   const host = el('div', { class: 'pgc-host pgc-host--left' })
   const looseBus = ctx.bus

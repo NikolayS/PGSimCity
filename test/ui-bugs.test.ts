@@ -19,6 +19,7 @@ import {
   createControls,
   createKnobControl,
   KNOB_PREFERENCES_STORAGE_KEY,
+  loadKnobPreferences,
 } from '../src/ui/controls'
 import { createHud } from '../src/ui/hud'
 import { createHelp } from '../src/ui/help'
@@ -97,7 +98,7 @@ describe('shared_buffers control', () => {
 })
 
 describe('standby knob preference migration', () => {
-  it('loads old replica-prefixed values as standby A preferences', () => {
+  it('migrates old standby preferences without applying them until explicitly loaded', () => {
     const dom = installTestDom()
     dom.mount('hud-left')
     window.localStorage.setItem(KNOB_PREFERENCES_STORAGE_KEY, JSON.stringify({
@@ -110,6 +111,9 @@ describe('standby knob preference migration', () => {
     const ctx = context()
 
     const controls = createControls(ctx)
+    expect(ctx.sim.state.knobs.standbyAEnabled).toBe(true)
+    expect(ctx.sim.state.knobs.standbyANetworkLag).toBe(DEFAULT_KNOBS.standbyANetworkLag)
+    loadKnobPreferences(ctx.sim)
 
     expect(ctx.sim.state.knobs.standbyAEnabled).toBe(false)
     expect(ctx.sim.state.knobs.standbyANetworkLag).toBe(175)
