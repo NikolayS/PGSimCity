@@ -22,6 +22,28 @@ export function contains(container, child) {
   )
 }
 
+export const STATEMENT_EXECUTOR_RETURN_ROUTE = Object.freeze([
+  Object.freeze([600, 211]),
+  Object.freeze([600, 282]),
+  Object.freeze([215, 282]),
+  Object.freeze([215, 128]),
+  Object.freeze([124, 128]),
+])
+
+export function bufferAccessSummary({ sharedHits, sharedReads }) {
+  const reach = sharedReads > 0 ? 'read' : sharedHits > 0 ? 'hit' : 'none'
+  const description = reach === 'read'
+    ? 'READ BELOW SHARED_BUFFERS'
+    : reach === 'hit'
+      ? 'ALL HIT IN SHARED_BUFFERS'
+      : 'NO SHARED-BUFFER ACCESSES REPORTED'
+  return {
+    reach,
+    text: `P MEASURED · HIT ${sharedHits} · READ ${sharedReads}`
+      + ` · ${description}`,
+  }
+}
+
 const STATEMENT_STAGE_SPECS = Object.freeze([
   Object.freeze({
     id: 'client',
@@ -171,13 +193,18 @@ export function createStatementReplay(report) {
   const writes = modifiesRows(plan)
   const sharedHits = finiteNumber(plan?.buffers?.sharedHits)
   const sharedReads = finiteNumber(plan?.buffers?.sharedReads)
+  const sharedCountsKnown = [plan?.buffers?.sharedHits, plan?.buffers?.sharedReads]
+    .every((value) => typeof value === 'number' && Number.isFinite(value) && value >= 0)
+  const noSharedAccess = sharedCountsKnown && sharedHits === 0 && sharedReads === 0
   const pacing = measuredPacing(plan)
   const rowMeasurement = resultMeasurement(report)
   const rows = rowMeasurement.count
   const stages = STATEMENT_STAGE_SPECS
     .filter((spec) => writes || (spec.id !== 'wal' && spec.id !== 'commit'))
     .map((spec) => {
-    const skipped = (spec.id === 'kernel' || spec.id === 'disk') && sharedReads === 0
+    const skipped = spec.id === 'buffer'
+      ? noSharedAccess
+      : (spec.id === 'kernel' || spec.id === 'disk') && sharedReads === 0
     let durationMs = spec.durationMs
     let measurement = null
     if (spec.id === 'plan') {
@@ -191,13 +218,17 @@ export function createStatementReplay(report) {
         ? `${finiteNumber(plan.executionTimeMs)} ms execution`
         : 'timing unavailable'
     } else if (spec.id === 'buffer') {
-      measurement = plan
-        ? `${sharedHits} hits · ${sharedReads} reads`
+      measurement = sharedCountsKnown
+        ? noSharedAccess
+          ? 'skipped · no shared-buffer accesses reported'
+          : `${sharedHits} hits · ${sharedReads} reads`
         : 'buffer counts unavailable'
     } else if (spec.id === 'kernel' || spec.id === 'disk') {
-      measurement = skipped
-        ? 'skipped · 0 shared reads'
-        : `${sharedReads} shared reads · route modelled`
+      measurement = !sharedCountsKnown
+        ? 'shared reads unavailable · route modelled'
+        : skipped
+          ? 'skipped · 0 shared reads'
+          : `${sharedReads} shared reads · route modelled`
     } else if (spec.id === 'wal') {
       measurement = 'WAL path modelled'
     } else if (spec.id === 'commit') {
@@ -207,6 +238,7 @@ export function createStatementReplay(report) {
     }
     return Object.freeze({
       ...spec,
+      source: spec.id === 'buffer' && !sharedCountsKnown ? 'model' : spec.source,
       durationMs,
       measurement,
       skipped,
@@ -241,6 +273,19 @@ export function nextStatementStageIndex(replay, currentIndex) {
     if (!replay.stages[index].skipped) return index
   }
   return replay.stages.length - 1
+}
+
+export function statementReturnRouteId(replay) {
+  if (replay?.writes) {
+    return replay.synchronousCommit === 'off' ? 'returnFromWal' : 'returnFromCommit'
+  }
+  const stages = replay?.stages
+  if (stages) {
+    for (let index = 0; index < stages.length; index += 1) {
+      if (stages[index].id === 'buffer' && stages[index].skipped) return 'returnFromExecutor'
+    }
+  }
+  return replay?.receipt?.sharedReads > 0 ? 'returnFromDisk' : 'returnFromBuffer'
 }
 
 export function activeStatementStageIndex(replay, elapsedMs) {

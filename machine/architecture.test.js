@@ -2,11 +2,28 @@ import { describe, expect, it } from 'vitest'
 
 import {
   ARCHITECTURE_LAYOUT,
+  STATEMENT_EXECUTOR_RETURN_ROUTE,
   activeStatementStageIndex,
+  bufferAccessSummary,
   contains,
   createStatementReplay,
   nextStatementStageIndex,
+  statementReturnRouteId,
 } from './architecture.js'
+
+describe('Machine measured buffer access', () => {
+  it.each([
+    [0, 0, 'none', 'NO SHARED-BUFFER ACCESSES REPORTED'],
+    [1, 0, 'hit', 'ALL HIT IN SHARED_BUFFERS'],
+    [0, 1, 'read', 'READ BELOW SHARED_BUFFERS'],
+    [12, 3, 'read', 'READ BELOW SHARED_BUFFERS'],
+  ])('describes %i hits and %i reads', (sharedHits, sharedReads, reach, description) => {
+    expect(bufferAccessSummary({ sharedHits, sharedReads })).toEqual({
+      reach,
+      text: `P MEASURED · HIT ${sharedHits} · READ ${sharedReads} · ${description}`,
+    })
+  })
+})
 
 const REPORT = Object.freeze({
   source: 'postgres',
@@ -60,6 +77,66 @@ describe('Magnum PostgreSQL architecture containment', () => {
 })
 
 describe('Magnum statement replay', () => {
+  const resultOnly = () => createStatementReplay({
+    ...REPORT,
+    sql: 'SELECT 1;',
+    plan: {
+      ...REPORT.plan,
+      buffers: { source: 'postgres', sharedHits: 0, sharedReads: 0 },
+      root: { nodeType: 'Result', actualRows: 1, actualLoops: 1 },
+    },
+  })
+
+  it('skips unsupported shared-buffer access for a measured Result-only query', () => {
+    const replay = resultOnly()
+    expect(replay.stages.filter((stage) => stage.skipped).map((stage) => stage.id))
+      .toEqual(['buffer', 'kernel', 'disk'])
+    const executeIndex = replay.stages.findIndex((stage) => stage.id === 'execute')
+    expect(replay.stages[nextStatementStageIndex(replay, executeIndex)].id).toBe('return')
+    const throughExecution = replay.stages.slice(0, executeIndex + 1)
+      .reduce((sum, stage) => sum + stage.durationMs, 0)
+    expect(replay.stages[activeStatementStageIndex(replay, throughExecution)].id).toBe('return')
+  })
+
+  it('returns a measured no-shared-access result directly from the executor', () => {
+    expect(statementReturnRouteId(resultOnly())).toBe('returnFromExecutor')
+    expect(STATEMENT_EXECUTOR_RETURN_ROUTE[0]).toEqual([600, 211])
+    expect(STATEMENT_EXECUTOR_RETURN_ROUTE.at(-1)).toEqual([124, 128])
+    expect(Math.max(...STATEMENT_EXECUTOR_RETURN_ROUTE.map((point) => point[1])))
+      .toBeLessThan(ARCHITECTURE_LAYOUT.sharedMemory.y)
+  })
+
+  it.each([[1, 0, 'returnFromBuffer'], [0, 1, 'returnFromDisk'], [12, 3, 'returnFromDisk']])(
+    'preserves the measured route for %i hits and %i reads', (sharedHits, sharedReads, route) => {
+      const replay = createStatementReplay({
+        ...REPORT,
+        plan: { ...REPORT.plan, buffers: { sharedHits, sharedReads }, root: { nodeType: 'Result' } },
+      })
+      expect(replay.stages.find((stage) => stage.id === 'buffer').skipped).toBe(false)
+      expect(statementReturnRouteId(replay)).toBe(route)
+    },
+  )
+
+  it.each([null, {}, { sharedHits: 0 }, { sharedHits: 0, sharedReads: NaN }])(
+    'does not treat unavailable counters as measured zero: %j', (buffers) => {
+      const replay = createStatementReplay({ ...REPORT, plan: { ...REPORT.plan, buffers } })
+      const stage = replay.stages.find((stage) => stage.id === 'buffer')
+      expect(stage.skipped).toBe(false)
+      expect(stage.source).toBe('model')
+      expect(stage.measurement).toBe('buffer counts unavailable')
+      expect(statementReturnRouteId(replay)).toBe('returnFromBuffer')
+    },
+  )
+
+  it.each(['on', 'off'])('preserves the modelled write return path with synchronous_commit=%s', (setting) => {
+    const replay = createStatementReplay({
+      ...REPORT,
+      plan: { ...REPORT.plan, root: { nodeType: 'ModifyTable', operation: 'Update' } },
+    })
+    expect(statementReturnRouteId({ ...replay, synchronousCommit: setting }))
+      .toBe(setting === 'off' ? 'returnFromWal' : 'returnFromCommit')
+  })
+
   it('turns the submitted SQL and its EXPLAIN report into one ordered trip', () => {
     const replay = createStatementReplay(REPORT)
 
