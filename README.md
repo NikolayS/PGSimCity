@@ -43,6 +43,7 @@ Selected reporting and hands-on reviews of PGSimCity:
 | **IBM Think** | [Someone turned PostgreSQL into a city you can walk around in](https://www.ibm.com/think/news/pgsimcity-postgresql-3d-visualization) — Antonia Davison’s feature, also included in the IBM Think newsletter. | July 31, 2026 |
 | **Gizmodo** | [This SimCity-Like Visualization Turns Tech’s Most Boring Systems Into Fun](https://gizmodo.com/this-simcity-like-visualization-turns-techs-most-boring-systems-into-fun-2000791397) — Tom Hawking’s hands-on review. | July 28, 2026 |
 | **GIGAZINE** | [データベース「PostgreSQL」がどのように実際には内部で動いているかがシムシティっぽい3Dでわかる「PGSimCity」](https://gigazine.net/news/20260728-pgsimcity-postgresql/) — a screenshot-led Japanese walkthrough of connections, query planning, buffers, page storage, WAL, vacuum and replication. [English edition](https://gigazine.net/gsc_news/en/20260728-pgsimcity-postgresql/). | July 28, 2026 |
+| **Developers Digest** | [PGSimCity: A 3D Interactive City That Visualizes How PostgreSQL Works](https://www.developersdigest.tech/blog/pgsimcity-postgresql-3d-visualization-hn) — an overview of the visualization and the Hacker News discussion, including community feedback on usability and accuracy. | July 27, 2026 |
 
 Articles describe the version available when published.
 
