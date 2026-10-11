@@ -2,18 +2,51 @@
 
 **Walk through PostgreSQL. Break things. Understand why.**
 
+[![CI](https://github.com/NikolayS/PGSimCity/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/NikolayS/PGSimCity/actions/workflows/ci.yml)
+[![License: Apache-2.0](docs/badges/license.svg)](LICENSE)
+[![Built with TypeScript](docs/badges/typescript.svg)](package.json)
+[![Hacker News discussion](docs/badges/hacker-news.svg)](https://news.ycombinator.com/item?id=49063754)
+
 An explorable 3D city where buildings represent PostgreSQL internals and motion
 shows their interaction. Follow a query, investigate a growing table, or see
 what changes when memory, checkpoints and replication become bottlenecks.
 
-**[Explore the city](https://nikolays.github.io/PGSimCity/)** ·
-[Start an investigation](#start-here-investigate-a-vacuum-blockade)
+**[Explore the city →](https://nikolays.github.io/PGSimCity/)** ·
+[Diagnose](https://nikolays.github.io/PGSimCity/observability/) ·
+[Machine](https://nikolays.github.io/PGSimCity/machine/)
+
+[Community discussion](#hacker-news-discussion) · [Press coverage](#press-coverage) ·
+[Start here](#start-here-investigate-a-vacuum-blockade) · [Model accuracy](#how-much-to-trust-this)
 
 No installation. Runs in a browser with WebGL2.
+The city is an educational model, not a running PostgreSQL server.
 
 [![PGSimCity at golden hour: the buffer pool, backend avenue and surrounding PostgreSQL districts. Click to explore the city.](docs/screenshot.png)](https://nikolays.github.io/PGSimCity/)
 
-[Featured in InfoQ · IBM Think · Gizmodo · GIGAZINE](#press-coverage)
+## Hacker News discussion
+
+> **[930 points · 91 comments on Hacker News →](https://news.ycombinator.com/item?id=49063754)**
+>
+> Explore the community’s questions, technical discussion and feedback on
+> **PGSimCity — How PostgreSQL Works**, posted July 27, 2026.
+>
+> Counts checked October 11, 2026. The discussion describes the version available then.
+
+## Press coverage
+
+Selected reporting and hands-on reviews of PGSimCity:
+
+| Publication | Article | Published |
+|---|---|---|
+| **Clement Mondary · Français** | [PGSIMCITY : comprendre PostgreSQL en visitant une ville en 3D](https://mondary.design/2026/08/pgsimcity-comprendre-postgresql-en-visitant-une-ville-en-3d/) — an introduction to the city’s visual language, interactive scenarios and distinction between the simulation and PGlite. | August 22, 2026 |
+| **InfoQ** | [How PGSimCity Turns PostgreSQL Complexity into a Virtual City 3D Simulation](https://www.infoq.com/news/2026/08/pgsimcity/) — Olimpiu Pop on the project’s architecture and educational approach. Also available in [简体中文](https://www.infoq.cn/article/umVdo2GaEyONQLWNmPZ9), translated by 田橙. | August 16, 2026 |
+| **IBM Think** | [Someone turned PostgreSQL into a city you can walk around in](https://www.ibm.com/think/news/pgsimcity-postgresql-3d-visualization) — Antonia Davison’s feature, also included in the IBM Think newsletter. | July 31, 2026 |
+| **Gizmodo** | [This SimCity-Like Visualization Turns Tech’s Most Boring Systems Into Fun](https://gizmodo.com/this-simcity-like-visualization-turns-techs-most-boring-systems-into-fun-2000791397) — Tom Hawking’s hands-on review. | July 28, 2026 |
+| **GIGAZINE** | [データベース「PostgreSQL」がどのように実際には内部で動いているかがシムシティっぽい3Dでわかる「PGSimCity」](https://gigazine.net/news/20260728-pgsimcity-postgresql/) — a screenshot-led Japanese walkthrough of connections, query planning, buffers, page storage, WAL, vacuum and replication. [English edition](https://gigazine.net/gsc_news/en/20260728-pgsimcity-postgresql/). | July 28, 2026 |
+
+Articles describe the version available when published.
+
+---
 
 ## Start here: investigate a vacuum blockade
 
@@ -59,27 +92,6 @@ they do not establish complete coverage or make this model an emulator.
 Lessons include keyboard and text-first routes; the 3D scene and first-person
 walk do not have a nonvisual equivalent. Touch verification has used browser
 emulation, not physical devices. [Accessibility and alternatives](blueprints/ACCESSIBILITY.md).
-
----
-
-## Press coverage
-
-**Featured in InfoQ, IBM Think, Gizmodo and GIGAZINE.**
-
-Selected reporting and hands-on reviews of PGSimCity:
-
-| Publication | Article | Published |
-|---|---|---|
-| **InfoQ** | [How PGSimCity Turns PostgreSQL Complexity into a Virtual City 3D Simulation](https://www.infoq.com/news/2026/08/pgsimcity/) — Olimpiu Pop on the project’s architecture and educational approach. Also available in [简体中文](https://www.infoq.cn/article/umVdo2GaEyONQLWNmPZ9), translated by 田橙. | August 16, 2026 |
-| **IBM Think** | [Someone turned PostgreSQL into a city you can walk around in](https://www.ibm.com/think/news/pgsimcity-postgresql-3d-visualization) — Antonia Davison’s feature, also included in the IBM Think newsletter. | July 31, 2026 |
-| **Gizmodo** | [This SimCity-Like Visualization Turns Tech’s Most Boring Systems Into Fun](https://gizmodo.com/this-simcity-like-visualization-turns-techs-most-boring-systems-into-fun-2000791397) — Tom Hawking’s hands-on review. | July 28, 2026 |
-| **GIGAZINE** | [データベース「PostgreSQL」がどのように実際には内部で動いているかがシムシティっぽい3Dでわかる「PGSimCity」](https://gigazine.net/news/20260728-pgsimcity-postgresql/) — a screenshot-led Japanese walkthrough of connections, query planning, buffers, page storage, WAL, vacuum and replication. [English edition](https://gigazine.net/gsc_news/en/20260728-pgsimcity-postgresql/). | July 28, 2026 |
-
-### Further reading
-
-- **Clement Mondary · Français:** [PGSIMCITY : comprendre PostgreSQL en visitant une ville en 3D](https://mondary.design/2026/08/pgsimcity-comprendre-postgresql-en-visitant-une-ville-en-3d/) — an introduction to the city’s visual language, interactive scenarios and distinction between the simulation and PGlite.
-
-Articles describe the version available when published.
 
 ---
 
