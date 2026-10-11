@@ -6,7 +6,12 @@ delivery rules. [`CONTRIBUTING.md`](CONTRIBUTING.md) is the shorter human guide.
 
 ## Codex workflow
 
-- **Never push.** Pushing is the project owner's action, always.
+- **Follow the owner's publishing instructions.** An explicit request to push,
+  publish, or deploy authorizes that action; do not ask for the same permission
+  again. Without such a request, keep work committed locally for review.
+- Push focused changes from your dedicated branch. Do not force-push or rewrite
+  shared history unless explicitly requested. For previews, preserve the live
+  city and publish to a separate path or site.
 - **In your own dedicated worktree on your own branch: commit your work.** That
   is how it reaches the owner for merge — uncommitted work in a worktree is easy
   to lose and impossible to review as a diff. Commit before you report.
