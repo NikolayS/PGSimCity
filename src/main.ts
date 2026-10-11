@@ -86,7 +86,7 @@ import { createControlCenter } from './ui/control-center'
 import { createWalkUpInteraction } from './ui/walk-up'
 import { MOVEMENT_SOUND_OFF, movementSoundEnabledToast } from './ui/sound'
 import { createWorldHandleSites } from './ui/world-handles'
-import { createVisualCompare } from './ui/visual-compare'
+import { createVisualCompare, visualCompareHost } from './ui/visual-compare'
 import { BOOT_STEPS, failBoot, finishBoot, presentBootStep } from './ui/boot'
 import type { UiContext, UiModule } from './ui/uikit'
 
@@ -403,9 +403,9 @@ async function boot(): Promise<void> {
     createZoomContext({ dom: renderer.domElement, picker, registry, rig }),
   ]
   void import('./ui/anatomy').then(({ createAnatomy }) => ui.push(createAnatomy(uiCtx))) // PAGE + DATA-DIRECTORY ANATOMY WIRING
-  const hudRoot = document.getElementById('hud')
-  if (hudRoot && visualComparisonRequested(window.location.search)) {
-    ui.push(createVisualCompare(hudRoot, { getMode: () => gfx.visualMode, setMode: setVisualMode }))
+  const visualCompareRoot = visualComparisonRequested(window.location.search) ? visualCompareHost(document) : null
+  if (visualCompareRoot) {
+    ui.push(createVisualCompare(visualCompareRoot, { getMode: () => gfx.visualMode, setMode: setVisualMode }))
   }
 
   /* --- bus wiring ---------------------------------------------------------- */

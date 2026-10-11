@@ -25,6 +25,12 @@ const OPTIONS: readonly { mode: VisualMode; label: string }[] = [
   { mode: 'polish', label: 'Polished' },
 ]
 
+/* Appended after .hud-bar inside #hud-top so it reserves its own row in the
+ * top strip; the #hud deck row belongs to the first-run tour card. */
+export function visualCompareHost(doc: Pick<Document, 'getElementById'>): HTMLElement | null {
+  return doc.getElementById('hud-top')
+}
+
 function recordInAddressBar(mode: VisualMode): void {
   try {
     const { pathname, search, hash } = window.location
@@ -53,6 +59,7 @@ export function createVisualCompare(root: HTMLElement, deps: VisualCompareDeps):
     el('p', { class: 'visual-compare__note', text: VISUAL_COMPARE_NOTE }),
   )
   root.append(node)
+  root.classList.add('has-visual-compare')
   sync()
 
   function sync(): void {
@@ -74,6 +81,7 @@ export function createVisualCompare(root: HTMLElement, deps: VisualCompareDeps):
     update() {},
     dispose() {
       node.remove()
+      root.classList.remove('has-visual-compare')
     },
   }
 }

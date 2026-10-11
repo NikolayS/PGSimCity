@@ -511,20 +511,19 @@
   animation: pg-fade-up var(--dur) var(--ease-out-expo) both;
 }
 
-/* ?visual= comparison preview only. Bottom-left of the deck row keeps it off
-   the top-bar model qualification and the centred tour deck. */
+/* ?visual= comparison preview only. A flow row under .hud-bar in #hud-top, so
+   it reserves height instead of sharing the deck row with the tour card. #hud
+   children default to pointer-events: none. */
 .visual-compare {
-  grid-area: deck;
-  place-self: end start;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 2px 4px;
-  max-width: 280px;
-  padding: 4px 6px;
+  gap: 2px 6px;
+  min-width: 0;
+  padding: 3px 12px;
   background: var(--bg-panel);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--r-md);
+  border-top: 1px solid var(--line-soft);
+  pointer-events: auto;
 }
 .visual-compare__label {
   font-size: var(--fs-micro);
@@ -534,9 +533,17 @@
   margin-right: 2px;
 }
 .visual-compare__note {
-  flex-basis: 100%;
-  margin: 0;
+  flex: 1 1 16em;
+  min-width: 0;
+  margin: 0 0 0 4px;
   font-size: var(--fs-micro);
   line-height: 1.35;
   color: var(--ink-dim);
+}
+/* Below 1101px the model-qualification badge hangs absolutely under the bar;
+   on a comparison URL it would cover this row, so it joins the bar's flow. */
+#hud-top.has-visual-compare .hud-bar > .city-version-provenance {
+  position: static;
+  grid-column: 1 / -1;
+  justify-self: end;
 }

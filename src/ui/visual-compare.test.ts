@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { installTestDom } from '../../test/dom'
 import type { VisualMode } from '../engine/visual-polish'
-import { VISUAL_COMPARE_NOTE, createVisualCompare } from './visual-compare'
+import { VISUAL_COMPARE_NOTE, createVisualCompare, visualCompareHost } from './visual-compare'
 
 function fixture(initial: VisualMode) {
   const dom = installTestDom()
@@ -52,5 +52,23 @@ describe('Baseline / Polished switch', () => {
     expect(VISUAL_COMPARE_NOTE).toMatch(/same model, geometry and palette/i)
     f.ui.dispose()
     expect(f.root.querySelector('.visual-compare')).toBeNull()
+  })
+})
+
+/* Screenshot review: in the #hud deck row the first-run tour card covered both
+ * buttons. Layout rules are asserted in test/visual-compare-style.test.ts. */
+describe('Baseline / Polished switch placement', () => {
+  it('mounts in the top instrument strip, below the bar, not the tour deck row', () => {
+    const dom = installTestDom()
+    dom.mount('hud')
+    const top = dom.mount('hud-top')
+    expect(visualCompareHost(document)).toBe(top as unknown as HTMLElement)
+  })
+
+  it('marks its host while mounted so the model-qualification badge can yield the row', () => {
+    const f = fixture('polish')
+    expect(f.root.classList.contains('has-visual-compare')).toBe(true)
+    f.ui.dispose()
+    expect(f.root.classList.contains('has-visual-compare')).toBe(false)
   })
 })
