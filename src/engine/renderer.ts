@@ -811,7 +811,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     fill.position.set(v.fillPos[0], v.fillPos[1], v.fillPos[2])
     key.shadow.intensity = v.shadowIntensity
     if (gtaoPass) gtaoPass.blendIntensity = v.aoBlend
-    if (outputPass) outputPass.setGrade(daylightGradeFor(visualMode))
+    if (outputPass) outputPass.setGrade(daylightGradeFor(visualMode), themeDaylight())
   }
 
   function setVisualMode(mode: VisualMode): void {

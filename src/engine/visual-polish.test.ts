@@ -4,6 +4,7 @@ import { ATMOSPHERE, DAY_PALETTE, clockAtmosphereAt, clockSunAt } from '../core/
 import type { Atmosphere } from '../core/themes'
 import {
   GOLDEN_HOUR_GRADE,
+  GoldenHourOutputPass,
   gradeDaylightHex,
   gradeLitDaylightHex,
   oklab,
@@ -171,6 +172,18 @@ function minPairDistance(hexes: number[]): number {
 }
 
 describe('comparison mode selection', () => {
+  it('blends the actual output grade continuously with twilight daylight', () => {
+    const pass = new GoldenHourOutputPass()
+    try {
+      for (const daylight of [0, 0.25, 0.5, 0.75, 1]) {
+        pass.setGrade(POLISHED_DAYLIGHT_GRADE, daylight)
+        expect(pass.uniforms.pgGradeLift.value).toBeCloseTo(GOLDEN_HOUR_GRADE.lift * (1 - daylight), 12)
+        expect(pass.uniforms.pgGradeGamma.value).toBe(GOLDEN_HOUR_GRADE.gamma)
+      }
+    } finally {
+      pass.dispose()
+    }
+  })
   it('stays on baseline unless the URL asks for exactly ?visual=polish', () => {
     expect(visualModeFromSearch('')).toBe('baseline')
     expect(visualModeFromSearch('?visual=baseline')).toBe('baseline')

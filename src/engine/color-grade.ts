@@ -86,6 +86,11 @@ vec3 pgApplyHeightFog( vec3 color, vec2 uv ) {
 }
 `
 
+const clamp01 = (value: number): number => Math.max(0, Math.min(1, value))
+
+const blendGrade = (baseline: number, grade: number, t: number): number =>
+  t >= 1 ? grade : baseline + (grade - baseline) * t
+
 const SAMPLE_ANCHOR = 'uniform sampler2D tDiffuse;'
 const GRADE_ANCHOR = '\n\t\t\t// tone mapping'
 
@@ -135,13 +140,17 @@ export class GoldenHourOutputPass extends OutputPass {
     this.uniforms.pgGradeEnabled.value = enabled ? 1 : 0
   }
 
-  /** Uniform-only: switching grades never recompiles the output shader. */
-  setGrade(grade: DaylightGrade): void {
-    this.uniforms.pgGradeLift.value = grade.lift
-    this.uniforms.pgGradeGamma.value = grade.gamma
-    this.uniforms.pgGradeGain.value = grade.gain
-    this.uniforms.pgGradeSaturation.value = grade.midtoneSaturation
-    this.uniforms.pgGradeVignette.value = grade.vignette
+  /* Uniform-only: switching grades never recompiles the output shader.
+   * `daylight` blends from the baseline grade so twilight stays continuous;
+   * full daylight writes `grade` exactly. */
+  setGrade(grade: DaylightGrade, daylight = 1): void {
+    const t = clamp01(daylight)
+    const u = this.uniforms
+    u.pgGradeLift.value = blendGrade(GOLDEN_HOUR_GRADE.lift, grade.lift, t)
+    u.pgGradeGamma.value = blendGrade(GOLDEN_HOUR_GRADE.gamma, grade.gamma, t)
+    u.pgGradeGain.value = blendGrade(GOLDEN_HOUR_GRADE.gain, grade.gain, t)
+    u.pgGradeSaturation.value = blendGrade(GOLDEN_HOUR_GRADE.midtoneSaturation, grade.midtoneSaturation, t)
+    u.pgGradeVignette.value = blendGrade(GOLDEN_HOUR_GRADE.vignette, grade.vignette, t)
   }
 
   setAerialPerspective(color: number, density: number, falloff: number, strength: number): void {
@@ -172,8 +181,6 @@ export class GoldenHourOutputPass extends OutputPass {
 }
 
 type Rgb = readonly [number, number, number]
-
-const clamp01 = (value: number): number => Math.max(0, Math.min(1, value))
 
 function srgbToLinear(value: number): number {
   return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4)

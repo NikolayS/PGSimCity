@@ -1563,10 +1563,12 @@ export function createCameraRig(
     // Shortest arc: three's slerp already handles the sign, but make it explicit
     // so a 180° framing change never rolls through the pole.
     if (tweenQ0.dot(tweenQ1) < 0) tweenQ1.set(-tweenQ1.x, -tweenQ1.y, -tweenQ1.z, -tweenQ1.w)
-    tweenD0 = clamp(camera.position.distanceTo(tweenTarget), MIN_DIST, MAX_DIST)
+    const lookD0 = camera.position.distanceTo(tweenTarget)
+    tweenD0 = clamp(lookD0, MIN_DIST, MAX_DIST)
     tweenD1 = d
     tweenT = 0
-    focusMove.begin(focusStyle, tweenP0, tweenQ0, tweenD0, tweenP1, tweenQ1, tweenTarget)
+    // The aim path starts on the subject itself, so it needs the unclamped range.
+    focusMove.begin(focusStyle, tweenP0, tweenQ0, lookD0, tweenP1, tweenQ1, tweenTarget)
     // An explicit duration is a caller's pacing decision; only the default scales.
     const defaultDur = focusStyle === 'polish' ? polishFocusDuration(focusMove.travel()) : FOCUS_DUR
     tweenDur = Math.max(0.05, opts?.duration ?? defaultDur)

@@ -80,6 +80,21 @@ describe('focus style switching', () => {
     expect(worstDriftDuringRefocus('baseline')).toBeGreaterThan(1)
   })
 
+  it('keeps a close centred subject framed even inside the orbit minimum', () => {
+    const { camera, rig } = createRig()
+    const subject = new THREE.Vector3(0, 0, 0)
+    camera.position.set(0, 8, 8)
+    camera.lookAt(subject)
+    rig.focusStyle = 'polish'
+    rig.focusOn({ target: [0, 0, 0], distance: 90, dir: [-1, 0.6, -0.2] })
+    let worst = 0
+    for (let i = 0; i < 200 && rig.mode === 'focus'; i++) {
+      rig.update(1 / 60)
+      worst = Math.max(worst, framingError(camera, subject))
+    }
+    expect(worst).toBeLessThan(0.05)
+  })
+
   it('lets a move already in flight finish on the path it started', () => {
     const run = (switchMidway: boolean): THREE.Vector3[] => {
       const { camera, rig } = createRig()
