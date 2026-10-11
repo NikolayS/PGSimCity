@@ -3,6 +3,8 @@ import type { Bus, CameraApi, CameraMode, FocusSpec } from '../core/types'
 import { clamp, clamp01, damp, easeInOutCubic, lerp, reduceMotion } from '../core/util'
 import { ANCHOR } from '../world/layout'
 import { PLAN_UP, sampleOutline } from '../world/slonik'
+import { BASELINE_FOCUS_DURATION, FocusMove, easeEnds, polishFocusDuration } from './focus-path'
+import type { FocusStyle } from './focus-path'
 
 /* ============================================================================
  * THE CAMERA RIG
@@ -32,6 +34,8 @@ export interface CameraRig extends CameraApi {
   setPivot(p: THREE.Vector3 | [number, number, number]): void
   readonly pivot: THREE.Vector3
   readonly speed: number
+  /** Scripted focus interpolation; 'polish' is the opt-in comparison style. */
+  focusStyle: FocusStyle
 }
 
 export interface CameraRigOptions {
@@ -103,11 +107,9 @@ const TOUCH_TWIST_ANGLE = TOUCH_INTENT_FRACTION * 2
  * even off-centre where its midpoint legitimately travels farther than its span. */
 const TOUCH_DECISIVE_TWIST_ANGLE = TOUCH_TWIST_ANGLE * 3
 
-const FOCUS_DUR = 1.05
+const FOCUS_DUR = BASELINE_FOCUS_DURATION
 /** Upward framing bias for auto-derived focus directions. */
 const FOCUS_UP_BIAS = 0.436 // 25°
-/** Fraction of a tour path spent easing in / out. */
-const PATH_EASE = 0.18
 
 /* A raised three-quarter view keeps the client terminal in the foreground,
  * the backend row clear of the basin, and storage visible below the deck.
@@ -223,24 +225,6 @@ function wheelPixels(e: WheelEvent): number {
   return e.deltaY
 }
 
-/**
- * Arc-length reparameterisation with smoothstep ramps at the ends only:
- * constant speed through the middle of a tour shot, no dead-stop feel.
- * ∫ smoothstep = x³ − x⁴/2, which is 0.5 at x = 1.
- */
-function easeEnds(t: number): number {
-  const a = PATH_EASE
-  const total = 1 - a
-  const u = clamp01(t)
-  if (u < a) {
-    const x = u / a
-    return (a * (x * x * x - (x * x * x * x) / 2)) / total
-  }
-  if (u < 1 - a) return (a / 2 + (u - a)) / total
-  const x = (1 - u) / a
-  return (total - a * (x * x * x - (x * x * x * x) / 2)) / total
-}
-
 /* ==========================================================================*/
 
 export function createCameraRig(
@@ -320,6 +304,8 @@ export function createCameraRig(
   const tweenTarget = new THREE.Vector3()
   let tweenD0 = 0
   let tweenD1 = 0
+  let focusStyle: FocusStyle = 'baseline'
+  const focusMove = new FocusMove()
 
   /* A new mode or subject cannot create clearance at an unchanged eye. Keep
    * the last tight-eye height until the camera itself rises out of that space. */
@@ -1447,11 +1433,18 @@ export function createCameraRig(
 
   function tickFocus(dt: number): void {
     tweenT += dt
-    const k = easeInOutCubic(clamp01(tweenT / tweenDur))
-    camera.position.lerpVectors(tweenP0, tweenP1, k)
-    camera.quaternion.slerpQuaternions(tweenQ0, tweenQ1, k)
-    camera.updateMatrixWorld()
-    adoptOrbit(lerp(tweenD0, tweenD1, k))
+    if (focusMove.style === 'polish') {
+      const u = clamp01(tweenT / tweenDur)
+      focusMove.sample(u, camera.position, camera.quaternion)
+      camera.updateMatrixWorld()
+      adoptOrbit(focusMove.lookDistance(u, camera.position))
+    } else {
+      const k = easeInOutCubic(clamp01(tweenT / tweenDur))
+      camera.position.lerpVectors(tweenP0, tweenP1, k)
+      camera.quaternion.slerpQuaternions(tweenQ0, tweenQ1, k)
+      camera.updateMatrixWorld()
+      adoptOrbit(lerp(tweenD0, tweenD1, k))
+    }
     if (tweenT >= tweenDur) {
       pivot.copy(tweenTarget)
       pivotT.copy(tweenTarget)
@@ -1573,7 +1566,10 @@ export function createCameraRig(
     tweenD0 = clamp(camera.position.distanceTo(tweenTarget), MIN_DIST, MAX_DIST)
     tweenD1 = d
     tweenT = 0
-    tweenDur = Math.max(0.05, opts?.duration ?? FOCUS_DUR)
+    focusMove.begin(focusStyle, tweenP0, tweenQ0, tweenD0, tweenP1, tweenQ1, tweenTarget)
+    // An explicit duration is a caller's pacing decision; only the default scales.
+    const defaultDur = focusStyle === 'polish' ? polishFocusDuration(focusMove.travel()) : FOCUS_DUR
+    tweenDur = Math.max(0.05, opts?.duration ?? defaultDur)
     velTheta = 0
     velPhi = 0
     velPivot.set(0, 0, 0)
@@ -1856,6 +1852,13 @@ export function createCameraRig(
     },
     get speed(): number {
       return flySpeed
+    },
+    get focusStyle(): FocusStyle {
+      return focusStyle
+    },
+    // Applies from the next focus move; one in flight keeps its own path.
+    set focusStyle(style: FocusStyle) {
+      focusStyle = style
     },
   }
   return rig

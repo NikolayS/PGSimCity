@@ -14,6 +14,7 @@ import {
   paintSceneMaterial,
   setBloomAvailable,
   startThemeClock,
+  themeDaylight,
   themeEnvironmentKey,
   themeMode,
 } from '../core/theme'
@@ -26,6 +27,8 @@ import type { Bus, QualityLevel, QualitySettings } from '../core/types'
 import { GoldenHourOutputPass } from './color-grade'
 import { LIGHT_SHAFT_PRESETS, LightShaftPass } from './light-shafts'
 import { waterReflectionScale } from './water'
+import { daylightGradeFor, polishLightBalance } from './visual-polish'
+import type { LightBalance, VisualMode } from './visual-polish'
 
 /* ============================================================================
  * THE RENDERER
@@ -80,6 +83,9 @@ export interface RendererApi {
   /** Detached, tone-mapped scene snapshot; normal render dimensions restore synchronously. */
   captureFrame(width: number, height: number): HTMLCanvasElement
   setQuality(level: QualityLevel): void
+  /** Opt-in comparison overlay; uniform-only, so the view and every material survive. */
+  setVisualMode(mode: VisualMode): void
+  readonly visualMode: VisualMode
   /** Pin deterministic moon staging without changing the local-time theme clock. */
   setMoonDate(date: Date): void
   /** Return a staged moon to the real date. */
@@ -713,9 +719,6 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     if (gtaoPass) {
       configureComposerDepth(fidelity.ambientOcclusion || shaftsEnabled)
       gtaoPass.enabled = fidelity.ambientOcclusion
-      // AO is a solidity cue, not a new night-time black channel. Keeping the
-      // night blend restrained preserves neon value and its bloom threshold.
-      gtaoPass.blendIntensity = air.daylight ? AO_BLEND_INTENSITY.day : AO_BLEND_INTENSITY.night
       if (fidelity.ambientOcclusion) {
         gtaoPass.updateGtaoMaterial({ samples: fidelity.aoSamples })
         gtaoPass.updatePdMaterial({ samples: fidelity.aoDenoiseSamples })
@@ -729,6 +732,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
       lightShaftPass.setAtmosphere(air.skyGlow, fog.near)
       lightShaftPass.setQuality(quality.level, air.daylight)
     }
+    applyVisualBalance()
     if (bloomPass) {
       bloomPass.enabled = quality.bloom && air.bloomEnabled
       bloomPass.strength = air.bloomStrength
@@ -769,10 +773,51 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
    * faces. Keep night structure at least as readable as the no-bloom tier. */
   function applyLightCompensation(): void {
     const noBloom = !quality.bloom
-    hemi.intensity = !air.daylight ? Math.max(air.noBloomHemi, air.hemiIntensity) : noBloom ? air.noBloomHemi : air.hemiIntensity
-    fill.intensity = !air.daylight ? Math.max(air.noBloomFill, air.fillIntensity) : noBloom ? air.noBloomFill : air.fillIntensity
     walGlow.intensity = noBloom ? air.noBloomWalGlow : air.walGlow
     yardGlow.intensity = noBloom ? air.noBloomYardGlow : air.yardGlow
+    applyVisualBalance()
+  }
+
+  let visualMode: VisualMode = 'baseline'
+  const balanceBase: LightBalance = {
+    hemiIntensity: 0,
+    fillIntensity: 0,
+    fillColor: 0,
+    fillPos: [0, 0, 0],
+    shadowIntensity: 0,
+    aoBlend: 0,
+  }
+  const balance: LightBalance = { ...balanceBase, fillPos: [0, 0, 0] }
+
+  /* Every value is re-derived from the atmosphere, never read back from a light,
+   * so this is idempotent and switching back to baseline is exact. */
+  function applyVisualBalance(): void {
+    const noBloom = !quality.bloom
+    const b = balanceBase
+    b.hemiIntensity = !air.daylight ? Math.max(air.noBloomHemi, air.hemiIntensity) : noBloom ? air.noBloomHemi : air.hemiIntensity
+    b.fillIntensity = !air.daylight ? Math.max(air.noBloomFill, air.fillIntensity) : noBloom ? air.noBloomFill : air.fillIntensity
+    b.fillColor = air.fillColor
+    b.fillPos[0] = air.fillPos[0]
+    b.fillPos[1] = air.fillPos[1]
+    b.fillPos[2] = air.fillPos[2]
+    b.shadowIntensity = air.shadowIntensity
+    // AO is a solidity cue, not a new night-time black channel. Keeping the
+    // night blend restrained preserves neon value and its bloom threshold.
+    b.aoBlend = air.daylight ? AO_BLEND_INTENSITY.day : AO_BLEND_INTENSITY.night
+    const v = visualMode === 'polish' ? polishLightBalance(balance, b, themeDaylight()) : b
+    hemi.intensity = v.hemiIntensity
+    fill.intensity = v.fillIntensity
+    fill.color.setHex(v.fillColor)
+    fill.position.set(v.fillPos[0], v.fillPos[1], v.fillPos[2])
+    key.shadow.intensity = v.shadowIntensity
+    if (gtaoPass) gtaoPass.blendIntensity = v.aoBlend
+    if (outputPass) outputPass.setGrade(daylightGradeFor(visualMode))
+  }
+
+  function setVisualMode(mode: VisualMode): void {
+    if (mode === visualMode) return
+    visualMode = mode
+    applyVisualBalance()
   }
 
   /* ---- light modes ------------------------------------------------------*/
@@ -1312,6 +1357,10 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     resize,
     captureFrame,
     setQuality,
+    setVisualMode,
+    get visualMode() {
+      return visualMode
+    },
     setMoonDate,
     refreshMoonDate,
     dispose,

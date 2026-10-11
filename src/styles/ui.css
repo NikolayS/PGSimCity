@@ -510,3 +510,33 @@
 .pg-enter {
   animation: pg-fade-up var(--dur) var(--ease-out-expo) both;
 }
+
+/* ?visual= comparison preview only. Bottom-left of the deck row keeps it off
+   the top-bar model qualification and the centred tour deck. */
+.visual-compare {
+  grid-area: deck;
+  place-self: end start;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 4px;
+  max-width: 280px;
+  padding: 4px 6px;
+  background: var(--bg-panel);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+}
+.visual-compare__label {
+  font-size: var(--fs-micro);
+  color: var(--ink-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-right: 2px;
+}
+.visual-compare__note {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: var(--fs-micro);
+  line-height: 1.35;
+  color: var(--ink-dim);
+}

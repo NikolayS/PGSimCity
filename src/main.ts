@@ -43,6 +43,8 @@ import { createAudio } from './engine/audio'
 import { createBufferWater } from './engine/water'
 import { createWalkController } from './engine/walk'
 import { createViewmodelHands } from './engine/hands'
+import { visualComparisonRequested, visualModeFromSearch } from './engine/visual-polish'
+import type { VisualMode } from './engine/visual-polish'
 
 import { createSim } from './sim/model'
 import { createIncidentReplay } from './sim/replay'
@@ -84,6 +86,7 @@ import { createControlCenter } from './ui/control-center'
 import { createWalkUpInteraction } from './ui/walk-up'
 import { MOVEMENT_SOUND_OFF, movementSoundEnabledToast } from './ui/sound'
 import { createWorldHandleSites } from './ui/world-handles'
+import { createVisualCompare } from './ui/visual-compare'
 import { BOOT_STEPS, failBoot, finishBoot, presentBootStep } from './ui/boot'
 import type { UiContext, UiModule } from './ui/uikit'
 
@@ -169,6 +172,13 @@ async function boot(): Promise<void> {
 
   await progress(BOOT_STEPS.camera)
   const rig = createCameraRig(camera, renderer.domElement, bus)
+
+  // Opt-in comparison only; a plain URL always renders the baseline city.
+  const setVisualMode = (mode: VisualMode): void => {
+    gfx.setVisualMode(mode)
+    rig.focusStyle = mode
+  }
+  setVisualMode(visualModeFromSearch(window.location.search))
 
   await progress(BOOT_STEPS.simulation)
   const sim = createSim(bus, incoming.kind === 'ready' ? { seed: incoming.value.record.seed } : {})
@@ -393,6 +403,10 @@ async function boot(): Promise<void> {
     createZoomContext({ dom: renderer.domElement, picker, registry, rig }),
   ]
   void import('./ui/anatomy').then(({ createAnatomy }) => ui.push(createAnatomy(uiCtx))) // PAGE + DATA-DIRECTORY ANATOMY WIRING
+  const hudRoot = document.getElementById('hud')
+  if (hudRoot && visualComparisonRequested(window.location.search)) {
+    ui.push(createVisualCompare(hudRoot, { getMode: () => gfx.visualMode, setMode: setVisualMode }))
+  }
 
   /* --- bus wiring ---------------------------------------------------------- */
 
@@ -725,6 +739,13 @@ async function boot(): Promise<void> {
     setThemeClockMinutes,
     themeAtmosphere: atmosphere,
     themeMode,
+    /** A/B frame review: same staged state, one call per frame. */
+    visual: {
+      get mode(): VisualMode {
+        return gfx.visualMode
+      },
+      set: setVisualMode,
+    },
   }
   Object.assign(window as unknown as Record<string, unknown>, { PGSIMCITY: handle, PGCITY: handle })
 }

@@ -1,13 +1,21 @@
 import * as THREE from 'three'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 
+export interface DaylightGrade {
+  readonly lift: number
+  readonly gamma: number
+  readonly gain: number
+  readonly midtoneSaturation: number
+  readonly vignette: number
+}
+
 export const GOLDEN_HOUR_GRADE = {
   lift: 0.008,
   gamma: 0.96,
   gain: 1.035,
   midtoneSaturation: 1.07,
   vignette: 0.075,
-} as const
+} as const satisfies DaylightGrade
 
 /** Extra ground-layer haze never replaces more than this much scene colour. */
 export const HEIGHT_FOG_MAX = 0.2
@@ -127,6 +135,15 @@ export class GoldenHourOutputPass extends OutputPass {
     this.uniforms.pgGradeEnabled.value = enabled ? 1 : 0
   }
 
+  /** Uniform-only: switching grades never recompiles the output shader. */
+  setGrade(grade: DaylightGrade): void {
+    this.uniforms.pgGradeLift.value = grade.lift
+    this.uniforms.pgGradeGamma.value = grade.gamma
+    this.uniforms.pgGradeGain.value = grade.gain
+    this.uniforms.pgGradeSaturation.value = grade.midtoneSaturation
+    this.uniforms.pgGradeVignette.value = grade.vignette
+  }
+
   setAerialPerspective(color: number, density: number, falloff: number, strength: number): void {
     this.uniforms.pgHeightFogColor.value.setHex(color)
     this.uniforms.pgHeightFogDensity.value = density * strength
@@ -182,12 +199,10 @@ function linearToHex(rgb: Rgb): number {
   return (r << 16) | (g << 8) | b
 }
 
-function gradeLinear(rgb: Rgb, edge: number): Rgb {
+function gradeLinear(rgb: Rgb, edge: number, grade: DaylightGrade = GOLDEN_HOUR_GRADE): Rgb {
   const graded: [number, number, number] = [0, 0, 0]
   for (let i = 0; i < 3; i++) {
-    graded[i] =
-      Math.pow(Math.max(0, rgb[i] + GOLDEN_HOUR_GRADE.lift), 1 / GOLDEN_HOUR_GRADE.gamma) *
-      GOLDEN_HOUR_GRADE.gain
+    graded[i] = Math.pow(Math.max(0, rgb[i] + grade.lift), 1 / grade.gamma) * grade.gain
   }
   const luma = 0.2126 * graded[0] + 0.7152 * graded[1] + 0.0722 * graded[2]
   const smoothstep = (a: number, b: number, value: number): number => {
@@ -195,8 +210,8 @@ function gradeLinear(rgb: Rgb, edge: number): Rgb {
     return t * t * (3 - 2 * t)
   }
   const mids = smoothstep(0.02, 0.18, luma) * (1 - smoothstep(0.65, 1.2, luma))
-  const saturation = 1 + (GOLDEN_HOUR_GRADE.midtoneSaturation - 1) * mids
-  const vignette = 1 - GOLDEN_HOUR_GRADE.vignette * clamp01(edge)
+  const saturation = 1 + (grade.midtoneSaturation - 1) * mids
+  const vignette = 1 - grade.vignette * clamp01(edge)
   return [
     Math.max(0, (luma + (graded[0] - luma) * saturation) * vignette),
     Math.max(0, (luma + (graded[1] - luma) * saturation) * vignette),
@@ -226,8 +241,23 @@ function neutralToneMap(rgb: Rgb): Rgb {
 }
 
 /** Palette readout after the actual day grade, Neutral tone map and sRGB encode. */
-export function gradeDaylightHex(hex: number, vignetteEdge = 0): number {
-  return linearToHex(neutralToneMap(gradeLinear(hexToLinear(hex), vignetteEdge)))
+export function gradeDaylightHex(hex: number, vignetteEdge = 0, grade: DaylightGrade = GOLDEN_HOUR_GRADE): number {
+  return linearToHex(neutralToneMap(gradeLinear(hexToLinear(hex), vignetteEdge, grade)))
+}
+
+/**
+ * Readout of a surface whose linear albedo is multiplied by a linear light
+ * colour before the day grade: how a lit face reaches the screen.
+ */
+export function gradeLitDaylightHex(
+  hex: number,
+  light: readonly [number, number, number],
+  grade: DaylightGrade = GOLDEN_HOUR_GRADE,
+): number {
+  const albedo = hexToLinear(hex)
+  return linearToHex(
+    neutralToneMap(gradeLinear([albedo[0] * light[0], albedo[1] * light[1], albedo[2] * light[2]], 0, grade)),
+  )
 }
 
 /** Palette readout at the brightest point of the pre-grade shaft composite. */
@@ -289,7 +319,8 @@ export function ungradedDaylightHex(hex: number): number {
   return linearToHex(neutralToneMap(hexToLinear(hex)))
 }
 
-function oklab(hex: number): Rgb {
+/** sRGB hex → OKLab [L, a, b]. */
+export function oklab(hex: number): Rgb {
   const [r, g, b] = hexToLinear(hex)
   const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b)
   const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b)
