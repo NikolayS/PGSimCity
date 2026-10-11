@@ -3,6 +3,11 @@ import { inspectRenderedPages } from './disclosure-browser.mjs'
 
 it('reserves the guided tour for its lesson and restores close-view orientation on exit', async () => {
   const reports = await inspectRenderedPages([{ name: 'City', path: '/', readySelector: '.hud-investigate', reducedMotion: true }], async ({ evaluate, send }) => {
+    // The HUD mounts before main.ts exposes the fully initialized city handle.
+    await evaluate(`(async()=>{
+      for(let i=0;i<240&&!window.PGSIMCITY;i++)await new Promise(r=>setTimeout(r,50));
+      if(!window.PGSIMCITY)throw new Error('City debugging surface not ready');
+    })()`)
     const states = []
     for (const [width, height] of [[390, 844], [1280, 900]]) {
       await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: width < 600 })
