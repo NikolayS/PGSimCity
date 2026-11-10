@@ -18,8 +18,11 @@ import { WET_FIELD_GLSL } from './ground-surface'
 
 /** Metres below the paving. The retaining skirt continues well beneath it. */
 export const SEA_LEVEL = -9
-/** Beyond the far fog distance in both modes, so no edge is ever visible. */
-export const SEA_RADIUS = 3800
+/**
+ * The rim must be past the fog's far distance from the furthest the camera can
+ * orbit, in both modes, so no edge is ever in frame.
+ */
+export const SEA_RADIUS = 5200
 /** Deep-water body colour, sRGB. Low chroma by construction. */
 export const SEA_DEEP = { day: 0x1f3440, night: 0x070a10 } as const
 

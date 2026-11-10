@@ -11,7 +11,7 @@ The colour readings use the same semantic materials and combined output path as
 the renderer: the tier's bloom fallback, daylight grade with its contrast curve,
 shaft addition and height haze, read at the centre of the frame. The same
 floors are also tested in the frame corner under the daylight vignette. The
-night haze glow and light pools are additive and are not part of this reading.
+night haze glow is additive and is not part of this reading.
 Each entry is the minimum of all 45 semantic pairs. Disclosure and
 touch readings come from a real 390 × 844 browser after each live quality
 transition.
@@ -34,7 +34,7 @@ all 20 reachable City controls were measured at every tier.
   half-resolution water reflection, AO, aerial perspective, 2048px soft
   shadows, ten-tap shafts, SMAA, bevels, full ground response, all rooftop
   dressing, wet paving with 24-tap reflections, the procedural cloud deck,
-  two-octave sea waves, night haze glow and light pools, and the film lens.
+  two-octave sea waves, night haze glow, and the film lens.
 - `high` removes 14 rooftop-detail anchors and reduces AO resolution/samples,
   aerial perspective, shadow resolution/softness and shaft resolution/samples.
   Wet-paving reflections drop to 16 taps at half resolution. It retains every
@@ -48,8 +48,7 @@ all 20 reachable City controls were measured at every tier.
   daylight sky scattering, clouds and bloom remain.
 - `reduced` additionally removes the environment map, planar water reflection,
   AO, aerial perspective, light shafts, daylight sky scattering and clouds,
-  ground-surface aggregate/joint response, sea waves, night haze glow and light
-  pools, the film lens, rooftop dressing, ambient ground
+  ground-surface aggregate/joint response, sea waves, night haze glow, the film lens, rooftop dressing, ambient ground
   light cones and articulated finger detail. It renders at 1× and retains the
   cheaper legacy sky, hand silhouettes and bloom.
 - `low` removes bloom as well, and bypasses the post chain at night. Its

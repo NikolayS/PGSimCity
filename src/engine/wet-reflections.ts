@@ -238,7 +238,11 @@ export class WetReflectionPass extends Pass {
   setQuality(level: QualityLevel, depthAvailable: boolean): void {
     const { steps, scale } = WET_REFLECTION_PRESETS[level]
     this.enabled = depthAvailable && steps > 0 && groundWetness(level) > 0
-    if (!this.enabled) return
+    if (!this.enabled) {
+      // A downgraded tier must not keep a framebuffer-sized float target alive.
+      this.target.setSize(1, 1)
+      return
+    }
     this.scale = scale
     this.setSize(this.fullWidth, this.fullHeight)
     this.material.uniforms.uReach.value = wetReflectionReach(steps)

@@ -26,8 +26,10 @@ describe('the sea around the island', () => {
   })
 
   it('outruns the fog in both modes, so its rim is never in frame', () => {
+    // The orbit camera can sit this far from the origin (engine/camera.ts MAX_DIST plus its pivot range).
+    const furthestEye = 2000
     for (const air of [ATMOSPHERE.day, ATMOSPHERE.night]) {
-      expect(SEA_RADIUS).toBeGreaterThan(CITY.fog.far * air.fogFarScale)
+      expect(SEA_RADIUS - furthestEye).toBeGreaterThan(CITY.fog.far * air.fogFarScale)
     }
   })
 

@@ -106,6 +106,13 @@ export const WET_FRESNEL_FLOOR = 0.08
 export const WET_POOL_MIRROR = 0.92
 export const WET_DAMP_MIRROR = 0.5
 
+/** CPU mirror of the shader's `wetMirror`: the share of a pixel the mirror may replace. */
+export function wetMirrorShare(damp: number, pool: number): number {
+  const d = Math.max(0, Math.min(1, damp))
+  const p = Math.max(0, Math.min(1, pool))
+  return d * WET_DAMP_MIRROR * (1 - p) + WET_POOL_MIRROR * p
+}
+
 /**
  * One wetness field for every consumer. The plate shades with it and the
  * reflection pass masks with it, so a mirrored building can only ever appear
@@ -164,8 +171,10 @@ float wetFresnel( float cosine ) {
   return ${WET_FRESNEL_FLOOR.toFixed(3)} + ${(1 - WET_FRESNEL_FLOOR).toFixed(3)} * pow( 1.0 - clamp( cosine, 0.0, 1.0 ), 5.0 );
 }
 
+// A blend, not a sum: standing water replaces the damp film, so the share
+// can never exceed the pool's own.
 float wetMirror( float damp, float pool ) {
-  return pool * ${WET_POOL_MIRROR.toFixed(3)} + damp * ${WET_DAMP_MIRROR.toFixed(3)};
+  return mix( damp * ${WET_DAMP_MIRROR.toFixed(3)}, ${WET_POOL_MIRROR.toFixed(3)}, pool );
 }
 `
 

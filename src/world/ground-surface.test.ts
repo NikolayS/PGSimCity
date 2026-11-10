@@ -17,6 +17,7 @@ import {
   groundSkyFill,
   groundSurfaceDetail,
   groundWetness,
+  wetMirrorShare,
   groundSurveyDetail,
 } from './ground-surface'
 
@@ -135,6 +136,23 @@ describe('procedural ground surface', () => {
     expect(WET_DAMP_MIRROR).toBeGreaterThan(0)
     expect(WET_FRESNEL_FLOOR).toBeGreaterThanOrEqual(0.02)
     expect(WET_FRESNEL_FLOOR).toBeLessThan(0.2)
+  })
+
+  it('never lets the mirror replace more than the whole pixel, or bloom', () => {
+    /* The share was once a sum that reached 1.42 where a pool sat in damp
+     * paving: the blend subtracted the paving and a capped reflection crossed
+     * the bloom threshold anyway. */
+    let peak = 0
+    for (let damp = 0; damp <= 1.0001; damp += 0.05) {
+      for (let pool = 0; pool <= 1.0001; pool += 0.05) {
+        peak = Math.max(peak, wetMirrorShare(damp, pool))
+      }
+    }
+    expect(peak).toBeLessThanOrEqual(WET_POOL_MIRROR)
+    expect(wetMirrorShare(1, 1)).toBe(WET_POOL_MIRROR)
+    expect(wetMirrorShare(1, 0)).toBe(WET_DAMP_MIRROR)
+    expect(wetMirrorShare(0, 0)).toBe(0)
+    expect(WET_FIELD_GLSL).toContain(`mix( damp * ${WET_DAMP_MIRROR.toFixed(3)}, ${WET_POOL_MIRROR.toFixed(3)}, pool )`)
   })
 
   it('floods standing water only inside paving that is already damp', () => {

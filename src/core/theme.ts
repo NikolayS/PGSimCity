@@ -597,9 +597,12 @@ const SURFACE_FRAG = /* glsl */ `
 		 * tie hole in every panel. Height only, so it exists as raking light and
 		 * retires with the normal long before it could alias. */
 		if ( pgNormalFade > 0.0 ) {
-			float pgGrit = pgValueNoise( pgSt * 23.0 ) + 0.5 * pgValueNoise( pgSt * 61.0 );
+			// Each term fades before its own Nyquist footprint, or it shimmers in motion.
+			float pgFine = 1.0 - smoothstep( 0.008, 0.022, pgPx );
+			float pgGrit = 0.75 + ( pgValueNoise( pgSt * 23.0 ) * 1.5 - 0.75 ) * pgFine;
 			vec2 pgTieAt = ( fract( vec2( pgHead, pgCourse ) ) - 0.5 ) * vec2( 2.6, 1.15 );
-			float pgTie = ( 1.0 - smoothstep( 0.035, 0.06, length( pgTieAt ) ) ) * ( 1.0 - pgFlat );
+			float pgTie = ( 1.0 - smoothstep( 0.035, 0.06, length( pgTieAt ) ) ) * ( 1.0 - pgFlat )
+			            * ( 1.0 - smoothstep( 0.02, 0.06, pgPx ) );
 			pgSurfaceHeight += ( ( pgGrit - 0.75 ) * 0.0035 + pgBlotch * 0.004 - pgTie * 0.02 ) * pgNormalFade;
 			roughnessFactor = clamp( roughnessFactor + ( pgGrit - 0.75 ) * 0.08 * pgNormalFade, 0.3, 1.0 );
 			pgPit = 1.0 - pgTie * 0.45 * pgNormalFade;
@@ -652,7 +655,9 @@ const METAL_FRAG = /* glsl */ `
 	vec2 pgSt = vec2( mix( pgU, pgWorld.x, pgFlat ), mix( pgWorld.y, pgWorld.z, pgFlat ) );
 	float pgFade = 1.0 - smoothstep( 0.5, 3.0, pgPx );
 
-	float pgBrush = pgValueNoise( vec2( pgSt.x * 9.0, pgSt.y * 0.35 ) + pgSeed * 17.0 );
+	// Nine cycles a metre: retired before 5 cm a pixel, where it would alias.
+	float pgBrush = 0.5 + ( pgValueNoise( vec2( pgSt.x * 9.0, pgSt.y * 0.35 ) + pgSeed * 17.0 ) - 0.5 )
+	              * ( 1.0 - smoothstep( 0.015, 0.045, pgPx ) );
 	float pgSmudge = pgValueNoise( pgSt * 0.6 + pgSeed * 29.0 ) * 0.6 + pgValueNoise( pgSt * 2.3 + 3.0 ) * 0.4;
 	float pgSeamAt = pgSt.y / 2.4 + pgSeed.y;
 	float pgSeam = 1.0 - smoothstep( 0.0, fwidth( pgSeamAt ) * 1.5 + 0.012, 0.5 - abs( fract( pgSeamAt ) - 0.5 ) );

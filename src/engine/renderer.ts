@@ -318,6 +318,27 @@ class ComposerDepthGTAOPass extends GTAOPass {
   }
 }
 
+/**
+ * SMAA writes into the composer target that still carries the scene's depth
+ * texture, and a fullscreen draw clears depth along with colour. The output
+ * pass reads that depth afterwards for aerial perspective and haze scatter, so
+ * this pass must leave it alone.
+ */
+class DepthPreservingSMAAPass extends SMAAPass {
+  override render(
+    renderer: THREE.WebGLRenderer,
+    writeBuffer: THREE.WebGLRenderTarget,
+    readBuffer: THREE.WebGLRenderTarget,
+    deltaTime: number,
+    maskActive: boolean,
+  ): void {
+    const autoClearDepth = renderer.autoClearDepth
+    renderer.autoClearDepth = false
+    super.render(renderer, writeBuffer, readBuffer, deltaTime, maskActive)
+    renderer.autoClearDepth = autoClearDepth
+  }
+}
+
 export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   const quality: QualitySettings = { ...QUALITY_PRESETS[DEFAULT_LEVEL] }
   let air: Atmosphere = atmosphere()
@@ -707,7 +728,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
 
     // SMAAPass takes no constructor args in r185 and MUST run before OutputPass:
     // it expects linear-srgb input.
-    smaaPass = new SMAAPass()
+    smaaPass = new DepthPreservingSMAAPass()
     composer.addPass(smaaPass)
 
     // Day grade, tone mapping and colour conversion happen here, exactly once.

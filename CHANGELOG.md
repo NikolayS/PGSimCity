@@ -9,9 +9,16 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
-## Unreleased — Cinematic rendering
+## v0.59.0 — Cinematic rendering
 
-Graphics only; no simulation behaviour changes. Not yet read by a review panel.
+Graphics only; no simulation behaviour changes. Frame rate on a real GPU is
+unmeasured: every capture was software WebGL, so the adaptive quality ladder is
+the only safety net for the new per-pixel cost.
+
+Read before release by a four-reviewer panel across two models (Opus and
+Sonnet; no GPT reviewer was available): PostgreSQL and semantic honesty twice,
+rendering correctness, and reader experience. Its blocking findings are fixed
+or withdrawn below.
 Weather, water and age are setting, not PostgreSQL facts: none of it is
 registered, labelled or pickable, and its own colour is a dark grey-blue, grey, or the sky's.
 Reflections and haze do carry the hue of the signal they come
@@ -25,6 +32,19 @@ from, so amber WAL light can fall on neighbouring paving.
 - Night haze lit by the city: the bloom chain's widest blur is scattered into the air by path length, so only what already clears the bloom threshold (semantic signals and the moon) can light it.
 - Daylight contrast: a stronger, warmer sun against less ambient fill, deeper cast shadows, and a luminance-only filmic contrast curve that keeps every semantic colour pair separated.
 - Film lens after display encoding: restrained grain (frozen under reduced motion, including a change after load) and a daylight vignette that leaves the centre of the frame untouched. Disabled on the low and reduced tiers.
+
+Fixed on the panel's findings:
+
+- Anti-aliasing cleared the scene depth that the output pass reads afterwards, so on high and ultra the height haze was silently off and the night haze glow ignored distance. The depth now survives.
+- The mirror's share of a pixel could reach 1.42 where a pool sat in damp paving, which subtracted the paving and let a capped reflection cross the bloom threshold. It is now a blend that cannot exceed the pool's own share.
+- Fine concrete, steel and wet-paving detail now fades before the footprint at which it would shimmer.
+
+Known and left:
+
+- The reflection pass composites over whatever is drawn on wet paving. At street level a ground decal or halo over standing water can be partly replaced by the mirror; from above the effect is slight.
+- Concrete and steel detail runs on every quality tier, including low and reduced, where its distance cut-off is the only saving.
+- In first-person views the wet mask can speckle on distant paving, and the half-resolution mirror can bleed a pixel onto wall edges.
+- `docs/screenshot.png` predates this release and no longer matches the daylight look.
 
 Held back by the review panel, with the reason:
 

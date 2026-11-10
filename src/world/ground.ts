@@ -215,7 +215,9 @@ void main() {
 
     vec3 toEye = normalize( cameraPosition - vWorld );
     // A film of water is flat; only the damp margin keeps the slab's tooth.
-    vec2 tooth = vec2( wetNoise( p * 7.3 ), wetNoise( p * 7.3 + 19.0 ) ) - 0.5;
+    // Tooth is a walking-distance detail; beyond it the glint would sparkle.
+    vec2 tooth = ( vec2( wetNoise( p * 7.3 ), wetNoise( p * 7.3 + 19.0 ) ) - 0.5 )
+               * ( 1.0 - smoothstep( 25.0, 110.0, viewDistance ) );
     vec3 wetNormal = normalize( vec3( tooth.x, 16.0 + 80.0 * pool, tooth.y ) );
     vec3 mirror = reflect( - toEye, wetNormal );
     float sunward = max( dot( mirror, uSunDirection ), 0.0 );
@@ -1234,15 +1236,17 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     /* The mirror follows the live sky, so clock mode needs these every frame.
      * All writes land in objects made at build time. */
     uWet.value = groundWetness(quality.level)
+    // One owner on every tier: the dry raking highlight reads these too, and a
+    // value left behind by a higher tier would light it from the wrong key.
+    uSunDirection.value
+      .set(air.keyPos[0] - air.keyTarget[0], air.keyPos[1] - air.keyTarget[1], air.keyPos[2] - air.keyTarget[2])
+      .normalize()
+    uSunColor.value.setHex(air.keyColor)
     if (uWet.value > 0) {
       // Keyed to the bloom pass, not to daylight: at dusk in clock mode bloom
       // is still running, and a bright glint would cross its threshold.
       uGlint.value = groundGlint(!air.bloomEnabled)
       uSkyFill.value = groundSkyFill(themeDaylight())
-      uSunDirection.value
-        .set(air.keyPos[0] - air.keyTarget[0], air.keyPos[1] - air.keyTarget[1], air.keyPos[2] - air.keyTarget[2])
-        .normalize()
-      uSunColor.value.setHex(air.keyColor)
       linearSky(uSkyZenith.value, air.skyZenith)
       linearSky(uSkyHorizon.value, air.skyHorizon)
       linearSky(uSkyGlow.value, air.skyGlow)

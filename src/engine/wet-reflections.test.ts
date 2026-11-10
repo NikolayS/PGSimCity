@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { ATMOSPHERE } from '../core/themes'
 import type { QualityLevel } from '../core/types'
-import { groundWetness } from '../world/ground-surface'
+import { groundWetness, wetMirrorShare } from '../world/ground-surface'
 import {
   WET_MARCH_GROWTH,
   WET_MARCH_START,
@@ -56,6 +56,8 @@ describe('wet-ground reflections', () => {
   it('caps mirrored night radiance below the bloom threshold', () => {
     // A reflected neon is the same fact seen twice; only the original may glow.
     expect(WET_NIGHT_RADIANCE_CAP).toBeLessThan(ATMOSPHERE.night.bloomThreshold)
+    // Fresnel tops out at one, so the largest composited mirror is cap x share.
+    expect(WET_NIGHT_RADIANCE_CAP * wetMirrorShare(1, 1)).toBeLessThan(ATMOSPHERE.night.bloomThreshold)
   })
 
   it('caps a mirrored signal without changing its hue', () => {
