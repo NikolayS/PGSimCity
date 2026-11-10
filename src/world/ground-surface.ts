@@ -92,11 +92,12 @@ export function groundWetness(quality: QualityLevel): number {
 }
 
 /**
- * Peak radiance of the key light mirrored in standing water. Night stays below
- * the bloom threshold: a moon glint must never glow like a semantic signal.
+ * Peak radiance of the key light mirrored in standing water. Wherever the
+ * bloom pass runs it stays below the threshold: a glint must never glow like a
+ * semantic signal. `unbloomed` is true only when no bloom pass is active.
  */
-export function groundGlint(daylight: boolean): number {
-  return daylight ? 2.4 : 0.55
+export function groundGlint(unbloomed: boolean): number {
+  return unbloomed ? 2.4 : 0.55
 }
 
 /** Fresnel floor of the stylized water film; real water is 0.02 and reads as dry from orbit. */

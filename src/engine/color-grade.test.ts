@@ -286,9 +286,9 @@ describe('film lens', () => {
     }
   }
 
-  it('keeps grain an order of magnitude below the semantic separation margin', async () => {
+  it('keeps grain to under two percent of display range either side', async () => {
     const { FILM_LENS } = await import('./color-grade')
-    // Half the peak-to-peak amplitude in display space, against the 0.045 OKLab floor.
+    // Zero-mean and per-pixel: it dithers a colour, it cannot move one.
     expect(FILM_LENS.grain / 2).toBeLessThan(0.02)
     expect(FILM_LENS.grain).toBeGreaterThan(0)
   })
@@ -341,25 +341,6 @@ describe('night haze light scatter', () => {
     expect(body).toContain('texture2D( pgScatterWide, uv )')
     expect(body).not.toContain('tDiffuse')
     expect(source.indexOf('pgLightScatter( gl_FragColor.rgb, vUv )')).toBeLessThan(source.indexOf('// tone mapping'))
-    pass.dispose()
-  })
-
-  it('pools light on the paving and platforms only, from a tighter blur than the haze', async () => {
-    const { GoldenHourOutputPass, LIGHT_SCATTER } = await import('./color-grade')
-    const pass = new GoldenHourOutputPass()
-    const source = pass.material.fragmentShader
-    expect(source).toContain(`abs( ( pgCameraWorld * view ).y ) < ${LIGHT_SCATTER.plateBand.toFixed(3)}`)
-    // District platforms stand 0.1 m proud; a kerb or a wall base must stay out.
-    expect(LIGHT_SCATTER.plateBand).toBeGreaterThan(0.1)
-    expect(LIGHT_SCATTER.plateBand).toBeLessThan(0.6)
-    const wide = { name: 'wide' } as never
-    const mid = { name: 'mid' } as never
-    pass.setLightScatter(wide, 0.4, mid, LIGHT_SCATTER.groundPool)
-    expect(pass.uniforms.pgScatterMid.value).toBe(mid)
-    expect(pass.uniforms.pgGroundPool.value).toBe(LIGHT_SCATTER.groundPool)
-    // No bloom chain, no pool: the paving has no light of its own.
-    pass.setLightScatter(null, 0.4, mid, LIGHT_SCATTER.groundPool)
-    expect(pass.uniforms.pgGroundPool.value).toBe(0)
     pass.dispose()
   })
 })

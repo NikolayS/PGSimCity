@@ -765,8 +765,6 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
       outputPass.setLightScatter(
         scatters ? bloomPass!.renderTargetsVertical[bloomPass!.nMips - 1].texture : null,
         LIGHT_SCATTER.strength,
-        scatters ? bloomPass!.renderTargetsVertical[2].texture : null,
-        LIGHT_SCATTER.groundPool,
       )
       outputPass.setAerialPerspective(
         air.fogColor,

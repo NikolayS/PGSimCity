@@ -1,7 +1,8 @@
 # Cinematic rendering
 
-Graphics only. No simulation code, PostgreSQL claim, layout or semantic colour
-changed. Captures are 1600x900 with HUD and labels hidden, taken through
+Graphics only. No simulation code, PostgreSQL claim, layout or palette value
+changed. The daylight key is warmer and stronger, so lit surfaces render
+warmer than before. Captures are 1600x900 with HUD and labels hidden, taken through
 `tools/shoot.mjs` (software WebGL) at the high or ultra tier.
 
 | View | Before | After |
@@ -15,7 +16,6 @@ changed. Captures are 1600x900 with HUD and labels hidden, taken through
 | Night, overview | — | `after-night-home-1600x900.png` |
 | Night, backend towers | — | `after-night-towers-1600x900.png` |
 | Night, WAL at street level | — | `after-night-street-1600x900.png` |
-| Night, WAL district | — | `after-night-wal-1600x900.png` |
 
 ## What the images show
 
@@ -23,7 +23,6 @@ changed. Captures are 1600x900 with HUD and labels hidden, taken through
   broken cloud deck; the paving is wet, tonally varied and mirrors the sky and
   nearby structure; concrete shows joints, tie holes, blotches and run-off;
   shade is deeper against sunlit stone.
-- Night, WAL district: the platform picks up the glow of the flows near it.
 - Night: lit districts glow into the haze by distance (street view); the sea
   gives the frame a horizon; wet paving returns a faint horizon glow in the
   overview. Neon, bloom and the Slonik plate outline are unchanged.

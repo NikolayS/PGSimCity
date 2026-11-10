@@ -142,10 +142,6 @@ export const LIGHT_SCATTER = {
   nearShare: 0.3,
   nearMetres: 40,
   farMetres: 700,
-  /** Gain on the tighter blur where it falls on the wet plate: a pool of light under its source. */
-  groundPool: 2.2,
-  /** Paving and the district platforms standing on it, which is where lamps are. */
-  plateBand: 0.25,
 } as const
 
 /** Fraction of the scatter gain a surface at `distance` metres receives. */
@@ -156,9 +152,7 @@ export function lightScatterShare(distance: number): number {
 
 const SCATTER_UNIFORMS = /* glsl */ `
 uniform sampler2D pgScatterWide;
-uniform sampler2D pgScatterMid;
 uniform float pgScatterStrength;
-uniform float pgGroundPool;
 
 vec3 pgLightScatter( vec3 color, vec2 uv ) {
 	float depth = texture2D( pgSceneDepth, uv ).x;
@@ -167,11 +161,6 @@ vec3 pgLightScatter( vec3 color, vec2 uv ) {
 		vec4 view = pgProjectionInverse * vec4( uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0 );
 		view /= max( view.w, 0.000001 );
 		path = smoothstep( ${LIGHT_SCATTER.nearMetres.toFixed(1)}, ${LIGHT_SCATTER.farMetres.toFixed(1)}, length( view.xyz ) );
-		// Wet paving under a lamp is lit by it. Screen-space, so a source out of
-		// frame lights nothing, which errs dark rather than inventing a glow.
-		if ( pgGroundPool > 0.0 && abs( ( pgCameraWorld * view ).y ) < ${LIGHT_SCATTER.plateBand.toFixed(3)} ) {
-			color += texture2D( pgScatterMid, uv ).rgb * pgGroundPool;
-		}
 	}
 	float share = ${LIGHT_SCATTER.nearShare.toFixed(3)} + ${(1 - LIGHT_SCATTER.nearShare).toFixed(3)} * path;
 	return color + texture2D( pgScatterWide, uv ).rgb * pgScatterStrength * share;
@@ -209,8 +198,6 @@ export class GoldenHourOutputPass extends OutputPass {
     this.uniforms.pgGradeContrast = { value: GOLDEN_HOUR_GRADE.contrast }
     this.uniforms.pgGradePivot = { value: GOLDEN_HOUR_GRADE.pivot }
     this.uniforms.pgScatterWide = { value: null }
-    this.uniforms.pgScatterMid = { value: null }
-    this.uniforms.pgGroundPool = { value: 0 }
     this.uniforms.pgScatterStrength = { value: 0 }
     this.uniforms.pgFilmGrain = { value: 0 }
     this.uniforms.pgFilmVignette = { value: 0 }
@@ -250,11 +237,9 @@ export class GoldenHourOutputPass extends OutputPass {
   }
 
   /** `wide` is the bloom chain's widest blur; null or zero strength disables the term. */
-  setLightScatter(wide: THREE.Texture | null, strength: number, mid: THREE.Texture | null = null, groundPool = 0): void {
+  setLightScatter(wide: THREE.Texture | null, strength: number): void {
     this.uniforms.pgScatterWide.value = wide
-    this.uniforms.pgScatterMid.value = mid ?? wide
     this.scatterStrength = wide ? strength : 0
-    this.uniforms.pgGroundPool.value = wide && mid ? groundPool : 0
   }
 
   setAerialPerspective(color: number, density: number, falloff: number, strength: number): void {

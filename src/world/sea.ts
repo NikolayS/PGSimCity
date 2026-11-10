@@ -195,8 +195,9 @@ export function createSea(edge: SeaEdgeField): SeaApi {
     ;(uniforms.uSunDirection.value as THREE.Vector3)
       .set(air.keyPos[0] - air.keyTarget[0], air.keyPos[1] - air.keyTarget[1], air.keyPos[2] - air.keyTarget[2])
       .normalize()
-    // Night stays under the bloom threshold: a moon path is weather, not signal.
-    uniforms.uGlint.value = 0.5 + 1.6 * light
+    // Wherever bloom runs the path stays under its threshold, dusk included: a
+    // moon path is weather, not signal.
+    uniforms.uGlint.value = air.bloomEnabled ? 0.5 : 2.1
     // A moon path is broad and faint; a sun path is tight and bright.
     uniforms.uSheen.value = 0.2 - 0.14 * light
     uniforms.uWaves.value = seaWaveDetail(quality)

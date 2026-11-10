@@ -31,10 +31,14 @@ describe('the sea around the island', () => {
     }
   })
 
-  it('is not the colour of a clean page or of the buffer pool', () => {
+  it('is not the colour of a clean page or of the buffer pool water', () => {
     // Open water is setting. Clean-page blue is a fact about a buffer.
     expect(perceptualColorDistance(SEA_DEEP.day, DAY_PALETTE.bufClean)).toBeGreaterThan(0.12)
     expect(perceptualColorDistance(SEA_DEEP.night, NIGHT_PALETTE.bufClean)).toBeGreaterThan(0.12)
+    // The pool's own surface, deep and shallow tints (engine/water.ts).
+    for (const pool of [0x5aa9e8, 0x1f5f9d, 0x69b9df]) {
+      expect(perceptualColorDistance(SEA_DEEP.day, pool)).toBeGreaterThan(0.12)
+    }
     for (const hex of [SEA_DEEP.day, SEA_DEEP.night]) {
       const r = (hex >> 16) & 255
       const g = (hex >> 8) & 255

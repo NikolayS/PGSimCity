@@ -40,6 +40,15 @@ export const WET_NIGHT_RADIANCE_CAP = 0.8
 /** Paving, plinth tops and decals sit within this band of the plate. */
 export const WET_PLATE_BAND = 0.07
 
+/** CPU mirror of the pass's radiance cap: the peak channel is limited, the ratios are kept. */
+export function capMirroredRadiance(
+  rgb: readonly [number, number, number],
+  cap: number,
+): [number, number, number] {
+  const scale = Math.min(1, cap / Math.max(rgb[0], rgb[1], rgb[2], 0.00001))
+  return [rgb[0] * scale, rgb[1] * scale, rgb[2] * scale]
+}
+
 /** Metres of mirrored ray a tier can resolve before the reflection fades to sky. */
 export function wetReflectionReach(steps: number): number {
   if (steps <= 0) return 0
@@ -133,7 +142,9 @@ void main() {
 
   vec2 border = smoothstep( vec2( 0.0 ), vec2( 0.08 ), hitUv ) * ( 1.0 - smoothstep( vec2( 0.92 ), vec2( 1.0 ), hitUv ) );
   float fade = border.x * border.y * ( 1.0 - smoothstep( uReach * 0.6, uReach, hi ) );
-  vec3 mirrored = min( texture2D( tDiffuse, hitUv ).rgb, vec3( uRadianceCap ) );
+  // Scale, never clamp per channel: a clamp turns WAL amber into warn yellow.
+  vec3 mirrored = texture2D( tDiffuse, hitUv ).rgb;
+  mirrored *= min( 1.0, uRadianceCap / max( max( mirrored.r, mirrored.g ), max( mirrored.b, 0.00001 ) ) );
   float weight = wetFresnel( toEye.y ) * amount * fade;
   gl_FragColor = vec4( mirrored * weight, weight );
 }

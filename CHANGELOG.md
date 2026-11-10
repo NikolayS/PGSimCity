@@ -13,23 +13,24 @@ are all still moving. Expect breaking changes between minor versions.
 
 Graphics only; no simulation behaviour changes. Not yet read by a review panel.
 Weather, water and age are setting, not PostgreSQL facts: none of it is
-registered, labelled or pickable, and its own colour is grey or the sky's.
-Reflections, haze and light pools do carry the hue of the signal they come
+registered, labelled or pickable, and its own colour is a dark grey-blue, grey, or the sky's.
+Reflections and haze do carry the hue of the signal they come
 from, so amber WAL light can fall on neighbouring paving.
 
 - Open water around the island, clipped to the coastline so every excavation stays open, with a sun or moon path and wash against the retaining wall.
 - A procedural cloud deck on the sky dome at high and ultra quality, by day and as a thin veil by night. It replaces the billboard clouds at those tiers; medium keeps the billboards.
-- Rain-wet paving at high and ultra quality: it darkens the plate, mirrors the live sky and sun, and reflects nearby structure in screen space. Mirrored night radiance is capped below the bloom threshold, so only the original signal glows.
-- Cast concrete on structural surfaces: aggregate tooth, formwork tie holes, curing blotches and run-off streaks. District zone paint now weathers with its slab.
+- Rain-wet paving at high and ultra quality: it darkens the plate, mirrors the live sky and sun, and reflects nearby structure in screen space. Mirrored night radiance is scaled below the bloom threshold with its hue kept, so only the original signal glows and a mirrored colour is still the colour it mirrors.
+- Cast concrete on structural surfaces: aggregate tooth, formwork tie holes, curing blotches and run-off streaks.
 - Rolled steel on machinery: brushed, seamed and smudged, carried mostly by roughness.
 - Night haze lit by the city: the bloom chain's widest blur is scattered into the air by path length, so only what already clears the bloom threshold (semantic signals and the moon) can light it.
-- Light pools: wet paving and the district platforms pick up the glow of nearby neon, from the same bloom buffers as the haze. This is a screen-space blur with no occlusion: a source out of frame lights nothing, and a source can light paving that is near it on screen without being beneath it.
 - Daylight contrast: a stronger, warmer sun against less ambient fill, deeper cast shadows, and a luminance-only filmic contrast curve that keeps every semantic colour pair separated.
 - Film lens after display encoding: restrained grain (frozen under reduced motion, including a change after load) and a daylight vignette that leaves the centre of the frame untouched. Disabled on the low and reduced tiers.
 
 Held back by the review panel, with the reason:
 
 - Daylight shading on semantic solids (capsules, lamps). A face in shade at 0.7 of its authored value put `warn` within 0.013 OKLab of `wal`, against a 0.045 floor. Value carries meaning in daylight, so meaning stays one flat value.
+- Night light pools on paving and platforms. They were a screen-space blur with no occlusion, so one district's colour could land on paving that was near it on screen but not beneath it.
+- Weathering on district zone paint. The surface term carries a small per-object warm/cool tint, and zone colour is district identity.
 - A night vignette. At 0.3 it took `wal` / `replication` to 0.029 OKLab in the frame corners, against a 0.038 floor that had only ever been tested at the centre. A corner test now covers every tier in both modes.
 
 ## v0.58.1 — Healthy startup

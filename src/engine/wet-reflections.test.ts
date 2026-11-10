@@ -9,6 +9,7 @@ import {
   WET_NIGHT_RADIANCE_CAP,
   WET_PLATE_BAND,
   WET_REFLECTION_PRESETS,
+  capMirroredRadiance,
   wetReflectionReach,
 } from './wet-reflections'
 
@@ -55,6 +56,18 @@ describe('wet-ground reflections', () => {
   it('caps mirrored night radiance below the bloom threshold', () => {
     // A reflected neon is the same fact seen twice; only the original may glow.
     expect(WET_NIGHT_RADIANCE_CAP).toBeLessThan(ATMOSPHERE.night.bloomThreshold)
+  })
+
+  it('caps a mirrored signal without changing its hue', () => {
+    // WAL amber at neon intensity: a per-channel clamp made this warn yellow.
+    const wal: [number, number, number] = [1.7, 0.74, 0.07]
+    const capped = capMirroredRadiance(wal, WET_NIGHT_RADIANCE_CAP)
+    expect(Math.max(...capped)).toBeCloseTo(WET_NIGHT_RADIANCE_CAP, 10)
+    expect(capped[1] / capped[0]).toBeCloseTo(wal[1] / wal[0], 10)
+    expect(capped[2] / capped[0]).toBeCloseTo(wal[2] / wal[0], 10)
+    // Anything already under the cap is the same fact, untouched.
+    expect(capMirroredRadiance([0.3, 0.2, 0.1], WET_NIGHT_RADIANCE_CAP)).toEqual([0.3, 0.2, 0.1])
+    expect(capMirroredRadiance([0, 0, 0], WET_NIGHT_RADIANCE_CAP)).toEqual([0, 0, 0])
   })
 
   it('confines the mirror to the plate, below the district plinth tops', () => {

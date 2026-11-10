@@ -1020,8 +1020,8 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     // Quiet mineral paving identifies the district without competing with live
     // state. Saturated semantic colour remains on its kerb, machinery and traffic.
     m.userData.pgDayColor = mixHex(spec.dayColor, 0xc5c8bd, 0.78)
-    // Zoning is paint on paving: it wears and stains with the slab beneath it,
-    // achromatically, so the district hue is aged but never shifted.
+    // Zoning is meaning painted on the ground; masonry joints do not belong on it.
+    m.userData.pgNoSurface = true
     mats.push(m)
     return m
   }
@@ -1235,7 +1235,9 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
      * All writes land in objects made at build time. */
     uWet.value = groundWetness(quality.level)
     if (uWet.value > 0) {
-      uGlint.value = groundGlint(daylight)
+      // Keyed to the bloom pass, not to daylight: at dusk in clock mode bloom
+      // is still running, and a bright glint would cross its threshold.
+      uGlint.value = groundGlint(!air.bloomEnabled)
       uSkyFill.value = groundSkyFill(themeDaylight())
       uSunDirection.value
         .set(air.keyPos[0] - air.keyTarget[0], air.keyPos[1] - air.keyTarget[1], air.keyPos[2] - air.keyTarget[2])
