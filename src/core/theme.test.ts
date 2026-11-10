@@ -314,6 +314,41 @@ describe('the masonry surface term', () => {
     expect(Number(joint![1]) + Number(joint![2])).toBeLessThanOrEqual(0.08)
   })
 
+  it('weathers structure achromatically and within three tenths of its albedo', () => {
+    for (const mode of ['day', 'night'] as const) {
+      const out = inMode(mode, () => compile(theme.mat(`wal.weather.${mode}`, { color: 0x2a3752 }), true))
+      const weather = /pgWeather = \( pgBlotch \* ([0-9.]+) - pgStreak \* ([0-9.]+) \)/.exec(out.fragmentShader)
+      expect(weather, mode).not.toBeNull()
+      // pgBlotch spans -0.5..0.5 and pgStreak 0..1, so this is the darkest stain.
+      expect(Number(weather![1]) * 0.5 + Number(weather![2])).toBeLessThanOrEqual(0.3)
+      // One scalar on all three channels: a stain can age a wall, never tint it.
+      expect(out.fragmentShader).toContain('diffuseColor.rgb *= ( 1.0 + pgWeather ) * pgPit;')
+      // Run-off hangs from walls; a roof or deck has nowhere for it to run.
+      expect(out.fragmentShader).toMatch(/pgStreak = smoothstep\([^;]+\) \* \( 1\.0 - pgFlat \);/)
+    }
+  })
+
+  it('leaves semantic solids one flat value in daylight', () => {
+    /* Shading them by sky and sun was tried and withdrawn: a face in shade at
+     * 0.7 of its authored value put `warn` within 0.013 OKLab of `wal`. Value
+     * carries meaning in daylight, so meaning is not shaded. */
+    const meshFrag = [
+      'void main() {',
+      '  vec4 diffuseColor = vec4( diffuse, opacity );',
+      '  #include <color_fragment>',
+      '  #include <specularmap_fragment>',
+      '  vec3 outgoingLight = reflectedLight.indirectDiffuse;',
+      '  #include <opaque_fragment>',
+      '}',
+    ].join('\n')
+    const shader = { vertexShader: BASIC_VERT, fragmentShader: meshFrag }
+    inMode('day', () => {
+      ;(theme.neon(0xff4d6d, 2.4).onBeforeCompile as unknown as (s: typeof shader) => void)(shader)
+    })
+    expect(shader.fragmentShader).not.toMatch(/outgoingLight\s*(\*=|=\s*outgoingLight\s*\*)/)
+    expect(shader.fragmentShader).not.toContain('dFdx')
+  })
+
   it('gives the surfaced and plain variants different program cache keys', () => {
     const surfaced = theme.mat('backends.struct', { color: 0x2a3852 })
     const plain = theme.mat('backends.rubber', { color: 0x2a3852, surface: false })
@@ -478,12 +513,31 @@ describe('what counts as masonry', () => {
     setThemeMode('night', { persist: false })
   })
 
-  it('courses stone and leaves machinery alone', () => {
+  it('courses stone and gives machinery steel, never masonry', () => {
     // A flywheel, a vault door and a pressure vessel are steel. This city
     // already says so with metalness, so nothing had to be re-declared.
     const wall = compile(theme.mat('wal.struct', { color: 0x2a3752, metalness: 0.3 }), true)
     const steel = compile(theme.mat('wal.heavy', { color: 0x202b42, metalness: 0.48 }), true)
-    expect(wall.fragmentShader).toContain('pgWorld')
-    expect(steel.fragmentShader).not.toContain('pgWorld')
+    expect(wall.fragmentShader).toContain('pgCourse')
+    // Coursed joints and formwork tie holes on a vault door claim the wrong material.
+    for (const masonry of ['pgCourse', 'pgBed', 'pgTie', 'pgBakedIndirect']) {
+      expect(steel.fragmentShader, masonry).not.toContain(masonry)
+      expect(steel.vertexShader, masonry).not.toContain(masonry)
+    }
+    expect(steel.fragmentShader).toContain('pgBrush')
+    const wallMat = theme.mat('wal.struct', { color: 0x2a3752, metalness: 0.3 })
+    const steelMat = theme.mat('wal.heavy', { color: 0x202b42, metalness: 0.48 })
+    expect(steelMat.customProgramCacheKey?.()).not.toBe(wallMat.customProgramCacheKey?.())
+  })
+
+  it('keeps steel achromatic and off anything that opted out or is see-through', () => {
+    const steel = compile(theme.mat('wal.vessel', { color: 0x202b42, metalness: 0.6 }), true)
+    const writes = steel.fragmentShader.slice(steel.fragmentShader.indexOf('float pgBrush')).match(/\n\tdiffuseColor[^;]*;/g) ?? []
+    expect(writes.length).toBeGreaterThan(0)
+    // One scalar product on rgb: rust would be amber, and amber means WAL.
+    for (const write of writes) expect(write).toMatch(/diffuseColor\.rgb \*= [^v]*;/)
+    const optedOut = compile(theme.mat('wal.plainsteel', { color: 0x202b42, metalness: 0.6, surface: false }), true)
+    const glass = compile(theme.mat('wal.window', { color: 0x9fd8ff, metalness: 0.6, transparent: true, opacity: 0.4 }), true)
+    for (const out of [optedOut, glass]) expect(out.fragmentShader).not.toContain('pgBrush')
   })
 })

@@ -296,6 +296,19 @@ const ASTERISM_LINKS: readonly (readonly [number, number])[] = [
   [0, 1],
 ]
 
+/**
+ * The procedural cloud deck on the daylight dome. Coverage is the fraction of
+ * the noise field above `coverFrom`; it is kept broken so the sun and the
+ * scattering gradient both remain legible through it.
+ */
+export const CLOUD_DECK = {
+  coverFrom: 0.5,
+  coverTo: 0.7,
+  opacity: 0.88,
+  /** Night keeps the stars: the deck is a veil, not a ceiling. */
+  nightOpacity: 0.5,
+} as const
+
 const skyVert = /* glsl */ `
 uniform vec3 uSunDirection;
 varying vec3 vDir;
@@ -339,6 +352,7 @@ uniform vec3 uSunDirection;
 uniform vec2 uSunFlat;
 uniform float uDaylight;
 uniform float uScattering;
+uniform float uCloudDeck;
 uniform float uSunVisible;
 varying vec3 vDir;
 varying vec3 vBetaR;
@@ -373,6 +387,34 @@ vec3 atmosphereExtinction( float elevation ) {
   return exp( -( vBetaR * sR + vBetaM * sM ) );
 }
 
+float skyHash( vec2 p ) {
+  p = fract( p * vec2( 0.1031, 0.1030 ) );
+  p += dot( p, p.yx + 33.33 );
+  return fract( ( p.x + p.y ) * p.x );
+}
+
+float skyNoise( vec2 p ) {
+  vec2 i = floor( p );
+  vec2 f = fract( p );
+  f = f * f * ( 3.0 - 2.0 * f );
+  return mix(
+    mix( skyHash( i ), skyHash( i + vec2( 1.0, 0.0 ) ), f.x ),
+    mix( skyHash( i + vec2( 0.0, 1.0 ) ), skyHash( i + vec2( 1.0, 1.0 ) ), f.x ),
+    f.y
+  );
+}
+
+float skyFbm( vec2 p ) {
+  float sum = 0.0;
+  float amp = 0.5;
+  for ( int i = 0; i < 5; i++ ) {
+    sum += amp * skyNoise( p );
+    p = mat2( 1.6, 1.2, -1.2, 1.6 ) * p;
+    amp *= 0.5;
+  }
+  return sum;
+}
+
 void main() {
   vec3 d = normalize( vDir );
   float h = d.y;
@@ -399,6 +441,20 @@ void main() {
       // transform. The compact solar radiance is added below in HDR.
       col = col / ( vec3( 1.0 ) + col );
       col = mix( col, uHaze, smoothstep( ${g(DAY.hazeFrom)}, ${g(DAY.hazeTo)}, h ) );
+      if ( uCloudDeck > 0.5 && h > 0.012 ) {
+        /* A broken cloud deck projected from a flat layer, so it converges on
+         * the horizon the way real cloud streets do. Static: the dome is also
+         * the environment map, and a moving sky would re-bake it every frame. */
+        vec2 deck = d.xz / ( h + 0.11 ) * 1.35;
+        float body = skyFbm( deck + 3.7 );
+        float cover = smoothstep( ${g(CLOUD_DECK.coverFrom)}, ${g(CLOUD_DECK.coverTo)}, body );
+        float thick = smoothstep( ${g(CLOUD_DECK.coverTo)}, 0.86, body );
+        float sunSide = pow( max( dot( scatterDirection, uSunDirection ), 0.0 ), 3.0 );
+        vec3 lit = mix( vec3( 0.93, 0.91, 0.89 ), uGlow * 1.15, sunSide * 0.7 );
+        vec3 base = mix( col, vec3( 0.36, 0.40, 0.50 ), 0.72 );
+        vec3 cloud = mix( lit, base, thick * 0.8 );
+        col = mix( col, cloud, cover * smoothstep( 0.012, 0.16, h ) * ${g(CLOUD_DECK.opacity)} );
+      }
       // The atmosphere is a backdrop, not a semantic light source.
       col = min( col, vec3( 0.98 ) );
     } else {
@@ -420,6 +476,14 @@ void main() {
     col += uHorizon * band * 0.30;
     float east = clamp( d.x, 0.0, 1.0 );
     col += uGlow * band * pow( east, 2.4 );
+    if ( uCloudDeck > 0.5 && h > 0.012 ) {
+      // The same deck by moonlight: thin, unlit from within, well under bloom.
+      vec2 deck = d.xz / ( h + 0.11 ) * 1.35;
+      float cover = smoothstep( ${g(CLOUD_DECK.coverFrom)}, ${g(CLOUD_DECK.coverTo + 0.08)}, skyFbm( deck + 3.7 ) );
+      float moonSide = pow( max( dot( d, uSunDirection ), 0.0 ), 2.0 );
+      vec3 cloud = uHorizon * ( 0.55 + 0.9 * moonSide );
+      col = mix( col, cloud, cover * smoothstep( 0.012, 0.2, h ) * ${g(CLOUD_DECK.nightOpacity)} );
+    }
     col *= mix( 0.18, 1.0, smoothstep( -0.30, -0.01, h ) );
   }
 
@@ -627,7 +691,16 @@ export function cloudAngularWidths(): number[] {
  * The dome carries those tiers; clouds are the higher-tier weather pass.
  */
 export function skyCloudsVisible(air: Atmosphere, quality: QualityLevel): boolean {
-  return air.clouds && quality !== 'low' && quality !== 'reduced'
+  return air.clouds && quality === 'medium'
+}
+
+/**
+ * The dome's own procedural deck replaces the billboards where five octaves of
+ * noise over the whole sky are affordable; two cloud systems would disagree
+ * about where the weather is. It runs by day and, as a thin veil, by night.
+ */
+export function skyCloudDeckEnabled(air: Atmosphere, quality: QualityLevel): boolean {
+  return quality === 'high' || quality === 'ultra'
 }
 
 /**
@@ -672,6 +745,7 @@ export function applySkyAtmosphere(
     }
     if (uniforms.uDaylight) uniforms.uDaylight.value = air.daylight ? 1 : 0
     if (uniforms.uScattering) uniforms.uScattering.value = skyScatteringEnabled(air, quality) ? 1 : 0
+    if (uniforms.uCloudDeck) uniforms.uCloudDeck.value = skyCloudDeckEnabled(air, quality) ? 1 : 0
     if (uniforms.uSunVisible) {
       uniforms.uSunVisible.value = sunDiscHorizonFraction(air.sunElevationDeg) > 0 ? 1 : 0
     }
@@ -760,6 +834,7 @@ export function createSky(theme: ThemeApi): THREE.Object3D {
       uSunFlat: { value: new THREE.Vector2(0, -1) },
       uDaylight: { value: 0 },
       uScattering: { value: 0 },
+      uCloudDeck: { value: 0 },
       uSunVisible: { value: 0 },
     },
     vertexShader: skyVert,

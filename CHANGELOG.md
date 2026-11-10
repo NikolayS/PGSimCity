@@ -9,6 +9,50 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## v0.59.0 — Cinematic rendering
+
+Graphics only; no simulation behaviour changes. Frame rate on a real GPU is
+unmeasured: every capture was software WebGL, so the adaptive quality ladder is
+the only safety net for the new per-pixel cost.
+
+Read before release by a four-reviewer panel across two models (Opus and
+Sonnet; no GPT reviewer was available): PostgreSQL and semantic honesty twice,
+rendering correctness, and reader experience. Its blocking findings are fixed
+or withdrawn below.
+Weather, water and age are setting, not PostgreSQL facts: none of it is
+registered, labelled or pickable, and its own colour is a dark grey-blue, grey, or the sky's.
+Reflections and haze do carry the hue of the signal they come
+from, so amber WAL light can fall on neighbouring paving.
+
+- Open water around the island, clipped to the coastline so every excavation stays open, with a sun or moon path and wash against the retaining wall.
+- A procedural cloud deck on the sky dome at high and ultra quality, by day and as a thin veil by night. It replaces the billboard clouds at those tiers; medium keeps the billboards.
+- Rain-wet paving at high and ultra quality: it darkens the plate, mirrors the live sky and sun, and reflects nearby structure in screen space. Mirrored night radiance is scaled below the bloom threshold with its hue kept, so only the original signal glows and a mirrored colour is still the colour it mirrors.
+- Cast concrete on structural surfaces: aggregate tooth, formwork tie holes, curing blotches and run-off streaks.
+- Rolled steel on machinery: brushed, seamed and smudged, carried mostly by roughness.
+- Night haze lit by the city: the bloom chain's widest blur is scattered into the air by path length, so only what already clears the bloom threshold (semantic signals and the moon) can light it.
+- Daylight contrast: a stronger, warmer sun against less ambient fill, deeper cast shadows, and a luminance-only filmic contrast curve that keeps every semantic colour pair separated.
+- Film lens after display encoding: restrained grain (frozen under reduced motion, including a change after load) and a daylight vignette that leaves the centre of the frame untouched. Disabled on the low and reduced tiers.
+
+Fixed on the panel's findings:
+
+- Anti-aliasing cleared the scene depth that the output pass reads afterwards, so on high and ultra the height haze was silently off and the night haze glow ignored distance. The depth now survives.
+- The mirror's share of a pixel could reach 1.42 where a pool sat in damp paving, which subtracted the paving and let a capped reflection cross the bloom threshold. It is now a blend that cannot exceed the pool's own share.
+- Fine concrete, steel and wet-paving detail now fades before the footprint at which it would shimmer.
+
+Known and left:
+
+- The reflection pass composites over whatever is drawn on wet paving. At street level a ground decal or halo over standing water can be partly replaced by the mirror; from above the effect is slight.
+- Concrete and steel detail runs on every quality tier, including low and reduced, where its distance cut-off is the only saving.
+- In first-person views the wet mask can speckle on distant paving, and the half-resolution mirror can bleed a pixel onto wall edges.
+- `docs/screenshot.png` predates this release and no longer matches the daylight look.
+
+Held back by the review panel, with the reason:
+
+- Daylight shading on semantic solids (capsules, lamps). A face in shade at 0.7 of its authored value put `warn` within 0.013 OKLab of `wal`, against a 0.045 floor. Value carries meaning in daylight, so meaning stays one flat value.
+- Night light pools on paving and platforms. They were a screen-space blur with no occlusion, so one district's colour could land on paving that was near it on screen but not beneath it.
+- Weathering on district zone paint. The surface term carries a small per-object warm/cool tint, and zone colour is district identity.
+- A night vignette. At 0.3 it took `wal` / `replication` to 0.029 OKLab in the frame corners, against a 0.038 floor that had only ever been tested at the centre. A corner test now covers every tier in both modes.
+
 ## v0.58.1 — Healthy startup
 
 - Start ordinary visits with healthy simulation defaults instead of silently restoring saved lock, overload or failover experiments.

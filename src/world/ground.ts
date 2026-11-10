@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { rectangularFramePlane } from './frame-plane'
 import { destinationForDistrict } from '../core/destinations'
-import { ATMOSPHERE, COLOR, DAY_PALETTE, atmosphere, mixHex } from '../core/theme'
+import { ATMOSPHERE, COLOR, DAY_PALETTE, atmosphere, mixHex, themeDaylight } from '../core/theme'
 import { clamp01, fmtBytes, fmtNum } from '../core/util'
 import { ANCHOR, CITY, DISTRICT_BOUNDS } from './layout'
 import { plateFogK } from './plate-fog'
@@ -9,9 +9,14 @@ import {
   GROUND_SURFACE_CHANNELS,
   GROUND_SURFACE_SIZE,
   createGroundSurfaceData,
+  groundGlint,
+  groundSkyFill,
   groundSurfaceDetail,
+  groundWetness,
+  WET_FIELD_GLSL,
   groundSurveyDetail,
 } from './ground-surface'
+import { createSea } from './sea'
 import {
   clearance,
   contains,
@@ -91,6 +96,12 @@ uniform float uSurfaceResponse;
 uniform float uSurveyDetail;
 uniform vec3 uSunDirection;
 uniform vec3 uSunColor;
+uniform float uWet;
+uniform float uGlint;
+uniform float uSkyFill;
+uniform vec3 uSkyZenith;
+uniform vec3 uSkyHorizon;
+uniform vec3 uSkyGlow;
 uniform sampler2D uEdge;
 uniform vec4 uEdgeMap;   // x0, z0, 1/width, 1/depth of the edge field
 uniform float uEdgeMax;  // metres encoded across the signed field
@@ -109,6 +120,7 @@ float gridMask( vec2 p, float spacing, float thick, out float density ) {
   return 1.0 - smoothstep( 0.0, thick, min( g.x, g.y ) );
 }
 
+${WET_FIELD_GLSL}
 void main() {
   vec2 p = vWorld.xz;
   float r = length( p );
@@ -188,6 +200,33 @@ void main() {
     float gloss = 1.0 - roughness;
     float highlight = pow( max( dot( surfaceNormal, halfDirection ), 0.0 ), mix( 12.0, 46.0, gloss ) );
     col += uSunColor * highlight * gloss * 0.12 * uSurfaceResponse;
+  }
+
+  if ( uWet > 0.01 ) {
+    /* Rain-wet paving. Standing water is weather, not a PostgreSQL fact, so it
+     * stays achromatic: it darkens the slab and mirrors the sky, and it never
+     * emits. Low ground is one broad field; the fine octave only frays edges. */
+    vec4 field = wetField( p, viewDistance );
+    float damp = field.z * uWet;
+    float pool = field.w * uWet;
+    col *= 0.88 + 0.26 * field.x;
+    col *= 1.0 + field.y * 0.22;
+    col *= 1.0 - 0.34 * damp;
+
+    vec3 toEye = normalize( cameraPosition - vWorld );
+    // A film of water is flat; only the damp margin keeps the slab's tooth.
+    // Tooth is a walking-distance detail; beyond it the glint would sparkle.
+    vec2 tooth = ( vec2( wetNoise( p * 7.3 ), wetNoise( p * 7.3 + 19.0 ) ) - 0.5 )
+               * ( 1.0 - smoothstep( 25.0, 110.0, viewDistance ) );
+    vec3 wetNormal = normalize( vec3( tooth.x, 16.0 + 80.0 * pool, tooth.y ) );
+    vec3 mirror = reflect( - toEye, wetNormal );
+    float sunward = max( dot( mirror, uSunDirection ), 0.0 );
+    vec3 sky = wetSky( mirror, uSunDirection, uSkyZenith, uSkyHorizon, uSkyGlow );
+    col = mix( col, sky, wetFresnel( dot( toEye, wetNormal ) ) * wetMirror( damp, pool ) );
+    col += uSunColor * uGlint * ( pow( sunward, 420.0 ) * pool + pow( sunward, 60.0 ) * damp * 0.05 );
+    // From above, Fresnel leaves a night puddle black. A wet slab still returns
+    // the whole horizon's glow diffusely, which is what makes it read as wet.
+    col += uSkyHorizon * uSkyFill * ( pool * 0.5 + damp * 0.16 );
   }
 
   col = mix( col, uMinor, minor * 0.9 );
@@ -540,6 +579,13 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
           .normalize(),
       },
       uSunColor: { value: new THREE.Color(ATMOSPHERE.day.keyColor) },
+      uWet: { value: 0 },
+      uGlint: { value: 0 },
+      uSkyFill: { value: 0 },
+      // Vectors, not Colors: the theme repaint translates Color uniforms.
+      uSkyZenith: { value: new THREE.Vector3() },
+      uSkyHorizon: { value: new THREE.Vector3() },
+      uSkyGlow: { value: new THREE.Vector3() },
       uEdgeMax: { value: EDGE_MAX },
       uEdgeMap: {
         value: new THREE.Vector4(bounds.x0, bounds.z0, 1 / (bounds.x1 - bounds.x0), 1 / (bounds.z1 - bounds.z0)),
@@ -557,6 +603,26 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   const uSurfaceDetail = gridUniforms.uSurfaceDetail as { value: number }
   const uSurfaceResponse = gridUniforms.uSurfaceResponse as { value: number }
   const uSurveyDetail = gridUniforms.uSurveyDetail as { value: number }
+  const uWet = gridUniforms.uWet as { value: number }
+  const uGlint = gridUniforms.uGlint as { value: number }
+  const uSkyFill = gridUniforms.uSkyFill as { value: number }
+  const uSunDirection = gridUniforms.uSunDirection as { value: THREE.Vector3 }
+  const uSunColor = gridUniforms.uSunColor as { value: THREE.Color }
+  const uSkyZenith = gridUniforms.uSkyZenith as { value: THREE.Vector3 }
+  const uSkyHorizon = gridUniforms.uSkyHorizon as { value: THREE.Vector3 }
+  const uSkyGlow = gridUniforms.uSkyGlow as { value: THREE.Vector3 }
+  const skyScratch = new THREE.Color()
+  const linearSky = (target: THREE.Vector3, hex: number): void => {
+    skyScratch.setHex(hex)
+    target.set(skyScratch.r, skyScratch.g, skyScratch.b)
+  }
+
+  const sea = createSea({
+    texture: edgeTex,
+    map: (gridUniforms.uEdgeMap as { value: THREE.Vector4 }).value,
+    max: EDGE_MAX,
+  })
+  group.add(sea.mesh)
 
   const plateMat = new THREE.ShaderMaterial({
     uniforms: gridUniforms,
@@ -583,7 +649,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   const dayShadowMat = new THREE.ShadowMaterial({
     color: 0x28333d,
     transparent: true,
-    opacity: 0.38,
+    opacity: 0.5,
     fog: true,
     // This repeats the plate silhouette exactly. Depth bias, not another tiny
     // Y nudge, keeps the two surfaces ordered at every camera distance.
@@ -1165,7 +1231,26 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
 
   function update(dt: number, _sim: SimState, _t: number): void {
     uSurveyDetail.value = groundSurveyDetail(ctx.camera.position.y)
-    const daylight = atmosphere().daylight
+    const air = atmosphere()
+    const daylight = air.daylight
+    /* The mirror follows the live sky, so clock mode needs these every frame.
+     * All writes land in objects made at build time. */
+    uWet.value = groundWetness(quality.level)
+    // One owner on every tier: the dry raking highlight reads these too, and a
+    // value left behind by a higher tier would light it from the wrong key.
+    uSunDirection.value
+      .set(air.keyPos[0] - air.keyTarget[0], air.keyPos[1] - air.keyTarget[1], air.keyPos[2] - air.keyTarget[2])
+      .normalize()
+    uSunColor.value.setHex(air.keyColor)
+    if (uWet.value > 0) {
+      // Keyed to the bloom pass, not to daylight: at dusk in clock mode bloom
+      // is still running, and a bright glint would cross its threshold.
+      uGlint.value = groundGlint(!air.bloomEnabled)
+      uSkyFill.value = groundSkyFill(themeDaylight())
+      linearSky(uSkyZenith.value, air.skyZenith)
+      linearSky(uSkyHorizon.value, air.skyHorizon)
+      linearSky(uSkyGlow.value, air.skyGlow)
+    }
     const nextSurfaceDetail = groundSurfaceDetail(daylight ? 'day' : 'night', quality.level)
     if (nextSurfaceDetail !== surfaceDetail) {
       surfaceDetail = nextSurfaceDetail
@@ -1177,6 +1262,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     // not move at all — they are lit windows, and lit windows hold still.
     clock += dt
     uTime.value = clock
+    sea.update(dt, quality.level)
   }
 
   function dispose(): void {
@@ -1185,6 +1271,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     // The edge field is ours alone — the theme cache never saw it.
     edgeTex.dispose()
     surfaceTex.dispose()
+    sea.dispose()
     group.clear()
   }
 

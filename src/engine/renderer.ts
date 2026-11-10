@@ -20,12 +20,14 @@ import {
 import type { Atmosphere, ThemeMode } from '../core/theme'
 import { clamp, damp } from '../core/util'
 import { ANCHOR, CITY } from '../world/layout'
+import { groundWetness } from '../world/ground-surface'
 import { applyGroundAtmosphere } from '../world/plate-fog'
 import { applySkyAtmosphere } from '../world/sky'
 import type { Bus, QualityLevel, QualitySettings } from '../core/types'
-import { GoldenHourOutputPass } from './color-grade'
+import { FILM_LENS, GoldenHourOutputPass, LIGHT_SCATTER } from './color-grade'
 import { LIGHT_SHAFT_PRESETS, LightShaftPass } from './light-shafts'
 import { waterReflectionScale } from './water'
+import { WetReflectionPass } from './wet-reflections'
 
 /* ============================================================================
  * THE RENDERER
@@ -58,6 +60,11 @@ import { waterReflectionScale } from './water'
  *     fused into that OutputPass, so the grade adds no second fullscreen pass.
  *   Consequence: the SAME renderer settings are valid on both paths. Never
  *   toggle renderer.toneMapping when switching quality.
+ *
+ * PASS ORDER: beauty, GTAO, wet-ground reflections, light shafts, bloom, SMAA,
+ *   output. Reflections read the AO-composited buffer and sit before bloom, so
+ *   their radiance cap is what bloom thresholds against. Grain and the lens
+ *   vignette run last, in display space, inside the output pass.
  * ==========================================================================*/
 
 export interface RendererApi {
@@ -308,6 +315,27 @@ class ComposerDepthGTAOPass extends GTAOPass {
     this.sceneDepthTexture = depth
     if (depth && this.depthTexture !== depth) this.setGBuffer(depth)
     super.render(renderer, writeBuffer, readBuffer, deltaTime, maskActive)
+  }
+}
+
+/**
+ * SMAA writes into the composer target that still carries the scene's depth
+ * texture, and a fullscreen draw clears depth along with colour. The output
+ * pass reads that depth afterwards for aerial perspective and haze scatter, so
+ * this pass must leave it alone.
+ */
+class DepthPreservingSMAAPass extends SMAAPass {
+  override render(
+    renderer: THREE.WebGLRenderer,
+    writeBuffer: THREE.WebGLRenderTarget,
+    readBuffer: THREE.WebGLRenderTarget,
+    deltaTime: number,
+    maskActive: boolean,
+  ): void {
+    const autoClearDepth = renderer.autoClearDepth
+    renderer.autoClearDepth = false
+    super.render(renderer, writeBuffer, readBuffer, deltaTime, maskActive)
+    renderer.autoClearDepth = autoClearDepth
   }
 }
 
@@ -631,6 +659,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   let composer: EffectComposer | null = null
   let renderPass: RenderPass | null = null
   let gtaoPass: ComposerDepthGTAOPass | null = null
+  let wetPass: WetReflectionPass | null = null
   let lightShaftPass: LightShaftPass | null = null
   let bloomPass: UnrealBloomPass | null = null
   let smaaPass: SMAAPass | null = null
@@ -679,6 +708,10 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     })
     composer.addPass(gtaoPass)
 
+    // After AO so mirrored contact shadows match, before bloom so the cap holds.
+    wetPass = new WetReflectionPass(camera, gtaoPass)
+    composer.addPass(wetPass)
+
     lightShaftPass = new LightShaftPass(camera, gtaoPass)
     composer.addPass(lightShaftPass)
 
@@ -695,7 +728,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
 
     // SMAAPass takes no constructor args in r185 and MUST run before OutputPass:
     // it expects linear-srgb input.
-    smaaPass = new SMAAPass()
+    smaaPass = new DepthPreservingSMAAPass()
     composer.addPass(smaaPass)
 
     // Day grade, tone mapping and colour conversion happen here, exactly once.
@@ -721,6 +754,10 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
         gtaoPass.updatePdMaterial({ samples: fidelity.aoDenoiseSamples })
       }
     }
+    if (wetPass) {
+      wetPass.setAtmosphere(air)
+      wetPass.setQuality(quality.level, fidelity.ambientOcclusion)
+    }
     if (lightShaftPass) {
       const x = air.keyPos[0] - air.keyTarget[0]
       const y = air.keyPos[1] - air.keyTarget[1]
@@ -738,6 +775,18 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     if (smaaPass) smaaPass.enabled = wantsSmaa(quality.level)
     if (outputPass) {
       outputPass.setDaylight(air.daylight)
+      // Rescue tiers keep a clean frame: grain is the first thing to go.
+      const film = quality.level === 'low' || quality.level === 'reduced' ? 0 : 1
+      outputPass.setFilm(
+        FILM_LENS.grain * film,
+        (air.daylight ? FILM_LENS.dayVignette : FILM_LENS.nightVignette) * film,
+      )
+      // Only where bloom runs: daylight has no bloom chain to scatter from.
+      const scatters = bloomPass !== null && quality.bloom && air.bloomEnabled && fidelity.ambientOcclusion
+      outputPass.setLightScatter(
+        scatters ? bloomPass!.renderTargetsVertical[bloomPass!.nMips - 1].texture : null,
+        LIGHT_SCATTER.strength,
+      )
       outputPass.setAerialPerspective(
         air.fogColor,
         air.heightFogDensity,
@@ -1056,6 +1105,9 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     if (preset.maxLabels < quality.maxLabels) reductions.push('labels')
     if (quality.antialias && !preset.antialias) reductions.push('antialiasing')
     if (quality.shadows && !preset.shadows) reductions.push('shadows')
+    // Wet paving, its reflections, the cloud deck and the lit haze leave together.
+    if (groundWetness(quality.level) > 0 && groundWetness(next) === 0) reductions.push('weather and reflections')
+    if (FILM_LENS.grain > 0 && quality.level === 'medium' && next === 'reduced') reductions.push('film grain')
     autoDowngrades++
     applyQuality(next)
     bus.emit('quality', { level: next })
@@ -1264,6 +1316,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
 
     if (bloomPass) bloomPass.dispose()
     if (gtaoPass) gtaoPass.dispose()
+    if (wetPass) wetPass.dispose()
     if (lightShaftPass) lightShaftPass.dispose()
     if (smaaPass) smaaPass.dispose()
     if (outputPass) outputPass.dispose()
@@ -1272,6 +1325,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     composerDepthEnabled = false
     renderPass = null
     gtaoPass = null
+    wetPass = null
     lightShaftPass = null
     bloomPass = null
     smaaPass = null

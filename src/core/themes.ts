@@ -324,9 +324,9 @@ export const ATMOSPHERE: Record<CuratedThemeMode, Atmosphere> = {
     plateFogScale: 0.84,
     hemiSky: 0xb0cee9,
     hemiGround: 0x7d8999,
-    hemiIntensity: 0.82,
-    keyColor: 0xffe6c7,
-    keyIntensity: 3.1,
+    hemiIntensity: 0.6,
+    keyColor: 0xffd9ae,
+    keyIntensity: 3.8,
     /* A north-west afternoon key lights roofs and facades together. At 27° a
      * tower's shadow stays within two heights, grounding its own machinery
      * instead of striping several unrelated districts. */
@@ -336,15 +336,15 @@ export const ATMOSPHERE: Record<CuratedThemeMode, Atmosphere> = {
     sunElevationDeg: 27.2,
     shadowBias: -0.0004,
     shadowNormalBias: 0.2,
-    shadowIntensity: 0.84,
+    shadowIntensity: 0.93,
     shadows: true,
     fillColor: 0x769bc6,
-    fillIntensity: 0.28,
+    fillIntensity: 0.2,
     fillPos: [420, 220, 360],
     walGlow: 0,
     yardGlow: 0,
-    noBloomHemi: 0.82,
-    noBloomFill: 0.28,
+    noBloomHemi: 0.6,
+    noBloomFill: 0.2,
     noBloomWalGlow: 0,
     noBloomYardGlow: 0,
     // OFF, and it has to be off rather than merely quiet. Several districts

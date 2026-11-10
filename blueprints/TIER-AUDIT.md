@@ -8,18 +8,21 @@ not tier removals: adaptive changes do not rebuild those factories.
 ## Measured teaching floors
 
 The colour readings use the same semantic materials and combined output path as
-the renderer: the tier's bloom fallback, daylight grade, shaft addition and
-height haze. Each entry is the minimum of all 45 semantic pairs. Disclosure and
+the renderer: the tier's bloom fallback, daylight grade with its contrast curve,
+shaft addition and height haze, read at the centre of the frame. The same
+floors are also tested in the frame corner under the daylight vignette. The
+night haze glow is additive and is not part of this reading.
+Each entry is the minimum of all 45 semantic pairs. Disclosure and
 touch readings come from a real 390 × 844 browser after each live quality
 transition.
 
 | Tier | Day minimum | Night minimum | Disclosure minimum | Touch minimum |
 | --- | --- | --- | --- | --- |
-| ultra | 0.047647 (`storage` / `index`) | 0.041117 (`wal` / `replication`) | 9px | 44 × 44px |
-| high | 0.049394 (`bufDirty` / `lock`) | 0.040915 (`wal` / `replication`) | 9px | 44 × 44px |
-| medium | 0.055711 (`bufDirty` / `lock`) | 0.042326 (`bufDirty` / `lock`) | 9px | 44 × 44px |
-| reduced | 0.066574 (`bufDirty` / `lock`) | 0.044247 (`bufDirty` / `lock`) | 9px | 44 × 44px |
-| low | 0.066574 (`bufDirty` / `lock`) | 0.044247 (`bufDirty` / `lock`) | 9px | 44 × 44px |
+| ultra | 0.053782 (`bufDirty` / `lock`) | 0.041117 (`wal` / `replication`) | 9px | 44 × 44px |
+| high | 0.057103 (`bufDirty` / `lock`) | 0.040915 (`wal` / `replication`) | 9px | 44 × 44px |
+| medium | 0.063598 (`bufDirty` / `lock`) | 0.042326 (`bufDirty` / `lock`) | 9px | 44 × 44px |
+| reduced | 0.076056 (`bufDirty` / `lock`) | 0.044247 (`bufDirty` / `lock`) | 9px | 44 × 44px |
+| low | 0.076056 (`bufDirty` / `lock`) | 0.044247 (`bufDirty` / `lock`) | 9px | 44 × 44px |
 
 The existing floors remain unchanged: 0.045 by day, 0.038 by night, 9px for
 disclosures and 44px for touch targets. All 13 rendered City disclosures and
@@ -29,19 +32,23 @@ all 20 reachable City controls were measured at every tier.
 
 - `ultra` removes nothing. It uses the full 2× render scale, environment,
   half-resolution water reflection, AO, aerial perspective, 2048px soft
-  shadows, ten-tap shafts, SMAA, bevels, full ground response and all rooftop
-  dressing.
+  shadows, ten-tap shafts, SMAA, bevels, full ground response, all rooftop
+  dressing, wet paving with 24-tap reflections, the procedural cloud deck,
+  two-octave sea waves, night haze glow, and the film lens.
 - `high` removes 14 rooftop-detail anchors and reduces AO resolution/samples,
   aerial perspective, shadow resolution/softness and shaft resolution/samples.
-  It retains every effect family, 2× render scale, SMAA and bevels.
+  Wet-paving reflections drop to 16 taps at half resolution. It retains every
+  effect family, 2× render scale, SMAA and bevels.
 - `medium` additionally removes cast shadows (including the decorative
-  shared-buffer raking shadows), SMAA and box bevels. It reduces the render cap
+  shared-buffer raking shadows), SMAA, box bevels, wet paving and its
+  reflections, and the procedural cloud deck (billboard clouds take its
+  place). It reduces sea waves to one octave, the render cap
   to 1.5×, water reflection to quarter-resolution, ground response to its joint
   layer, and rooftop dressing to 18 anchors. Environment, AO, haze, shafts,
   daylight sky scattering, clouds and bloom remain.
 - `reduced` additionally removes the environment map, planar water reflection,
   AO, aerial perspective, light shafts, daylight sky scattering and clouds,
-  ground-surface aggregate/joint response, rooftop dressing, ambient ground
+  ground-surface aggregate/joint response, sea waves, night haze glow, the film lens, rooftop dressing, ambient ground
   light cones and articulated finger detail. It renders at 1× and retains the
   cheaper legacy sky, hand silhouettes and bloom.
 - `low` removes bloom as well, and bypasses the post chain at night. Its

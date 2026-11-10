@@ -219,3 +219,128 @@ describe('local-clock colour separation', () => {
     }
   })
 })
+
+describe('film lens', () => {
+  it('leaves the centre of the frame, where the palette is read, untouched', async () => {
+    const { FILM_LENS, filmVignette } = await import('./color-grade')
+    for (const strength of [FILM_LENS.dayVignette, FILM_LENS.nightVignette]) {
+      expect(filmVignette(0, strength)).toBe(1)
+      expect(filmVignette(0.18, strength)).toBe(1)
+      expect(filmVignette(1, strength)).toBeCloseTo(1 - strength, 10)
+      let previous = 1
+      for (let edge = 0; edge <= 1.0001; edge += 0.02) {
+        const value = filmVignette(edge, strength)
+        expect(value).toBeLessThanOrEqual(previous)
+        previous = value
+      }
+    }
+  })
+
+  for (const level of QUALITY_LEVELS) {
+    for (const mode of ['day', 'night'] as const) {
+      it(`keeps all 45 ${mode} semantic pairs distinct in the frame corner at ${level}`, async () => {
+        /* The centre-of-frame floors say nothing about a corner. A 0.3 night
+         * vignette once passed every centre test while taking wal/replication
+         * to 0.029 where the frame is darkest. */
+        const { FILM_LENS, filmVignette } = await import('./color-grade')
+        const preset = QUALITY_PRESETS[level]
+        const fidelity = FIDELITY_PRESETS[level]
+        const strength = mode === 'day' ? FILM_LENS.dayVignette : FILM_LENS.nightVignette
+        const corner = filmVignette(1, strength)
+        const dim = (hex: number): number => {
+          const channel = (shift: number) => Math.round(((hex >> shift) & 255) * corner)
+          return (channel(16) << 16) | (channel(8) << 8) | channel(0)
+        }
+        setThemeMode(mode, { persist: false })
+        setBloomAvailable(preset.bloom)
+        const theme = createTheme()
+        try {
+          const colors = SEMANTIC.map((key) => {
+            const hex = theme.neon(NIGHT_PALETTE[key], 1).color.getHex()
+            return dim(
+              mode === 'day'
+                ? gradeDaylightHexWithEffects(
+                    hex,
+                    DAY_PALETTE.fog,
+                    HEIGHT_FOG_MAX * fidelity.aerialPerspective,
+                    LIGHT_SHAFT_COLOR,
+                    LIGHT_SHAFT_PRESETS[level].strength,
+                  )
+                : foggedNightHex(hex, NIGHT_PALETTE.fog, HEIGHT_FOG_MAX * fidelity.aerialPerspective),
+            )
+          })
+          for (let i = 0; i < colors.length; i++) {
+            for (let j = i + 1; j < colors.length; j++) {
+              expect(
+                perceptualColorDistance(colors[i], colors[j]),
+                `${SEMANTIC[i]} vs ${SEMANTIC[j]}`,
+              ).toBeGreaterThanOrEqual(mode === 'day' ? 0.045 : 0.038)
+            }
+          }
+        } finally {
+          theme.dispose()
+          setBloomAvailable(true)
+          setThemeMode('night', { persist: false })
+        }
+      })
+    }
+  }
+
+  it('keeps grain to under two percent of display range either side', async () => {
+    const { FILM_LENS } = await import('./color-grade')
+    // Zero-mean and per-pixel: it dithers a colour, it cannot move one.
+    expect(FILM_LENS.grain / 2).toBeLessThan(0.02)
+    expect(FILM_LENS.grain).toBeGreaterThan(0)
+  })
+
+  it('runs after tone mapping and display encoding, never before the grade', async () => {
+    const { GoldenHourOutputPass } = await import('./color-grade')
+    const pass = new GoldenHourOutputPass()
+    const source = pass.material.fragmentShader
+    const lens = source.lastIndexOf('pgFilmLens( gl_FragColor.rgb, vUv )')
+    expect(lens).toBeGreaterThan(source.indexOf('sRGBTransferOETF( gl_FragColor )'))
+    expect(lens).toBeGreaterThan(source.indexOf('pgGoldenHourGrade( gl_FragColor.rgb, vUv )'))
+    pass.dispose()
+  })
+
+  it('holds scene grey fixed under the contrast curve', async () => {
+    const { GOLDEN_HOUR_GRADE } = await import('./color-grade')
+    const curve = (tone: number) =>
+      GOLDEN_HOUR_GRADE.pivot * Math.pow(tone / GOLDEN_HOUR_GRADE.pivot, GOLDEN_HOUR_GRADE.contrast)
+    expect(curve(GOLDEN_HOUR_GRADE.pivot)).toBeCloseTo(GOLDEN_HOUR_GRADE.pivot, 12)
+    expect(curve(0.05)).toBeLessThan(0.05)
+    expect(curve(0.6)).toBeGreaterThan(0.6)
+    expect(GOLDEN_HOUR_GRADE.contrast).toBeGreaterThan(1)
+  })
+})
+
+describe('night haze light scatter', () => {
+  it('grows with path length between its near share and one', async () => {
+    const { LIGHT_SCATTER, lightScatterShare } = await import('./color-grade')
+    expect(lightScatterShare(0)).toBe(LIGHT_SCATTER.nearShare)
+    expect(lightScatterShare(LIGHT_SCATTER.nearMetres)).toBe(LIGHT_SCATTER.nearShare)
+    expect(lightScatterShare(LIGHT_SCATTER.farMetres)).toBe(1)
+    expect(lightScatterShare(1e6)).toBe(1)
+    let previous = 0
+    for (let metres = 0; metres <= 1000; metres += 25) {
+      const share = lightScatterShare(metres)
+      expect(share).toBeGreaterThanOrEqual(previous)
+      previous = share
+    }
+  })
+
+  it('has no source of its own: without the bloom chain or scene depth it is off', async () => {
+    const { GoldenHourOutputPass } = await import('./color-grade')
+    const pass = new GoldenHourOutputPass()
+    expect(pass.uniforms.pgScatterStrength.value).toBe(0)
+    pass.setLightScatter(null, 0.4)
+    expect(pass.uniforms.pgScatterWide.value).toBeNull()
+    // The term reads only the wide blur: it can spread a signal, never make one.
+    const source = pass.material.fragmentShader
+    const body = source.slice(source.indexOf('vec3 pgLightScatter'), source.indexOf('uniform float pgFilmGrain'))
+    expect(body).toContain('texture2D( pgScatterWide, uv )')
+    expect(body).not.toContain('tDiffuse')
+    expect(source.indexOf('pgLightScatter( gl_FragColor.rgb, vUv )')).toBeLessThan(source.indexOf('// tone mapping'))
+    pass.dispose()
+  })
+})

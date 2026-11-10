@@ -1,13 +1,40 @@
 import * as THREE from 'three'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 
+import { reduceMotion } from '../core/util'
+
 export const GOLDEN_HOUR_GRADE = {
   lift: 0.008,
   gamma: 0.96,
   gain: 1.035,
   midtoneSaturation: 1.07,
   vignette: 0.075,
+  /** Filmic contrast about scene grey: deepens shade, opens sunlit stone. */
+  contrast: 1.22,
+  pivot: 0.18,
 } as const
+
+/**
+ * Lens response applied after tone mapping and display encoding, in both modes.
+ * It is spatial only: the centre of the frame, where the palette is read, keeps
+ * the exact graded value, so no semantic colour moves.
+ */
+export const FILM_LENS = {
+  /** Peak-to-peak display-space luminance noise in the midtones. */
+  grain: 0.034,
+  /**
+   * Night gets none. Its closest semantic pair clears the 0.038 OKLab floor by
+   * 0.003 at the centre of the frame; a 0.3 corner falloff took it to 0.029.
+   */
+  nightVignette: 0,
+  dayVignette: 0.12,
+} as const
+
+/** Display-space multiplier of the lens falloff; `edge` is 0 at centre, 1 in the corner. */
+export function filmVignette(edge: number, strength: number): number {
+  const t = Math.max(0, Math.min(1, (edge - 0.18) / (1.0 - 0.18)))
+  return 1 - strength * t * t * (3 - 2 * t)
+}
 
 /** Extra ground-layer haze never replaces more than this much scene colour. */
 export const HEIGHT_FOG_MAX = 0.2
@@ -33,10 +60,16 @@ uniform float pgGradeGamma;
 uniform float pgGradeGain;
 uniform float pgGradeSaturation;
 uniform float pgGradeVignette;
+uniform float pgGradeContrast;
+uniform float pgGradePivot;
 
 vec3 pgGoldenHourGrade( vec3 color, vec2 uv ) {
 	color = max( color + vec3( pgGradeLift ), vec3( 0.0 ) );
 	color = pow( color, vec3( 1.0 / pgGradeGamma ) ) * pgGradeGain;
+	// Luminance-only power about the pivot: scene grey is fixed and every
+	// channel scales together, so two close semantic hues cannot converge.
+	float tone = max( dot( color, vec3( 0.2126, 0.7152, 0.0722 ) ), 0.00001 );
+	color *= pgGradePivot * pow( tone / pgGradePivot, pgGradeContrast ) / tone;
 
 	float luma = dot( color, vec3( 0.2126, 0.7152, 0.0722 ) );
 	float mids = smoothstep( 0.02, 0.18, luma ) * ( 1.0 - smoothstep( 0.65, 1.20, luma ) );
@@ -78,6 +111,64 @@ vec3 pgApplyHeightFog( vec3 color, vec2 uv ) {
 }
 `
 
+const FILM_UNIFORMS = /* glsl */ `
+uniform float pgFilmGrain;
+uniform float pgFilmVignette;
+uniform float pgFilmTime;
+
+vec3 pgFilmLens( vec3 color, vec2 uv ) {
+	vec2 frame = uv * 2.0 - 1.0;
+	float edge = smoothstep( 0.18, 1.0, dot( frame, frame ) * 0.5 );
+	color *= 1.0 - pgFilmVignette * edge;
+	// Interleaved gradient noise: no texture, stable per pixel, re-seeded in time.
+	vec2 cell = gl_FragCoord.xy + fract( pgFilmTime * vec2( 7.13, 3.71 ) ) * 289.0;
+	float noise = fract( 52.9829189 * fract( dot( cell, vec2( 0.06711056, 0.00583715 ) ) ) ) - 0.5;
+	float luma = dot( color, vec3( 0.2126, 0.7152, 0.0722 ) );
+	// Grain lives in the midtones; clean blacks keep night neon crisp.
+	float weight = smoothstep( 0.0, 0.12, luma ) * ( 1.0 - 0.55 * smoothstep( 0.55, 1.0, luma ) );
+	return max( color + noise * pgFilmGrain * weight, vec3( 0.0 ) );
+}
+`
+
+/**
+ * Night haze lit by the city. The source is the bloom chain's widest blur,
+ * which holds only what already cleared the bloom threshold, so the haze can
+ * glow only where a semantic signal is: it spreads meaning, it adds none.
+ */
+export const LIGHT_SCATTER = {
+  /** Linear-HDR gain on the wide blur at full path length. */
+  strength: 0.42,
+  /** Share present even at arm's length, so near lamps are not haloless. */
+  nearShare: 0.3,
+  nearMetres: 40,
+  farMetres: 700,
+} as const
+
+/** Fraction of the scatter gain a surface at `distance` metres receives. */
+export function lightScatterShare(distance: number): number {
+  const t = Math.max(0, Math.min(1, (distance - LIGHT_SCATTER.nearMetres) / (LIGHT_SCATTER.farMetres - LIGHT_SCATTER.nearMetres)))
+  return LIGHT_SCATTER.nearShare + (1 - LIGHT_SCATTER.nearShare) * t * t * (3 - 2 * t)
+}
+
+const SCATTER_UNIFORMS = /* glsl */ `
+uniform sampler2D pgScatterWide;
+uniform float pgScatterStrength;
+
+vec3 pgLightScatter( vec3 color, vec2 uv ) {
+	float depth = texture2D( pgSceneDepth, uv ).x;
+	float path = 1.0;
+	if ( depth < 0.999999 ) {
+		vec4 view = pgProjectionInverse * vec4( uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0 );
+		view /= max( view.w, 0.000001 );
+		path = smoothstep( ${LIGHT_SCATTER.nearMetres.toFixed(1)}, ${LIGHT_SCATTER.farMetres.toFixed(1)}, length( view.xyz ) );
+	}
+	float share = ${LIGHT_SCATTER.nearShare.toFixed(3)} + ${(1 - LIGHT_SCATTER.nearShare).toFixed(3)} * path;
+	return color + texture2D( pgScatterWide, uv ).rgb * pgScatterStrength * share;
+}
+`
+
+const FILM_ANCHOR = '\n\t\t}'
+
 const SAMPLE_ANCHOR = 'uniform sampler2D tDiffuse;'
 const GRADE_ANCHOR = '\n\t\t\t// tone mapping'
 
@@ -92,6 +183,7 @@ interface SceneDepthSource {
 export class GoldenHourOutputPass extends OutputPass {
   private readonly camera: THREE.PerspectiveCamera | null
   private readonly depthSource: SceneDepthSource | null
+  private scatterStrength = 0
 
   constructor(camera: THREE.PerspectiveCamera | null = null, depthSource: SceneDepthSource | null = null) {
     super()
@@ -103,6 +195,13 @@ export class GoldenHourOutputPass extends OutputPass {
     this.uniforms.pgGradeGain = { value: GOLDEN_HOUR_GRADE.gain }
     this.uniforms.pgGradeSaturation = { value: GOLDEN_HOUR_GRADE.midtoneSaturation }
     this.uniforms.pgGradeVignette = { value: GOLDEN_HOUR_GRADE.vignette }
+    this.uniforms.pgGradeContrast = { value: GOLDEN_HOUR_GRADE.contrast }
+    this.uniforms.pgGradePivot = { value: GOLDEN_HOUR_GRADE.pivot }
+    this.uniforms.pgScatterWide = { value: null }
+    this.uniforms.pgScatterStrength = { value: 0 }
+    this.uniforms.pgFilmGrain = { value: 0 }
+    this.uniforms.pgFilmVignette = { value: 0 }
+    this.uniforms.pgFilmTime = { value: 0 }
     this.uniforms.pgSceneDepth = { value: null }
     this.uniforms.pgAerialEnabled = { value: 0 }
     this.uniforms.pgHeightFogDensity = { value: 0 }
@@ -113,18 +212,34 @@ export class GoldenHourOutputPass extends OutputPass {
     this.uniforms.pgProjectionInverse = { value: new THREE.Matrix4() }
     this.uniforms.pgCameraWorld = { value: new THREE.Matrix4() }
     this.material.fragmentShader = this.material.fragmentShader
-      .replace(SAMPLE_ANCHOR, `${SAMPLE_ANCHOR}\n${GRADE_UNIFORMS}\n${AERIAL_UNIFORMS}`)
+      .replace(SAMPLE_ANCHOR, `${SAMPLE_ANCHOR}\n${GRADE_UNIFORMS}\n${AERIAL_UNIFORMS}\n${SCATTER_UNIFORMS}\n${FILM_UNIFORMS}`)
       .replace(
         GRADE_ANCHOR,
         '\n\t\t\tif ( pgAerialEnabled > 0.5 ) gl_FragColor.rgb = pgApplyHeightFog( gl_FragColor.rgb, vUv );' +
+          '\n\t\t\tif ( pgScatterStrength > 0.0 ) gl_FragColor.rgb = pgLightScatter( gl_FragColor.rgb, vUv );' +
           '\n\t\t\tif ( pgGradeEnabled > 0.5 ) gl_FragColor.rgb = pgGoldenHourGrade( gl_FragColor.rgb, vUv );' +
           GRADE_ANCHOR,
       )
+    const body = this.material.fragmentShader
+    const end = body.lastIndexOf(FILM_ANCHOR)
+    this.material.fragmentShader =
+      body.slice(0, end) + '\n\t\t\tgl_FragColor.rgb = pgFilmLens( gl_FragColor.rgb, vUv );' + body.slice(end)
     this.material.name = 'PGSimCity.GoldenHourOutput'
   }
 
   setDaylight(enabled: boolean): void {
     this.uniforms.pgGradeEnabled.value = enabled ? 1 : 0
+  }
+
+  setFilm(grain: number, vignette: number): void {
+    this.uniforms.pgFilmGrain.value = grain
+    this.uniforms.pgFilmVignette.value = vignette
+  }
+
+  /** `wide` is the bloom chain's widest blur; null or zero strength disables the term. */
+  setLightScatter(wide: THREE.Texture | null, strength: number): void {
+    this.uniforms.pgScatterWide.value = wide
+    this.scatterStrength = wide ? strength : 0
   }
 
   setAerialPerspective(color: number, density: number, falloff: number, strength: number): void {
@@ -150,6 +265,11 @@ export class GoldenHourOutputPass extends OutputPass {
       this.uniforms.pgProjectionInverse.value.copy(camera.projectionMatrixInverse)
       this.uniforms.pgCameraWorld.value.copy(camera.matrixWorld)
     }
+    // Scatter needs the path length; without scene depth it would glow uniformly.
+    this.uniforms.pgScatterStrength.value = depth && camera ? this.scatterStrength : 0
+    // Read live: the preference can change after load, and grain must then
+    // hold still as a static texture rather than keep flickering until reload.
+    this.uniforms.pgFilmTime.value = reduceMotion() ? 0 : (this.uniforms.pgFilmTime.value + deltaTime) % 64
     super.render(renderer, writeBuffer, readBuffer, deltaTime, maskActive)
   }
 }
@@ -189,6 +309,10 @@ function gradeLinear(rgb: Rgb, edge: number): Rgb {
       Math.pow(Math.max(0, rgb[i] + GOLDEN_HOUR_GRADE.lift), 1 / GOLDEN_HOUR_GRADE.gamma) *
       GOLDEN_HOUR_GRADE.gain
   }
+  const tone = Math.max(0.00001, 0.2126 * graded[0] + 0.7152 * graded[1] + 0.0722 * graded[2])
+  const toneScale =
+    (GOLDEN_HOUR_GRADE.pivot * Math.pow(tone / GOLDEN_HOUR_GRADE.pivot, GOLDEN_HOUR_GRADE.contrast)) / tone
+  for (let i = 0; i < 3; i++) graded[i] *= toneScale
   const luma = 0.2126 * graded[0] + 0.7152 * graded[1] + 0.0722 * graded[2]
   const smoothstep = (a: number, b: number, value: number): number => {
     const t = clamp01((value - a) / (b - a))
