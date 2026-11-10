@@ -15,6 +15,8 @@ changed. Captures are 1600x900 with HUD and labels hidden, taken through
 | Night, overview | — | `after-night-home-1600x900.png` |
 | Night, backend towers | — | `after-night-towers-1600x900.png` |
 | Night, WAL at street level | — | `after-night-street-1600x900.png` |
+| Night, WAL district | — | `after-night-wal-1600x900.png` |
+| Day, WAL at street level | — | `after-day-street-1600x900.png` |
 
 ## What the images show
 
@@ -22,6 +24,9 @@ changed. Captures are 1600x900 with HUD and labels hidden, taken through
   broken cloud deck; the paving is wet, tonally varied and mirrors the sky and
   nearby structure; concrete shows joints, tie holes, blotches and run-off;
   shade is deeper against sunlit stone.
+- Day, street level: WAL capsules carry shade and a glint instead of one flat
+  colour; their hue is unchanged.
+- Night, WAL district: the platform is lit by the flows passing over it.
 - Night: lit districts glow into the haze by distance (street view); the sea
   gives the frame a horizon; wet paving returns a faint horizon glow in the
   overview. Neon, bloom and the Slonik plate outline are unchanged.
@@ -34,5 +39,5 @@ changed. Captures are 1600x900 with HUD and labels hidden, taken through
   are frozen under reduced motion; stills cannot show either.
 - Geometry is unchanged. Buildings are the same boxes with better materials;
   no objects were added, because every object in this city is a claim.
-- Semantic machinery (flow capsules, ribbons, page tiles) keeps its flat,
-  saturated colour by design and reads as less photoreal than its setting.
+- Flat semantic parts (ribbons, page tiles, text) keep one flat colour by
+  design: a plane has no form to shade.

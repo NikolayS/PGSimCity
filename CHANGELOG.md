@@ -22,6 +22,8 @@ labelled or pickable.
 - Cast concrete on structural surfaces: aggregate tooth, formwork tie holes, curing blotches and run-off streaks. District zone paint now weathers with its slab.
 - Rolled steel on machinery: brushed, seamed and smudged, carried mostly by roughness.
 - Night haze lit by the city: the bloom chain's widest blur is scattered into the air by path length, so only signals that already glow can light it.
+- Daylight form on semantic solids: capsules and lamps are shaded by sky and sun so they sit in the scene. Shade only darkens toward the authored colour and hue is untouched; at night they remain their own light.
+- Light pools: wet paving and the district platforms are lit by the neon above them, from the same bloom buffers as the haze.
 - Daylight contrast: a stronger, warmer sun against less ambient fill, deeper cast shadows, and a luminance-only filmic contrast curve that keeps every semantic colour pair separated.
 - Film lens after display encoding: restrained grain (frozen under reduced motion) and a vignette that leaves the centre of the frame untouched. Disabled on the low and reduced tiers.
 

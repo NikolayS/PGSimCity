@@ -295,5 +295,23 @@ describe('night haze light scatter', () => {
     expect(source.indexOf('pgLightScatter( gl_FragColor.rgb, vUv )')).toBeLessThan(source.indexOf('// tone mapping'))
     pass.dispose()
   })
-})
 
+  it('pools light on the paving and platforms only, from a tighter blur than the haze', async () => {
+    const { GoldenHourOutputPass, LIGHT_SCATTER } = await import('./color-grade')
+    const pass = new GoldenHourOutputPass()
+    const source = pass.material.fragmentShader
+    expect(source).toContain(`abs( ( pgCameraWorld * view ).y ) < ${LIGHT_SCATTER.plateBand.toFixed(3)}`)
+    // District platforms stand 0.1 m proud; a kerb or a wall base must stay out.
+    expect(LIGHT_SCATTER.plateBand).toBeGreaterThan(0.1)
+    expect(LIGHT_SCATTER.plateBand).toBeLessThan(0.6)
+    const wide = { name: 'wide' } as never
+    const mid = { name: 'mid' } as never
+    pass.setLightScatter(wide, 0.4, mid, LIGHT_SCATTER.groundPool)
+    expect(pass.uniforms.pgScatterMid.value).toBe(mid)
+    expect(pass.uniforms.pgGroundPool.value).toBe(LIGHT_SCATTER.groundPool)
+    // No bloom chain, no pool: the paving has no light of its own.
+    pass.setLightScatter(null, 0.4, mid, LIGHT_SCATTER.groundPool)
+    expect(pass.uniforms.pgGroundPool.value).toBe(0)
+    pass.dispose()
+  })
+})
