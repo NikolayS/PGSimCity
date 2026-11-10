@@ -17,8 +17,10 @@ Graphics only. Captures are 1600x900 with HUD and labels hidden, through
   lines of surf with lace behind them, paler water over the shelf, and the
   cloud deck mirrored in the swell.
 - Pool by day: a rippled surface with a broken sun glitter path in place of a
-  uniform pane. The page tiles beneath are as legible as before.
-- Pool by night: the towers and neon are mirrored in the water.
+  uniform pane. Glitter is a veil of at most 10% over the page tiles.
+- Pool by night: a rippled surface under the moon. Nothing is mirrored in it:
+  a night reflection carried other districts' neon onto the page tiles and
+  was withdrawn before release.
 - Overview: surf follows the whole coastline.
 
 ## What they do not show
@@ -26,6 +28,5 @@ Graphics only. Captures are 1600x900 with HUD and labels hidden, through
 - Motion. Surf was confirmed to travel shoreward by two captures of the same
   view some seconds apart, which are not kept here. Sea, surf and ripple are
   frozen under reduced motion.
-- Caustics. At 7% they are barely visible in a still; they read in motion.
-- Frame rate. Software WebGL only. The pool's planar reflection now also
-  renders at night, which is a second scene pass at that time of day.
+- Caustics. At 5% they are barely visible in a still; they read in motion.
+- Frame rate. Software WebGL only.

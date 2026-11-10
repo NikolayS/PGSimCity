@@ -52,14 +52,32 @@ const REFLECTION_SCALE: Record<QualityLevel, number> = {
  * state in their colour, so this is a ceiling on how far a tile's value can be
  * lifted, not a look to tune.
  */
-export const POOL_CAUSTIC_PEAK = 0.07
+export const POOL_CAUSTIC_PEAK = 0.05
 
 /** Mirrored radiance ceiling where a bloom pass runs, kept under its threshold. */
 export const POOL_NIGHT_RADIANCE_CAP = 0.8
 
+/**
+ * Most of a page tile one sparkle may hide. Glitter is drawn as a veil with
+ * this ceiling, never as added light: added light whites a tile out, and the
+ * tile's colour is the page's state. Lower where the key light is the moon's
+ * pale blue, which sits in the clean page's own hue family.
+ */
+export function poolGlintCover(unbloomed: boolean): number {
+  return unbloomed ? 0.1 : 0.03
+}
+
 /** Peak key-light glitter on the ripple; `unbloomed` is true only with no bloom pass. */
 export function poolGlint(unbloomed: boolean): number {
   return unbloomed ? 2.2 : 0.5
+}
+
+/**
+ * Daylight only. A night mirror lays other districts' neon over the page
+ * tiles with its hue intact, and on this floor hue is the page's state.
+ */
+export function poolMirrorEnabled(scale: number, daylight: boolean, cameraAbove: boolean): boolean {
+  return scale > 0 && daylight && cameraAbove
 }
 
 /** Fraction of the drawing buffer spent on the planar water pass. */
@@ -98,7 +116,7 @@ void main() {
 }
 `
 
-const waterFragment = /* glsl */ `
+export const POOL_SURFACE_FRAGMENT = /* glsl */ `
 uniform sampler2D tDiffuse;
 uniform vec2 uTexelSize;
 uniform vec3 uBaseColor;
@@ -110,6 +128,7 @@ uniform float uRoughness;
 uniform float uTime;
 uniform float uRadianceCap;
 uniform float uGlint;
+uniform float uGlintCover;
 uniform float uCaustic;
 uniform vec3 uSunDirection;
 uniform vec3 uSunColor;
@@ -211,8 +230,12 @@ void main() {
   vec3 mirrorDir = reflect( - viewDirection, waveNormal );
   float sunward = max( dot( mirrorDir, uSunDirection ), 0.0 );
   float glint = pow( sunward, 900.0 ) + 0.03 * pow( sunward, 60.0 );
-  col += uSunColor * uGlint * glint;
-  alpha = min( 1.0, alpha + glint * uGlint );
+  // A veil with a ceiling, like the caustic: a sparkle may not blank a tile.
+  float sparkle = min( glint * uGlint, uGlintCover );
+  col = mix( col, uSunColor, sparkle / max( alpha + sparkle, 0.0001 ) );
+  alpha = alpha + sparkle * ( 1.0 - alpha );
+  // Mirror and glint can each sit under the bloom threshold and still sum past it.
+  col *= min( 1.0, uRadianceCap / max( max( col.r, col.g ), max( col.b, 0.00001 ) ) );
 
   gl_FragColor = vec4( col, alpha );
   #include <fog_fragment>
@@ -239,6 +262,7 @@ const WATER_SHADER = {
       uTime: { value: 0 },
       uRadianceCap: { value: 8 },
       uGlint: { value: 0 },
+      uGlintCover: { value: 0 },
       uCaustic: { value: 0 },
       uSunDirection: { value: new THREE.Vector3(0, 1, 0) },
       // A Vector3, not a Color: the theme repaint translates Color uniforms.
@@ -246,7 +270,7 @@ const WATER_SHADER = {
     },
   ]),
   vertexShader: waterVertex,
-  fragmentShader: waterFragment,
+  fragmentShader: POOL_SURFACE_FRAGMENT,
 }
 
 interface Ripple {
@@ -306,7 +330,7 @@ export function createBufferWater(
   surface.onBeforeRender = (renderer, activeScene, camera, geometry, material, renderGroup): void => {
     const scale = waterReflectionScale(resolvedQuality.level)
     const air = atmosphere()
-    const enabled = scale > 0 && camera.position.y > surfaceY + 0.05
+    const enabled = poolMirrorEnabled(scale, air.daylight, camera.position.y > surfaceY + 0.05)
     const uniforms = surfaceMaterial.uniforms
     uniforms.uReflectionStrength.value = enabled ? 0.94 : 0
     /* Wherever bloom runs, the mirror and the glint stay under its threshold:
@@ -314,6 +338,7 @@ export function createBufferWater(
      * original may glow. */
     uniforms.uRadianceCap.value = air.bloomEnabled ? POOL_NIGHT_RADIANCE_CAP : 8
     uniforms.uGlint.value = poolGlint(!air.bloomEnabled)
+    uniforms.uGlintCover.value = poolGlintCover(!air.bloomEnabled)
     // Daylight and the top tiers only: at night there is no sun to focus.
     uniforms.uCaustic.value = air.daylight && scale >= 0.5 ? POOL_CAUSTIC_PEAK : 0
     ;(uniforms.uSunDirection.value as THREE.Vector3)

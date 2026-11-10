@@ -38,6 +38,9 @@ export const SEA_SHELF = { day: 0x4f6458, night: 0x0c1210 } as const
  */
 export const SURF = { reach: 58, wavelength: 13, speed: 2.4 } as const
 
+/** Seconds before the sea's clock wraps: a whole number of surf periods, so no line jumps. */
+export const SEA_TIME_WRAP = (756 * SURF.wavelength) / SURF.speed
+
 /** Metres offshore of the surf line that was at `shore0` metres `seconds` ago. */
 export function surfLinePosition(shore0: number, seconds: number): number {
   return shore0 - SURF.speed * seconds
@@ -128,9 +131,14 @@ vec3 seaSurface( vec2 p, float range, float detail ) {
     float close = 1.0 - smoothstep( 30.0, 140.0, range );
     vec2 c1 = mat2( 0.54, 0.84, -0.84, 0.54 ) * p * 0.42 + vec2( uTime * 0.31, uTime * 0.12 );
     vec2 c2 = mat2( 0.91, -0.41, 0.41, 0.91 ) * p * 1.3 - vec2( uTime * 0.44, - uTime * 0.27 );
-    sum.xy += seaChop( c1 ) * 0.5 * near;
-    sum.xy += seaChop( c2 ) * 0.26 * close;
-    sum.z += ( wetNoise( c1 ) - 0.5 ) * 0.5 * near;
+    // Most of an overview frame is far water: pay for chop only where it shows.
+    if ( near > 0.0 ) {
+      sum.xy += seaChop( c1 ) * 0.5 * near;
+      sum.z += ( wetNoise( c1 ) - 0.5 ) * 0.5 * near;
+    }
+    if ( close > 0.0 ) {
+      sum.xy += seaChop( c2 ) * 0.26 * close;
+    }
   }
   // Swell seen edge-on near the horizon stacks into ruled lines; let it lie down.
   sum.xy *= 1.0 - 0.7 * smoothstep( 350.0, 1600.0, range );
@@ -170,11 +178,18 @@ void main() {
       float w = fract( phase );
       // Lines sharpen and their foam thickens as the water shoals.
       float shoal = 1.0 - smoothstep( SURF_REACH * 0.2, SURF_REACH, shore );
-      float front = 1.0 - smoothstep( 0.0, 0.035 + 0.05 * shoal, w );
+      /* From the far side of the island a crest is thinner than a pixel and
+       * crawls. Widen it and thin it with range so it stays a line. */
+      float afar = smoothstep( 220.0, 900.0, range );
+      float front = 1.0 - smoothstep( 0.0, 0.035 + 0.05 * shoal + 0.2 * afar, w );
+      // The breaking edge leads the crest by a short ramp, not a one-pixel step.
+      front = max( front, smoothstep( 1.0 - ( 0.02 + 0.1 * afar ), 1.0, w ) );
       float face = smoothstep( 0.72, 1.0, w );
-      crest = front * shoal;
+      crest = front * shoal * ( 1.0 - 0.5 * afar );
       float lace = smoothstep( 0.42, 0.72, wetNoise( p * 0.62 + vec2( uTime * 0.21, - uTime * 0.13 ) ) * 0.6
                                         + wetNoise( p * 1.9 - uTime * 0.17 ) * 0.4 );
+      // Half-metre lace cells alias long before the surf zone leaves the frame.
+      lace = mix( lace, 0.4, afar );
       trail = ( 1.0 - smoothstep( 0.03, 0.62, w ) ) * lace * shoal * shoal;
       // The swash: where each line dies against the wall and slides back.
       float pulse = 0.5 + 0.5 * sin( 6.2831853 * ( uTime * ( SURF_SPEED / SURF_LENGTH ) + ragged ) );
@@ -329,7 +344,7 @@ export function createSea(edge: SeaEdgeField): SeaApi {
     uniforms.uFoamKey.value = air.bloomEnabled ? 0.12 : 0.62
     // Under a bloom pass foam stays below its threshold; daylight has none.
     uniforms.uFoamCap.value = air.bloomEnabled ? 0.8 : 1.4
-    if (!reduceMotion()) uniforms.uTime.value = (uniforms.uTime.value + dt) % 4096
+    if (!reduceMotion()) uniforms.uTime.value = (uniforms.uTime.value + dt) % SEA_TIME_WRAP
   }
 
   function dispose(): void {

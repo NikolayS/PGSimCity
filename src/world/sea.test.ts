@@ -16,6 +16,7 @@ import {
   createSea,
   seaWaveDetail,
   surfLinePosition,
+  SEA_TIME_WRAP,
 } from './sea'
 
 const LEVELS: readonly QualityLevel[] = ['low', 'reduced', 'medium', 'high', 'ultra']
@@ -126,6 +127,20 @@ describe('the sea around the island', () => {
     )
     expect(Number(material.defines.SURF_SPEED)).toBe(SURF.speed)
     expect(Number(material.defines.SURF_LENGTH)).toBe(SURF.wavelength)
+    sea.dispose()
+  })
+
+  it('wraps its clock on a whole number of surf periods, so the lines never jump', () => {
+    const periods = (SEA_TIME_WRAP * SURF.speed) / SURF.wavelength
+    expect(periods).toBeGreaterThan(100)
+    expect(Math.abs(periods - Math.round(periods))).toBeLessThan(1e-9)
+  })
+
+  it('does no chop arithmetic for water too far away to show it', () => {
+    const sea = createSea(edgeField())
+    const shader = (sea.mesh.material as THREE.ShaderMaterial).fragmentShader
+    expect(shader).toContain('if ( near > 0.0 ) {')
+    expect(shader).toContain('if ( close > 0.0 ) {')
     sea.dispose()
   })
 

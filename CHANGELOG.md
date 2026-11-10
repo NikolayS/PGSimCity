@@ -14,10 +14,44 @@ are all still moving. Expect breaking changes between minor versions.
 Graphics only; no simulation behaviour changes. The buffer pool's water height
 is still the representative sample's occupancy and nothing about it changed.
 
-- Surf. Swell that reaches the retaining wall steepens into lines that run in at walking pace, break, and leave lace behind them; a swash rises and falls against the wall. It follows the whole coastline, including the outermost capes, where the earlier wash never appeared.
+- Surf. Swell that reaches the retaining wall steepens into lines that run in at 2.4 m/s, break, and leave lace behind them; a swash rises and falls against the wall. It follows the whole coastline, including the outermost capes, where the earlier wash never appeared.
 - Open sea. Directional wave trains with deep-water dispersion replace sampled noise, with noise only for the short chop, so crests are crisp near and calm far. Water is paler and greener over the shelf, crests are lit from within toward the sun, whitecaps break on the steepest, and the cloud deck is mirrored in it at high and ultra.
-- Buffer pool water. A rippled surface with true Fresnel: clear when looked down into, a mirror at a grazing angle, with a sun glitter path. Its planar reflection now runs at night as well, so the towers and neon are mirrored in it, scaled under the bloom threshold with their hue kept.
-- Pool caustics, in daylight at high and ultra: a faint moving net of focused light. It is drawn on the surface as a veil of at most 7%, so a page tile beneath it is brightened slightly and never recoloured; a test holds every pair of page states apart through it.
+- Buffer pool water. A rippled surface with true Fresnel: clear when looked down into, a mirror at a grazing angle by day, with a sun glitter path. Glitter is a veil over the page tiles with a ceiling (10% by day, 3% under the moon), not added light.
+- Pool caustics, in daylight at high and ultra: a faint moving net of focused light, drawn on the surface as a veil of at most 5% toward the key light's colour. It warms and lifts the tile beneath it slightly.
+
+The page tiles under the pool carry page state in their colour, so every veil
+above them is tested against the tiles as rendered (palette colour times the
+per-state level, through the daylight remap), not against palette swatches: a
+tile under a caustic keeps at least four fifths of its separation from every
+other state, and a tile under the brightest sparkle stays nearer its own state
+than any other.
+
+### Review panel
+
+Two independent reviewers across two models, one on rendering correctness and
+one on semantic honesty, read the release before it merged. Blocking findings,
+both in the pool, and what became of them:
+
+- Withdrawn: the pool's planar reflection at night. It mirrored other
+  districts' neon onto the page tiles with its hue intact; at a 10° view a free
+  frame under reflected backend cyan measured 0.034 from a clean tile. The
+  mirror is daylight-only again, as in v0.59.0. A night mirror needs a design
+  in which a reflection cannot restate a tile, which does not exist yet.
+- Fixed: the daylight sun glitter was added light with no ceiling and whited
+  out roughly thirty tiles in the evidence capture. It is now a capped veil.
+- Fixed: the caustic test compared palette swatches blended toward white; the
+  shader blends rendered tiles toward the key colour. Measured correctly the
+  7% veil cost more than a fifth of two pairs' separation, so it is now 5%.
+
+Also fixed from the panel: mirror and glint could sum past the bloom threshold
+(one cap now follows both); chop noise ran for far water that could not show
+it; surf crests aliased at overview range and broke on a one-pixel step; the
+sea clock's wrap made surf lines jump every 68 minutes.
+
+Known and left: the medium tier pays for surf noise inside the 58 m surf band;
+the sea's wave trains still jump once when the clock wraps (about 68 minutes);
+pool glitter can sparkle at pixel scale between 60 and 220 m; the pool's
+ripple still reacts to reduced motion only at load, unlike the sea.
 
 Weather and water remain setting, not PostgreSQL facts. Sea, surf, foam and
 caustics are unregistered, unlabelled and unpickable; foam is lit, never
