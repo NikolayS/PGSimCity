@@ -23,7 +23,7 @@ import { ANCHOR, CITY } from '../world/layout'
 import { applyGroundAtmosphere } from '../world/plate-fog'
 import { applySkyAtmosphere } from '../world/sky'
 import type { Bus, QualityLevel, QualitySettings } from '../core/types'
-import { FILM_LENS, GoldenHourOutputPass } from './color-grade'
+import { FILM_LENS, GoldenHourOutputPass, LIGHT_SCATTER } from './color-grade'
 import { LIGHT_SHAFT_PRESETS, LightShaftPass } from './light-shafts'
 import { waterReflectionScale } from './water'
 import { WetReflectionPass } from './wet-reflections'
@@ -766,6 +766,12 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
         FILM_LENS.grain * film,
         (air.daylight ? FILM_LENS.dayVignette : FILM_LENS.nightVignette) * film,
         !reducedMotion,
+      )
+      // Only where bloom runs: daylight has no bloom chain to scatter from.
+      const scatters = bloomPass !== null && quality.bloom && air.bloomEnabled && fidelity.ambientOcclusion
+      outputPass.setLightScatter(
+        scatters ? bloomPass!.renderTargetsVertical[bloomPass!.nMips - 1].texture : null,
+        LIGHT_SCATTER.strength,
       )
       outputPass.setAerialPerspective(
         air.fogColor,

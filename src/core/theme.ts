@@ -629,6 +629,36 @@ const SURFACE_NORMAL_FRAG = /* glsl */ `
 }
 `
 
+/* Rolled steel for the city's machinery: smudged, brushed along the sheet and
+ * seamed every 2.4 m. Roughness carries most of it, because variation in a
+ * metal reads through its reflection, not its albedo. Achromatic throughout:
+ * rust would be amber, and amber means WAL. */
+const METAL_FRAG = /* glsl */ `
+{
+	vec3 pgDX = dFdx( pgWorld );
+	vec3 pgDY = dFdy( pgWorld );
+	vec3 pgFN = abs( normalize( cross( pgDX, pgDY ) ) );
+	float pgPx = max( dot( abs( pgDX ), vec3( 1.0 ) ), dot( abs( pgDY ), vec3( 1.0 ) ) );
+	float pgFlat = smoothstep( 0.55, 0.82, pgFN.y );
+	float pgU = mix( pgWorld.x, pgWorld.z, step( pgFN.z, pgFN.x ) );
+	vec2 pgSt = vec2( mix( pgU, pgWorld.x, pgFlat ), mix( pgWorld.y, pgWorld.z, pgFlat ) );
+	float pgFade = 1.0 - smoothstep( 0.5, 3.0, pgPx );
+
+	float pgBrush = pgValueNoise( vec2( pgSt.x * 9.0, pgSt.y * 0.35 ) + pgSeed * 17.0 );
+	float pgSmudge = pgValueNoise( pgSt * 0.6 + pgSeed * 29.0 ) * 0.6 + pgValueNoise( pgSt * 2.3 + 3.0 ) * 0.4;
+	float pgSeamAt = pgSt.y / 2.4 + pgSeed.y;
+	float pgSeam = 1.0 - smoothstep( 0.0, fwidth( pgSeamAt ) * 1.5 + 0.012, 0.5 - abs( fract( pgSeamAt ) - 0.5 ) );
+	pgSeam *= 1.0 - smoothstep( 0.15, 0.5, pgPx );
+
+	roughnessFactor = clamp(
+		roughnessFactor + ( pgSmudge - 0.5 ) * 0.34 * pgFade + ( pgBrush - 0.5 ) * 0.12 * pgFade + pgSeam * 0.2,
+		0.12, 1.0 );
+	float pgGrime = 1.0 - 0.07 * ( 1.0 - smoothstep( 0.0, 1.6, pgWorld.y ) );
+	diffuseColor.rgb *= ( 1.0 + ( pgSmudge - 0.5 ) * 0.16 * pgFade ) * ( 1.0 - pgSeam * 0.10 ) * pgGrime;
+	pgSurfaceHeight = ( ( pgBrush - 0.5 ) * 0.0006 - pgSeam * 0.004 ) * ( 1.0 - smoothstep( 0.12, 0.42, pgPx ) );
+}
+`
+
 /*
  * Written inline rather than as a function called from the chunk. A helper
  * declared at the top of the shader is not reliably in scope by the time the
@@ -681,7 +711,7 @@ export interface ThemeShaderSource {
  * correct in both modes, and night is the only mode that has no other way to
  * tell a wall from a slab once the neon is off.
  */
-function patchThemeShader(shader: ThemeShaderSource, surface: boolean): void {
+function patchThemeShader(shader: ThemeShaderSource, surface: boolean, metal = false): void {
   let f = shader.fragmentShader
   if (airFor(mode).toon) {
     if (f.indexOf(DAYLIGHT_ANCHOR) >= 0) f = f.replace(DAYLIGHT_ANCHOR, DAYLIGHT_ANCHOR + '\n' + DAYLIGHT_GLSL)
@@ -706,6 +736,16 @@ function patchThemeShader(shader: ThemeShaderSource, surface: boolean): void {
         .replace(BAKED_NORMAL_VERT_ANCHOR, BAKED_NORMAL_VERT_ANCHOR + '\n' + BAKED_VERT)
         .replace(SURFACE_VERT_ANCHOR, SURFACE_VERT_ANCHOR + '\n' + SURFACE_VERT)
   }
+  // Machinery shares the world-space varyings but not the baked transport,
+  // whose vertex attributes exist only on masonry geometry.
+  if (metal && !surface && f.indexOf(SURFACE_ANCHOR) >= 0) {
+    f = SURFACE_FRAG_DECLS + f.replace(SURFACE_ANCHOR, SURFACE_ANCHOR + '\n' + METAL_FRAG)
+    if (f.indexOf(SURFACE_NORMAL_ANCHOR) >= 0) {
+      f = f.replace(SURFACE_NORMAL_ANCHOR, SURFACE_NORMAL_ANCHOR + '\n' + SURFACE_NORMAL_FRAG)
+    }
+    shader.vertexShader =
+      SURFACE_VARYINGS + shader.vertexShader.replace(SURFACE_VERT_ANCHOR, SURFACE_VERT_ANCHOR + '\n' + SURFACE_VERT)
+  }
   shader.fragmentShader = f
 }
 
@@ -723,12 +763,20 @@ function themeHookPlain(shader: ThemeShaderSource): void {
   patchThemeShader(shader, false)
 }
 
+function themeHookMetal(shader: ThemeShaderSource): void {
+  patchThemeShader(shader, false, true)
+}
+
 function themeCacheKey(): string {
   return airFor(mode).toon ? 'pg-day-s' : 'pg-night-s'
 }
 
 function themeCacheKeyPlain(): string {
   return airFor(mode).toon ? 'pg-day' : 'pg-night'
+}
+
+function themeCacheKeyMetal(): string {
+  return airFor(mode).toon ? 'pg-day-m' : 'pg-night-m'
 }
 
 function isStandard(m: THREE.Material): m is THREE.MeshStandardMaterial {
@@ -744,20 +792,21 @@ function isStandard(m: THREE.Material): m is THREE.MeshStandardMaterial {
  * ShaderMaterials are skipped — they carry no three chunks to replace, and
  * their colours are handled through their uniforms instead.
  */
-function installThemeShader(m: THREE.Material, target: ThemeMode, surface: boolean): void {
+function installThemeShader(m: THREE.Material, target: ThemeMode, surface: boolean, metal = false): void {
   if ((m as THREE.ShaderMaterial).isShaderMaterial === true) return
   const ud = m.userData as ThemeUserData
   ud.pgSurface = surface
-  const hook = surface ? themeHook : themeHookPlain
+  const steel = metal && !surface
+  const hook = surface ? themeHook : steel ? themeHookMetal : themeHookPlain
   if (m.onBeforeCompile !== hook) {
     m.onBeforeCompile = hook
-    m.customProgramCacheKey = surface ? themeCacheKey : themeCacheKeyPlain
+    m.customProgramCacheKey = surface ? themeCacheKey : steel ? themeCacheKeyMetal : themeCacheKeyPlain
     ud.pgProgram = undefined
   }
   /* The compiled variant is (mode, surface), so the gate has to track both. A
    * gate that watched the toon flag alone would leave a material that changed
    * variant running its previous program until the next mode toggle. */
-  const want = (airFor(target).toon ? 2 : 0) + (surface ? 1 : 0)
+  const want = (airFor(target).toon ? 4 : 0) + (surface ? 1 : steel ? 2 : 0)
   if (ud.pgProgram === want) return
   ud.pgProgram = want
   m.needsUpdate = true
@@ -838,6 +887,8 @@ interface MatSpec {
   emissive: number
   emissiveIntensity: number
   surface: boolean
+  /** Steel response. Never set when the caller chose `surface` explicitly. */
+  metal: boolean
 }
 
 function daylightRoughness(authored: number, masonry: boolean): number {
@@ -862,7 +913,7 @@ function paintMat(m: THREE.MeshStandardMaterial, s: MatSpec, target: ThemeMode):
     m.emissive.setHex(s.emissive)
   }
   m.emissiveIntensity = s.emissiveIntensity
-  installThemeShader(m, target, s.surface)
+  installThemeShader(m, target, s.surface, s.metal)
 }
 
 interface NeonSpec {
@@ -1100,7 +1151,10 @@ export function paintSceneMaterial(m: THREE.Material, target: ThemeMode): void {
    * repainted metalness would change the material family on a later toggle. */
   const authoredMetalness = night.metalness ?? std.metalness
   const surface = lit && ud.pgNoSurface !== true && basic.vertexColors !== true && authoredMetalness < 0.45
-  installThemeShader(m, target, surface)
+  // Per-instance colour is live state and glass is see-through: neither is steel.
+  const metal =
+    lit && !surface && ud.pgNoSurface !== true && basic.vertexColors !== true && !m.transparent && authoredMetalness >= 0.45
+  installThemeShader(m, target, surface, metal)
 
   const hasColor = (basic.color as THREE.Color | undefined) !== undefined
   // vertexColors means `color` is a per-instance multiplier; leave it white.
@@ -1201,6 +1255,7 @@ export function createTheme(): ThemeApi {
          * vault door, a pressure vessel. Coursed joints on any of them claim
          * the wrong material, so the default follows the metal. */
         surface: opts.surface ?? metalness < 0.45,
+        metal: opts.surface === undefined && metalness >= 0.45 && !(opts.transparent ?? false),
       }
       m = new THREE.MeshStandardMaterial({
         transparent: opts.transparent ?? false,

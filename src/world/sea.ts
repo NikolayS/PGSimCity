@@ -21,7 +21,7 @@ export const SEA_LEVEL = -9
 /** Beyond the far fog distance in both modes, so no edge is ever visible. */
 export const SEA_RADIUS = 3800
 /** Deep-water body colour, sRGB. Low chroma by construction. */
-export const SEA_DEEP = { day: 0x1f3440, night: 0x03060b } as const
+export const SEA_DEEP = { day: 0x1f3440, night: 0x050a14 } as const
 
 /** Metres the water reaches in under the kerb before the island cuts it away. */
 export const SEA_UNDERCUT = 3
@@ -52,6 +52,7 @@ uniform vec3 uSkyGlow;
 uniform vec3 uSunDirection;
 uniform vec3 uSunColor;
 uniform float uGlint;
+uniform float uSheen;
 uniform float uTime;
 uniform float uWaves;
 uniform sampler2D uEdge;
@@ -62,10 +63,12 @@ varying vec3 vWorld;
 
 ${WET_FIELD_GLSL}
 
-// Two crossing swells; the gradient is taken analytically cheap, by offset.
+// Two crossing swells on rotated axes, so no lattice lines up with the coast.
 float seaHeight( vec2 p ) {
-  return wetNoise( p * 0.045 + vec2( uTime * 0.035, uTime * 0.021 ) )
-       + 0.5 * wetNoise( p * 0.13 - vec2( uTime * 0.05, -uTime * 0.03 ) );
+  vec2 a = mat2( 0.8, 0.6, -0.6, 0.8 ) * p;
+  vec2 b = mat2( 0.28, -0.96, 0.96, 0.28 ) * p;
+  return wetNoise( a * 0.045 + vec2( uTime * 0.035, uTime * 0.021 ) )
+       + 0.5 * wetNoise( b * 0.13 - vec2( uTime * 0.05, -uTime * 0.03 ) );
 }
 
 void main() {
@@ -84,12 +87,14 @@ void main() {
     float h = seaHeight( p );
     vec2 slope = vec2( seaHeight( p + vec2( 1.5, 0.0 ) ) - h, seaHeight( p + vec2( 0.0, 1.5 ) ) - h );
     if ( uWaves > 1.5 ) {
-      float chop = wetNoise( p * 0.6 + uTime * 0.11 );
-      slope += vec2( wetNoise( p * 0.6 + vec2( 0.4, 0.0 ) + uTime * 0.11 ) - chop,
-                     wetNoise( p * 0.6 + vec2( 0.0, 0.4 ) + uTime * 0.11 ) - chop ) * 0.35;
+      // Chop is a near-field detail; past a few hundred metres it only aliases.
+      vec2 q = mat2( 0.54, 0.84, -0.84, 0.54 ) * p * 0.6 + uTime * 0.11;
+      float chop = wetNoise( q );
+      float near = 1.0 - smoothstep( 80.0, 520.0, range );
+      slope += vec2( wetNoise( q + vec2( 0.4, 0.0 ) ) - chop, wetNoise( q + vec2( 0.0, 0.4 ) ) - chop ) * 0.35 * near;
     }
     // Waves flatten toward the horizon, or the far sea boils with aliasing.
-    float calm = 1.0 - smoothstep( 300.0, 2400.0, range );
+    float calm = 1.0 - 0.85 * smoothstep( 250.0, 1800.0, range );
     normal = normalize( vec3( - slope.x * 0.9 * calm, 1.0, - slope.y * 0.9 * calm ) );
   }
   vec3 mirror = reflect( - toEye, normal );
@@ -98,7 +103,7 @@ void main() {
   vec3 sky = wetSky( mirror, uSunDirection, uSkyZenith, uSkyHorizon, uSkyGlow );
   float sunward = max( dot( mirror, uSunDirection ), 0.0 );
   vec3 col = mix( uDeep, sky, fresnel );
-  col += uSunColor * uGlint * ( pow( sunward, 260.0 ) + 0.06 * pow( sunward, 28.0 ) );
+  col += uSunColor * uGlint * ( pow( sunward, 260.0 ) + uSheen * pow( sunward, 28.0 ) );
   gl_FragColor = vec4( col, 1.0 );
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
@@ -132,6 +137,7 @@ export function createSea(edge: SeaEdgeField): SeaApi {
       uSunDirection: { value: new THREE.Vector3(0, 1, 0) },
       uSunColor: { value: new THREE.Vector3(1, 1, 1) },
       uGlint: { value: 0 },
+      uSheen: { value: 0.06 },
       uTime: { value: 0 },
       uWaves: { value: 0 },
       uEdge: { value: null },
@@ -179,6 +185,8 @@ export function createSea(edge: SeaEdgeField): SeaApi {
       .normalize()
     // Night stays under the bloom threshold: a moon path is weather, not signal.
     uniforms.uGlint.value = 0.5 + 1.6 * light
+    // A moon path is broad and faint; a sun path is tight and bright.
+    uniforms.uSheen.value = 0.2 - 0.14 * light
     uniforms.uWaves.value = seaWaveDetail(quality)
     if (!reduceMotion()) uniforms.uTime.value = (uniforms.uTime.value + dt) % 4096
   }

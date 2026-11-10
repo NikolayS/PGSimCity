@@ -492,12 +492,31 @@ describe('what counts as masonry', () => {
     setThemeMode('night', { persist: false })
   })
 
-  it('courses stone and leaves machinery alone', () => {
+  it('courses stone and gives machinery steel, never masonry', () => {
     // A flywheel, a vault door and a pressure vessel are steel. This city
     // already says so with metalness, so nothing had to be re-declared.
     const wall = compile(theme.mat('wal.struct', { color: 0x2a3752, metalness: 0.3 }), true)
     const steel = compile(theme.mat('wal.heavy', { color: 0x202b42, metalness: 0.48 }), true)
-    expect(wall.fragmentShader).toContain('pgWorld')
-    expect(steel.fragmentShader).not.toContain('pgWorld')
+    expect(wall.fragmentShader).toContain('pgCourse')
+    // Coursed joints and formwork tie holes on a vault door claim the wrong material.
+    for (const masonry of ['pgCourse', 'pgBed', 'pgTie', 'pgBakedIndirect']) {
+      expect(steel.fragmentShader, masonry).not.toContain(masonry)
+      expect(steel.vertexShader, masonry).not.toContain(masonry)
+    }
+    expect(steel.fragmentShader).toContain('pgBrush')
+    const wallMat = theme.mat('wal.struct', { color: 0x2a3752, metalness: 0.3 })
+    const steelMat = theme.mat('wal.heavy', { color: 0x202b42, metalness: 0.48 })
+    expect(steelMat.customProgramCacheKey?.()).not.toBe(wallMat.customProgramCacheKey?.())
+  })
+
+  it('keeps steel achromatic and off anything that opted out or is see-through', () => {
+    const steel = compile(theme.mat('wal.vessel', { color: 0x202b42, metalness: 0.6 }), true)
+    const writes = steel.fragmentShader.slice(steel.fragmentShader.indexOf('float pgBrush')).match(/\n\tdiffuseColor[^;]*;/g) ?? []
+    expect(writes.length).toBeGreaterThan(0)
+    // One scalar product on rgb: rust would be amber, and amber means WAL.
+    for (const write of writes) expect(write).toMatch(/diffuseColor\.rgb \*= [^v]*;/)
+    const optedOut = compile(theme.mat('wal.plainsteel', { color: 0x202b42, metalness: 0.6, surface: false }), true)
+    const glass = compile(theme.mat('wal.window', { color: 0x9fd8ff, metalness: 0.6, transparent: true, opacity: 0.4 }), true)
+    for (const out of [optedOut, glass]) expect(out.fragmentShader).not.toContain('pgBrush')
   })
 })

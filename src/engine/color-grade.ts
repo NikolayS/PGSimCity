@@ -125,6 +125,43 @@ vec3 pgFilmLens( vec3 color, vec2 uv ) {
 }
 `
 
+/**
+ * Night haze lit by the city. The source is the bloom chain's widest blur,
+ * which holds only what already cleared the bloom threshold, so the haze can
+ * glow only where a semantic signal is: it spreads meaning, it adds none.
+ */
+export const LIGHT_SCATTER = {
+  /** Linear-HDR gain on the wide blur at full path length. */
+  strength: 0.42,
+  /** Share present even at arm's length, so near lamps are not haloless. */
+  nearShare: 0.3,
+  nearMetres: 40,
+  farMetres: 700,
+} as const
+
+/** Fraction of the scatter gain a surface at `distance` metres receives. */
+export function lightScatterShare(distance: number): number {
+  const t = Math.max(0, Math.min(1, (distance - LIGHT_SCATTER.nearMetres) / (LIGHT_SCATTER.farMetres - LIGHT_SCATTER.nearMetres)))
+  return LIGHT_SCATTER.nearShare + (1 - LIGHT_SCATTER.nearShare) * t * t * (3 - 2 * t)
+}
+
+const SCATTER_UNIFORMS = /* glsl */ `
+uniform sampler2D pgScatterWide;
+uniform float pgScatterStrength;
+
+vec3 pgLightScatter( vec3 color, vec2 uv ) {
+	float depth = texture2D( pgSceneDepth, uv ).x;
+	float path = 1.0;
+	if ( depth < 0.999999 ) {
+		vec4 view = pgProjectionInverse * vec4( uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0 );
+		view /= max( view.w, 0.000001 );
+		path = smoothstep( ${LIGHT_SCATTER.nearMetres.toFixed(1)}, ${LIGHT_SCATTER.farMetres.toFixed(1)}, length( view.xyz ) );
+	}
+	float share = ${LIGHT_SCATTER.nearShare.toFixed(3)} + ${(1 - LIGHT_SCATTER.nearShare).toFixed(3)} * path;
+	return color + texture2D( pgScatterWide, uv ).rgb * pgScatterStrength * share;
+}
+`
+
 const FILM_ANCHOR = '\n\t\t}'
 
 const SAMPLE_ANCHOR = 'uniform sampler2D tDiffuse;'
@@ -142,6 +179,7 @@ export class GoldenHourOutputPass extends OutputPass {
   private readonly camera: THREE.PerspectiveCamera | null
   private readonly depthSource: SceneDepthSource | null
   private filmAnimated = true
+  private scatterStrength = 0
 
   constructor(camera: THREE.PerspectiveCamera | null = null, depthSource: SceneDepthSource | null = null) {
     super()
@@ -155,6 +193,8 @@ export class GoldenHourOutputPass extends OutputPass {
     this.uniforms.pgGradeVignette = { value: GOLDEN_HOUR_GRADE.vignette }
     this.uniforms.pgGradeContrast = { value: GOLDEN_HOUR_GRADE.contrast }
     this.uniforms.pgGradePivot = { value: GOLDEN_HOUR_GRADE.pivot }
+    this.uniforms.pgScatterWide = { value: null }
+    this.uniforms.pgScatterStrength = { value: 0 }
     this.uniforms.pgFilmGrain = { value: 0 }
     this.uniforms.pgFilmVignette = { value: 0 }
     this.uniforms.pgFilmTime = { value: 0 }
@@ -168,10 +208,11 @@ export class GoldenHourOutputPass extends OutputPass {
     this.uniforms.pgProjectionInverse = { value: new THREE.Matrix4() }
     this.uniforms.pgCameraWorld = { value: new THREE.Matrix4() }
     this.material.fragmentShader = this.material.fragmentShader
-      .replace(SAMPLE_ANCHOR, `${SAMPLE_ANCHOR}\n${GRADE_UNIFORMS}\n${AERIAL_UNIFORMS}\n${FILM_UNIFORMS}`)
+      .replace(SAMPLE_ANCHOR, `${SAMPLE_ANCHOR}\n${GRADE_UNIFORMS}\n${AERIAL_UNIFORMS}\n${SCATTER_UNIFORMS}\n${FILM_UNIFORMS}`)
       .replace(
         GRADE_ANCHOR,
         '\n\t\t\tif ( pgAerialEnabled > 0.5 ) gl_FragColor.rgb = pgApplyHeightFog( gl_FragColor.rgb, vUv );' +
+          '\n\t\t\tif ( pgScatterStrength > 0.0 ) gl_FragColor.rgb = pgLightScatter( gl_FragColor.rgb, vUv );' +
           '\n\t\t\tif ( pgGradeEnabled > 0.5 ) gl_FragColor.rgb = pgGoldenHourGrade( gl_FragColor.rgb, vUv );' +
           GRADE_ANCHOR,
       )
@@ -192,6 +233,12 @@ export class GoldenHourOutputPass extends OutputPass {
     this.uniforms.pgFilmVignette.value = vignette
     this.filmAnimated = animated
     if (!animated) this.uniforms.pgFilmTime.value = 0
+  }
+
+  /** `wide` is the bloom chain's widest blur; null or zero strength disables the term. */
+  setLightScatter(wide: THREE.Texture | null, strength: number): void {
+    this.uniforms.pgScatterWide.value = wide
+    this.scatterStrength = wide ? strength : 0
   }
 
   setAerialPerspective(color: number, density: number, falloff: number, strength: number): void {
@@ -217,6 +264,8 @@ export class GoldenHourOutputPass extends OutputPass {
       this.uniforms.pgProjectionInverse.value.copy(camera.projectionMatrixInverse)
       this.uniforms.pgCameraWorld.value.copy(camera.matrixWorld)
     }
+    // Scatter needs the path length; without scene depth it would glow uniformly.
+    this.uniforms.pgScatterStrength.value = depth && camera ? this.scatterStrength : 0
     if (this.filmAnimated) this.uniforms.pgFilmTime.value = (this.uniforms.pgFilmTime.value + deltaTime) % 64
     super.render(renderer, writeBuffer, readBuffer, deltaTime, maskActive)
   }
