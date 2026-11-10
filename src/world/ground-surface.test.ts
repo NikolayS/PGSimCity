@@ -1,13 +1,21 @@
 import { describe, expect, it } from 'vitest'
 
+import { ATMOSPHERE } from '../core/themes'
+
 import {
   GROUND_SURFACE_CHANNELS,
   GROUND_SURFACE_HEIGHT_METRES,
   GROUND_SURFACE_MAX_SLOPE,
   GROUND_SURFACE_SIZE,
   GROUND_SURFACE_WORLD_METRES,
+  WET_DAMP_MIRROR,
+  WET_FIELD_GLSL,
+  WET_FRESNEL_FLOOR,
+  WET_POOL_MIRROR,
   createGroundSurfaceData,
+  groundGlint,
   groundSurfaceDetail,
+  groundWetness,
   groundSurveyDetail,
 } from './ground-surface'
 
@@ -95,5 +103,40 @@ describe('procedural ground surface', () => {
     expect(groundSurfaceDetail('day', 'medium')).toBe(1)
     expect(groundSurfaceDetail('day', 'high')).toBe(2)
     expect(groundSurfaceDetail('day', 'ultra')).toBe(2)
+  })
+
+  it('spends rain-wet paving only on the tiers that already sample the aggregate', () => {
+    expect(groundWetness('low')).toBe(0)
+    expect(groundWetness('reduced')).toBe(0)
+    expect(groundWetness('medium')).toBe(0)
+    expect(groundWetness('high')).toBe(1)
+    expect(groundWetness('ultra')).toBe(1)
+  })
+
+  it('keeps a mirrored moon below the night bloom threshold', () => {
+    // Glow is reserved for meaning; standing water is weather.
+    expect(groundGlint(false)).toBeLessThan(ATMOSPHERE.night.bloomThreshold)
+    expect(groundGlint(true)).toBeGreaterThan(groundGlint(false))
+  })
+
+  it('makes standing water a stronger mirror than damp paving, and neither a full one', () => {
+    expect(WET_POOL_MIRROR).toBeGreaterThan(WET_DAMP_MIRROR)
+    expect(WET_POOL_MIRROR).toBeLessThan(1)
+    expect(WET_DAMP_MIRROR).toBeGreaterThan(0)
+    expect(WET_FRESNEL_FLOOR).toBeGreaterThanOrEqual(0.02)
+    expect(WET_FRESNEL_FLOOR).toBeLessThan(0.2)
+  })
+
+  it('floods standing water only inside paving that is already damp', () => {
+    const steps = /smoothstep\( ([0-9.]+), ([0-9.]+), level \),\s+smoothstep\( ([0-9.]+), ([0-9.]+), level \)/.exec(
+      WET_FIELD_GLSL,
+    )
+    expect(steps).not.toBeNull()
+    const [dampLo, dampHi, poolLo, poolHi] = steps!.slice(1).map(Number)
+    expect(dampLo).toBeLessThan(dampHi)
+    expect(poolLo).toBeGreaterThanOrEqual(dampHi)
+    expect(poolHi).toBeGreaterThan(poolLo)
+    // Weather may darken and mirror; it may never emit.
+    expect(WET_FIELD_GLSL).not.toContain('emissive')
   })
 })

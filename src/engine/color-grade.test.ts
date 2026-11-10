@@ -219,3 +219,50 @@ describe('local-clock colour separation', () => {
     }
   })
 })
+
+describe('film lens', () => {
+  it('leaves the centre of the frame, where the palette is read, untouched', async () => {
+    const { FILM_LENS, filmVignette } = await import('./color-grade')
+    for (const strength of [FILM_LENS.dayVignette, FILM_LENS.nightVignette]) {
+      expect(filmVignette(0, strength)).toBe(1)
+      expect(filmVignette(0.18, strength)).toBe(1)
+      expect(filmVignette(1, strength)).toBeCloseTo(1 - strength, 10)
+      let previous = 1
+      for (let edge = 0; edge <= 1.0001; edge += 0.02) {
+        const value = filmVignette(edge, strength)
+        expect(value).toBeLessThanOrEqual(previous)
+        previous = value
+      }
+    }
+  })
+
+  it('keeps grain an order of magnitude below the semantic separation margin', async () => {
+    const { FILM_LENS } = await import('./color-grade')
+    // Half the peak-to-peak amplitude in display space, against the 0.045 OKLab floor.
+    expect(FILM_LENS.grain / 2).toBeLessThan(0.02)
+    expect(FILM_LENS.grain).toBeGreaterThan(0)
+  })
+
+  it('runs after tone mapping and display encoding, never before the grade', async () => {
+    const { GoldenHourOutputPass } = await import('./color-grade')
+    const pass = new GoldenHourOutputPass()
+    const source = pass.material.fragmentShader
+    const lens = source.lastIndexOf('pgFilmLens( gl_FragColor.rgb, vUv )')
+    expect(lens).toBeGreaterThan(source.indexOf('sRGBTransferOETF( gl_FragColor )'))
+    expect(lens).toBeGreaterThan(source.indexOf('pgGoldenHourGrade( gl_FragColor.rgb, vUv )'))
+    pass.setFilm(0.03, 0.2, false)
+    expect(pass.uniforms.pgFilmTime.value).toBe(0)
+    pass.dispose()
+  })
+
+  it('holds scene grey fixed under the contrast curve', async () => {
+    const { GOLDEN_HOUR_GRADE } = await import('./color-grade')
+    const curve = (tone: number) =>
+      GOLDEN_HOUR_GRADE.pivot * Math.pow(tone / GOLDEN_HOUR_GRADE.pivot, GOLDEN_HOUR_GRADE.contrast)
+    expect(curve(GOLDEN_HOUR_GRADE.pivot)).toBeCloseTo(GOLDEN_HOUR_GRADE.pivot, 12)
+    expect(curve(0.05)).toBeLessThan(0.05)
+    expect(curve(0.6)).toBeGreaterThan(0.6)
+    expect(GOLDEN_HOUR_GRADE.contrast).toBeGreaterThan(1)
+  })
+})
+

@@ -338,8 +338,10 @@ const VCOLOR_ANCHOR = '#include <color_fragment>'
  *
  * WHAT IT MAY DO. The one height signal affects albedo, roughness, and the
  * standard material's lighting normal. It never writes emissive or adds a
- * bright seam. Albedo contrast stays below eight percent and relief below
- * 1.2 cm, so structure acquires material response without acquiring meaning.
+ * bright seam. Joint contrast stays below eight percent and relief below
+ * 1.2 cm; exposure history (curing blotches, run-off streaks) may move albedo
+ * by up to a fifth, and is achromatic, so structure acquires age and material
+ * response without acquiring meaning.
  *
  * WHERE IT MAY GO. Injection is guarded on <roughnessmap_fragment>, an anchor
  * that exists only in the standard/physical fragment shader — which is exactly
@@ -477,6 +479,23 @@ const SURFACE_FRAG_DECLS = /* glsl */ `
 varying vec3 pgWorld;
 varying vec2 pgSeed;
 float pgSurfaceHeight;
+
+float pgHash( vec2 p ) {
+	p = fract( p * vec2( 0.1031, 0.1030 ) );
+	p += dot( p, p.yx + 33.33 );
+	return fract( ( p.x + p.y ) * p.x );
+}
+
+float pgValueNoise( vec2 p ) {
+	vec2 i = floor( p );
+	vec2 f = fract( p );
+	f = f * f * ( 3.0 - 2.0 * f );
+	return mix(
+		mix( pgHash( i ), pgHash( i + vec2( 1.0, 0.0 ) ), f.x ),
+		mix( pgHash( i + vec2( 0.0, 1.0 ) ), pgHash( i + vec2( 1.0, 1.0 ) ), f.x ),
+		f.y
+	);
+}
 `
 
 const SURFACE_VERT = /* glsl */ `
@@ -556,7 +575,20 @@ const SURFACE_FRAG = /* glsl */ `
 	float pgTone = 1.0 + ( pgSeed.x - 0.5 ) * 0.07;
 	float pgWarm = ( pgSeed.y - 0.5 ) * 0.05;
 
+	/* Exposure history. Curing blotches several metres across survive to orbit
+	 * range, where joints have long retired, so a facade is never one flat RGB;
+	 * run-off streaks belong to walls only and hang from wherever water sheds.
+	 * Both are achromatic and multiplicative: age, never meaning. */
+	vec2 pgSt = vec2( pgMu, pgMv );
+	float pgBlotch = pgValueNoise( pgSt * 0.19 + pgSeed * 31.0 ) * 0.62
+	               + pgValueNoise( pgSt * 0.77 + 11.0 ) * 0.38 - 0.5;
+	float pgStreak = pgValueNoise( vec2( pgU * 2.1 + pgSeed.x * 40.0, pgWorld.y * 0.11 ) );
+	pgStreak = smoothstep( 0.56, 0.96, pgStreak ) * ( 1.0 - pgFlat );
+	float pgWeather = ( pgBlotch * 0.19 - pgStreak * 0.11 ) * ( 1.0 - smoothstep( 1.6, 6.5, pgPx ) );
+	roughnessFactor = clamp( roughnessFactor - pgWeather * 0.5, 0.3, 1.0 );
+
 	diffuseColor.rgb *= ( 1.0 - pgJoint ) * pgGrade * pgRain * pgTone * ( 1.0 + pgN * 0.038 );
+	diffuseColor.rgb *= 1.0 + pgWeather;
 	diffuseColor.rgb *= vec3( 1.0 + pgWarm, 1.0, 1.0 - pgWarm );
 }
 `

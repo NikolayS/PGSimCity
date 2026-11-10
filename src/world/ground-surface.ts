@@ -82,3 +82,88 @@ export function groundSurfaceDetail(mode: ThemeMode, quality: QualityLevel): 0 |
   if (mode === 'night' || quality === 'low' || quality === 'reduced') return 0
   return quality === 'medium' ? 1 : 2
 }
+
+/**
+ * Rain-wet paving costs two noise fields over the largest surface in frame, so
+ * only the tiers that already pay for the aggregate lookup receive it.
+ */
+export function groundWetness(quality: QualityLevel): number {
+  return quality === 'high' || quality === 'ultra' ? 1 : 0
+}
+
+/**
+ * Peak radiance of the key light mirrored in standing water. Night stays below
+ * the bloom threshold: a moon glint must never glow like a semantic signal.
+ */
+export function groundGlint(daylight: boolean): number {
+  return daylight ? 2.4 : 0.55
+}
+
+/** Fresnel floor of the stylized water film; real water is 0.02 and reads as dry from orbit. */
+export const WET_FRESNEL_FLOOR = 0.08
+/** Share of the mirrored radiance kept by standing water and by merely damp paving. */
+export const WET_POOL_MIRROR = 0.92
+export const WET_DAMP_MIRROR = 0.5
+
+/**
+ * One wetness field for every consumer. The plate shades with it and the
+ * reflection pass masks with it, so a mirrored building can only ever appear
+ * where the paving already shows standing water.
+ */
+export const WET_FIELD_GLSL = /* glsl */ `
+float wetHash( vec2 p ) {
+  p = fract( p * vec2( 0.1031, 0.1030 ) );
+  p += dot( p, p.yx + 33.33 );
+  return fract( ( p.x + p.y ) * p.x );
+}
+
+float wetNoise( vec2 p ) {
+  vec2 i = floor( p );
+  vec2 f = fract( p );
+  f = f * f * ( 3.0 - 2.0 * f );
+  return mix(
+    mix( wetHash( i ), wetHash( i + vec2( 1.0, 0.0 ) ), f.x ),
+    mix( wetHash( i + vec2( 0.0, 1.0 ) ), wetHash( i + vec2( 1.0, 1.0 ) ), f.x ),
+    f.y
+  );
+}
+
+// Rotated lacunarity hides the lattice; four octaves is the whole budget.
+float wetFbm( vec2 p ) {
+  float sum = 0.0;
+  float amp = 0.5;
+  for ( int i = 0; i < 4; i++ ) {
+    sum += amp * wetNoise( p );
+    p = mat2( 1.6, 1.2, -1.2, 1.6 ) * p;
+    amp *= 0.5;
+  }
+  return sum;
+}
+
+// x: broad tone, y: fine tone, z: damp paving, w: standing water.
+vec4 wetField( vec2 p, float viewDistance ) {
+  float broad = wetFbm( p / 96.0 + 7.3 );
+  float fine = wetFbm( p / 13.0 - 3.1 );
+  float nearFine = 1.0 - smoothstep( 260.0, 900.0, viewDistance );
+  float level = broad * 0.78 + fine * 0.22 * nearFine + 0.11 * ( 1.0 - nearFine );
+  return vec4(
+    broad,
+    ( fine - 0.47 ) * nearFine,
+    smoothstep( 0.30, 0.44, level ),
+    smoothstep( 0.46, 0.51, level )
+  );
+}
+
+vec3 wetSky( vec3 mirror, vec3 sunDirection, vec3 zenith, vec3 horizon, vec3 glow ) {
+  float sunward = max( dot( mirror, sunDirection ), 0.0 );
+  return mix( horizon, zenith, pow( clamp( mirror.y, 0.0, 1.0 ), 0.6 ) ) + glow * pow( sunward, 18.0 ) * 0.55;
+}
+
+float wetFresnel( float cosine ) {
+  return ${WET_FRESNEL_FLOOR.toFixed(3)} + ${(1 - WET_FRESNEL_FLOOR).toFixed(3)} * pow( 1.0 - clamp( cosine, 0.0, 1.0 ), 5.0 );
+}
+
+float wetMirror( float damp, float pool ) {
+  return pool * ${WET_POOL_MIRROR.toFixed(3)} + damp * ${WET_DAMP_MIRROR.toFixed(3)};
+}
+`

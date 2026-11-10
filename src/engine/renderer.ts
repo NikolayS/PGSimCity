@@ -23,9 +23,10 @@ import { ANCHOR, CITY } from '../world/layout'
 import { applyGroundAtmosphere } from '../world/plate-fog'
 import { applySkyAtmosphere } from '../world/sky'
 import type { Bus, QualityLevel, QualitySettings } from '../core/types'
-import { GoldenHourOutputPass } from './color-grade'
+import { FILM_LENS, GoldenHourOutputPass } from './color-grade'
 import { LIGHT_SHAFT_PRESETS, LightShaftPass } from './light-shafts'
 import { waterReflectionScale } from './water'
+import { WetReflectionPass } from './wet-reflections'
 
 /* ============================================================================
  * THE RENDERER
@@ -58,6 +59,11 @@ import { waterReflectionScale } from './water'
  *     fused into that OutputPass, so the grade adds no second fullscreen pass.
  *   Consequence: the SAME renderer settings are valid on both paths. Never
  *   toggle renderer.toneMapping when switching quality.
+ *
+ * PASS ORDER: beauty, GTAO, wet-ground reflections, light shafts, bloom, SMAA,
+ *   output. Reflections read the AO-composited buffer and sit before bloom, so
+ *   their radiance cap is what bloom thresholds against. Grain and the lens
+ *   vignette run last, in display space, inside the output pass.
  * ==========================================================================*/
 
 export interface RendererApi {
@@ -317,6 +323,13 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   // Reused by live updates: the render loop never constructs a Date.
   const moonDate = new Date()
   let moonDatePinned = false
+
+  let reducedMotion = false
+  try {
+    reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  } catch {
+    reducedMotion = false
+  }
 
   /* ---- renderer ---------------------------------------------------------*/
 
@@ -631,6 +644,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   let composer: EffectComposer | null = null
   let renderPass: RenderPass | null = null
   let gtaoPass: ComposerDepthGTAOPass | null = null
+  let wetPass: WetReflectionPass | null = null
   let lightShaftPass: LightShaftPass | null = null
   let bloomPass: UnrealBloomPass | null = null
   let smaaPass: SMAAPass | null = null
@@ -679,6 +693,10 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     })
     composer.addPass(gtaoPass)
 
+    // After AO so mirrored contact shadows match, before bloom so the cap holds.
+    wetPass = new WetReflectionPass(camera, gtaoPass)
+    composer.addPass(wetPass)
+
     lightShaftPass = new LightShaftPass(camera, gtaoPass)
     composer.addPass(lightShaftPass)
 
@@ -721,6 +739,10 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
         gtaoPass.updatePdMaterial({ samples: fidelity.aoDenoiseSamples })
       }
     }
+    if (wetPass) {
+      wetPass.setAtmosphere(air)
+      wetPass.setQuality(quality.level, fidelity.ambientOcclusion)
+    }
     if (lightShaftPass) {
       const x = air.keyPos[0] - air.keyTarget[0]
       const y = air.keyPos[1] - air.keyTarget[1]
@@ -738,6 +760,13 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     if (smaaPass) smaaPass.enabled = wantsSmaa(quality.level)
     if (outputPass) {
       outputPass.setDaylight(air.daylight)
+      // Rescue tiers keep a clean frame: grain is the first thing to go.
+      const film = quality.level === 'low' || quality.level === 'reduced' ? 0 : 1
+      outputPass.setFilm(
+        FILM_LENS.grain * film,
+        (air.daylight ? FILM_LENS.dayVignette : FILM_LENS.nightVignette) * film,
+        !reducedMotion,
+      )
       outputPass.setAerialPerspective(
         air.fogColor,
         air.heightFogDensity,
@@ -1264,6 +1293,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
 
     if (bloomPass) bloomPass.dispose()
     if (gtaoPass) gtaoPass.dispose()
+    if (wetPass) wetPass.dispose()
     if (lightShaftPass) lightShaftPass.dispose()
     if (smaaPass) smaaPass.dispose()
     if (outputPass) outputPass.dispose()
@@ -1272,6 +1302,7 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     composerDepthEnabled = false
     renderPass = null
     gtaoPass = null
+    wetPass = null
     lightShaftPass = null
     bloomPass = null
     smaaPass = null

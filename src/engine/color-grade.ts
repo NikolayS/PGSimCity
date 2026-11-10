@@ -7,7 +7,29 @@ export const GOLDEN_HOUR_GRADE = {
   gain: 1.035,
   midtoneSaturation: 1.07,
   vignette: 0.075,
+  /** Filmic contrast about scene grey: deepens shade, opens sunlit stone. */
+  contrast: 1.22,
+  pivot: 0.18,
 } as const
+
+/**
+ * Lens response applied after tone mapping and display encoding, in both modes.
+ * It is spatial only: the centre of the frame, where the palette is read, keeps
+ * the exact graded value, so no semantic colour moves.
+ */
+export const FILM_LENS = {
+  /** Peak-to-peak display-space luminance noise in the midtones. */
+  grain: 0.034,
+  /** Corner darkening added to night, which has no golden-hour vignette. */
+  nightVignette: 0.3,
+  dayVignette: 0.12,
+} as const
+
+/** Display-space multiplier of the lens falloff; `edge` is 0 at centre, 1 in the corner. */
+export function filmVignette(edge: number, strength: number): number {
+  const t = Math.max(0, Math.min(1, (edge - 0.18) / (1.0 - 0.18)))
+  return 1 - strength * t * t * (3 - 2 * t)
+}
 
 /** Extra ground-layer haze never replaces more than this much scene colour. */
 export const HEIGHT_FOG_MAX = 0.2
@@ -33,10 +55,16 @@ uniform float pgGradeGamma;
 uniform float pgGradeGain;
 uniform float pgGradeSaturation;
 uniform float pgGradeVignette;
+uniform float pgGradeContrast;
+uniform float pgGradePivot;
 
 vec3 pgGoldenHourGrade( vec3 color, vec2 uv ) {
 	color = max( color + vec3( pgGradeLift ), vec3( 0.0 ) );
 	color = pow( color, vec3( 1.0 / pgGradeGamma ) ) * pgGradeGain;
+	// Luminance-only power about the pivot: scene grey is fixed and every
+	// channel scales together, so two close semantic hues cannot converge.
+	float tone = max( dot( color, vec3( 0.2126, 0.7152, 0.0722 ) ), 0.00001 );
+	color *= pgGradePivot * pow( tone / pgGradePivot, pgGradeContrast ) / tone;
 
 	float luma = dot( color, vec3( 0.2126, 0.7152, 0.0722 ) );
 	float mids = smoothstep( 0.02, 0.18, luma ) * ( 1.0 - smoothstep( 0.65, 1.20, luma ) );
@@ -78,6 +106,27 @@ vec3 pgApplyHeightFog( vec3 color, vec2 uv ) {
 }
 `
 
+const FILM_UNIFORMS = /* glsl */ `
+uniform float pgFilmGrain;
+uniform float pgFilmVignette;
+uniform float pgFilmTime;
+
+vec3 pgFilmLens( vec3 color, vec2 uv ) {
+	vec2 frame = uv * 2.0 - 1.0;
+	float edge = smoothstep( 0.18, 1.0, dot( frame, frame ) * 0.5 );
+	color *= 1.0 - pgFilmVignette * edge;
+	// Interleaved gradient noise: no texture, stable per pixel, re-seeded in time.
+	vec2 cell = gl_FragCoord.xy + fract( pgFilmTime * vec2( 7.13, 3.71 ) ) * 289.0;
+	float noise = fract( 52.9829189 * fract( dot( cell, vec2( 0.06711056, 0.00583715 ) ) ) ) - 0.5;
+	float luma = dot( color, vec3( 0.2126, 0.7152, 0.0722 ) );
+	// Grain lives in the midtones; clean blacks keep night neon crisp.
+	float weight = smoothstep( 0.0, 0.12, luma ) * ( 1.0 - 0.55 * smoothstep( 0.55, 1.0, luma ) );
+	return max( color + noise * pgFilmGrain * weight, vec3( 0.0 ) );
+}
+`
+
+const FILM_ANCHOR = '\n\t\t}'
+
 const SAMPLE_ANCHOR = 'uniform sampler2D tDiffuse;'
 const GRADE_ANCHOR = '\n\t\t\t// tone mapping'
 
@@ -92,6 +141,7 @@ interface SceneDepthSource {
 export class GoldenHourOutputPass extends OutputPass {
   private readonly camera: THREE.PerspectiveCamera | null
   private readonly depthSource: SceneDepthSource | null
+  private filmAnimated = true
 
   constructor(camera: THREE.PerspectiveCamera | null = null, depthSource: SceneDepthSource | null = null) {
     super()
@@ -103,6 +153,11 @@ export class GoldenHourOutputPass extends OutputPass {
     this.uniforms.pgGradeGain = { value: GOLDEN_HOUR_GRADE.gain }
     this.uniforms.pgGradeSaturation = { value: GOLDEN_HOUR_GRADE.midtoneSaturation }
     this.uniforms.pgGradeVignette = { value: GOLDEN_HOUR_GRADE.vignette }
+    this.uniforms.pgGradeContrast = { value: GOLDEN_HOUR_GRADE.contrast }
+    this.uniforms.pgGradePivot = { value: GOLDEN_HOUR_GRADE.pivot }
+    this.uniforms.pgFilmGrain = { value: 0 }
+    this.uniforms.pgFilmVignette = { value: 0 }
+    this.uniforms.pgFilmTime = { value: 0 }
     this.uniforms.pgSceneDepth = { value: null }
     this.uniforms.pgAerialEnabled = { value: 0 }
     this.uniforms.pgHeightFogDensity = { value: 0 }
@@ -113,18 +168,30 @@ export class GoldenHourOutputPass extends OutputPass {
     this.uniforms.pgProjectionInverse = { value: new THREE.Matrix4() }
     this.uniforms.pgCameraWorld = { value: new THREE.Matrix4() }
     this.material.fragmentShader = this.material.fragmentShader
-      .replace(SAMPLE_ANCHOR, `${SAMPLE_ANCHOR}\n${GRADE_UNIFORMS}\n${AERIAL_UNIFORMS}`)
+      .replace(SAMPLE_ANCHOR, `${SAMPLE_ANCHOR}\n${GRADE_UNIFORMS}\n${AERIAL_UNIFORMS}\n${FILM_UNIFORMS}`)
       .replace(
         GRADE_ANCHOR,
         '\n\t\t\tif ( pgAerialEnabled > 0.5 ) gl_FragColor.rgb = pgApplyHeightFog( gl_FragColor.rgb, vUv );' +
           '\n\t\t\tif ( pgGradeEnabled > 0.5 ) gl_FragColor.rgb = pgGoldenHourGrade( gl_FragColor.rgb, vUv );' +
           GRADE_ANCHOR,
       )
+    const body = this.material.fragmentShader
+    const end = body.lastIndexOf(FILM_ANCHOR)
+    this.material.fragmentShader =
+      body.slice(0, end) + '\n\t\t\tgl_FragColor.rgb = pgFilmLens( gl_FragColor.rgb, vUv );' + body.slice(end)
     this.material.name = 'PGSimCity.GoldenHourOutput'
   }
 
   setDaylight(enabled: boolean): void {
     this.uniforms.pgGradeEnabled.value = enabled ? 1 : 0
+  }
+
+  /** Grain is frozen for reduced motion: a static texture, never a flicker. */
+  setFilm(grain: number, vignette: number, animated: boolean): void {
+    this.uniforms.pgFilmGrain.value = grain
+    this.uniforms.pgFilmVignette.value = vignette
+    this.filmAnimated = animated
+    if (!animated) this.uniforms.pgFilmTime.value = 0
   }
 
   setAerialPerspective(color: number, density: number, falloff: number, strength: number): void {
@@ -150,6 +217,7 @@ export class GoldenHourOutputPass extends OutputPass {
       this.uniforms.pgProjectionInverse.value.copy(camera.projectionMatrixInverse)
       this.uniforms.pgCameraWorld.value.copy(camera.matrixWorld)
     }
+    if (this.filmAnimated) this.uniforms.pgFilmTime.value = (this.uniforms.pgFilmTime.value + deltaTime) % 64
     super.render(renderer, writeBuffer, readBuffer, deltaTime, maskActive)
   }
 }
@@ -189,6 +257,10 @@ function gradeLinear(rgb: Rgb, edge: number): Rgb {
       Math.pow(Math.max(0, rgb[i] + GOLDEN_HOUR_GRADE.lift), 1 / GOLDEN_HOUR_GRADE.gamma) *
       GOLDEN_HOUR_GRADE.gain
   }
+  const tone = Math.max(0.00001, 0.2126 * graded[0] + 0.7152 * graded[1] + 0.0722 * graded[2])
+  const toneScale =
+    (GOLDEN_HOUR_GRADE.pivot * Math.pow(tone / GOLDEN_HOUR_GRADE.pivot, GOLDEN_HOUR_GRADE.contrast)) / tone
+  for (let i = 0; i < 3; i++) graded[i] *= toneScale
   const luma = 0.2126 * graded[0] + 0.7152 * graded[1] + 0.0722 * graded[2]
   const smoothstep = (a: number, b: number, value: number): number => {
     const t = clamp01((value - a) / (b - a))

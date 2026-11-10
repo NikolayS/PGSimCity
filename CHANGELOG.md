@@ -9,6 +9,16 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## Unreleased — Cinematic rendering, first pass
+
+Graphics only; no simulation behaviour changes. Not yet read by a review panel.
+
+- Rain-wet paving at high and ultra quality: one shared wetness field darkens the ground plate, mirrors the live sky and sun in standing water, and stays achromatic. Weather is decoration, not a PostgreSQL fact.
+- Screen-space reflections of the city in that water. Mirrored night radiance is capped below the bloom threshold, so only the original signal glows.
+- Exposure history on structural surfaces: curing blotches and run-off streaks, multiplicative and achromatic.
+- Daylight contrast: a stronger, warmer sun against less ambient fill, deeper cast shadows, and a luminance-only filmic contrast curve that keeps every semantic colour pair separated.
+- Film lens after display encoding: restrained grain (frozen under reduced motion) and a vignette that leaves the centre of the frame untouched. Disabled on the low and reduced tiers.
+
 ## v0.58.1 — Healthy startup
 
 - Start ordinary visits with healthy simulation defaults instead of silently restoring saved lock, overload or failover experiments.
