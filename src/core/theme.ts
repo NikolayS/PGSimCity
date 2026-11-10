@@ -580,15 +580,26 @@ const SURFACE_FRAG = /* glsl */ `
 	 * run-off streaks belong to walls only and hang from wherever water sheds.
 	 * Both are achromatic and multiplicative: age, never meaning. */
 	vec2 pgSt = vec2( pgMu, pgMv );
-	float pgBlotch = pgValueNoise( pgSt * 0.19 + pgSeed * 31.0 ) * 0.62
-	               + pgValueNoise( pgSt * 0.77 + 11.0 ) * 0.38 - 0.5;
+	float pgBlotch = pgValueNoise( pgSt * 0.19 + pgSeed * 31.0 ) * 0.50
+	               + pgValueNoise( pgSt * 0.77 + 11.0 ) * 0.30
+	               + pgValueNoise( pgSt * 2.9 + 5.0 ) * 0.20 - 0.5;
 	float pgStreak = pgValueNoise( vec2( pgU * 2.1 + pgSeed.x * 40.0, pgWorld.y * 0.11 ) );
-	pgStreak = smoothstep( 0.56, 0.96, pgStreak ) * ( 1.0 - pgFlat );
-	float pgWeather = ( pgBlotch * 0.19 - pgStreak * 0.11 ) * ( 1.0 - smoothstep( 1.6, 6.5, pgPx ) );
-	roughnessFactor = clamp( roughnessFactor - pgWeather * 0.5, 0.3, 1.0 );
+	pgStreak = smoothstep( 0.52, 0.94, pgStreak ) * ( 1.0 - pgFlat );
+	float pgWeather = ( pgBlotch * 0.26 - pgStreak * 0.15 ) * ( 1.0 - smoothstep( 1.6, 6.5, pgPx ) );
+
+	/* Cast-concrete tooth: aggregate a few centimetres across and a formwork
+	 * tie hole in every panel. Height only, so it exists as raking light and
+	 * retires with the normal long before it could alias. */
+	float pgGrit = pgValueNoise( pgSt * 23.0 ) + 0.5 * pgValueNoise( pgSt * 61.0 );
+	vec2 pgTieCell = vec2( pgHead, pgCourse );
+	vec2 pgTieAt = ( fract( pgTieCell ) - 0.5 ) * vec2( 2.6, 1.15 );
+	float pgTie = ( 1.0 - smoothstep( 0.035, 0.06, length( pgTieAt ) ) ) * ( 1.0 - pgFlat );
+	pgSurfaceHeight += ( ( pgGrit - 0.75 ) * 0.0035 + pgBlotch * 0.004 - pgTie * 0.02 ) * pgNormalFade;
+	roughnessFactor = clamp( roughnessFactor - pgWeather * 0.6 + ( pgGrit - 0.75 ) * 0.08 * pgNormalFade, 0.3, 1.0 );
+	float pgPit = 1.0 - pgTie * 0.45 * pgNormalFade;
 
 	diffuseColor.rgb *= ( 1.0 - pgJoint ) * pgGrade * pgRain * pgTone * ( 1.0 + pgN * 0.038 );
-	diffuseColor.rgb *= 1.0 + pgWeather;
+	diffuseColor.rgb *= ( 1.0 + pgWeather ) * pgPit;
 	diffuseColor.rgb *= vec3( 1.0 + pgWarm, 1.0, 1.0 - pgWarm );
 }
 `

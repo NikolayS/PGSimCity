@@ -314,15 +314,15 @@ describe('the masonry surface term', () => {
     expect(Number(joint![1]) + Number(joint![2])).toBeLessThanOrEqual(0.08)
   })
 
-  it('weathers structure achromatically and within a fifth of its albedo', () => {
+  it('weathers structure achromatically and within three tenths of its albedo', () => {
     for (const mode of ['day', 'night'] as const) {
       const out = inMode(mode, () => compile(theme.mat(`wal.weather.${mode}`, { color: 0x2a3752 }), true))
       const weather = /pgWeather = \( pgBlotch \* ([0-9.]+) - pgStreak \* ([0-9.]+) \)/.exec(out.fragmentShader)
       expect(weather, mode).not.toBeNull()
       // pgBlotch spans -0.5..0.5 and pgStreak 0..1, so this is the darkest stain.
-      expect(Number(weather![1]) * 0.5 + Number(weather![2])).toBeLessThanOrEqual(0.21)
+      expect(Number(weather![1]) * 0.5 + Number(weather![2])).toBeLessThanOrEqual(0.3)
       // One scalar on all three channels: a stain can age a wall, never tint it.
-      expect(out.fragmentShader).toContain('diffuseColor.rgb *= 1.0 + pgWeather;')
+      expect(out.fragmentShader).toContain('diffuseColor.rgb *= ( 1.0 + pgWeather ) * pgPit;')
       // Run-off hangs from walls; a roof or deck has nowhere for it to run.
       expect(out.fragmentShader).toMatch(/pgStreak = smoothstep\([^;]+\) \* \( 1\.0 - pgFlat \);/)
     }

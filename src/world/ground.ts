@@ -15,6 +15,7 @@ import {
   WET_FIELD_GLSL,
   groundSurveyDetail,
 } from './ground-surface'
+import { createSea } from './sea'
 import {
   clearance,
   contains,
@@ -607,6 +608,13 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     target.set(skyScratch.r, skyScratch.g, skyScratch.b)
   }
 
+  const sea = createSea({
+    texture: edgeTex,
+    map: (gridUniforms.uEdgeMap as { value: THREE.Vector4 }).value,
+    max: EDGE_MAX,
+  })
+  group.add(sea.mesh)
+
   const plateMat = new THREE.ShaderMaterial({
     uniforms: gridUniforms,
     vertexShader: groundVert,
@@ -1005,8 +1013,8 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     // Quiet mineral paving identifies the district without competing with live
     // state. Saturated semantic colour remains on its kerb, machinery and traffic.
     m.userData.pgDayColor = mixHex(spec.dayColor, 0xc5c8bd, 0.78)
-    // Zoning is meaning painted on the ground; masonry joints do not belong on it.
-    m.userData.pgNoSurface = true
+    // Zoning is paint on paving: it wears and stains with the slab beneath it,
+    // achromatically, so the district hue is aged but never shifted.
     mats.push(m)
     return m
   }
@@ -1240,6 +1248,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     // not move at all — they are lit windows, and lit windows hold still.
     clock += dt
     uTime.value = clock
+    sea.update(dt, quality.level)
   }
 
   function dispose(): void {
@@ -1248,6 +1257,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     // The edge field is ours alone — the theme cache never saw it.
     edgeTex.dispose()
     surfaceTex.dispose()
+    sea.dispose()
     group.clear()
   }
 
