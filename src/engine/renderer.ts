@@ -20,6 +20,7 @@ import {
 import type { Atmosphere, ThemeMode } from '../core/theme'
 import { clamp, damp } from '../core/util'
 import { ANCHOR, CITY } from '../world/layout'
+import { groundWetness } from '../world/ground-surface'
 import { applyGroundAtmosphere } from '../world/plate-fog'
 import { applySkyAtmosphere } from '../world/sky'
 import type { Bus, QualityLevel, QualitySettings } from '../core/types'
@@ -323,13 +324,6 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
   // Reused by live updates: the render loop never constructs a Date.
   const moonDate = new Date()
   let moonDatePinned = false
-
-  let reducedMotion = false
-  try {
-    reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  } catch {
-    reducedMotion = false
-  }
 
   /* ---- renderer ---------------------------------------------------------*/
 
@@ -765,7 +759,6 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
       outputPass.setFilm(
         FILM_LENS.grain * film,
         (air.daylight ? FILM_LENS.dayVignette : FILM_LENS.nightVignette) * film,
-        !reducedMotion,
       )
       // Only where bloom runs: daylight has no bloom chain to scatter from.
       const scatters = bloomPass !== null && quality.bloom && air.bloomEnabled && fidelity.ambientOcclusion
@@ -1093,6 +1086,9 @@ export function createRenderer(container: HTMLElement, bus: Bus): RendererApi {
     if (preset.maxLabels < quality.maxLabels) reductions.push('labels')
     if (quality.antialias && !preset.antialias) reductions.push('antialiasing')
     if (quality.shadows && !preset.shadows) reductions.push('shadows')
+    // Wet paving, its reflections, the cloud deck and the lit haze leave together.
+    if (groundWetness(quality.level) > 0 && groundWetness(next) === 0) reductions.push('weather and reflections')
+    if (FILM_LENS.grain > 0 && quality.level === 'medium' && next === 'reduced') reductions.push('film grain')
     autoDowngrades++
     applyQuality(next)
     bus.emit('quality', { level: next })

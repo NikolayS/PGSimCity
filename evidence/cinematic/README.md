@@ -16,7 +16,6 @@ changed. Captures are 1600x900 with HUD and labels hidden, taken through
 | Night, backend towers | — | `after-night-towers-1600x900.png` |
 | Night, WAL at street level | — | `after-night-street-1600x900.png` |
 | Night, WAL district | — | `after-night-wal-1600x900.png` |
-| Day, WAL at street level | — | `after-day-street-1600x900.png` |
 
 ## What the images show
 
@@ -24,9 +23,7 @@ changed. Captures are 1600x900 with HUD and labels hidden, taken through
   broken cloud deck; the paving is wet, tonally varied and mirrors the sky and
   nearby structure; concrete shows joints, tie holes, blotches and run-off;
   shade is deeper against sunlit stone.
-- Day, street level: WAL capsules carry shade and a glint instead of one flat
-  colour; their hue is unchanged.
-- Night, WAL district: the platform is lit by the flows passing over it.
+- Night, WAL district: the platform picks up the glow of the flows near it.
 - Night: lit districts glow into the haze by distance (street view); the sea
   gives the frame a horizon; wet paving returns a faint horizon glow in the
   overview. Neon, bloom and the Slonik plate outline are unchanged.
@@ -35,9 +32,11 @@ changed. Captures are 1600x900 with HUD and labels hidden, taken through
 
 - Frame rate. Every capture is software WebGL at 1–3 fps; cost on a real GPU
   is unmeasured.
-- Motion. The sea, the wash against the wall and the grain are animated and
-  are frozen under reduced motion; stills cannot show either.
-- Geometry is unchanged. Buildings are the same boxes with better materials;
-  no objects were added, because every object in this city is a claim.
-- Flat semantic parts (ribbons, page tiles, text) keep one flat colour by
-  design: a plane has no form to shade.
+- Motion. The sea, the wash against the wall and the grain are animated, and
+  all three are frozen under reduced motion. Stills show neither state.
+- Buildings are unchanged: the same boxes with better materials. The only new
+  objects are the sea and the cloud deck, which are setting and carry no label.
+- Semantic parts (capsules, ribbons, page tiles, text) keep one flat colour in
+  daylight by design, and so read as less photoreal than their setting.
+- Labels and the HUD. They were hidden for these captures, so nothing here
+  shows text against the darker ground or the sea.

@@ -340,7 +340,7 @@ const VCOLOR_ANCHOR = '#include <color_fragment>'
  * standard material's lighting normal. It never writes emissive or adds a
  * bright seam. Joint contrast stays below eight percent and relief below
  * 1.2 cm; exposure history (curing blotches, run-off streaks) may move albedo
- * by up to a fifth, and is achromatic, so structure acquires age and material
+ * by up to three tenths, and is achromatic, so structure acquires age and material
  * response without acquiring meaning.
  *
  * WHERE IT MAY GO. Injection is guarded on <roughnessmap_fragment>, an anchor
@@ -637,54 +637,6 @@ const SURFACE_NORMAL_FRAG = /* glsl */ `
 }
 `
 
-/* ============================================================================
- * DAYLIGHT FORM ON MEANING.
- *
- * A capsule, a ribbon or a signal lamp is a MeshBasicMaterial: at night it is
- * its own light, and it must stay that way. In daylight nothing glows, and an
- * unlit solid in a lit world reads as a sticker on the screen rather than an
- * object in the scene. This gives those solids form and nothing else: the
- * authored colour is the sunlit face, shade only ever darkens toward it, and
- * hue is untouched, so the colour a reader learns is the colour they see.
- *
- * The sun is the day preset's; local-clock mode reuses it while it is light,
- * a few degrees off the true key at the ends of the day.
- * ==========================================================================*/
-
-/** Value of a face turned fully away from sky and sun, relative to authored. */
-export const DAY_FORM_FLOOR = 0.7
-/** Peak white added at the glint; small, or a saturated hue washes out. */
-export const DAY_FORM_GLOSS = 0.16
-
-const FORM_VERT_ANCHOR = '#include <project_vertex>'
-const FORM_FRAG_ANCHOR = '#include <opaque_fragment>'
-const FORM_GUARD = '#include <specularmap_fragment>'
-
-function dayFormFrag(): string {
-  const key = ATMOSPHERE.day
-  const x = key.keyPos[0] - key.keyTarget[0]
-  const y = key.keyPos[1] - key.keyTarget[1]
-  const z = key.keyPos[2] - key.keyTarget[2]
-  const length = Math.hypot(x, y, z)
-  const sun = [x / length, y / length, z / length].map((value) => value.toFixed(6)).join(', ')
-  return /* glsl */ `
-{
-	vec3 pgFace = cross( dFdx( pgView ), dFdy( pgView ) );
-	if ( dot( pgFace, pgFace ) > 1e-20 ) {
-		pgFace = normalize( pgFace );
-		vec3 pgUp = normalize( ( viewMatrix * vec4( 0.0, 1.0, 0.0, 0.0 ) ).xyz );
-		vec3 pgSun = normalize( ( viewMatrix * vec4( ${sun}, 0.0 ) ).xyz );
-		float pgSky = 0.5 + 0.5 * dot( pgFace, pgUp );
-		float pgLit = max( dot( pgFace, pgSun ), 0.0 );
-		float pgForm = ${DAY_FORM_FLOOR.toFixed(3)} + ${((1 - DAY_FORM_FLOOR) * 0.4).toFixed(3)} * pgSky + ${((1 - DAY_FORM_FLOOR) * 0.6).toFixed(3)} * pgLit;
-		vec3 pgHalf = normalize( pgSun + normalize( - pgView ) );
-		float pgGlint = pow( max( dot( pgFace, pgHalf ), 0.0 ), 48.0 ) * ${DAY_FORM_GLOSS.toFixed(3)};
-		outgoingLight = outgoingLight * pgForm + vec3( pgGlint );
-	}
-}
-`
-}
-
 /* Rolled steel for the city's machinery: smudged, brushed along the sheet and
  * seamed every 2.4 m. Roughness carries most of it, because variation in a
  * metal reads through its reflection, not its albedo. Achromatic throughout:
@@ -767,7 +719,7 @@ export interface ThemeShaderSource {
  * correct in both modes, and night is the only mode that has no other way to
  * tell a wall from a slab once the neon is off.
  */
-function patchThemeShader(shader: ThemeShaderSource, surface: boolean, metal = false, form = false): void {
+function patchThemeShader(shader: ThemeShaderSource, surface: boolean, metal = false): void {
   let f = shader.fragmentShader
   if (airFor(mode).toon) {
     if (f.indexOf(DAYLIGHT_ANCHOR) >= 0) f = f.replace(DAYLIGHT_ANCHOR, DAYLIGHT_ANCHOR + '\n' + DAYLIGHT_GLSL)
@@ -802,14 +754,6 @@ function patchThemeShader(shader: ThemeShaderSource, surface: boolean, metal = f
     shader.vertexShader =
       SURFACE_VARYINGS + shader.vertexShader.replace(SURFACE_VERT_ANCHOR, SURFACE_VERT_ANCHOR + '\n' + SURFACE_VERT)
   }
-  // The guard exists in the basic mesh shader and not in a line's, so a stroke
-  // (which has no faces to shade) cannot be handed this by mistake.
-  if (form && airFor(mode).toon && f.indexOf(FORM_GUARD) >= 0 && f.indexOf(SURFACE_ANCHOR) < 0) {
-    f = 'varying vec3 pgView;\n' + f.replace(FORM_FRAG_ANCHOR, dayFormFrag() + '\n' + FORM_FRAG_ANCHOR)
-    shader.vertexShader =
-      'varying vec3 pgView;\n' +
-      shader.vertexShader.replace(FORM_VERT_ANCHOR, FORM_VERT_ANCHOR + '\n\tpgView = mvPosition.xyz;')
-  }
   shader.fragmentShader = f
 }
 
@@ -831,10 +775,6 @@ function themeHookMetal(shader: ThemeShaderSource): void {
   patchThemeShader(shader, false, true)
 }
 
-function themeHookForm(shader: ThemeShaderSource): void {
-  patchThemeShader(shader, false, false, true)
-}
-
 function themeCacheKey(): string {
   return airFor(mode).toon ? 'pg-day-s' : 'pg-night-s'
 }
@@ -845,16 +785,6 @@ function themeCacheKeyPlain(): string {
 
 function themeCacheKeyMetal(): string {
   return airFor(mode).toon ? 'pg-day-m' : 'pg-night-m'
-}
-
-function themeCacheKeyForm(): string {
-  return airFor(mode).toon ? 'pg-day-f' : 'pg-night-f'
-}
-
-/** Opaque, untextured basic solids: text, halos and glass keep their flat value. */
-function takesDayForm(m: THREE.Material): boolean {
-  const basic = m as THREE.MeshBasicMaterial
-  return basic.isMeshBasicMaterial === true && !basic.map && !basic.alphaMap && !basic.transparent
 }
 
 function isStandard(m: THREE.Material): m is THREE.MeshStandardMaterial {
@@ -875,23 +805,16 @@ function installThemeShader(m: THREE.Material, target: ThemeMode, surface: boole
   const ud = m.userData as ThemeUserData
   ud.pgSurface = surface
   const steel = metal && !surface
-  const form = !surface && !steel && takesDayForm(m)
-  const hook = surface ? themeHook : steel ? themeHookMetal : form ? themeHookForm : themeHookPlain
+  const hook = surface ? themeHook : steel ? themeHookMetal : themeHookPlain
   if (m.onBeforeCompile !== hook) {
     m.onBeforeCompile = hook
-    m.customProgramCacheKey = surface
-      ? themeCacheKey
-      : steel
-        ? themeCacheKeyMetal
-        : form
-          ? themeCacheKeyForm
-          : themeCacheKeyPlain
+    m.customProgramCacheKey = surface ? themeCacheKey : steel ? themeCacheKeyMetal : themeCacheKeyPlain
     ud.pgProgram = undefined
   }
   /* The compiled variant is (mode, surface), so the gate has to track both. A
    * gate that watched the toon flag alone would leave a material that changed
    * variant running its previous program until the next mode toggle. */
-  const want = (airFor(target).toon ? 4 : 0) + (surface ? 1 : steel ? 2 : form ? 3 : 0)
+  const want = (airFor(target).toon ? 4 : 0) + (surface ? 1 : steel ? 2 : 0)
   if (ud.pgProgram === want) return
   ud.pgProgram = want
   m.needsUpdate = true

@@ -3,8 +3,6 @@ import * as THREE from 'three'
 
 import {
   COLOR,
-  DAY_FORM_FLOOR,
-  DAY_FORM_GLOSS,
   atmosphere,
   createTheme,
   paintSceneMaterial,
@@ -330,7 +328,10 @@ describe('the masonry surface term', () => {
     }
   })
 
-  it('gives daylight form to opaque semantic solids and to nothing else', () => {
+  it('leaves semantic solids one flat value in daylight', () => {
+    /* Shading them by sky and sun was tried and withdrawn: a face in shade at
+     * 0.7 of its authored value put `warn` within 0.013 OKLab of `wal`. Value
+     * carries meaning in daylight, so meaning is not shaded. */
     const meshFrag = [
       'void main() {',
       '  vec4 diffuseColor = vec4( diffuse, opacity );',
@@ -340,36 +341,12 @@ describe('the masonry surface term', () => {
       '  #include <opaque_fragment>',
       '}',
     ].join('\n')
-    const meshVert = ['void main() {', '  #include <project_vertex>', '}'].join('\n')
-    const lineFrag = ['void main() {', '  #include <color_fragment>', '  #include <opaque_fragment>', '}'].join('\n')
-    const run = (material: THREE.Material, fragmentShader: string) => {
-      const shader = { vertexShader: meshVert, fragmentShader }
-      ;(material.onBeforeCompile as unknown as (s: typeof shader) => void)(shader)
-      return shader
-    }
-
-    const solid = theme.neon(0xff4d6d, 2.4)
-    const day = inMode('day', () => run(solid, meshFrag))
-    expect(day.fragmentShader).toContain('outgoingLight = outgoingLight * pgForm + vec3( pgGlint );')
-    expect(day.vertexShader).toContain('pgView = mvPosition.xyz;')
-    // Shade may only darken toward the authored colour, and by a bounded amount.
-    const form = /pgForm = ([0-9.]+) \+ ([0-9.]+) \* pgSky \+ ([0-9.]+) \* pgLit/.exec(day.fragmentShader)
-    expect(form).not.toBeNull()
-    const [floor, sky, lit] = form!.slice(1).map(Number)
-    expect(floor).toBe(DAY_FORM_FLOOR)
-    expect(floor).toBeGreaterThanOrEqual(0.6)
-    expect(floor + sky + lit).toBeCloseTo(1, 6)
-    expect(DAY_FORM_GLOSS).toBeLessThanOrEqual(0.2)
-
-    // At night a neon is its own light. Form would make it a lit object.
-    const night = inMode('night', () => run(solid, meshFrag))
-    expect(night.fragmentShader).not.toContain('pgForm')
-
-    // A stroke has no faces; glass and halos are see-through.
-    const stroke = inMode('day', () => run(theme.line(0x8fa5c4, 0.4), lineFrag))
-    const halo = inMode('day', () => run(theme.neon(0xff4d6d, 2.4, { transparent: true, opacity: 0.5 }), meshFrag))
-    for (const out of [stroke, halo]) expect(out.fragmentShader).not.toContain('pgForm')
-    expect(solid.customProgramCacheKey?.()).not.toBe(theme.line(0x8fa5c4, 0.4).customProgramCacheKey?.())
+    const shader = { vertexShader: BASIC_VERT, fragmentShader: meshFrag }
+    inMode('day', () => {
+      ;(theme.neon(0xff4d6d, 2.4).onBeforeCompile as unknown as (s: typeof shader) => void)(shader)
+    })
+    expect(shader.fragmentShader).not.toMatch(/outgoingLight\s*(\*=|=\s*outgoingLight\s*\*)/)
+    expect(shader.fragmentShader).not.toContain('dFdx')
   })
 
   it('gives the surfaced and plain variants different program cache keys', () => {

@@ -1,6 +1,8 @@
 import * as THREE from 'three'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 
+import { reduceMotion } from '../core/util'
+
 export const GOLDEN_HOUR_GRADE = {
   lift: 0.008,
   gamma: 0.96,
@@ -20,8 +22,11 @@ export const GOLDEN_HOUR_GRADE = {
 export const FILM_LENS = {
   /** Peak-to-peak display-space luminance noise in the midtones. */
   grain: 0.034,
-  /** Corner darkening added to night, which has no golden-hour vignette. */
-  nightVignette: 0.3,
+  /**
+   * Night gets none. Its closest semantic pair clears the 0.038 OKLab floor by
+   * 0.003 at the centre of the frame; a 0.3 corner falloff took it to 0.029.
+   */
+  nightVignette: 0,
   dayVignette: 0.12,
 } as const
 
@@ -189,7 +194,6 @@ interface SceneDepthSource {
 export class GoldenHourOutputPass extends OutputPass {
   private readonly camera: THREE.PerspectiveCamera | null
   private readonly depthSource: SceneDepthSource | null
-  private filmAnimated = true
   private scatterStrength = 0
 
   constructor(camera: THREE.PerspectiveCamera | null = null, depthSource: SceneDepthSource | null = null) {
@@ -240,12 +244,9 @@ export class GoldenHourOutputPass extends OutputPass {
     this.uniforms.pgGradeEnabled.value = enabled ? 1 : 0
   }
 
-  /** Grain is frozen for reduced motion: a static texture, never a flicker. */
-  setFilm(grain: number, vignette: number, animated: boolean): void {
+  setFilm(grain: number, vignette: number): void {
     this.uniforms.pgFilmGrain.value = grain
     this.uniforms.pgFilmVignette.value = vignette
-    this.filmAnimated = animated
-    if (!animated) this.uniforms.pgFilmTime.value = 0
   }
 
   /** `wide` is the bloom chain's widest blur; null or zero strength disables the term. */
@@ -281,7 +282,9 @@ export class GoldenHourOutputPass extends OutputPass {
     }
     // Scatter needs the path length; without scene depth it would glow uniformly.
     this.uniforms.pgScatterStrength.value = depth && camera ? this.scatterStrength : 0
-    if (this.filmAnimated) this.uniforms.pgFilmTime.value = (this.uniforms.pgFilmTime.value + deltaTime) % 64
+    // Read live: the preference can change after load, and grain must then
+    // hold still as a static texture rather than keep flickering until reload.
+    this.uniforms.pgFilmTime.value = reduceMotion() ? 0 : (this.uniforms.pgFilmTime.value + deltaTime) % 64
     super.render(renderer, writeBuffer, readBuffer, deltaTime, maskActive)
   }
 }

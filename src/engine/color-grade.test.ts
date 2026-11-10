@@ -236,6 +236,56 @@ describe('film lens', () => {
     }
   })
 
+  for (const level of QUALITY_LEVELS) {
+    for (const mode of ['day', 'night'] as const) {
+      it(`keeps all 45 ${mode} semantic pairs distinct in the frame corner at ${level}`, async () => {
+        /* The centre-of-frame floors say nothing about a corner. A 0.3 night
+         * vignette once passed every centre test while taking wal/replication
+         * to 0.029 where the frame is darkest. */
+        const { FILM_LENS, filmVignette } = await import('./color-grade')
+        const preset = QUALITY_PRESETS[level]
+        const fidelity = FIDELITY_PRESETS[level]
+        const strength = mode === 'day' ? FILM_LENS.dayVignette : FILM_LENS.nightVignette
+        const corner = filmVignette(1, strength)
+        const dim = (hex: number): number => {
+          const channel = (shift: number) => Math.round(((hex >> shift) & 255) * corner)
+          return (channel(16) << 16) | (channel(8) << 8) | channel(0)
+        }
+        setThemeMode(mode, { persist: false })
+        setBloomAvailable(preset.bloom)
+        const theme = createTheme()
+        try {
+          const colors = SEMANTIC.map((key) => {
+            const hex = theme.neon(NIGHT_PALETTE[key], 1).color.getHex()
+            return dim(
+              mode === 'day'
+                ? gradeDaylightHexWithEffects(
+                    hex,
+                    DAY_PALETTE.fog,
+                    HEIGHT_FOG_MAX * fidelity.aerialPerspective,
+                    LIGHT_SHAFT_COLOR,
+                    LIGHT_SHAFT_PRESETS[level].strength,
+                  )
+                : foggedNightHex(hex, NIGHT_PALETTE.fog, HEIGHT_FOG_MAX * fidelity.aerialPerspective),
+            )
+          })
+          for (let i = 0; i < colors.length; i++) {
+            for (let j = i + 1; j < colors.length; j++) {
+              expect(
+                perceptualColorDistance(colors[i], colors[j]),
+                `${SEMANTIC[i]} vs ${SEMANTIC[j]}`,
+              ).toBeGreaterThanOrEqual(mode === 'day' ? 0.045 : 0.038)
+            }
+          }
+        } finally {
+          theme.dispose()
+          setBloomAvailable(true)
+          setThemeMode('night', { persist: false })
+        }
+      })
+    }
+  }
+
   it('keeps grain an order of magnitude below the semantic separation margin', async () => {
     const { FILM_LENS } = await import('./color-grade')
     // Half the peak-to-peak amplitude in display space, against the 0.045 OKLab floor.
@@ -250,8 +300,6 @@ describe('film lens', () => {
     const lens = source.lastIndexOf('pgFilmLens( gl_FragColor.rgb, vUv )')
     expect(lens).toBeGreaterThan(source.indexOf('sRGBTransferOETF( gl_FragColor )'))
     expect(lens).toBeGreaterThan(source.indexOf('pgGoldenHourGrade( gl_FragColor.rgb, vUv )'))
-    pass.setFilm(0.03, 0.2, false)
-    expect(pass.uniforms.pgFilmTime.value).toBe(0)
     pass.dispose()
   })
 
