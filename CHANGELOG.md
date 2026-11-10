@@ -9,6 +9,17 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## v0.59.2 — Dry paving, irregular far sea
+
+Graphics only; no simulation behaviour changes. Both changes answer the
+project owner's reading of v0.59.1.
+
+- The paving is dry and matte on every tier. Rain-wet paving (v0.59.0) mirrored the sun and the cloud deck across the whole plate and read as gloss. Its wetness field and screen-space reflection pass remain in the code, switched off in one place (`groundWetness`); the pass does no work while the paving is dry.
+- The far sea no longer repeats. From altitude the sum of steady wave trains showed as a grid of identical cells. Past a few hundred metres the trains now hand over to stretched noise, so distant crests are long, irregular and never line up.
+
+Not reviewed by a panel: this is a withdrawal and a distance-only shader
+change, made on the owner's direct instruction. Night was not re-captured.
+
 ## v0.59.1 — Water
 
 Graphics only; no simulation behaviour changes. The buffer pool's water height

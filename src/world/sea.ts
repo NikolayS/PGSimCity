@@ -115,12 +115,19 @@ vec2 seaChop( vec2 c ) {
 vec3 seaSurface( vec2 p, float range, float detail ) {
   // A slow warp breaks the long crests so trains never line up into a grid.
   vec2 q = p + 26.0 * ( vec2( wetNoise( p * 0.007 ), wetNoise( p * 0.007 + 31.0 ) ) - 0.5 );
+  /* Two steady trains crossing make a lattice, and from altitude the lattice
+   * is all there is to see. A wide second warp bends each crest out of line,
+   * and every train swells and dies in its own wave groups. */
+  q += 140.0 * ( vec2( wetNoise( p * 0.0013 + 3.0 ), wetNoise( p * 0.0013 + 57.0 ) ) - 0.5 );
+  float g1 = 0.25 + 1.5 * wetNoise( p * 0.0037 + 11.0 );
+  float g2 = 0.25 + 1.5 * wetNoise( p * 0.0049 + 43.0 );
+  float g3 = 0.25 + 1.5 * wetNoise( p * 0.0071 + 87.0 );
   vec3 sum = vec3( 0.0 );
   // Swell from a spread of bearings; trains from one quarter alone read as
   // ruled lines from the far side of the island.
-  sum += seaTrain( q, vec2( 0.961, 0.276 ), 71.0, 0.045, uTime ) * ( 1.0 - smoothstep( 1500.0, 3400.0, range ) );
-  sum += seaTrain( q, vec2( 0.326, 0.945 ), 47.0, 0.045, uTime ) * ( 1.0 - smoothstep( 1100.0, 2600.0, range ) );
-  sum += seaTrain( q, vec2( 0.707, -0.707 ), 29.0, 0.050, uTime ) * ( 1.0 - smoothstep( 700.0, 1700.0, range ) );
+  sum += seaTrain( q, vec2( 0.961, 0.276 ), 71.0, 0.045, uTime ) * g1 * ( 1.0 - smoothstep( 1500.0, 3400.0, range ) );
+  sum += seaTrain( q, vec2( 0.326, 0.945 ), 47.0, 0.045, uTime ) * g2 * ( 1.0 - smoothstep( 1100.0, 2600.0, range ) );
+  sum += seaTrain( q, vec2( 0.707, -0.707 ), 29.0, 0.050, uTime ) * g3 * ( 1.0 - smoothstep( 700.0, 1700.0, range ) );
   if ( detail > 1.5 ) {
     sum += seaTrain( q, vec2( -0.342, 0.940 ), 17.0, 0.050, uTime ) * ( 1.0 - smoothstep( 400.0, 1000.0, range ) );
     sum += seaTrain( q, vec2( 0.940, -0.342 ), 9.5, 0.050, uTime ) * ( 1.0 - smoothstep( 220.0, 560.0, range ) );
@@ -139,6 +146,18 @@ vec3 seaSurface( vec2 p, float range, float detail ) {
     if ( close > 0.0 ) {
       sum.xy += seaChop( c2 ) * 0.26 * close;
     }
+  }
+  /* From altitude any sum of steady trains is a lattice, however it is
+   * warped. Past a few hundred metres the trains hand over to stretched
+   * noise: long irregular crests on two bearings that never repeat. */
+  float aloft = smoothstep( 220.0, 800.0, range );
+  sum *= 1.0 - 0.85 * aloft;
+  if ( aloft > 0.0 ) {
+    vec2 s1 = mat2( 0.961, 0.276, -0.276, 0.961 ) * p * vec2( 0.034, 0.009 ) + vec2( uTime * 0.05, 0.0 );
+    vec2 s2 = mat2( 0.326, 0.945, -0.945, 0.326 ) * p * vec2( 0.051, 0.013 ) + vec2( uTime * 0.07, 3.0 );
+    sum.xy += ( mat2( 0.961, -0.276, 0.276, 0.961 ) * ( seaChop( s1 ) * vec2( 1.0, 0.3 ) ) * 0.34
+              + mat2( 0.326, -0.945, 0.945, 0.326 ) * ( seaChop( s2 ) * vec2( 1.0, 0.3 ) ) * 0.24 ) * aloft;
+    sum.z += ( wetNoise( s1 ) + wetNoise( s2 ) - 1.0 ) * 0.9 * aloft;
   }
   // Swell seen edge-on near the horizon stacks into ruled lines; let it lie down.
   sum.xy *= 1.0 - 0.7 * smoothstep( 350.0, 1600.0, range );

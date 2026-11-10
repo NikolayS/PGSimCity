@@ -84,11 +84,12 @@ export function groundSurfaceDetail(mode: ThemeMode, quality: QualityLevel): 0 |
 }
 
 /**
- * Rain-wet paving costs two noise fields over the largest surface in frame, so
- * only the tiers that already pay for the aggregate lookup receive it.
+ * The paving is dry. A wet plate mirrored the sun and sky across the largest
+ * surface in frame and read as gloss, not weather; the field and its mirror
+ * stay wired so a tier can opt back in here alone.
  */
-export function groundWetness(quality: QualityLevel): number {
-  return quality === 'high' || quality === 'ultra' ? 1 : 0
+export function groundWetness(_quality: QualityLevel): number {
+  return 0
 }
 
 /**

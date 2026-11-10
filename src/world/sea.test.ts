@@ -136,6 +136,15 @@ describe('the sea around the island', () => {
     expect(Math.abs(periods - Math.round(periods))).toBeLessThan(1e-9)
   })
 
+  it('hands the far sea from steady trains to noise, so it cannot form a lattice', () => {
+    const sea = createSea(edgeField())
+    const shader = (sea.mesh.material as THREE.ShaderMaterial).fragmentShader
+    const handover = shader.indexOf('sum *= 1.0 - 0.85 * aloft;')
+    expect(handover).toBeGreaterThan(shader.indexOf('seaTrain( q, vec2( 0.707, -0.707 )'))
+    expect(shader.indexOf('if ( aloft > 0.0 ) {')).toBeGreaterThan(handover)
+    sea.dispose()
+  })
+
   it('does no chop arithmetic for water too far away to show it', () => {
     const sea = createSea(edgeField())
     const shader = (sea.mesh.material as THREE.ShaderMaterial).fragmentShader
