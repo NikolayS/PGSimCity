@@ -167,3 +167,11 @@ float wetMirror( float damp, float pool ) {
   return pool * ${WET_POOL_MIRROR.toFixed(3)} + damp * ${WET_DAMP_MIRROR.toFixed(3)};
 }
 `
+
+/**
+ * Diffuse return of the horizon's glow from wet paving. Daylight needs none:
+ * its mirror term already carries a bright sky. `daylight` is 0 at night, 1 by day.
+ */
+export function groundSkyFill(daylight: number): number {
+  return 0.55 * (1 - Math.max(0, Math.min(1, daylight)))
+}

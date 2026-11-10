@@ -9,13 +9,19 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
-## Unreleased — Cinematic rendering, first pass
+## Unreleased — Cinematic rendering
 
 Graphics only; no simulation behaviour changes. Not yet read by a review panel.
+Weather, water and age are setting, not PostgreSQL facts: all of it is
+achromatic or sky-coloured, none of it emits, and none of it is registered,
+labelled or pickable.
 
-- Rain-wet paving at high and ultra quality: one shared wetness field darkens the ground plate, mirrors the live sky and sun in standing water, and stays achromatic. Weather is decoration, not a PostgreSQL fact.
-- Screen-space reflections of the city in that water. Mirrored night radiance is capped below the bloom threshold, so only the original signal glows.
-- Exposure history on structural surfaces: curing blotches and run-off streaks, multiplicative and achromatic.
+- Open water around the island, clipped to the coastline so every excavation stays open, with a sun or moon path and wash against the retaining wall.
+- A procedural cloud deck on the sky dome at high and ultra quality, by day and as a thin veil by night. The billboard clouds remain at medium only.
+- Rain-wet paving at high and ultra quality: it darkens the plate, mirrors the live sky and sun, and reflects nearby structure in screen space. Mirrored night radiance is capped below the bloom threshold, so only the original signal glows.
+- Cast concrete on structural surfaces: aggregate tooth, formwork tie holes, curing blotches and run-off streaks. District zone paint now weathers with its slab.
+- Rolled steel on machinery: brushed, seamed and smudged, carried mostly by roughness.
+- Night haze lit by the city: the bloom chain's widest blur is scattered into the air by path length, so only signals that already glow can light it.
 - Daylight contrast: a stronger, warmer sun against less ambient fill, deeper cast shadows, and a luminance-only filmic contrast curve that keeps every semantic colour pair separated.
 - Film lens after display encoding: restrained grain (frozen under reduced motion) and a vignette that leaves the centre of the frame untouched. Disabled on the low and reduced tiers.
 

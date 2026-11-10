@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { rectangularFramePlane } from './frame-plane'
 import { destinationForDistrict } from '../core/destinations'
-import { ATMOSPHERE, COLOR, DAY_PALETTE, atmosphere, mixHex } from '../core/theme'
+import { ATMOSPHERE, COLOR, DAY_PALETTE, atmosphere, mixHex, themeDaylight } from '../core/theme'
 import { clamp01, fmtBytes, fmtNum } from '../core/util'
 import { ANCHOR, CITY, DISTRICT_BOUNDS } from './layout'
 import { plateFogK } from './plate-fog'
@@ -10,6 +10,7 @@ import {
   GROUND_SURFACE_SIZE,
   createGroundSurfaceData,
   groundGlint,
+  groundSkyFill,
   groundSurfaceDetail,
   groundWetness,
   WET_FIELD_GLSL,
@@ -97,6 +98,7 @@ uniform vec3 uSunDirection;
 uniform vec3 uSunColor;
 uniform float uWet;
 uniform float uGlint;
+uniform float uSkyFill;
 uniform vec3 uSkyZenith;
 uniform vec3 uSkyHorizon;
 uniform vec3 uSkyGlow;
@@ -220,6 +222,9 @@ void main() {
     vec3 sky = wetSky( mirror, uSunDirection, uSkyZenith, uSkyHorizon, uSkyGlow );
     col = mix( col, sky, wetFresnel( dot( toEye, wetNormal ) ) * wetMirror( damp, pool ) );
     col += uSunColor * uGlint * ( pow( sunward, 420.0 ) * pool + pow( sunward, 60.0 ) * damp * 0.05 );
+    // From above, Fresnel leaves a night puddle black. A wet slab still returns
+    // the whole horizon's glow diffusely, which is what makes it read as wet.
+    col += uSkyHorizon * uSkyFill * ( pool * 0.5 + damp * 0.16 );
   }
 
   col = mix( col, uMinor, minor * 0.9 );
@@ -574,6 +579,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
       uSunColor: { value: new THREE.Color(ATMOSPHERE.day.keyColor) },
       uWet: { value: 0 },
       uGlint: { value: 0 },
+      uSkyFill: { value: 0 },
       // Vectors, not Colors: the theme repaint translates Color uniforms.
       uSkyZenith: { value: new THREE.Vector3() },
       uSkyHorizon: { value: new THREE.Vector3() },
@@ -597,6 +603,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
   const uSurveyDetail = gridUniforms.uSurveyDetail as { value: number }
   const uWet = gridUniforms.uWet as { value: number }
   const uGlint = gridUniforms.uGlint as { value: number }
+  const uSkyFill = gridUniforms.uSkyFill as { value: number }
   const uSunDirection = gridUniforms.uSunDirection as { value: THREE.Vector3 }
   const uSunColor = gridUniforms.uSunColor as { value: THREE.Color }
   const uSkyZenith = gridUniforms.uSkyZenith as { value: THREE.Vector3 }
@@ -1229,6 +1236,7 @@ export const createGround: WorldFactory = (ctx: WorldContext): WorldModule => {
     uWet.value = groundWetness(quality.level)
     if (uWet.value > 0) {
       uGlint.value = groundGlint(daylight)
+      uSkyFill.value = groundSkyFill(themeDaylight())
       uSunDirection.value
         .set(air.keyPos[0] - air.keyTarget[0], air.keyPos[1] - air.keyTarget[1], air.keyPos[2] - air.keyTarget[2])
         .normalize()

@@ -14,6 +14,7 @@ import {
   WET_POOL_MIRROR,
   createGroundSurfaceData,
   groundGlint,
+  groundSkyFill,
   groundSurfaceDetail,
   groundWetness,
   groundSurveyDetail,
@@ -117,6 +118,15 @@ describe('procedural ground surface', () => {
     // Glow is reserved for meaning; standing water is weather.
     expect(groundGlint(false)).toBeLessThan(ATMOSPHERE.night.bloomThreshold)
     expect(groundGlint(true)).toBeGreaterThan(groundGlint(false))
+  })
+
+  it('returns the horizon glow from wet paving only as the sun leaves', () => {
+    expect(groundSkyFill(1)).toBe(0)
+    expect(groundSkyFill(0)).toBeGreaterThan(0)
+    expect(groundSkyFill(0)).toBeLessThan(1)
+    expect(groundSkyFill(0.5)).toBeLessThan(groundSkyFill(0))
+    expect(groundSkyFill(-3)).toBe(groundSkyFill(0))
+    expect(groundSkyFill(9)).toBe(0)
   })
 
   it('makes standing water a stronger mirror than damp paving, and neither a full one', () => {
