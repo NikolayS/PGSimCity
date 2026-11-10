@@ -30,3 +30,5 @@ Graphics only. Captures are 1600x900 with HUD and labels hidden, through
   frozen under reduced motion.
 - Caustics. At 5% they are barely visible in a still; they read in motion.
 - Frame rate. Software WebGL only.
+- The coast and overview captures predate the review fixes to distant surf
+  (crests widen past 220 m); the two pool captures were retaken after them.
