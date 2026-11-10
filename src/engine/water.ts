@@ -47,6 +47,21 @@ const REFLECTION_SCALE: Record<QualityLevel, number> = {
   ultra: 0.5,
 }
 
+/**
+ * Most a caustic line may veil what lies under it. The page tiles below carry
+ * state in their colour, so this is a ceiling on how far a tile's value can be
+ * lifted, not a look to tune.
+ */
+export const POOL_CAUSTIC_PEAK = 0.07
+
+/** Mirrored radiance ceiling where a bloom pass runs, kept under its threshold. */
+export const POOL_NIGHT_RADIANCE_CAP = 0.8
+
+/** Peak key-light glitter on the ripple; `unbloomed` is true only with no bloom pass. */
+export function poolGlint(unbloomed: boolean): number {
+  return unbloomed ? 2.2 : 0.5
+}
+
 /** Fraction of the drawing buffer spent on the planar water pass. */
 export function waterReflectionScale(level: QualityLevel): number {
   return REFLECTION_SCALE[level]
@@ -93,6 +108,11 @@ uniform float uOpacity;
 uniform float uReflectionStrength;
 uniform float uRoughness;
 uniform float uTime;
+uniform float uRadianceCap;
+uniform float uGlint;
+uniform float uCaustic;
+uniform vec3 uSunDirection;
+uniform vec3 uSunColor;
 varying vec4 vReflectionCoord;
 varying vec2 vPoolUv;
 varying vec3 vWorldPosition;
@@ -101,47 +121,98 @@ varying vec3 vWorldPosition;
 #include <fog_pars_fragment>
 #include <logdepthbuf_pars_fragment>
 
+float poolHash( vec2 p ) {
+  p = fract( p * vec2( 0.1031, 0.1030 ) );
+  p += dot( p, p.yx + 33.33 );
+  return fract( ( p.x + p.y ) * p.x );
+}
+
+float poolNoise( vec2 p ) {
+  vec2 i = floor( p );
+  vec2 f = fract( p );
+  f = f * f * ( 3.0 - 2.0 * f );
+  return mix(
+    mix( poolHash( i ), poolHash( i + vec2( 1.0, 0.0 ) ), f.x ),
+    mix( poolHash( i + vec2( 0.0, 1.0 ) ), poolHash( i + vec2( 1.0, 1.0 ) ), f.x ),
+    f.y
+  );
+}
+
 void main() {
   #include <logdepthbuf_fragment>
 
-  vec3 col = uBaseColor;
-  float alpha = uOpacity;
+  vec3 viewDirection = normalize( cameraPosition - vWorldPosition );
+  float viewDistance = distance( cameraPosition, vWorldPosition );
+  /* Wind ripple on still water: short trains crossing at odd angles, each
+   * retired before it falls under two pixels. A basin has no fetch, so there
+   * is no swell here, only texture. */
+  vec2 w = vWorldPosition.xz;
+  float a = uTime;
+  float fine = 1.0 - smoothstep( 18.0, 60.0, viewDistance );
+  float mid = 1.0 - smoothstep( 60.0, 220.0, viewDistance );
+  // Two long, lazy trains carry the surface; everything shorter is noise,
+  // because short sines interfere into a lattice no water ever shows.
+  vec2 slope = vec2( 0.92, 0.39 ) * cos( dot( w, vec2( 0.92, 0.39 ) ) * 1.3 + a * 1.4 ) * 0.022 * mid;
+  slope += vec2( -0.45, 0.89 ) * cos( dot( w, vec2( -0.45, 0.89 ) ) * 2.1 - a * 1.8 ) * 0.018 * mid;
+  vec2 r1 = mat2( 0.8, 0.6, -0.6, 0.8 ) * w * 1.6 + vec2( a * 0.45, a * 0.21 );
+  vec2 r2 = mat2( 0.28, -0.96, 0.96, 0.28 ) * w * 4.7 - vec2( a * 0.7, - a * 0.52 );
+  float n1 = poolNoise( r1 );
+  float n2 = poolNoise( r2 );
+  slope += vec2( poolNoise( r1 + vec2( 0.3, 0.0 ) ) - n1, poolNoise( r1 + vec2( 0.0, 0.3 ) ) - n1 ) * 0.16 * mid;
+  slope += vec2( poolNoise( r2 + vec2( 0.3, 0.0 ) ) - n2, poolNoise( r2 + vec2( 0.0, 0.3 ) ) - n2 ) * 0.09 * fine;
+  vec3 waveNormal = normalize( vec3( - slope.x, 1.0, - slope.y ) );
+  float facing = clamp( dot( viewDirection, waveNormal ), 0.0, 1.0 );
+  float fresnel = 0.02 + 0.98 * pow( 1.0 - facing, 5.0 );
+
+  float edge = min( min( vPoolUv.x, 1.0 - vPoolUv.x ), min( vPoolUv.y, 1.0 - vPoolUv.y ) );
+  float opticalDepth = smoothstep( 0.0, 0.28, edge );
+  vec3 col = mix( uShallowColor, uDeepColor, 0.28 + opticalDepth * 0.72 );
+  // Looking down, clear water shows what is in it; only a grazing view is a mirror.
+  float alpha = uOpacity * ( 0.55 + 0.45 * fresnel );
+
   if ( uReflectionStrength > 0.001 ) {
-    float a = uTime * 0.72;
-    vec2 wave = vec2(
-      cos( vPoolUv.x * 47.0 + vPoolUv.y * 19.0 + a )
-        + cos( vPoolUv.y * 73.0 - a * 1.37 ),
-      sin( vPoolUv.y * 43.0 - vPoolUv.x * 17.0 - a * 0.83 )
-        + sin( vPoolUv.x * 61.0 + a * 1.19 )
-    ) * 0.5;
-
-    vec3 viewDirection = normalize( cameraPosition - vWorldPosition );
-    vec3 waveNormal = normalize( vec3( wave.x * 0.055, 1.0, wave.y * 0.055 ) );
-    float facing = clamp( dot( viewDirection, waveNormal ), 0.0, 1.0 );
-    float oneMinusFacing = 1.0 - facing;
-    float fresnel = 0.025 + 0.975 * oneMinusFacing * oneMinusFacing
-      * oneMinusFacing * oneMinusFacing * oneMinusFacing;
-
-    float viewDistance = distance( cameraPosition, vWorldPosition );
     float farBlur = smoothstep( 26.0, 240.0, viewDistance );
     vec2 projected = vReflectionCoord.xy / max( vReflectionCoord.w, 1e-5 );
-    projected += wave * mix( 0.0007, 0.0018, farBlur );
+    // The mirror is displaced by the ripple it sits on, more at grazing angles.
+    projected += slope * mix( 0.55, 0.18, farBlur ) * ( 0.35 + 0.65 * ( 1.0 - facing ) );
     projected = clamp( projected, uTexelSize * 2.0, vec2( 1.0 ) - uTexelSize * 2.0 );
-    vec2 blur = uTexelSize * mix( 1.3, 5.2, farBlur ) * uRoughness;
+    vec2 blur = uTexelSize * mix( 0.8, 4.0, farBlur ) * uRoughness;
 
     vec3 reflected = texture2D( tDiffuse, projected ).rgb * 0.36;
     reflected += texture2D( tDiffuse, projected + vec2( blur.x, 0.0 ) ).rgb * 0.16;
     reflected += texture2D( tDiffuse, projected - vec2( blur.x, 0.0 ) ).rgb * 0.16;
     reflected += texture2D( tDiffuse, projected + vec2( 0.0, blur.y ) ).rgb * 0.16;
     reflected += texture2D( tDiffuse, projected - vec2( 0.0, blur.y ) ).rgb * 0.16;
+    // Scale, never clamp per channel: a mirrored signal keeps its hue.
+    reflected *= min( 1.0, uRadianceCap / max( max( reflected.r, reflected.g ), max( reflected.b, 0.00001 ) ) );
 
-    float edge = min( min( vPoolUv.x, 1.0 - vPoolUv.x ), min( vPoolUv.y, 1.0 - vPoolUv.y ) );
-    float opticalDepth = smoothstep( 0.0, 0.28, edge );
-    vec3 waterTint = mix( uShallowColor, uDeepColor, 0.28 + opticalDepth * 0.72 );
-    float reflectionMix = uReflectionStrength * mix( 0.14, 0.74, fresnel );
-    col = mix( waterTint, reflected, reflectionMix );
-    alpha += reflectionMix * 0.55;
+    float reflectionMix = uReflectionStrength * fresnel;
+    col = mix( col, reflected, reflectionMix );
+    alpha = mix( alpha, 1.0, reflectionMix * 0.92 );
   }
+
+  /* Caustics: the ripple focuses the key light into a moving net on whatever
+   * lies below. Drawn here, on the surface, as a faint pale veil, so the page
+   * tiles under it are brightened by at most POOL_CAUSTIC_PEAK and never
+   * recoloured. It needs a sun and a view down through the water. */
+  if ( uCaustic > 0.0 ) {
+    vec2 k1 = mat2( 0.8, 0.6, -0.6, 0.8 ) * w * 0.55 + vec2( a * 0.21, a * 0.13 );
+    vec2 k2 = mat2( 0.28, -0.96, 0.96, 0.28 ) * w * 0.83 - vec2( a * 0.17, - a * 0.24 );
+    float ridge1 = 1.0 - abs( poolNoise( k1 ) * 2.0 - 1.0 );
+    float ridge2 = 1.0 - abs( poolNoise( k2 ) * 2.0 - 1.0 );
+    float net = pow( ridge1 * ridge2, 3.0 ) * 2.4;
+    float through = facing * ( 1.0 - smoothstep( 60.0, 200.0, viewDistance ) );
+    float veil = clamp( net, 0.0, 1.0 ) * through * uCaustic;
+    col = mix( col, uSunColor, veil / max( alpha + veil, 0.0001 ) );
+    alpha = alpha + veil * ( 1.0 - alpha );
+  }
+
+  // The key light on the ripple: a tight glitter path and a broad sheen.
+  vec3 mirrorDir = reflect( - viewDirection, waveNormal );
+  float sunward = max( dot( mirrorDir, uSunDirection ), 0.0 );
+  float glint = pow( sunward, 900.0 ) + 0.03 * pow( sunward, 60.0 );
+  col += uSunColor * uGlint * glint;
+  alpha = min( 1.0, alpha + glint * uGlint );
 
   gl_FragColor = vec4( col, alpha );
   #include <fog_fragment>
@@ -166,6 +237,12 @@ const WATER_SHADER = {
       uReflectionStrength: { value: 0 },
       uRoughness: { value: 0.74 },
       uTime: { value: 0 },
+      uRadianceCap: { value: 8 },
+      uGlint: { value: 0 },
+      uCaustic: { value: 0 },
+      uSunDirection: { value: new THREE.Vector3(0, 1, 0) },
+      // A Vector3, not a Color: the theme repaint translates Color uniforms.
+      uSunColor: { value: new THREE.Vector3(1, 1, 1) },
     },
   ]),
   vertexShader: waterVertex,
@@ -223,15 +300,27 @@ export function createBufferWater(
   reflectionTarget.texture.name = 'PGSimCity.water.planar-reflection'
   reflectionTarget.texture.generateMipmaps = false
   const reflectionSize = new THREE.Vector2()
+  const sunScratch = new THREE.Color()
   const texelSize = surfaceMaterial.uniforms.uTexelSize.value as THREE.Vector2
   const renderReflection = surface.onBeforeRender
   surface.onBeforeRender = (renderer, activeScene, camera, geometry, material, renderGroup): void => {
     const scale = waterReflectionScale(resolvedQuality.level)
-    const enabled =
-      scale > 0 &&
-      atmosphere().daylight &&
-      camera.position.y > surfaceY + 0.05
-    surfaceMaterial.uniforms.uReflectionStrength.value = enabled ? 0.9 : 0
+    const air = atmosphere()
+    const enabled = scale > 0 && camera.position.y > surfaceY + 0.05
+    const uniforms = surfaceMaterial.uniforms
+    uniforms.uReflectionStrength.value = enabled ? 0.94 : 0
+    /* Wherever bloom runs, the mirror and the glint stay under its threshold:
+     * a signal reflected in the pool is the same fact twice, and only the
+     * original may glow. */
+    uniforms.uRadianceCap.value = air.bloomEnabled ? POOL_NIGHT_RADIANCE_CAP : 8
+    uniforms.uGlint.value = poolGlint(!air.bloomEnabled)
+    // Daylight and the top tiers only: at night there is no sun to focus.
+    uniforms.uCaustic.value = air.daylight && scale >= 0.5 ? POOL_CAUSTIC_PEAK : 0
+    ;(uniforms.uSunDirection.value as THREE.Vector3)
+      .set(air.keyPos[0] - air.keyTarget[0], air.keyPos[1] - air.keyTarget[1], air.keyPos[2] - air.keyTarget[2])
+      .normalize()
+    sunScratch.setHex(air.keyColor)
+    ;(uniforms.uSunColor.value as THREE.Vector3).set(sunScratch.r, sunScratch.g, sunScratch.b)
     if (!enabled) return
 
     renderer.getDrawingBufferSize(reflectionSize)

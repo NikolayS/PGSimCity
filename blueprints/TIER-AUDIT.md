@@ -34,7 +34,8 @@ all 20 reachable City controls were measured at every tier.
   half-resolution water reflection, AO, aerial perspective, 2048px soft
   shadows, ten-tap shafts, SMAA, bevels, full ground response, all rooftop
   dressing, wet paving with 24-tap reflections, the procedural cloud deck,
-  two-octave sea waves, night haze glow, and the film lens.
+  full sea swell and chop with surf, cloud mirror and whitecaps, pool caustics,
+  night haze glow, and the film lens.
 - `high` removes 14 rooftop-detail anchors and reduces AO resolution/samples,
   aerial perspective, shadow resolution/softness and shaft resolution/samples.
   Wet-paving reflections drop to 16 taps at half resolution. It retains every
@@ -42,13 +43,14 @@ all 20 reachable City controls were measured at every tier.
 - `medium` additionally removes cast shadows (including the decorative
   shared-buffer raking shadows), SMAA, box bevels, wet paving and its
   reflections, and the procedural cloud deck (billboard clouds take its
-  place). It reduces sea waves to one octave, the render cap
+  place). It reduces the sea to three swell trains with surf but no chop, whitecaps or
+  cloud mirror, removes pool caustics, and reduces the render cap
   to 1.5×, water reflection to quarter-resolution, ground response to its joint
   layer, and rooftop dressing to 18 anchors. Environment, AO, haze, shafts,
   daylight sky scattering, clouds and bloom remain.
 - `reduced` additionally removes the environment map, planar water reflection,
   AO, aerial perspective, light shafts, daylight sky scattering and clouds,
-  ground-surface aggregate/joint response, sea waves, night haze glow, the film lens, rooftop dressing, ambient ground
+  ground-surface aggregate/joint response, sea waves and surf, night haze glow, the film lens, rooftop dressing, ambient ground
   light cones and articulated finger detail. It renders at 1× and retains the
   cheaper legacy sky, hand silhouettes and bloom.
 - `low` removes bloom as well, and bypasses the post chain at night. Its

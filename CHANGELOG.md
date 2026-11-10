@@ -9,6 +9,20 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## v0.59.1 — Water
+
+Graphics only; no simulation behaviour changes. The buffer pool's water height
+is still the representative sample's occupancy and nothing about it changed.
+
+- Surf. Swell that reaches the retaining wall steepens into lines that run in at walking pace, break, and leave lace behind them; a swash rises and falls against the wall. It follows the whole coastline, including the outermost capes, where the earlier wash never appeared.
+- Open sea. Directional wave trains with deep-water dispersion replace sampled noise, with noise only for the short chop, so crests are crisp near and calm far. Water is paler and greener over the shelf, crests are lit from within toward the sun, whitecaps break on the steepest, and the cloud deck is mirrored in it at high and ultra.
+- Buffer pool water. A rippled surface with true Fresnel: clear when looked down into, a mirror at a grazing angle, with a sun glitter path. Its planar reflection now runs at night as well, so the towers and neon are mirrored in it, scaled under the bloom threshold with their hue kept.
+- Pool caustics, in daylight at high and ultra: a faint moving net of focused light. It is drawn on the surface as a veil of at most 7%, so a page tile beneath it is brightened slightly and never recoloured; a test holds every pair of page states apart through it.
+
+Weather and water remain setting, not PostgreSQL facts. Sea, surf, foam and
+caustics are unregistered, unlabelled and unpickable; foam is lit, never
+luminous.
+
 ## v0.59.0 — Cinematic rendering
 
 Graphics only; no simulation behaviour changes. Frame rate on a real GPU is
