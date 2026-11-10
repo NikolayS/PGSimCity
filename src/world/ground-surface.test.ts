@@ -107,12 +107,10 @@ describe('procedural ground surface', () => {
     expect(groundSurfaceDetail('day', 'ultra')).toBe(2)
   })
 
-  it('spends rain-wet paving only on the tiers that already sample the aggregate', () => {
-    expect(groundWetness('low')).toBe(0)
-    expect(groundWetness('reduced')).toBe(0)
-    expect(groundWetness('medium')).toBe(0)
-    expect(groundWetness('high')).toBe(1)
-    expect(groundWetness('ultra')).toBe(1)
+  it('keeps the paving dry and matte on every tier', () => {
+    for (const level of ['low', 'reduced', 'medium', 'high', 'ultra'] as const) {
+      expect(groundWetness(level)).toBe(0)
+    }
   })
 
   it('keeps a mirrored moon below the night bloom threshold', () => {

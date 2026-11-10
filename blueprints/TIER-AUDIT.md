@@ -33,16 +33,16 @@ all 20 reachable City controls were measured at every tier.
 - `ultra` removes nothing. It uses the full 2× render scale, environment,
   half-resolution water reflection, AO, aerial perspective, 2048px soft
   shadows, ten-tap shafts, SMAA, bevels, full ground response, all rooftop
-  dressing, wet paving with 24-tap reflections, the procedural cloud deck,
+  dressing, the procedural cloud deck,
   full sea swell and chop with surf, cloud mirror and whitecaps, pool caustics,
   night haze glow, and the film lens.
 - `high` removes 14 rooftop-detail anchors and reduces AO resolution/samples,
   aerial perspective, shadow resolution/softness and shaft resolution/samples.
-  Wet-paving reflections drop to 16 taps at half resolution. It retains every
+  It retains every
   effect family, 2× render scale, SMAA and bevels.
 - `medium` additionally removes cast shadows (including the decorative
-  shared-buffer raking shadows), SMAA, box bevels, wet paving and its
-  reflections, and the procedural cloud deck (billboard clouds take its
+  shared-buffer raking shadows), SMAA, box bevels,
+  and the procedural cloud deck (billboard clouds take its
   place). It reduces the sea to three swell trains with surf but no chop, whitecaps or
   cloud mirror, removes pool caustics, and reduces the render cap
   to 1.5×, water reflection to quarter-resolution, ground response to its joint
