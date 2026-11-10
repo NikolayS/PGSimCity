@@ -6,7 +6,18 @@ import { DAY_PALETTE, NIGHT_PALETTE } from '../core/themes'
 import type { QualityLevel } from '../core/types'
 import { perceptualColorDistance } from '../engine/color-grade'
 import { CITY } from './layout'
-import { SEA_DEEP, SEA_LEVEL, SEA_RADIUS, SEA_UNDERCUT, createSea, seaWaveDetail } from './sea'
+import {
+  SEA_DEEP,
+  SEA_LEVEL,
+  SEA_RADIUS,
+  SEA_SHELF,
+  SEA_UNDERCUT,
+  SURF,
+  createSea,
+  seaWaveDetail,
+  surfLinePosition,
+  SEA_TIME_WRAP,
+} from './sea'
 
 const LEVELS: readonly QualityLevel[] = ['low', 'reduced', 'medium', 'high', 'ultra']
 
@@ -62,7 +73,10 @@ describe('the sea around the island', () => {
   it('is cut away under the island so excavations stay open', () => {
     const sea = createSea(edgeField())
     const material = sea.mesh.material as THREE.ShaderMaterial
-    expect(material.fragmentShader).toContain('if ( inside > SEA_UNDERCUT ) discard;')
+    expect(material.fragmentShader).toContain('if ( beyond < 0.001 && inside > SEA_UNDERCUT ) discard;')
+    // The edge field covers only the island's own rectangle. Past it the coast
+    // is further away by the overshoot, or surf vanishes on the outermost capes.
+    expect(material.fragmentShader).toContain('float beyond = length( ( euv - held ) / uEdgeMap.zw );')
     expect(Number(material.defines.SEA_UNDERCUT)).toBe(SEA_UNDERCUT)
     // The kerb overhangs the cut by more than the encoded field can mis-place it.
     expect(SEA_UNDERCUT).toBeGreaterThan(0)
@@ -95,4 +109,77 @@ describe('the sea around the island', () => {
     expect(uniforms.uWaves.value).toBe(0)
     sea.dispose()
   })
+
+  it('runs its surf lines toward the wall, never out to sea', () => {
+    let previous: number = SURF.reach
+    for (let seconds = 1; seconds <= 10; seconds++) {
+      const position = surfLinePosition(SURF.reach, seconds)
+      expect(position).toBeLessThan(previous)
+      previous = position
+    }
+    expect(surfLinePosition(SURF.reach, SURF.reach / SURF.speed)).toBeCloseTo(0, 10)
+    // The shader's phase rises with time and with distance out, which is the
+    // same statement: a fixed phase sits closer to the wall each second.
+    const sea = createSea(edgeField())
+    const material = sea.mesh.material as THREE.ShaderMaterial
+    expect(material.fragmentShader).toContain(
+      'float phase = shore / SURF_LENGTH + uTime * ( SURF_SPEED / SURF_LENGTH ) + ragged;',
+    )
+    expect(Number(material.defines.SURF_SPEED)).toBe(SURF.speed)
+    expect(Number(material.defines.SURF_LENGTH)).toBe(SURF.wavelength)
+    sea.dispose()
+  })
+
+  it('wraps its clock on a whole number of surf periods, so the lines never jump', () => {
+    const periods = (SEA_TIME_WRAP * SURF.speed) / SURF.wavelength
+    expect(periods).toBeGreaterThan(100)
+    expect(Math.abs(periods - Math.round(periods))).toBeLessThan(1e-9)
+  })
+
+  it('does no chop arithmetic for water too far away to show it', () => {
+    const sea = createSea(edgeField())
+    const shader = (sea.mesh.material as THREE.ShaderMaterial).fragmentShader
+    expect(shader).toContain('if ( near > 0.0 ) {')
+    expect(shader).toContain('if ( close > 0.0 ) {')
+    sea.dispose()
+  })
+
+  it('breaks at a walking pace over a shelf a few lines wide', () => {
+    // Faster reads as a conveyor, slower as paint; fewer lines is no surf zone.
+    expect(SURF.speed).toBeGreaterThan(1)
+    expect(SURF.speed).toBeLessThan(5)
+    expect(SURF.reach / SURF.wavelength).toBeGreaterThanOrEqual(3)
+    expect(SURF.reach).toBeLessThan(96)
+  })
+
+  it('holds its surf still under reduced motion and keeps foam under the bloom threshold', () => {
+    const sea = createSea(edgeField())
+    const uniforms = (sea.mesh.material as THREE.ShaderMaterial).uniforms
+    setThemeMode('night', { persist: false })
+    sea.update(1, 'ultra')
+    // Foam is lit, never luminous: wherever bloom runs it cannot cross into it.
+    expect(uniforms.uFoamCap.value).toBeLessThan(ATMOSPHERE.night.bloomThreshold)
+    setThemeMode('day', { persist: false })
+    sea.update(1, 'ultra')
+    expect(uniforms.uFoamCap.value).toBeGreaterThan(ATMOSPHERE.night.bloomThreshold)
+    sea.dispose()
+  })
+
+  it('keeps shelf water away from clean-page blue and from the pool', () => {
+    for (const pool of [DAY_PALETTE.bufClean, 0x5aa9e8, 0x1f5f9d, 0x69b9df]) {
+      expect(perceptualColorDistance(SEA_SHELF.day, pool)).toBeGreaterThan(0.12)
+    }
+  })
+
+  it('mirrors the cloud deck only on the tiers that draw it', () => {
+    const sea = createSea(edgeField())
+    const uniforms = (sea.mesh.material as THREE.ShaderMaterial).uniforms
+    setThemeMode('day', { persist: false })
+    for (const level of LEVELS) {
+      sea.update(0, level)
+      expect(uniforms.uCloud.value > 0, level).toBe(level === 'high' || level === 'ultra')
+    }
+    sea.dispose()
+  })
 })
+
