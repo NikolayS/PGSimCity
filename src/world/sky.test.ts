@@ -12,6 +12,7 @@ import {
   SLONIK_LINK_OPACITY,
   SUN_ANGULAR_DIAMETER_DEG,
   applySkyAtmosphere,
+  CLOUD_DECK,
   cloudAngularWidths,
   cloudElevations,
   createSky,
@@ -236,6 +237,11 @@ describe('day sky', () => {
     applySkyAtmosphere(sky, ATMOSPHERE.night, 'high', FIXED_SKY_DATE)
     expect(stars?.visible).toBe(true)
     expect(clouds?.visible).toBe(false)
+    // By night the deck is a veil the stars show through, never a ceiling.
+    expect(dome.material.uniforms.uCloudDeck.value).toBe(1)
+    expect(CLOUD_DECK.nightOpacity).toBeLessThanOrEqual(0.5)
+    expect(CLOUD_DECK.nightOpacity).toBeLessThan(CLOUD_DECK.opacity)
+    applySkyAtmosphere(sky, ATMOSPHERE.night, 'reduced', FIXED_SKY_DATE)
     expect(dome.material.uniforms.uCloudDeck.value).toBe(0)
 
     ;(sky.userData.dispose as () => void)()

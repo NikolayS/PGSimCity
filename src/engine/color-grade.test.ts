@@ -266,3 +266,34 @@ describe('film lens', () => {
   })
 })
 
+describe('night haze light scatter', () => {
+  it('grows with path length between its near share and one', async () => {
+    const { LIGHT_SCATTER, lightScatterShare } = await import('./color-grade')
+    expect(lightScatterShare(0)).toBe(LIGHT_SCATTER.nearShare)
+    expect(lightScatterShare(LIGHT_SCATTER.nearMetres)).toBe(LIGHT_SCATTER.nearShare)
+    expect(lightScatterShare(LIGHT_SCATTER.farMetres)).toBe(1)
+    expect(lightScatterShare(1e6)).toBe(1)
+    let previous = 0
+    for (let metres = 0; metres <= 1000; metres += 25) {
+      const share = lightScatterShare(metres)
+      expect(share).toBeGreaterThanOrEqual(previous)
+      previous = share
+    }
+  })
+
+  it('has no source of its own: without the bloom chain or scene depth it is off', async () => {
+    const { GoldenHourOutputPass } = await import('./color-grade')
+    const pass = new GoldenHourOutputPass()
+    expect(pass.uniforms.pgScatterStrength.value).toBe(0)
+    pass.setLightScatter(null, 0.4)
+    expect(pass.uniforms.pgScatterWide.value).toBeNull()
+    // The term reads only the wide blur: it can spread a signal, never make one.
+    const source = pass.material.fragmentShader
+    const body = source.slice(source.indexOf('vec3 pgLightScatter'), source.indexOf('uniform float pgFilmGrain'))
+    expect(body).toContain('texture2D( pgScatterWide, uv )')
+    expect(body).not.toContain('tDiffuse')
+    expect(source.indexOf('pgLightScatter( gl_FragColor.rgb, vUv )')).toBeLessThan(source.indexOf('// tone mapping'))
+    pass.dispose()
+  })
+})
+

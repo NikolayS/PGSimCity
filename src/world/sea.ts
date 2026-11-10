@@ -21,7 +21,7 @@ export const SEA_LEVEL = -9
 /** Beyond the far fog distance in both modes, so no edge is ever visible. */
 export const SEA_RADIUS = 3800
 /** Deep-water body colour, sRGB. Low chroma by construction. */
-export const SEA_DEEP = { day: 0x1f3440, night: 0x050a14 } as const
+export const SEA_DEEP = { day: 0x1f3440, night: 0x070a10 } as const
 
 /** Metres the water reaches in under the kerb before the island cuts it away. */
 export const SEA_UNDERCUT = 3
@@ -75,9 +75,12 @@ void main() {
   // No water under the island: every excavation in the plate must stay open
   // down to its own floor, or the storage districts drown.
   vec2 euv = ( vWorld.xz - uEdgeMap.xy ) * uEdgeMap.zw;
+  // Metres offshore; large where the edge field has no opinion.
+  float offshore = 1000.0;
   if ( euv.x > 0.0 && euv.x < 1.0 && euv.y > 0.0 && euv.y < 1.0 ) {
     float inside = ( texture2D( uEdge, euv ).r - 0.5 ) * 2.0 * uEdgeMax;
     if ( inside > SEA_UNDERCUT ) discard;
+    offshore = - inside;
   }
   vec3 toEye = normalize( cameraPosition - vWorld );
   float range = distance( cameraPosition, vWorld );
@@ -104,6 +107,15 @@ void main() {
   float sunward = max( dot( mirror, uSunDirection ), 0.0 );
   vec3 col = mix( uDeep, sky, fresnel );
   col += uSunColor * uGlint * ( pow( sunward, 260.0 ) + uSheen * pow( sunward, 28.0 ) );
+  if ( uWaves > 0.5 && offshore < 26.0 ) {
+    // Wash against the retaining wall: broken, drifting, and lit only by the
+    // sky it sits under, so it is grey at night and can never read as a signal.
+    float surge = wetNoise( vWorld.xz * 0.21 + uTime * 0.16 ) * 0.6 + wetNoise( vWorld.xz * 0.9 - uTime * 0.23 ) * 0.4;
+    float band = 1.0 - smoothstep( 1.0, 9.0 + 14.0 * surge, offshore + 3.0 );
+    float foam = band * smoothstep( 0.34, 0.62, surge );
+    vec3 foamColor = ( uSkyHorizon * 0.9 + uSunColor * uGlint * 0.16 );
+    col = mix( col, min( foamColor, vec3( 0.8 ) ), foam * 0.8 );
+  }
   gl_FragColor = vec4( col, 1.0 );
   #include <tonemapping_fragment>
   #include <colorspace_fragment>

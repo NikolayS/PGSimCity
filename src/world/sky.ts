@@ -305,6 +305,8 @@ export const CLOUD_DECK = {
   coverFrom: 0.5,
   coverTo: 0.7,
   opacity: 0.88,
+  /** Night keeps the stars: the deck is a veil, not a ceiling. */
+  nightOpacity: 0.5,
 } as const
 
 const skyVert = /* glsl */ `
@@ -474,6 +476,14 @@ void main() {
     col += uHorizon * band * 0.30;
     float east = clamp( d.x, 0.0, 1.0 );
     col += uGlow * band * pow( east, 2.4 );
+    if ( uCloudDeck > 0.5 && h > 0.012 ) {
+      // The same deck by moonlight: thin, unlit from within, well under bloom.
+      vec2 deck = d.xz / ( h + 0.11 ) * 1.35;
+      float cover = smoothstep( ${g(CLOUD_DECK.coverFrom)}, ${g(CLOUD_DECK.coverTo + 0.08)}, skyFbm( deck + 3.7 ) );
+      float moonSide = pow( max( dot( d, uSunDirection ), 0.0 ), 2.0 );
+      vec3 cloud = uHorizon * ( 0.55 + 0.9 * moonSide );
+      col = mix( col, cloud, cover * smoothstep( 0.012, 0.2, h ) * ${g(CLOUD_DECK.nightOpacity)} );
+    }
     col *= mix( 0.18, 1.0, smoothstep( -0.30, -0.01, h ) );
   }
 
@@ -687,10 +697,10 @@ export function skyCloudsVisible(air: Atmosphere, quality: QualityLevel): boolea
 /**
  * The dome's own procedural deck replaces the billboards where five octaves of
  * noise over the whole sky are affordable; two cloud systems would disagree
- * about where the weather is.
+ * about where the weather is. It runs by day and, as a thin veil, by night.
  */
 export function skyCloudDeckEnabled(air: Atmosphere, quality: QualityLevel): boolean {
-  return air.clouds && air.daylight && (quality === 'high' || quality === 'ultra')
+  return quality === 'high' || quality === 'ultra'
 }
 
 /**
