@@ -30,3 +30,38 @@ jobs:
       - run: npm ci
       - name: Verify reference columns and diagnostic queries
         run: gosu postgres npm run oracle
+
+  browser-reference:
+    name: PostgreSQL 19 reference browser
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd # v2.1.2
+        id: chrome
+        with:
+          chrome-version: stable
+      - run: npm run build
+      - name: Exercise reference cards through the approved driver
+        env:
+          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
+          CDP_SEQUENCE: tools/pg19-reference-sequence.mjs
+        run: |
+          mkdir -p artifacts
+          npm run preview > artifacts/preview.log 2>&1 &
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://localhost:4173/observability/ >/dev/null; then break; fi
+            sleep 1
+          done
+          CDP_PORT=9601 node tools/shoot.mjs http://localhost:4173/observability/ artifacts/desktop.png 5000 1280 900 > artifacts/desktop.log 2>&1
+          CDP_PORT=9602 CDP_MOBILE=1 node tools/shoot.mjs http://localhost:4173/observability/ artifacts/phone.png 5000 390 844 > artifacts/phone.log 2>&1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pg19-reference-browser
+          path: artifacts/
