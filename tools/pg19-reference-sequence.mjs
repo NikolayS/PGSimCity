@@ -17,6 +17,7 @@ export async function runSequence({ send, output, logs }) {
       const style = boundary && getComputedStyle(boundary)
       return {
         heading: document.querySelector('h1')?.textContent,
+        correctionScope: document.querySelector('[data-version-qualification-marker]')?.textContent ?? '',
         failedResources: performance.getEntriesByType('resource').filter(e => e.responseStatus >= 400).map(e => ({ url: e.name, status: e.responseStatus })),
         selected: document.querySelector('.vchip[aria-pressed="true"]')?.textContent,
         columns: [...document.querySelectorAll('.cols .col')].map(e => e.textContent),
@@ -53,6 +54,7 @@ export async function runSequence({ send, output, logs }) {
   await chooseVersion(19)
   const wal = await snapshot('wal19')
   assert.equal(wal.heading, 'pg_stat_wal')
+  assert.equal(wal.correctionScope, 'PostgreSQL 19 reference · model unchanged')
   assert.ok(wal.columns.includes('wal_fpi_bytes'))
   assert.match(wal.sql, /wal_fpi_bytes/)
   assert.ok(wal.visibleBoundary)
@@ -82,6 +84,7 @@ export async function runSequence({ send, output, logs }) {
   const restored = await snapshot('wal18-restored')
   assert.deepEqual(restored.columns, baseline.columns)
   assert.equal(restored.boundary, '')
+  assert.equal(restored.correctionScope, baseline.correctionScope)
   assert.equal(restored.sql, '')
   assert.ok(!logs.some(line => line.includes('[EXCEPTION]')), logs.join('\n'))
   writeFileSync(output.replace('.png', '.json'), JSON.stringify(reports, null, 2))

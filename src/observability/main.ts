@@ -889,6 +889,12 @@ function renderInstrument(e: CatalogEntry): HTMLElement {
     ),
   )
 
+  if (reference.major === 19 && !missing) body.push(el(
+    'details', { data: { versionQualification: 'postgresql19-reference' } },
+    el('summary', { text: 'PostgreSQL 19 reference · model unchanged' }),
+    el('span', { data: { versionQualificationFull: 'true' }, text: PG19_MODEL_BOUNDARY }),
+  ))
+
   return el('article', { class: `card${pgVersion === 19 ? ' pg19-reference' : ''}` }, ...body.filter(Boolean).map((x) => x as HTMLElement))
 }
 
@@ -972,7 +978,7 @@ function footer(): HTMLElement {
     { class: 'foot' },
     stamp,
     el('p', {
-      html: `Inspired by <a href="https://pgstats.dev/" target="_blank" rel="noreferrer noopener">Alexey Lesovsky's PostgreSQL Observability map</a>. Names verified against the <a href="${CLAIM_VALUES.postgresqlVersion.manualBase}monitoring-stats.html" target="_blank" rel="noreferrer noopener">${CLAIM_VALUES.postgresqlVersion.majorLabel} manual</a>. Apache-2.0.`,
+      html: `Inspired by <a href="https://pgstats.dev/" target="_blank" rel="noreferrer noopener">Alexey Lesovsky's PostgreSQL Observability map</a>. Baseline references use the <a href="${CLAIM_VALUES.postgresqlVersion.manualBase}monitoring-stats.html" target="_blank" rel="noreferrer noopener">${CLAIM_VALUES.postgresqlVersion.majorLabel} manual</a>; PostgreSQL 19 reference cards link their own manual. Apache-2.0.`,
     }),
     el('p', { class: 'foot__legal', text: TRADEMARK_NOTICE }),
     el('p', { class: 'foot__legal', text: NO_EA_CONTENT }),

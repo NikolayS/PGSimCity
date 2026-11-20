@@ -62,6 +62,7 @@ jobs:
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
           CDP_SEQUENCE: tools/pg19-reference-sequence.mjs
+          CDP_LOG_URLS: http
         run: |
           mkdir -p artifacts
           npm run preview > artifacts/preview.log 2>&1 &
