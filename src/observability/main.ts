@@ -13,6 +13,7 @@
  * which one do you open, and why that one.
  * ==========================================================================*/
 
+import { PG19_MODEL_BOUNDARY } from '../spine/postgresql-19'
 import './style.css'
 
 import { ANALYTICS_EVENTS, startAnalytics } from '../core/analytics'
@@ -35,7 +36,7 @@ import { fmtNum, reduceMotion } from '../core/util'
 import { createFrameTimebase } from '../core/timebase'
 import { cityComponentHref } from '../core/city-route'
 
-import { BY_ID, CATALOG, CATALOG_SUBSYSTEMS, VERSIONS } from './catalog'
+import { BY_ID, CATALOG, CATALOG_SUBSYSTEMS, VERSIONS, catalogReference } from './catalog'
 import type { CatalogEntry } from './catalog'
 import { createCollector } from './collector'
 import {
@@ -126,7 +127,7 @@ let screen: Screen = new URLSearchParams(window.location.search).get('view') ===
   ? { kind: 'flow' }
   : { kind: 'home' }
 let counterMode: Mode = 'total'
-let pgVersion: number = VERSIONS[0]
+let pgVersion: number = CLAIM_VALUES.postgresqlVersion.major
 let flowView: Flow2dView | null = null
 
 /** Everything the current pane wants refreshed on the data tick. */
@@ -332,7 +333,7 @@ function buildRail(): void {
       : 'Pick a complaint. The model is put into a state that produces it, and you are walked to the column that proves it.' }),
     symptomList,
     railHeading('Instruments', versionRail),
-    el('p', { class: 'rail__note', text: 'Every view this model can serve, live. Change the version to see what you would be blind to.' }),
+    el('p', { class: 'rail__note', text: 'Reference instruments and explicitly labeled model coverage. The version filter changes references, not the city or SQL engine.' }),
     instrumentList,
   )
 }
@@ -536,7 +537,7 @@ function renderHome(): HTMLElement {
       data: { disclosure: 'diagnose-postgresql-version' },
       text:
         `Catalog shapes and explanations on this page describe ${CLAIM_VALUES.postgresqlVersion.referenceLabel}. `
-        + 'The version rail flags whole instruments missing from older majors; each instrument’s version note explains changed columns.',
+        + 'Select 19 for the explicitly labeled PostgreSQL 19 reference cards; other cards retain the 18 reference. The filter does not upgrade the city model or PGlite. Each instrument’s version note explains changed columns.',
     }),
     el('p', {
       class: 'lede',
@@ -791,6 +792,7 @@ function renderVerdict(sc: Extract<Screen, { kind: 'console' }>, v: Verdict): HT
  * -------------------------------------------------------------------------*/
 
 function renderInstrument(e: CatalogEntry): HTMLElement {
+  const reference = catalogReference(e, pgVersion)
   const missing = e.since > pgVersion
   const body: (HTMLElement | null)[] = []
 
@@ -803,6 +805,11 @@ function renderInstrument(e: CatalogEntry): HTMLElement {
       md(e.what, 'lede'),
     ),
   )
+
+  if (pgVersion === 19) body.push(el('aside', { class: 'blindspot', data: { disclosure: 'postgresql-19-boundary' } },
+    el('span', { class: 'note__k', text: 'POSTGRESQL 19: REFERENCE SUPPORT, NOT EMULATION' }),
+    el('p', { text: PG19_MODEL_BOUNDARY }),
+  ))
 
   if (missing) {
     body.push(
@@ -829,8 +836,13 @@ function renderInstrument(e: CatalogEntry): HTMLElement {
     body.push(liveGrid(e.projection))
   }
 
+  if (!missing && reference.major === 19) body.push(el('section', { class: 'block' },
+    el('h3', { text: 'Run on PostgreSQL 19, not in PGlite' }),
+    sqlBlock(`SELECT ${reference.columns.join(', ')}\nFROM pg_catalog.${e.id};`),
+  ))
+
   const cols = el('div', { class: 'cols' })
-  for (const c of e.columns) cols.append(el('code', { class: 'col', text: c }))
+  for (const c of reference.columns) cols.append(el('code', { class: 'col', text: c }))
   /* Functions carry signatures, not columns, and calling them "columns" would be
    * the small kind of wrong that costs a reader their trust in the large kind. */
   const isFn = e.kind === 'function'
@@ -838,12 +850,12 @@ function renderInstrument(e: CatalogEntry): HTMLElement {
     el(
       'section',
       { class: 'block' },
-      el('h3', { text: isFn ? `Signatures (${e.columns.length})` : `Columns (${e.columns.length})` }),
+      el('h3', { text: isFn ? `Signatures (${reference.columns.length})` : `Columns (${reference.columns.length})` }),
       el('p', {
         class: 'fine',
         text: isFn
           ? 'The real signatures, as the manual gives them. Checked one at a time.'
-          : 'The complete list as of PostgreSQL 18, in the order the manual gives it. Nothing is abridged: if a column is missing from this list, that is a bug worth reporting. Names were checked against the manual one at a time.',
+          : `PostgreSQL ${reference.major} reference columns in catalog order. The version filter does not change the city simulation. Live grids remain ${CLAIM_VALUES.postgresqlVersion.referenceLabel} model output; new PostgreSQL 19 fields are not synthesized.`,
       }),
       cols,
     ),
@@ -872,12 +884,18 @@ function renderInstrument(e: CatalogEntry): HTMLElement {
     el(
       'section',
       { class: 'block links' },
-      el('a', { class: 'extlink', href: e.docs, target: '_blank', rel: 'noreferrer noopener', text: 'PostgreSQL manual' }),
+      el('a', { class: 'extlink', href: reference.docs, target: '_blank', rel: 'noreferrer noopener', text: 'PostgreSQL manual' }),
       cityLink(e.city, 'See the mechanism in the city'),
     ),
   )
 
-  return el('article', { class: 'card' }, ...body.filter(Boolean).map((x) => x as HTMLElement))
+  if (reference.major === 19) body.push(el(
+    'details', { data: { versionQualification: 'postgresql19-reference' } },
+    el('summary', { text: 'PostgreSQL 19 reference · model unchanged' }),
+    el('span', { data: { versionQualificationFull: 'true' }, text: PG19_MODEL_BOUNDARY }),
+  ))
+
+  return el('article', { class: `card${pgVersion === 19 ? ' pg19-reference' : ''}` }, ...body.filter(Boolean).map((x) => x as HTMLElement))
 }
 
 /* ---------------------------------------------------------------------------
@@ -960,7 +978,7 @@ function footer(): HTMLElement {
     { class: 'foot' },
     stamp,
     el('p', {
-      html: `Inspired by <a href="https://pgstats.dev/" target="_blank" rel="noreferrer noopener">Alexey Lesovsky's PostgreSQL Observability map</a>. Names verified against the <a href="${CLAIM_VALUES.postgresqlVersion.manualBase}monitoring-stats.html" target="_blank" rel="noreferrer noopener">${CLAIM_VALUES.postgresqlVersion.majorLabel} manual</a>. Apache-2.0.`,
+      html: `Inspired by <a href="https://pgstats.dev/" target="_blank" rel="noreferrer noopener">Alexey Lesovsky's PostgreSQL Observability map</a>. Baseline references use the <a href="${CLAIM_VALUES.postgresqlVersion.manualBase}monitoring-stats.html" target="_blank" rel="noreferrer noopener">${CLAIM_VALUES.postgresqlVersion.majorLabel} manual</a>; PostgreSQL 19 reference cards link their own manual. Apache-2.0.`,
     }),
     el('p', { class: 'foot__legal', text: TRADEMARK_NOTICE }),
     el('p', { class: 'foot__legal', text: NO_EA_CONTENT }),

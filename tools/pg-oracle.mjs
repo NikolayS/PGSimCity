@@ -911,6 +911,21 @@ async function checkCatalog(psql, query, registry, major) {
   return results
 }
 
+async function checkPg19Reference(psql, query, registry, major) {
+  if (major !== 19) return []
+  const [server] = await query("SELECT current_setting('server_version_num') AS version")
+  if (Math.floor(Number(server.version) / 10000) !== 19) {
+    throw new Error(`PostgreSQL 19 reference check requires a 19 server, got ${server.version}`)
+  }
+  const catalog = registry.catalog.filter((entry) => entry.columns19 || entry.since === 19)
+    .map((entry) => ({ ...entry, columns: entry.columns19 ?? entry.columns }))
+  const results = await checkCatalog(psql, query, { ...registry, target: { major }, catalog }, major)
+  for (const entry of catalog) {
+    await query(`SELECT ${entry.columns.join(', ')} FROM pg_catalog.${entry.id} LIMIT 0`)
+  }
+  return results
+}
+
 export function waitEventClaimsForMajor(claim, major) {
   return claim.events.flatMap((entry) => {
     const expected = expectedForMajor(entry, major)
@@ -3868,6 +3883,7 @@ async function runChecks(server, registry, major, pgBin) {
       major,
     )],
     ['catalog shapes', () => checkCatalog(server.psql, server.query, registry, major)],
+    ['PostgreSQL 19 reference', () => checkPg19Reference(server.psql, server.query, registry, major)],
     ['diagnostic SQL', () => checkDiagnosticSql(server.psql, registry, major)],
     ['wait events', () => checkWaitEvents(server.query, registry, major)],
     ['latency wait mappings', () => checkLatencyWaitMappings(
@@ -3963,7 +3979,7 @@ async function main() {
   const startedAt = performance.now()
   const registry = await loadOracleRegistry()
   const major = parseMajor(registry)
-  const pgBin = `/usr/lib/postgresql/${major}/bin`
+  const pgBin = process.env.PG_BIN ?? `/usr/lib/postgresql/${major}/bin`
   for (const binary of [
     'initdb',
     'pg_basebackup',

@@ -206,3 +206,11 @@ minimum width, about 806px. On a 390px phone the track sized to 806, and since
 right-hand third of every row, including half of each complaint, ceased to
 exist with no scrollbar to reveal it. The old page failed the same test at
 900px. Check narrow widths before shipping anything here.
+
+## PostgreSQL 19 reference support
+
+The version rail includes 19 for the reviewed WAL/vacuum column variants and
+new lock, recovery and autovacuum-score reference cards. Their copyable SQL is
+for a real PostgreSQL 19 server, not the embedded PGlite engine. The city stays
+on its PostgreSQL 18.6 model baseline. See the [support boundary and mechanism
+inventory](../docs/POSTGRESQL-19.md) before interpreting the model as PG19.

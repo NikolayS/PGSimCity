@@ -302,6 +302,12 @@ body {
   display: grid;
   gap: 18px;
 }
+/* Long real-server SELECT lists must scroll locally, not widen qualifications. */
+.pg19-reference,
+.pg19-reference .block {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .card__head { display: grid; gap: 8px; }
 .card h1 {
   margin: 0;
