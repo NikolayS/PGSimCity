@@ -889,7 +889,7 @@ function renderInstrument(e: CatalogEntry): HTMLElement {
     ),
   )
 
-  return el('article', { class: 'card' }, ...body.filter(Boolean).map((x) => x as HTMLElement))
+  return el('article', { class: `card${pgVersion === 19 ? ' pg19-reference' : ''}` }, ...body.filter(Boolean).map((x) => x as HTMLElement))
 }
 
 /* ---------------------------------------------------------------------------

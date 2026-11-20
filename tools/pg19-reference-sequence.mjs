@@ -17,11 +17,13 @@ export async function runSequence({ send, output, logs }) {
       const style = boundary && getComputedStyle(boundary)
       return {
         heading: document.querySelector('h1')?.textContent,
+        failedResources: performance.getEntriesByType('resource').filter(e => e.responseStatus >= 400).map(e => ({ url: e.name, status: e.responseStatus })),
         selected: document.querySelector('.vchip[aria-pressed="true"]')?.textContent,
         columns: [...document.querySelectorAll('.cols .col')].map(e => e.textContent),
         sql: document.querySelector('.sqlblock__code')?.textContent ?? '',
         boundary: boundary?.textContent ?? '',
         boundaryRight: rect?.right ?? 0,
+        sqlRight: document.querySelector('.sqlblock')?.getBoundingClientRect().right ?? 0,
         viewportWidth: window.innerWidth,
         visibleBoundary: !!rect && rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden',
         page: document.body.innerText,
@@ -55,6 +57,7 @@ export async function runSequence({ send, output, logs }) {
   assert.match(wal.sql, /wal_fpi_bytes/)
   assert.ok(wal.visibleBoundary)
   assert.ok(wal.boundaryRight <= wal.viewportWidth, 'PG19 qualification is clipped horizontally')
+  assert.ok(wal.sqlRight <= wal.viewportWidth, 'SQL block widens the PG19 reference card')
   assert.match(wal.boundary, /PostgreSQL 18\.6 teaching model/)
   assert.match(wal.boundary, /PGlite runs PostgreSQL 18\.3/)
 
