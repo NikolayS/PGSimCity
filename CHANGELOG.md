@@ -9,6 +9,16 @@ are all still moving. Expect breaking changes between minor versions.
 
 ---
 
+## Unreleased — PostgreSQL 19 diagnostic reference
+
+- Add explicit PostgreSQL 19 WAL/vacuum column variants and lock, recovery and
+  autovacuum-score reference cards with copyable SQL for real servers.
+- Keep the city model on its PostgreSQL 18.6 baseline and PGlite on its separately
+  reported engine version. Disclose the unmodeled PostgreSQL 19 mechanisms on
+  the 19 cards and in the support inventory; do not change city graphics.
+- Validate the bounded reference surface and diagnostic SQL on PostgreSQL 19
+  in a dedicated CI job, separate from the PostgreSQL 18 lifecycle oracle.
+
 ## v0.59.2 — Dry paving, irregular far sea
 
 Graphics only; no simulation behaviour changes. Both changes answer the

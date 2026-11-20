@@ -84,6 +84,11 @@ The project is an evolving 0.x prototype, with known simplifications and tests
 against PostgreSQL behavior. See [model accuracy and limitations](docs/MODEL-ACCURACY.md)
 for the reviewed reference version, formulas and review history.
 
+**PostgreSQL 19:** Diagnose supports selected version-aware reference columns,
+new monitoring views and copyable real-server SQL. This does not switch the city
+model or PGlite runtime to 19. See the [exact support boundary and unmodeled
+mechanisms](docs/POSTGRESQL-19.md).
+
 PGSimCity targets the PostgreSQL 18 major line, with PostgreSQL 18.6 as its
 reviewed reference and [`REL_18_STABLE`](https://github.com/postgres/postgres/tree/REL_18_STABLE)
 as the source branch. Four review rounds are documented in the accuracy notes;

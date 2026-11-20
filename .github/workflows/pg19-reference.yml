@@ -1,0 +1,32 @@
+name: PostgreSQL 19 reference support
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reference:
+    runs-on: ubuntu-latest
+    container:
+      image: postgres:19
+    timeout-minutes: 10
+    env:
+      PG_VERSION: '19'
+      # This job validates the supported reference surface, not PG19 simulation.
+      PG_ORACLE_ONLY: PostgreSQL 19 reference,diagnostic SQL
+      PG_ORACLE_ALL: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Verify reference columns and diagnostic queries
+        run: gosu postgres npm run oracle

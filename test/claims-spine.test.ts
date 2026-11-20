@@ -145,7 +145,8 @@ const REGISTERED_CLAIM_VALUE_READS = {
     'src/core/corrections.ts': 2,
     'src/main.ts': 1,
     'src/observability/catalog.ts': 1,
-    'src/observability/main.ts': 4,
+    'src/observability/main.ts': 6,
+    'src/spine/postgresql-19.ts': 1,
     'src/observability/paths.ts': 1,
     'src/spine/postgresql-oracle.ts': 1,
     'src/ui/anatomy.ts': 10,
@@ -153,7 +154,7 @@ const REGISTERED_CLAIM_VALUE_READS = {
     'src/ui/docs-storage.ts': 4,
     'src/ui/hud.ts': 1,
   },
-  pgliteVersion: { 'machine/magnum.js': 2 },
+  pgliteVersion: { 'machine/magnum.js': 2, 'src/spine/postgresql-19.ts': 1 },
   reviewStatus: { 'src/main.ts': 1 },
 } as const satisfies Partial<Record<ClaimId, Readonly<Record<string, number>>>>
 

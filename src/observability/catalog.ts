@@ -1,7 +1,8 @@
 /* ============================================================================
  * THE INSTRUMENT CATALOG
  *
- * Every name in this file targets the PostgreSQL 18 major line and was checked
+ * Baseline entries target PostgreSQL 18; explicit columns19 and since: 19
+ * entries describe the bounded PostgreSQL 19 reference surface. Baseline names were checked
  * against its manual; default-value claims use the reviewed 18.6 release. If a
  * column, view, function or enum value appears here, it exists. Where a name
  * changed between releases the change is recorded in `version`, because a
@@ -42,6 +43,8 @@ export interface CatalogEntry {
   what: string
   /** verified column list — the whole list, in catalog order */
   columns: string[]
+  /** Explicitly reviewed PG19 reference; never changes model output. */
+  columns19?: string[]
   docs: string
   coverage: Coverage
   /** why the coverage is what it is */
@@ -170,12 +173,13 @@ export const CATALOG: CatalogEntry[] = [
     subsystem: 'wal',
     what: 'How much WAL you are generating, and how much of it is full-page images.',
     columns: ['wal_records', 'wal_fpi', 'wal_bytes', 'wal_buffers_full', 'stats_reset'],
+    columns19: ['wal_records', 'wal_fpi', 'wal_bytes', 'wal_fpi_bytes', 'wal_buffers_full', 'stats_reset'],
     docs: `${M}#MONITORING-PG-STAT-WAL-VIEW`,
     coverage: 'partial',
     coverageNote:
       'wal_bytes is the model LSN advance, which is exact. wal_records and wal_fpi are derived from the model — one record per tuple operation plus one per commit, and full-page images taken from the post-checkpoint burst the model actually simulates. Treat them as shaped, not measured.',
     version:
-      'New in 14. PostgreSQL 18 removed wal_write, wal_sync, wal_write_time and wal_sync_time from this view; WAL I/O is now reported by pg_stat_io with object = \'wal\'.',
+      'New in 14. PostgreSQL 18 removed wal_write, wal_sync, wal_write_time and wal_sync_time from this view; WAL I/O is now reported by pg_stat_io with object = \'wal\'. PostgreSQL 19 adds wal_fpi_bytes: full-page-image bytes already included in wal_bytes, not extra WAL to add to it.',
     projection: 'wal',
     city: 'wal.vault',
   },
@@ -233,12 +237,18 @@ export const CATALOG: CatalogEntry[] = [
       'dead_tuple_bytes', 'num_dead_item_ids', 'indexes_total', 'indexes_processed',
       'delay_time',
     ],
+    columns19: [
+      'pid', 'datid', 'datname', 'relid', 'phase', 'heap_blks_total', 'heap_blks_scanned',
+      'heap_blks_vacuumed', 'index_vacuum_count', 'max_dead_tuple_bytes',
+      'dead_tuple_bytes', 'num_dead_item_ids', 'indexes_total', 'indexes_processed',
+      'delay_time', 'mode', 'started_by',
+    ],
     docs: `${MANUAL}progress-reporting.html`,
     coverage: 'partial',
     coverageNote:
       'The model runs up to three autovacuum workers through the real phase sequence, so pid, relid, phase, the heap block counters and index_vacuum_count are live. It does not model the dead-tuple store, so the byte columns are blank.',
     version:
-      'PostgreSQL 17 replaced max_dead_tuples and num_dead_tuples with max_dead_tuple_bytes, dead_tuple_bytes and num_dead_item_ids, and added indexes_total and indexes_processed. delay_time arrived in 18. On 16 and older, expect the two older columns instead.',
+      'PostgreSQL 17 replaced max_dead_tuples and num_dead_tuples with max_dead_tuple_bytes, dead_tuple_bytes and num_dead_item_ids, and added indexes_total and indexes_processed. delay_time arrived in 18. PostgreSQL 19 adds mode (normal, aggressive or failsafe) and started_by (manual, autovacuum or autovacuum_wraparound). These are reference fields, not modeled values. On 16 and older, expect the two older columns instead.',
     projection: 'progress_vacuum',
     city: 'autovac.launcher',
   },
@@ -402,6 +412,35 @@ export const CATALOG: CatalogEntry[] = [
       'New in 13. In 17 the SLRU caches became individually sizeable (commit_timestamp_buffers, multixact_offset_buffers and friends), which made this view actionable rather than merely interesting.',
     city: 'clog.slru',
   },
+  {
+    id: 'pg_stat_lock', kind: 'view', since: 19, subsystem: 'locks',
+    what: 'Cumulative lock waits by lock type, not a list of current blockers.',
+    columns: ['locktype', 'waits', 'wait_time', 'fastpath_exceeded', 'stats_reset'],
+    docs: 'https://www.postgresql.org/docs/19/monitoring-stats.html#MONITORING-PG-STAT-LOCK-VIEW',
+    coverage: 'absent',
+    coverageNote: 'PostgreSQL 19 reference only. The model does not collect per-lock-type cumulative wait statistics; use pg_locks for its current modeled locks.',
+  },
+  {
+    id: 'pg_stat_recovery', kind: 'view', since: 19, subsystem: 'replication',
+    what: 'Recovery replay positions, timelines, pause state and transaction timing.',
+    columns: ['promote_triggered', 'last_replayed_read_lsn', 'last_replayed_end_lsn',
+      'last_replayed_tli', 'replay_end_lsn', 'replay_end_tli', 'recovery_last_xact_time',
+      'current_chunk_start_time', 'pause_state'],
+    docs: 'https://www.postgresql.org/docs/19/monitoring-stats.html#MONITORING-PG-STAT-RECOVERY-VIEW',
+    coverage: 'absent',
+    coverageNote: 'PostgreSQL 19 reference only. The city models bounded replay rates, not these recovery internals or WAIT FOR LSN sessions.',
+  },
+  {
+    id: 'pg_stat_autovacuum_scores', kind: 'view', since: 19, subsystem: 'vacuum',
+    what: 'The scores and eligibility flags used to prioritize autovacuum work.',
+    columns: ['relid', 'schemaname', 'relname', 'score', 'xid_score', 'mxid_score',
+      'vacuum_score', 'vacuum_insert_score', 'analyze_score', 'do_vacuum', 'do_analyze',
+      'for_wraparound'],
+    docs: 'https://www.postgresql.org/docs/19/monitoring-stats.html#MONITORING-PG-STAT-AUTOVACUUM-SCORES-VIEW',
+    coverage: 'absent',
+    coverageNote: 'PostgreSQL 19 reference only. The city does not implement the PostgreSQL 19 scoring scheduler, XID/MXID wraparound scores or parallel index autovacuum.',
+  },
+
 ]
 
 export const BY_ID = new Map(CATALOG.map((e) => [e.id, e]))
@@ -421,4 +460,14 @@ export const CATALOG_SUBSYSTEMS: { id: Subsystem; label: string }[] = [
 ]
 
 /** Versions offered in the version rail, newest first. */
-export const VERSIONS = [18, 17, 16, 15, 14, 13, 12] as const
+export const VERSIONS = [19, 18, 17, 16, 15, 14, 13, 12] as const
+
+/** Older filters describe object availability, not a reconstructed old catalog. */
+export function catalogReference(entry: CatalogEntry, major: number) {
+  const use19 = major === 19 && Boolean(entry.columns19 || entry.since === 19)
+  return {
+    major: use19 || entry.since === 19 ? 19 : 18,
+    columns: use19 ? entry.columns19 ?? entry.columns : entry.columns,
+    docs: use19 ? entry.docs.replace('/docs/18/', '/docs/19/') : entry.docs,
+  }
+}
