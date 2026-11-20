@@ -13,9 +13,7 @@ permissions:
 jobs:
   reference:
     runs-on: ubuntu-latest
-    container:
-      image: postgres:19
-    timeout-minutes: 10
+    timeout-minutes: 20
     env:
       PG_VERSION: '19'
       # This job validates the supported reference surface, not PG19 simulation.
@@ -28,8 +26,21 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Build the verified PostgreSQL 19.0 release
+        run: |
+          curl --fail --location --retry 3 https://ftp.postgresql.org/pub/source/v19.0/postgresql-19.0.tar.bz2 -o "$RUNNER_TEMP/postgresql-19.0.tar.bz2"
+          echo 'a89fd70efbad6a08c7dbed8d4872e3af30170d9e5ca9dc7906523be95b4e692d  '"$RUNNER_TEMP/postgresql-19.0.tar.bz2" | sha256sum --check
+          tar -xjf "$RUNNER_TEMP/postgresql-19.0.tar.bz2" -C "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP/postgresql-19.0"
+          ./configure --prefix="$RUNNER_TEMP/pg19" --without-icu --without-readline
+          make -j2
+          make install
+          make -C contrib/pg_stat_statements install
+          make -C contrib/pg_buffercache install
+          "$RUNNER_TEMP/pg19/bin/postgres" --version
+          echo "PG_BIN=$RUNNER_TEMP/pg19/bin" >> "$GITHUB_ENV"
       - name: Verify reference columns and diagnostic queries
-        run: gosu postgres npm run oracle
+        run: npm run oracle
 
   browser-reference:
     name: PostgreSQL 19 reference browser

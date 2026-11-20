@@ -21,6 +21,8 @@ export async function runSequence({ send, output, logs }) {
         columns: [...document.querySelectorAll('.cols .col')].map(e => e.textContent),
         sql: document.querySelector('.sqlblock__code')?.textContent ?? '',
         boundary: boundary?.textContent ?? '',
+        boundaryRight: rect?.right ?? 0,
+        viewportWidth: window.innerWidth,
         visibleBoundary: !!rect && rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden',
         page: document.body.innerText,
       }
@@ -52,6 +54,7 @@ export async function runSequence({ send, output, logs }) {
   assert.ok(wal.columns.includes('wal_fpi_bytes'))
   assert.match(wal.sql, /wal_fpi_bytes/)
   assert.ok(wal.visibleBoundary)
+  assert.ok(wal.boundaryRight <= wal.viewportWidth, 'PG19 qualification is clipped horizontally')
   assert.match(wal.boundary, /PostgreSQL 18\.6 teaching model/)
   assert.match(wal.boundary, /PGlite runs PostgreSQL 18\.3/)
 

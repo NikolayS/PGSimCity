@@ -49,7 +49,7 @@ not proof that all PostgreSQL 19 execution behavior is represented.
 
 `src/observability/catalog-pg19.test.ts` checks version separation, new fields,
 absent coverage and preservation of the 18 reference. The
-`PostgreSQL 19 reference support` workflow runs the oracle against `postgres:19`,
+`PostgreSQL 19 reference support` workflow builds the checksum-verified official PostgreSQL 19.0 release and runs the oracle,
 checking exact column order and executing the displayed reference SELECT lists,
 plus the existing diagnostic SQL checks. The PostgreSQL 18 lifecycle oracle
 continues independently; the new job does not claim to validate PG19 simulation.
