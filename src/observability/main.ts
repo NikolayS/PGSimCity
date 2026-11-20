@@ -889,7 +889,7 @@ function renderInstrument(e: CatalogEntry): HTMLElement {
     ),
   )
 
-  if (reference.major === 19 && !missing) body.push(el(
+  if (reference.major === 19) body.push(el(
     'details', { data: { versionQualification: 'postgresql19-reference' } },
     el('summary', { text: 'PostgreSQL 19 reference · model unchanged' }),
     el('span', { data: { versionQualificationFull: 'true' }, text: PG19_MODEL_BOUNDARY }),

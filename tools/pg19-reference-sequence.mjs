@@ -80,6 +80,7 @@ export async function runSequence({ send, output, logs }) {
   const absent = await snapshot('scores18-absent')
   assert.match(absent.page, /BLIND SPOT ON PG 18/)
   assert.equal(absent.sql, '')
+  assert.equal(absent.correctionScope, 'PostgreSQL 19 reference · model unchanged')
   await chooseInstrument('pg_stat_wal')
   const restored = await snapshot('wal18-restored')
   assert.deepEqual(restored.columns, baseline.columns)
